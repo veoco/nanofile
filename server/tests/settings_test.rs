@@ -75,7 +75,7 @@ async fn a_restart_only_setting_is_stored_but_not_applied() {
 
     let outcome = settings
         .save(
-            Section::General,
+            Section::Server,
             &form(&[("server.max_json_body_mb", "7")]),
             None,
         )
@@ -165,7 +165,7 @@ async fn a_rejected_value_is_not_stored() {
 
     // A port of 0 parses as a number but could never be bound.
     let error = settings
-        .save(Section::General, &form(&[("server.port", "0")]), None)
+        .save(Section::Server, &form(&[("server.port", "0")]), None)
         .await
         .expect_err("port 0 must be refused");
     assert!(matches!(error, base::error::AppError::BadRequest(_)));
@@ -173,7 +173,7 @@ async fn a_rejected_value_is_not_stored() {
 
     // A value that is not a number at all.
     let error = settings
-        .save(Section::General, &form(&[("server.port", "eighty")]), None)
+        .save(Section::Server, &form(&[("server.port", "eighty")]), None)
         .await
         .expect_err("a non-number must be refused");
     assert!(matches!(error, base::error::AppError::BadRequest(_)));
@@ -205,12 +205,12 @@ async fn a_key_outside_the_page_is_refused() {
         .state
         .settings
         .save(
-            Section::General,
+            Section::Server,
             &form(&[("server.share_link_enabled", "false")]),
             None,
         )
         .await
-        .expect_err("a Security key cannot be saved from the General page");
+        .expect_err("a Security key cannot be saved from the Server page");
     assert!(matches!(error, base::error::AppError::BadRequest(_)));
 }
 
@@ -399,25 +399,25 @@ async fn a_setting_captured_at_startup_reports_the_hook_that_applies_it() {
     // mislabel any of them as plain "live".
     for (section, key, value, expected) in [
         (
-            Section::Security,
+            Section::RateLimits,
             "auth.max_login_attempts",
             "3",
             infra::settings::Hook::RateLimits,
         ),
         (
-            Section::Storage,
+            Section::Maintenance,
             "tasks.max_active_tasks",
             "5",
             infra::settings::Hook::TaskSystem,
         ),
         (
-            Section::Storage,
+            Section::Maintenance,
             "tasks.load_aware",
             "true",
             infra::settings::Hook::TaskLoad,
         ),
         (
-            Section::Email,
+            Section::Notifications,
             "notification.max_connections",
             "10",
             infra::settings::Hook::NotificationManager,
@@ -539,22 +539,15 @@ async fn every_settings_page_renders_for_an_admin_only() {
     common::create_test_admin(&server.db, "root@example.com", "password123").await;
     let admin = ui_login(&server, "root@example.com", "password123").await;
 
-    for path in [
-        "/sysadmin/settings/",
-        "/sysadmin/settings/security/",
-        "/sysadmin/settings/storage/",
-        "/sysadmin/settings/email/",
-        "/sysadmin/settings/advanced/",
-    ] {
-        let (status, html) = page(&server, &admin, path).await;
+    // Every page of the nav, plus the first page's old id: a bookmark from
+    // before it was renamed still has to land on a page with rows on it.
+    for section in infra::settings::Section::ALL {
+        let path = format!("/sysadmin/settings/{}/", section.id());
+        let (status, html) = page(&server, &admin, &path).await;
         assert_eq!(status, 200, "{path}");
-        // The catalog is what fills the page, so a page with no rows would mean
-        // the section filter is wrong.
         assert!(html.contains("class=\"page-title\""), "{path} has no title");
-        // The translation dictionary is embedded in every page, so only the
-        // rendered body can be checked for a label that fell back to its key.
         let body = strip_i18n_dictionary(&html);
-        for raw in ["setting.section_", "setting.origin_", "setting.server_"] {
+        for raw in ["setting.section_", "setting.group_", "setting.origin_"] {
             assert!(
                 !body.contains(raw),
                 "{path} rendered the raw locale key {raw}"
@@ -565,7 +558,12 @@ async fn every_settings_page_renders_for_an_admin_only() {
             "{path} rendered no setting rows"
         );
     }
-
+    {
+        let path = "/sysadmin/settings/general/";
+        let (status, html) = page(&server, &admin, path).await;
+        assert_eq!(status, 200, "the first page's old id must still render");
+        assert!(html.matches("class=\"badge").count() >= 2, "{path}");
+    }
     // An unknown section lands on the first page rather than 404ing.
     let (status, _) = page(&server, &admin, "/sysadmin/settings/nope/").await;
     assert_eq!(status, 200);
@@ -737,12 +735,12 @@ async fn restarting_from_the_page_returns_a_waiting_page_and_signals_the_runner(
     common::create_test_admin(&server.db, "root@example.com", "password123").await;
     let admin = ui_login(&server, "root@example.com", "password123").await;
 
-    let (_, html) = page(&server, &admin, "/sysadmin/settings/general/").await;
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/server/").await;
     let csrf = csrf_of(&html);
 
     let resp = admin
         .post(format!("{}/sysadmin/settings/restart/", server.base_url))
-        .form(&[("csrf_token", csrf.as_str()), ("section", "general")])
+        .form(&[("csrf_token", csrf.as_str()), ("section", "server")])
         .send()
         .await
         .unwrap();
@@ -756,7 +754,7 @@ async fn restarting_from_the_page_returns_a_waiting_page_and_signals_the_runner(
         "{body}"
     );
     assert!(
-        !body.contains(r#"action="/sysadmin/settings/general/save/""#),
+        !body.contains(r#"action="/sysadmin/settings/server/save/""#),
         "the restarting page must not render the form"
     );
     // The content is everything before the embedded i18n data block.
@@ -791,7 +789,7 @@ async fn restarting_needs_an_admin_and_a_csrf_token() {
     // No CSRF token at all.
     let resp = admin
         .post(format!("{}/sysadmin/settings/restart/", server.base_url))
-        .form(&[("section", "general")])
+        .form(&[("section", "server")])
         .send()
         .await
         .unwrap();
@@ -805,7 +803,7 @@ async fn restarting_needs_an_admin_and_a_csrf_token() {
     let csrf = csrf_of(&html);
     let resp = user
         .post(format!("{}/sysadmin/settings/restart/", server.base_url))
-        .form(&[("csrf_token", csrf.as_str()), ("section", "general")])
+        .form(&[("csrf_token", csrf.as_str()), ("section", "server")])
         .send()
         .await
         .unwrap();
@@ -863,7 +861,7 @@ async fn the_page_separates_in_place_from_process_restarts() {
     server
         .state
         .settings
-        .save(Section::General, &form(&[("ui.tray_language", "zh")]), None)
+        .save(Section::Server, &form(&[("ui.tray_language", "zh")]), None)
         .await
         .expect("save");
 
@@ -883,7 +881,7 @@ async fn the_page_separates_in_place_from_process_restarts() {
         "the in-app restart cannot apply a process-bootstrap value"
     );
 
-    let (_, html) = page(&server, &admin, "/sysadmin/settings/general/").await;
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/server/").await;
     let row = html
         .split(r#"data-setting="ui.tray_language""#)
         .nth(1)

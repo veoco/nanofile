@@ -11,7 +11,19 @@ import { signInAs } from "../helpers/users";
  * away.
  */
 
-const AREAS = ["", "security/", "storage/", "email/", "advanced/"];
+const AREAS = [
+  "",
+  "server/",
+  "security/",
+  "authentication/",
+  "rate-limits/",
+  "storage/",
+  "encryption/",
+  "maintenance/",
+  "email/",
+  "notifications/",
+  "advanced/",
+];
 
 test("the admin menu reaches system management", async ({ page }) => {
   await page.goto("/libraries/");
@@ -58,7 +70,7 @@ test("a live setting takes effect immediately and says where it came from", asyn
 });
 
 test("a restart-only setting is marked as such", async ({ page }) => {
-  await page.goto("/sysadmin/settings/general/");
+  await page.goto("/sysadmin/settings/server/");
 
   // The bind port is restart-only, and this suite sets it in the environment —
   // which is exactly what makes it read-only here. Both badges have to show.
@@ -77,7 +89,7 @@ test("a restart-only setting is marked as such", async ({ page }) => {
 
   await field.fill("7");
   await page
-    .locator('form[action="/sysadmin/settings/general/save/"]')
+    .locator('form[action="/sysadmin/settings/server/save/"]')
     .getByRole("button", { name: "Save", exact: true })
     .click();
   // Three things say it: the save confirmation, the page-wide reminder, and the

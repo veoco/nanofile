@@ -85,7 +85,7 @@ test("startRestartWatch reloads once the server answers", async () => {
   const status = { textContent: "" };
   const el = {
     dataset: {
-      return: "/sysadmin/settings/general/?action=restarted",
+      return: "/sysadmin/settings/server/?action=restarted",
       timeout: "gave up",
       generation: "1",
     },
@@ -107,7 +107,7 @@ test("startRestartWatch reloads once the server answers", async () => {
   assert.equal(started, true);
 
   await flush();
-  assert.equal(location.replaced, "/sysadmin/settings/general/?action=restarted");
+  assert.equal(location.replaced, "/sysadmin/settings/server/?action=restarted");
   assert.equal(status.textContent, "", "a successful wait needs no message");
 });
 

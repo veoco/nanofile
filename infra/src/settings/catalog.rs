@@ -5,9 +5,12 @@
 //! *from* this table, so a setting cannot be added without wiring its variable,
 //! and the admin UI cannot advertise a variable the server does not read.
 //!
-//! Entries are grouped by the admin page they appear on
-//! ([`Section`]), and within a page by the config file's own ordering — the page
-//! then reads like the file an operator already knows.
+//! Entries are grouped by the admin page they appear on ([`Section`]) and, on a
+//! page, by the heading they are read under ([`GROUPS`]). This file therefore
+//! reads top to bottom like the pages do; where a group's order disagrees with
+//! the config file's, the page wins, because the page is what an operator reads.
+//! [`GROUPS`] names the same keys a second time, and the
+//! `the_groups_partition_the_catalog` test is what keeps the two lists honest.
 
 use std::path::PathBuf;
 
@@ -41,10 +44,11 @@ macro_rules! setting {
 
 /// Every `Config` field, in admin-page order.
 pub static CATALOG: &[SettingDef] = &[
-    // ── General ────────────────────────────────────────────────────────────
+    // ── Server ──────────────────────────────────────────────────────────────
+    // · Addresses & identity
     setting!(
         "server.addr",
-        General,
+        Server,
         "NANOFILE_SERVER_ADDR",
         Kind::Text,
         Apply::Restart,
@@ -56,7 +60,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "server.port",
-        General,
+        Server,
         "NANOFILE_SERVER_PORT",
         Kind::U16,
         Apply::Restart,
@@ -68,7 +72,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "server.version",
-        General,
+        Server,
         "NANOFILE_SERVER_VERSION",
         Kind::Text,
         Apply::Live,
@@ -80,7 +84,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "server.site_url",
-        General,
+        Server,
         "NANOFILE_SERVER_SITE_URL",
         Kind::Text,
         Apply::Live,
@@ -90,9 +94,10 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Uploads & requests
     setting!(
         "server.max_upload_size_mb",
-        General,
+        Server,
         "NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB",
         Kind::U64,
         Apply::Restart,
@@ -104,7 +109,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "server.max_json_body_mb",
-        General,
+        Server,
         "NANOFILE_SERVER_MAX_JSON_BODY_MB",
         Kind::U64,
         Apply::Restart,
@@ -116,7 +121,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "server.max_chunk_size_mb",
-        General,
+        Server,
         "NANOFILE_SERVER_MAX_CHUNK_SIZE_MB",
         Kind::U64,
         Apply::Live,
@@ -128,7 +133,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "server.request_timeout_secs",
-        General,
+        Server,
         "NANOFILE_SERVER_REQUEST_TIMEOUT_SECS",
         Kind::U64,
         Apply::Restart,
@@ -140,7 +145,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "server.header_read_timeout_secs",
-        General,
+        Server,
         "NANOFILE_SERVER_HEADER_READ_TIMEOUT_SECS",
         Kind::U64,
         Apply::Restart,
@@ -152,7 +157,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "server.body_timeout_secs",
-        General,
+        Server,
         "NANOFILE_SERVER_BODY_TIMEOUT_SECS",
         Kind::U64,
         Apply::Restart,
@@ -162,9 +167,10 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · CORS
     setting!(
         "server.cors_allowed_origins",
-        General,
+        Server,
         "NANOFILE_CORS_ALLOWED_ORIGINS",
         Kind::TextList,
         Apply::Restart,
@@ -176,7 +182,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "server.cors_max_age_secs",
-        General,
+        Server,
         "NANOFILE_CORS_MAX_AGE_SECS",
         Kind::U64,
         Apply::Restart,
@@ -186,9 +192,10 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Desktop & tray
     setting!(
         "server.desktop_custom_brand",
-        General,
+        Server,
         "NANOFILE_SERVER_DESKTOP_CUSTOM_BRAND",
         Kind::OptText,
         Apply::Live,
@@ -200,7 +207,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "server.desktop_custom_logo",
-        General,
+        Server,
         "NANOFILE_SERVER_DESKTOP_CUSTOM_LOGO",
         Kind::OptText,
         Apply::Live,
@@ -212,7 +219,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "server.tray",
-        General,
+        Server,
         "NANOFILE_SERVER_TRAY",
         Kind::Bool,
         Apply::ProcessRestart,
@@ -223,20 +230,8 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
-        "ui.default_language",
-        General,
-        "NANOFILE_UI_DEFAULT_LANGUAGE",
-        Kind::Enum(&["en", "zh"]),
-        Apply::Live,
-        |c| c.ui.default_language.clone(),
-        |c, v| {
-            c.ui.default_language = parse_enum(v, &["en", "zh"])?;
-            Ok(())
-        }
-    ),
-    setting!(
         "ui.tray_language",
-        General,
+        Server,
         "NANOFILE_UI_TRAY_LANGUAGE",
         Kind::Enum(&["auto", "en", "zh"]),
         Apply::ProcessRestart,
@@ -246,7 +241,21 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // ── Security ───────────────────────────────────────────────────────────
+    // · Web interface
+    setting!(
+        "ui.default_language",
+        Server,
+        "NANOFILE_UI_DEFAULT_LANGUAGE",
+        Kind::Enum(&["en", "zh"]),
+        Apply::Live,
+        |c| c.ui.default_language.clone(),
+        |c, v| {
+            c.ui.default_language = parse_enum(v, &["en", "zh"])?;
+            Ok(())
+        }
+    ),
+    // ── Security ────────────────────────────────────────────────────────────
+    // · Master secret
     setting!(
         "server.secret_key",
         Security,
@@ -259,6 +268,7 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Capabilities
     setting!(
         "server.webdav_enabled",
         Security,
@@ -307,6 +317,7 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Hosts & proxies
     setting!(
         "server.trusted_proxies",
         Security,
@@ -343,18 +354,7 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    setting!(
-        "server.max_propfind_entries",
-        Security,
-        "NANOFILE_SERVER_MAX_PROPFIND_ENTRIES",
-        Kind::Usize,
-        Apply::Live,
-        |c| c.server.max_propfind_entries.to_string(),
-        |c, v| {
-            c.server.max_propfind_entries = parse_usize(v)?;
-            Ok(())
-        }
-    ),
+    // · Response headers & request caps
     setting!(
         "server.hsts_include_subdomains",
         Security,
@@ -368,52 +368,22 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
-        "server.encrypted_library_version",
+        "server.max_propfind_entries",
         Security,
-        "NANOFILE_SERVER_ENCRYPTED_LIBRARY_VERSION",
-        Kind::I32,
+        "NANOFILE_SERVER_MAX_PROPFIND_ENTRIES",
+        Kind::Usize,
         Apply::Live,
-        |c| c.server.encrypted_library_version.to_string(),
+        |c| c.server.max_propfind_entries.to_string(),
         |c, v| {
-            c.server.encrypted_library_version = parse_i32(v)?;
+            c.server.max_propfind_entries = parse_usize(v)?;
             Ok(())
         }
     ),
-    setting!(
-        "server.encrypted_library_pwd_hash_algo",
-        Security,
-        "NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_ALGO",
-        Kind::Enum(&["", "pbkdf2_sha256", "argon2id"]),
-        Apply::Live,
-        |c| c
-            .server
-            .encrypted_library_pwd_hash_algo
-            .clone()
-            .unwrap_or_default(),
-        |c, v| {
-            c.server.encrypted_library_pwd_hash_algo = opt_text(v);
-            Ok(())
-        }
-    ),
-    setting!(
-        "server.encrypted_library_pwd_hash_params",
-        Security,
-        "NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS",
-        Kind::OptText,
-        Apply::Live,
-        |c| c
-            .server
-            .encrypted_library_pwd_hash_params
-            .clone()
-            .unwrap_or_default(),
-        |c, v| {
-            c.server.encrypted_library_pwd_hash_params = opt_text(v);
-            Ok(())
-        }
-    ),
+    // ── Authentication ──────────────────────────────────────────────────────
+    // · Passwords
     setting!(
         "auth.password_hash_iterations",
-        Security,
+        Authentication,
         "NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS",
         Kind::U32,
         Apply::Live,
@@ -424,56 +394,8 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
-        "auth.api_token_ttl_days",
-        Security,
-        "NANOFILE_AUTH_API_TOKEN_TTL_DAYS",
-        Kind::U64,
-        Apply::Live,
-        |c| c.auth.api_token_ttl_days.to_string(),
-        |c, v| {
-            c.auth.api_token_ttl_days = parse_u64(v)?;
-            Ok(())
-        }
-    ),
-    setting!(
-        "auth.sync_token_ttl_days",
-        Security,
-        "NANOFILE_AUTH_SYNC_TOKEN_TTL_DAYS",
-        Kind::U64,
-        Apply::Live,
-        |c| c.auth.sync_token_ttl_days.to_string(),
-        |c, v| {
-            c.auth.sync_token_ttl_days = parse_u64(v)?;
-            Ok(())
-        }
-    ),
-    setting!(
-        "auth.enable_invitations",
-        Security,
-        "NANOFILE_AUTH_ENABLE_INVITATIONS",
-        Kind::Bool,
-        Apply::Live,
-        |c| fmt_bool(c.auth.enable_invitations),
-        |c, v| {
-            c.auth.enable_invitations = parse_bool(v)?;
-            Ok(())
-        }
-    ),
-    setting!(
-        "auth.enable_password_reset",
-        Security,
-        "NANOFILE_AUTH_ENABLE_PASSWORD_RESET",
-        Kind::Bool,
-        Apply::Live,
-        |c| fmt_bool(c.auth.enable_password_reset),
-        |c, v| {
-            c.auth.enable_password_reset = parse_bool(v)?;
-            Ok(())
-        }
-    ),
-    setting!(
         "auth.password_min_length",
-        Security,
+        Authentication,
         "NANOFILE_AUTH_PASSWORD_MIN_LENGTH",
         Kind::U32,
         Apply::Live,
@@ -485,7 +407,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "auth.require_strong_password",
-        Security,
+        Authentication,
         "NANOFILE_AUTH_REQUIRE_STRONG_PASSWORD",
         Kind::Bool,
         Apply::Live,
@@ -496,8 +418,58 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
+        "auth.enable_password_reset",
+        Authentication,
+        "NANOFILE_AUTH_ENABLE_PASSWORD_RESET",
+        Kind::Bool,
+        Apply::Live,
+        |c| fmt_bool(c.auth.enable_password_reset),
+        |c, v| {
+            c.auth.enable_password_reset = parse_bool(v)?;
+            Ok(())
+        }
+    ),
+    // · Registration
+    setting!(
+        "auth.enable_invitations",
+        Authentication,
+        "NANOFILE_AUTH_ENABLE_INVITATIONS",
+        Kind::Bool,
+        Apply::Live,
+        |c| fmt_bool(c.auth.enable_invitations),
+        |c, v| {
+            c.auth.enable_invitations = parse_bool(v)?;
+            Ok(())
+        }
+    ),
+    // · Token lifetimes
+    setting!(
+        "auth.api_token_ttl_days",
+        Authentication,
+        "NANOFILE_AUTH_API_TOKEN_TTL_DAYS",
+        Kind::U64,
+        Apply::Live,
+        |c| c.auth.api_token_ttl_days.to_string(),
+        |c, v| {
+            c.auth.api_token_ttl_days = parse_u64(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "auth.sync_token_ttl_days",
+        Authentication,
+        "NANOFILE_AUTH_SYNC_TOKEN_TTL_DAYS",
+        Kind::U64,
+        Apply::Live,
+        |c| c.auth.sync_token_ttl_days.to_string(),
+        |c, v| {
+            c.auth.sync_token_ttl_days = parse_u64(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
         "auth.api_key_ttl_presets_days",
-        Security,
+        Authentication,
         "NANOFILE_AUTH_API_KEY_TTL_PRESETS_DAYS",
         Kind::NumList,
         Apply::Live,
@@ -509,7 +481,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "auth.api_key_max_ttl_days",
-        Security,
+        Authentication,
         "NANOFILE_AUTH_API_KEY_MAX_TTL_DAYS",
         Kind::U64,
         Apply::Live,
@@ -519,9 +491,11 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // ── Rate limits ────────────────────────────────────────────────────────
+    // · Sign-in
     setting!(
         "auth.max_login_attempts",
-        Security,
+        RateLimits,
         "NANOFILE_AUTH_MAX_LOGIN_ATTEMPTS",
         Kind::U32,
         Apply::LiveWithHook(Hook::RateLimits),
@@ -533,7 +507,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "auth.lockout_duration_secs",
-        Security,
+        RateLimits,
         "NANOFILE_AUTH_LOCKOUT_DURATION_SECS",
         Kind::U64,
         Apply::LiveWithHook(Hook::RateLimits),
@@ -545,7 +519,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "auth.max_distinct_usernames_per_ip",
-        Security,
+        RateLimits,
         "NANOFILE_AUTH_MAX_DISTINCT_USERNAMES_PER_IP",
         Kind::U32,
         Apply::LiveWithHook(Hook::RateLimits),
@@ -556,20 +530,21 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
-        "auth.sso_link_max_per_hour",
-        Security,
-        "NANOFILE_AUTH_SSO_LINK_MAX_PER_HOUR",
+        "auth.totp_max_attempts",
+        RateLimits,
+        "NANOFILE_AUTH_TOTP_MAX_ATTEMPTS",
         Kind::U32,
         Apply::LiveWithHook(Hook::RateLimits),
-        |c| c.auth.sso_link_max_per_hour.to_string(),
+        |c| c.auth.totp_max_attempts.to_string(),
         |c, v| {
-            c.auth.sso_link_max_per_hour = parse_u32(v)?;
+            c.auth.totp_max_attempts = parse_u32(v)?;
             Ok(())
         }
     ),
+    // · Account flows
     setting!(
         "auth.password_reset_max_per_hour",
-        Security,
+        RateLimits,
         "NANOFILE_AUTH_PASSWORD_RESET_MAX_PER_HOUR",
         Kind::U32,
         Apply::LiveWithHook(Hook::RateLimits),
@@ -581,7 +556,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "auth.registration_max_per_hour",
-        Security,
+        RateLimits,
         "NANOFILE_AUTH_REGISTRATION_MAX_PER_HOUR",
         Kind::U32,
         Apply::LiveWithHook(Hook::RateLimits),
@@ -592,20 +567,21 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
-        "auth.totp_max_attempts",
-        Security,
-        "NANOFILE_AUTH_TOTP_MAX_ATTEMPTS",
+        "auth.sso_link_max_per_hour",
+        RateLimits,
+        "NANOFILE_AUTH_SSO_LINK_MAX_PER_HOUR",
         Kind::U32,
         Apply::LiveWithHook(Hook::RateLimits),
-        |c| c.auth.totp_max_attempts.to_string(),
+        |c| c.auth.sso_link_max_per_hour.to_string(),
         |c, v| {
-            c.auth.totp_max_attempts = parse_u32(v)?;
+            c.auth.sso_link_max_per_hour = parse_u32(v)?;
             Ok(())
         }
     ),
+    // · Protected resources
     setting!(
         "auth.link_password_max_per_hour",
-        Security,
+        RateLimits,
         "NANOFILE_AUTH_LINK_PASSWORD_MAX_PER_HOUR",
         Kind::U32,
         Apply::LiveWithHook(Hook::RateLimits),
@@ -617,7 +593,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "auth.repo_password_max_per_hour",
-        Security,
+        RateLimits,
         "NANOFILE_AUTH_REPO_PASSWORD_MAX_PER_HOUR",
         Kind::U32,
         Apply::LiveWithHook(Hook::RateLimits),
@@ -628,8 +604,21 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
+        "auth.webdav_max_failures_per_5min",
+        RateLimits,
+        "NANOFILE_AUTH_WEBDAV_MAX_FAILURES_PER_5MIN",
+        Kind::U32,
+        Apply::LiveWithHook(Hook::RateLimits),
+        |c| c.auth.webdav_max_failures_per_5min.to_string(),
+        |c, v| {
+            c.auth.webdav_max_failures_per_5min = parse_u32(v)?;
+            Ok(())
+        }
+    ),
+    // · Content & search
+    setting!(
         "auth.share_download_max_per_minute",
-        Security,
+        RateLimits,
         "NANOFILE_AUTH_SHARE_DOWNLOAD_MAX_PER_MINUTE",
         Kind::U32,
         Apply::LiveWithHook(Hook::RateLimits),
@@ -640,32 +629,8 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
-        "auth.webdav_max_failures_per_5min",
-        Security,
-        "NANOFILE_AUTH_WEBDAV_MAX_FAILURES_PER_5MIN",
-        Kind::U32,
-        Apply::LiveWithHook(Hook::RateLimits),
-        |c| c.auth.webdav_max_failures_per_5min.to_string(),
-        |c, v| {
-            c.auth.webdav_max_failures_per_5min = parse_u32(v)?;
-            Ok(())
-        }
-    ),
-    setting!(
-        "auth.reindex_max_per_hour",
-        Security,
-        "NANOFILE_AUTH_REINDEX_MAX_PER_HOUR",
-        Kind::U32,
-        Apply::LiveWithHook(Hook::RateLimits),
-        |c| c.auth.reindex_max_per_hour.to_string(),
-        |c, v| {
-            c.auth.reindex_max_per_hour = parse_u32(v)?;
-            Ok(())
-        }
-    ),
-    setting!(
         "auth.search_max_per_minute",
-        Security,
+        RateLimits,
         "NANOFILE_AUTH_SEARCH_MAX_PER_MINUTE",
         Kind::U32,
         Apply::LiveWithHook(Hook::RateLimits),
@@ -676,30 +641,19 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
-        "notification.private_key",
-        Security,
-        "NANOFILE_NOTIFICATION_PRIVATE_KEY",
-        Kind::Secret,
-        Apply::Live,
-        |c| c.notification.private_key.clone(),
+        "auth.reindex_max_per_hour",
+        RateLimits,
+        "NANOFILE_AUTH_REINDEX_MAX_PER_HOUR",
+        Kind::U32,
+        Apply::LiveWithHook(Hook::RateLimits),
+        |c| c.auth.reindex_max_per_hour.to_string(),
         |c, v| {
-            c.notification.private_key = v.trim().to_string();
+            c.auth.reindex_max_per_hour = parse_u32(v)?;
             Ok(())
         }
     ),
-    setting!(
-        "notification.accept_legacy_event_tokens",
-        Security,
-        "NANOFILE_NOTIFICATION_ACCEPT_LEGACY_EVENT_TOKENS",
-        Kind::Bool,
-        Apply::Live,
-        |c| fmt_bool(c.notification.accept_legacy_event_tokens),
-        |c, v| {
-            c.notification.accept_legacy_event_tokens = parse_bool(v)?;
-            Ok(())
-        }
-    ),
-    // ── Storage ────────────────────────────────────────────────────────────
+    // ── Storage ─────────────────────────────────────────────────────────────
+    // · Directories
     setting!(
         "storage.block_dir",
         Storage,
@@ -748,6 +702,7 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Quotas & resumable uploads
     setting!(
         "storage.max_storage_bytes",
         Storage,
@@ -757,18 +712,6 @@ pub static CATALOG: &[SettingDef] = &[
         |c| c.storage.max_storage_bytes.to_string(),
         |c, v| {
             c.storage.max_storage_bytes = parse_u64(v)?;
-            Ok(())
-        }
-    ),
-    setting!(
-        "storage.ffmpeg_path",
-        Storage,
-        "NANOFILE_STORAGE_FFMPEG_PATH",
-        Kind::Text,
-        Apply::Live,
-        |c| c.storage.ffmpeg_path.clone(),
-        |c, v| {
-            c.storage.ffmpeg_path = v.trim().to_string();
             Ok(())
         }
     ),
@@ -808,6 +751,7 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Archives
     setting!(
         "storage.max_zip_entries",
         Storage,
@@ -844,9 +788,24 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Media tools
+    setting!(
+        "storage.ffmpeg_path",
+        Storage,
+        "NANOFILE_STORAGE_FFMPEG_PATH",
+        Kind::Text,
+        Apply::Live,
+        |c| c.storage.ffmpeg_path.clone(),
+        |c, v| {
+            c.storage.ffmpeg_path = v.trim().to_string();
+            Ok(())
+        }
+    ),
+    // ── Encryption ──────────────────────────────────────────────────────────
+    // · Block storage
     setting!(
         "storage.block_encryption_mode",
-        Storage,
+        Encryption,
         "NANOFILE_STORAGE_BLOCK_ENCRYPTION_MODE",
         Kind::Enum(&["off", "on", "lazy"]),
         Apply::ReadOnly,
@@ -858,7 +817,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "storage.encryption_key",
-        Storage,
+        Encryption,
         "NANOFILE_STORAGE_ENCRYPTION_KEY",
         Some("NANOFILE_STORAGE_ENCRYPTION_KEY_FILE"),
         Kind::Secret,
@@ -869,9 +828,56 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Encrypted libraries
+    setting!(
+        "server.encrypted_library_version",
+        Encryption,
+        "NANOFILE_SERVER_ENCRYPTED_LIBRARY_VERSION",
+        Kind::I32,
+        Apply::Live,
+        |c| c.server.encrypted_library_version.to_string(),
+        |c, v| {
+            c.server.encrypted_library_version = parse_i32(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "server.encrypted_library_pwd_hash_algo",
+        Encryption,
+        "NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_ALGO",
+        Kind::Enum(&["", "pbkdf2_sha256", "argon2id"]),
+        Apply::Live,
+        |c| c
+            .server
+            .encrypted_library_pwd_hash_algo
+            .clone()
+            .unwrap_or_default(),
+        |c, v| {
+            c.server.encrypted_library_pwd_hash_algo = opt_text(v);
+            Ok(())
+        }
+    ),
+    setting!(
+        "server.encrypted_library_pwd_hash_params",
+        Encryption,
+        "NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS",
+        Kind::OptText,
+        Apply::Live,
+        |c| c
+            .server
+            .encrypted_library_pwd_hash_params
+            .clone()
+            .unwrap_or_default(),
+        |c, v| {
+            c.server.encrypted_library_pwd_hash_params = opt_text(v);
+            Ok(())
+        }
+    ),
+    // ── Maintenance ─────────────────────────────────────────────────────────
+    // · Search index
     setting!(
         "index.enabled",
-        Storage,
+        Maintenance,
         "NANOFILE_INDEX_ENABLED",
         Kind::Bool,
         Apply::Restart,
@@ -883,7 +889,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "index.index_dir",
-        Storage,
+        Maintenance,
         "NANOFILE_INDEX_INDEX_DIR",
         Kind::Path,
         Apply::Restart,
@@ -893,9 +899,10 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Garbage collection
     setting!(
         "gc.enabled",
-        Storage,
+        Maintenance,
         "NANOFILE_GC_ENABLED",
         Kind::Bool,
         Apply::Restart,
@@ -907,7 +914,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "gc.interval_hours",
-        Storage,
+        Maintenance,
         "NANOFILE_GC_INTERVAL_HOURS",
         Kind::U64,
         Apply::Restart,
@@ -919,7 +926,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "gc.min_block_age_secs",
-        Storage,
+        Maintenance,
         "NANOFILE_GC_MIN_BLOCK_AGE_SECS",
         Kind::U64,
         Apply::Restart,
@@ -929,9 +936,10 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Background tasks
     setting!(
         "tasks.max_active_tasks",
-        Storage,
+        Maintenance,
         "NANOFILE_TASKS_MAX_ACTIVE",
         Kind::U64,
         Apply::LiveWithHook(Hook::TaskSystem),
@@ -943,7 +951,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "tasks.max_active_per_user",
-        Storage,
+        Maintenance,
         "NANOFILE_TASKS_MAX_ACTIVE_PER_USER",
         Kind::U64,
         Apply::LiveWithHook(Hook::TaskSystem),
@@ -955,7 +963,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "tasks.load_aware",
-        Storage,
+        Maintenance,
         "NANOFILE_TASKS_LOAD_AWARE",
         Kind::Bool,
         Apply::LiveWithHook(Hook::TaskLoad),
@@ -967,7 +975,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "tasks.load_sample_interval_secs",
-        Storage,
+        Maintenance,
         "NANOFILE_TASKS_LOAD_SAMPLE_INTERVAL_SECS",
         Kind::U64,
         Apply::Restart,
@@ -979,7 +987,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "tasks.max_retained_bytes",
-        Storage,
+        Maintenance,
         "NANOFILE_TASKS_MAX_RETAINED_BYTES",
         Kind::U64,
         Apply::LiveWithHook(Hook::TaskSystem),
@@ -989,7 +997,8 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // ── Email ──────────────────────────────────────────────────────────────
+    // ── Email ───────────────────────────────────────────────────────────────
+    // · Delivery
     setting!(
         "email.enabled",
         Email,
@@ -1051,6 +1060,31 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
+        "email.timeout_secs",
+        Email,
+        "NANOFILE_EMAIL_TIMEOUT_SECS",
+        Kind::U64,
+        Apply::Live,
+        |c| c.email.timeout_secs.to_string(),
+        |c, v| {
+            c.email.timeout_secs = parse_u64(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "email.max_attempts",
+        Email,
+        "NANOFILE_EMAIL_MAX_ATTEMPTS",
+        Kind::U32,
+        Apply::Live,
+        |c| c.email.max_attempts.to_string(),
+        |c, v| {
+            c.email.max_attempts = parse_u32(v)?;
+            Ok(())
+        }
+    ),
+    // · Credentials
+    setting!(
         "email.username",
         Email,
         "NANOFILE_EMAIL_USERNAME",
@@ -1075,6 +1109,7 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Sender
     setting!(
         "email.from_address",
         Email,
@@ -1099,30 +1134,7 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    setting!(
-        "email.timeout_secs",
-        Email,
-        "NANOFILE_EMAIL_TIMEOUT_SECS",
-        Kind::U64,
-        Apply::Live,
-        |c| c.email.timeout_secs.to_string(),
-        |c, v| {
-            c.email.timeout_secs = parse_u64(v)?;
-            Ok(())
-        }
-    ),
-    setting!(
-        "email.max_attempts",
-        Email,
-        "NANOFILE_EMAIL_MAX_ATTEMPTS",
-        Kind::U32,
-        Apply::Live,
-        |c| c.email.max_attempts.to_string(),
-        |c, v| {
-            c.email.max_attempts = parse_u32(v)?;
-            Ok(())
-        }
-    ),
+    // · Account notifications
     setting!(
         "email.notify_new_device",
         Email,
@@ -1159,9 +1171,11 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // ── Notifications ───────────────────────────────────────────────────────
+    // · Service
     setting!(
         "notification.enabled",
-        Email,
+        Notifications,
         "NANOFILE_NOTIFICATION_ENABLED",
         Kind::Bool,
         Apply::Restart,
@@ -1172,32 +1186,33 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
-        "notification.ping_interval",
-        Email,
-        "NANOFILE_NOTIFICATION_PING_INTERVAL",
-        Kind::U64,
+        "notification.private_key",
+        Notifications,
+        "NANOFILE_NOTIFICATION_PRIVATE_KEY",
+        Kind::Secret,
         Apply::Live,
-        |c| c.notification.ping_interval.to_string(),
+        |c| c.notification.private_key.clone(),
         |c, v| {
-            c.notification.ping_interval = parse_u64(v)?;
+            c.notification.private_key = v.trim().to_string();
             Ok(())
         }
     ),
     setting!(
-        "notification.client_timeout",
-        Email,
-        "NANOFILE_NOTIFICATION_CLIENT_TIMEOUT",
-        Kind::U64,
+        "notification.accept_legacy_event_tokens",
+        Notifications,
+        "NANOFILE_NOTIFICATION_ACCEPT_LEGACY_EVENT_TOKENS",
+        Kind::Bool,
         Apply::Live,
-        |c| c.notification.client_timeout.to_string(),
+        |c| fmt_bool(c.notification.accept_legacy_event_tokens),
         |c, v| {
-            c.notification.client_timeout = parse_u64(v)?;
+            c.notification.accept_legacy_event_tokens = parse_bool(v)?;
             Ok(())
         }
     ),
+    // · Connections
     setting!(
         "notification.max_connections",
-        Email,
+        Notifications,
         "NANOFILE_NOTIFICATION_MAX_CONNECTIONS",
         Kind::U64,
         Apply::LiveWithHook(Hook::NotificationManager),
@@ -1209,7 +1224,7 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     setting!(
         "notification.max_connections_per_ip",
-        Email,
+        Notifications,
         "NANOFILE_NOTIFICATION_MAX_CONNECTIONS_PER_IP",
         Kind::U64,
         Apply::LiveWithHook(Hook::NotificationManager),
@@ -1219,9 +1234,34 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Timeouts
+    setting!(
+        "notification.ping_interval",
+        Notifications,
+        "NANOFILE_NOTIFICATION_PING_INTERVAL",
+        Kind::U64,
+        Apply::Live,
+        |c| c.notification.ping_interval.to_string(),
+        |c, v| {
+            c.notification.ping_interval = parse_u64(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "notification.client_timeout",
+        Notifications,
+        "NANOFILE_NOTIFICATION_CLIENT_TIMEOUT",
+        Kind::U64,
+        Apply::Live,
+        |c| c.notification.client_timeout.to_string(),
+        |c, v| {
+            c.notification.client_timeout = parse_u64(v)?;
+            Ok(())
+        }
+    ),
     setting!(
         "notification.subscribe_timeout_secs",
-        Email,
+        Notifications,
         "NANOFILE_NOTIFICATION_SUBSCRIBE_TIMEOUT_SECS",
         Kind::U64,
         Apply::Live,
@@ -1231,7 +1271,8 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // ── Advanced ───────────────────────────────────────────────────────────
+    // ── Advanced ────────────────────────────────────────────────────────────
+    // · Database
     setting!(
         "database.url",
         Advanced,
@@ -1256,6 +1297,7 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · First-run bootstrap
     setting!(
         "admin_init.email",
         Advanced,
@@ -1281,6 +1323,7 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Logging
     setting!(
         "logging.level",
         Advanced,
@@ -1346,6 +1389,7 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Sync protocol
     setting!(
         "sync.verify_fs_objects",
         Advanced,
@@ -1383,3 +1427,362 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
 ];
+
+/// One group of rows inside an admin page.
+///
+/// A page is read under a handful of headings rather than as one flat list:
+/// `Security` is the master secret, the capability switches, the hosts that are
+/// trusted and the headers that are sent, and an operator looking for one of
+/// them should not have to read the other three to find it.
+pub struct GroupDef {
+    pub section: Section,
+    /// Stable identifier, used for the page's `data-setting-group` hook and to
+    /// build [`Self::title_key`].
+    pub id: &'static str,
+    /// The locale key of the group's heading.
+    pub title_key: &'static str,
+    /// The catalog keys the group holds, in render order.
+    pub keys: &'static [&'static str],
+}
+
+/// Every page's groups, in navigation order.
+///
+/// This is a second list beside [`CATALOG`], so a key can be added without a
+/// home; `the_groups_partition_the_catalog` fails in that case, and the page
+/// falls back to a trailing "Other" group rather than dropping the row.
+pub static GROUPS: &[GroupDef] = &[
+    GroupDef {
+        section: Section::Server,
+        id: "server_addresses",
+        title_key: "setting.group_server_addresses",
+        keys: &[
+            "server.addr",
+            "server.port",
+            "server.version",
+            "server.site_url",
+        ],
+    },
+    GroupDef {
+        section: Section::Server,
+        id: "server_requests",
+        title_key: "setting.group_server_requests",
+        keys: &[
+            "server.max_upload_size_mb",
+            "server.max_json_body_mb",
+            "server.max_chunk_size_mb",
+            "server.request_timeout_secs",
+            "server.header_read_timeout_secs",
+            "server.body_timeout_secs",
+        ],
+    },
+    GroupDef {
+        section: Section::Server,
+        id: "server_cors",
+        title_key: "setting.group_server_cors",
+        keys: &["server.cors_allowed_origins", "server.cors_max_age_secs"],
+    },
+    GroupDef {
+        section: Section::Server,
+        id: "server_desktop",
+        title_key: "setting.group_server_desktop",
+        keys: &[
+            "server.desktop_custom_brand",
+            "server.desktop_custom_logo",
+            "server.tray",
+            "ui.tray_language",
+        ],
+    },
+    GroupDef {
+        section: Section::Server,
+        id: "server_interface",
+        title_key: "setting.group_server_interface",
+        keys: &["ui.default_language"],
+    },
+    GroupDef {
+        section: Section::Security,
+        id: "security_secret",
+        title_key: "setting.group_security_secret",
+        keys: &["server.secret_key"],
+    },
+    GroupDef {
+        section: Section::Security,
+        id: "security_capabilities",
+        title_key: "setting.group_security_capabilities",
+        keys: &[
+            "server.webdav_enabled",
+            "server.sso_enabled",
+            "server.file_search_enabled",
+            "server.share_link_enabled",
+        ],
+    },
+    GroupDef {
+        section: Section::Security,
+        id: "security_hosts",
+        title_key: "setting.group_security_hosts",
+        keys: &[
+            "server.trusted_proxies",
+            "server.allowed_hosts",
+            "server.trust_request_host",
+        ],
+    },
+    GroupDef {
+        section: Section::Security,
+        id: "security_headers",
+        title_key: "setting.group_security_headers",
+        keys: &[
+            "server.hsts_include_subdomains",
+            "server.max_propfind_entries",
+        ],
+    },
+    GroupDef {
+        section: Section::Authentication,
+        id: "authentication_passwords",
+        title_key: "setting.group_authentication_passwords",
+        keys: &[
+            "auth.password_hash_iterations",
+            "auth.password_min_length",
+            "auth.require_strong_password",
+            "auth.enable_password_reset",
+        ],
+    },
+    GroupDef {
+        section: Section::Authentication,
+        id: "authentication_registration",
+        title_key: "setting.group_authentication_registration",
+        keys: &["auth.enable_invitations"],
+    },
+    GroupDef {
+        section: Section::Authentication,
+        id: "authentication_tokens",
+        title_key: "setting.group_authentication_tokens",
+        keys: &[
+            "auth.api_token_ttl_days",
+            "auth.sync_token_ttl_days",
+            "auth.api_key_ttl_presets_days",
+            "auth.api_key_max_ttl_days",
+        ],
+    },
+    GroupDef {
+        section: Section::RateLimits,
+        id: "rate_limits_sign_in",
+        title_key: "setting.group_rate_limits_sign_in",
+        keys: &[
+            "auth.max_login_attempts",
+            "auth.lockout_duration_secs",
+            "auth.max_distinct_usernames_per_ip",
+            "auth.totp_max_attempts",
+        ],
+    },
+    GroupDef {
+        section: Section::RateLimits,
+        id: "rate_limits_account_flows",
+        title_key: "setting.group_rate_limits_account_flows",
+        keys: &[
+            "auth.password_reset_max_per_hour",
+            "auth.registration_max_per_hour",
+            "auth.sso_link_max_per_hour",
+        ],
+    },
+    GroupDef {
+        section: Section::RateLimits,
+        id: "rate_limits_protected",
+        title_key: "setting.group_rate_limits_protected",
+        keys: &[
+            "auth.link_password_max_per_hour",
+            "auth.repo_password_max_per_hour",
+            "auth.webdav_max_failures_per_5min",
+        ],
+    },
+    GroupDef {
+        section: Section::RateLimits,
+        id: "rate_limits_content",
+        title_key: "setting.group_rate_limits_content",
+        keys: &[
+            "auth.share_download_max_per_minute",
+            "auth.search_max_per_minute",
+            "auth.reindex_max_per_hour",
+        ],
+    },
+    GroupDef {
+        section: Section::Storage,
+        id: "storage_directories",
+        title_key: "setting.group_storage_directories",
+        keys: &[
+            "storage.block_dir",
+            "storage.temp_dir",
+            "storage.thumbnail_dir",
+            "storage.avatar_dir",
+        ],
+    },
+    GroupDef {
+        section: Section::Storage,
+        id: "storage_quotas",
+        title_key: "setting.group_storage_quotas",
+        keys: &[
+            "storage.max_storage_bytes",
+            "storage.max_temp_uploads",
+            "storage.max_temp_upload_bytes",
+            "storage.temp_upload_ttl_hours",
+        ],
+    },
+    GroupDef {
+        section: Section::Storage,
+        id: "storage_archives",
+        title_key: "setting.group_storage_archives",
+        keys: &[
+            "storage.max_zip_entries",
+            "storage.max_zip_bytes",
+            "storage.max_zip_task_bytes",
+        ],
+    },
+    GroupDef {
+        section: Section::Storage,
+        id: "storage_media",
+        title_key: "setting.group_storage_media",
+        keys: &["storage.ffmpeg_path"],
+    },
+    GroupDef {
+        section: Section::Encryption,
+        id: "encryption_blocks",
+        title_key: "setting.group_encryption_blocks",
+        keys: &["storage.block_encryption_mode", "storage.encryption_key"],
+    },
+    GroupDef {
+        section: Section::Encryption,
+        id: "encryption_libraries",
+        title_key: "setting.group_encryption_libraries",
+        keys: &[
+            "server.encrypted_library_version",
+            "server.encrypted_library_pwd_hash_algo",
+            "server.encrypted_library_pwd_hash_params",
+        ],
+    },
+    GroupDef {
+        section: Section::Maintenance,
+        id: "maintenance_index",
+        title_key: "setting.group_maintenance_index",
+        keys: &["index.enabled", "index.index_dir"],
+    },
+    GroupDef {
+        section: Section::Maintenance,
+        id: "maintenance_gc",
+        title_key: "setting.group_maintenance_gc",
+        keys: &["gc.enabled", "gc.interval_hours", "gc.min_block_age_secs"],
+    },
+    GroupDef {
+        section: Section::Maintenance,
+        id: "maintenance_tasks",
+        title_key: "setting.group_maintenance_tasks",
+        keys: &[
+            "tasks.max_active_tasks",
+            "tasks.max_active_per_user",
+            "tasks.load_aware",
+            "tasks.load_sample_interval_secs",
+            "tasks.max_retained_bytes",
+        ],
+    },
+    GroupDef {
+        section: Section::Email,
+        id: "email_delivery",
+        title_key: "setting.group_email_delivery",
+        keys: &[
+            "email.enabled",
+            "email.paused",
+            "email.host",
+            "email.port",
+            "email.tls",
+            "email.timeout_secs",
+            "email.max_attempts",
+        ],
+    },
+    GroupDef {
+        section: Section::Email,
+        id: "email_credentials",
+        title_key: "setting.group_email_credentials",
+        keys: &["email.username", "email.password"],
+    },
+    GroupDef {
+        section: Section::Email,
+        id: "email_sender",
+        title_key: "setting.group_email_sender",
+        keys: &["email.from_address", "email.from_name"],
+    },
+    GroupDef {
+        section: Section::Email,
+        id: "email_notify",
+        title_key: "setting.group_email_notify",
+        keys: &[
+            "email.notify_new_device",
+            "email.notify_api_key_created",
+            "email.notify_new_login",
+        ],
+    },
+    GroupDef {
+        section: Section::Notifications,
+        id: "notifications_service",
+        title_key: "setting.group_notifications_service",
+        keys: &[
+            "notification.enabled",
+            "notification.private_key",
+            "notification.accept_legacy_event_tokens",
+        ],
+    },
+    GroupDef {
+        section: Section::Notifications,
+        id: "notifications_connections",
+        title_key: "setting.group_notifications_connections",
+        keys: &[
+            "notification.max_connections",
+            "notification.max_connections_per_ip",
+        ],
+    },
+    GroupDef {
+        section: Section::Notifications,
+        id: "notifications_timeouts",
+        title_key: "setting.group_notifications_timeouts",
+        keys: &[
+            "notification.ping_interval",
+            "notification.client_timeout",
+            "notification.subscribe_timeout_secs",
+        ],
+    },
+    GroupDef {
+        section: Section::Advanced,
+        id: "advanced_database",
+        title_key: "setting.group_advanced_database",
+        keys: &["database.url", "database.max_connections"],
+    },
+    GroupDef {
+        section: Section::Advanced,
+        id: "advanced_bootstrap",
+        title_key: "setting.group_advanced_bootstrap",
+        keys: &["admin_init.email", "admin_init.password"],
+    },
+    GroupDef {
+        section: Section::Advanced,
+        id: "advanced_logging",
+        title_key: "setting.group_advanced_logging",
+        keys: &[
+            "logging.level",
+            "logging.file_enabled",
+            "logging.file",
+            "logging.max_file_size_mb",
+            "logging.max_backups",
+        ],
+    },
+    GroupDef {
+        section: Section::Advanced,
+        id: "advanced_sync",
+        title_key: "setting.group_advanced_sync",
+        keys: &[
+            "sync.verify_fs_objects",
+            "sync.max_tree_depth",
+            "sync.max_tree_visits",
+        ],
+    },
+];
+
+/// The groups of one page, in render order.
+pub fn groups(section: Section) -> impl Iterator<Item = &'static GroupDef> {
+    GROUPS.iter().filter(move |group| group.section == section)
+}

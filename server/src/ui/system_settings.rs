@@ -88,7 +88,7 @@ pub struct SelectOption {
 /// One entry of the section navigation.
 pub struct SectionLink {
     pub id: &'static str,
-    pub label_key: String,
+    pub label_key: &'static str,
     pub active: bool,
 }
 
@@ -112,8 +112,8 @@ pub struct SystemSettingsTemplate {
     pub current_repo_id: Option<String>,
 
     pub section: &'static str,
-    pub section_title_key: String,
-    pub section_subtitle_key: String,
+    pub section_title_key: &'static str,
+    pub section_subtitle_key: &'static str,
     pub sections: Vec<SectionLink>,
     pub rows: Vec<SettingRow>,
     /// Keys whose saved value supersedes a config-file entry that disagrees.
@@ -162,14 +162,6 @@ fn section_of(id: &str) -> Option<Section> {
     Section::from_id(id)
 }
 
-fn section_title_key(section: Section) -> String {
-    format!("setting.section_{}_title", section.id())
-}
-
-fn section_subtitle_key(section: Section) -> String {
-    format!("setting.section_{}_subtitle", section.id())
-}
-
 /// GET /sysadmin/settings/ and /sysadmin/settings/{section}/.
 pub async fn settings_page(
     user: WebUser,
@@ -181,11 +173,11 @@ pub async fn settings_page(
         return Redirect::to("/libraries/").into_response();
     }
     let section = match path.as_ref().map(|Path(id)| id.as_str()) {
-        None => Section::General,
+        None => Section::Server,
         // An unknown page falls back to the first one rather than 404ing: the
         // area is a handful of links, and a stale bookmark should land somewhere
         // useful.
-        Some(id) => section_of(id).unwrap_or(Section::General),
+        Some(id) => section_of(id).unwrap_or(Section::Server),
     };
     let success = success_message(
         I18n::get(user.language.as_deref()),
@@ -249,13 +241,13 @@ async fn render(
         current_repo_id: None,
 
         section: section.id(),
-        section_title_key: section_title_key(section),
-        section_subtitle_key: section_subtitle_key(section),
+        section_title_key: section.title_key(),
+        section_subtitle_key: section.subtitle_key(),
         sections: Section::ALL
             .iter()
             .map(|id| SectionLink {
                 id: id.id(),
-                label_key: format!("setting.section_{}_title", id.id()),
+                label_key: id.title_key(),
                 active: *id == section,
             })
             .collect(),
@@ -288,7 +280,7 @@ async fn render(
 /// The URL of one section's page, with an optional action banner.
 fn settings_url(section: Section, action: &str) -> String {
     match section {
-        Section::General => format!("/sysadmin/settings/?action={action}"),
+        Section::Server => format!("/sysadmin/settings/?action={action}"),
         other => format!("/sysadmin/settings/{}/?action={action}", other.id()),
     }
 }
@@ -594,7 +586,7 @@ pub async fn restart(
     let section = form
         .get("section")
         .and_then(|id| section_of(id))
-        .unwrap_or(Section::General);
+        .unwrap_or(Section::Server);
 
     tracing::warn!(
         admin = user.user_id,
@@ -626,7 +618,7 @@ pub async fn refresh(
     let section = form
         .get("section")
         .and_then(|id| section_of(id))
-        .unwrap_or(Section::General);
+        .unwrap_or(Section::Server);
 
     let outcome = state.settings.reload().await?;
     if !outcome.is_empty() {
@@ -711,7 +703,7 @@ mod tests {
 
         // A read-only secret is never submitted, whatever the form says.
         let parsed = parse_form(
-            Section::Advanced,
+            Section::Security,
             &form(&[("secret:server.secret_key", "injected")]),
         )
         .unwrap();
@@ -721,7 +713,7 @@ mod tests {
     #[test]
     fn only_the_pages_own_keys_are_parsed() {
         let parsed = parse_form(
-            Section::General,
+            Section::Server,
             &form(&[
                 ("server.port", "8082"),
                 ("server.share_link_enabled", "false"),

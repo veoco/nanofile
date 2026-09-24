@@ -37,7 +37,7 @@ test("the restart button applies a saved restart-only setting", async ({ browser
   test.setTimeout(60_000);
   const { page, close } = await signInAs(browser, ADMIN_EMAIL, ADMIN_PASSWORD, { baseURL: URL });
   try {
-    await page.goto("/sysadmin/settings/general/");
+    await page.goto("/sysadmin/settings/server/");
 
     // A restart-only value this instance leaves to the settings table (the port
     // itself is environment-owned here, so it is not editable).
@@ -48,7 +48,7 @@ test("the restart button applies a saved restart-only setting", async ({ browser
     expect(before).not.toBe("7");
     await field.fill("7");
     await page
-      .locator('form[action="/sysadmin/settings/general/save/"]')
+      .locator('form[action="/sysadmin/settings/server/save/"]')
       .getByRole("button", { name: "Save", exact: true })
       .click();
     await expect(page.getByText("Settings saved.")).toBeVisible();

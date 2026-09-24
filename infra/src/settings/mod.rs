@@ -33,15 +33,27 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::Config;
 
-pub use catalog::CATALOG;
+pub use catalog::{CATALOG, GROUPS, GroupDef, groups};
 
 /// The admin page a setting is shown on.
+///
+/// The pages follow the operator's mental model rather than the config file's
+/// shape: one page per subject, in the order they appear in the navigation. A
+/// page that would grow past a couple of screens is split by subject instead —
+/// `security` is what requests are trusted and which capabilities are exposed,
+/// while the password policy, the token lifetimes and the attempt budgets each
+/// have a page of their own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Section {
-    General,
+    Server,
     Security,
+    Authentication,
+    RateLimits,
     Storage,
+    Encryption,
+    Maintenance,
     Email,
+    Notifications,
     Advanced,
 }
 
@@ -49,32 +61,83 @@ impl Section {
     /// Stable identifier used in the URL (`/sysadmin/settings/<id>/`).
     pub const fn id(self) -> &'static str {
         match self {
-            Section::General => "general",
+            Section::Server => "server",
             Section::Security => "security",
+            Section::Authentication => "authentication",
+            Section::RateLimits => "rate-limits",
             Section::Storage => "storage",
+            Section::Encryption => "encryption",
+            Section::Maintenance => "maintenance",
             Section::Email => "email",
+            Section::Notifications => "notifications",
             Section::Advanced => "advanced",
         }
     }
 
     /// Parse a URL segment.
+    ///
+    /// `general` is what the first page was called before it became `server`;
+    /// accepting it keeps an older bookmark on the page it named rather than
+    /// silently landing the reader somewhere else.
     pub fn from_id(value: &str) -> Option<Self> {
         match value {
-            "general" => Some(Section::General),
+            "general" | "server" => Some(Section::Server),
             "security" => Some(Section::Security),
+            "authentication" => Some(Section::Authentication),
+            "rate-limits" => Some(Section::RateLimits),
             "storage" => Some(Section::Storage),
+            "encryption" => Some(Section::Encryption),
+            "maintenance" => Some(Section::Maintenance),
             "email" => Some(Section::Email),
+            "notifications" => Some(Section::Notifications),
             "advanced" => Some(Section::Advanced),
             _ => None,
         }
     }
 
-    /// Every section, in page order.
-    pub const ALL: [Section; 5] = [
-        Section::General,
+    /// The locale key of the page's title.
+    pub const fn title_key(self) -> &'static str {
+        match self {
+            Section::Server => "setting.section_server_title",
+            Section::Security => "setting.section_security_title",
+            Section::Authentication => "setting.section_authentication_title",
+            Section::RateLimits => "setting.section_rate_limits_title",
+            Section::Storage => "setting.section_storage_title",
+            Section::Encryption => "setting.section_encryption_title",
+            Section::Maintenance => "setting.section_maintenance_title",
+            Section::Email => "setting.section_email_title",
+            Section::Notifications => "setting.section_notifications_title",
+            Section::Advanced => "setting.section_advanced_title",
+        }
+    }
+
+    /// The locale key of the page's one-line description.
+    pub const fn subtitle_key(self) -> &'static str {
+        match self {
+            Section::Server => "setting.section_server_subtitle",
+            Section::Security => "setting.section_security_subtitle",
+            Section::Authentication => "setting.section_authentication_subtitle",
+            Section::RateLimits => "setting.section_rate_limits_subtitle",
+            Section::Storage => "setting.section_storage_subtitle",
+            Section::Encryption => "setting.section_encryption_subtitle",
+            Section::Maintenance => "setting.section_maintenance_subtitle",
+            Section::Email => "setting.section_email_subtitle",
+            Section::Notifications => "setting.section_notifications_subtitle",
+            Section::Advanced => "setting.section_advanced_subtitle",
+        }
+    }
+
+    /// Every section, in navigation order.
+    pub const ALL: [Section; 10] = [
+        Section::Server,
         Section::Security,
+        Section::Authentication,
+        Section::RateLimits,
         Section::Storage,
+        Section::Encryption,
+        Section::Maintenance,
         Section::Email,
+        Section::Notifications,
         Section::Advanced,
     ];
 }
@@ -1101,5 +1164,82 @@ mod tests {
             assert_eq!(Section::from_id(section.id()), Some(section));
         }
         assert_eq!(Section::from_id("nope"), None);
+        // The first page kept its old id as an alias, so an older bookmark
+        // lands on the page it named.
+        assert_eq!(Section::from_id("general"), Some(Section::Server));
+    }
+
+    /// Every page has a title and a description, and no two share one.
+    ///
+    /// The keys are what the template renders; a duplicate would put one page's
+    /// heading over another page's body.
+    #[test]
+    fn every_section_has_its_own_title_and_subtitle() {
+        let mut ids = BTreeSet::new();
+        let mut titles = BTreeSet::new();
+        let mut subtitles = BTreeSet::new();
+        for section in Section::ALL {
+            assert!(ids.insert(section.id()), "duplicate id {:?}", section.id());
+            assert!(
+                titles.insert(section.title_key()),
+                "duplicate title key {}",
+                section.title_key()
+            );
+            assert!(
+                subtitles.insert(section.subtitle_key()),
+                "duplicate subtitle key {}",
+                section.subtitle_key()
+            );
+        }
+        assert_eq!(ids.len(), Section::ALL.len());
+    }
+
+    /// The group list is a second naming of the catalog, so the two have to
+    /// agree: every entry in exactly one group, and on the page it belongs to.
+    #[test]
+    fn the_groups_partition_the_catalog() {
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let mut ids: BTreeSet<&str> = BTreeSet::new();
+        for group in GROUPS {
+            assert!(ids.insert(group.id), "duplicate group id {}", group.id);
+            assert!(!group.keys.is_empty(), "{} is empty", group.id);
+            assert_eq!(
+                group.title_key,
+                format!("setting.group_{}", group.id),
+                "{} has a title key that is not derived from its id",
+                group.id
+            );
+            for key in group.keys {
+                assert!(seen.insert(key), "{key} is listed in more than one group");
+                let def = find(key).unwrap_or_else(|| panic!("{key} is not a catalog entry"));
+                assert_eq!(
+                    def.section, group.section,
+                    "{key} is on {:?} but grouped under {:?}",
+                    def.section, group.section
+                );
+            }
+        }
+        let ungrouped: Vec<&str> = CATALOG
+            .iter()
+            .map(|def| def.key)
+            .filter(|key| !seen.contains(key))
+            .collect();
+        assert!(
+            ungrouped.is_empty(),
+            "these settings have no group: {ungrouped:?}"
+        );
+    }
+
+    /// A page reads top to bottom like the catalog does, so the page order and
+    /// the declaration order cannot drift into disagreeing.
+    #[test]
+    fn a_pages_groups_follow_the_catalog_order() {
+        for page in Section::ALL {
+            let listed: Vec<&str> = groups(page)
+                .flat_map(|group| group.keys.iter().copied())
+                .collect();
+            let declared: Vec<&str> = self::section(page).map(|def| def.key).collect();
+            assert_eq!(listed, declared, "{page:?}");
+        }
     }
 }
