@@ -105,6 +105,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
       - name: Install Tailwind CSS
         run: npm ci
+      - name: Lint with the tray feature
+        run: cargo clippy -p server --features tray --bin nanofile -- -D warnings
       - name: Test with tray feature
         run: cargo test -p server --features tray --bin nanofile -- --nocapture
 
@@ -129,6 +131,11 @@ jobs:
         run: npm ci
       - name: Check the Windows-only code
         run: cargo check -p server --features tray --bin nanofile
+      # The tray is a feature, not a platform: a Windows build without it still
+      # carries the service CLI and the login entry it retires, so both
+      # configurations have to compile.
+      - name: Check the Windows code without the tray
+        run: cargo check -p server --bin nanofile
 
   # ── Frontend tests (pure JS, no npm deps) ──────────────────────────
   frontend-test:
