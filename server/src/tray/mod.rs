@@ -307,7 +307,7 @@ fn create_tray(
     let item_quit = MenuItem::with_id(ID_QUIT, t.tr("tray.quit"), true, None);
 
     // Three groups: the two "open something" actions, the automatic-start pair
-    // (long labels, and the two that are alternatives to each other), and Quit.
+    // (the two that are alternatives to each other), and Quit.
     let menu = Menu::new();
     menu.append(&item_open_web)
         .context("failed to build tray menu")?;
