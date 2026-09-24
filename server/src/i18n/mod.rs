@@ -204,7 +204,14 @@ impl I18n {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::path::Path;
+
+    use infra::config::Config;
+
     use super::*;
+    use crate::service::mail::settings::EmailSettings;
+    use crate::tasks::spec::{JobKey, ServiceKey};
 
     #[test]
     fn tr_returns_translation_and_falls_back_to_key() {
@@ -349,6 +356,117 @@ mod tests {
             }
         }
         assert!(missing.is_empty(), "untranslated: {missing:?}");
+    }
+
+    /// The converse of `every_catalog_string_is_translated`: a key whose only
+    /// reader moved away stays in the dictionary forever, because that guard
+    /// proves the dictionary is complete, never that it is minimal. One
+    /// settings-page move left 31 `admin.email_*` labels behind.
+    ///
+    /// `admin.*` is where that has happened, and the only namespace where a key
+    /// can be built instead of written: the job and service slugs, and the mail
+    /// fields `EmailSettings::missing` reports. Those three are the generators
+    /// below; every other key has to appear whole in the rendering tree.
+    /// `server/tests` is not scanned on purpose — a test naming a key is not a
+    /// reason to keep it, or a dead key could be kept alive by its own test.
+    #[test]
+    fn no_admin_key_is_unasked_for() {
+        let mut covered: HashSet<String> = generated_admin_keys().into_iter().collect();
+        let mut tree = String::new();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for dir in ["src", "templates", "frontend"] {
+            collect_text(&root.join(dir), &mut tree);
+        }
+        covered.extend(admin_keys_in(&tree).into_iter().map(str::to_string));
+
+        let mut unused: Vec<&str> = EN
+            .keys()
+            .filter(|key| key.starts_with("admin.") && !covered.contains(key.as_str()))
+            .map(String::as_str)
+            .collect();
+        unused.sort_unstable();
+        unused.dedup();
+        assert!(
+            unused.is_empty(),
+            "no template or module asks for these keys: {unused:#?} — delete \
+             them, or add the generator that builds them"
+        );
+    }
+
+    /// Every whole `admin.<key>` string in `text`.
+    ///
+    /// Whole rather than by substring: the paused-mail key is a prefix of its
+    /// `_on` sibling, so a substring test would let the longer key stand in for
+    /// the shorter one. The leading check does the same for identifiers that
+    /// merely end in `admin`, like `form.is_admin.is_some()`.
+    ///
+    /// A whole key written in a comment is therefore a reference like any other,
+    /// which is why this one names none of them.
+    fn admin_keys_in(text: &str) -> Vec<&str> {
+        const MARKER: &str = "admin.";
+        let mut out = Vec::new();
+        let mut rest = text;
+        while let Some(at) = rest.find(MARKER) {
+            let glued = rest[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+            let after = &rest[at + MARKER.len()..];
+            let name_len = after
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(after.len());
+            if !glued && name_len > 0 {
+                out.push(&rest[at..at + MARKER.len() + name_len]);
+            }
+            rest = after;
+        }
+        out
+    }
+
+    /// The `admin.*` keys no source file can write whole, because the slug or
+    /// the field name is only known at run time.
+    fn generated_admin_keys() -> Vec<String> {
+        let mut keys = Vec::new();
+        let mut slug_keys = |prefix: &str, slug: &str| {
+            let slug = slug.replace('-', "_");
+            keys.push(format!("{prefix}{slug}"));
+            keys.push(format!("{prefix}{slug}_desc"));
+        };
+        for key in JobKey::ALL {
+            slug_keys("admin.job_", key.as_str());
+        }
+        for key in ServiceKey::ALL {
+            slug_keys("admin.service_", key.as_str());
+        }
+
+        // Not a hard-coded list: `missing()` is what `missing_labels` translates,
+        // so the mail fields are elicited by breaking all three at once.
+        let mut config = Config::default();
+        config.email.host = String::new();
+        config.email.port = 0;
+        config.email.from_address = "not-an-address".to_string();
+        for field in EmailSettings::from_config(&config).missing() {
+            keys.push(format!("admin.email_field_{field}"));
+        }
+        keys
+    }
+
+    /// Append every readable file under `dir` to `out`, so one pass can search a
+    /// whole tree. A path that will not read as UTF-8 (a binary asset) is
+    /// skipped rather than failing the scan.
+    fn collect_text(dir: &Path, out: &mut String) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_text(&path, out);
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                out.push_str(&text);
+                out.push('\n');
+            }
+        }
     }
 
     /// A numeric setting's unit is rendered beside the field, so the label must
