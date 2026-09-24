@@ -97,9 +97,9 @@ email.new_login.text = '''
 
 email.test.subject = "{brand} 测试邮件"
 email.test.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">这是一封测试邮件。</p>
-<p style="margin:0;font-size:13px;line-height:1.7;color:#71717a;">如果您能看到它，说明 {site_url}/sysadmin/email/ 保存的 SMTP 设置可用。发送时间 {time}。</p>'''
+<p style="margin:0;font-size:13px;line-height:1.7;color:#71717a;">如果您能看到它，说明 {site_url}/sysadmin/settings/email/ 保存的 SMTP 设置可用。发送时间 {time}。</p>'''
 email.test.text = '''
 这是一封测试邮件。
 
-如果您能看到它，说明 {site_url}/sysadmin/email/ 保存的 SMTP 设置可用。发送时间 {time}。
+如果您能看到它，说明 {site_url}/sysadmin/settings/email/ 保存的 SMTP 设置可用。发送时间 {time}。
 '''

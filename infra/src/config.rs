@@ -201,8 +201,8 @@ fn default_tray_language() -> String {
 /// cannot enable outbound mail from the Web UI, only configure how it is sent.
 /// The connection fields below are *bootstrap* values — they seed the
 /// `email_settings` row on first start and are superseded by whatever
-/// `/sysadmin/email/` saves, so the SMTP host can be corrected without editing
-/// this file or restarting.
+/// `/sysadmin/settings/email/` saves, so the SMTP host can be corrected without
+/// editing this file or restarting.
 #[derive(Deserialize, Serialize, Clone)]
 pub struct EmailConfig {
     /// Master switch. When `false` (default) the whole mail subsystem is off:

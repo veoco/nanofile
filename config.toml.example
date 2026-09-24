@@ -309,7 +309,7 @@ max_distinct_usernames_per_ip = 20
 enable_invitations = true
 # Whether the password-reset flow is served at all. It additionally needs a
 # usable email backend: `[email] enabled` must be true *and* the SMTP settings
-# saved at /sysadmin/email/ must be complete, otherwise the "Forgot password?"
+# saved at /sysadmin/settings/email/ must be complete, otherwise the "Forgot password?"
 # link is hidden, `/accounts/password/reset/` answers 404 and no token is
 # minted (the startup log warns about exactly this combination).
 # Env: NANOFILE_AUTH_ENABLE_PASSWORD_RESET

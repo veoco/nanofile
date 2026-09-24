@@ -5,8 +5,8 @@ use sea_orm_migration::prelude::*;
 /// `email_settings` is a single row (`id = 1`). The master switch stays in
 /// `config.toml` (`[email] enabled`) on purpose: enabling outbound mail is an
 /// operational opt-in, while everything else about the SMTP connection is meant
-/// to be editable at runtime from `/sysadmin/email/` — which requires a table,
-/// because `AppState.config` is immutable.
+/// to be editable at runtime from `/sysadmin/settings/email/` — which requires a
+/// table, because `AppState.config` is immutable.
 ///
 /// `email_messages` is both the queue and the audit log. The rendered body is
 /// stored **encrypted** (`body_enc`, the same domain-separated AEAD cipher as

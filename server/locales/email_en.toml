@@ -106,10 +106,10 @@ revoke the session under Settings -> Credentials.
 
 email.test.subject = "Test message from {brand}"
 email.test.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">This is a test message.</p>
-<p style="margin:0;font-size:13px;line-height:1.7;color:#71717a;">If you can read it, the SMTP settings saved at {site_url}/sysadmin/email/ work. Sent on {time}.</p>'''
+<p style="margin:0;font-size:13px;line-height:1.7;color:#71717a;">If you can read it, the SMTP settings saved at {site_url}/sysadmin/settings/email/ work. Sent on {time}.</p>'''
 email.test.text = '''
 This is a test message.
 
-If you can read it, the SMTP settings saved at {site_url}/sysadmin/email/ work.
+If you can read it, the SMTP settings saved at {site_url}/sysadmin/settings/email/ work.
 Sent on {time}.
 '''
