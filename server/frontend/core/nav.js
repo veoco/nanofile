@@ -66,6 +66,9 @@ if (userMenu && userButton) {
       shareLink.textContent = __t('ui.share_management');
       dropdown.appendChild(shareLink);
 
+      // Task management is two pages behind one entry, the way system
+      // management is ten: this lands on the run list, and the tab bar there
+      // leads to the registered tasks.
       var taskLink = document.createElement("a");
       taskLink.href = "/sysadmin/tasks/";
       taskLink.className = menuItem;

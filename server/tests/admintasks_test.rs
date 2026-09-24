@@ -96,9 +96,9 @@ async fn admin_server() -> (TestServer, reqwest::Client) {
     (server, admin)
 }
 
-/// Both pages render for an administrator, are one tab apart, and print no
-/// locale key: a missing string falls back to its own identifier, which is a
-/// defect only a reader would notice.
+/// Both pages render for an administrator, each names the other, and neither
+/// prints a locale key: a missing string falls back to its own identifier, which
+/// is a defect only a reader would notice.
 #[tokio::test]
 async fn both_task_pages_render_for_an_admin() {
     let (server, admin) = admin_server().await;
@@ -120,6 +120,13 @@ async fn both_task_pages_render_for_an_admin() {
             html.matches("aria-current=\"page\"").count(),
             1,
             "{path} does not say which page it is"
+        );
+        // The account menu is the only route into this area and it lands on the
+        // run list, so a page that stopped naming its sibling would strand it.
+        let sibling = if path == RUNS { REGISTRY } else { RUNS };
+        assert!(
+            html.contains(&format!("href=\"{sibling}\"")),
+            "{path} does not link to {sibling}"
         );
     }
 }
