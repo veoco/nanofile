@@ -12,6 +12,7 @@ use infra::config::{Config, EnvKeys};
 
 use super::windows::{install, probe, report_failure, run_as_service, uninstall};
 use super::{ServiceAction, ServiceProbe};
+use crate::startup::login::{LoginEntry as _, PlatformLogin};
 
 /// `nanofile service …` entry point.
 pub(crate) fn run_cli(
@@ -24,6 +25,7 @@ pub(crate) fn run_cli(
         ServiceAction::Run => run_as_service(config.clone(), env_keys),
         ServiceAction::Install => match install(config_path) {
             Ok(()) => {
+                retire_login_entry(config_path);
                 println!(
                     "Nanofile registered as a Windows service; it starts at the next system \
                      start, without a login."
@@ -37,7 +39,16 @@ pub(crate) fn run_cli(
         },
         ServiceAction::Uninstall => match uninstall() {
             Ok(()) => {
-                println!("Nanofile is no longer registered as a Windows service.");
+                // Deliberately *not* re-creating the login entry: "remove the
+                // service" means Nanofile no longer starts automatically, and
+                // writing a startup registration the user did not ask for in
+                // that command would be worse than starting from an honest
+                // blank.
+                println!(
+                    "Nanofile is no longer registered as a Windows service, and no longer \
+                     starts automatically: install it again, or enable \"Start at login\" \
+                     from the tray."
+                );
                 Ok(())
             }
             Err(e) => {
@@ -76,5 +87,24 @@ pub(crate) fn run_cli(
             }
             Ok(())
         }
+    }
+}
+
+/// Remove this installation's login entry: the service has replaced it.
+///
+/// The tray does the same thing after a successful install; this is what makes
+/// `nanofile service install` mean the same as the menu item. Deliberately
+/// narrow — `retire_ours()` removes the entry only when it names this
+/// executable — because the elevated helper this command may *be* can have a
+/// different administrator's `HKCU` hive.
+fn retire_login_entry(config_path: &Path) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let login = PlatformLogin::new(exe, config_path.to_path_buf());
+    match login.retire_ours() {
+        Ok(true) => println!("The start-at-login entry was removed: the service replaces it."),
+        Ok(false) => {}
+        Err(e) => tracing::warn!("could not remove the start-at-login entry: {e:#}"),
     }
 }

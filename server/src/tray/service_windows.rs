@@ -290,8 +290,9 @@ pub(super) fn finish(enable: bool, exit_code: u32) {
     if exit_code == 0 {
         if enable {
             // The service starts at boot, so the login entry would start a
-            // second instance that can only end up as a client-mode tray.
-            if let Err(e) = autostart.disable() {
+            // second instance that can only end up as a client-mode tray. Only
+            // an entry this installation wrote is removed.
+            if let Err(e) = autostart.retire_ours() {
                 tracing::warn!("could not remove the start-at-login entry: {e:#}");
             }
             tracing::info!("registered as a Windows service");

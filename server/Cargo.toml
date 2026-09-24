@@ -19,7 +19,6 @@ tray = [
     "tray-icon/gtk",
     "dep:open",
     "dep:notify-rust",
-    "dep:winreg",
     "dep:objc2",
     "dep:objc2-app-kit",
     "dep:gtk",
@@ -136,7 +135,10 @@ sys-locale = { version = "0.3", optional = true }
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 notify-rust = { version = "4", optional = true }
 [target.'cfg(target_os = "windows")'.dependencies]
-winreg = { version = "0.55", optional = true }
+# Not optional: the login entry (`HKCU\…\Run`) is read and written by every
+# Windows build, not only the tray one — `nanofile service install` retires it,
+# so the service and the login entry can never both start Nanofile.
+winreg = "0.55"
 # Not optional: `nanofile service …` (the Service Control Manager front-end the
 # tray menu drives) exists in every Windows build, not only the tray one.
 windows-sys = { version = "0.59", features = [

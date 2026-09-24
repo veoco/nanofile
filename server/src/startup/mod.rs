@@ -16,8 +16,13 @@
 /// entry and the service registration.
 pub(crate) mod cmdline;
 
-/// The per-user login entry, which only the tray reads and writes today.
-#[cfg(feature = "tray")]
+/// The per-user login entry.
+///
+/// Compiled on Windows unconditionally: `nanofile service install` retires the
+/// entry there, with or without the tray. Without the tray only that retirement
+/// is reachable, which is why the rest of the surface is allowed to go unused.
+#[cfg(any(target_os = "windows", feature = "tray"))]
+#[cfg_attr(not(feature = "tray"), allow(dead_code))]
 pub(crate) mod login;
 
 /// The rule that keeps the login entry and the Windows service alternatives.
