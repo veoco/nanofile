@@ -102,7 +102,7 @@ Frequently changed keys:
 - Storage directories (`[storage]`): default under `data/` in the binary's directory. Relative paths resolve against the binary's directory; absolute paths place state elsewhere.
 - `secret_key`: the master key (see **Deploy with Docker**).
 
-Most settings apply immediately; the listener, transfer limits and cache directories apply at the next start. Some runtime settings are also editable at "System Management → Settings" in the web interface, where a saved value overrides the same key in the config file.
+Most settings apply immediately; the listener, transfer limits and cache directories apply at the next start. Some runtime settings are also editable at "System Management → Settings" in the web interface, where a saved value overrides the same key in the config file. Those pages are Server, Security, Authentication, Rate limits, Storage, Encryption, Maintenance, Email, Notifications and Advanced, each grouped under headings and filterable in the browser by name, config key or description; every row says where its value came from and whether changing it needs a restart.
 
 The **Restart server** button at the bottom of those pages restarts the server in place: the process, the tray icon and the listening port stay the same, but the settings table, database connections, caches and background tasks are all rebuilt, so every "needs a restart" row takes effect immediately (and the administrator's session survives). The log level and file caps, and whether the desktop tray exists and in which language, are decided before the process starts: those are marked "needs a full process restart" and are only applied by stopping and starting the process.
 

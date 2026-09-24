@@ -2,10 +2,11 @@
 //! runtime, on one page per area.
 //!
 //! The page is *data-driven*: it renders the catalog (`infra::settings::CATALOG`)
-//! rather than naming fields, so a setting cannot exist without appearing here,
-//! and each row shows where its effective value came from — the environment, the
-//! config file, the database, or the built-in default — plus whether a change
-//! needs a restart.
+//! rather than naming fields, so a setting cannot exist without appearing here.
+//! A page is rendered as its groups (`infra::settings::GROUPS`), and each row
+//! says what the setting does, where its effective value came from — the
+//! environment, the config file, the database, or the built-in default — and the
+//! one state it is in: waiting for a restart, needing one, or read-only.
 //!
 //! What the page deliberately cannot do is unchanged from the rest of the admin
 //! area: read-only settings (the master secret, the database URL, the state

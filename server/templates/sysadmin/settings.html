@@ -5,11 +5,17 @@
 {# System management: one page per area, each a form over the settings catalog.
 
    The page is rendered from the catalog rather than written out field by field,
-   so a setting cannot be added to the server without appearing here — and each
-   row says where its effective value came from and whether changing it needs a
-   restart. Read-only values (the master secret, the database URL, the state
-   directories) are shown for their origin but have no control: the server
-   refuses to store them.
+   so a setting cannot be added to the server without appearing here — and a page
+   is rendered as its groups, so a page that grew past a couple of screens is
+   read under headings rather than as one list. Each row says what the setting
+   does, where its effective value came from and the one state it is in (waiting
+   for a restart, needing one, or read-only). Read-only values (the master
+   secret, the database URL, the state directories) are shown for their origin
+   but have no control: the server refuses to store them.
+
+   A row's internal key is a `data-` hook and the label's tooltip, not text: the
+   page prints the environment variable when one owns the value, because that is
+   the only piece of provenance an operator has to go and change.
 
    A secret never renders back: the field starts empty and the switch below it
    says whether something is stored, so the three states an operator has —
