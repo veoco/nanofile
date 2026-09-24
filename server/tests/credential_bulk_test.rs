@@ -218,10 +218,25 @@ async fn a_no_op_bulk_action_reports_nothing_to_revoke() {
         resp.headers().get("location").unwrap(),
         "/settings/credentials/?bulk=nothing"
     );
+    // Follow it the way a browser would, query string included: the assertion is
+    // about the banner, not about the dictionary every page ships in `__T`.
+    let location = resp
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let body = client
+        .get(format!("{}{location}", f.server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
     assert!(
-        page(&client, &f.server.base_url)
-            .await
-            .contains("nothing left to revoke"),
+        body.contains(r#"<p class="font-medium">There was nothing left to revoke.</p>"#),
         "the page explains the no-op"
     );
 }

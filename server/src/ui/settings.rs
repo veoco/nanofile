@@ -560,6 +560,9 @@ fn flash_for_revoked(revoked: Option<&str>) -> Option<&'static str> {
 
 fn flash_for_bulk(bulk: Option<&str>) -> Option<&'static str> {
     match bulk {
+        // `revoke_bulk` redirects with `bulk=nothing` when the action removed
+        // nothing, which is not a bulk action id and has its own wording.
+        Some("nothing") => Some("credential.nothing_to_revoke"),
         Some(id) if BulkRevoke::from_id(id).is_some() => Some("credential.bulk_done"),
         _ => None,
     }
