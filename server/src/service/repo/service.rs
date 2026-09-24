@@ -321,18 +321,23 @@ fn build_op_url(site_url: &str, op: &str, token: &str) -> String {
     format!("{}/{}/{}", base, op, token)
 }
 
-/// Ensure a sync token exists for the given user+repo pair.
+/// Build the `RepoInfo` wire shape of one library the caller can access, for a
+/// list response.
 ///
-/// Only repo members may obtain a sync token (matches official seafile: the
-/// token is minted from `repo-tokens`/`download-info`, both of which require
-/// repo permission). Non-members get `Forbidden`.
+/// `user_id` decides `type` — `repo` for the owner, `srepo` for a member — and
+/// `permission` is that caller's membership row, passed in because the caller
+/// has already loaded the memberships. Encryption fields are echoed from the
+/// stored row, so a library read here cannot disagree with a later `get`.
+///
+/// The per-caller extras (`token`, `email` and the duplicated `repo_id` /
+/// `repo_name`) stay empty: only the endpoints that hand the caller a credential
+/// of its own fill them (see [`RepoService::create_repo`]).
 fn build_repo_info_from_model(
     r: &repo::Model,
     owner_email: &str,
     owner_name: &str,
     permission: &str,
     user_id: i32,
-    _extra_fields: bool,
 ) -> RepoInfo {
     let encrypted = r.encrypted != 0;
     let crypto = RepoCrypto::from_model(r);
@@ -427,7 +432,6 @@ impl RepoService {
                 &owner_name,
                 &m.permission,
                 user_id,
-                false,
             ));
         }
 
