@@ -4,11 +4,9 @@
 //! Re-entrancy contract: muda invokes the shared menu handler synchronously
 //! from inside `DispatchMessageW` (its `WM_COMMAND` handling still holds a
 //! borrow of the clicked menu item), so the handler must not touch that item
-//! and must not block on anything that pumps messages. Work that has to
-//! escape those constraints — the launch-at-login toggle and the service
-//! toggle, both of which end in a `set_checked` on the clicked item and may
-//! show a modal (elevation) dialog — is posted here as a thread message and
-//! runs in this loop after the dispatch has returned.
+//! and must not block on anything that pumps messages. It only queues an
+//! action ([`super::actions`]); this loop drains the queue after the dispatch
+//! has returned, which is where every dialog and every `set_checked` happens.
 
 use std::sync::OnceLock;
 use tokio::sync::mpsc::UnboundedSender;
@@ -19,17 +17,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_SETTINGCHANGE,
 };
 
-use super::{TrayContext, perform_autostart_toggle};
+use super::TrayContext;
 
-/// App-defined thread message carrying a "toggle launch-at-login" request
-/// from the menu handler to the message loop.
-const WM_APP_TOGGLE_AUTOSTART: u32 = WM_APP + 1;
-/// "Run the service toggle": the confirmation and the elevation prompt both
-/// have to happen outside muda's synchronous dispatch.
-const WM_APP_TOGGLE_SERVICE: u32 = WM_APP + 2;
+/// "Run the queued menu actions": the confirmation and the elevation prompt
+/// both have to happen outside muda's synchronous dispatch.
+const WM_APP_TRAY_ACTION: u32 = WM_APP + 1;
 /// "The elevated helper exited": `wparam` is 1 for an install and 0 for an
 /// uninstall, `lparam` is its exit code.
-const WM_APP_SERVICE_RESULT: u32 = WM_APP + 3;
+const WM_APP_SERVICE_RESULT: u32 = WM_APP + 2;
 
 /// Main thread's id, captured when the loop starts.
 static LOOP_THREAD_ID: OnceLock<u32> = OnceLock::new();
@@ -43,29 +38,15 @@ fn post(message: u32, wparam: usize, lparam: isize) -> bool {
 }
 
 /// Called from the menu handler, which runs inside muda's synchronous
-/// `WM_COMMAND` dispatch: ask the loop to run the toggle once that dispatch
-/// has returned.
-pub(super) fn request_autostart_toggle() {
-    if !post(WM_APP_TOGGLE_AUTOSTART, 0, 0) {
-        // The loop has not started (cannot happen for menu events, which are
-        // only delivered while it runs). Best effort: run the toggle now.
-        tracing::warn!("Tray loop not running, applying launch-at-login toggle directly");
-        super::perform_autostart_toggle();
-    }
-}
-
-/// The same deferral for the service item.
-pub(super) fn request_service_toggle() {
-    if !post(WM_APP_TOGGLE_SERVICE, 0, 0) {
-        tracing::error!("Tray loop not running; the service toggle was dropped");
-    }
+/// `WM_COMMAND` dispatch: ask the loop to run the queued actions once that
+/// dispatch has returned.
+pub(super) fn post_action() -> bool {
+    post(WM_APP_TRAY_ACTION, 0, 0)
 }
 
 /// Called from the helper-waiting thread once the elevated copy exited.
-pub(super) fn post_service_result(enable: bool, exit_code: isize) {
-    if !post(WM_APP_SERVICE_RESULT, usize::from(enable), exit_code) {
-        tracing::warn!("Tray loop not running; the service result was dropped");
-    }
+pub(super) fn post_service_result(enable: bool, exit_code: isize) -> bool {
+    post(WM_APP_SERVICE_RESULT, usize::from(enable), exit_code)
 }
 
 pub(super) fn run(
@@ -95,16 +76,12 @@ pub(super) fn run(
             // procedure; handle the deferred tray work here.
             if msg.hwnd.is_null() {
                 match msg.message {
-                    WM_APP_TOGGLE_AUTOSTART => {
-                        perform_autostart_toggle();
-                        continue;
-                    }
-                    WM_APP_TOGGLE_SERVICE => {
-                        super::service_windows::start_toggle();
+                    WM_APP_TRAY_ACTION => {
+                        super::actions::drain();
                         continue;
                     }
                     WM_APP_SERVICE_RESULT => {
-                        super::service_windows::finish(msg.wParam != 0, msg.lParam as u32);
+                        super::actions::service_finished(msg.wParam != 0, msg.lParam as u32);
                         continue;
                     }
                     _ => {}

@@ -17,12 +17,10 @@
 //!   menu comes up without one; Quit then exits this process alone. That is what
 //!   keeps the service switchable from the tray while the service is running.
 
+mod actions;
 mod icon;
 pub(crate) mod icon_gen;
 mod notify;
-/// The Windows-only "start as a service" menu item.
-#[cfg(target_os = "windows")]
-mod service_windows;
 /// macOS gets a template image and lets the system invert it, so the theme
 /// probe only exists where the raster has to carry the colour itself.
 #[cfg(not(target_os = "macos"))]
@@ -41,7 +39,6 @@ mod backend;
 #[path = "backend_fallback.rs"]
 mod backend;
 
-use std::cell::RefCell;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -51,12 +48,13 @@ use anyhow::Context;
 use infra::config::Config;
 use server::i18n::I18n;
 use tokio::sync::mpsc::UnboundedSender;
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
 use crate::TrayCommand;
 use crate::startup::login::{LoginEntry as _, PlatformLogin};
 use crate::startup::policy;
+use actions::MenuState;
 
 const ID_OPEN_WEB: &str = "nanofile.open-web";
 const ID_AUTOSTART: &str = "nanofile.autostart";
@@ -232,7 +230,7 @@ fn probe_addr(addr: &str, port: u16) -> SocketAddr {
 /// automatic start there is.
 #[cfg(target_os = "windows")]
 fn service_registered(config_path: &Path) -> bool {
-    service_windows::probe(config_path).is_ours()
+    crate::startup::service::probe_service(config_path).is_ours()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -348,22 +346,19 @@ fn create_tray(
     menu.append(&item_quit)
         .context("failed to build tray menu")?;
 
-    MENU_STATE.with(|slot| {
-        *slot.borrow_mut() = Some(MenuState {
-            ctx: TrayContext {
-                exe_path: ctx.exe_path.clone(),
-                config_path: ctx.config_path.clone(),
-                web_url: ctx.web_url.clone(),
-            },
-            autostart,
-            autostart_item: item_autostart,
-            #[cfg(target_os = "windows")]
-            service_item: item_service,
-            client_mode,
-            quit_tx,
-        });
+    actions::install(MenuState {
+        ctx: TrayContext {
+            exe_path: ctx.exe_path.clone(),
+            config_path: ctx.config_path.clone(),
+            web_url: ctx.web_url.clone(),
+        },
+        login: autostart,
+        login_item: item_autostart,
+        #[cfg(target_os = "windows")]
+        service_item: item_service,
+        client_mode,
+        quit_tx,
     });
-    MenuEvent::set_event_handler(Some(on_menu_event));
 
     TrayIconBuilder::new()
         .with_id("nanofile")
@@ -384,166 +379,6 @@ fn create_tray(
         .with_icon(icon::tray_icon())
         .build()
         .context("failed to create tray icon")
-}
-
-struct MenuState {
-    ctx: TrayContext,
-    autostart: PlatformLogin,
-    autostart_item: CheckMenuItem,
-    /// The Windows "start as a service" item.
-    #[cfg(target_os = "windows")]
-    service_item: CheckMenuItem,
-    /// Something else already serves this address, so this process runs no
-    /// server and Quit only ends the tray.
-    client_mode: bool,
-    quit_tx: UnboundedSender<TrayCommand>,
-}
-
-thread_local! {
-    /// Menu items and OS handles are only valid on the event-loop thread;
-    /// keeping them here lets the (Send-bounded) muda event handler reach the
-    /// shared state without ever moving anything across threads — the handler
-    /// is always invoked on the loop thread.
-    static MENU_STATE: RefCell<Option<MenuState>> = const { RefCell::new(None) };
-}
-
-/// Menu action snapshot, taken in a short borrow of `MENU_STATE` and executed
-/// outside of it — the handler must never hold the RefCell across work that
-/// pumps messages (modal dialogs, spawned processes), or a re-entrant menu
-/// event would panic on the live borrow.
-enum MenuAction {
-    OpenWeb(String),
-    ToggleAutostart(PlatformLogin, CheckMenuItem),
-    #[cfg(target_os = "windows")]
-    ToggleService,
-    OpenConfig(PathBuf),
-    Quit(UnboundedSender<TrayCommand>, bool),
-}
-
-fn on_menu_event(event: MenuEvent) {
-    let id: &str = event.id.as_ref();
-
-    // muda invokes this handler synchronously inside its WM_COMMAND dispatch
-    // (Windows) while it holds a borrow of the clicked item itself. Snapshot
-    // the action in a short borrow and act outside of it, so a re-entrant
-    // menu event can never touch a live borrow.
-    let action = MENU_STATE.with(|slot| {
-        let slot = slot.borrow();
-        let state = slot.as_ref()?;
-        match id {
-            ID_OPEN_WEB => Some(MenuAction::OpenWeb(state.ctx.web_url.clone())),
-            ID_AUTOSTART => Some(MenuAction::ToggleAutostart(
-                state.autostart.clone(),
-                state.autostart_item.clone(),
-            )),
-            #[cfg(target_os = "windows")]
-            ID_SERVICE => Some(MenuAction::ToggleService),
-            ID_OPEN_CONFIG => Some(MenuAction::OpenConfig(state.ctx.config_path.clone())),
-            ID_QUIT => Some(MenuAction::Quit(state.quit_tx.clone(), state.client_mode)),
-            _ => None,
-        }
-    });
-
-    match action {
-        Some(MenuAction::OpenWeb(web_url)) => {
-            tracing::info!("Opening web UI {web_url}");
-            if let Err(e) = open::that(&web_url) {
-                tracing::warn!("Failed to open web UI: {e}");
-            }
-        }
-        Some(MenuAction::ToggleAutostart(autostart, item)) => {
-            toggle_autostart(autostart, item);
-        }
-        // The service toggle is deferred like the autostart one: it may show a
-        // confirmation and then an elevation prompt, both of which pump
-        // messages on this thread.
-        #[cfg(target_os = "windows")]
-        Some(MenuAction::ToggleService) => service_windows::request_toggle(),
-        Some(MenuAction::OpenConfig(config_path)) => open_config_file(&config_path),
-        Some(MenuAction::Quit(quit_tx, client_mode)) => {
-            if client_mode {
-                // Something else serves the address. Quit means the same thing
-                // it means in the ordinary tray — stop the server — which in
-                // this state is this installation's Windows service, if that is
-                // what is listening. `quit_client` decides, and says so when it
-                // cannot.
-                quit_client();
-            } else {
-                tracing::info!("Quit requested from tray");
-                let _ = quit_tx.send(TrayCommand::Quit);
-            }
-        }
-        None => {}
-    }
-}
-
-/// Quit from a tray that brought up no server of its own.
-fn quit_client() {
-    #[cfg(target_os = "windows")]
-    service_windows::quit_in_client_mode();
-    #[cfg(not(target_os = "windows"))]
-    {
-        // No service concept: whatever holds the address is a process the user
-        // started, and ending it is not this menu's business.
-        tracing::info!("Quit requested from a client-mode tray");
-        std::process::exit(0);
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn toggle_autostart(_autostart: PlatformLogin, _item: CheckMenuItem) {
-    // muda's WM_COMMAND dispatch is still on the stack: it holds a borrow of
-    // the clicked item itself, so calling `set_checked` here panics — and the
-    // registry toggle below may show a modal elevation dialog, which pumps
-    // messages. Defer the whole toggle to the message loop via a thread
-    // message; muda has already flipped the checkbox optimistically and the
-    // deferred sync corrects it if the toggle fails or is cancelled.
-    backend::request_autostart_toggle();
-}
-
-#[cfg(not(target_os = "windows"))]
-fn toggle_autostart(autostart: PlatformLogin, item: CheckMenuItem) {
-    perform_autostart_toggle_with(autostart, item);
-}
-
-/// Run the launch-at-login toggle now. Only call outside muda's synchronous
-/// menu dispatch (on Windows the backend loop invokes this from a posted
-/// thread message), because it ends in a `set_checked` on the clicked item.
-#[cfg(target_os = "windows")]
-pub(super) fn perform_autostart_toggle() {
-    let Some((autostart, item)) = MENU_STATE.with(|slot| {
-        slot.borrow_mut()
-            .as_ref()
-            .map(|state| (state.autostart.clone(), state.autostart_item.clone()))
-    }) else {
-        return;
-    };
-    // The login entry and the service are alternatives: while this
-    // installation's service is registered the item is disabled, and this
-    // catches the case where the registration changed outside the tray.
-    if service_windows::refuse_login_entry_change() {
-        return;
-    }
-    perform_autostart_toggle_with(autostart, item);
-}
-
-fn perform_autostart_toggle_with(autostart: PlatformLogin, item: CheckMenuItem) {
-    let result = if autostart.is_enabled() {
-        tracing::info!("Disabling launch at login");
-        autostart.disable()
-    } else if !login_entry_write_confirmed() {
-        // The warning below was dismissed; leave the checkbox where the
-        // registry actually is.
-        tracing::info!("launch-at-login registration cancelled");
-        Ok(())
-    } else {
-        tracing::info!("Enabling launch at login");
-        autostart.enable()
-    };
-    if let Err(e) = result {
-        tracing::error!("Failed to update launch-at-login: {e:#}");
-    }
-    item.set_checked(autostart.is_enabled());
 }
 
 /// Whether writing the login entry may proceed.
