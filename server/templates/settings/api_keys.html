@@ -100,7 +100,8 @@
                 {# The dates are the row's fixed columns: right-aligned and
                    labelled so they read down the list, not into the name.
                    `data-ts` so they land in the viewer's timezone; a key with
-                   no expiry and one never used both read as `common.never`. #}
+                   no expiry reads as `common.no_expiry` and one never used as
+                   `common.never` — a property and an event, not one string. #}
                 <div class="nf-facts">
                     <div class="f">
                         <span class="k">{{ t.tr("apikey.created") }}</span>
@@ -110,7 +111,7 @@
                         <span class="k">{{ t.tr("apikey.expires") }}</span>
                         {% match key.expires_at_ts %}
                         {% when Some with (ts) %}{{ time::ts_class(ts, "v") }}
-                        {% when None %}<span class="v">{{ t.tr("common.never") }}</span>
+                        {% when None %}<span class="v">{{ t.tr("common.no_expiry") }}</span>
                         {% endmatch %}
                     </div>
                     <div class="f">
@@ -154,7 +155,7 @@
                                 <option value="{{ option.days }}">{{ option.label }}</option>
                                 {% endfor %}
                                 <option value="custom" {% if key.has_expiry %}selected{% endif %}>{{ t.tr("apikey.expiry_custom") }}</option>
-                                <option value="never" {% if !key.has_expiry %}selected{% endif %}>{{ t.tr("apikey.expiry_never") }}</option>
+                                <option value="never" {% if !key.has_expiry %}selected{% endif %}>{{ t.tr("common.no_expiry") }}</option>
                             </select>
                         </div>
                         <div>
@@ -262,7 +263,7 @@
                             {% endfor %}
                             <option value="custom">{{ t.tr("apikey.expiry_custom") }}</option>
                             {% if max_ttl_days == 0 %}
-                            <option value="never">{{ t.tr("apikey.expiry_never") }}</option>
+                            <option value="never">{{ t.tr("common.no_expiry") }}</option>
                             {% endif %}
                         </select>
                     </div>

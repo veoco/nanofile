@@ -111,6 +111,13 @@ twofactor.incorrect_password = "密码不正确。"
 common.never = "从未"
 common.unlimited = "不限"
 
+# “从未”与“永不过期”是两种含义，不能共用同一条字符串。
+# `common.never` 是尚未发生的事件（最近使用、最后登录）；
+# `common.no_expiry` 是不会过期的属性，旁边有标签；
+# `common.never_expires` 是独立写法，用于旁边没有标签的位置。
+common.no_expiry = "永不过期"
+common.never_expires = "永不过期"
+
 # 系统管理
 admin.global_quota = "{size}(全局)"
 
@@ -413,7 +420,6 @@ fb.move_select_destination = "选择目标位置:"
 fb.move_selected = "移动所选"
 fb.network_error = "网络错误"
 fb.network_error_folder = "创建文件夹时网络错误"
-fb.never = "永不过期"
 fb.new_folder = "新建文件夹"
 fb.new_folder_enter_name = "为新文件夹输入一个名称。"
 fb.no_exif_data = "无 EXIF 数据"
@@ -781,7 +787,6 @@ credential.warn_stale = "有 {count} 个同步令牌超过 30 天未同步。"
 credential.warn_other_sessions = "还有 {count} 个其他浏览器会话处于登录状态。"
 credential.expired = "已过期"
 credential.expiring_soon = "即将过期"
-credential.never = "永不过期"
 credential.sign_out_others = "退出其他所有会话"
 credential.sign_out_others_confirm = "退出其他所有浏览器会话？它们会立即失效，当前这个保持登录。"
 credential.revoked = "凭据已吊销。"
@@ -967,7 +972,6 @@ apikey.expiry = "有效期"
 apikey.expiry_days = "{days} 天"
 apikey.expiry_custom = "自定义"
 apikey.expiry_custom_days = "天数"
-apikey.expiry_never = "永不过期"
 apikey.create_button = "创建密钥"
 apikey.show_once = "密钥已创建"
 apikey.show_once_desc = "请立即复制：服务端只保存哈希，之后无法再次显示。"

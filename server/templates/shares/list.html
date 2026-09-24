@@ -70,7 +70,7 @@
         <div class="nf-prow-meta flex items-center gap-3">
             {{ time::ts_class(s.created_at_ts, "w-[112px] text-right") }}
             <span class="w-[112px] text-right{% if s.expires_at_ts.is_some() %} text-err-text{% endif %}">
-                {% if let Some(ts) = s.expires_at_ts %}{{ time::ts(ts) }}{% else %}{{ t.tr("common.never") }}{% endif %}
+                {% if let Some(ts) = s.expires_at_ts %}{{ time::ts(ts) }}{% else %}{{ t.tr("common.never_expires") }}{% endif %}
             </span>
         </div>
         <div class="nf-prow-act">
@@ -133,7 +133,7 @@
         <div class="nf-prow-meta flex items-center gap-3">
             {{ time::ts_class(u.created_at_ts, "w-[112px] text-right") }}
             <span class="w-[112px] text-right{% if u.expires_at_ts.is_some() %} text-err-text{% endif %}">
-                {% if let Some(ts) = u.expires_at_ts %}{{ time::ts(ts) }}{% else %}{{ t.tr("common.never") }}{% endif %}
+                {% if let Some(ts) = u.expires_at_ts %}{{ time::ts(ts) }}{% else %}{{ t.tr("common.never_expires") }}{% endif %}
             </span>
         </div>
         <div class="nf-prow-act">
@@ -180,7 +180,7 @@
             <div>
                 <label class="form-label mb-1">{{ t.tr("share.expires_in") }}</label>
                 <select id="edit-expiry-select" class="select">
-                    <option value="">{{ t.tr("common.never") }}</option>
+                    <option value="">{{ t.tr("common.no_expiry") }}</option>
                     <option value="1">{{ t.tr("share.expiry_1d") }}</option>
                     <option value="7">{{ t.tr("share.expiry_7d") }}</option>
                     <option value="30">{{ t.tr("share.expiry_30d") }}</option>
@@ -225,7 +225,7 @@
             <div>
                 <label class="form-label mb-1">{{ t.tr("share.expires_in") }}</label>
                 <select id="ul-edit-expiry-select" class="select">
-                    <option value="">{{ t.tr("common.never") }}</option>
+                    <option value="">{{ t.tr("common.no_expiry") }}</option>
                     <option value="1">{{ t.tr("share.expiry_1d") }}</option>
                     <option value="7">{{ t.tr("share.expiry_7d") }}</option>
                     <option value="30">{{ t.tr("share.expiry_30d") }}</option>

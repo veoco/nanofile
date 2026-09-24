@@ -111,6 +111,13 @@ twofactor.incorrect_password = "Incorrect password."
 common.never = "Never"
 common.unlimited = "Unlimited"
 
+# "Never" carries two meanings that must not share one string. `common.never` is
+# an event that has not happened yet (last used, last login); `common.no_expiry`
+# is the property of not expiring, shown next to a label, and
+# `common.never_expires` is the standalone form for a slot with no label.
+common.no_expiry = "Never"
+common.never_expires = "Never expires"
+
 # Admin
 admin.global_quota = "{size} (global)"
 
@@ -413,7 +420,6 @@ fb.move_select_destination = "Select destination:"
 fb.move_selected = "Move selected"
 fb.network_error = "Network error"
 fb.network_error_folder = "Network error creating folder"
-fb.never = "Never"
 fb.new_folder = "New Folder"
 fb.new_folder_enter_name = "Enter a name for the new folder."
 fb.no_exif_data = "No EXIF data"
@@ -782,7 +788,6 @@ credential.warn_stale = "{count} sync token(s) have not synced for over 30 days.
 credential.warn_other_sessions = "{count} other browser session(s) are signed in."
 credential.expired = "Expired"
 credential.expiring_soon = "Expiring soon"
-credential.never = "Never expires"
 credential.sign_out_others = "Sign out other sessions"
 credential.sign_out_others_confirm = "Sign out every other browser session? They stop working immediately; this one stays signed in."
 credential.revoked = "Credential revoked."
@@ -968,7 +973,6 @@ apikey.expiry = "Expires"
 apikey.expiry_days = "{days} days"
 apikey.expiry_custom = "Custom"
 apikey.expiry_custom_days = "Days"
-apikey.expiry_never = "Never"
 apikey.create_button = "Create key"
 apikey.show_once = "Key created"
 apikey.show_once_desc = "Copy it now: only its hash is stored, so it cannot be shown again."

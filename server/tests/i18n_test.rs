@@ -3,6 +3,7 @@
 mod common;
 
 use common::{TestServer, create_test_user};
+use server::i18n::I18n;
 
 /// Log in via the Web UI and return a cookie-tracking client plus the
 /// `sfcsrftoken` cookie value (needed for CSRF-protected form posts).
@@ -178,5 +179,82 @@ async fn test_libraries_page_uses_language() {
     assert!(
         body.contains("新建资料库"),
         "libraries page should render in Chinese"
+    );
+}
+
+/// The HTML a fact row puts between its label and the end of that row.
+fn fact<'a>(body: &'a str, label: &str) -> &'a str {
+    let key = format!(r#"<span class="k">{label}</span>"#);
+    let start = body
+        .find(&key)
+        .unwrap_or_else(|| panic!("no {label:?} fact on the page"))
+        + key.len();
+    let rest = &body[start..];
+    &rest[..rest.find("</div>").unwrap_or(rest.len())]
+}
+
+/// A key that does not expire is a property, not an event that never happened:
+/// the row and both expiry forms have to use the same words for it, and only the
+/// "last used" fact may say "never" in the other sense.
+#[tokio::test]
+async fn test_a_key_without_an_expiry_is_not_read_as_never_happened() {
+    let server = TestServer::start().await;
+    create_test_user(&server.db, "i18n6@test.com", "password").await;
+    let (client, csrf) = login_ui(&server, "i18n6@test.com", "password").await;
+
+    client
+        .post(format!("{}/settings/language/", server.base_url))
+        .form(&[("language", "zh"), ("csrf_token", &csrf)])
+        .send()
+        .await
+        .unwrap();
+
+    let created = client
+        .post(format!("{}/settings/api-keys/create/", server.base_url))
+        .form(&[
+            ("name", "never-key"),
+            ("expiry", "never"),
+            ("all_repos", "1"),
+            ("cap__file.read", "1"),
+            ("csrf_token", &csrf),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        created.status(),
+        303,
+        "creating a key redirects to the list"
+    );
+
+    let page = client
+        .get(format!("{}/settings/api-keys/", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), 200);
+    let body = page.text().await.unwrap();
+
+    let t = I18n::get(Some("zh"));
+    let expires = fact(&body, t.tr("apikey.expires"));
+    assert!(
+        expires.contains(t.tr("common.no_expiry")),
+        "the expiry row must say it does not expire, got {expires:?}"
+    );
+    assert!(
+        !expires.contains(t.tr("common.never")),
+        "the expiry row must not read as an event, got {expires:?}"
+    );
+    let last_used = fact(&body, t.tr("apikey.last_used"));
+    assert!(
+        last_used.contains(t.tr("common.never")),
+        "an unused key still reads as never used, got {last_used:?}"
+    );
+    // The row and the create/edit expiry selects must agree, or the page
+    // contradicts itself about the same property.
+    assert!(
+        body.matches(t.tr("common.no_expiry")).count() >= 3,
+        "row plus two forms should all say {:?}",
+        t.tr("common.no_expiry")
     );
 }
