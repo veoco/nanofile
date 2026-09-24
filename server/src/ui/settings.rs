@@ -480,9 +480,10 @@ pub struct CredentialsTemplate {
     pub devices: Vec<DeviceInfo>,
     pub browsers: Vec<BrowserInfo>,
     /// Sync tokens whose device is not in `devices`, i.e. everything except
-    /// the ones already shown inside a device's expanded detail. These are
-    /// historical leftovers — a normal account has none — so the section that
-    /// renders them is hidden when the list is empty.
+    /// the ones already shown inside a device's expanded detail: tokens issued
+    /// to a caller that reported no device identity (an API key asking for a
+    /// repository token), which the first device to sync with one claims. The
+    /// section that renders them is hidden when the list is empty.
     pub loose_sync_tokens: Vec<SyncTokenInfo>,
     /// 2FA trusts whose device is not in `devices`; see `loose_sync_tokens`.
     pub loose_device_trusts: Vec<DeviceTrustInfo>,

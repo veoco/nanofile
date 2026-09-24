@@ -485,6 +485,9 @@ async fn test_sync_token_has_ttl() {
     let token = body["token"].as_str().unwrap().to_string();
 
     let repo_id = common::create_test_repo(&client, &token, "TTL Test").await;
+    // Creating a library mints nothing, so ask for its token the way the sync
+    // protocol does; it is the expiry on that row this test pins.
+    common::get_sync_token(&client, &token, &repo_id).await;
     let sync = infra::entity::sync_token::Entity::find()
         .filter(infra::entity::sync_token::Column::RepoId.eq(&repo_id))
         .one(server.db.as_ref())

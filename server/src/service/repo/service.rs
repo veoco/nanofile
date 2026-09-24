@@ -436,10 +436,17 @@ impl RepoService {
 
     /// Create a new repo.
     ///
-    /// Returns the created RepoInfo and the sync token value. `peer` is the
-    /// device the request came from, when it reported one: the new repository's
-    /// token is issued to it, so it shows up under that device immediately
-    /// instead of waiting for the first sync.
+    /// `peer` is the device the request came from, when it reported one: the new
+    /// repository's token is issued to it and returned in
+    /// [`RepoInfo::token`], so it shows up under that device immediately instead
+    /// of waiting for the first sync.
+    ///
+    /// A caller that reported **no** device (a browser session, a unified API
+    /// key) gets no token here: no client is holding one yet, so minting it would
+    /// only leave the account a credential that can never be used or named.
+    /// Creating a library is not asking to sync it — the sync protocol mints the
+    /// shared unattributed token on the first request that actually needs one
+    /// (`repo-tokens`, `download-info`, `accessible-repos`).
     ///
     /// `passwd` is the bare-password creation flow (seahub passes it straight to
     /// `seafile_api.create_repo`): with no client-supplied `magic`/`random_key`
@@ -468,7 +475,7 @@ impl RepoService {
         policy: &EncryptedLibraryPolicy,
         peer: Option<&PeerStamp>,
         sync_token_ttl_days: u64,
-    ) -> Result<(RepoInfo, String), AppError> {
+    ) -> Result<RepoInfo, AppError> {
         let name = validate_repo_name(name)?;
         // The client may propose a repo id (the sync clients generate their
         // own). Only accept a well-formed UUID: the id is part of DNS-free
@@ -669,16 +676,25 @@ impl RepoService {
         // Issue the repository's sync token, attributed to the creating device
         // when it reported one. The membership was just created, so the
         // permission re-check inside the resolver would only repeat it.
-        let token_value = ensure_sync_tokens_for_repos(
-            repos,
-            std::slice::from_ref(&repo_id),
-            user_id,
-            peer,
-            sync_token_ttl_days,
-        )
-        .await?
-        .remove(&repo_id)
-        .ok_or_else(|| AppError::internal("sync token was not resolved"))?;
+        //
+        // A device-less creator (a browser session, a unified API key) gets no
+        // token: see the note on this function. The unattributed token is minted
+        // on demand instead, by the first sync request that needs one.
+        let token_value = match peer {
+            Some(peer) => Some(
+                ensure_sync_tokens_for_repos(
+                    repos,
+                    std::slice::from_ref(&repo_id),
+                    user_id,
+                    Some(peer),
+                    sync_token_ttl_days,
+                )
+                .await?
+                .remove(&repo_id)
+                .ok_or_else(|| AppError::internal("sync token was not resolved"))?,
+            ),
+            None => None,
+        };
 
         let encrypted = encrypted_val == 1;
         // Everything encryption-related is echoed from the row that was just
@@ -721,11 +737,11 @@ impl RepoService {
             lib_need_decrypt: if encrypted { Some(true) } else { None },
             repo_id_dup: Some(repo_id),
             repo_name_dup: Some(name.to_string()),
-            token: Some(token_value.clone()),
+            token: token_value,
             email: Some(email.to_string()),
         };
 
-        Ok((repo_info, token_value))
+        Ok(repo_info)
     }
 
     /// Get a single repo's details (v2 API).

@@ -93,15 +93,18 @@ async fn download_info_hands_a_device_its_own_attributed_token() {
     let f = TestFixture::new().await;
     let device = login_device(&f, "linux", "dev-a").await;
 
-    // A second library whose token was minted without a device identity.
+    // A second library whose token was asked for without a device identity —
+    // creating a library mints nothing, so this is the sync protocol's own
+    // device-less request.
     let resp = f.client.create_repo(&f.api_token, "second").await;
     assert_eq!(resp.status(), 201);
     let second = resp.json::<serde_json::Value>().await.unwrap()["id"]
         .as_str()
         .expect("repo id")
         .to_string();
+    repo_token(&f, &f.api_token, &second).await;
     let orphan = row_for(&f, &second).await;
-    assert_eq!(orphan.peer_id, None, "minted by a device-less login");
+    assert_eq!(orphan.peer_id, None, "asked for by a device-less login");
 
     let resp = f.client.download_info(&device, &second).await;
     assert_eq!(resp.status(), 200);

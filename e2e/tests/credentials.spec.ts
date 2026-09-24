@@ -78,6 +78,26 @@ test("the leftover sections count exactly the rows they list", async ({ page }) 
   }
 });
 
+test("creating a library from a session leaves no unattributed token", async ({
+  page,
+}) => {
+  // A browser session and a unified API key report no device, and creating a
+  // library is not asking to sync it: the token is minted by the sync protocol
+  // (`/api2/repo-tokens/`, as the tests below seed it), never by the create. It
+  // used to be issued up front, and the row read as an unnamed device that had
+  // never synced.
+  const name = `e2e-create-${Date.now()}`;
+  await createRepo(state.baseURL, state.adminToken, name);
+
+  await page.goto("/settings/credentials/");
+  const leftovers = page.locator("#sync-tokens");
+  if ((await leftovers.count()) > 0) {
+    await expect(
+      leftovers.locator(".nf-prow").filter({ hasText: name }),
+    ).toHaveCount(0);
+  }
+});
+
 test("the summary strip and the device detail both render", async ({ page }) => {
   await page.goto("/settings/credentials/");
   // Four counters, whatever their numbers.

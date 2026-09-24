@@ -264,11 +264,17 @@ async fn a_sync_token_for_a_known_device_is_not_listed_as_unknown() {
     assert_eq!(resp.status(), 200);
 
     // A second library, because a sync token is unique per (user, library).
-    // Creating one mints its sync token, which has no peer id yet, so that is
-    // the leftover; the fixture's own token is then pointed at the device that
-    // signed in above, so it belongs to that card instead.
+    // Creating one mints nothing, so its token is asked for the way a
+    // device-less sync client does: it has no peer id, so that is the leftover;
+    // the fixture's own token is then pointed at the device that signed in
+    // above, so it belongs to that card instead.
     let resp = f.client.create_repo(&f.api_token, "second").await;
     assert_eq!(resp.status(), 201);
+    let second_id = resp.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    common::get_sync_token(&f.client, &f.api_token, &second_id).await;
 
     let attached = f
         .server
@@ -331,6 +337,33 @@ async fn a_sync_token_for_a_known_device_is_not_listed_as_unknown() {
         section_by_id(&after, "sync-tokens").is_none(),
         "every token belongs to a device, so the section is not rendered"
     );
+}
+
+/// Creating a library from the web leaves nothing in the unattributed section:
+/// the token is minted by the sync protocol, not by creating a library. The
+/// fixture's own token is still there, so the section is filtered by name.
+#[tokio::test]
+async fn creating_a_library_from_the_web_mints_no_token() {
+    let f = TestFixture::new().await;
+    let resp = f.client.create_repo(&f.api_token, "web-made").await;
+    assert_eq!(resp.status(), 201);
+    assert!(
+        resp.json::<serde_json::Value>()
+            .await
+            .unwrap()
+            .get("token")
+            .is_none(),
+        "the browser never receives a sync token"
+    );
+
+    let client = login_client(&f).await;
+    let body = visible(&page(&client, &f.server.base_url).await);
+    if let Some(tokens) = section_by_id(&body, "sync-tokens") {
+        assert!(
+            !tokens.contains("web-made"),
+            "the library just created must not appear as an unattributed token"
+        );
+    }
 }
 
 #[tokio::test]

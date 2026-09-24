@@ -254,12 +254,15 @@ async fn test_unlink_only_revokes_the_device_it_names() {
 
     let phone_repo = common::create_test_repo(&client, &phone, "Phone Repo").await;
     let laptop_repo = common::create_test_repo(&client, &laptop, "Laptop Repo").await;
-    // A third library created by a login that reports no device: with no device
-    // to attribute it to, its token stays unattributed until one claims it.
+    // A third library created by a login that reports no device. Creating a
+    // library mints nothing, so the token is asked for the way a device-less
+    // sync client does — and with no device to attribute it to, it stays
+    // unattributed until one claims it.
     let resp = client.login("test@example.com", "password123").await;
     let body: serde_json::Value = resp.json().await.unwrap();
     let device_less = body["token"].as_str().unwrap().to_string();
     let unattributed_repo = common::create_test_repo(&client, &device_less, "Unattributed").await;
+    common::get_sync_token(&client, &device_less, &unattributed_repo).await;
 
     for (repo_id, peer) in [(&phone_repo, "phone-001"), (&laptop_repo, "laptop-001")] {
         let token = infra::entity::sync_token::Entity::find()

@@ -427,7 +427,100 @@ async fn test_create_repo_multipart_body() {
     assert_eq!(body["repo_name"], "Multipart Created Repo");
     assert!(body["id"].as_str().is_some());
     assert!(body["repo_id"].as_str().is_some());
-    assert!(body["token"].as_str().is_some());
+    // The fixture's login reports no device, and creating a library is not
+    // asking to sync it: the token is minted on the first sync-protocol request
+    // that needs one, so the field is absent rather than an unused credential.
+    assert!(
+        body.get("token").is_none(),
+        "a device-less creator gets no sync token"
+    );
+}
+
+/// Creating a library mints no credential when the caller reported no device.
+///
+/// The token used to be issued up front, which left a browser-created library
+/// an unattributed `sync_tokens` row that nothing held: the credential page
+/// showed it as an unnamed device that had never synced.
+#[tokio::test]
+async fn a_library_created_without_a_device_has_no_sync_token() {
+    let server = TestServer::start().await;
+    let client = server.client();
+
+    create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+    let resp = client.login("test@example.com", "password123").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let api_token = body["token"].as_str().unwrap();
+
+    let resp = client.create_repo(api_token, "No Token Yet").await;
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let repo_id = body["id"].as_str().unwrap().to_string();
+    assert!(
+        body.get("token").is_none(),
+        "no token in the create response"
+    );
+
+    assert!(
+        repo_sync_tokens(&server, &repo_id).await.is_empty(),
+        "creating a library must not mint a sync token"
+    );
+
+    // Asking for one the way the sync protocol does mints exactly one, with no
+    // device on it, and asking again reuses it.
+    let token = common::get_sync_token(&client, api_token, &repo_id).await;
+    let rows = repo_sync_tokens(&server, &repo_id).await;
+    assert_eq!(rows.len(), 1, "the sync request mints one token");
+    assert!(rows[0].peer_id.is_none(), "no device asked for it");
+    assert!(rows[0].last_sync_time.is_none(), "it has never synced");
+
+    let again = common::get_sync_token(&client, api_token, &repo_id).await;
+    assert_eq!(again, token, "the same unattributed token is reused");
+    assert_eq!(repo_sync_tokens(&server, &repo_id).await.len(), 1);
+}
+
+/// A device that creates a library still gets its token up front, already
+/// attributed, so the inventory shows it under that device before the first
+/// sync.
+#[tokio::test]
+async fn a_device_that_creates_a_library_gets_its_token() {
+    let server = TestServer::start().await;
+    let client = server.client();
+
+    create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
+    // The Android client's login: it reports a device, and the account token it
+    // receives carries that device id.
+    let resp = client
+        .login_multipart("test@example.com", "password123")
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let api_token = body["token"].as_str().unwrap();
+
+    let resp = client.create_repo(api_token, "Device Library").await;
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let repo_id = body["id"].as_str().unwrap();
+    let token = body["token"]
+        .as_str()
+        .expect("a device-attributed create returns its token");
+    assert_eq!(token.len(), 40, "a sync token is 40 hex chars");
+
+    let rows = repo_sync_tokens(&server, repo_id).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].peer_id.as_deref(), Some("test-device-123"));
+    assert_eq!(rows[0].peer_name.as_deref(), Some("Test Device"));
+}
+
+/// The sync tokens stored for one library.
+async fn repo_sync_tokens(
+    server: &TestServer,
+    repo_id: &str,
+) -> Vec<infra::entity::sync_token::Model> {
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    infra::entity::sync_token::Entity::find()
+        .filter(infra::entity::sync_token::Column::RepoId.eq(repo_id))
+        .all(server.db.as_ref())
+        .await
+        .unwrap()
 }
 
 /// Regression: POST /api2/repos/ accepts multipart body with description.

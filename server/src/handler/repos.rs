@@ -169,7 +169,7 @@ pub async fn create_repo(
     };
 
     let peer = auth.device.as_ref().map(|device| device.peer());
-    let (repo_info, _token) = service::RepoService::create_repo(
+    let repo_info = service::RepoService::create_repo(
         state.db.as_ref(),
         &state.repos,
         auth.user_id,
@@ -705,7 +705,7 @@ pub async fn create_default_repo(
         Some(id) => id,
         None => {
             let peer = auth.device.as_ref().map(|device| device.peer());
-            let (repo_info, _token) = service::RepoService::create_repo(
+            let repo_info = service::RepoService::create_repo(
                 state.db.as_ref(),
                 &state.repos,
                 auth.user_id,
