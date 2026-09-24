@@ -826,6 +826,9 @@ html:not([data-view]) .seg .js-view-list {
 
   .nf-list { @apply rounded-box border border-line bg-panel overflow-hidden; }
   .nf-list > :last-child { border-bottom: 0; }
+  /* A group sits between the panel and its rows, so the rule above does not
+     reach the last row of the last group. */
+  .nf-list > section:last-child > :last-child { border-bottom: 0; }
   .nf-prow {
     @apply flex items-center gap-3 px-3.5 py-2 min-h-12 border-b border-line transition-colors;
   }

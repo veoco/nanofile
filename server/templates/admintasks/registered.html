@@ -8,7 +8,12 @@
    Rendered from the task system's own registry rather than written out field by
    field, so a job cannot be added to the server without appearing here — and
    named from its stable slug, so the page never shows `JobSpec::name`, which is
-   the code's vocabulary rather than the reader's. #}
+   the code's vocabulary rather than the reader's.
+
+   Grouped by how a job comes to run, so the heading says what the badge used to
+   repeat on every row. The numbers are labelled: a bare `0 / 0 / 0` next to a
+   dash is what the old page showed for a job that had never run, which is the
+   one case where a counter says nothing at all. #}
 
 {% block title %}{{ t.tr("admin.registered_title") }} | Nanofile{% endblock %}
 
@@ -25,7 +30,7 @@
 <div class="mt-5">{% include "includes/alert_success.html" %}</div>
 {% endif %}
 
-{% if tasks.is_empty() %}
+{% if groups.is_empty() %}
 <div class="nf-list mt-5">
     <div class="nf-empty">
         {{ icons::icon_clock("mx-auto h-10 w-10 text-ink-3") }}
@@ -34,70 +39,72 @@
     </div>
 </div>
 {% else %}
-{# Each row carries the nine things the old table spread over nine columns:
-   the interval and last run sit under the name, the duration and the success /
-   error / total triple in the metadata column, and the last message becomes a
-   third line — the label for each number rides in its `title`. #}
 <div class="nf-list mt-5">
-    {% for task in tasks %}
-    <div class="nf-prow" data-task="{{ task.name }}">
-        <span class="nf-prow-ic">{{ icons::icon_clock("w-[15px] h-[15px]") }}</span>
-        <div class="nf-prow-main">
-            <div class="nf-prow-name">
-                <span class="base">{{ task.display_name }}</span>
-                <span class="badge badge-brand shrink-0">{{ task.kind_label }}</span>
-                {% if !task.priority_label.is_empty() %}
-                <span class="badge badge-gray shrink-0" title="{{ t.tr("admin.task_priority") }}">{{ task.priority_label }}</span>
+    {% for group in groups %}
+    {# One `<section>` per group, so a heading and the rows under it are one
+       block rather than a heading that happens to precede some rows. #}
+    <section data-task-group="{{ group.id }}">
+        <div class="nf-sec">
+            <h2>{{ t.tr(group.title_key) }}</h2>
+            <span class="n num">{{ group.rows.len() }}</span>
+            <span class="rule" aria-hidden="true"></span>
+        </div>
+        {% for row in group.rows %}
+        <div class="nf-prow" data-task="{{ row.slug }}" data-task-kind="{{ row.kind }}">
+            <span class="nf-prow-ic">
+                {% if row.icon == "clock" %}{{ icons::icon_clock("w-[15px] h-[15px]") }}
+                {% else if row.icon == "refresh" %}{{ icons::icon_refresh("w-[15px] h-[15px]") }}
+                {% else if row.icon == "cog" %}{{ icons::icon_cog("w-[15px] h-[15px]") }}
+                {% else if row.icon == "play" %}{{ icons::icon_play("w-[15px] h-[15px]") }}
+                {% else %}{{ icons::icon_inbox("w-[15px] h-[15px]") }}{% endif %}
+            </span>
+            <div class="nf-prow-main">
+                <div class="nf-prow-name">
+                    <span class="base">{{ row.name }}</span>
+                    {% if let Some(state) = row.state %}
+                    <span class="badge {{ state.class }} shrink-0">{{ state.label }}</span>
+                    {% endif %}
+                </div>
+                {# What the row does, in words: a name like "gc" says nothing on
+                   its own, and the job's own slug is not the operator's
+                   vocabulary. #}
+                <p class="nf-prow-hi text-ink-3">{{ row.desc }}</p>
+                <div class="nf-prow-sub flex-wrap">
+                    <span class="t">{{ row.schedule }}</span>
+                    {% if row.never_run %}
+                    <span class="sep">&middot;</span>
+                    <span class="t">{{ t.tr("admin.task_never_run") }}</span>
+                    {% endif %}
+                    {% for fact in row.facts %}
+                    <span class="sep">&middot;</span>
+                    {# A time is a raw stamp the browser renders in the reader's
+                       timezone; the server never formats one. #}
+                    <span class="t" data-fact="{{ fact.key }}">
+                        <span class="text-ink-3">{{ fact.label }}</span>
+                        {% match fact.ts %}
+                        {% when Some with (ts) %}{{ time::ts_class(ts, "text-ink-2 tabular-nums", "relative") }}
+                        {% when None %}<span class="text-ink-2 tabular-nums">{{ fact.value }}</span>
+                        {% endmatch %}
+                    </span>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="nf-prow-act">
+                {% if row.triggerable %}
+                <form action="/sysadmin/tasks/{{ row.slug }}/trigger/" method="POST" class="trigger-form"
+                      data-confirm="admin.task_run_confirm" data-confirm-variant="solid"
+                      data-confirm-args='{{ row.confirm_args }}'>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
+                    <button type="submit" class="btn btn-line btn-sm" title="{{ t.tr("admin.task_run_now") }}">
+                        {{ icons::icon_play("w-3.5 h-3.5") }}
+                        <span class="hidden sm:inline">{{ t.tr("admin.task_run_now") }}</span>
+                    </button>
+                </form>
                 {% endif %}
             </div>
-            {# What the row does, in words: a name like "gc" says nothing on its
-               own, and the job's own slug is not the operator's vocabulary. #}
-            <p class="nf-prow-hi text-ink-3">{{ task.desc }}</p>
-            <div class="nf-prow-sub">
-                {# Only a periodic job has an interval; the server renders an em
-                   dash for the rest, so drop the whole segment. #}
-                {% if task.interval_secs_display != "—" %}
-                <span class="t" title="{{ t.tr("admin.task_interval") }}">{{ task.interval_secs_display }}</span>
-                <span class="sep">&middot;</span>
-                {% endif %}
-                <span class="t" title="{{ t.tr("admin.task_concurrency") }}">{{ task.concurrency }}</span>
-                <span class="sep">&middot;</span>
-                <span class="t" title="{{ t.tr("admin.task_last_run") }}" data-last-run>
-                    {% match task.last_run_at_ts %}
-                    {% when Some with (ts) %}{{ time::ts(ts) }}
-                    {% when None %}{{ t.tr("common.never") }}
-                    {% endmatch %}
-                </span>
-            </div>
-            {% if !task.last_error_message.is_empty() %}
-            <p class="nf-prow-hi text-err-text" title="{{ task.last_error_message }}">{{ task.last_error_message }}</p>
-            {% endif %}
-            {% if !task.last_success_message.is_empty() %}
-            <p class="nf-prow-hi" title="{{ task.last_success_message }}">{{ task.last_success_message }}</p>
-            {% endif %}
         </div>
-        <div class="nf-prow-meta flex items-center gap-3">
-            <span class="w-[64px] text-right" title="{{ t.tr("admin.task_duration") }}">
-                {% if task.last_duration_ms > 0 %}{{ task.last_duration_ms }}ms{% else %}&mdash;{% endif %}
-            </span>
-            <span class="min-w-[96px] text-right" title="{{ t.tr("admin.task_s_e_t") }}">
-                <span class="text-ok-text">{{ task.success_count }}</span> / <span class="text-err-text">{{ task.error_count }}</span> / <span>{{ task.total_processed }}</span>
-            </span>
-        </div>
-        <div class="nf-prow-act">
-            {% if task.triggerable %}
-            <form action="/sysadmin/tasks/{{ task.name }}/trigger/" method="POST" class="trigger-form"
-                  data-confirm="admin.task_run_confirm" data-confirm-variant="solid"
-                  data-confirm-args='{"name":"{{ task.name }}"}'>
-                <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
-                <button type="submit" class="btn btn-line btn-sm" title="{{ t.tr("admin.task_run_now") }}">
-                    {{ icons::icon_play("w-3.5 h-3.5") }}
-                    <span class="hidden sm:inline">{{ t.tr("admin.task_run_now") }}</span>
-                </button>
-            </form>
-            {% endif %}
-        </div>
-    </div>
+        {% endfor %}
+    </section>
     {% endfor %}
 </div>
 {% endif %}

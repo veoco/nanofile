@@ -11,10 +11,6 @@ const REGISTRY = "/sysadmin/tasks/registered/";
 const taskRow = (page: import("@playwright/test").Page, name: string) =>
   page.locator(`main [data-task="${name}"]`);
 
-/** The row's last-run cell, filled from `data-ts` by core/local-time.js. */
-const lastRun = (page: import("@playwright/test").Page, name: string) =>
-  taskRow(page, name).locator("[data-last-run]");
-
 // The two views of the task system are sibling pages, not one page: a bookmark
 // to either has to mean something, so the tab bar marks the current one.
 test("the two task pages are a tab apart", async ({ page }) => {
@@ -32,11 +28,47 @@ test("the two task pages are a tab apart", async ({ page }) => {
   );
 });
 
-test("the registry lists scheduled and continuous tasks", async ({ page }) => {
+// The registry is grouped by how a job comes to run, so the heading says what a
+// badge used to repeat on every row.
+test("the registry groups jobs by how they run", async ({ page }) => {
   await page.goto(REGISTRY);
-  await expect(taskRow(page, "share-link-cleanup")).toBeVisible();
-  await expect(page.getByText("Periodic").first()).toBeVisible();
-  await expect(page.getByText("Service").first()).toBeVisible();
+  const periodic = page.locator('main [data-task-group="periodic"]');
+  const onDemand = page.locator('main [data-task-group="on_demand"]');
+  await expect(periodic.locator(".nf-sec h2")).toHaveText("Periodic");
+  await expect(onDemand.locator(".nf-sec h2")).toHaveText("On demand");
+
+  // A job a request submits offers no trigger button — a bare button cannot
+  // supply its parameters — and the row says when it runs instead.
+  await expect(taskRow(page, "copy")).toBeVisible();
+  await expect(taskRow(page, "copy").locator("form.trigger-form")).toHaveCount(0);
+  await expect(taskRow(page, "share-link-cleanup").locator("form.trigger-form")).toHaveCount(1);
+
+  // A long-lived service is its own group and carries no counters: it never
+  // finishes, so it has no run count to show.
+  const services = page.locator('main [data-task-group="service"] [data-task-kind="service"]');
+  if ((await services.count()) > 0) {
+    await expect(services.first().locator("[data-fact]")).toHaveCount(0);
+    await expect(services.first().locator("form.trigger-form")).toHaveCount(0);
+  }
+});
+
+// Zero and "no such number" must not look the same: the old page showed
+// `0 / 0 / 0` and a dash for a job that had never run at all.
+test("a job that has never run shows no counters", async ({ page }) => {
+  await page.goto(REGISTRY);
+  const never = page
+    .locator('main [data-task-kind="job"]')
+    .filter({ hasText: "Has not run yet" });
+  test.skip((await never.count()) === 0, "every job has already run on this server");
+  await expect(never.first().locator("[data-fact]")).toHaveCount(0);
+});
+
+// The two pages hold different things, so neither should be showing the other's
+// rows.
+test("the run list is not the registry", async ({ page }) => {
+  await page.goto("/sysadmin/tasks/");
+  await expect(page.locator("main .nf-sec h2").first()).toHaveText("Recent runs");
+  await expect(page.locator("main [data-task]")).toHaveCount(0);
 });
 
 // The subtitle has no bottom margin of its own, so the run panel must keep its
@@ -52,9 +84,9 @@ test("trigger a periodic task manually", async ({ page }) => {
   await expect(row).toBeVisible();
   // A periodic job exposes a trigger button; a service has nothing to run.
   await expect(row.locator("form.trigger-form")).toBeVisible();
-  const lastRunBefore = (
-    await lastRun(page, "share-link-cleanup").innerText()
-  ).trim();
+  // A job that has never run says so instead of showing zeroes, so the row's
+  // own text is the only thing that is always there to compare against.
+  const before = (await row.innerText()).trim();
 
   await row.locator('form.trigger-form button[type="submit"]').click();
   await page.locator(".js-confirm-ok").click();
@@ -66,12 +98,10 @@ test("trigger a periodic task manually", async ({ page }) => {
   // margin, so the banner has to keep its distance.
   expect(await bannerGap(page)).toBeGreaterThanOrEqual(16);
 
-  // A manual run stamps a new last-run timestamp.
+  // The row stops saying "has not run yet" and starts reporting the run.
   await expect
-    .poll(async () =>
-      (await lastRun(page, "share-link-cleanup").innerText()).trim(),
-    )
-    .not.toBe(lastRunBefore);
+    .poll(async () => (await taskRow(page, "share-link-cleanup").innerText()).trim())
+    .not.toBe(before);
 });
 
 // A browser form must get a page back whatever happens: an unknown task slug
