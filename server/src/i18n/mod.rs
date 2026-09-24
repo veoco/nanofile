@@ -302,12 +302,20 @@ mod tests {
     fn every_catalog_string_is_translated() {
         let mut missing: Vec<String> = Vec::new();
         for def in infra::settings::CATALOG {
-            // Step 3 adds `def.help_key()` here once every entry has a sentence.
-            for key in [def.label_key()] {
+            let mut keys = vec![def.label_key(), def.help_key()];
+            keys.extend(def.unit_key());
+            for key in keys {
                 for (lang, table) in [("en", &*EN), ("zh", &*ZH)] {
                     if !table.contains_key(&key) {
                         missing.push(format!("{lang}: {key}"));
                     }
+                }
+            }
+        }
+        for key in ["setting.list_placeholder", "setting.list_hint"] {
+            for (lang, table) in [("en", &*EN), ("zh", &*ZH)] {
+                if !table.contains_key(key) {
+                    missing.push(format!("{lang}: {key}"));
                 }
             }
         }
@@ -328,6 +336,27 @@ mod tests {
             }
         }
         assert!(missing.is_empty(), "untranslated: {missing:?}");
+    }
+
+    /// A numeric setting's unit is rendered beside the field, so the label must
+    /// not repeat it: "Max upload size (MB) MB" is what happens when both exist.
+    #[test]
+    fn a_unit_is_not_repeated_in_the_label() {
+        for def in infra::settings::CATALOG {
+            let Some(unit_key) = def.unit_key() else {
+                continue;
+            };
+            for table in [&*EN, &*ZH] {
+                let unit = table.get(&unit_key).expect("the unit is translated");
+                let label = table.get(&def.label_key()).expect("the label exists");
+                assert!(
+                    !label.contains(&format!("({unit})"))
+                        && !label.contains(&format!("（{unit}）")),
+                    "{} repeats its unit in the label: {label:?}",
+                    def.key
+                );
+            }
+        }
     }
 
     /// Every tray string must exist in both languages, otherwise the menu

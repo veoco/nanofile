@@ -36,8 +36,14 @@ pub struct SettingRow {
     pub key: String,
     /// The locale key, so the template renders the label.
     pub label_key: String,
-    /// Already-translated help text, when the locale has one.
-    pub help: Option<String>,
+    /// The one sentence that says what this setting does. Every catalog entry
+    /// has one in both languages; `every_catalog_string_is_translated` is what
+    /// keeps it that way, because a row with only a label is a row an operator
+    /// has to guess at.
+    pub help: String,
+    /// The unit the value is expressed in, already translated. The label does
+    /// not repeat it.
+    pub unit: Option<String>,
     /// The form control: `bool`, `number`, `text`, `enum`, `list`, `path`,
     /// `secret`.
     pub control: &'static str,
@@ -418,9 +424,8 @@ fn build_row(
     SettingRow {
         key: def.key.to_string(),
         label_key: def.label_key(),
-        help: t
-            .has(&def.help_key())
-            .then(|| t.tr(&def.help_key()).to_string()),
+        help: t.tr(&def.help_key()).to_string(),
+        unit: def.unit_key().map(|key| t.tr(&key).to_string()),
         control: match def.kind {
             Kind::Bool => "bool",
             Kind::U16 | Kind::U32 | Kind::U64 | Kind::I32 | Kind::Usize => "number",
@@ -808,7 +813,8 @@ mod tests {
         SettingRow {
             key: key.to_string(),
             label_key: String::new(),
-            help: None,
+            help: String::new(),
+            unit: None,
             control: "text",
             value: String::new(),
             checked: false,

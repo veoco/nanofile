@@ -334,6 +334,50 @@ impl SettingDef {
     pub const fn is_stored(&self) -> bool {
         self.apply.is_stored()
     }
+
+    /// The unit a numeric value is expressed in, as a suffix for
+    /// `setting.unit_<id>`.
+    ///
+    /// The unit belongs beside the field rather than inside the label: "Max
+    /// upload size" with `MB` after the box reads as one statement, and the
+    /// label stays usable in a sentence. The table is explicit rather than
+    /// derived from the key's suffix, because a name is not a contract — a
+    /// `_bytes` field could hold kilobytes tomorrow.
+    pub fn unit(&self) -> Option<&'static str> {
+        Some(match self.key {
+            "server.max_upload_size_mb"
+            | "server.max_json_body_mb"
+            | "server.max_chunk_size_mb"
+            | "logging.max_file_size_mb" => "mb",
+            "server.request_timeout_secs"
+            | "server.header_read_timeout_secs"
+            | "server.body_timeout_secs"
+            | "server.cors_max_age_secs"
+            | "auth.lockout_duration_secs"
+            | "gc.min_block_age_secs"
+            | "email.timeout_secs"
+            | "notification.ping_interval"
+            | "notification.client_timeout"
+            | "notification.subscribe_timeout_secs"
+            | "tasks.load_sample_interval_secs" => "secs",
+            "auth.api_token_ttl_days"
+            | "auth.sync_token_ttl_days"
+            | "auth.api_key_ttl_presets_days"
+            | "auth.api_key_max_ttl_days" => "days",
+            "gc.interval_hours" | "storage.temp_upload_ttl_hours" => "hours",
+            "storage.max_storage_bytes"
+            | "storage.max_temp_upload_bytes"
+            | "storage.max_zip_bytes"
+            | "storage.max_zip_task_bytes"
+            | "tasks.max_retained_bytes" => "bytes",
+            _ => return None,
+        })
+    }
+
+    /// The locale key of this setting's unit, when it has one.
+    pub fn unit_key(&self) -> Option<String> {
+        self.unit().map(|unit| format!("setting.unit_{unit}"))
+    }
 }
 
 /// `"auth.max_login_attempts"` → `"setting.auth_max_login_attempts"`.
@@ -1152,6 +1196,31 @@ mod tests {
             config.server.max_json_body_mb, 64,
             "restart key keeps its startup value"
         );
+    }
+
+    /// A unit is a fact about the value's shape, so it only belongs on a number
+    /// (or a list of them), and the key it renders through has to be one the
+    /// locales define.
+    #[test]
+    fn units_are_known_and_only_on_numbers() {
+        const UNITS: &[&str] = &["mb", "secs", "days", "hours", "bytes"];
+        for def in CATALOG {
+            let Some(unit) = def.unit() else {
+                assert!(def.unit_key().is_none(), "{}", def.key);
+                continue;
+            };
+            assert!(UNITS.contains(&unit), "{}: unknown unit {unit}", def.key);
+            assert_eq!(def.unit_key().unwrap(), format!("setting.unit_{unit}"));
+            assert!(
+                matches!(
+                    def.kind,
+                    Kind::U16 | Kind::U32 | Kind::U64 | Kind::I32 | Kind::Usize | Kind::NumList
+                ),
+                "{}: {:?} cannot carry a unit",
+                def.key,
+                def.kind
+            );
+        }
     }
 
     #[test]

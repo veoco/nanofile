@@ -542,12 +542,12 @@ async fn every_settings_page_renders_for_an_admin_only() {
         assert_eq!(status, 200, "{path}");
         assert!(html.contains("class=\"page-title\""), "{path} has no title");
         let body = page_content(&html);
-        for raw in ["setting.section_", "setting.group_", "setting.origin_"] {
-            assert!(
-                !body.contains(raw),
-                "{path} rendered the raw locale key {raw}"
-            );
-        }
+        // Any untranslated string — a label, a help sentence, a unit, a page
+        // title, a group heading — renders as its own locale id.
+        assert!(
+            !body.contains("setting."),
+            "{path} rendered a raw locale key"
+        );
         assert!(
             html.matches("class=\"badge").count() >= 2,
             "{path} rendered no setting rows"
@@ -589,6 +589,45 @@ async fn every_settings_page_renders_for_an_admin_only() {
             .get("location")
             .is_some_and(|l| l.to_str().unwrap().contains("/libraries/"))
     );
+}
+
+/// The markup of one row, from its `data-setting` hook to the next row.
+fn row_of<'a>(html: &'a str, key: &str) -> &'a str {
+    let marker = format!(r#"data-setting="{key}""#);
+    let rest = html
+        .split(&marker)
+        .nth(1)
+        .unwrap_or_else(|| panic!("{key} did not render"));
+    let end = rest.find(r#"data-setting=""#).unwrap_or(rest.len());
+    &rest[..end]
+}
+
+/// A numeric value carries its unit beside the field, not inside its label:
+/// "Max upload size" plus `MB` reads as one statement, and the label alone
+/// still works in a sentence.
+#[tokio::test]
+async fn a_numeric_row_shows_its_unit_outside_the_label() {
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/server/").await;
+    let row = row_of(&html, "server.max_upload_size_mb");
+    assert!(row.contains("Max upload size"), "{row}");
+    assert!(
+        !row.contains("Max upload size (MB)"),
+        "the label must not repeat the unit: {row}"
+    );
+    assert!(row.contains(">MB<"), "the unit must be rendered: {row}");
+    assert!(
+        row.contains(r#"type="number""#) && row.contains(r#"min="0""#),
+        "the control is a number field: {row}"
+    );
+
+    // A setting with no unit gets none, so a bare "0" is not followed by a
+    // stray word.
+    let row = row_of(&html, "server.port");
+    assert!(!row.contains(">MB<"), "{row}");
 }
 
 #[tokio::test]

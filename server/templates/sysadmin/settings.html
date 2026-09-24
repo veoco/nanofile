@@ -110,9 +110,7 @@
                             {{ t.tr(row.label_key) }}
                         </label>
                         <p class="mono text-[11px] text-ink-3">{{ row.key }}</p>
-                        {% if let Some(help) = row.help %}
-                        <p class="desc">{{ help }}</p>
-                        {% endif %}
+                        <p class="desc">{{ row.help }}</p>
 
                         <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
                             {% if row.origin == "environment" %}
@@ -167,9 +165,10 @@
                             {% else %}
                                 {{ row.value }}
                             {% endif %}
+                            {% if let Some(unit) = row.unit %}<span class="text-ink-3"> {{ unit }}</span>{% endif %}
                         </p>
                         {% else if row.locked %}
-                        <p class="mono text-[12px] text-ink-2 break-all" data-setting-value>{{ row.value }}</p>
+                        <p class="mono text-[12px] text-ink-2 break-all" data-setting-value>{{ row.value }}{% if let Some(unit) = row.unit %}<span class="text-ink-3"> {{ unit }}</span>{% endif %}</p>
                         <p class="text-[11px] text-ink-3">{{ t.tr("setting.env_locked") }}</p>
                         {% else if row.control == "bool" %}
                         <div class="flex items-center gap-2">
@@ -179,7 +178,7 @@
                                "leave it alone". #}
                             <input type="hidden" name="{{ row.key }}" value="false">
                             <input type="checkbox" name="{{ row.key }}" value="true" id="field-{{ row.key }}"
-                                   {% if row.checked %}checked{% endif %}>
+                                   class="accent-ink" {% if row.checked %}checked{% endif %}>
                         </div>
                         {% else if row.control == "enum" %}
                         <select class="input w-full" name="{{ row.key }}" id="field-{{ row.key }}">
@@ -194,17 +193,38 @@
                                id="field-{{ row.key }}" autocomplete="new-password"
                                placeholder="{% if row.secret_set %}{{ t.tr("setting.secret_keep") }}{% else %}{{ t.tr("setting.secret_unset") }}{% endif %}">
                         <label class="flex items-center gap-2 text-[12px] text-ink-2">
-                            <input type="checkbox" name="clear:{{ row.key }}" value="on">
+                            <input type="checkbox" name="clear:{{ row.key }}" value="on" class="accent-ink">
                             {{ t.tr("setting.secret_clear") }}
                         </label>
                         {% if row.secret_broken %}
                         <p class="text-[12px] text-err-text">{{ t.tr("setting.secret_broken") }}</p>
                         {% endif %}
+                        {% else if row.control == "number" %}
+                        {# The unit is rendered here rather than written into the
+                           label, so the label reads on its own. #}
+                        <div class="flex items-center gap-2">
+                            <input class="input mono w-full" type="number" min="0" step="1"
+                                   name="{{ row.key }}" id="field-{{ row.key }}" value="{{ row.value }}">
+                            {% if let Some(unit) = row.unit %}
+                            <span class="text-[12px] text-ink-3 whitespace-nowrap">{{ unit }}</span>
+                            {% endif %}
+                        </div>
                         {% else %}
-                        <input class="input w-full {% if row.control == "number" %}mono{% endif %}"
-                               type="{% if row.control == "number" %}number{% else %}text{% endif %}"
-                               name="{{ row.key }}" id="field-{{ row.key }}" value="{{ row.value }}"
-                               {% if row.control == "list" %}placeholder="a,b,c"{% endif %}>
+                        <div class="flex w-full flex-col gap-1">
+                            <div class="flex items-center gap-2">
+                                <input class="input w-full {% if row.control == "path" %}mono{% endif %}"
+                                       type="text"
+                                       name="{{ row.key }}" id="field-{{ row.key }}" value="{{ row.value }}"
+                                       {% if row.control == "path" %}spellcheck="false"{% endif %}
+                                       {% if row.control == "list" %}placeholder="{{ t.tr("setting.list_placeholder") }}"{% endif %}>
+                                {% if let Some(unit) = row.unit %}
+                                <span class="text-[12px] text-ink-3 whitespace-nowrap">{{ unit }}</span>
+                                {% endif %}
+                            </div>
+                            {% if row.control == "list" %}
+                            <p class="text-[11px] text-ink-3">{{ t.tr("setting.list_hint") }}</p>
+                            {% endif %}
+                        </div>
                         {% endif %}
 
                         {% if row.origin == "database" %}
