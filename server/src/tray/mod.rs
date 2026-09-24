@@ -73,6 +73,11 @@ pub(crate) struct TrayContext {
     config_path: PathBuf,
     /// `site_url` with a trailing slash, opened by the "Open Web UI" action.
     web_url: String,
+    /// What the service preflight checks, taken from this instance's settings.
+    /// The menu runs it before asking for elevation, so a service that could
+    /// never serve is refused while a person is watching.
+    #[cfg(target_os = "windows")]
+    preflight: crate::startup::service::PreflightInput,
 }
 
 /// Whether the tray can and should run for this process and platform.
@@ -158,9 +163,12 @@ pub fn run(config: Config, env_keys: infra::config::EnvKeys, config_path: PathBu
     // The tray menu is built from the config file (it is opened before the
     // database is read). `site_url` is one of the settings an administrator can
     // change at runtime, so a saved value reaches the menu at the next start.
+    let config_path = absolute(&config_path);
     let ctx = TrayContext {
         exe_path,
-        config_path: absolute(&config_path),
+        #[cfg(target_os = "windows")]
+        preflight: crate::startup::service::PreflightInput::from_config(&config, &config_path),
+        config_path,
         web_url: format!("{}/", config.server.site_url.trim_end_matches('/')),
     };
 
@@ -351,6 +359,8 @@ fn create_tray(
             exe_path: ctx.exe_path.clone(),
             config_path: ctx.config_path.clone(),
             web_url: ctx.web_url.clone(),
+            #[cfg(target_os = "windows")]
+            preflight: ctx.preflight.clone(),
         },
         login: autostart,
         login_item: item_autostart,

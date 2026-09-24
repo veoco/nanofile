@@ -670,14 +670,25 @@ async fn run_server(
     // `ensure_private_dir` is also used for the log directory (which is created
     // earlier, during `logging::init`), so all of them are covered regardless
     // of the operator's umask.
-    for dir in [
-        &config.storage.block_dir,
-        &config.storage.temp_dir,
-        &config.storage.thumbnail_dir,
-        &config.storage.avatar_dir,
-        &config.index.index_dir,
+    //
+    // Every failure names the setting and the directory: under a service the
+    // only report is a log line (and a restart that fails the same way), and
+    // "Permission denied" without the path is not something an operator can act
+    // on.
+    for (field, dir) in [
+        ("storage.block_dir", &config.storage.block_dir),
+        ("storage.temp_dir", &config.storage.temp_dir),
+        ("storage.thumbnail_dir", &config.storage.thumbnail_dir),
+        ("storage.avatar_dir", &config.storage.avatar_dir),
+        ("index.index_dir", &config.index.index_dir),
     ] {
-        infra::common::util::ensure_private_dir(dir)?;
+        infra::common::util::ensure_private_dir(dir).map_err(|e| {
+            anyhow::anyhow!(
+                "cannot create or write the {field} directory {} ({e}); the account this \
+                 process runs as needs write access to it",
+                dir.display()
+            )
+        })?;
     }
 
     // ── Block layout migration (blocks are stored per library) ─────────

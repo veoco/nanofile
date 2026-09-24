@@ -321,6 +321,8 @@ mod tests {
             "tray.service_removed",
             "tray.service_failed",
             "tray.service_launch_failed",
+            "tray.service_preflight_failed",
+            "tray.service_advisories",
             "tray.autostart_superseded_by_service",
             "tray.quit_service_stopped",
             "tray.quit_service_running",

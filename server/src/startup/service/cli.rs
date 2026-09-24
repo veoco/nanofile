@@ -22,21 +22,45 @@ pub(crate) fn run_cli(
     env_keys: EnvKeys,
 ) -> anyhow::Result<()> {
     match action {
-        ServiceAction::Run => run_as_service(config.clone(), env_keys),
-        ServiceAction::Install => match install(config_path) {
-            Ok(()) => {
-                retire_login_entry(config_path);
-                println!(
-                    "Nanofile registered as a Windows service; it starts at the next system \
-                     start, without a login."
+        ServiceAction::Run => run_as_service(config.clone(), env_keys, config_path.to_path_buf()),
+        ServiceAction::Install => {
+            // The checks the tray runs before it asks for elevation, repeated
+            // here as the installing administrator and *before* the SCM is
+            // touched: a directory this process cannot write is a service that
+            // cannot start, and a registration nobody can use is worse than a
+            // refusal that names the path.
+            let preflight =
+                super::preflight::run(&super::preflight::Input::from_config(config, config_path));
+            preflight.log();
+            for line in preflight.lines_at_least(super::checks::Severity::Warn) {
+                println!("note: {line}");
+            }
+            if !preflight.is_ok() {
+                let details = preflight
+                    .lines_at_least(super::checks::Severity::Fail)
+                    .join("\n");
+                let e = anyhow::anyhow!(
+                    "these checks have to pass before the service can serve:\n{details}"
                 );
-                Ok(())
+                report_failure("Nanofile cannot be registered as a Windows service", &e);
+                return Err(e);
             }
-            Err(e) => {
-                report_failure("Nanofile could not be registered as a Windows service", &e);
-                Err(e)
+
+            match install(config_path) {
+                Ok(()) => {
+                    retire_login_entry(config_path);
+                    println!(
+                        "Nanofile registered as a Windows service; it starts at the next system \
+                         start, without a login."
+                    );
+                    Ok(())
+                }
+                Err(e) => {
+                    report_failure("Nanofile could not be registered as a Windows service", &e);
+                    Err(e)
+                }
             }
-        },
+        }
         ServiceAction::Uninstall => match uninstall() {
             Ok(()) => {
                 // Deliberately *not* re-creating the login entry: "remove the

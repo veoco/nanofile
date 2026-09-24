@@ -927,6 +927,8 @@ tray.quit_service_stopped = "The Nanofile service was stopped. It starts again a
 tray.quit_service_running = "Nanofile is running as a Windows service, and it could not be stopped from here:\n\n{detail}\n\nQuit the tray only (the service keeps running)?\n\nCancel keeps the tray open."
 tray.quit_other_service = "Another installation's Nanofile service is serving this address; it was left running. Only the tray is quitting."
 tray.autostart_superseded_by_service = "Nanofile starts as a Windows service, so \"Start at login\" is not used. Remove the service to start at login instead."
+tray.service_preflight_failed = "Nanofile cannot be registered as a Windows service; these checks failed:\n\n{details}\n\nFix those paths, or point the settings at directories the service account can write."
+tray.service_advisories = "Before registering the service:\n\n{details}\n\nContinue?"
 
 
 # HTML error pages. The wire protocol (/api2/, /seafhttp/, sync, WebDAV) keeps

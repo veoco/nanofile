@@ -36,6 +36,20 @@ pub(crate) const SERVICE_NAME: &str = "Nanofile";
 /// What the service is called in `services.msc`.
 pub(crate) const DISPLAY_NAME: &str = "Nanofile Sync Server";
 
+// ── Exit codes ───────────────────────────────────────────────────────────────
+// One vocabulary for both processes the tray reads: the elevated helper's
+// process exit status, and the service's own status in `services.msc` /
+// `sc query`. `EXIT_REFUSED` means "nothing was changed on purpose", which is
+// not a failure to report and not a success either.
+
+/// Failed; the reason is in the log file and (for the helper) in a dialog.
+#[cfg(target_os = "windows")]
+pub(crate) const EXIT_FAILED: i32 = 1;
+/// Refused before changing anything: the operator cancelled, or a preflight
+/// check failed.
+#[cfg(target_os = "windows")]
+pub(crate) const EXIT_REFUSED: i32 = 2;
+
 /// What `nanofile service …` can be asked to do.
 #[cfg(target_os = "windows")]
 #[derive(clap::Subcommand, Debug)]
@@ -160,13 +174,21 @@ pub(crate) fn image_path_matches(registered: &str, expected: &str) -> bool {
             || expected.starts_with(&registered))
 }
 
+#[cfg(any(target_os = "windows", test))]
+mod checks;
 #[cfg(target_os = "windows")]
 mod cli;
 #[cfg(target_os = "windows")]
+mod preflight;
+#[cfg(target_os = "windows")]
 mod windows;
 
+#[cfg(all(target_os = "windows", feature = "tray"))]
+pub(crate) use checks::Severity;
 #[cfg(target_os = "windows")]
 pub(crate) use cli::run_cli;
+#[cfg(all(target_os = "windows", feature = "tray"))]
+pub(crate) use preflight::{Input as PreflightInput, run as run_preflight};
 #[cfg(all(target_os = "windows", feature = "tray"))]
 pub(crate) use windows::probe as probe_service;
 #[cfg(all(target_os = "windows", feature = "tray"))]

@@ -925,6 +925,8 @@ tray.quit_service_stopped = "已停止 Nanofile 服务；它会在下次系统�
 tray.quit_service_running = "Nanofile 正以 Windows 服务方式运行，无法从这里停止：\n\n{detail}\n\n只退出托盘（服务继续运行）？\n\n选择「取消」可保留托盘菜单。"
 tray.quit_other_service = "占用该地址的是另一套安装的 Nanofile 服务，已保持运行；本次只退出托盘。"
 tray.autostart_superseded_by_service = "Nanofile 以 Windows 服务方式启动，因此不使用「登录启动」。若想改为登录时启动，请先移除该服务。"
+tray.service_preflight_failed = "无法将 Nanofile 注册为 Windows 服务，以下检查未通过：\n\n{details}\n\n请修改这些路径，或把对应设置指向服务账户可写的目录。"
+tray.service_advisories = "注册服务前有以下提示：\n\n{details}\n\n是否继续？"
 
 
 

@@ -1701,6 +1701,39 @@ impl Config {
         self.resolve_state_paths_in(base, &cwd)
     }
 
+    /// Every directory the server keeps state in, with the config field that
+    /// names it.
+    ///
+    /// The one list of "the server's directories": the startup checks and the
+    /// Windows-service preflight walk all of them, and `run_server` creates the
+    /// subset it owns, so a state directory cannot be created in one place and
+    /// left unchecked in another. A database URL that names no file
+    /// (`:memory:`, or another backend) contributes nothing; the database's
+    /// directory is otherwise the parent of its file.
+    ///
+    /// The paths are exactly as configured, so call [`Self::resolve_state_paths`]
+    /// first.
+    pub fn state_dirs(&self) -> Vec<(&'static str, PathBuf)> {
+        let mut dirs = Vec::new();
+        if let Some((file, _)) = sqlite_url_file(&self.database.url) {
+            let parent = Path::new(file).parent().unwrap_or_else(|| Path::new("."));
+            dirs.push((
+                "database.url",
+                if parent.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    parent.to_path_buf()
+                },
+            ));
+        }
+        dirs.push(("storage.block_dir", self.storage.block_dir.clone()));
+        dirs.push(("storage.temp_dir", self.storage.temp_dir.clone()));
+        dirs.push(("storage.thumbnail_dir", self.storage.thumbnail_dir.clone()));
+        dirs.push(("storage.avatar_dir", self.storage.avatar_dir.clone()));
+        dirs.push(("index.index_dir", self.index.index_dir.clone()));
+        dirs
+    }
+
     /// [`Self::resolve_state_paths`] with an explicit working directory, so
     /// tests never have to change the process's own.
     fn resolve_state_paths_in(&mut self, base: &Path, cwd: &Path) -> Vec<PathResolution> {
@@ -2657,6 +2690,39 @@ request_timeout_secs = 600
         assert_eq!(resolved.len(), 6, "every relative field is reported");
         assert!(resolved.iter().all(|r| r.rewritten));
         assert!(resolved.iter().any(|r| r.field == "database.url"));
+    }
+
+    #[test]
+    fn state_dirs_names_the_database_directory_and_every_cache() {
+        let base = PathBuf::from("/opt/nanofile");
+        let cwd = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.resolve_state_paths_in(&base, cwd.path());
+
+        let dirs: Vec<_> = config.state_dirs();
+        let fields: Vec<_> = dirs.iter().map(|(field, _)| *field).collect();
+        assert_eq!(
+            fields,
+            vec![
+                "database.url",
+                "storage.block_dir",
+                "storage.temp_dir",
+                "storage.thumbnail_dir",
+                "storage.avatar_dir",
+                "index.index_dir",
+            ]
+        );
+        assert_eq!(dirs[0].1, base.join("data"));
+        assert_eq!(dirs[1].1, base.join("data/blocks"));
+    }
+
+    #[test]
+    fn state_dirs_has_no_directory_for_an_in_memory_database() {
+        let mut config = Config::default();
+        config.database.url = "sqlite::memory:".to_string();
+        let fields: Vec<_> = config.state_dirs().iter().map(|(f, _)| *f).collect();
+        assert!(!fields.contains(&"database.url"));
+        assert!(fields.contains(&"storage.block_dir"));
     }
 
     /// The `sqlite://` URL spelling is relative too, so it is rewritten as well.

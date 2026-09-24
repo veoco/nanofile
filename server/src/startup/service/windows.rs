@@ -5,7 +5,7 @@
 //! `nanofile service install` has a console to report on.
 
 use std::ffi::c_void;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use infra::config::{Config, EnvKeys};
 use windows_sys::Win32::Foundation::{
@@ -21,8 +21,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::{
-    DISPLAY_NAME, SERVICE_NAME, ServiceProbe, image_path_matches, service_command_line,
-    service_description,
+    DISPLAY_NAME, EXIT_FAILED, EXIT_REFUSED, SERVICE_NAME, ServiceProbe, image_path_matches,
+    service_command_line, service_description,
 };
 use crate::startup::win32::wide;
 
@@ -49,8 +49,11 @@ pub(super) fn report_failure(context: &str, error: &anyhow::Error) {
 // ── Running as a service ─────────────────────────────────────────────────────
 
 /// The config the `ServiceMain` callback (which is called by the SCM, on a
-/// thread this process does not control) has to pick up.
-static SERVICE_INPUT: std::sync::Mutex<Option<(Config, EnvKeys)>> = std::sync::Mutex::new(None);
+/// thread this process does not control) has to pick up: the loaded
+/// configuration, the environment keys it was layered with, and the path of the
+/// file it came from (the preflight checks the last one directly).
+static SERVICE_INPUT: std::sync::Mutex<Option<(Config, EnvKeys, PathBuf)>> =
+    std::sync::Mutex::new(None);
 
 struct ServiceRuntime {
     /// `SERVICE_STATUS_HANDLE`, kept as an integer: a raw pointer is neither
@@ -63,7 +66,7 @@ struct ServiceRuntime {
 
 static SERVICE_RUNTIME: std::sync::Mutex<Option<ServiceRuntime>> = std::sync::Mutex::new(None);
 
-fn report(state: u32, exit_code: u32, wait_hint_ms: u32) {
+fn report(state: u32, exit_code: i32, wait_hint_ms: u32) {
     let mut guard = SERVICE_RUNTIME
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -72,7 +75,7 @@ fn report(state: u32, exit_code: u32, wait_hint_ms: u32) {
     };
     runtime.state = state;
     if exit_code != 0 {
-        runtime.exit_code = exit_code;
+        runtime.exit_code = exit_code.max(0) as u32;
     }
     let accepted = if state == SERVICE_RUNNING {
         SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN | SERVICE_ACCEPT_PRESHUTDOWN
@@ -157,11 +160,36 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .take();
-    let Some((config, env_keys)) = input else {
+    let Some((config, env_keys, config_path)) = input else {
         tracing::error!("the service was dispatched without a configuration");
-        report(SERVICE_STOPPED, 1, 0);
+        report(SERVICE_STOPPED, EXIT_FAILED, 0);
         return;
     };
+
+    // Say who this is before anything else: every permission question below is
+    // about *this* account, and the log is the only place the answer appears.
+    tracing::info!(
+        account = crate::startup::win32::current_account_name().unwrap_or_default(),
+        exe = %std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default(),
+        config = %config_path.display(),
+        cwd = %std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default(),
+        "the service is starting"
+    );
+
+    // The authoritative preflight: it runs as the account that will serve, which
+    // is the one whose access to the data directories actually matters.
+    let preflight =
+        super::preflight::run(&super::preflight::Input::from_config(&config, &config_path));
+    preflight.log();
+    if !preflight.is_ok() {
+        tracing::error!(
+            "refusing to start: {} preflight check(s) failed; the directories above have to be \
+             writable by this account",
+            preflight.of(super::checks::Severity::Fail).count()
+        );
+        report(SERVICE_STOPPED, EXIT_REFUSED, 0);
+        return;
+    }
 
     report(SERVICE_RUNNING, 0, 0);
     tracing::info!("running as the Windows service '{SERVICE_NAME}'");
@@ -170,7 +198,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core
         Ok(runtime) => runtime,
         Err(e) => {
             tracing::error!("failed to create the tokio runtime: {e}");
-            report(SERVICE_STOPPED, 1, 0);
+            report(SERVICE_STOPPED, EXIT_FAILED, 0);
             return;
         }
     };
@@ -181,7 +209,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core
         }
         Err(e) => {
             tracing::error!("service failed: {e:#}");
-            report(SERVICE_STOPPED, 1, 0);
+            report(SERVICE_STOPPED, EXIT_FAILED, 0);
         }
     }
 }
@@ -191,10 +219,14 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core
 /// Fails immediately when the process was not started by the SCM, which is
 /// what a user typing `nanofile service run` gets — a clear error instead of
 /// a process that hangs waiting for a dispatcher that will never call.
-pub(crate) fn run_as_service(config: Config, env_keys: EnvKeys) -> anyhow::Result<()> {
+pub(crate) fn run_as_service(
+    config: Config,
+    env_keys: EnvKeys,
+    config_path: PathBuf,
+) -> anyhow::Result<()> {
     *SERVICE_INPUT
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((config, env_keys));
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((config, env_keys, config_path));
     let name = wide(SERVICE_NAME);
     let table = [
         SERVICE_TABLE_ENTRYW {

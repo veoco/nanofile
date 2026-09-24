@@ -206,6 +206,18 @@ fn open_file_logging(config: &Config) -> io::Result<FileBackend> {
     }))
 }
 
+/// The log file this configuration uses when it can be opened.
+///
+/// The first entry of [`candidate_paths`], exposed so the Windows service
+/// preflight can answer "can the account this process runs as write the log?".
+/// That matters most for a service: the fallback is stdout, which a service has
+/// no console for, so an unwritable log location silently costs the only
+/// diagnostic channel there is.
+#[cfg(target_os = "windows")]
+pub(crate) fn configured_log_path(config: &Config) -> Option<PathBuf> {
+    candidate_paths(config).into_iter().next()
+}
+
 /// Log file candidates in preference order. Explicit absolute paths win;
 /// relative paths resolve against the binary's directory (never the working
 /// directory, which is `C:\Windows\System32` or `/` for login-started

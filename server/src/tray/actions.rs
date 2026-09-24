@@ -357,6 +357,15 @@ fn toggle_service() {
 
     let enable = !service.is_ours();
     let t = lang();
+
+    // Before elevation, and while a person is watching: a directory the service
+    // account cannot write is a registration that can never serve, and the UAC
+    // prompt should not be shown for one.
+    if enable && !preflight_allows(t) {
+        sync(&service_item, &login_item, &login, &config_path);
+        return;
+    }
+
     let config_display = config_path.display().to_string();
     let prompt = if enable {
         // Naming the registration that is about to be replaced matters: the
@@ -451,6 +460,48 @@ fn toggle_service() {
     }
 }
 
+/// Whether a service registration may proceed, asked of the preflight.
+///
+/// A `Fail` is refused outright (the message names every path); a `Warn` is a
+/// confirmation, because the operator may know something the check cannot (a
+/// share already granted to the machine account, for instance). `Note`s are
+/// logged only: "the port is in use" is the expected answer while the instance
+/// asking is the one serving it.
+#[cfg(target_os = "windows")]
+fn preflight_allows(t: &server::i18n::I18n) -> bool {
+    use crate::startup::service::{Severity, run_preflight};
+
+    let Some(input) = with_state(|state| state.ctx.preflight.clone()) else {
+        return false;
+    };
+    let report = run_preflight(&input);
+    report.log();
+
+    if report.has(Severity::Fail) {
+        let details = report.lines_at_least(Severity::Fail).join("\n");
+        let text = t.trf(
+            "tray.service_preflight_failed",
+            &[("details", details.as_str())],
+        );
+        show_message(
+            t.tr("tray.notify_title"),
+            &text,
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
+        );
+        return false;
+    }
+    if report.has(Severity::Warn) {
+        let details = report.lines_at_least(Severity::Warn).join("\n");
+        let text = t.trf("tray.service_advisories", &[("details", details.as_str())]);
+        return show_message(
+            t.tr("tray.notify_title"),
+            &text,
+            MB_OKCANCEL | MB_ICONWARNING | MB_SETFOREGROUND,
+        ) == IDOK;
+    }
+    true
+}
+
 /// The elevated helper exited: apply the consequence, then say what happened.
 #[cfg(target_os = "windows")]
 pub(super) fn service_finished(enable: bool, exit_code: u32) {
@@ -458,6 +509,19 @@ pub(super) fn service_finished(enable: bool, exit_code: u32) {
         return;
     };
     let t = lang();
+
+    // The helper refused before changing anything (its own preflight): the
+    // reason is in the log and there is nothing to report twice.
+    if exit_code == crate::startup::service::EXIT_REFUSED as u32 {
+        tracing::warn!("the elevated helper refused to change the service");
+        sync(
+            &snapshot.service_item,
+            &snapshot.login_item,
+            &snapshot.login,
+            &snapshot.config_path,
+        );
+        return;
+    }
 
     // `STILL_ACTIVE`: the helper is still running after five minutes. Its own
     // dialog owns any error, and what it did may well have succeeded, so only
