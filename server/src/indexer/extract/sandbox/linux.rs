@@ -48,12 +48,17 @@ struct CapData {
 
 // ── Landlock (linux/landlock.h) ─────────────────────────────────────────────
 const LANDLOCK_CREATE_RULESET_VERSION: libc::c_uint = 1;
-/// Newest ABI this file knows about; the mask scales down to the running one.
-const LANDLOCK_MAX_ABI: i64 = 5;
+/// Newest ABI this file knows about.
+///
+/// Six rather than five: the scope bits are the ABI-6 addition, and the report
+/// carries the ABI that was actually used rather than this one.
+const LANDLOCK_MAX_ABI: i64 = 6;
 
 #[repr(C)]
 struct LandlockRulesetAttr {
     handled_access_fs: u64,
+    handled_access_net: u64,
+    scoped: u64,
 }
 
 const LL_EXECUTE: u64 = 1 << 0;
@@ -72,6 +77,21 @@ const LL_MAKE_SYM: u64 = 1 << 12;
 const LL_REFER: u64 = 1 << 13;
 const LL_TRUNCATE: u64 = 1 << 14;
 const LL_IOCTL_DEV: u64 = 1 << 15;
+
+/// Network rights (ABI 4): handling them with no rule denies every TCP
+/// bind and connect, which is the network layer again — the one that survives a
+/// kernel without seccomp.
+const LL_NET_BIND_TCP: u64 = 1 << 0;
+const LL_NET_CONNECT_TCP: u64 = 1 << 1;
+
+/// IPC scopes (ABI 6): a domain cannot signal a process outside itself, and
+/// cannot reach an abstract socket outside itself.
+///
+/// This is what closes the one hole a denylist cannot: `kill` must be judged by
+/// its *target*, which a classic BPF filter cannot read, and Landlock decides
+/// it against the domain instead.
+const LL_SCOPE_ABSTRACT_UNIX_SOCKET: u64 = 1 << 0;
+const LL_SCOPE_SIGNAL: u64 = 1 << 1;
 
 // ── seccomp (linux/seccomp.h, linux/filter.h, linux/bpf_common.h) ───────────
 const SECCOMP_SET_MODE_FILTER: libc::c_uint = 1;
@@ -153,24 +173,80 @@ pub(super) fn confine() -> (Layers, Vec<String>) {
     );
 
     detail.push(drop_capabilities().to_string());
+    // Both are free and both close a way for a process of the same user to
+    // reach this one: `PR_SET_DUMPABLE` takes away `/proc/<pid>/mem` and the
+    // ability to attach, and the parent-death signal is what ends a parser
+    // whose parent is gone. Neither is a layer — the report says what took.
+    detail.push(
+        if set_dumpable() {
+            "dumpable=off"
+        } else {
+            "dumpable=refused"
+        }
+        .to_string(),
+    );
+    detail.push(
+        if set_parent_death_signal() {
+            "pdeathsig=on"
+        } else {
+            "pdeathsig=refused"
+        }
+        .to_string(),
+    );
 
     match install_landlock() {
-        Ok(abi) => {
+        Ok(landlock) => {
             layers.files = true;
-            detail.push(format!("landlock_abi={abi}"));
+            detail.push(format!("landlock_abi={}", landlock.abi));
+            detail.push(format!("landlock_net={}", on_off(landlock.network)));
+            detail.push(format!("landlock_scoped={}", on_off(landlock.scoped)));
         }
         Err(reason) => detail.push(format!("landlock={reason}")),
     }
 
-    if install_seccomp() {
-        layers.network = true;
-        layers.process = true;
-        detail.push("seccomp=on".to_string());
-    } else {
-        detail.push("seccomp=off".to_string());
+    match install_seccomp() {
+        Some(denied) => {
+            layers.network = true;
+            layers.process = true;
+            detail.push(format!("seccomp={denied}"));
+        }
+        None => detail.push("seccomp=off".to_string()),
     }
 
     (layers, detail)
+}
+
+/// How a boolean fact is spelled in the report, for facts that are not layers.
+fn on_off(value: bool) -> &'static str {
+    if value { "on" } else { "off" }
+}
+
+/// Make this process undumpable.
+///
+/// A process of the same user can otherwise read this one through
+/// `/proc/<pid>/mem` and attach to it; nothing here defends against a same-user
+/// process in general (see the module docs), but this is the difference between
+/// "the sandbox does not stop your neighbour" and "your neighbour can read the
+/// document the server just handed over".
+fn set_dumpable() -> bool {
+    unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0 as libc::c_ulong, 0, 0, 0) == 0 }
+}
+
+/// Ask the kernel to end this process when its parent ends.
+///
+/// The parent bounds every child with a timeout and kills the group it started,
+/// so this covers the one case it cannot: the parent itself is gone, and
+/// nothing is left to wait for the parser or to collect it.
+fn set_parent_death_signal() -> bool {
+    unsafe {
+        libc::prctl(
+            libc::PR_SET_PDEATHSIG,
+            libc::SIGKILL as libc::c_ulong,
+            0,
+            0,
+            0,
+        ) == 0
+    }
 }
 
 /// Close every descriptor above stderr.
@@ -199,15 +275,14 @@ fn close_extra_descriptors() {
         rlim_cur: 0,
         rlim_max: 0,
     };
-    let highest = if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } == 0
-        && limit.rlim_cur != libc::RLIM_INFINITY
-    {
+    let highest = match unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } {
         // The clamp below lowers this to `NOFILE_LIMIT`; what matters is the
         // *current* limit, which is what the parent's descriptors were opened
         // under.
-        u64::try_from(limit.rlim_cur).unwrap_or(u64::MAX)
-    } else {
-        1024
+        0 if limit.rlim_cur != libc::RLIM_INFINITY => limit.rlim_cur,
+        // Unlimited, or a kernel that would not say: the constant is only the
+        // floor under a case this cannot enumerate.
+        _ => 1024,
     };
     for descriptor in 3..highest {
         unsafe { libc::close(descriptor as libc::c_int) };
@@ -289,14 +364,36 @@ fn is_empty(sets: &[CapData]) -> bool {
         .all(|set| set.effective == 0 && set.permitted == 0 && set.inheritable == 0)
 }
 
+/// What the ruleset that was installed actually governs.
+struct Landlock {
+    /// The ABI the kernel negotiated, capped at what this file knows.
+    abi: i64,
+    /// Whether the TCP rights were handled: the network layer without seccomp.
+    network: bool,
+    /// Whether the scope bits were handled: signals and abstract sockets cannot
+    /// leave this domain, which is the one thing seccomp's denylist cannot say
+    /// about a call it must allow.
+    scoped: bool,
+}
+
 /// Install a Landlock ruleset that grants nothing.
 ///
-/// Every filesystem access the running kernel's ABI can govern is handled, and
-/// no path-beneath rule is added: on Linux an unhandled access is simply
-/// allowed, so handling the full mask *is* the denial. This is stricter than
-/// the launcher this mirrors, which grants read access to `/` because it wraps
-/// commands that need a filesystem; this process gets its document on stdin.
-fn install_landlock() -> Result<i64, &'static str> {
+/// Every access the running kernel's ABI can govern is handled, and no
+/// path-beneath rule is added: on Linux an unhandled access is simply allowed,
+/// so handling the full mask *is* the denial. This is stricter than the launcher
+/// this mirrors, which grants read access to `/` because it wraps commands that
+/// need a filesystem; this process gets its document on stdin.
+///
+/// Three groups of rights, added as the ABI that has them (the kernel rejects a
+/// struct with fields it does not know, so the size passed is the one this ABI
+/// reads): the filesystem mask, the two TCP rights from ABI 4, and the IPC
+/// scopes from ABI 6.
+///
+/// A ruleset the kernel refuses is retried with the filesystem mask alone. The
+/// alternative — reporting `landlock=ruleset` and losing the filesystem layer
+/// because a bit this file guessed was wrong — would be a sandbox that gives up
+/// its strongest layer over its weakest claim.
+fn install_landlock() -> Result<Landlock, &'static str> {
     let abi = unsafe {
         libc::syscall(
             libc::SYS_landlock_create_ruleset,
@@ -309,17 +406,12 @@ fn install_landlock() -> Result<i64, &'static str> {
         return Err("unsupported");
     }
 
-    let attr = LandlockRulesetAttr {
-        handled_access_fs: fs_mask_for_abi(abi),
-    };
-    let ruleset = unsafe {
-        libc::syscall(
-            libc::SYS_landlock_create_ruleset,
-            &attr as *const LandlockRulesetAttr,
-            size_of::<LandlockRulesetAttr>() as libc::size_t,
-            0 as libc::c_uint,
-        )
-    };
+    let mut taken = ruleset_for_abi(abi);
+    let mut ruleset = create_ruleset(&taken.0, taken.1);
+    if ruleset < 0 && taken.1 > size_of::<u64>() {
+        taken = ruleset_for_abi(3);
+        ruleset = create_ruleset(&taken.0, taken.1);
+    }
     if ruleset < 0 {
         return Err("ruleset");
     }
@@ -330,7 +422,43 @@ fn install_landlock() -> Result<i64, &'static str> {
     if restricted != 0 {
         return Err("restrict");
     }
-    Ok(abi.min(LANDLOCK_MAX_ABI))
+    let (attr, size) = taken;
+    Ok(Landlock {
+        abi: abi.min(LANDLOCK_MAX_ABI),
+        network: size >= 2 * size_of::<u64>() && attr.handled_access_net != 0,
+        scoped: size >= 3 * size_of::<u64>() && attr.scoped != 0,
+    })
+}
+
+/// The ruleset to ask a kernel of `abi` for, and the size to pass with it.
+fn ruleset_for_abi(abi: i64) -> (LandlockRulesetAttr, usize) {
+    let mut attr = LandlockRulesetAttr {
+        handled_access_fs: fs_mask_for_abi(abi),
+        handled_access_net: 0,
+        scoped: 0,
+    };
+    let mut size = size_of::<u64>();
+    if abi >= 4 {
+        attr.handled_access_net = LL_NET_BIND_TCP | LL_NET_CONNECT_TCP;
+        size = 2 * size_of::<u64>();
+    }
+    if abi >= 6 {
+        attr.scoped = LL_SCOPE_ABSTRACT_UNIX_SOCKET | LL_SCOPE_SIGNAL;
+        size = size_of::<LandlockRulesetAttr>();
+    }
+    (attr, size)
+}
+
+/// One `landlock_create_ruleset` call, or a negative errno.
+fn create_ruleset(attr: &LandlockRulesetAttr, size: usize) -> i64 {
+    unsafe {
+        libc::syscall(
+            libc::SYS_landlock_create_ruleset,
+            attr as *const LandlockRulesetAttr,
+            size as libc::size_t,
+            0 as libc::c_uint,
+        )
+    }
 }
 
 /// Every filesystem access the given Landlock ABI can govern.
@@ -365,11 +493,12 @@ fn fs_mask_for_abi(abi: i64) -> u64 {
     mask
 }
 
-/// Install the seccomp filter, returning whether the kernel accepted it.
-fn install_seccomp() -> bool {
-    let Some(program) = filter_program() else {
-        return false;
-    };
+/// Install the seccomp filter, returning how many syscalls it refuses.
+///
+/// The count is in the report because the list is what the layer is: a run
+/// where the list silently stopped covering a call is a report that says so.
+fn install_seccomp() -> Option<usize> {
+    let (program, denied) = filter_program()?;
     let fprog = SockFprog {
         length: program.len() as u16,
         filter: program.as_ptr(),
@@ -382,10 +511,10 @@ fn install_seccomp() -> bool {
             &fprog as *const SockFprog,
         )
     };
-    installed == 0
+    (installed == 0).then_some(denied)
 }
 
-/// The filter: allow everything the parser needs, refuse the rest with `EPERM`.
+/// The filter, and how many syscalls it names.
 ///
 /// A denylist rather than an allowlist, following Codex's Linux sandbox: an
 /// allowlist has to enumerate every syscall a Rust runtime and two parsers may
@@ -393,10 +522,19 @@ fn install_seccomp() -> bool {
 /// cannot be read. `EPERM` rather than a kill is the same choice: a denied
 /// call is an error the parser can survive, not a crash to attribute later.
 ///
+/// The list carries two kinds of entry. The first is what a parser must never
+/// do at all — sockets, starting programs, reading another process, the kernel
+/// surfaces. The second is what Landlock *cannot* govern, which is a fact about
+/// Landlock rather than about parsers: it sees opens and creations, not
+/// metadata changes, not truncation before ABI 3, not a signal's target. Those
+/// calls are denied here, where the decision is about the syscall rather than
+/// about the path.
+///
 /// Returns `None` on an architecture whose audit code this file does not carry.
-fn filter_program() -> Option<Vec<SockFilter>> {
+fn filter_program() -> Option<(Vec<SockFilter>, usize)> {
     let arch = AUDIT_ARCH?;
-    let mut program = Vec::with_capacity(4 + 2 * denied_syscalls().len());
+    let denied = denied_syscalls();
+    let mut program = Vec::with_capacity(8 + 2 * denied.len());
 
     let stmt = |code: u16, k: u32| SockFilter {
         code,
@@ -413,8 +551,8 @@ fn filter_program() -> Option<Vec<SockFilter>> {
     program.push(stmt(BPF_RET_K, SECCOMP_RET_KILL_PROCESS));
 
     program.push(stmt(BPF_LD_W_ABS, SECCOMP_DATA_NR));
-    for number in denied_syscalls() {
-        program.push(jump(BPF_JEQ_K, number as u32, 0, 1));
+    for number in &denied {
+        program.push(jump(BPF_JEQ_K, *number as u32, 0, 1));
         program.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | EPERM));
     }
 
@@ -443,8 +581,22 @@ fn filter_program() -> Option<Vec<SockFilter>> {
         program.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | EPERM));
     }
 
+    // `prlimit64` is how the runtime sets its own limits — glibc's `setrlimit`
+    // is this call — and it is also how a limit is set on *another* process.
+    // Only the self form is allowed: the resource limits are this process's
+    // alone to state, and a document that could lower the server's would have
+    // reached the process the sandbox exists to protect. `args[0] == 0` is the
+    // kernel's own spelling of "this process".
+    #[cfg(target_endian = "little")]
+    {
+        program.push(jump(BPF_JEQ_K, libc::SYS_prlimit64 as u32, 0, 3));
+        program.push(stmt(BPF_LD_W_ABS, SECCOMP_DATA_ARGS0_LOW));
+        program.push(jump(BPF_JEQ_K, 0, 1, 0));
+        program.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | EPERM));
+    }
+
     program.push(stmt(BPF_RET_K, SECCOMP_RET_ALLOW));
-    Some(program)
+    Some((program, denied.len()))
 }
 
 /// The syscalls the child never needs.
@@ -514,7 +666,64 @@ fn denied_syscalls() -> Vec<libc::c_long> {
         libc::SYS_quotactl,
         libc::SYS_open_by_handle_at,
         libc::SYS_memfd_create,
+        // Reading another process, and the signal that would end it: the sandbox
+        // has no business addressing anything outside itself. `pidfd_open` is
+        // how a signal is sent without a pid race.
+        libc::SYS_kill,
+        libc::SYS_tkill,
+        libc::SYS_tgkill,
+        libc::SYS_pidfd_open,
+        libc::SYS_pidfd_send_signal,
+        // Reading the shape of the filesystem without reading a file: names,
+        // sizes and existence. Landlock governs opens, so these reach past it —
+        // an exploited parser could otherwise map the machine it is confined to.
+        // `*at` forms only where the architecture has no bare one, which is
+        // what the second block below is for.
+        libc::SYS_newfstatat,
+        libc::SYS_statx,
+        libc::SYS_faccessat,
+        libc::SYS_faccessat2,
+        libc::SYS_readlinkat,
+        libc::SYS_getdents64,
+        libc::SYS_chdir,
+        libc::SYS_fchdir,
+        libc::SYS_name_to_handle_at,
+        // The calls Landlock documents as ungovernable: metadata changes and
+        // truncation. None has a use here — the document arrives on stdin and
+        // nothing is written — so the syscall is where they are refused.
+        libc::SYS_ftruncate,
+        libc::SYS_truncate,
+        libc::SYS_fchmod,
+        libc::SYS_fchmodat,
+        libc::SYS_fchown,
+        libc::SYS_fchownat,
+        libc::SYS_fsetxattr,
+        libc::SYS_lsetxattr,
+        libc::SYS_setxattr,
+        libc::SYS_fremovexattr,
+        libc::SYS_lremovexattr,
+        libc::SYS_removexattr,
+        libc::SYS_utimensat,
     ];
+
+    // The bare path-taking forms of the same calls: the architectures that kept
+    // the old table have them (x86, and the 32-bit ones), and the ones that did
+    // not — aarch64, riscv64, loongarch64 — reach the same objects through the
+    // `*at` forms above. A number a kernel does not have cannot be denied here
+    // and does not need to be.
+    #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+    {
+        denied.push(libc::SYS_chmod);
+        denied.push(libc::SYS_chown);
+        denied.push(libc::SYS_lchown);
+        denied.push(libc::SYS_utime);
+        denied.push(libc::SYS_utimes);
+        denied.push(libc::SYS_futimesat);
+        denied.push(libc::SYS_stat);
+        denied.push(libc::SYS_lstat);
+        denied.push(libc::SYS_access);
+        denied.push(libc::SYS_readlink);
+    }
 
     // `fork` and `vfork` only exist where the kernel has them; the architectures
     // that do not (aarch64, loongarch64) reach process creation through `clone`,
@@ -552,7 +761,7 @@ mod tests {
     /// `EPERM`, and ends by allowing everything it did not name.
     #[test]
     fn the_filter_refuses_the_denylist_and_allows_the_rest() {
-        let Some(program) = filter_program() else {
+        let Some((program, _)) = filter_program() else {
             return; // an architecture this file does not carry
         };
 
@@ -645,7 +854,7 @@ mod tests {
     }
 
     fn run_filter(nr: libc::c_long, args0: u32) -> u32 {
-        let program = filter_program().expect("a program for this architecture");
+        let (program, _) = filter_program().expect("a program for this architecture");
         evaluate(
             &program,
             AUDIT_ARCH.expect("an architecture with a filter"),
@@ -671,12 +880,94 @@ mod tests {
             libc::SYS_clock_gettime,
             libc::SYS_rt_sigaction,
             libc::SYS_exit_group,
-            libc::SYS_prlimit64,
         ] {
             assert_eq!(
                 run_filter(nr, 1),
                 SECCOMP_RET_ALLOW,
                 "syscall {nr} must pass"
+            );
+        }
+    }
+
+    /// The one allowed call that reads its first argument: the limits may be
+    /// stated for this process and for no other. A document that could set the
+    /// server's limits would have reached the process the sandbox protects.
+    #[test]
+    fn only_this_process_limits_may_be_stated() {
+        assert_eq!(
+            run_filter(libc::SYS_prlimit64, 0),
+            SECCOMP_RET_ALLOW,
+            "glibc's setrlimit is this call, and the child sets its own"
+        );
+        assert_eq!(
+            run_filter(libc::SYS_prlimit64, 1),
+            SECCOMP_RET_ERRNO | EPERM,
+            "another process's limits are not this process's to state"
+        );
+    }
+
+    /// The calls Landlock cannot govern are refused here instead, which is the
+    /// division of labour the module documents: paths are Landlock's, syscalls
+    /// are this filter's.
+    #[test]
+    fn the_calls_landlock_cannot_govern_are_refused() {
+        for (name, nr) in [
+            ("ftruncate", libc::SYS_ftruncate),
+            ("fchmodat", libc::SYS_fchmodat),
+            ("fchownat", libc::SYS_fchownat),
+            ("fsetxattr", libc::SYS_fsetxattr),
+            ("utimensat", libc::SYS_utimensat),
+            ("newfstatat", libc::SYS_newfstatat),
+            ("readlinkat", libc::SYS_readlinkat),
+            ("getdents64", libc::SYS_getdents64),
+            ("faccessat2", libc::SYS_faccessat2),
+        ] {
+            assert_eq!(
+                run_filter(nr, 0),
+                SECCOMP_RET_ERRNO | EPERM,
+                "{name} is a Landlock gap and must be refused"
+            );
+        }
+    }
+
+    /// Signals are decided by their target, which a classic BPF filter cannot
+    /// read — so the calls are refused outright, and ABI 6's `LANDLOCK_SCOPE_*`
+    /// is what makes the same refusal precise rather than total.
+    #[test]
+    fn a_signal_cannot_be_sent_at_all() {
+        for (name, nr) in [
+            ("kill", libc::SYS_kill),
+            ("tkill", libc::SYS_tkill),
+            ("tgkill", libc::SYS_tgkill),
+            ("pidfd_open", libc::SYS_pidfd_open),
+            ("pidfd_send_signal", libc::SYS_pidfd_send_signal),
+        ] {
+            assert_eq!(
+                run_filter(nr, 0),
+                SECCOMP_RET_ERRNO | EPERM,
+                "{name} reaches a process outside the sandbox"
+            );
+        }
+    }
+
+    /// The path-taking forms the old tables kept exist on the architectures
+    /// that have them, and are refused there too.
+    #[test]
+    fn the_legacy_path_calls_are_refused_where_they_exist() {
+        #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+        for (name, nr) in [
+            ("chmod", libc::SYS_chmod),
+            ("chown", libc::SYS_chown),
+            ("stat", libc::SYS_stat),
+            ("lstat", libc::SYS_lstat),
+            ("access", libc::SYS_access),
+            ("readlink", libc::SYS_readlink),
+            ("utime", libc::SYS_utime),
+        ] {
+            assert_eq!(
+                run_filter(nr, 0),
+                SECCOMP_RET_ERRNO | EPERM,
+                "{name} is a Landlock gap and must be refused"
             );
         }
     }
@@ -735,7 +1026,7 @@ mod tests {
     /// numbers that mean something else there.
     #[test]
     fn the_filter_kills_a_foreign_architecture() {
-        let Some(program) = filter_program() else {
+        let Some((program, _)) = filter_program() else {
             return;
         };
         assert_eq!(
