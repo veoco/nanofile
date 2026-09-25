@@ -160,34 +160,43 @@ html.dark {
    Reserve each mode's width up front so the layout doesn't shift when the text
    appears — and, for the relative form, when it changes on the minute tick.
 
+   Unlayered, like the rest of this block, a `display` here outranks every rule
+   a page can write: `.nf-prow-meta { display: none }` — how a list row sheds
+   its metadata column on a phone — lost to the `inline-block` below, so the
+   time cells of the activity feed stayed on the row. The whole block is a set
+   of defaults, so it belongs in `@layer base`: `@layer components` and the
+   utilities, and the unlayered page rules further down, all still win.
+
    min-width only affects inline elements once they're inline-block, so scope
    that to spans — block divs (folder rows) must keep their own line. */
 /* Date and time are localized, so the stamp's width follows the language and
    the 12/24-hour clock ("9/19/25, 3:04 PM" vs "2025/9/19 15:04"). No single
    reserved width fits them, so the cell sizes to its content; the digits still
    line up between rows. */
-[data-ts]:not([data-ts-mode]),
-[data-ts-mode="absolute"] {
-  font-variant-numeric: tabular-nums;
-}
-/* The relative form is the one cell whose text changes while the page is open,
-   so it has to be one width for "Just now" and "3 days ago" alike. */
-[data-ts-mode="relative"] {
-  min-width: 11ch;
-  font-variant-numeric: tabular-nums;
-}
-/* "Sep 19" — sized by its content; the grid tile sets its own. */
-[data-ts-mode="short"] {
-  min-width: 0;
-  font-variant-numeric: tabular-nums;
-}
-span[data-ts] {
-  display: inline-block;
-}
-/* Block divs (folder rows, search results) render empty with zero height;
-   reserve one line so the row doesn't shift when the text is filled in. */
-div[data-ts] {
-  min-height: 1rem;
+@layer base {
+  [data-ts]:not([data-ts-mode]),
+  [data-ts-mode="absolute"] {
+    font-variant-numeric: tabular-nums;
+  }
+  /* The relative form is the one cell whose text changes while the page is open,
+     so it has to be one width for "Just now" and "3 days ago" alike. */
+  [data-ts-mode="relative"] {
+    min-width: 11ch;
+    font-variant-numeric: tabular-nums;
+  }
+  /* "Sep 19" — sized by its content; the grid tile sets its own. */
+  [data-ts-mode="short"] {
+    min-width: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  span[data-ts] {
+    display: inline-block;
+  }
+  /* Block divs (folder rows, search results) render empty with zero height;
+     reserve one line so the row doesn't shift when the text is filled in. */
+  div[data-ts] {
+    min-height: 1rem;
+  }
 }
 
 /* ─── Base layer overrides ─────────────────────────────────────────────────── */

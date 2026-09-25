@@ -168,3 +168,17 @@ test("a day heading draws the only line above its group", async ({ page }) => {
   });
   expect(band).not.toBe(row);
 });
+
+// A list row sheds its metadata column on a phone. The activity row puts the
+// class straight on the `[data-ts]` span, so the rule that hides it has to beat
+// the `inline-block` a time cell is given — which is why those defaults sit in
+// `@layer base` instead of outranking every rule a page can write.
+test("a phone row sheds its time column", async ({ page }) => {
+  await page.goto("/activities/");
+  await page.waitForSelector("main .nf-prow[data-ts-day]");
+  const meta = page.locator("main .nf-prow[data-ts-day] .nf-prow-meta").first();
+  await expect(meta).toBeVisible();
+
+  await page.setViewportSize({ width: 375, height: 820 });
+  await expect(meta).toBeHidden();
+});
