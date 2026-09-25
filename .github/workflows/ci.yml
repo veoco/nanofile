@@ -160,8 +160,19 @@ jobs:
           grep -q 'container=appcontainer' sandbox.txt
           grep -q 'files=denied' sandbox.txt
           grep -q 'network=denied' sandbox.txt
+          # The far edge of the files layer: the container refuses the user's own
+          # paths (above) and reads the system tree, which is the over-grant this
+          # configuration has. Asserted rather than left in a comment, so a host
+          # where `ALL APPLICATION PACKAGES` stops covering the system tree says
+          # so in the log.
+          grep -q 'system=readable' sandbox.txt
           grep -q 'threads=ok' sandbox.txt
-          grep -qE 'level=(partial|full)' sandbox.txt
+          grep -q 'level=full' sandbox.txt
+          # `strict` makes every layer a condition rather than a hope, the
+          # AppContainer included: this probe exits non-zero on a host that has
+          # lost one, which is what keeps the layer from degrading quietly.
+          ./target/debug/nanofile.exe extract-worker --probe --policy strict | tee strict.txt
+          grep -q 'level=full' strict.txt
 
   # ── macOS-only code: the tray back-end, and the Seatbelt profile the
   #    extraction worker runs under. Every other job runs on Linux, where
@@ -196,7 +207,12 @@ jobs:
           grep -q 'files=denied' sandbox.txt
           grep -q 'network=denied' sandbox.txt
           grep -q 'threads=ok' sandbox.txt
-          grep -qE 'level=(full|partial)' sandbox.txt
+          grep -q 'level=full' sandbox.txt
+          # The same probe under the strictest policy: every layer this host can
+          # give is a condition, so a host that loses one — the address-space
+          # limit, or the profile — fails here instead of indexing with less.
+          ./target/debug/nanofile extract-worker --probe --policy strict | tee strict.txt
+          grep -q 'level=full' strict.txt
       # Parsing *under* the profile, which the probe above does not do: a
       # profile that denies something the parsers need shows up as a document
       # that cannot be read, not as a missing layer. The fixture also insists

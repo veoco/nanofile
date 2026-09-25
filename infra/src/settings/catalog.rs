@@ -915,11 +915,11 @@ pub static CATALOG: &[SettingDef] = &[
         "index.sandbox",
         Maintenance,
         "NANOFILE_INDEX_SANDBOX",
-        Kind::Enum(&["require", "prefer"]),
+        Kind::Enum(&["require", "strict", "prefer"]),
         Apply::Restart,
         |c| c.index.sandbox.clone(),
         |c, v| {
-            c.index.sandbox = parse_enum(v, &["require", "prefer"])?;
+            c.index.sandbox = parse_enum(v, &["require", "strict", "prefer"])?;
             Ok(())
         }
     ),

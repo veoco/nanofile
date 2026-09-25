@@ -1422,7 +1422,10 @@ pub struct IndexConfig {
     /// Documents are parsed in a separate, confined process; `require` (the
     /// default) refuses to index one that would run with nothing but resource
     /// limits, and records it as a failure the backfill retries once the host
-    /// can confine it. `prefer` indexes it anyway, which is the escape hatch
+    /// can confine it. `strict` refuses anything short of every layer the host
+    /// can provide — on Windows, the AppContainer included — which is what
+    /// makes the difference between reading a document with fewer layers and
+    /// not reading it. `prefer` indexes it anyway, which is the escape hatch
     /// for a kernel or container that blocks the sandbox: the worker still
     /// applies every layer it can.
     ///

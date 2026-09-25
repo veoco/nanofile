@@ -45,11 +45,16 @@
 //! or the launch — the child still runs, and reports the layers it has rather
 //! than the ones that were asked for, which is what the parent's fallback logs.
 //!
-//! What no layer here bounds is the shape of the boundary itself: the container
-//! still reads the system tree it loads from (`Windows`, `Program Files` — the
-//! paths `ALL APPLICATION PACKAGES` covers), still reaches local IPC through the
-//! handles it inherits, and still reads the registry. Those are the platform's
-//! own limits, and they are the same shape as the macOS profile's grants.
+//! What no layer here bounds is the shape of the boundary itself. The container
+//! reads the system tree it loads from (`Windows`, `Program Files` — the paths
+//! `ALL APPLICATION PACKAGES` covers), which is the over-grant this
+//! configuration has, and the reason the child reports `system=readable` beside
+//! the per-user paths it was refused. Everything else is that same
+//! dual-principal check rather than an open door: the registry it reads is the
+//! keys carrying the same grant — system ones, not the user's — while its writes
+//! are redirected to its own per-app store, and the IPC it reaches is over the
+//! handles this process handed it. Those are the platform's own limits, and they
+//! are the same shape as the macOS profile's grants.
 //!
 //! # References
 //!

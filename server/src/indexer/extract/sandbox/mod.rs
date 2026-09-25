@@ -25,8 +25,11 @@
 //! [`Level`] is what the layers add up to, and the `index.sandbox` setting says
 //! what the server requires of them. `require` (the default) refuses to extract
 //! a document that would run with nothing but resource limits, which is the
-//! `None` level; `prefer` extracts anyway and logs the shortfall. Both run the
-//! child — there is no in-process path to fall back to.
+//! `None` level; `strict` refuses anything short of [`Level::Full`], which is
+//! what makes a layer the platform can only sometimes provide — the Windows
+//! AppContainer is the one — a condition rather than a hope; `prefer` extracts
+//! anyway and logs the shortfall. All three run the child — there is no
+//! in-process path to fall back to.
 //!
 //! # Claims are measured
 //!
@@ -37,6 +40,15 @@
 //! reported as `none` rather than as protection that is not there. The same
 //! reasoning is why the macOS runner's claims are all three measured: the
 //! profile is applied by a wrapper this process cannot inspect.
+//!
+//! The Windows files layer is the one whose boundary is not a rule this process
+//! writes for itself: an AppContainer denies what the user's own ACLs grant and
+//! permits what `ALL APPLICATION PACKAGES` grants, which is the system tree it
+//! loads from. So the child measures both edges of that window and reports the
+//! far one as `system=`, without letting it clear the layer — a parser that gets
+//! loose in the child reads `Windows` whether or not that is recorded, and what
+//! the report can do is say so next to the fact that the user's own files are
+//! refused.
 //!
 //! Memory is measured the same way. The limit counts only if the kernel took it
 //! — on macOS that means a limit stated from the space the process has already
@@ -290,7 +302,20 @@ fn parse_denial(value: &str) -> Option<bool> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Policy {
     /// Refuse to extract without at least [`Level::Partial`].
+    ///
+    /// This refuses the `None` level — a child a host could not confine at all
+    /// — and accepts a host that has some of the layers. A layer the platform
+    /// can only sometimes provide, which on Windows is the AppContainer, is not
+    /// a condition here.
     Require,
+    /// Refuse to extract without [`Level::Full`]: every layer this platform can
+    /// provide, the Windows AppContainer included.
+    ///
+    /// The difference from [`Policy::Require`] is what a host does when it
+    /// cannot provide one of them: `require` reads the document with the layers
+    /// that are left, `strict` reads nothing and leaves the documents for a host
+    /// that can.
+    Strict,
     /// Extract at any level, reporting the shortfall.
     Prefer,
 }
@@ -300,6 +325,7 @@ impl Policy {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "require" => Some(Policy::Require),
+            "strict" => Some(Policy::Strict),
             "prefer" => Some(Policy::Prefer),
             _ => None,
         }
@@ -308,6 +334,7 @@ impl Policy {
     pub fn as_str(self) -> &'static str {
         match self {
             Policy::Require => "require",
+            Policy::Strict => "strict",
             Policy::Prefer => "prefer",
         }
     }
@@ -315,6 +342,7 @@ impl Policy {
     pub fn accepts(self, level: Level) -> bool {
         match self {
             Policy::Require => level >= Level::Partial,
+            Policy::Strict => level == Level::Full,
             Policy::Prefer => true,
         }
     }
@@ -400,6 +428,16 @@ pub fn confine(external: External) -> Report {
             }
         }
     }
+    // The far edge of the Windows files layer, reported beside the near one: an
+    // AppContainer denies what the user's own ACLs grant and permits what `ALL
+    // APPLICATION PACKAGES` grants, which is the system tree the child loads
+    // from. Which of the two it found is as much of the answer as the layer
+    // count.
+    #[cfg(windows)]
+    if layers.files {
+        detail.push(format!("system={}", system_tree()));
+    }
+
     // Process creation is only ever claimed by an external runner: Windows
     // bounds it with the Job Object this process installs itself, which is not
     // something the child can measure by trying to start a program.
@@ -530,6 +568,38 @@ fn network_is_denied() -> bool {
         }
         Err(error) => error.raw_os_error() == Some(WSAEACCES),
     }
+}
+
+/// Whether the system tree is still readable, which under an AppContainer it is.
+///
+/// The far edge of the Windows files layer, and a residual rather than a claim:
+/// `ALL APPLICATION PACKAGES` is granted across the system tree because that is
+/// how a packaged app loads the system it runs on, so a parser that gets loose
+/// in the child reads `Windows` even though the user's own files are refused.
+/// Reported as a fact and never as a contradiction — a host where this answered
+/// `denied` would be stricter than the platform, not broken.
+///
+/// The candidates are tried in order and the first one that exists decides. The
+/// first two are files nothing maps — the legacy `win.ini` and the hosts file —
+/// and the last is `ntdll.dll`, which this process has already mapped, so the
+/// answer cannot be `absent` on a host where the child runs at all.
+#[cfg(windows)]
+fn system_tree() -> &'static str {
+    const CANDIDATES: [&str; 3] = [
+        r"C:\Windows\win.ini",
+        r"C:\Windows\System32\drivers\etc\hosts",
+        r"C:\Windows\System32\ntdll.dll",
+    ];
+
+    let mut refused = false;
+    for candidate in CANDIDATES {
+        match std::fs::File::open(candidate) {
+            Ok(_) => return "readable",
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => refused = true,
+            Err(_) => {}
+        }
+    }
+    if refused { "denied" } else { "absent" }
 }
 
 /// Whether starting another program is refused, measured.
@@ -815,15 +885,19 @@ mod tests {
     }
 
     #[test]
-    fn the_require_policy_refuses_the_none_level() {
+    fn each_policy_refuses_the_levels_below_it() {
         assert!(!Policy::Require.accepts(Level::None));
         assert!(Policy::Require.accepts(Level::Partial));
         assert!(Policy::Require.accepts(Level::Full));
+        assert!(!Policy::Strict.accepts(Level::None));
+        assert!(!Policy::Strict.accepts(Level::Partial));
+        assert!(Policy::Strict.accepts(Level::Full));
         for level in [Level::None, Level::Partial, Level::Full] {
             assert!(Policy::Prefer.accepts(level));
         }
         assert_eq!(Policy::parse(" require "), Some(Policy::Require));
-        assert_eq!(Policy::parse("prefer"), Some(Policy::Prefer));
+        assert_eq!(Policy::parse("strict"), Some(Policy::Strict));
+        assert_eq!(Policy::parse("PREFER"), Some(Policy::Prefer));
         assert_eq!(Policy::parse("off"), None);
     }
 

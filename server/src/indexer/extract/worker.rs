@@ -271,10 +271,23 @@ pub fn status() -> Status {
                 "document extraction sandbox"
             );
             if report.level() < Level::Full {
-                tracing::warn!(
-                    detail = report.detail.as_str(),
-                    "document extraction runs with less confinement than this host can give"
-                );
+                // Why the layer is missing, where the parent is the only one
+                // that can say: a child whose token is not an AppContainer's
+                // reports `files=open`, and the reason the launch produced no
+                // container exists nowhere but here. Without this the log says
+                // what is missing and leaves the operator to run the probe to
+                // find out which step refused.
+                match sandbox::container_shortfall() {
+                    Some(reason) => tracing::warn!(
+                        detail = report.detail.as_str(),
+                        container = reason,
+                        "document extraction runs with less confinement than this host can give"
+                    ),
+                    None => tracing::warn!(
+                        detail = report.detail.as_str(),
+                        "document extraction runs with less confinement than this host can give"
+                    ),
+                }
             }
             cache.status = Some(status.clone());
         }
@@ -282,9 +295,9 @@ pub fn status() -> Status {
             tracing::error!(
                 reason = reason.as_str(),
                 "the document extraction sandbox is not available; documents will not be \
-                 indexed. Check the log line above, and see `index.sandbox` if this host \
-                 cannot confine the worker at all (a container may need the Landlock \
-                 syscalls allowed)."
+                 indexed. Check the log line above, and see `index.sandbox`: `require` \
+                 accepts any confinement, `strict` requires every layer this host can \
+                 give, and a container may need the Landlock syscalls allowed."
             );
             cache.retry_at = Some(Instant::now() + UNAVAILABLE_RETRY);
         }
