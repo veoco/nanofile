@@ -227,14 +227,26 @@ impl Drop for Child {
 /// rather than no worker at all.
 pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child> {
     if let Some(token) = restricted_token() {
-        let mut args = args.to_vec();
+        let mut with_token = args.to_vec();
         // The child cannot see the token it was created with, and whether
         // writes are restricted is worth saying out loud.
-        args.push(OsString::from("--restricted"));
-        match start(program, &args, Some(token)) {
+        with_token.push(OsString::from("--restricted"));
+        match start(program, &with_token, Some(token)) {
             Ok(child) => return Ok(child),
-            Err(error) => {
-                tracing::warn!("extract-worker: {error}; starting the child with the default token")
+            Err(restricted) => {
+                tracing::warn!(
+                    "extract-worker: the restricted token was refused ({restricted}); \
+                     starting the child with the default token"
+                );
+                // Both failures are carried, not just the last one: the first
+                // says whether the token or the launch was refused, and the
+                // probe path has no subscriber for the warning above to reach.
+                return start(program, args, None).map_err(|default| {
+                    std::io::Error::new(
+                        default.kind(),
+                        format!("with a restricted token: {restricted}; without one: {default}"),
+                    )
+                });
             }
         }
     }
@@ -258,8 +270,8 @@ fn start(program: &OsStr, args: &[OsString], token: Option<HANDLE>) -> std::io::
 fn start_with(program: &OsStr, args: &[OsString], token: Option<HANDLE>) -> std::io::Result<Child> {
     let [
         (child_stdin, parent_stdin),
-        (parent_stdout, child_stdout),
-        (parent_stderr, child_stderr),
+        (child_stdout, parent_stdout),
+        (child_stderr, parent_stderr),
     ] = open_pipes()?;
     let inherited = [child_stdin, child_stdout, child_stderr];
 
@@ -345,14 +357,17 @@ fn close_all(handles: &[HANDLE]) {
 }
 
 /// The three pipe pairs the protocol needs, cleaned up if one cannot be made.
+///
+/// Every pair is `(child end, parent end)`: standard input runs into the child,
+/// standard output and standard error run out of it.
 fn open_pipes() -> std::io::Result<[(HANDLE, HANDLE); 3]> {
     let mut pipes: [(HANDLE, HANDLE); 3] = [(null_mut(), null_mut()); 3];
-    for slot in &mut pipes {
-        match open_pipe() {
+    for (slot, child_reads) in pipes.iter_mut().zip([true, false, false]) {
+        match open_pipe(child_reads) {
             Ok(pipe) => *slot = pipe,
             Err(error) => {
-                for (read, write) in pipes {
-                    close_all(&[read, write]);
+                for (child, parent) in pipes {
+                    close_all(&[child, parent]);
                 }
                 return Err(error);
             }
@@ -361,8 +376,15 @@ fn open_pipes() -> std::io::Result<[(HANDLE, HANDLE); 3]> {
     Ok(pipes)
 }
 
-/// A pipe whose child end is inheritable and whose parent end is not.
-fn open_pipe() -> std::io::Result<(HANDLE, HANDLE)> {
+/// A pipe pair: the end the child holds, and the end the parent holds.
+///
+/// Both ends come back inheritable — `CreatePipe` takes no such parameter — and
+/// only the parent's end is cleared. The child's end has to stay inheritable:
+/// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` accepts inheritable handles only, and
+/// names one it cannot pass on by failing with `ERROR_INVALID_PARAMETER`.
+///
+/// `child_reads` is the one thing that decides which end is which.
+fn open_pipe(child_reads: bool) -> std::io::Result<(HANDLE, HANDLE)> {
     let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: null_mut(),
@@ -373,18 +395,26 @@ fn open_pipe() -> std::io::Result<(HANDLE, HANDLE)> {
     if unsafe { CreatePipe(&mut read, &mut write, &attributes, 0) } == 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // Both ends are created inheritable; the parent's end must not be, or the
-    // child would hold its own reader open and never see end of input.
-    for handle in [read, write] {
-        unsafe {
-            SetHandleInformation(
-                handle,
-                windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT,
-                0,
-            )
-        };
+    let (child, parent) = if child_reads {
+        (read, write)
+    } else {
+        (write, read)
+    };
+    // The parent's end must not be inherited, or the child would hold its own
+    // reader open and never see end of input.
+    if unsafe {
+        SetHandleInformation(
+            parent,
+            windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT,
+            0,
+        )
+    } == 0
+    {
+        let error = std::io::Error::last_os_error();
+        close_all(&[read, write]);
+        return Err(error);
     }
-    Ok((read, write))
+    Ok((child, parent))
 }
 
 /// A `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, which is what limits inheritance to
