@@ -194,6 +194,10 @@ windows-sys = { version = "0.59", features = [
     # that grants a named account "Log on as a service".
     "Win32_Security_Authorization",
     "Win32_Security_Authentication_Identity",
+    # `DeriveAppContainerSidFromAppContainerName`: the SID the extraction worker
+    # runs in, with no capabilities, so it can reach neither the network nor a
+    # file whose ACL names only its user.
+    "Win32_Security_Isolation",
 ] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }

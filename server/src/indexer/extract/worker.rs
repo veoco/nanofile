@@ -125,7 +125,9 @@ pub fn run(job: Job, external: External, policy: Policy) -> anyhow::Result<()> {
     // The parser limits are process-global and this process never runs the
     // server, so they are set here and nowhere else.
     configure_parser_limits();
-    let mut report = sandbox::confine(external.runner);
+    let mut report = sandbox::confine(sandbox::External {
+        runner: external.runner,
+    });
     if external.restricted_token {
         // A restricted token is a property of the process, not a layer this
         // process installed, so it is reported rather than claimed as one.
@@ -155,7 +157,14 @@ pub fn run(job: Job, external: External, policy: Policy) -> anyhow::Result<()> {
 pub fn probe_report() -> anyhow::Result<()> {
     match status() {
         Status::Ready(report) => {
-            println!("{} text_chars={}", report.line(), MAX_INDEXED_CONTENT_BYTES);
+            let mut line = report.line();
+            // The parent's half of the answer: the child can say whether its
+            // token is an AppContainer's, and only the parent knows what it asked
+            // for and what came back.
+            if let Some(reason) = sandbox::container_shortfall() {
+                line.push_str(&format!(",container={reason}"));
+            }
+            println!("{line} text_chars={MAX_INDEXED_CONTENT_BYTES}");
             Ok(())
         }
         Status::Unavailable(reason) => {
@@ -551,6 +560,8 @@ fn spawn_child(
 /// Empty on every platform that does not start the child differently without a
 /// token, which is every platform but Windows. The result is a diagnosis, never
 /// a fallback: a child that only runs unrestricted is a child that does not run.
+/// The run carries neither the token nor the AppContainer the token was paired
+/// with, so a child that reports here is one whose *creation* is what failed.
 fn token_diagnosis(invocation: &Invocation) -> String {
     #[cfg(windows)]
     {
@@ -564,12 +575,14 @@ fn token_diagnosis(invocation: &Invocation) -> String {
                 );
                 let reported = Report::parse(line.trim()).is_some();
                 format!(
-                    "; without a restricted token: {}: {}",
+                    "; without a token or a container: {}: {}",
                     if reported { "reported" } else { "still silent" },
                     run.summary()
                 )
             }
-            Err(error) => format!("; without a restricted token: cannot start ({error})"),
+            Err(error) => {
+                format!("; without a token or a container: cannot start ({error})")
+            }
         }
     }
     #[cfg(not(windows))]
@@ -734,6 +747,13 @@ fn classify(run: &Run) -> Outcome {
 fn interpret(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Outcome {
     if exit_code == Some(EXIT_SANDBOX_UNAVAILABLE) || stderr.contains(SANDBOX_REFUSAL) {
         return Outcome::Unavailable(detail_or(stderr, "the sandbox refused to run"));
+    }
+    // A process that stopped itself at its memory bound has no reply to write,
+    // and what it ran into is the same thing a parser that expands past its
+    // budget runs into: a document that costs more than it may.
+    if exit_code == Some(sandbox::EXIT_MEMORY_LIMIT) {
+        tracing::warn!("extract-worker: the child stopped at its memory bound");
+        return Outcome::Failed(reason::BUDGET);
     }
     for signature in runner_failure_signatures() {
         if stderr.to_ascii_lowercase().contains(signature) {

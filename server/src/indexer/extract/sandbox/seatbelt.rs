@@ -90,22 +90,36 @@ fn escape(path: &str) -> String {
     path.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Clamp the child's own resources. The rest of the confinement comes from the
-/// runner.
+/// Clamp the child's own resources, and watch the footprint where the kernel
+/// will not take an address-space limit. The rest of the confinement comes from
+/// the runner.
 ///
-/// The address-space cap is expected to be refused here — Darwin will not lower
-/// it below what the process already has mapped — so the report carries it as
-/// `as…=refused` rather than failing the layer for it. Memory is bounded by the
-/// parsers' budgets on this platform.
+/// The address-space limit is set against the space this process already has
+/// mapped, which is what makes Darwin accept it at all (see `super::watchdog`).
+/// A host whose kernel refuses even that — macOS 11 and older — gets the
+/// footprint watchdog instead, and the report says which of the two is in force:
+/// `as+…` inside the limits, or `as=refused` next to `memwatch…`.
 #[cfg(target_os = "macos")]
 pub(super) fn confine() -> (Layers, Vec<String>) {
     let mut layers = Layers::default();
     let mut detail = Vec::new();
-    let (limits, limits_detail) = super::clamp_resources();
-    if limits {
+
+    let limits = super::clamp_resources();
+    let mut memory = limits.address_space;
+    if !memory {
+        match super::watchdog::arm(super::ADDRESS_SPACE_LIMIT) {
+            Ok(()) => {
+                detail.push(format!("memwatch{}", super::ADDRESS_SPACE_LIMIT));
+                memory = true;
+            }
+            Err(reason) => detail.push(format!("memwatch={reason}")),
+        }
+    }
+
+    if limits.enforced(memory) {
         layers.limits = true;
     }
-    detail.push(format!("limits={limits_detail}"));
+    detail.push(format!("limits={}", limits.detail));
     (layers, detail)
 }
 

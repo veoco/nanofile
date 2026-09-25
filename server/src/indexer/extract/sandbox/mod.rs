@@ -6,16 +6,19 @@
 //!
 //! | Layer | What it bounds | Linux | macOS | Windows |
 //! |---|---|---|---|---|
-//! | limits | address space, CPU seconds, descriptors, file size | `prlimit64` | `setrlimit` | Job Object memory cap |
+//! | limits | memory, CPU seconds, descriptors, file size | `RLIMIT_AS` | `setrlimit` (mapped space plus the cap), footprint watchdog as fallback | Job Object memory cap |
 //! | files | reading or writing any path | Landlock, zero grants | Seatbelt profile | — |
 //! | network | creating a socket | seccomp denylist | Seatbelt profile | — |
 //! | process | `exec`, `fork`, extra processes | seccomp denylist | Seatbelt profile | Job active-process limit |
 //!
-//! macOS is the one platform without an address-space cap: `setrlimit` refuses
-//! to lower `RLIMIT_AS` below what the process already has mapped, and Darwin
-//! does not enforce the limit it does accept. Memory there is bounded by the
-//! parsers' own budgets, and the report says which limits took rather than
-//! which were attempted.
+//! Memory is the one limit each platform has to be told about differently. Linux
+//! takes the cap as an address-space limit outright; Windows caps committed
+//! memory with a Job Object; Darwin refuses a limit below what a process already
+//! has mapped, so there the limit is the mapped size plus the cap — the same
+//! bound, stated from where the process already is. Where even that is refused
+//! (macOS 11 and older, whose VM map has no size limit) the child watches its own
+//! footprint instead. The report says which of them took rather than which were
+//! attempted.
 //!
 //! # Levels and policy
 //!
@@ -34,6 +37,13 @@
 //! reported as `none` rather than as protection that is not there. The same
 //! reasoning is why the macOS runner's claims are all three measured: the
 //! profile is applied by a wrapper this process cannot inspect.
+//!
+//! Memory is measured the same way. The limit counts only if the kernel took it
+//! — on macOS that means a limit stated from the space the process has already
+//! mapped, and a query that failed to report that space leaves the limit below
+//! what is mapped and the layer off. Where the kernel takes no such limit at all,
+//! the fallback reports itself armed only after reading the footprint it watches:
+//! a bound that cannot read the number it bounds is not a bound.
 //!
 //! # What this is not
 //!
@@ -68,6 +78,10 @@ mod linux;
 // text, but only macOS ever runs under it.
 #[cfg(any(target_os = "macos", test))]
 mod seatbelt;
+/// How macOS states an address-space limit, and the watchdog it falls back to
+/// where the kernel will not take one.
+#[cfg(target_os = "macos")]
+mod watchdog;
 #[cfg(target_os = "windows")]
 mod windows;
 /// Start the child the way Windows has to: a restricted token cannot be applied
@@ -76,6 +90,30 @@ mod windows;
 /// killed from a child that never started.
 #[cfg(target_os = "windows")]
 pub(super) use windows::{Child as WindowsChild, spawn, spawn_unrestricted};
+
+/// Why the child was not started in an AppContainer, where the platform has one.
+///
+/// `None` when the container was applied, was never asked for, or cannot exist on
+/// this platform. The probe prints what this says, because the child can only
+/// report that its token is not one, not why.
+pub fn container_shortfall() -> Option<&'static str> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::shortfall()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
+/// Exit code the child uses when it stops itself at its memory bound.
+///
+/// Nothing else the child does produces it, and the parent reads it as a
+/// document that expanded past the extraction budget rather than as a crash:
+/// only the macOS watchdog exits this way, because the other two platforms have
+/// the kernel stop the process instead.
+pub const EXIT_MEMORY_LIMIT: i32 = 124;
 
 /// Most address space a child may use.
 ///
@@ -140,7 +178,7 @@ impl Level {
 /// The confinement layers actually in force.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Layers {
-    /// Address space, CPU seconds, descriptors, file size.
+    /// Memory, CPU seconds, descriptors, file size.
     pub limits: bool,
     /// Paths cannot be read or written.
     pub files: bool,
@@ -292,6 +330,15 @@ pub struct Runner {
     pub external_confinement: bool,
 }
 
+/// What the parent did around this process that this process cannot see.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct External {
+    /// The parent wrapped this process in the platform's runner (macOS
+    /// `sandbox-exec`), so files, the network and process creation are the
+    /// runner's layers rather than this process's own.
+    pub runner: bool,
+}
+
 /// The runner this platform needs around `exe`, if any.
 ///
 /// Only macOS needs one: a Seatbelt profile can only be applied by
@@ -318,10 +365,10 @@ pub fn runner(exe: &Path) -> Option<Runner> {
 /// Must be called on the child's only thread and before the document is read:
 /// Landlock and seccomp are inherited by threads created afterwards, and the
 /// parsers create one.
-pub fn confine(external_confinement: bool) -> Report {
+pub fn confine(external: External) -> Report {
     let (mut layers, mut detail) = platform_confine();
 
-    if external_confinement {
+    if external.runner {
         // The parent asserts it wrapped this process in a runner whose profile
         // governs all three. Every claim is measured below, so a wrapper that
         // silently did nothing drops the level instead of reporting it.
@@ -331,7 +378,10 @@ pub fn confine(external_confinement: bool) -> Report {
         detail.push("runner=external".to_string());
     }
 
-    #[cfg(unix)]
+    // Every layer that was claimed by a mechanism is now measured, whichever
+    // process installed it: the child's own Landlock ruleset, a token the parent
+    // created, or a profile a runner applied.
+    #[cfg(any(unix, windows))]
     {
         if layers.files {
             if files_are_denied() {
@@ -349,13 +399,17 @@ pub fn confine(external_confinement: bool) -> Report {
                 detail.push("network=measured-open".to_string());
             }
         }
-        if external_confinement {
-            if process_is_denied() {
-                detail.push("process=measured-denied".to_string());
-            } else {
-                layers.process = false;
-                detail.push("process=measured-open".to_string());
-            }
+    }
+    // Process creation is only ever claimed by an external runner: Windows
+    // bounds it with the Job Object this process installs itself, which is not
+    // something the child can measure by trying to start a program.
+    #[cfg(unix)]
+    if external.runner {
+        if process_is_denied() {
+            detail.push("process=measured-denied".to_string());
+        } else {
+            layers.process = false;
+            detail.push("process=measured-open".to_string());
         }
     }
 
@@ -377,7 +431,7 @@ pub fn confine(external_confinement: bool) -> Report {
     }
 }
 
-/// Whether reading a path outside the document is refused, measured.
+/// Whether reading or writing a path outside the document is refused, measured.
 ///
 /// Any one of these failing to open is the denial: `/` always exists, and the
 /// other three are readable by every process that is not confined. The macOS
@@ -396,6 +450,38 @@ fn files_are_denied() -> bool {
         })
 }
 
+/// Whether reading or writing a path outside the document is refused, measured.
+///
+/// A Windows AppContainer is not a deny-everything rule: what it leaves readable
+/// is the system tree it loads from, which is what `ALL APPLICATION PACKAGES`
+/// grants on `Windows` and `Program Files`. So the measurement asks for paths a
+/// user can use and a container cannot: listing the directory the child's own
+/// image sits in — a per-user install, which does not carry that grant — and
+/// creating a file in the user's temporary directory. Either one failing is the
+/// denial.
+#[cfg(windows)]
+fn files_are_denied() -> bool {
+    let denied = |error: &std::io::Error| error.kind() == std::io::ErrorKind::PermissionDenied;
+
+    if let Some(directory) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        && let Err(error) = std::fs::read_dir(directory)
+        && denied(&error)
+    {
+        return true;
+    }
+
+    let probe = std::env::temp_dir().join("nanofile-extraction-write-probe");
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            false
+        }
+        Err(error) => denied(&error),
+    }
+}
+
 /// Whether creating a socket is refused, measured.
 ///
 /// Binding an ephemeral UDP port needs no peer and cannot fail for any reason
@@ -409,6 +495,40 @@ fn network_is_denied() -> bool {
             false
         }
         Err(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
+    }
+}
+
+/// Whether opening a connection is refused, measured.
+///
+/// A container with no capabilities cannot open one at all: the Windows Filtering
+/// Platform refuses the connect before a packet leaves, and the refusal arrives
+/// as the socket error `WSAEACCES` rather than as the timeout a silent drop
+/// would give. The address is one a *working* connection answers quickly, so a
+/// host whose container is not holding reports `open` instead of waiting: what
+/// this asks is whether the connection was forbidden.
+///
+/// The same error can come from a firewall rule that has nothing to do with the
+/// container, which is why this layer is only ever claimed by a process whose own
+/// token says it is in one — see `windows::confine`.
+#[cfg(windows)]
+fn network_is_denied() -> bool {
+    /// `WSAEACCES`, from `winerror.h`.
+    const WSAEACCES: i32 = 10013;
+    /// A well-known address, on the port it answers on.
+    const ADDRESS: std::net::SocketAddr = std::net::SocketAddr::new(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1)),
+        443,
+    );
+    /// Long enough for a working connection to answer, short enough that a host
+    /// which neither connects nor refuses does not stall the child.
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+    match std::net::TcpStream::connect_timeout(&ADDRESS, WAIT) {
+        Ok(stream) => {
+            drop(stream);
+            false
+        }
+        Err(error) => error.raw_os_error() == Some(WSAEACCES),
     }
 }
 
@@ -438,6 +558,63 @@ fn process_is_denied() -> bool {
     }
 }
 
+/// The limits a process can set for itself, and whether each of them took.
+///
+/// Kept apart rather than added up here because the memory bound is not always
+/// one of them: macOS has no address-space limit to set and supplies its own
+/// bound instead, so the caller is the one that knows what to add to the rest.
+#[cfg(unix)]
+struct Clamped {
+    address_space: bool,
+    cpu: bool,
+    descriptors: bool,
+    file_size: bool,
+    core: bool,
+    detail: String,
+}
+
+#[cfg(unix)]
+impl Clamped {
+    /// Whether these limits, plus a memory bound the caller established some
+    /// other way, add up to a limits layer.
+    ///
+    /// Every limit is required, and memory may come from either the address-space
+    /// limit or from `memory`. A `limits` layer missing any of them would let a
+    /// document cost what the layer exists to bound.
+    fn enforced(&self, memory: bool) -> bool {
+        self.cpu
+            && self.descriptors
+            && self.file_size
+            && self.core
+            && (self.address_space || memory)
+    }
+}
+
+/// The address-space limit to set, and how the report spells it.
+///
+/// Linux takes the cap itself. Darwin refuses a limit below what the process
+/// already has mapped, so there the limit is the mapped size plus the cap, and
+/// the token says `+<cap>`: what is bounded is the growth, which is the same
+/// thing the absolute cap bounds on a platform that can state it from zero. The
+/// watchdog's `mapped_address_space` is where the base comes from, and a host
+/// that will not report it leaves the limit below what is mapped — a refusal the
+/// report shows and the fallback covers.
+#[cfg(unix)]
+fn address_space_limit() -> (u64, String) {
+    #[cfg(target_os = "macos")]
+    {
+        let mapped = watchdog::mapped_address_space().unwrap_or(0);
+        (
+            mapped.saturating_add(ADDRESS_SPACE_LIMIT),
+            format!("+{ADDRESS_SPACE_LIMIT}"),
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        (ADDRESS_SPACE_LIMIT, ADDRESS_SPACE_LIMIT.to_string())
+    }
+}
+
 /// Clamp the limits that bound what a parser can cost.
 ///
 /// Both the soft and the hard value are set: a soft-only clamp can be raised by
@@ -445,14 +622,10 @@ fn process_is_denied() -> bool {
 /// that took and every one the kernel refused, so a report whose layer is
 /// missing says which limit to look at.
 ///
-/// The address-space cap is the one limit that is not required on every
-/// platform. Darwin refuses to lower `RLIMIT_AS` below the space a process
-/// already has mapped — the dyld shared cache alone is larger than the cap —
-/// and does not enforce the limit it does accept, so on macOS the memory bound
-/// is the parsers' own budgets (the PDF stream limit, the office budget and the
-/// 8 MiB text cap) and the cap is reported as refused rather than counted on.
+/// The address-space cap is the one limit Darwin does not have; see the
+/// `watchdog` module for what stands in for it there.
 #[cfg(unix)]
-fn clamp_resources() -> (bool, String) {
+fn clamp_resources() -> Clamped {
     macro_rules! clamp {
         ($resource:expr, $soft:expr, $hard:expr) => {{
             let limit = libc::rlimit {
@@ -463,7 +636,8 @@ fn clamp_resources() -> (bool, String) {
         }};
     }
 
-    let address_space = clamp!(libc::RLIMIT_AS, ADDRESS_SPACE_LIMIT, ADDRESS_SPACE_LIMIT);
+    let (address_space_value, address_space_label) = address_space_limit();
+    let address_space = clamp!(libc::RLIMIT_AS, address_space_value, address_space_value);
     let cpu = clamp!(libc::RLIMIT_CPU, CPU_SOFT_SECONDS, CPU_HARD_SECONDS);
     let descriptors = clamp!(libc::RLIMIT_NOFILE, NOFILE_LIMIT, NOFILE_LIMIT);
     let file_size = clamp!(libc::RLIMIT_FSIZE, FILE_SIZE_LIMIT, FILE_SIZE_LIMIT);
@@ -472,7 +646,7 @@ fn clamp_resources() -> (bool, String) {
     let core = clamp!(libc::RLIMIT_CORE, 0, 0);
 
     let mut detail = Vec::new();
-    detail.push(took(address_space, "as", &ADDRESS_SPACE_LIMIT.to_string()));
+    detail.push(took(address_space, "as", &address_space_label));
     detail.push(took(
         cpu,
         "cpu",
@@ -486,9 +660,14 @@ fn clamp_resources() -> (bool, String) {
     ));
     detail.push(took(core, "core", "0"));
 
-    let enforced =
-        cpu && descriptors && file_size && core && (address_space || cfg!(target_os = "macos"));
-    (enforced, detail.join(","))
+    Clamped {
+        address_space,
+        cpu,
+        descriptors,
+        file_size,
+        core,
+        detail: detail.join(","),
+    }
 }
 
 /// One limit, as the report spells it: `nofile32` when it took, `nofile=refused`
@@ -541,6 +720,44 @@ fn platform_confine() -> (Layers, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every limit is required, and memory may be the address-space limit or the
+    /// bound that stands in for it where the kernel does not take one.
+    #[cfg(unix)]
+    #[test]
+    fn a_limits_layer_needs_every_limit_and_one_memory_bound() {
+        let clamped = |address_space, cpu, descriptors, file_size, core| Clamped {
+            address_space,
+            cpu,
+            descriptors,
+            file_size,
+            core,
+            detail: String::new(),
+        };
+        assert!(
+            clamped(true, true, true, true, true).enforced(false),
+            "the address-space limit is a memory bound"
+        );
+        assert!(
+            clamped(false, true, true, true, true).enforced(true),
+            "so is the fallback for a kernel that has none"
+        );
+        assert!(
+            !clamped(false, true, true, true, true).enforced(false),
+            "and without either there is no memory bound at all"
+        );
+        for (cpu, descriptors, file_size, core) in [
+            (false, true, true, true),
+            (true, false, true, true),
+            (true, true, false, true),
+            (true, true, true, false),
+        ] {
+            assert!(
+                !clamped(true, cpu, descriptors, file_size, core).enforced(true),
+                "every limit is required: {cpu} {descriptors} {file_size} {core}"
+            );
+        }
+    }
 
     /// The report names every limit that took and every one the kernel refused,
     /// so a missing limits layer says which limit to look at.

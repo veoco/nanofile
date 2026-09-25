@@ -136,11 +136,12 @@ pub(super) fn confine() -> (Layers, Vec<String>) {
 
     close_extra_descriptors();
 
-    let (limits, limits_detail) = super::clamp_resources();
-    if limits {
+    let limits = super::clamp_resources();
+    // The address-space limit is this platform's memory bound; there is no other.
+    if limits.enforced(limits.address_space) {
         layers.limits = true;
     }
-    detail.push(format!("limits={limits_detail}"));
+    detail.push(format!("limits={}", limits.detail));
 
     detail.push(
         if set_no_new_privs() {

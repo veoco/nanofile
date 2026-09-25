@@ -157,6 +157,9 @@ jobs:
           ./target/debug/nanofile.exe extract-worker --probe | tee sandbox.txt
           grep -q 'token=restricted' sandbox.txt
           grep -q 'job=memory' sandbox.txt
+          grep -q 'container=appcontainer' sandbox.txt
+          grep -q 'files=denied' sandbox.txt
+          grep -q 'network=denied' sandbox.txt
           grep -q 'threads=ok' sandbox.txt
           grep -qE 'level=(partial|full)' sandbox.txt
 
@@ -181,6 +184,11 @@ jobs:
         run: npm ci
       - name: Check the macOS-only code
         run: cargo check -p server --tests --bin nanofile
+      # The sandbox's own unit tests read this process's mapped address space and
+      # its footprint — the two numbers the memory limit and its fallback are set
+      # from — and neither call can be made anywhere but macOS.
+      - name: Test the sandbox's own measurements
+        run: cargo test -p server --lib indexer::extract::sandbox
       - name: Run the extraction sandbox probe
         run: |
           cargo build --bin nanofile

@@ -1,8 +1,8 @@
-//! Windows confinement: a Job Object around the child, and a restricted token
-//! for it to run under.
+//! Windows confinement: a Job Object around the child, a restricted token for it
+//! to run under, and an AppContainer around that.
 //!
-//! Windows has no `RLIMIT_AS` and no unprivileged equivalent of Landlock, so
-//! the layers are these two, and they are applied in different processes:
+//! Windows has no `RLIMIT_AS` and no unprivileged equivalent of Landlock, so the
+//! layers are these three, and they are applied in two processes:
 //!
 //! * **The Job Object** (this child, at startup) caps the process's committed
 //!   memory, its CPU time and how many processes it may hold, and restricts the
@@ -14,6 +14,14 @@
 //!   which is the one case Windows allows without `SeAssignPrimaryToken`.
 //!   Privileges are gone, the administrative SIDs are deny-only, and write
 //!   access is checked against the restricting SIDs alone.
+//! * **The AppContainer** (the parent, at creation) is a process-creation
+//!   attribute rather than a token: `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`
+//!   with an AppContainer SID and *no capabilities* is what turns the child into
+//!   a low-box process. Capabilities are what grant a container network access
+//!   and access outside its own package, so an empty list is a process that
+//!   cannot open a socket to anything and cannot read a file whose ACL names only
+//!   its user. This is the configuration Chromium's own zero-capability sandbox
+//!   uses, and the one the reference below documents.
 //!
 //! The restricting SIDs are this process's own identity: the logon session, the
 //! user, and the groups Windows grants the objects a process needs to attach to
@@ -24,19 +32,32 @@
 //! `STATUS_DLL_INIT_FAILED` (`0xC0000142`).
 //!
 //! Because the user's own SID is in that list, `WRITE_RESTRICTED` narrows writes
-//! to what this user may write rather than to nothing: what it takes away is
-//! access to objects the user cannot write at all, and administrative access is
-//! what `LUA_TOKEN` takes away. Bounding writes to the user's *own* space is a
-//! low integrity token's job — Chromium's sandbox is that token plus a desktop
-//! of its own — and this is not that.
+//! to what this user may write rather than to nothing. What closes that gap is
+//! the container: an AppContainer access check requires an ACE for the package
+//! SID — or for `ALL APPLICATION PACKAGES` — *in addition* to whatever the user
+//! and group SIDs grant, so a file that only names the user stops being readable.
+//! The one file that has to keep being readable is the worker's own image, which
+//! a per-user install does not carry that ACE on, so the parent grants it to the
+//! container's SID before the first launch (see [`grant_image_access`]).
 //!
-//! This is what both of the sandboxes this follows report as *partial*: reads
-//! are only partly confined (`Everyone` cannot be dropped, and NTFS hard links
-//! alias one file object across paths), so the level here is never `Full`.
-//! A restricted token also cannot be asked for on a process that already
-//! exists, which is why `spawn` — not `confine` — is where it happens, and why
-//! a token that cannot be created falls back to an unrestricted (but still
-//! Job-limited) child and says so.
+//! With the container in place, all four layers are the platform's own and the
+//! level is `full`. Without it — a host that refuses the token, or the container,
+//! or the launch — the child still runs, and reports the layers it has rather
+//! than the ones that were asked for, which is what the parent's fallback logs.
+//!
+//! What no layer here bounds is the shape of the boundary itself: the container
+//! still reads the system tree it loads from (`Windows`, `Program Files` — the
+//! paths `ALL APPLICATION PACKAGES` covers), still reaches local IPC through the
+//! handles it inherits, and still reads the registry. Those are the platform's
+//! own limits, and they are the same shape as the macOS profile's grants.
+//!
+//! # References
+//!
+//! * Microsoft, *Launch an AppContainer*: the attribute, the empty capability
+//!   list, and the requirement that the image be readable by the container.
+//! * Chromium's `sandbox/win/src/`: the same launch (`CreateProcessAsUser` with a
+//!   plain restricted token plus `SECURITY_CAPABILITIES`), and the check that
+//!   refuses to start when the image is not accessible to the container.
 
 use std::ffi::{OsStr, OsString, c_void};
 use std::fs::File;
@@ -44,17 +65,25 @@ use std::mem::{offset_of, size_of, size_of_val};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::ptr::{null, null_mut};
+use std::sync::OnceLock;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, HANDLE, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, HANDLE, LocalFree, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
+use windows_sys::Win32::Security::Authorization::{
+    EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT,
+    SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+};
+use windows_sys::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
 use windows_sys::Win32::Security::{
-    CopySid, CreateRestrictedToken, CreateWellKnownSid, DISABLE_MAX_PRIVILEGE, GetLengthSid,
-    GetTokenInformation, IsValidSid, LUA_TOKEN, PSID, SECURITY_ATTRIBUTES, SID_AND_ATTRIBUTES,
-    TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY, TOKEN_USER, TokenGroups,
-    TokenUser, WELL_KNOWN_SID_TYPE, WRITE_RESTRICTED, WinAuthenticatedUserSid, WinBuiltinUsersSid,
-    WinInteractiveSid, WinWorldSid,
+    ACL, CopySid, CreateRestrictedToken, CreateWellKnownSid, DACL_SECURITY_INFORMATION,
+    DISABLE_MAX_PRIVILEGE, GetLengthSid, GetTokenInformation, IsValidSid, LUA_TOKEN,
+    NO_INHERITANCE, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
+    SID_AND_ATTRIBUTES, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY,
+    TOKEN_USER, TokenGroups, TokenIsAppContainer, TokenUser, WELL_KNOWN_SID_TYPE, WRITE_RESTRICTED,
+    WinAuthenticatedUserSid, WinBuiltinUsersSid, WinInteractiveSid, WinWorldSid,
 };
+use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
     JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -70,8 +99,8 @@ use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, CreateProcessW,
     EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, INFINITE,
     InitializeProcThreadAttributeList, OpenProcessToken, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
-    UpdateProcThreadAttribute, WaitForSingleObject,
+    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 use super::Layers;
@@ -80,7 +109,7 @@ use super::Layers;
 ///
 /// The same gigabyte the Unix layer allows, for the same reason: a document is
 /// at most 256 MiB decompressed and yields at most 8 MiB of text.
-const MEMORY_LIMIT: usize = 1 << 30;
+const MEMORY_LIMIT: u64 = 1 << 30;
 
 /// CPU seconds before the job terminates the process.
 ///
@@ -102,6 +131,12 @@ const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
 const MAX_SID_BYTES: usize = 68;
 
 /// Apply the confinement the child can give itself: the Job Object.
+///
+/// The other two layers are the parent's, but this process can still see one of
+/// them: whether the token it was given is an AppContainer's is a property of the
+/// token, read here rather than taken from the parent's word. A token that is not
+/// one claims neither layer, and the measurement below clears a claim the token
+/// does not back up.
 pub(super) fn confine() -> (Layers, Vec<String>) {
     let mut layers = Layers::default();
     let mut detail = Vec::new();
@@ -117,6 +152,12 @@ pub(super) fn confine() -> (Layers, Vec<String>) {
             let _ = job;
         }
         Err(reason) => detail.push(format!("job={reason}")),
+    }
+
+    if is_app_container() {
+        layers.files = true;
+        layers.network = true;
+        detail.push("container=appcontainer".to_string());
     }
 
     (layers, detail)
@@ -139,7 +180,7 @@ fn job_object() -> Result<HANDLE, &'static str> {
     // One process: this one. A parser has no child to run, and a fork bomb has
     // nowhere to go.
     limits.BasicLimitInformation.ActiveProcessLimit = 1;
-    limits.ProcessMemoryLimit = MEMORY_LIMIT;
+    limits.ProcessMemoryLimit = MEMORY_LIMIT as usize;
 
     let sized = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
     let set_limits = unsafe {
@@ -229,20 +270,28 @@ impl Drop for Child {
     }
 }
 
-/// Start the child, with a restricted token when the system will make one.
+/// Start the child, in an AppContainer with a restricted token when the system
+/// will make them.
 ///
-/// The token is created first because the child is told whether it got one;
-/// a host that refuses `CreateProcessAsUser` still gets a job-limited worker
-/// rather than no worker at all.
+/// The container is what bounds files and the network, and it is applied on top
+/// of the token rather than instead of it: the token takes the privileges away,
+/// the container makes every access check require the package SID as well as the
+/// user's. A host that will not give one still gets the token, and a host that
+/// will not give that either still gets a job-limited child rather than no child
+/// at all.
 pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child> {
+    let container = app_container(program);
     if let Some(token) = restricted_token() {
         let mut with_token = args.to_vec();
         // The child cannot see the token it was created with, and whether
         // writes are restricted is worth saying out loud.
         with_token.push(OsString::from("--restricted"));
-        match start(program, &with_token, Some(token)) {
+        match start(program, &with_token, Some(token), container.as_ref()) {
             Ok(child) => return Ok(child),
             Err(restricted) => {
+                if container.is_some() {
+                    note_shortfall("launch-refused");
+                }
                 tracing::warn!(
                     "extract-worker: the restricted token was refused ({restricted}); \
                      starting the child with the default token"
@@ -250,7 +299,7 @@ pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child
                 // Both failures are carried, not just the last one: the first
                 // says whether the token or the launch was refused, and the
                 // probe path has no subscriber for the warning above to reach.
-                return start(program, args, None).map_err(|default| {
+                return start(program, args, None, None).map_err(|default| {
                     std::io::Error::new(
                         default.kind(),
                         format!("with a restricted token: {restricted}; without one: {default}"),
@@ -259,17 +308,17 @@ pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child
             }
         }
     }
-    start(program, args, None)
+    start(program, args, None, None)
 }
 
-/// Start the child with this process's own token.
+/// Start the child with this process's own token and no container.
 ///
 /// Only the probe uses this. A child that was created and then died before it
-/// reported can be failing because of its token or because of everything else
-/// about how it was started, and the two are told apart the only way that
-/// cannot be argued with: start it again without the token and see.
+/// reported can be failing because of its token or its container, or because of
+/// everything else about how it was started, and the two are told apart the only
+/// way that cannot be argued with: start it again without either and see.
 pub(crate) fn spawn_unrestricted(program: &OsStr, args: &[OsString]) -> std::io::Result<Child> {
-    start(program, args, None)
+    start(program, args, None, None)
 }
 
 /// Create the process, its pipes and the handle list that keeps inheritance to
@@ -278,15 +327,25 @@ pub(crate) fn spawn_unrestricted(program: &OsStr, args: &[OsString]) -> std::io:
 /// The token is closed on every path, including the failing ones: this runs
 /// once per document, and a leak here would be a leak in the server's own
 /// handle table.
-fn start(program: &OsStr, args: &[OsString], token: Option<HANDLE>) -> std::io::Result<Child> {
-    let started = start_with(program, args, token);
+fn start(
+    program: &OsStr,
+    args: &[OsString],
+    token: Option<HANDLE>,
+    container: Option<&AppContainer>,
+) -> std::io::Result<Child> {
+    let started = start_with(program, args, token, container);
     if let Some(token) = token {
         unsafe { CloseHandle(token) };
     }
     started
 }
 
-fn start_with(program: &OsStr, args: &[OsString], token: Option<HANDLE>) -> std::io::Result<Child> {
+fn start_with(
+    program: &OsStr,
+    args: &[OsString],
+    token: Option<HANDLE>,
+    container: Option<&AppContainer>,
+) -> std::io::Result<Child> {
     let [
         (child_stdin, parent_stdin),
         (child_stdout, parent_stdout),
@@ -300,17 +359,19 @@ fn start_with(program: &OsStr, args: &[OsString], token: Option<HANDLE>) -> std:
     startup.StartupInfo.hStdInput = child_stdin;
     startup.StartupInfo.hStdOutput = child_stdout;
     startup.StartupInfo.hStdError = child_stderr;
-    // Only these three handles are inherited. Without the list,
-    // `bInheritHandles` would hand the child everything inheritable this
-    // process holds — the server's own standard streams among it.
-    let mut attributes = match AttributeList::new(inherited) {
-        Ok(attributes) => attributes,
-        Err(error) => {
-            close_all(&inherited);
-            close_all(&[parent_stdin, parent_stdout, parent_stderr]);
-            return Err(error);
-        }
-    };
+    // Only these three handles are inherited, and the container is named in the
+    // same list. Without the list, `bInheritHandles` would hand the child
+    // everything inheritable this process holds — the server's own standard
+    // streams among it.
+    let mut attributes =
+        match AttributeList::new(&inherited, container.map(|held| &held.capabilities)) {
+            Ok(attributes) => attributes,
+            Err(error) => {
+                close_all(&inherited);
+                close_all(&[parent_stdin, parent_stdout, parent_stderr]);
+                return Err(error);
+            }
+        };
     startup.lpAttributeList = attributes.as_mut_ptr();
 
     let application: Vec<u16> = program.encode_wide().chain(std::iter::once(0)).collect();
@@ -436,38 +497,83 @@ fn open_pipe(child_reads: bool) -> std::io::Result<(HANDLE, HANDLE)> {
     Ok((child, parent))
 }
 
-/// A `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, which is what limits inheritance to
-/// the handles a child is actually given.
+/// The process attributes the child is created with: the handles it may inherit,
+/// and the AppContainer it runs in.
 struct AttributeList {
     buffer: Vec<u8>,
 }
 
 impl AttributeList {
-    fn new(handles: [HANDLE; 3]) -> std::io::Result<Self> {
+    fn new(
+        handles: &[HANDLE; 3],
+        capabilities: Option<&SECURITY_CAPABILITIES>,
+    ) -> std::io::Result<Self> {
+        let count = 1 + u32::from(capabilities.is_some()) as usize;
         let mut size = 0usize;
-        unsafe { InitializeProcThreadAttributeList(null_mut(), 1, 0, &mut size) };
+        unsafe { InitializeProcThreadAttributeList(null_mut(), count as u32, 0, &mut size) };
         let mut buffer = vec![0u8; size];
         let list = buffer.as_mut_ptr().cast();
-        if unsafe { InitializeProcThreadAttributeList(list, 1, 0, &mut size) } == 0 {
+        if unsafe { InitializeProcThreadAttributeList(list, count as u32, 0, &mut size) } == 0 {
             return Err(std::io::Error::last_os_error());
         }
+
+        let mut attributes = Self { buffer };
+        let handles = unsafe {
+            attributes.set(
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                handles.as_ptr().cast::<c_void>(),
+                size_of_val(&handles),
+            )
+        };
+        let container = match capabilities {
+            Some(capabilities) => unsafe {
+                attributes.set(
+                    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
+                    std::ptr::from_ref(capabilities).cast::<c_void>(),
+                    size_of::<SECURITY_CAPABILITIES>(),
+                )
+            },
+            None => Ok(()),
+        };
+        match handles.and(container) {
+            Ok(()) => Ok(attributes),
+            Err(error) => {
+                // The buffer is a live attribute list, so the failing path drops
+                // it through the same cleanup a successful one does.
+                drop(attributes);
+                Err(error)
+            }
+        }
+    }
+
+    /// Fill one attribute slot, which has to happen before the list is used and
+    /// after the buffer exists.
+    ///
+    /// # Safety
+    ///
+    /// `value` must point at `size` readable bytes of the type the attribute
+    /// names, and stay there until the list is dropped.
+    unsafe fn set(
+        &mut self,
+        attribute: usize,
+        value: *const c_void,
+        size: usize,
+    ) -> std::io::Result<()> {
         let updated = unsafe {
             UpdateProcThreadAttribute(
-                list,
+                self.as_mut_ptr(),
                 0,
-                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                handles.as_ptr().cast(),
-                size_of_val(&handles),
+                attribute,
+                value,
+                size,
                 null_mut(),
                 null(),
             )
         };
         if updated == 0 {
-            let error = std::io::Error::last_os_error();
-            unsafe { windows_sys::Win32::System::Threading::DeleteProcThreadAttributeList(list) };
-            return Err(error);
+            return Err(std::io::Error::last_os_error());
         }
-        Ok(Self { buffer })
+        Ok(())
     }
 
     fn as_mut_ptr(
@@ -485,6 +591,221 @@ impl Drop for AttributeList {
             )
         };
     }
+}
+
+/// Why the child is not in an AppContainer, when the parent asked for one.
+///
+/// The probe prints it. Without it, losing the container would show up only as a
+/// child that reports `files=open`, with the reason on a `tracing` warning the
+/// probe path has no subscriber for.
+static SHORTFALL: OnceLock<&'static str> = OnceLock::new();
+
+/// The reason the container was asked for and not applied, if there is one.
+pub(crate) fn shortfall() -> Option<&'static str> {
+    SHORTFALL.get().copied()
+}
+
+fn note_shortfall(reason: &'static str) {
+    let _ = SHORTFALL.set(reason);
+}
+
+/// The name the worker's AppContainer SID is derived from.
+///
+/// The SID is a hash of it rather than a registered package, which is all a
+/// process that never writes to its own storage needs: the same name gives the
+/// same SID on every run, and nothing has to be installed for it to exist.
+const APP_CONTAINER_NAME: &str = "Nanofile.Extraction.Worker";
+
+/// The AppContainer the child is created in.
+struct AppContainer {
+    /// What the process attribute points at: the package SID, and an empty
+    /// capability list. The SID's memory belongs to the process, not to this
+    /// value — it is derived once and outlives every launch — so this may only be
+    /// read while it is alive on the caller's stack.
+    capabilities: SECURITY_CAPABILITIES,
+}
+
+/// The AppContainer to start `program` in, or `None` when this host will not
+/// give one.
+///
+/// Derived rather than created: `CreateAppContainerProfile` would write a package
+/// profile into the user's AppData for a process that has no storage of its own,
+/// and this needs the SID alone.
+fn app_container(program: &OsStr) -> Option<AppContainer> {
+    let Some(sid) = app_container_sid() else {
+        note_shortfall("sid-refused");
+        return None;
+    };
+    // The image is the one file the child cannot run without, and it is the
+    // parent's job to make it readable: inside the container the check that
+    // matters is the package SID's, and a per-user install has no ACE for it.
+    if !grant_image_access(program, sid) {
+        note_shortfall("image-grant-refused");
+        return None;
+    }
+    Some(AppContainer {
+        capabilities: SECURITY_CAPABILITIES {
+            AppContainerSid: sid,
+            // No capabilities at all, which is the whole point: a capability is
+            // what opens a socket or reaches outside the package, and a worker
+            // that reads bytes from a pipe needs neither.
+            Capabilities: null_mut(),
+            CapabilityCount: 0,
+            Reserved: 0,
+        },
+    })
+}
+
+/// This process's own SID for the worker container.
+///
+/// Derived once and kept: the SID is a constant of the name, the grant recorded
+/// against it is a property of the image, and freeing it would only mean
+/// deriving the same value again. The allocation is one SID, for the life of the
+/// process.
+fn app_container_sid() -> Option<PSID> {
+    static SID: OnceLock<usize> = OnceLock::new();
+    let stored = *SID.get_or_init(|| {
+        let name: Vec<u16> = OsStr::new(APP_CONTAINER_NAME)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut sid: PSID = null_mut();
+        let derived = unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
+        if derived < 0 || sid.is_null() {
+            return 0;
+        }
+        sid as usize
+    });
+    (stored != 0).then(|| stored as PSID)
+}
+
+/// Whether `program` has been given to the container, granting it if not.
+///
+/// Once per process and per image: a grant is a change to the file's own ACL, and
+/// doing it again for every document would add a second identical ACE each time.
+/// A call for a *different* image is refused rather than silently reported as
+/// granted, which leaves it to run under the restricted token alone.
+///
+/// A grant that cannot be made — an image under `Program Files`, where the user
+/// may not rewrite the DACL, or one whose ACL cannot be read — leaves the child
+/// with the token alone. That is less confinement than this host could give, and
+/// the child's own measurement is what says so: nothing here claims a layer the
+/// token did not hand over.
+fn grant_image_access(program: &OsStr, sid: PSID) -> bool {
+    static GRANTED: OnceLock<(OsString, bool)> = OnceLock::new();
+    let (image, granted) = GRANTED.get_or_init(|| {
+        (
+            program.to_os_string(),
+            add_read_execute(program, sid).is_ok(),
+        )
+    });
+    *granted && image == program
+}
+
+/// Add read and execute for `sid` to `program`'s DACL, keeping every ACE it has.
+///
+/// The existing DACL is read and merged into: writing a fresh one would take the
+/// file away from the user who owns it. `FILE_GENERIC_EXECUTE` is in the mask
+/// because executing an image and traversing into a directory are the same bit,
+/// and the loader needs both to map the file it was started from.
+fn add_read_execute(program: &OsStr, sid: PSID) -> std::io::Result<()> {
+    let path: Vec<u16> = program.encode_wide().chain(std::iter::once(0)).collect();
+
+    let mut dacl: *mut ACL = null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+    let read = unsafe {
+        GetNamedSecurityInfoW(
+            path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut descriptor,
+        )
+    };
+    if read != 0 {
+        return Err(std::io::Error::from_raw_os_error(read as i32));
+    }
+    // A NULL DACL grants everyone everything; merging our entry into it would
+    // produce a DACL that grants the container and nobody else, taking the file
+    // away from the user it belongs to. There is nothing to add to, so nothing
+    // is added.
+    if dacl.is_null() {
+        unsafe { LocalFree(descriptor) };
+        return Err(std::io::Error::other(
+            "the image has no discretionary ACL to add to",
+        ));
+    }
+
+    let entry = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        grfAccessMode: GRANT_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            // A trustee of form SID carries the SID itself where a name would
+            // otherwise be.
+            ptstrName: sid.cast::<u16>(),
+        },
+    };
+    let mut merged: *mut ACL = null_mut();
+    let built = unsafe { SetEntriesInAclW(1, &entry, dacl, &mut merged) };
+    if built != 0 {
+        unsafe { LocalFree(descriptor) };
+        return Err(std::io::Error::from_raw_os_error(built as i32));
+    }
+
+    let written = unsafe {
+        SetNamedSecurityInfoW(
+            path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            merged,
+            null_mut(),
+        )
+    };
+    unsafe {
+        LocalFree(merged.cast());
+        // Frees the descriptor and the DACL that came with it.
+        LocalFree(descriptor);
+    }
+    if written != 0 {
+        return Err(std::io::Error::from_raw_os_error(written as i32));
+    }
+    Ok(())
+}
+
+/// Whether this process's token is an AppContainer's.
+///
+/// The parent asks for the container through the process attributes rather than
+/// through the command line, so the child reads its own token instead of being
+/// told: a request the kernel did not grant must not become a claim, and this is
+/// what the file and network layers are claimed on.
+fn is_app_container() -> bool {
+    let mut token: HANDLE = null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return false;
+    }
+    let mut inside = 0i32;
+    let mut length = 0u32;
+    let read = unsafe {
+        GetTokenInformation(
+            token,
+            TokenIsAppContainer,
+            std::ptr::addr_of_mut!(inside).cast::<c_void>(),
+            size_of::<i32>() as u32,
+            &mut length,
+        )
+    };
+    unsafe { CloseHandle(token) };
+    read != 0 && inside != 0
 }
 
 /// A restricted version of this process's own token.
@@ -767,10 +1088,24 @@ fn quote(argument: &OsStr) -> String {
 /// back into a block that was cleared for the same reason (libuv: "Windows has a
 /// few essential environment variables"). None of them is a secret.
 ///
+/// `LOCALAPPDATA` is on the list because the AppContainer path reads it while the
+/// process is being created — Microsoft's own process-container engine requires
+/// it to be present, even with a nonsense value — and because a container without
+/// a profile has no redirection to fall back on. Here it points at the user's own
+/// directory, which the container cannot write to and has no business reading.
+///
 /// The identity variables a parser has no use for (`USERNAME`, `USERPROFILE`,
 /// `LOGONSERVER`, …) are deliberately not on the list, and neither is anything
 /// this deployment set.
-const SYSTEM_VARIABLES: &[&str] = &["Path", "SystemDrive", "SystemRoot", "TEMP", "TMP", "WINDIR"];
+const SYSTEM_VARIABLES: &[&str] = &[
+    "LOCALAPPDATA",
+    "Path",
+    "SystemDrive",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "WINDIR",
+];
 
 /// The environment the child starts with: the system variables above, the two
 /// switches the Rust runtime reads, and nothing else.
