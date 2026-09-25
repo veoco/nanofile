@@ -1489,3 +1489,37 @@ fn zip_parts(parts: &[(&str, String)]) -> Vec<u8> {
     }
     writer.finish().expect("finish archive").into_inner()
 }
+
+/// A `.docx` whose central directory claims a part expands past the extractor's
+/// budget.
+///
+/// Only the declaration is a lie: the package itself is a few hundred bytes, so
+/// the fixture costs the suite nothing while exercising the real pipeline. A
+/// genuinely 256 MiB-expanding part would take seconds to build and prove no
+/// more — the budget's decoded-byte path is covered by the unit tests, and this
+/// is the shape a crafted file actually takes.
+pub fn bomb_docx() -> Vec<u8> {
+    let mut package = minimal_docx("zebraquartz");
+    let declared = (8 * server::indexer::extract::MAX_STRUCTURED_BYTES + 1) as u32;
+    patch_declared_uncompressed_size(&mut package, declared);
+    package
+}
+
+/// Rewrite the declared uncompressed size of every central directory entry.
+///
+/// Offset 24 of a central directory header (`PK\x01\x02`) is the uncompressed
+/// size, which is the field the archive reader believes.
+fn patch_declared_uncompressed_size(package: &mut [u8], declared: u32) {
+    let mut patched = 0;
+    let mut index = 0;
+    while let Some(found) = package[index..]
+        .windows(4)
+        .position(|window| window == b"PK\x01\x02")
+    {
+        let at = index + found + 24;
+        package[at..at + 4].copy_from_slice(&declared.to_le_bytes());
+        patched += 1;
+        index = at + 4;
+    }
+    assert!(patched > 0, "the fixture must have a central directory");
+}

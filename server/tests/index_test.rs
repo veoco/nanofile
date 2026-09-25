@@ -1429,23 +1429,26 @@ async fn document_formats_are_searchable() {
     }
 }
 
-/// Files the PDF parser cannot turn into text are recorded as skipped, and
+/// Files the extractor cannot turn into text are recorded as skipped, and
 /// neither the request nor the batch that carried them fails.
 ///
-/// Two shapes: a damaged container the lenient reader still opens, and input
-/// that is not a PDF at all. The second is what makes the loader refuse, and it
-/// is exercised through the whole pipeline rather than only in a unit test.
+/// Three shapes: a damaged container the lenient reader still opens, input that
+/// is not a PDF at all, and an Office package that claims to expand far past
+/// the extraction budget. The last one is the shape a crafted file takes, and
+/// it is exercised through the whole pipeline rather than only in a unit test.
 #[tokio::test]
 async fn an_unreadable_document_is_skipped_without_breaking_the_batch() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    let unreadable: [(&str, &[u8]); 2] = [
+    let bomb = common::bomb_docx();
+    let unreadable: [(&str, &[u8]); 3] = [
         ("corrupt.pdf", include_bytes!("fixtures/corrupt.pdf")),
         (
             "garbage.pdf",
             b"this file is not a PDF, whatever its name says" as &[u8],
         ),
+        ("bomb.docx", bomb.as_slice()),
     ];
 
     for (name, data) in unreadable {

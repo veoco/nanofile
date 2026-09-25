@@ -139,6 +139,10 @@ tantivy-jieba = "0.20.0"
 # the limits that keep these crates safe on untrusted content.
 lopdf = { version = "0.45", default-features = false }
 office_oxide = "0.1.12"
+# Counting what an Office package decompresses to before it is parsed, which
+# `office_oxide` itself does not bound across parts. Same crate, same version
+# and same feature set as its own dependency, so this adds nothing to the graph.
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 
 # ── Optional system tray dependencies (enabled by the `tray` feature) ───────
 # NOTE: keep these target-specific tables LAST — everything after a
@@ -202,7 +206,6 @@ reqwest = { version = "0.13", features = ["json", "multipart", "cookies", "form"
 image = { version = "0.25", features = ["tiff"] }
 tempfile = "3"
 tokio-tungstenite = "0.29"
-zip = "2"
 # Building the adversarial fixtures: a Flate stream that expands past the
 # per-stream cap (see `indexer::extract::pdf`). Compressing is all the tests
 # need it for; the decoder side is lopdf's own flate2.
