@@ -21,6 +21,26 @@ use sea_orm::{
 use base::error::AppError;
 use infra::entity::job_run;
 
+/// Which finished runs a reader asked to see.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RunHistoryFilter {
+    /// A job slug. A slug rather than a `JobKey`, because the journal holds
+    /// rows for jobs this build no longer runs.
+    pub kind: Option<String>,
+    pub outcome: Option<RunOutcome>,
+}
+
+/// The verdict a reader filters by.
+///
+/// Two cases rather than one per phase: a reader looking for trouble wants
+/// everything that did not succeed, and separating a timeout from a failure
+/// would only make them guess which one they wanted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunOutcome {
+    Succeeded,
+    Failed,
+}
+
 /// A row to write when a run is first submitted.
 pub struct NewJobRun {
     pub id: String,
@@ -101,7 +121,23 @@ pub trait JobRunRepository: Send + Sync {
     ) -> Result<bool, AppError>;
 
     /// Newest finished runs, for the administrator's listing.
+    ///
+    /// Shorthand for [`JobRunRepository::recent_matching`] with no filter, which
+    /// is what most callers want.
     async fn recent(&self, limit: u64) -> Result<Vec<job_run::Model>, AppError>;
+
+    /// Newest finished runs a reader asked to see.
+    async fn recent_matching(
+        &self,
+        limit: u64,
+        filter: &RunHistoryFilter,
+    ) -> Result<Vec<job_run::Model>, AppError>;
+
+    /// The jobs that appear in the newest `window` finished runs, newest first.
+    ///
+    /// What a reader can filter the list by is what the list actually holds: a
+    /// filter offering a job with no rows would only ever show an empty page.
+    async fn recent_kinds(&self, window: u64) -> Result<Vec<String>, AppError>;
 
     /// Retention: drop finished rows past either age cutoff, then drop the
     /// oldest finished rows until at most `max_rows` are left.
@@ -281,12 +317,42 @@ impl JobRunRepository for DbJobRunRepository {
     }
 
     async fn recent(&self, limit: u64) -> Result<Vec<job_run::Model>, AppError> {
-        Ok(job_run::Entity::find()
+        self.recent_matching(limit, &RunHistoryFilter::default())
+            .await
+    }
+
+    async fn recent_matching(
+        &self,
+        limit: u64,
+        filter: &RunHistoryFilter,
+    ) -> Result<Vec<job_run::Model>, AppError> {
+        let mut query = job_run::Entity::find()
             .filter(job_run::Column::FinishedAt.is_not_null())
             .order_by_desc(job_run::Column::FinishedAt)
-            .limit(limit)
-            .all(self.db.as_ref())
-            .await?)
+            .limit(limit);
+        if let Some(kind) = &filter.kind {
+            query = query.filter(job_run::Column::Kind.eq(kind.as_str()));
+        }
+        match filter.outcome {
+            Some(RunOutcome::Succeeded) => {
+                query = query.filter(job_run::Column::Phase.eq("succeeded"));
+            }
+            Some(RunOutcome::Failed) => {
+                query = query.filter(job_run::Column::Phase.ne("succeeded"));
+            }
+            None => {}
+        }
+        Ok(query.all(self.db.as_ref()).await?)
+    }
+
+    async fn recent_kinds(&self, window: u64) -> Result<Vec<String>, AppError> {
+        let mut kinds: Vec<String> = Vec::new();
+        for row in self.recent(window).await? {
+            if !kinds.contains(&row.kind) {
+                kinds.push(row.kind);
+            }
+        }
+        Ok(kinds)
     }
 
     async fn prune(

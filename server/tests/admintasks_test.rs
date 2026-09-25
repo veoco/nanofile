@@ -351,6 +351,90 @@ async fn a_journal_row_is_named_and_state_labelled() {
     assert!(row.contains("nothing to remove"), "{row}");
 }
 
+/// A list that is filtered by job, by verdict, or by both, and keeps the choice
+/// the reader did not make.
+#[tokio::test]
+async fn the_run_list_can_be_narrowed_by_job_and_by_verdict() {
+    let (server, admin) = admin_server().await;
+    let journal = server.state.repos.job_run.clone();
+    let now = chrono::Utc::now().timestamp();
+
+    // Two jobs, one of each verdict, so every combination has an answer.
+    for (id, kind, phase) in [
+        ("gc-ok", JobKey::GarbageCollection, "succeeded"),
+        ("gc-bad", JobKey::GarbageCollection, "failed"),
+        ("reindex-ok", JobKey::Reindex, "succeeded"),
+    ] {
+        journal
+            .record_finished(server::repository::job_run::FinishedJobRun {
+                id: id.to_string(),
+                kind: kind.as_str().to_string(),
+                owner: None,
+                phase: phase.to_string(),
+                summary: "did work".to_string(),
+                error: None,
+                processed: None,
+                attempt: 1,
+                created_at: now,
+                started_at: Some(now),
+                finished_at: now,
+            })
+            .await
+            .unwrap();
+        // Distinct seconds, so the newest-first order is not a tie.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+
+    let body_of = |html: &str| page_content(html).to_string();
+
+    // Everything, by default.
+    let (_, html) = page(&server, &admin, RUNS).await;
+    let body = body_of(&html);
+    assert_eq!(body.matches("data-run=\"").count(), 3, "all three rows");
+
+    // By job: the other job's row is gone, and the verdict choice is still
+    // offered.
+    let (_, html) = page(&server, &admin, "/sysadmin/tasks/?kind=gc").await;
+    let body = body_of(&html);
+    assert!(body.contains("data-run=\"gc-ok\""), "{body}");
+    assert!(body.contains("data-run=\"gc-bad\""), "{body}");
+    assert!(!body.contains("data-run=\"reindex-ok\""), "{body}");
+    assert!(
+        body.contains("href=\"/sysadmin/tasks/?kind=gc&#38;outcome=failed\""),
+        "the verdict filter kept the job: {body}"
+    );
+
+    // By verdict: only the runs that did not succeed, under either job.
+    let (_, html) = page(&server, &admin, "/sysadmin/tasks/?outcome=failed").await;
+    let body = body_of(&html);
+    assert!(body.contains("data-run=\"gc-bad\""), "{body}");
+    assert!(!body.contains("data-run=\"gc-ok\""), "{body}");
+    assert!(!body.contains("data-run=\"reindex-ok\""), "{body}");
+
+    // By both.
+    let (_, html) = page(
+        &server,
+        &admin,
+        "/sysadmin/tasks/?kind=reindex&outcome=failed",
+    )
+    .await;
+    let body = body_of(&html);
+    assert!(
+        body.contains("No recorded run matches this filter"),
+        "an empty filtered list says why: {body}"
+    );
+    assert!(
+        !body.contains("No finished run has been recorded yet"),
+        "and does not claim nothing ever happened: {body}"
+    );
+
+    // A stale bookmark asks for something that is not there, so the page shows
+    // everything rather than an empty list.
+    let (_, html) = page(&server, &admin, "/sysadmin/tasks/?kind=Not A Job").await;
+    let body = body_of(&html);
+    assert_eq!(body.matches("data-run=\"").count(), 3);
+}
+
 /// The run columns are fixed-width and right-aligned, which is what lets the
 /// times be compared down the list rather than read one row at a time. The
 /// classes are the whole mechanism, and only a page test sees them.

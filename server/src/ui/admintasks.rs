@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
+use crate::repository::job_run::{RunHistoryFilter, RunOutcome};
 use crate::tasks::JobStats;
 use crate::tasks::registry::RegisteredJob;
 use crate::tasks::run::{JobRun, JobState, Origin};
@@ -42,6 +43,13 @@ pub struct RunsTemplate {
     pub active_page: &'static str,
     pub active: Vec<ActiveRunRow>,
     pub runs: Vec<RunRow>,
+    /// The job filter buttons: "everything", then the jobs the journal holds.
+    pub job_filters: Vec<FilterChip>,
+    /// The verdict filter buttons.
+    pub outcome_filters: Vec<FilterChip>,
+    /// Whether a filter is narrowing the list, which decides whether an empty
+    /// list means "nothing has happened" or "nothing matches".
+    pub filtered: bool,
     /// How long a run stays readable, in the reader's words. The journal's own
     /// policy rather than a per-job setting: one bounded table is what the
     /// system actually keeps.
@@ -677,12 +685,88 @@ pub struct TasksQuery {
     pub action: Option<String>,
 }
 
+/// What the run list was asked to show. An unrecognised value is ignored, so a
+/// stale bookmark shows the whole list rather than an empty page.
+#[derive(Deserialize, Default)]
+pub struct RunsQuery {
+    /// A job slug.
+    pub kind: Option<String>,
+    /// `succeeded` or `failed`.
+    pub outcome: Option<String>,
+}
+
+/// The filter the run list was opened with, as a reader chose it.
+#[derive(Default)]
+struct RunListChoice {
+    kind: Option<String>,
+    outcome: Option<RunOutcome>,
+}
+
+impl RunListChoice {
+    /// Read the choice out of a query string.
+    ///
+    /// Validated rather than trusted: the slug is checked as a slug and the
+    /// outcome against the two cases, so a hand-typed URL cannot ask the page
+    /// for something that does not exist.
+    fn from_query(query: &RunsQuery) -> Self {
+        let kind = query
+            .kind
+            .as_deref()
+            .filter(|kind| {
+                !kind.is_empty()
+                    && kind.len() <= 64
+                    && kind
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            })
+            .map(str::to_string);
+        let outcome = match query.outcome.as_deref() {
+            Some("succeeded") => Some(RunOutcome::Succeeded),
+            Some("failed") => Some(RunOutcome::Failed),
+            _ => None,
+        };
+        Self { kind, outcome }
+    }
+
+    /// The list's own URL with one of the two choices replaced, keeping the
+    /// other: a page filtered by job and by outcome must be able to change one
+    /// without losing the other.
+    fn href(&self, kind: Option<&str>, outcome: Option<&str>) -> String {
+        let mut params: Vec<String> = Vec::new();
+        if let Some(kind) = kind.filter(|k| !k.is_empty()) {
+            params.push(format!("kind={kind}"));
+        }
+        if let Some(outcome) = outcome.filter(|o| !o.is_empty()) {
+            params.push(format!("outcome={outcome}"));
+        }
+        if params.is_empty() {
+            "/sysadmin/tasks/".to_string()
+        } else {
+            format!("/sysadmin/tasks/?{}", params.join("&"))
+        }
+    }
+}
+
+/// One filter button: what clicking it asks for, and whether it is the current
+/// choice.
+pub struct FilterChip {
+    /// The query value, empty for "everything", used as the row's DOM handle.
+    pub id: String,
+    pub label: String,
+    pub href: String,
+    pub active: bool,
+}
+
 /// GET /sysadmin/tasks/ — what has been running (admin only).
-pub async fn runs_page(user: WebUser, State(state): State<Arc<AppState>>) -> Response {
+pub async fn runs_page(
+    user: WebUser,
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<RunsQuery>,
+) -> Response {
     if !user.is_admin {
         return Redirect::to("/libraries/").into_response();
     }
-    match render_runs(&state, &user).await {
+    match render_runs(&state, &user, RunListChoice::from_query(&query)).await {
         Ok(resp) => resp,
         Err(e) => e.into_response(),
     }
@@ -742,6 +826,64 @@ fn run_name(slug: &str, t: &I18n) -> String {
         Some(key) => t.tr(key).to_string(),
         None => slug.to_string(),
     }
+}
+
+/// How many of the newest finished runs are scanned for the jobs a reader can
+/// filter by.
+///
+/// A bounded window rather than a `GROUP BY`: the chips are for a reader
+/// looking at recent runs, and a job whose last run is older than the window is
+/// not something they are looking for here.
+const KIND_WINDOW: u64 = 500;
+
+/// The verdict of a chosen filter as a query value.
+///
+/// Written out rather than derived from a wire name, because these are the two
+/// words the query string uses, and they are the same words the state badges
+/// are labelled with.
+fn outcome_query(outcome: Option<RunOutcome>) -> Option<&'static str> {
+    match outcome {
+        Some(RunOutcome::Succeeded) => Some("succeeded"),
+        Some(RunOutcome::Failed) => Some("failed"),
+        None => None,
+    }
+}
+
+/// The job filter buttons: everything, then the jobs the journal actually
+/// holds, newest first.
+fn kind_filters(choice: &RunListChoice, kinds: &[String], t: &I18n) -> Vec<FilterChip> {
+    let mut chips = vec![FilterChip {
+        id: String::new(),
+        label: t.tr("admin.runs_filter_all").to_string(),
+        href: choice.href(None, outcome_query(choice.outcome)),
+        active: choice.kind.is_none(),
+    }];
+    for kind in kinds {
+        chips.push(FilterChip {
+            id: kind.clone(),
+            label: run_name(kind, t),
+            href: choice.href(Some(kind), outcome_query(choice.outcome)),
+            active: choice.kind.as_deref() == Some(kind.as_str()),
+        });
+    }
+    chips
+}
+
+/// The verdict filter buttons.
+fn outcome_filters(choice: &RunListChoice, t: &I18n) -> Vec<FilterChip> {
+    [
+        (None, "admin.runs_filter_all"),
+        (Some(RunOutcome::Succeeded), "admin.run_state_succeeded"),
+        (Some(RunOutcome::Failed), "admin.run_state_failed"),
+    ]
+    .into_iter()
+    .map(|(outcome, label_key)| FilterChip {
+        id: outcome_query(outcome).unwrap_or_default().to_string(),
+        label: t.tr(label_key).to_string(),
+        href: choice.href(choice.kind.as_deref(), outcome_query(outcome)),
+        active: choice.outcome == outcome,
+    })
+    .collect()
 }
 
 /// How far a run has got, as the run itself reports it.
@@ -839,7 +981,11 @@ fn journal_row(row: &job_run::Model, owners: &HashMap<i32, String>, t: &I18n) ->
 }
 
 /// Build and render the run list.
-async fn render_runs(state: &Arc<AppState>, user: &WebUser) -> Result<Response, AppError> {
+async fn render_runs(
+    state: &Arc<AppState>,
+    user: &WebUser,
+    choice: RunListChoice,
+) -> Result<Response, AppError> {
     let t = I18n::get(user.language.as_deref());
 
     // What is happening now, from the in-memory table. Every active run is
@@ -852,8 +998,26 @@ async fn render_runs(state: &Arc<AppState>, user: &WebUser) -> Result<Response, 
 
     // What happened, from the durable journal. It survives a restart, which the
     // in-memory table does not, and it holds every job whose subsystem asked to
-    // be remembered.
-    let journal = state.repos.job_run.recent(20).await.unwrap_or_default();
+    // be remembered — filtered, if the reader asked for a job or a verdict.
+    let filter = RunHistoryFilter {
+        kind: choice.kind.clone(),
+        outcome: choice.outcome,
+    };
+    let journal = state
+        .repos
+        .job_run
+        .recent_matching(20, &filter)
+        .await
+        .unwrap_or_default();
+    // What the filter can offer is what the journal holds, not every job the
+    // server knows: a chip for a job with no rows would only ever show an empty
+    // page.
+    let kinds = state
+        .repos
+        .job_run
+        .recent_kinds(KIND_WINDOW)
+        .await
+        .unwrap_or_default();
 
     // One lookup for both lists, so a page of runs does not become a query per
     // row.
@@ -871,6 +1035,9 @@ async fn render_runs(state: &Arc<AppState>, user: &WebUser) -> Result<Response, 
         .iter()
         .map(|row| journal_row(row, &owners, t))
         .collect();
+
+    let job_filters = kind_filters(&choice, &kinds, t);
+    let outcome_filters = outcome_filters(&choice, t);
 
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
 
@@ -899,6 +1066,9 @@ async fn render_runs(state: &Arc<AppState>, user: &WebUser) -> Result<Response, 
         active_page: "admintasks",
         active,
         runs,
+        job_filters,
+        outcome_filters,
+        filtered: choice.kind.is_some() || choice.outcome.is_some(),
         retention_hint,
         load: LoadRow::from_state(state),
         error: None,
@@ -1343,6 +1513,72 @@ mod tests {
             run_name("temp-upload-cleanup", t),
             "Temporary upload cleanup"
         );
+    }
+
+    /// A stale bookmark must not be able to ask for something that does not
+    /// exist: an unknown slug or verdict shows the whole list.
+    #[test]
+    fn a_filter_that_makes_no_sense_shows_everything() {
+        let choice = RunListChoice::from_query(&RunsQuery {
+            kind: Some("Share Link Cleanup!".to_string()),
+            outcome: Some("exploded".to_string()),
+        });
+        assert!(choice.kind.is_none(), "a slug is lower-case words");
+        assert!(choice.outcome.is_none());
+
+        let choice = RunListChoice::from_query(&RunsQuery {
+            kind: Some("share-link-cleanup".to_string()),
+            outcome: Some("failed".to_string()),
+        });
+        assert_eq!(choice.kind.as_deref(), Some("share-link-cleanup"));
+        assert_eq!(choice.outcome, Some(RunOutcome::Failed));
+    }
+
+    /// Each filter keeps the other: narrowing by job must not drop the verdict
+    /// the reader already chose.
+    #[test]
+    fn a_filter_link_keeps_the_other_choice() {
+        let choice = RunListChoice {
+            kind: Some("gc".to_string()),
+            outcome: Some(RunOutcome::Failed),
+        };
+        assert_eq!(
+            choice.href(None, Some("failed")),
+            "/sysadmin/tasks/?outcome=failed"
+        );
+        assert_eq!(choice.href(Some("gc"), None), "/sysadmin/tasks/?kind=gc");
+        assert_eq!(choice.href(None, None), "/sysadmin/tasks/");
+        assert_eq!(
+            choice.href(Some("gc"), Some("failed")),
+            "/sysadmin/tasks/?kind=gc&outcome=failed"
+        );
+    }
+
+    /// The buttons say which one is current, so the list explains why it is
+    /// short.
+    #[test]
+    fn exactly_one_button_per_filter_is_current() {
+        let t = I18n::get(None);
+        let choice = RunListChoice {
+            kind: Some("gc".to_string()),
+            outcome: None,
+        };
+        let jobs = kind_filters(&choice, &["gc".to_string(), "reindex".to_string()], t);
+        assert_eq!(jobs.len(), 3, "everything, then the jobs the journal holds");
+        assert_eq!(jobs.iter().filter(|chip| chip.active).count(), 1);
+        assert!(jobs[0].label == "All");
+        assert_eq!(jobs[1].label, "Garbage collection");
+
+        let outcomes = outcome_filters(&choice, t);
+        assert_eq!(outcomes.len(), 3);
+        assert_eq!(
+            outcomes.iter().filter(|chip| chip.active).count(),
+            1,
+            "an unset verdict has exactly one current button too"
+        );
+        assert_eq!(outcomes[0].id, "");
+        assert_eq!(outcomes[1].id, "succeeded");
+        assert_eq!(outcomes[1].label, "Succeeded");
     }
 
     /// Every retired slug has a name in every language: its rows are still in

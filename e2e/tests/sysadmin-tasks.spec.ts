@@ -258,6 +258,46 @@ test("the run columns line up down the list", async ({ page }) => {
   }
 });
 
+// The list is filtered by job and by verdict, and each filter keeps the other:
+// a reader who narrowed by job must not lose that by narrowing by verdict.
+test("the run list is filtered by job and by verdict", async ({ page }) => {
+  await page.goto("/sysadmin/tasks/");
+  await expect(page.locator('main [data-panel="recent"]')).toBeVisible();
+
+  // The job chips offer what the journal holds, not every job the server knows.
+  const jobChips = page.locator('main [data-panel="recent"] a[data-filter]');
+  await expect(jobChips.filter({ hasText: "Expired data cleanup" })).toHaveCount(1);
+
+  // Narrow to that job, then to its failures, and check the second filter kept
+  // the first: the "All" verdict chip under a job filter is the job's own URL.
+  await jobChips.filter({ hasText: "Expired data cleanup" }).click();
+  await expect(page).toHaveURL(/\?kind=expired-data-cleanup$/);
+  const allVerdicts = page.locator('main [data-panel="recent"] a[data-filter=""]');
+  await expect(allVerdicts.last()).toHaveAttribute(
+    "href",
+    "/sysadmin/tasks/?kind=expired-data-cleanup",
+  );
+
+  await page.locator('main [data-panel="recent"] a[data-filter="failed"]').click();
+  await expect(page).toHaveURL(/kind=expired-data-cleanup(?:&#38;|&)outcome=failed$/);
+
+  // Nothing failed, so the list says the filter is why it is empty rather than
+  // claiming the server has never finished a run.
+  await expect(page.locator('main [data-panel="recent"]')).toContainText(
+    "No recorded run matches this filter",
+  );
+  await expect(page.locator('main [data-panel="recent"] [data-run]')).toHaveCount(0);
+
+  // Clearing one dimension leaves the other alone: the job row's "All" keeps the
+  // verdict, and the verdict row's "All" then clears it too.
+  const allChips = page.locator('main [data-panel="recent"] a[data-filter=""]');
+  await allChips.first().click();
+  await expect(page).toHaveURL(/\/sysadmin\/tasks\/\?outcome=failed$/);
+  await allChips.last().click();
+  await expect(page).toHaveURL(/\/sysadmin\/tasks\/$/);
+  await expect(page.locator('main [data-panel="recent"] [data-run]').first()).toBeVisible();
+});
+
 // The tab bar carries a bottom margin of its own, and the load card is now the
 // first block under it: the two must not touch, or the card reads as part of
 // the tab bar.
