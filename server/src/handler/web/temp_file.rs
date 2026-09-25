@@ -566,12 +566,15 @@ impl TempFileManager {
     /// temp files and any blocks they wrote that no commit references, and
     /// release their block reservations. Called periodically by the scheduler so
     /// abandoned resumable uploads don't leak memory, disk or quota.
+    ///
+    /// Returns how many uploads were dropped, so the pass that called this can
+    /// report what it did rather than a bare "ok".
     pub async fn cleanup_stale(
         &self,
         repos: &crate::repository::Repositories,
         ttl: std::time::Duration,
         store: &DynBlockStorage,
-    ) {
+    ) -> usize {
         let cutoff = Instant::now() - ttl;
         let stale: Vec<(String, PathBuf, Option<i32>, Vec<String>)> = {
             let mut guard = self.inner.active.write().await;
@@ -594,6 +597,7 @@ impl TempFileManager {
             }
             removed
         };
+        let dropped = stale.len();
         for (repo_id, p, owner, blocks) in stale {
             if let Err(e) = fs::remove_file(&p).await {
                 tracing::warn!("Failed to remove stale temp file {:?}: {e}", p);
@@ -603,6 +607,7 @@ impl TempFileManager {
                 crate::service::fs::quota::release_repo_reservation(repos, uid, &repo_id);
             }
         }
+        dropped
     }
 
     /// The total file size declared when the upload was started.

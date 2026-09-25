@@ -28,6 +28,10 @@ pub struct RunReport {
     pub state: JobState,
     pub outcome: Option<Outcome>,
     pub attempts: u32,
+    /// When the first attempt started, as the store recorded it.
+    pub started_at: Option<i64>,
+    /// When the run reached its terminal state, as the store recorded it.
+    pub finished_at: Option<i64>,
 }
 
 /// Drive `run`'s body to completion, writing every state transition.
@@ -65,42 +69,51 @@ pub async fn execute(
     let attempts_allowed = spec.retry.attempts().max(1);
 
     loop {
-        mark_running(store, run, attempt);
+        let started_at = mark_running(store, run, attempt);
         match attempt_once(job, &ctx, params.clone(), &tick).await {
             Ok(outcome) => {
-                mark_terminal(store, run, JobState::Succeeded, Some(outcome.clone()));
+                let finished_at =
+                    mark_terminal(store, run, JobState::Succeeded, Some(outcome.clone()));
                 return RunReport {
                     state: JobState::Succeeded,
                     outcome: Some(outcome),
                     attempts: attempt,
+                    started_at: Some(started_at),
+                    finished_at: Some(finished_at),
                 };
             }
             // A cancel or a timeout is terminal: retrying would either ignore
             // the caller or repeat whatever caused the stall.
             Err(JobFailure::Cancelled) => {
-                mark_terminal(store, run, JobState::Cancelled, None);
+                let finished_at = mark_terminal(store, run, JobState::Cancelled, None);
                 return RunReport {
                     state: JobState::Cancelled,
                     outcome: None,
                     attempts: attempt,
+                    started_at: Some(started_at),
+                    finished_at: Some(finished_at),
                 };
             }
             Err(JobFailure::TimedOut) => {
-                mark_terminal(store, run, JobState::TimedOut, None);
+                let finished_at = mark_terminal(store, run, JobState::TimedOut, None);
                 return RunReport {
                     state: JobState::TimedOut,
                     outcome: None,
                     attempts: attempt,
+                    started_at: Some(started_at),
+                    finished_at: Some(finished_at),
                 };
             }
             Err(JobFailure::App(e)) => {
                 if attempt >= attempts_allowed {
                     let state = JobState::Failed(e.to_string());
-                    mark_terminal(store, run, state.clone(), None);
+                    let finished_at = mark_terminal(store, run, state.clone(), None);
                     return RunReport {
                         state,
                         outcome: None,
                         attempts: attempt,
+                        started_at: Some(started_at),
+                        finished_at: Some(finished_at),
                     };
                 }
                 tracing::warn!(
@@ -112,11 +125,13 @@ pub async fn execute(
                 );
                 let delay = Duration::from_secs(spec.retry.delay_secs(attempt));
                 if !delay.is_zero() && ctx.sleep(delay).await.is_err() {
-                    mark_terminal(store, run, JobState::Cancelled, None);
+                    let finished_at = mark_terminal(store, run, JobState::Cancelled, None);
                     return RunReport {
                         state: JobState::Cancelled,
                         outcome: None,
                         attempts: attempt,
+                        started_at: Some(started_at),
+                        finished_at: Some(finished_at),
                     };
                 }
                 attempt += 1;
@@ -220,17 +235,23 @@ fn flatten(result: Caught) -> Result<Outcome, JobFailure> {
     }
 }
 
-fn mark_running(store: &RunStore, run: &JobRun, attempt: u32) {
+/// Mark the run as executing. Returns when it started: the first attempt's
+/// timestamp, which is the one the run keeps.
+fn mark_running(store: &RunStore, run: &JobRun, attempt: u32) -> i64 {
     let now = chrono::Utc::now().timestamp();
     let id = run.id.clone();
+    let mut started_at = now;
     store.update(&id, |r| {
         r.state = JobState::Running;
         r.started_at.get_or_insert(now);
+        started_at = r.started_at.unwrap_or(now);
         r.attempt = attempt;
     });
+    started_at
 }
 
-fn mark_terminal(store: &RunStore, run: &JobRun, state: JobState, outcome: Option<Outcome>) {
+/// Mark the run terminal. Returns when it finished.
+fn mark_terminal(store: &RunStore, run: &JobRun, state: JobState, outcome: Option<Outcome>) -> i64 {
     let now = chrono::Utc::now().timestamp();
     let id = run.id.clone();
     store.update(&id, |r| {
@@ -246,6 +267,7 @@ fn mark_terminal(store: &RunStore, run: &JobRun, state: JobState, outcome: Optio
         // served its purpose; a wire projection reads the summary instead.
         r.drop_params();
     });
+    now
 }
 
 #[cfg(test)]

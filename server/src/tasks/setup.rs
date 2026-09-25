@@ -217,8 +217,15 @@ pub fn install_default_jobs(
         jobs.push(job(JobKey::TokenExpiryCheck, move |_ctx, _params| {
             let manager = manager.clone();
             async move {
-                manager.check_expired_tokens().await;
-                Ok(Outcome::success("ok", None))
+                let expired = manager.check_expired_tokens().await;
+                Ok(if expired > 0 {
+                    Outcome::success(
+                        format!("Told {expired} signed-in clients their token expired"),
+                        Some(expired),
+                    )
+                } else {
+                    Outcome::success("no token has expired", None)
+                })
             }
         }));
     }
@@ -413,7 +420,7 @@ pub fn install_default_jobs(
                 let idx = idx.clone();
                 async move {
                     if !idx.has_pending() {
-                        return Ok(Outcome::success("index clean, skipped", None));
+                        return Ok(Outcome::success("index clean, nothing to commit", None));
                     }
                     tokio::task::spawn_blocking(move || idx.commit())
                         .await
@@ -455,8 +462,16 @@ pub fn install_default_jobs(
     }
 
     jobs.push(job(JobKey::ZipTaskCleanup, |_ctx, _params| async move {
-        crate::handler::web::zip_download::cleanup_expired(chrono::Utc::now().timestamp());
-        Ok(Outcome::success("ok", None))
+        let dropped =
+            crate::handler::web::zip_download::cleanup_expired(chrono::Utc::now().timestamp());
+        Ok(if dropped > 0 {
+            Outcome::success(
+                format!("Dropped {dropped} expired zip downloads"),
+                Some(dropped as u64),
+            )
+        } else {
+            Outcome::success("no zip download had expired", None)
+        })
     }));
 
     // Skipped entirely when the TTL is 0, which is what disables the cleanup.
@@ -471,10 +486,17 @@ pub fn install_default_jobs(
                 let block_store = block_store.clone();
                 let repos = repos.clone();
                 async move {
-                    temp_file_manager
+                    let dropped = temp_file_manager
                         .cleanup_stale(&repos, ttl, &block_store)
                         .await;
-                    Ok(Outcome::success("ok", None))
+                    Ok(if dropped > 0 {
+                        Outcome::success(
+                            format!("Dropped {dropped} abandoned uploads"),
+                            Some(dropped as u64),
+                        )
+                    } else {
+                        Outcome::success("no upload had been abandoned", None)
+                    })
                 }
             }
         }));

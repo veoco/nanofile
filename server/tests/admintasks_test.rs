@@ -263,7 +263,7 @@ async fn seed_run(
         .await
         .unwrap();
     journal
-        .finish(id, phase, error, None, finished_at)
+        .finish(id, phase, error, None, None, finished_at)
         .await
         .unwrap();
 }
@@ -292,7 +292,7 @@ async fn a_journal_row_is_named_and_state_labelled() {
         .await
         .unwrap();
     journal
-        .finish("journalled-run", "succeeded", None, Some(4), now + 1)
+        .finish("journalled-run", "succeeded", None, Some(4), None, now + 1)
         .await
         .unwrap();
 
@@ -315,7 +315,7 @@ async fn a_journal_row_is_named_and_state_labelled() {
         .await
         .unwrap();
     journal
-        .finish("journalled-other", "succeeded", None, None, now - 599)
+        .finish("journalled-other", "succeeded", None, None, None, now - 599)
         .await
         .unwrap();
 
@@ -425,7 +425,7 @@ async fn a_run_without_a_start_says_its_duration_is_unknown() {
         .await
         .unwrap();
     journal
-        .finish("unstarted-run", "cancelled", None, None, now)
+        .finish("unstarted-run", "cancelled", None, None, None, now)
         .await
         .unwrap();
 

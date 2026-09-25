@@ -515,13 +515,24 @@ impl TaskSystem {
                 .as_ref()
                 .and_then(|o| o.processed)
                 .map(|p| p as i64);
+            // The job's own account of what it did is what the column is for.
+            // A run that failed before it could report anything keeps the
+            // summary its submitter gave, which is `None` here.
+            let summary = report
+                .outcome
+                .as_ref()
+                .map(|outcome| outcome.message.as_str())
+                .filter(|message| !message.is_empty());
             if let Err(e) = journal
                 .finish(
                     run.id.as_str(),
                     report.state.as_str(),
                     error,
                     processed,
-                    chrono::Utc::now().timestamp(),
+                    summary,
+                    report
+                        .finished_at
+                        .unwrap_or_else(|| chrono::Utc::now().timestamp()),
                 )
                 .await
             {
@@ -633,6 +644,7 @@ impl TaskSystem {
                         "interrupted",
                         Some("no job is registered under this name any more"),
                         None,
+                        None,
                         now,
                     )
                     .await;
@@ -647,6 +659,7 @@ impl TaskSystem {
                         &row.id,
                         "interrupted",
                         Some("this job is not safe to replay"),
+                        None,
                         None,
                         now,
                     )
@@ -687,6 +700,7 @@ impl TaskSystem {
                             "interrupted",
                             Some("recovered after a restart"),
                             row.processed,
+                            None,
                             now,
                         )
                         .await;
@@ -698,6 +712,7 @@ impl TaskSystem {
                             &row.id,
                             "failed",
                             Some(&format!("could not be recovered: {e}")),
+                            None,
                             None,
                             now,
                         )
@@ -1171,8 +1186,11 @@ impl TaskSystem {
             );
             return false;
         }
+        // No summary: the run row already names the job from its slug, and a
+        // timer has nothing to say about a run before it has run. The job's own
+        // report fills the column in when it finishes.
         match self
-            .submit(job.key(), None, Params::Null, job.name(), None)
+            .submit(job.key(), None, Params::Null, String::new(), None)
             .await
         {
             Ok(_) => true,
@@ -1959,7 +1977,9 @@ mod tests {
         system
             .register(RegisteredJob::new(
                 catalog::policy(JobKey::ShareLinkCleanup),
-                Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
+                Arc::new(|_ctx, _params| {
+                    Box::pin(async { Ok(Outcome::success("cleaned up 3 expired links", Some(3))) })
+                }),
             ))
             .unwrap();
         let id = system
@@ -1995,6 +2015,63 @@ mod tests {
         assert!(row.finished_at.is_some());
         assert!(row.lease_until.is_none(), "a finished run holds no lease");
         assert!(row.params.is_none(), "the input is dropped once it is over");
+        // What the job reported is what the record says it did — not the name
+        // its submitter called it.
+        assert_eq!(row.summary, "cleaned up 3 expired links");
+        assert_eq!(row.processed, Some(3));
+    }
+
+    /// A run that failed before it could report anything keeps the summary its
+    /// submitter gave, so the record still says which work it was.
+    #[tokio::test]
+    async fn a_failed_run_keeps_the_submitters_summary() {
+        let (system, repos) = journal_system().await;
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::ShareLinkCleanup),
+                Arc::new(|_ctx, _params| {
+                    Box::pin(async {
+                        Err(JobFailure::App(AppError::Internal(
+                            "the database is locked".into(),
+                        )))
+                    })
+                }),
+            ))
+            .unwrap();
+        let id = system
+            .submit(
+                JobKey::ShareLinkCleanup,
+                Some(1),
+                Params::Null,
+                "share link cleanup",
+                None,
+            )
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            if system.store().get(&id).unwrap().state.is_terminal() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let mut rows = Vec::new();
+        for _ in 0..200 {
+            rows = repos.job_run.recent(10).await.unwrap();
+            if !rows.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].phase, "failed");
+        assert_eq!(rows[0].summary, "share link cleanup");
+        assert!(
+            rows[0]
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("locked")
+        );
     }
 
     /// A destructive job is never recorded as replayable, so a crash can never

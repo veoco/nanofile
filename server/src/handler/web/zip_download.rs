@@ -90,17 +90,20 @@ impl ZipTaskInfo {
 
 impl ZipTaskRegistry {
     /// Drop tokens older than [`ZIP_TASK_TTL_SECS`], returning their bytes to
-    /// the budget.
-    fn sweep(&mut self, now: i64) {
+    /// the budget and the number of entries dropped.
+    fn sweep(&mut self, now: i64) -> usize {
+        let mut dropped = 0usize;
         let mut freed = 0usize;
         self.tasks.retain(|token, task| {
             let keep = now - task.created_at < ZIP_TASK_TTL_SECS;
             if !keep {
+                dropped += 1;
                 freed += ZipTaskInfo::entry_bytes(token, task);
             }
             keep
         });
         self.bytes = self.bytes.saturating_sub(freed);
+        dropped
     }
 
     /// Insert a token, evicting oldest-first until both budgets hold.
@@ -168,9 +171,14 @@ fn zip_tasks() -> &'static Mutex<ZipTaskRegistry> {
 /// Remove zip tasks older than `ZIP_TASK_TTL_SECS`. Called on new task
 /// creation and periodically by the scheduler so abandoned tasks don't
 /// accumulate.
-pub fn cleanup_expired(now: i64) {
-    if let Ok(mut registry) = zip_tasks().lock() {
-        registry.sweep(now);
+/// Drop expired zip tokens, reporting how many were dropped so the cleanup job
+/// can say what it did.
+pub fn cleanup_expired(now: i64) -> usize {
+    match zip_tasks().lock() {
+        Ok(mut registry) => registry.sweep(now),
+        // A poisoned lock means a previous pass panicked; the registry is still
+        // readable, and the next pass will try again.
+        Err(poisoned) => poisoned.into_inner().sweep(now),
     }
 }
 
@@ -331,8 +339,9 @@ pub async fn zip_task_handler(
     let token = generate_token();
     let now = now_secs();
 
-    // Purge abandoned tasks and enforce the count/byte budgets.
-    cleanup_expired(now);
+    // Purge abandoned tasks and enforce the count/byte budgets. The count is
+    // the cleanup job's business, not this request's.
+    let _ = cleanup_expired(now);
     {
         let max_bytes = state.config().storage.max_zip_task_bytes as usize;
         let mut registry = zip_tasks()

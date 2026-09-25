@@ -350,8 +350,12 @@ impl NotificationManager {
     ///
     /// This is a single-shot check intended to be called periodically by
     /// the [`Scheduler`](crate::scheduler::Scheduler).
-    pub async fn check_expired_tokens(&self) {
+    ///
+    /// Returns how many tokens were expired, so the pass that called this can
+    /// say what it did instead of reporting a bare "ok".
+    pub async fn check_expired_tokens(&self) -> u64 {
         let now = chrono::Utc::now().timestamp();
+        let mut expired_total = 0u64;
         let clients = self.read_clients();
         for (client_id, client) in clients.iter() {
             // Collect expired repo_ids.
@@ -402,7 +406,9 @@ impl NotificationManager {
                     let _ = client.sender.try_send(bytes);
                 }
             }
+            expired_total += expired.len() as u64;
         }
+        expired_total
     }
 
     /// Gracefully shut down all WebSocket connections by clearing all client

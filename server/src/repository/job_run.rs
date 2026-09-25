@@ -38,12 +38,18 @@ pub trait JobRunRepository: Send + Sync {
     async fn enqueue(&self, run: NewJobRun, lease_until: i64) -> Result<(), AppError>;
 
     /// Write the terminal state, releasing the lease and dropping the input.
+    ///
+    /// `summary` replaces the one recorded at submit time when it is `Some`:
+    /// the job's own account of what it did is the point of the column, while
+    /// `None` keeps what the submitter said — which is what a run that failed
+    /// before it could report anything has left to say.
     async fn finish(
         &self,
         id: &str,
         phase: &str,
         error: Option<&str>,
         processed: Option<i64>,
+        summary: Option<&str>,
         finished_at: i64,
     ) -> Result<(), AppError>;
 
@@ -144,22 +150,29 @@ impl JobRunRepository for DbJobRunRepository {
         phase: &str,
         error: Option<&str>,
         processed: Option<i64>,
+        summary: Option<&str>,
         finished_at: i64,
     ) -> Result<(), AppError> {
         debug_assert!(is_terminal(phase), "finish is for a terminal phase");
+        let mut row = job_run::ActiveModel {
+            phase: Set(phase.to_string()),
+            error: Set(error.map(str::to_string)),
+            processed: Set(processed),
+            finished_at: Set(Some(finished_at)),
+            // The run is over, so nobody holds it and its input is no
+            // longer needed.
+            lease_until: Set(None),
+            params: Set(None),
+            ..Default::default()
+        };
+        // An unset field is left alone, so `None` keeps the submit-time
+        // summary rather than blanking the column.
+        if let Some(summary) = summary {
+            row.summary = Set(summary.to_string());
+        }
         job_run::Entity::update_many()
             .filter(job_run::Column::Id.eq(id))
-            .set(job_run::ActiveModel {
-                phase: Set(phase.to_string()),
-                error: Set(error.map(str::to_string)),
-                processed: Set(processed),
-                finished_at: Set(Some(finished_at)),
-                // The run is over, so nobody holds it and its input is no
-                // longer needed.
-                lease_until: Set(None),
-                params: Set(None),
-                ..Default::default()
-            })
+            .set(row)
             .exec(self.db.as_ref())
             .await?;
         Ok(())
