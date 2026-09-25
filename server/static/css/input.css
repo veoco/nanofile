@@ -1039,6 +1039,13 @@ html:not([data-view]) .seg .js-view-list {
   .nf-kv .v { @apply min-w-0 text-[12.5px] text-ink-2; }
   .nf-kv .v .sep { @apply text-ink-3; }
 
+  /* A detail list is not a form: its labels run much longer than the 6rem
+     column was measured for ("Waits for a quiet server", "Items processed"),
+     and at 96px every second row wraps. The disclosure gives them a wider
+     column and the value takes the rest of the line; on a phone the label
+     sizes to its own text and the pair wraps. */
+  .nf-kv.is-detail .k { @apply w-auto sm:w-44; }
+
   /* Something the reader has to copy: a TOTP secret, backup codes, a
      shown-once key. The box takes the control height so it lines up with the
      copy button beside it; the line box absorbs it, borders included, which

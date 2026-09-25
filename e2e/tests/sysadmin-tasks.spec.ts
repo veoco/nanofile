@@ -154,6 +154,43 @@ test("a finished run is named and labelled on the run list", async ({ page }) =>
   await expect(run.locator("details.nf-xrow-more")).toContainText("Run id");
 });
 
+// The run columns are fixed-width and right-aligned, so the finish times can be
+// compared down the list instead of read one row at a time.
+test("the run columns line up down the list", async ({ page }) => {
+  // Two recorded runs, so there is something to line up across. The first has
+  // to reach the journal before the second is submitted, or the job's own
+  // concurrency cap turns the duplicate away.
+  for (let i = 0; i < 2; i++) {
+    await page.goto(REGISTRY);
+    await taskRow(page, "share-link-cleanup")
+      .locator('form.trigger-form button[type="submit"]')
+      .click();
+    await page.locator(".js-confirm-ok").click();
+    await page.waitForURL(/\/sysadmin\/tasks\/registered\/\?action=triggered$/);
+    await expect
+      .poll(async () => {
+        await page.goto("/sysadmin/tasks/");
+        return page.locator('main [data-fact="finished"]').count();
+      })
+      .toBeGreaterThanOrEqual(i + 1);
+  }
+
+  const columns = await page
+    .locator('main [data-fact="finished"]')
+    .evaluateAll((els) =>
+      els.map((el) => {
+        const box = el.getBoundingClientRect();
+        return { right: Math.round(box.right), width: Math.round(box.width) };
+      }),
+    );
+
+  expect(columns.length).toBeGreaterThanOrEqual(2);
+  for (const column of columns) {
+    expect(column.width).toBe(112);
+    expect(Math.abs(column.right - columns[0].right)).toBeLessThanOrEqual(1);
+  }
+});
+
 // The tab bar carries a bottom margin of its own, and the load card is now the
 // first block under it: the two must not touch, or the card reads as part of
 // the tab bar.

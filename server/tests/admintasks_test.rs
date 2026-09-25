@@ -233,6 +233,41 @@ async fn the_registry_names_the_jobs_it_did_not_register() {
     assert!(body.contains("Not registered on this server"));
 }
 
+/// A finished run in the journal, as the run page reads it.
+async fn seed_run(
+    server: &TestServer,
+    id: &str,
+    key: JobKey,
+    phase: &str,
+    error: Option<&str>,
+    finished_at: i64,
+) {
+    let journal = server.state.repos.job_run.clone();
+    journal
+        .enqueue(
+            NewJobRun {
+                id: id.to_string(),
+                kind: key.as_str().to_string(),
+                owner: None,
+                summary: String::new(),
+                params: None,
+                created_at: finished_at - 5,
+            },
+            finished_at + 300,
+        )
+        .await
+        .unwrap();
+    // Started as well as finished, so the row has a duration to report.
+    journal
+        .mark_running(id, finished_at - 5, finished_at + 300)
+        .await
+        .unwrap();
+    journal
+        .finish(id, phase, error, None, finished_at)
+        .await
+        .unwrap();
+}
+
 /// A journalled run is named, labelled with its verdict in the reader's
 /// language, and never printed as the slug and wire phase the database holds.
 #[tokio::test]
@@ -311,6 +346,100 @@ async fn a_journal_row_is_named_and_state_labelled() {
     // The run's own report and its id are one disclosure away.
     assert!(row.contains("journalled-run"), "{row}");
     assert!(row.contains("nothing to remove"), "{row}");
+}
+
+/// The run columns are fixed-width and right-aligned, which is what lets the
+/// times be compared down the list rather than read one row at a time. The
+/// classes are the whole mechanism, and only a page test sees them.
+#[tokio::test]
+async fn a_run_row_pins_its_time_columns() {
+    let (server, admin) = admin_server().await;
+    seed_run(
+        &server,
+        "pinned-run",
+        JobKey::GarbageCollection,
+        "succeeded",
+        None,
+        chrono::Utc::now().timestamp(),
+    )
+    .await;
+
+    let (_, html) = page(&server, &admin, RUNS).await;
+    let body = page_content(&html);
+    for expected in [
+        "class=\"w-[112px] text-right\" data-fact=\"finished\"",
+        "class=\"w-[64px] text-right\" data-fact=\"duration\"",
+        "data-fact=\"owner\"",
+    ] {
+        assert!(body.contains(expected), "the run list has no {expected}");
+    }
+}
+
+/// A failure is what the list is scanned for, so the job's own error is on the
+/// row rather than only behind the disclosure.
+#[tokio::test]
+async fn a_failed_run_shows_its_error_on_the_row() {
+    let (server, admin) = admin_server().await;
+    seed_run(
+        &server,
+        "failed-run",
+        JobKey::GarbageCollection,
+        "failed",
+        Some("database is locked"),
+        chrono::Utc::now().timestamp(),
+    )
+    .await;
+
+    let (_, html) = page(&server, &admin, RUNS).await;
+    // Up to this row's own duration column: the disclosure follows it, and the
+    // error has to be readable without opening that.
+    let row = row_of(
+        page_content(&html),
+        "data-run=\"failed-run\"",
+        "data-fact=\"duration\"",
+    );
+    assert!(row.contains("nf-prow-hi text-err-text"), "{row}");
+    assert!(row.contains("database is locked"), "{row}");
+}
+
+/// A run whose start was never recorded has no duration to report, which is not
+/// a duration of zero: the column says so with a dash and keeps its width, so
+/// the rows above it stay aligned.
+#[tokio::test]
+async fn a_run_without_a_start_says_its_duration_is_unknown() {
+    let (server, admin) = admin_server().await;
+    let journal = server.state.repos.job_run.clone();
+    let now = chrono::Utc::now().timestamp();
+    journal
+        .enqueue(
+            NewJobRun {
+                id: "unstarted-run".to_string(),
+                kind: JobKey::GarbageCollection.as_str().to_string(),
+                owner: None,
+                summary: String::new(),
+                params: None,
+                created_at: now - 5,
+            },
+            now + 300,
+        )
+        .await
+        .unwrap();
+    journal
+        .finish("unstarted-run", "cancelled", None, None, now)
+        .await
+        .unwrap();
+
+    let (_, html) = page(&server, &admin, RUNS).await;
+    let row = row_of(
+        page_content(&html),
+        "data-run=\"unstarted-run\"",
+        "nf-xrow-more",
+    );
+    assert!(
+        row.contains("class=\"w-[64px] text-right text-ink-3\" data-fact=\"duration\""),
+        "{row}"
+    );
+    assert!(row.contains("&mdash;"), "{row}");
 }
 
 /// Triggering a job answers the browser with the page its button lives on,

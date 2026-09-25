@@ -110,14 +110,23 @@ impl LoadRow {
 ///
 /// The journal only holds what has finished, so a run that is happening now is
 /// nowhere else: without this the page could not answer "what is the server
-/// doing", which is the question the load panel next to it raises.
+/// doing", which is the question the load panel above it raises.
 pub struct ActiveRunRow {
     /// The full id, which is what the log line for this run carries.
     pub id: String,
     /// The job's name, in the reader's language.
     pub name: String,
     pub state: StateBadge,
-    pub facts: Vec<FactRow>,
+    /// The account that submitted it, named. The row's dim line.
+    pub owner: String,
+    /// How far the run says it has got.
+    pub progress: String,
+    /// The one time a live run has, which the browser renders.
+    pub time_ts: i64,
+    /// `started` or `submitted`: which time that is, as a test hook.
+    pub time_key: &'static str,
+    /// That time's label, in the reader's language.
+    pub time_label: String,
     /// What the run is doing now, in the job's own words.
     pub message: String,
 }
@@ -129,10 +138,23 @@ pub struct RunRow {
     /// The job's name, or its slug when the job no longer exists.
     pub name: String,
     pub state: StateBadge,
-    pub facts: Vec<FactRow>,
+    /// The account that submitted it, named. The row's dim line.
+    pub owner: String,
+    /// When it finished. The journal only holds finished rows.
+    pub finished_ts: Option<i64>,
+    /// How long it took, when the row recorded both ends: a run whose start
+    /// was never written has no duration, which is not a duration of zero.
+    pub duration: Option<String>,
+    /// The job's own error, when the run did not succeed. Carried on the row
+    /// rather than only behind the disclosure: a failure is what the list is
+    /// scanned for.
+    pub error: Option<String>,
+    /// Items the run reported it processed, when it reports one.
+    pub processed: Option<i64>,
+    /// How many attempts the run took. Only more than one is worth a row.
+    pub attempt: i32,
     /// The job's own summary of what it did.
     pub summary: String,
-    pub error: String,
 }
 
 /// The one state a row is in, as a badge.
@@ -797,91 +819,46 @@ fn owner_label(t: &I18n, owners: &HashMap<i32, String>, owner: Option<i32>) -> S
     }
 }
 
-/// A labelled pair with an already-rendered value.
-fn plain_fact(key: &'static str, label: &str, value: String) -> FactRow {
-    FactRow {
-        key,
-        label: label.to_string(),
-        value,
-        ts: None,
-    }
-}
-
-/// A labelled pair whose value is a raw stamp the browser renders.
-fn time_fact(key: &'static str, label: &str, ts: i64) -> FactRow {
-    FactRow {
-        key,
-        label: label.to_string(),
-        value: String::new(),
-        ts: Some(ts),
-    }
-}
-
 /// One row for a run that is still going.
 fn active_run_row(run: &JobRun, owners: &HashMap<i32, String>, t: &I18n) -> ActiveRunRow {
-    let mut facts = vec![
-        plain_fact("progress", t.tr("admin.fact_progress"), progress_value(run)),
-        plain_fact(
-            "owner",
-            t.tr("admin.runs_owner"),
-            owner_label(t, owners, run.owner),
-        ),
-    ];
     // A run that has not started yet is still queued, and saying when it was
     // submitted is the only time it has.
-    facts.push(match run.started_at {
-        Some(ts) => time_fact("started", t.tr("admin.fact_started"), ts),
-        None => time_fact("submitted", t.tr("admin.fact_submitted"), run.created_at),
-    });
+    let (time_ts, time_key, time_label) = match run.started_at {
+        Some(ts) => (ts, "started", t.tr("admin.fact_started")),
+        None => (run.created_at, "submitted", t.tr("admin.fact_submitted")),
+    };
     ActiveRunRow {
         id: run.id.as_str().to_string(),
         name: run_name(run.key.as_str(), t),
         state: state_badge(t, run.state.as_str()),
-        facts,
+        owner: owner_label(t, owners, run.owner),
+        progress: progress_value(run),
+        time_ts,
+        time_key,
+        time_label: time_label.to_string(),
         message: run.progress.message.clone(),
     }
 }
 
 /// One row for a run the journal kept.
 fn journal_row(row: &job_run::Model, owners: &HashMap<i32, String>, t: &I18n) -> RunRow {
-    let mut facts = vec![plain_fact(
-        "owner",
-        t.tr("admin.runs_owner"),
-        owner_label(t, owners, row.owner),
-    )];
-    if let Some(processed) = row.processed {
-        facts.push(plain_fact(
-            "processed",
-            t.tr("admin.runs_processed"),
-            processed.to_string(),
-        ));
-    }
-    // Only a recovered run has more than one attempt, so the plain case is not
-    // worth a column.
-    if row.attempt > 1 {
-        facts.push(plain_fact(
-            "attempt",
-            t.tr("admin.fact_attempt"),
-            row.attempt.to_string(),
-        ));
-    }
-    if let Some(finished) = row.finished_at {
-        if let Some(started) = row.started_at {
-            facts.push(plain_fact(
-                "duration",
-                t.tr("admin.task_duration"),
-                duration_display(finished.saturating_sub(started)),
-            ));
-        }
-        facts.push(time_fact("finished", t.tr("admin.fact_finished"), finished));
-    }
+    let duration = row
+        .started_at
+        .zip(row.finished_at)
+        .map(|(started, finished)| duration_display(finished.saturating_sub(started)));
     RunRow {
         id: row.id.clone(),
         name: run_name(&row.kind, t),
         state: state_badge(t, &row.phase),
-        facts,
+        owner: owner_label(t, owners, row.owner),
+        finished_ts: row.finished_at,
+        duration,
+        // The column is nullable and the phase is a separate field, so an empty
+        // string and "no error" are the same thing here.
+        error: row.error.clone().filter(|error| !error.is_empty()),
+        processed: row.processed,
+        attempt: row.attempt,
         summary: row.summary.clone(),
-        error: row.error.clone().unwrap_or_default(),
     }
 }
 

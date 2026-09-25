@@ -91,21 +91,21 @@
                 <span class="base">{{ row.name }}</span>
                 <span class="badge {{ row.state.class }} shrink-0">{{ row.state.label }}</span>
             </div>
+            <div class="nf-prow-sub">
+                <span class="t" data-fact="owner" title="{{ t.tr("admin.runs_owner") }}">{{ row.owner }}</span>
+            </div>
             {% if !row.message.is_empty() %}
             <p class="nf-prow-hi text-ink-3">{{ row.message }}</p>
             {% endif %}
-            <div class="nf-prow-sub flex-wrap">
-                {% for fact in row.facts %}
-                <span class="t" data-fact="{{ fact.key }}">
-                    <span class="text-ink-3">{{ fact.label }}</span>
-                    {% match fact.ts %}
-                    {% when Some with (ts) %}{{ time::ts_class(ts, "text-ink-2 tabular-nums", "relative") }}
-                    {% when None %}<span class="text-ink-2 tabular-nums">{{ fact.value }}</span>
-                    {% endmatch %}
-                </span>
-                {% if !loop.last %}<span class="sep">&middot;</span>{% endif %}
-                {% endfor %}
-            </div>
+        </div>
+        {# What the reader checks rather than reads: fixed columns, right-aligned,
+           so the numbers line up down the list the way the file list's sizes
+           do. #}
+        <div class="nf-prow-meta flex items-center gap-3">
+            <span class="w-[80px] text-right" data-fact="progress"
+                  title="{{ t.tr("admin.fact_progress") }}">{{ row.progress }}</span>
+            <span class="w-[112px] text-right" data-fact="{{ row.time_key }}"
+                  title="{{ row.time_label }}">{{ time::ts_class(row.time_ts, "", "relative") }}</span>
         </div>
     </div>
     {% endfor %}
@@ -133,18 +133,35 @@
                     <span class="base">{{ row.name }}</span>
                     <span class="badge {{ row.state.class }} shrink-0">{{ row.state.label }}</span>
                 </div>
-                <div class="nf-prow-sub flex-wrap">
-                    {% for fact in row.facts %}
-                    <span class="t" data-fact="{{ fact.key }}">
-                        <span class="text-ink-3">{{ fact.label }}</span>
-                        {% match fact.ts %}
-                        {% when Some with (ts) %}{{ time::ts_class(ts, "text-ink-2 tabular-nums", "relative") }}
-                        {% when None %}<span class="text-ink-2 tabular-nums">{{ fact.value }}</span>
-                        {% endmatch %}
-                    </span>
-                    {% if !loop.last %}<span class="sep">&middot;</span>{% endif %}
-                    {% endfor %}
+                <div class="nf-prow-sub">
+                    <span class="t" data-fact="owner" title="{{ t.tr("admin.runs_owner") }}">{{ row.owner }}</span>
                 </div>
+                {# A failure is what the list is scanned for, so the job's own
+                   error is on the row. The prose is the job's rather than the
+                   page's, so it is shown as written; the full text stays in the
+                   disclosure below. #}
+                {% if let Some(error) = row.error %}
+                <p class="nf-prow-hi text-err-text truncate" title="{{ error }}">{{ error }}</p>
+                {% endif %}
+            </div>
+            {# Fixed, right-aligned columns: the finish time and the duration are
+               what the reader compares down the list, and a column that moves
+               per row cannot be compared. #}
+            <div class="nf-prow-meta flex items-center gap-3">
+                {% match row.finished_ts %}
+                {% when Some with (ts) %}
+                <span class="w-[112px] text-right" data-fact="finished">{{ time::ts_class(ts, "", "relative") }}</span>
+                {% when None %}
+                <span class="w-[112px] text-right text-ink-3" data-fact="finished">&mdash;</span>
+                {% endmatch %}
+                {% match row.duration %}
+                {% when Some with (duration) %}
+                <span class="w-[64px] text-right" data-fact="duration"
+                      title="{{ t.tr("admin.task_duration") }}">{{ duration }}</span>
+                {% when None %}
+                <span class="w-[64px] text-right text-ink-3" data-fact="duration"
+                      title="{{ t.tr("admin.task_duration") }}">&mdash;</span>
+                {% endmatch %}
             </div>
         </div>
         {# The id, and the job's own account of what it did. The prose is the
@@ -156,20 +173,34 @@
                 {{ t.tr("admin.run_detail") }}
             </summary>
             <div class="nf-expand flex flex-col gap-2">
-                <div class="nf-kv">
+                <div class="nf-kv is-detail">
                     <span class="k">{{ t.tr("admin.fact_run_id") }}</span>
                     <span class="v mono break-all">{{ row.id }}</span>
                 </div>
+                {% if let Some(processed) = row.processed %}
+                <div class="nf-kv is-detail">
+                    <span class="k">{{ t.tr("admin.runs_processed") }}</span>
+                    <span class="v tabular-nums">{{ processed }}</span>
+                </div>
+                {% endif %}
+                {# Only a recovered run has more than one attempt, so the plain
+                   case is not worth a row. #}
+                {% if row.attempt > 1 %}
+                <div class="nf-kv is-detail">
+                    <span class="k">{{ t.tr("admin.fact_attempt") }}</span>
+                    <span class="v tabular-nums">{{ row.attempt }}</span>
+                </div>
+                {% endif %}
                 {% if !row.summary.is_empty() %}
-                <div class="nf-kv">
+                <div class="nf-kv is-detail">
                     <span class="k">{{ t.tr("admin.run_summary") }}</span>
                     <span class="v">{{ row.summary }}</span>
                 </div>
                 {% endif %}
-                {% if !row.error.is_empty() %}
-                <div class="nf-kv">
+                {% if let Some(error) = row.error %}
+                <div class="nf-kv is-detail">
                     <span class="k">{{ t.tr("admin.run_error") }}</span>
-                    <span class="v text-err-text">{{ row.error }}</span>
+                    <span class="v text-err-text">{{ error }}</span>
                 </div>
                 {% endif %}
             </div>
