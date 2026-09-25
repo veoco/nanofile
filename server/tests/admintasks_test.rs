@@ -236,14 +236,41 @@ async fn a_journal_row_is_named_and_state_labelled() {
         .await
         .unwrap();
 
+    // A second, older run, so the row below has a real end. Without it the
+    // slice would run to the end of the page and these assertions would pass
+    // on markup that is not this row — which is exactly what an end marker
+    // naming a class the page does not carry (`class="nf-list"`) did.
+    journal
+        .enqueue(
+            NewJobRun {
+                id: "journalled-other".to_string(),
+                kind: JobKey::ShareLinkCleanup.as_str().to_string(),
+                owner: None,
+                summary: "no links to clean".to_string(),
+                params: None,
+                created_at: now - 600,
+            },
+            now + 300,
+        )
+        .await
+        .unwrap();
+    journal
+        .finish("journalled-other", "succeeded", None, None, now - 599)
+        .await
+        .unwrap();
+
     let (_, html) = page(&server, &admin, RUNS).await;
     let row = row_of(
         page_content(&html),
         "data-run=\"journalled-run\"",
-        // The load panel starts the next block; there is no second run row.
-        "class=\"nf-list\"",
+        // The next row starts at the next `data-run=`; that is where this ends.
+        "data-run=\"",
     );
 
+    assert!(
+        !row.contains("journalled-other"),
+        "the row slice ran past its end: {row}"
+    );
     assert!(row.contains("Garbage collection"), "{row}");
     assert!(
         row.contains("badge-green") && row.contains(">Succeeded</span>"),
