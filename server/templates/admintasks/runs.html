@@ -116,31 +116,31 @@
 <div class="nf-list mt-5" data-panel="recent">
     <div class="nf-sec">
         <h2>{{ t.tr("admin.runs_title") }}</h2>
-        <span class="n num">{{ runs.len() }}</span>
+        {# How long a row lasts is a property of the journal, not of a job, and it
+           is not something a reader consults the list for: it rides on the count
+           rather than taking a line of its own above the filters. #}
+        <span class="n num" title="{{ retention_hint }}">{{ runs.len() }}</span>
     </div>
-    <p class="px-3.5 pb-1 text-[12px] text-ink-3">{{ t.tr("admin.runs_hint") }}</p>
-    {# How long a row lasts is a property of the journal, not of a job, so it is
-       said once here rather than repeated in every row's disclosure. #}
-    <p class="px-3.5 pb-3 text-[11px] text-ink-3">{{ retention_hint }}</p>
     {# Two filters, each keeping the other: a reader who has narrowed the list by
-       job can narrow it by verdict without losing the job. #}
-    {# One line per dimension from a phone up until it fits, because a job name
-       and three verdicts do not share a narrow row: the wrap would otherwise
-       split a label away from the buttons it labels. #}
-    <div class="flex flex-col gap-2 px-3.5 pb-3 sm:flex-row sm:items-center sm:gap-5">
-        <div class="flex flex-wrap items-center gap-2">
-            <span class="text-[11px] text-ink-3">{{ t.tr("admin.runs_filter_job") }}</span>
+       job can narrow it by verdict without losing the job. The job group reads
+       left and the verdicts sit against the right edge; a phone wraps them onto
+       two lines rather than squeezing a job name into a few characters. #}
+    <div class="nf-filterband">
+        <div class="nf-fgroup" role="group" aria-label="{{ t.tr("admin.runs_filter_job") }}">
+            <span class="nf-fgroup-l">{{ t.tr("admin.runs_filter_job") }}</span>
             {% for chip in job_filters %}
             <a href="{{ chip.href }}" data-filter="{{ chip.id }}"
-               class="btn btn-sm {% if chip.active %}btn-solid{% else %}btn-line{% endif %}">{{ chip.label }}</a>
+               class="nf-fchip{% if chip.active %} is-on{% endif %}">{{ chip.label }}</a>
             {% endfor %}
         </div>
-        <div class="flex flex-wrap items-center gap-2">
-            <span class="text-[11px] text-ink-3">{{ t.tr("admin.runs_filter_result") }}</span>
-            {% for chip in outcome_filters %}
-            <a href="{{ chip.href }}" data-filter="{{ chip.id }}"
-               class="btn btn-sm {% if chip.active %}btn-solid{% else %}btn-line{% endif %}">{{ chip.label }}</a>
-            {% endfor %}
+        <div class="nf-fgroup" role="group" aria-label="{{ t.tr("admin.runs_filter_result") }}">
+            <span class="nf-fgroup-l">{{ t.tr("admin.runs_filter_result") }}</span>
+            <div class="nf-fseg">
+                {% for chip in outcome_filters %}
+                <a href="{{ chip.href }}" data-filter="{{ chip.id }}"
+                   class="{% if chip.active %}is-on{% endif %}">{{ chip.label }}</a>
+                {% endfor %}
+            </div>
         </div>
     </div>
     {% if runs.is_empty() %}
@@ -149,17 +149,28 @@
     </p>
     {% else %}
     {% for row in runs %}
-    <div class="nf-xrow" data-run="{{ row.id }}">
-        <div class="nf-prow">
+    {# The row is the disclosure: it already stands two lines tall, and a second
+       opener under it cost a third that carried nothing but the word. The row
+       body holds no control of its own, which is what makes `<summary>` safe as
+       the row rather than a label inside it. #}
+    <details class="nf-xrow" data-run="{{ row.id }}">
+        <summary class="nf-prow cursor-pointer">
             <span class="nf-prow-ic">{{ icons::icon_clock("w-[15px] h-[15px]") }}</span>
             <div class="nf-prow-main">
                 <div class="nf-prow-name">
                     <span class="base">{{ row.name }}</span>
                     <span class="badge {{ row.state.class }} shrink-0">{{ row.state.label }}</span>
                 </div>
+                {# What the run did, where the submitter used to be: every
+                   scheduled run is submitted by the server, so that line said the
+                   same thing on every row. The submitter is a fact about the run
+                   rather than about what it did, so it moved into the disclosure
+                   under its own label. #}
+                {% if !row.summary.is_empty() %}
                 <div class="nf-prow-sub">
-                    <span class="t" data-fact="owner" title="{{ t.tr("admin.runs_owner") }}">{{ row.owner }}</span>
+                    <span class="t" title="{{ row.summary }}">{{ row.summary }}</span>
                 </div>
+                {% endif %}
                 {# A failure is what the list is scanned for, so the job's own
                    error is on the row. The prose is the job's rather than the
                    page's, so it is shown as written; the full text stays in the
@@ -187,19 +198,28 @@
                       title="{{ t.tr("admin.task_duration") }}">&mdash;</span>
                 {% endmatch %}
             </div>
-        </div>
-        {# The id, and the job's own account of what it did. The prose is the
-           job's rather than the page's, so it is shown as written: it is a
-           diagnostic an operator greps the log for. #}
-        <details class="nf-xrow-more">
-            <summary class="nf-toggle">
-                {{ icons::icon_arrow_right("w-3 h-3") }}
-                {{ t.tr("admin.run_detail") }}
-            </summary>
+            {# Says what the row does rather than being a control: the row itself
+               is the control, so this is a label in the action column. #}
+            <span class="nf-prow-act">
+                <span class="nf-toggle" aria-hidden="true">
+                    {{ icons::icon_arrow_right("w-3 h-3") }}
+                    {{ t.tr("admin.run_detail") }}
+                </span>
+            </span>
+        </summary>
+        {# The id, who submitted it, and the job's own account of what it did —
+           repeated in full, because the row's copy is one truncated line. The
+           prose is the job's rather than the page's, so it is shown as written:
+           it is a diagnostic an operator greps the log for. #}
+        <div class="nf-xrow-more">
             <div class="nf-expand flex flex-col gap-2">
                 <div class="nf-kv is-detail">
                     <span class="k">{{ t.tr("admin.fact_run_id") }}</span>
                     <span class="v mono break-all">{{ row.id }}</span>
+                </div>
+                <div class="nf-kv is-detail">
+                    <span class="k">{{ t.tr("admin.runs_owner") }}</span>
+                    <span class="v" data-fact="owner">{{ row.owner }}</span>
                 </div>
                 {% if let Some(processed) = row.processed %}
                 <div class="nf-kv is-detail">
@@ -228,8 +248,8 @@
                 </div>
                 {% endif %}
             </div>
-        </details>
-    </div>
+        </div>
+    </details>
     {% endfor %}
     {% endif %}
 </div>

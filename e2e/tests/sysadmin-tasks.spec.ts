@@ -208,15 +208,19 @@ test("a finished run is named and labelled on the run list", async ({ page }) =>
     .first();
   await expect(run.locator(".badge")).toHaveText("Succeeded");
   await expect(run).not.toContainText("expired-data-cleanup");
-  await expect(run.locator('[data-fact="owner"]')).toContainText("The server");
+  // The row's second line is what the run did, not who submitted it: every
+  // scheduled run is submitted by the server, so that line said nothing.
+  await expect(run.locator("summary.nf-prow .nf-prow-sub")).toContainText("expired");
+  await expect(run.locator(".nf-xrow-more [data-fact='owner']")).toContainText("The server");
 
-  // The id and the job's own report are one disclosure away. The report is what
-  // the job said it did, never the name the row already carries.
-  await expect(run.locator("details.nf-xrow-more .nf-kv").first()).toBeHidden();
-  await run.locator("details.nf-xrow-more summary").click();
-  await expect(run.locator("details.nf-xrow-more")).toContainText("Run id");
-  await expect(run.locator("details.nf-xrow-more")).toContainText("Summary");
-  const summary = run.locator("details.nf-xrow-more .nf-kv", { hasText: "Summary" });
+  // The row is its own disclosure: the id and the job's own report are one click
+  // away, and the report is what the job said it did, never the name the row
+  // already carries.
+  await expect(run.locator(".nf-xrow-more .nf-kv").first()).toBeHidden();
+  await run.locator("summary.nf-prow").click();
+  await expect(run.locator(".nf-xrow-more")).toContainText("Run id");
+  await expect(run.locator(".nf-xrow-more")).toContainText("Summary");
+  const summary = run.locator(".nf-xrow-more .nf-kv", { hasText: "Summary" });
   await expect(summary.locator(".v")).not.toHaveText("Expired data cleanup");
   await expect(summary.locator(".v")).toContainText("expired");
 });
@@ -268,12 +272,18 @@ test("the run list is filtered by job and by verdict", async ({ page }) => {
   const jobChips = page.locator('main [data-panel="recent"] a[data-filter]');
   await expect(jobChips.filter({ hasText: "Expired data cleanup" })).toHaveCount(1);
 
+  // Each group's "everything" names its own dimension: two chips reading "All"
+  // side by side left the reader to tell them apart by position alone.
+  const allChips = page.locator('main [data-panel="recent"] a[data-filter=""]');
+  await expect(allChips).toHaveCount(2);
+  await expect(allChips.first()).toHaveText("All jobs");
+  await expect(allChips.last()).toHaveText("All results");
+
   // Narrow to that job, then to its failures, and check the second filter kept
-  // the first: the "All" verdict chip under a job filter is the job's own URL.
+  // the first: the "All results" chip under a job filter is the job's own URL.
   await jobChips.filter({ hasText: "Expired data cleanup" }).click();
   await expect(page).toHaveURL(/\?kind=expired-data-cleanup$/);
-  const allVerdicts = page.locator('main [data-panel="recent"] a[data-filter=""]');
-  await expect(allVerdicts.last()).toHaveAttribute(
+  await expect(allChips.last()).toHaveAttribute(
     "href",
     "/sysadmin/tasks/?kind=expired-data-cleanup",
   );
@@ -288,9 +298,8 @@ test("the run list is filtered by job and by verdict", async ({ page }) => {
   );
   await expect(page.locator('main [data-panel="recent"] [data-run]')).toHaveCount(0);
 
-  // Clearing one dimension leaves the other alone: the job row's "All" keeps the
-  // verdict, and the verdict row's "All" then clears it too.
-  const allChips = page.locator('main [data-panel="recent"] a[data-filter=""]');
+  // Clearing one dimension leaves the other alone: the job row's "All jobs" keeps
+  // the verdict, and the verdict group's "All results" then clears it too.
   await allChips.first().click();
   await expect(page).toHaveURL(/\/sysadmin\/tasks\/\?outcome=failed$/);
   await allChips.last().click();

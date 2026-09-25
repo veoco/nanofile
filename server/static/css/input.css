@@ -949,6 +949,35 @@ html:not([data-view]) .seg .js-view-list {
   .nf-left-panel { width: var(--left-panel-width, 240px); }
 
   .nf-filterbar { @apply flex flex-wrap items-center gap-2 mb-3; }
+  /* The run list's own filter bar: one band under the panel's heading, so the
+     controls read as the list's instrument rather than as more page prose.
+     `space-between` keeps the verdicts against the right edge; when the row is
+     too narrow for both groups the verdicts wrap to a line of their own and sit
+     at the start, which is where a single group belongs. */
+  .nf-filterband {
+    @apply flex flex-wrap items-center justify-between gap-x-5 gap-y-2
+           px-3.5 py-2 border-b border-line;
+  }
+  .nf-fgroup { @apply flex flex-wrap items-center gap-1.5 min-w-0; }
+  .nf-fgroup-l { @apply shrink-0 text-[11px] font-medium uppercase tracking-[0.07em] text-ink-3; }
+  /* A filter is a set of links, not a toolbar: the chips are quiet until one of
+     them is the choice, which is the only one that carries the accent. */
+  .nf-fchip {
+    @apply inline-flex items-center h-6 px-2 rounded-ctl bg-raised text-[12px] text-ink-2
+           no-underline whitespace-nowrap;
+  }
+  .nf-fchip:hover { @apply bg-line text-ink; }
+  .nf-fchip.is-on { @apply bg-accent text-accent-ink; }
+  /* Three verdicts are one choice, so they share one border instead of being
+     three buttons that happen to sit next to each other. */
+  .nf-fseg { @apply inline-flex items-center h-6 shrink-0 rounded-ctl border border-line overflow-hidden; }
+  .nf-fseg > a {
+    @apply inline-flex items-center h-full px-2.5 text-[12px] text-ink-2 no-underline
+           border-l border-line;
+  }
+  .nf-fseg > a:first-child { @apply border-l-0; }
+  .nf-fseg > a:hover { @apply bg-raised text-ink; }
+  .nf-fseg > a.is-on { @apply bg-accent text-accent-ink; }
   .nf-pager { @apply flex items-center justify-between gap-3 mt-3; }
   .nf-pager .m { @apply text-[12px] tabular-nums text-ink-3; }
 

@@ -853,10 +853,14 @@ fn outcome_query(outcome: Option<RunOutcome>) -> Option<&'static str> {
 
 /// The job filter buttons: everything, then the jobs the journal actually
 /// holds, newest first.
+///
+/// The two groups are read one after the other, so each one's "everything" says
+/// which dimension it clears: two chips reading "All" side by side left the
+/// reader to work out which was which from where it sat.
 fn kind_filters(choice: &RunListChoice, kinds: &[String], t: &I18n) -> Vec<FilterChip> {
     let mut chips = vec![FilterChip {
         id: String::new(),
-        label: t.tr("admin.runs_filter_all").to_string(),
+        label: t.tr("admin.runs_filter_all_jobs").to_string(),
         href: choice.href(None, outcome_query(choice.outcome)),
         active: choice.kind.is_none(),
     }];
@@ -874,7 +878,7 @@ fn kind_filters(choice: &RunListChoice, kinds: &[String], t: &I18n) -> Vec<Filte
 /// The verdict filter buttons.
 fn outcome_filters(choice: &RunListChoice, t: &I18n) -> Vec<FilterChip> {
     [
-        (None, "admin.runs_filter_all"),
+        (None, "admin.runs_filter_all_results"),
         (Some(RunOutcome::Succeeded), "admin.run_state_succeeded"),
         (Some(RunOutcome::Failed), "admin.run_state_failed"),
     ]
@@ -1568,7 +1572,9 @@ mod tests {
         let jobs = kind_filters(&choice, &["gc".to_string(), "reindex".to_string()], t);
         assert_eq!(jobs.len(), 3, "everything, then the jobs the journal holds");
         assert_eq!(jobs.iter().filter(|chip| chip.active).count(), 1);
-        assert!(jobs[0].label == "All");
+        // Each group's "everything" names the dimension it clears: two chips
+        // reading "All" next to each other were the same word twice.
+        assert_eq!(jobs[0].label, "All jobs");
         assert_eq!(jobs[1].label, "Garbage collection");
 
         let outcomes = outcome_filters(&choice, t);
@@ -1579,6 +1585,7 @@ mod tests {
             "an unset verdict has exactly one current button too"
         );
         assert_eq!(outcomes[0].id, "");
+        assert_eq!(outcomes[0].label, "All results");
         assert_eq!(outcomes[1].id, "succeeded");
         assert_eq!(outcomes[1].label, "Succeeded");
     }
