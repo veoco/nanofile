@@ -249,10 +249,24 @@ pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child
 
 /// Create the process, its pipes and the handle list that keeps inheritance to
 /// those pipes.
+///
+/// The token is closed on every path, including the failing ones: this runs
+/// once per document, and a leak here would be a leak in the server's own
+/// handle table.
 fn start(program: &OsStr, args: &[OsString], token: Option<HANDLE>) -> std::io::Result<Child> {
-    let (child_stdin, parent_stdin) = open_pipe()?;
-    let (parent_stdout, child_stdout) = open_pipe()?;
-    let (parent_stderr, child_stderr) = open_pipe()?;
+    let started = start_with(program, args, token);
+    if let Some(token) = token {
+        unsafe { CloseHandle(token) };
+    }
+    started
+}
+
+fn start_with(program: &OsStr, args: &[OsString], token: Option<HANDLE>) -> std::io::Result<Child> {
+    let [
+        (child_stdin, parent_stdin),
+        (parent_stdout, child_stdout),
+        (parent_stderr, child_stderr),
+    ] = open_pipes()?;
     let inherited = [child_stdin, child_stdout, child_stderr];
 
     let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
@@ -314,9 +328,6 @@ fn start(program: &OsStr, args: &[OsString], token: Option<HANDLE>) -> std::io::
         }
     };
 
-    if let Some(token) = token {
-        unsafe { CloseHandle(token) };
-    }
     close_all(&inherited);
     if created == 0 {
         let error = std::io::Error::last_os_error();
@@ -337,6 +348,23 @@ fn close_all(handles: &[HANDLE]) {
     for handle in handles {
         unsafe { CloseHandle(*handle) };
     }
+}
+
+/// The three pipe pairs the protocol needs, cleaned up if one cannot be made.
+fn open_pipes() -> std::io::Result<[(HANDLE, HANDLE); 3]> {
+    let mut pipes: [(HANDLE, HANDLE); 3] = [(null_mut(), null_mut()); 3];
+    for slot in &mut pipes {
+        match open_pipe() {
+            Ok(pipe) => *slot = pipe,
+            Err(error) => {
+                for (read, write) in pipes {
+                    close_all(&[read, write]);
+                }
+                return Err(error);
+            }
+        }
+    }
+    Ok(pipes)
 }
 
 /// A pipe whose child end is inheritable and whose parent end is not.
