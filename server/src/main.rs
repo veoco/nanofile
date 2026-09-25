@@ -211,6 +211,13 @@ fn main() -> anyhow::Result<()> {
         policy,
     } = &command
     {
+        let policy = server::indexer::extract::sandbox::Policy::parse(policy)
+            .unwrap_or(server::indexer::extract::sandbox::Policy::Require);
+        // `--probe` runs the parent's half of the startup check, and that half
+        // applies the policy to the report it gets back — so the policy has to
+        // be known here and not only passed to the child. The server takes the
+        // same path through `lib.rs`, before any document is handed over.
+        server::indexer::extract::worker::configure_policy(policy);
         if *probe {
             return server::indexer::extract::worker::probe_report();
         }
@@ -219,8 +226,6 @@ fn main() -> anyhow::Result<()> {
         } else {
             server::indexer::extract::worker::Job::Extract
         };
-        let policy = server::indexer::extract::sandbox::Policy::parse(policy)
-            .unwrap_or(server::indexer::extract::sandbox::Policy::Require);
         let external = server::indexer::extract::worker::External {
             runner: *seatbelt,
             restricted_token: *restricted,

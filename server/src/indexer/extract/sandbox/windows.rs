@@ -120,11 +120,7 @@ use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
-    JOB_OBJECT_LIMIT_PROCESS_TIME, JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_DISPLAYSETTINGS,
-    JOB_OBJECT_UILIMIT_EXITWINDOWS, JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
-    JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS,
-    JOB_OBJECT_UILIMIT_WRITECLIPBOARD, JOBOBJECT_BASIC_UI_RESTRICTIONS,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicUIRestrictions,
+    JOB_OBJECT_LIMIT_PROCESS_TIME, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
@@ -132,15 +128,13 @@ use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, CreateProcessW,
     EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess,
     GetProcessMitigationPolicy, INFINITE, InitializeProcThreadAttributeList, OpenProcessToken,
-    PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-    PROCESS_INFORMATION, ProcessChildProcessPolicy, ProcessDynamicCodePolicy,
-    ProcessExtensionPointDisablePolicy, ProcessFontDisablePolicy, ProcessImageLoadPolicy,
-    ProcessStrictHandleCheckPolicy, ProcessSystemCallDisablePolicy, STARTF_USESTDHANDLES,
-    STARTUPINFOEXW, SetProcessMitigationPolicy, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ProcessChildProcessPolicy,
+    ProcessDynamicCodePolicy, ProcessExtensionPointDisablePolicy, ProcessFontDisablePolicy,
+    ProcessImageLoadPolicy, ProcessStrictHandleCheckPolicy, ProcessSystemCallDisablePolicy,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW, SetProcessMitigationPolicy, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
-use windows_sys::Win32::System::WindowsProgramming::PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
 
 /// `SE_GROUP_INTEGRITY`, from `winnt.h`: the attribute that marks the one entry
 /// of a mandatory label as the integrity level itself.
@@ -169,6 +163,17 @@ const RESTRICTED_FLAGS: u32 = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICT
 
 /// `SE_GROUP_LOGON_ID` from `winnt.h`.
 const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
+
+// The window station, desktop, clipboard and handle restrictions this job used
+// to carry are gone, and the reason is measured: a job's UI restrictions apply
+// from the process's first instruction, and `JOB_OBJECT_UILIMIT_HANDLES` denies
+// the loader the console it attaches on the way up — the child dies with
+// `STATUS_DLL_INIT_FAILED` (`0xC0000142`) before it can print anything. They
+// were applied *after* startup until the job moved to the parent, which is why
+// this only appeared then. What covers the same ground now is stronger and does
+// not have to be set on the job: win32k lockdown refuses every win32k system
+// call outright, the container reaches no other process's objects, and the
+// child-process policy refuses process creation.
 
 /// Room for one SID, `SECURITY_MAX_SID_SIZE`.
 const MAX_SID_BYTES: usize = 68;
@@ -240,14 +245,24 @@ fn job_limits() -> Result<(u64, i64), &'static str> {
         return Err("unverified");
     }
 
+    // The values, not only the flags: a job the host already put this process in
+    // (a CI runner wraps everything it starts) has limits of its own, and one
+    // whose limits are exactly these is the parent's. A job that is not there is
+    // reported as absent rather than counted — the layer is a bound only if
+    // there is one.
     let limits = info.BasicLimitInformation.LimitFlags;
-    let memory = limits & JOB_OBJECT_LIMIT_PROCESS_MEMORY != 0;
-    let cpu = limits & JOB_OBJECT_LIMIT_PROCESS_TIME != 0;
-    let processes = limits & JOB_OBJECT_LIMIT_ACTIVE_PROCESS != 0
-        && info.BasicLimitInformation.ActiveProcessLimit == 1;
-    if !(memory && cpu && processes) {
+    let ours = limits & JOB_OBJECT_LIMIT_PROCESS_MEMORY != 0
+        && limits & JOB_OBJECT_LIMIT_PROCESS_TIME != 0
+        && limits & JOB_OBJECT_LIMIT_ACTIVE_PROCESS != 0
+        && limits & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0
+        && info.BasicLimitInformation.ActiveProcessLimit == 1
+        && info.ProcessMemoryLimit as u64 == MEMORY_LIMIT
+        && info.BasicLimitInformation.PerProcessUserTimeLimit
+            == CPU_LIMIT_SECONDS * HUNDRED_NANOSECONDS;
+    if !ours {
         return Err("limits-missing");
     }
+
     Ok((
         info.ProcessMemoryLimit as u64,
         info.BasicLimitInformation.PerProcessUserTimeLimit / HUNDRED_NANOSECONDS,
@@ -346,7 +361,7 @@ fn harden_process() -> usize {
     let policies: [(
         windows_sys::Win32::System::Threading::PROCESS_MITIGATION_POLICY,
         u32,
-    ); 7] = [
+    ); 8] = [
         // No calls serviced by `win32k.sys` at all: the kernel surface a
         // document parser has no business reaching, and the one an exploit
         // would use to find a kernel bug to climb out through.
@@ -371,6 +386,12 @@ fn harden_process() -> usize {
         // A bad handle reference raises instead of being ignored, which turns
         // some exploits into crashes.
         (ProcessStrictHandleCheckPolicy, ENABLE),
+        // No process creation at all, on the process rather than on the job: a
+        // job can be escaped by a process that knows how, which is why Chromium
+        // carries this next to its own job. Set here rather than named at
+        // creation, because nothing untrusted runs before this point anyway —
+        // the document is not read until after `confine` returns.
+        (ProcessChildProcessPolicy, ENABLE),
     ];
 
     let mut taken = 0;
@@ -401,21 +422,6 @@ fn harden_process() -> usize {
         }
     }
 
-    // The one mitigation the parent had to name at creation, because the
-    // kernel only takes it for a process that is being created: read back here
-    // rather than taken on the parent's word, like the rest.
-    let mut child_policy = 0u32;
-    let read = unsafe {
-        GetProcessMitigationPolicy(
-            GetCurrentProcess(),
-            ProcessChildProcessPolicy,
-            std::ptr::addr_of_mut!(child_policy).cast::<c_void>(),
-            size_of_val(&child_policy),
-        )
-    } != 0;
-    if read && child_policy & ENABLE != 0 {
-        taken += 1;
-    }
     taken
 }
 
@@ -511,29 +517,7 @@ fn parent_job() -> Option<HANDLE> {
         )
     };
 
-    // The window station, the clipboard, the desktop and handles to other
-    // processes: none of it belongs to a document parser.
-    let ui = JOBOBJECT_BASIC_UI_RESTRICTIONS {
-        UIRestrictionsClass: JOB_OBJECT_UILIMIT_HANDLES
-            | JOB_OBJECT_UILIMIT_READCLIPBOARD
-            | JOB_OBJECT_UILIMIT_WRITECLIPBOARD
-            | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
-            | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
-            | JOB_OBJECT_UILIMIT_GLOBALATOMS
-            | JOB_OBJECT_UILIMIT_DESKTOP
-            | JOB_OBJECT_UILIMIT_EXITWINDOWS,
-    };
-    let sized = size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32;
-    let set_ui = unsafe {
-        SetInformationJobObject(
-            job,
-            JobObjectBasicUIRestrictions,
-            std::ptr::addr_of!(ui).cast(),
-            sized,
-        )
-    };
-
-    if set_limits == 0 || set_ui == 0 {
+    if set_limits == 0 {
         unsafe { CloseHandle(job) };
         return None;
     }
@@ -854,11 +838,7 @@ impl AttributeList {
         capabilities: Option<&SECURITY_CAPABILITIES>,
         job: Option<&HANDLE>,
     ) -> std::io::Result<Self> {
-        // The job brings a second attribute with it: the child-process policy
-        // is only accepted for a process that is in a job, which is also what
-        // makes "no child processes" enforceable rather than advisory.
-        let count =
-            1 + usize::from(capabilities.is_some()) + 2 * usize::from(job.is_some()) as usize;
+        let count = 1 + usize::from(capabilities.is_some()) + usize::from(job.is_some()) as usize;
         let mut size = 0usize;
         unsafe { InitializeProcThreadAttributeList(null_mut(), count as u32, 0, &mut size) };
         let mut buffer = vec![0u8; size];
@@ -882,19 +862,13 @@ impl AttributeList {
                     None => Ok(()),
                 })
         };
-        if let Err(error) = filled {
-            drop(attributes);
-            return Err(error);
+        match filled {
+            Ok(()) => Ok(attributes),
+            Err(error) => {
+                drop(attributes);
+                Err(error)
+            }
         }
-
-        // Best effort: the child is already bounded by the job, the token and
-        // the container, and a kernel that will not take this one attribute is
-        // not a reason to fail the launch. Whether it took is in the report,
-        // because the child reads it back ([`harden_process`]).
-        if job.is_some() {
-            let _ = unsafe { attributes.no_child_processes() };
-        }
-        Ok(attributes)
     }
 
     /// The handles the child may inherit, and nothing else.
@@ -941,27 +915,6 @@ impl AttributeList {
                 PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
                 std::ptr::from_ref(job).cast::<c_void>(),
                 size_of::<HANDLE>(),
-            )
-        }
-    }
-
-    /// Forbid the child from creating processes at all.
-    ///
-    /// This is on the process rather than on the job, which is what
-    /// distinguishes it from the job's active-process limit: Chromium carries
-    /// both, and says why — a job can be escaped by a process that knows how,
-    /// and this is the kernel refusing the creation itself.
-    ///
-    /// # Safety
-    ///
-    /// Requires an attribute list that names a job for this child.
-    unsafe fn no_child_processes(&mut self) -> std::io::Result<()> {
-        let policy: u32 = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
-        unsafe {
-            self.set(
-                PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY as usize,
-                std::ptr::from_ref(&policy).cast::<c_void>(),
-                size_of::<u32>(),
             )
         }
     }

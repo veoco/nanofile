@@ -609,6 +609,19 @@ fn filter_program() -> Option<(Vec<SockFilter>, usize)> {
 }
 
 /// The syscalls the child never needs.
+///
+/// A denylist is only as good as the argument for each name being on it, and the
+/// two arguments here are "a parser has no business doing this" and "Landlock
+/// cannot decide this". Both are re-derivable, which is what keeps the list from
+/// drifting into folklore:
+///
+/// * A new name goes on for a reason, and the reason goes above it.
+/// * What the parsers actually call can be re-measured instead of argued about:
+///   run the fixture corpus with the filter in `SECCOMP_RET_LOG` mode (or under
+///   `strace -f -c`), and diff the syscalls seen against this list. Anything the
+///   parsers never call and this list does not name is a candidate, and anything
+///   the parsers *do* call that is named here is a report of `parse=` turning
+///   into `unsupported` in the worker's own self-test.
 fn denied_syscalls() -> Vec<libc::c_long> {
     let mut denied = vec![
         // Sockets of every kind: the child talks to its parent over pipes.
