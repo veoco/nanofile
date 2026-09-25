@@ -34,6 +34,27 @@
 //! [`text_content_sniff`] accepts the first [`PLAN_SNIFF_BYTES`] when they
 //! contain no NUL bytes and are valid UTF-8.
 //!
+//! # What bounds a document
+//!
+//! Four things, in the order they apply:
+//!
+//! * the read itself — a document is never larger than [`MAX_STRUCTURED_BYTES`],
+//!   and a file above that cap is skipped without being read;
+//! * the parsers' own limits — the PDF reader caps every stream it decodes and
+//!   the page count, and the Office path counts what a package decompresses to
+//!   before the parser sees it;
+//! * this process's per-document text caps — [`MAX_INDEXED_CONTENT_BYTES`] of
+//!   text, which is also what a search result can highlight;
+//! * the extraction worker ([`worker`]) — a separate, confined process with an
+//!   address-space limit, a CPU limit and a wall-clock timeout. That last one
+//!   is not redundant: [`guard`] catches panics, and a stack overflow or a
+//!   failed allocation is not a panic but an abort, which no boundary in this
+//!   process could contain.
+//!
+//! Documents are extracted *only* in that worker. If it cannot be started, or
+//! refuses to run without confinement, the file is failed and retried later;
+//! nothing in the server parses a document itself.
+//!
 //! # Failure Handling
 //!
 //! [`extract`] never fails and never unwinds: a format the pipeline cannot read
@@ -45,6 +66,8 @@
 
 mod office;
 mod pdf;
+pub mod sandbox;
+pub mod worker;
 
 /// Version of the extraction pipeline as a whole.
 ///
@@ -115,6 +138,83 @@ pub enum Plan {
     Document(Document),
 }
 
+/// Why the extractor did not index a file.
+///
+/// Named constants because these reasons cross a process boundary: the worker's
+/// reply carries the text, and [`intern`] maps it back onto one of them so the
+/// caller keeps its `&'static str` and the index records something it can
+/// compare against.
+pub mod reason {
+    pub const PARSE: &str = "could not parse document";
+    pub const ENCRYPTED: &str = "encrypted pdf";
+    pub const NO_TEXT: &str = "no extractable text";
+    pub const PANIC: &str = "extractor panicked";
+    pub const NOT_TEXT: &str = "not a text file";
+    pub const BUDGET: &str = "document expands past the extraction budget";
+    pub const PARTS: &str = "document has too many parts";
+    pub const FAILED: &str = "extractor failed";
+    pub const TIMED_OUT: &str = "extractor timed out";
+
+    /// Every reason the extractor can produce.
+    pub const ALL: &[&str] = &[
+        PARSE, ENCRYPTED, NO_TEXT, PANIC, NOT_TEXT, BUDGET, PARTS, FAILED, TIMED_OUT,
+    ];
+
+    /// Map a reason that crossed the process boundary back onto a constant.
+    ///
+    /// Anything unrecognised becomes [`FAILED`]: the point of the table is that
+    /// the caller never has to allocate a reason per document, and a worker
+    /// that says something this process does not know is a failed extraction
+    /// rather than a skipped one with a made-up label.
+    pub fn intern(value: &str) -> &'static str {
+        ALL.iter()
+            .copied()
+            .find(|known| *known == value)
+            .unwrap_or(FAILED)
+    }
+}
+
+impl Plan {
+    /// The byte that names this plan in the worker protocol.
+    ///
+    /// The whole enum is covered rather than only the documents: the parent
+    /// decides what it sends, and a protocol that can already carry every plan
+    /// does not have to change the day a text prefix moves into the child too.
+    pub fn tag(self) -> u8 {
+        use office_oxide::DocumentFormat;
+
+        match self {
+            Plan::Text => 0,
+            Plan::Sniff => 1,
+            Plan::Document(Document::Pdf) => 2,
+            Plan::Document(Document::Office(DocumentFormat::Docx)) => 3,
+            Plan::Document(Document::Office(DocumentFormat::Xlsx)) => 4,
+            Plan::Document(Document::Office(DocumentFormat::Pptx)) => 5,
+            Plan::Document(Document::Office(DocumentFormat::Doc)) => 6,
+            Plan::Document(Document::Office(DocumentFormat::Xls)) => 7,
+            Plan::Document(Document::Office(DocumentFormat::Ppt)) => 8,
+        }
+    }
+
+    /// The plan a worker request names, or `None` for an unknown tag.
+    pub fn from_tag(tag: u8) -> Option<Plan> {
+        use office_oxide::DocumentFormat;
+
+        Some(match tag {
+            0 => Plan::Text,
+            1 => Plan::Sniff,
+            2 => Plan::Document(Document::Pdf),
+            3 => Plan::Document(Document::Office(DocumentFormat::Docx)),
+            4 => Plan::Document(Document::Office(DocumentFormat::Xlsx)),
+            5 => Plan::Document(Document::Office(DocumentFormat::Pptx)),
+            6 => Plan::Document(Document::Office(DocumentFormat::Doc)),
+            7 => Plan::Document(Document::Office(DocumentFormat::Xls)),
+            8 => Plan::Document(Document::Office(DocumentFormat::Ppt)),
+            _ => return None,
+        })
+    }
+}
+
 /// Decide from the filename how a file must be read.
 ///
 /// Detection is by extension only. Magic bytes cannot disambiguate the
@@ -159,7 +259,7 @@ pub fn extract(plan: Plan, data: Vec<u8>) -> Extracted {
             if text_content_sniff(&data) {
                 extract_text(&data)
             } else {
-                Extracted::Unsupported("not a text file")
+                Extracted::Unsupported(reason::NOT_TEXT)
             }
         }
         Plan::Document(Document::Pdf) => pdf::extract_text(data),
@@ -305,25 +405,27 @@ pub(super) fn finish(text: String) -> Extracted {
     normalize(&mut text);
     cap_text(&mut text);
     if text.trim().is_empty() {
-        return Extracted::Unsupported("no extractable text");
+        return Extracted::Unsupported(reason::NO_TEXT);
     }
     Extracted::Text(text)
 }
 
-/// Run a document parser with a panic boundary.
+/// Run a step with a panic boundary.
 ///
 /// Both parser crates panic on some corrupted input (measured: roughly 1 in 600
 /// for PDF), and a panic here would otherwise take down the blocking task and
 /// the batch with it. Catching it keeps the module's contract — [`extract`]
 /// always returns, never unwinds — and turns the file into a skipped document.
-/// The default panic hook still prints the message, which is the diagnostic we
-/// want.
+/// `fallback` builds the caller's own verdict from the panic message; the
+/// default panic hook still prints it, which is the diagnostic we want.
 ///
 /// The index pipeline reuses this around the blocking call, so a panic in its
-/// own dispatch cannot fail a whole run either.
-pub(crate) fn guard<F>(label: &str, f: F) -> Extracted
+/// own dispatch cannot fail a whole run either. It catches panics only: a stack
+/// overflow or a failed allocation aborts, which is why documents are parsed in
+/// a separate process (see [`worker`]).
+pub(crate) fn guard<T, F>(label: &str, fallback: impl FnOnce(&str) -> T, f: F) -> T
 where
-    F: FnOnce() -> Extracted,
+    F: FnOnce() -> T,
 {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(result) => result,
@@ -334,7 +436,7 @@ where
                 .or_else(|| payload.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "unknown panic".to_string());
             tracing::warn!("{label}: extractor panicked: {detail}");
-            Extracted::Unsupported("extractor panicked")
+            fallback(&detail)
         }
     }
 }
@@ -496,7 +598,7 @@ mod tests {
     fn an_unknown_binary_is_unsupported_not_an_error() {
         assert_eq!(
             extract(plan("image.png"), b"\x89PNG\r\n\x1a\n".to_vec()),
-            Extracted::Unsupported("not a text file")
+            Extracted::Unsupported(reason::NOT_TEXT)
         );
     }
 
@@ -559,16 +661,78 @@ mod tests {
     /// The panic boundary turns a panicking parser into a skipped document.
     #[test]
     fn a_panicking_parser_is_contained() {
-        let result = guard("test", || panic!("boom"));
-        assert_eq!(result, Extracted::Unsupported("extractor panicked"));
+        let result = guard(
+            "test",
+            |_| Extracted::Unsupported(reason::PANIC),
+            || panic!("boom"),
+        );
+        assert_eq!(result, Extracted::Unsupported(reason::PANIC));
     }
 
     #[test]
     fn a_parser_that_returns_normally_is_untouched() {
         assert_eq!(
-            guard("test", || Extracted::Text("ok".to_string())),
+            guard(
+                "test",
+                |_| Extracted::Unsupported(reason::PANIC),
+                || Extracted::Text("ok".to_string())
+            ),
             Extracted::Text("ok".to_string())
         );
+    }
+
+    /// The fallback sees the panic's message, which is what lets the caller
+    /// log something more useful than "it failed".
+    #[test]
+    fn the_fallback_receives_the_panic_message() {
+        let seen = std::cell::RefCell::new(String::new());
+        let result = guard(
+            "test",
+            |detail| {
+                seen.replace(detail.to_string());
+                Extracted::Unsupported(reason::PANIC)
+            },
+            || panic!("the reason"),
+        );
+        assert_eq!(result, Extracted::Unsupported(reason::PANIC));
+        assert_eq!(seen.into_inner(), "the reason");
+    }
+
+    /// Every plan survives the worker protocol unchanged, or a document would
+    /// be parsed as something it is not.
+    #[test]
+    fn a_plan_round_trips_through_its_protocol_tag() {
+        let plans = [
+            Plan::Text,
+            Plan::Sniff,
+            Plan::Document(Document::Pdf),
+            Plan::Document(Document::Office(office_oxide::DocumentFormat::Docx)),
+            Plan::Document(Document::Office(office_oxide::DocumentFormat::Xlsx)),
+            Plan::Document(Document::Office(office_oxide::DocumentFormat::Pptx)),
+            Plan::Document(Document::Office(office_oxide::DocumentFormat::Doc)),
+            Plan::Document(Document::Office(office_oxide::DocumentFormat::Xls)),
+            Plan::Document(Document::Office(office_oxide::DocumentFormat::Ppt)),
+        ];
+        let mut tags: Vec<u8> = plans.iter().map(|plan| plan.tag()).collect();
+        assert_eq!(tags.len(), 9);
+        for plan in plans {
+            assert_eq!(Plan::from_tag(plan.tag()), Some(plan), "{plan:?}");
+        }
+        // The tags are unique, so a wire byte names exactly one plan.
+        tags.sort_unstable();
+        tags.dedup();
+        assert_eq!(tags.len(), 9);
+    }
+
+    /// A reason that crossed the process boundary has to come back as one of
+    /// the constants; anything else is a failed extraction.
+    #[test]
+    fn a_reason_is_interned_back_to_a_constant() {
+        for known in reason::ALL {
+            assert_eq!(reason::intern(known), *known);
+        }
+        assert_eq!(reason::intern("something else"), reason::FAILED);
+        assert_eq!(reason::intern(""), reason::FAILED);
     }
 
     #[test]

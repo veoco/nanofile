@@ -35,7 +35,7 @@ use std::io::{Cursor, Read};
 use office_oxide::{Document, DocumentFormat};
 use zip::ZipArchive;
 
-use super::{Extracted, MAX_STRUCTURED_BYTES, finish, guard};
+use super::{Extracted, MAX_STRUCTURED_BYTES, finish, guard, reason};
 
 /// Most bytes a whole Office package may decompress to.
 ///
@@ -55,21 +55,15 @@ const MAX_OFFICE_ENTRIES: usize = 10_000;
 /// Fixed, so the pre-check's own memory does not grow with the package.
 const BUDGET_SCRATCH_BYTES: usize = 64 * 1024;
 
-/// Reason for a package that expands past the extraction budget.
-const BUDGET_REASON: &str = "document expands past the extraction budget";
-
-/// Reason for a package with more parts than the extractor will read.
-const PARTS_REASON: &str = "document has too many parts";
-
-/// Reason for a package the ZIP reader cannot open at all.
-const PARSE_REASON: &str = "could not parse document";
-
 /// Extract the text of an Office document, or why it cannot be read.
 ///
 /// `format` comes from the extraction plan, which decided it from the filename;
 /// the parser validates the package against it and fails loudly on a mismatch.
 pub(super) fn extract_text(data: Vec<u8>, format: DocumentFormat) -> Extracted {
-    guard("office", move || {
+    guard(
+        "office",
+        |_| Extracted::Unsupported(reason::PANIC),
+        move || {
         // The OOXML formats are ZIP packages; the legacy ones are compound
         // files, which store their streams uncompressed and are therefore
         // bounded by the file itself.
@@ -85,11 +79,12 @@ pub(super) fn extract_text(data: Vec<u8>, format: DocumentFormat) -> Extracted {
             Ok(document) => document,
             Err(e) => {
                 tracing::debug!("office: cannot parse {format:?}: {e}");
-                return Extracted::Unsupported(PARSE_REASON);
+                return Extracted::Unsupported(reason::PARSE);
             }
         };
         finish(document.plain_text())
-    })
+    },
+    )
 }
 
 /// Whether a format is a ZIP-based OOXML package.
@@ -108,9 +103,9 @@ fn is_package(format: DocumentFormat) -> bool {
 /// this loop could not. That keeps a file with, say, one corrupt checksum
 /// (which the parser tolerates) from being refused outright.
 fn within_budget(data: &[u8], budget: u64, max_entries: usize) -> Result<(), &'static str> {
-    let mut archive = ZipArchive::new(Cursor::new(data)).map_err(|_| PARSE_REASON)?;
+    let mut archive = ZipArchive::new(Cursor::new(data)).map_err(|_| reason::PARSE)?;
     if archive.len() > max_entries {
-        return Err(PARTS_REASON);
+        return Err(reason::PARTS);
     }
 
     let mut total: u64 = 0;
@@ -121,7 +116,7 @@ fn within_budget(data: &[u8], budget: u64, max_entries: usize) -> Result<(), &'s
         };
         // Free to check, and it stops an honest bomb before it is decoded.
         if part.size() > budget {
-            return Err(BUDGET_REASON);
+            return Err(reason::BUDGET);
         }
         loop {
             match part.read(&mut scratch) {
@@ -129,7 +124,7 @@ fn within_budget(data: &[u8], budget: u64, max_entries: usize) -> Result<(), &'s
                 Ok(read) => {
                     total += read as u64;
                     if total > budget {
-                        return Err(BUDGET_REASON);
+                        return Err(reason::BUDGET);
                     }
                 }
                 Err(_) => break,
@@ -161,7 +156,7 @@ mod tests {
         let package = package(&[("word/document.xml", 64 * 1024)]);
         assert_eq!(
             within_budget(&package, 4 * 1024, 10),
-            Err(BUDGET_REASON),
+            Err(reason::BUDGET),
             "the declared size must be enough to refuse it"
         );
     }
@@ -175,7 +170,7 @@ mod tests {
 
         assert_eq!(
             within_budget(&package, 4 * 1024, 10),
-            Err(BUDGET_REASON),
+            Err(reason::BUDGET),
             "the decoded total must be what refuses it"
         );
     }
@@ -193,7 +188,7 @@ mod tests {
                 MAX_OFFICE_UNCOMPRESSED_BYTES,
                 MAX_OFFICE_ENTRIES
             ),
-            Err(BUDGET_REASON)
+            Err(reason::BUDGET)
         );
     }
 
@@ -204,7 +199,7 @@ mod tests {
         let package = package(&parts);
         assert_eq!(
             within_budget(&package, 1024 * 1024, 10),
-            Err(PARTS_REASON)
+            Err(reason::PARTS)
         );
     }
 
@@ -212,7 +207,7 @@ mod tests {
     fn something_that_is_not_a_zip_is_a_parse_failure() {
         assert_eq!(
             within_budget(b"not an office document", 1024, 10),
-            Err(PARSE_REASON)
+            Err(reason::PARSE)
         );
     }
 

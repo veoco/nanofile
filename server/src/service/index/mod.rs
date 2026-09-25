@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use tokio::sync::Semaphore;
 
-use crate::indexer::extract::{self, Plan};
+use crate::indexer::extract::{self, Plan, worker};
 use crate::indexer::{DocMeta, TextIndexer, collect_file_entries_under};
 use crate::repository::Repositories;
 use crate::tasks::context::JobContext;
@@ -486,17 +486,34 @@ impl IndexService {
             return Ok(OneOutcome::Failed);
         }
 
-        let extracted = if matches!(plan, Plan::Document(_)) {
-            // Parsing a document is synchronous and CPU-heavy, and can take
-            // seconds on a large file: run it on the blocking pool, and hold a
-            // gate permit so a batch cannot put several parses in flight at
-            // once. The permit is released when this branch ends.
+        let extracted = if matches!(plan, extract::Plan::Document(_)) {
+            // A document is parsed by a confined child process and never here:
+            // see `extract::worker`. Spawning it and waiting for it is
+            // synchronous and can take seconds, so it runs on the blocking
+            // pool under a gate permit that bounds how many children are alive
+            // at once. The permit is released when this branch ends.
             let _permit = structured_gate()
                 .clone()
                 .acquire_owned()
                 .await
                 .map_err(|e| AppError::internal(format!("document gate closed: {e}")))?;
-            offload_extract(ctx, move || extract::extract(plan, data)).await?
+            match offload_extract(ctx, move || worker::extract(plan, data)).await? {
+                worker::Outcome::Extracted(extracted) => extracted,
+                // The sandbox or the child itself is unavailable: an
+                // environment problem, so the file is failed and the backfill
+                // picks it up again once the host can confine the worker. It is
+                // deliberately *not* retried in this process.
+                worker::Outcome::Unavailable(reason) => {
+                    tracing::warn!("indexing {path}: {reason}");
+                    self.indexer
+                        .mark_file_async(repo_id, path, filename, DocMeta::failed(fs_id.as_str()))
+                        .await?;
+                    return Ok(OneOutcome::Failed);
+                }
+                // The child ran and did not answer: a property of the bytes, so
+                // the document is skipped rather than retried every pass.
+                worker::Outcome::Failed(reason) => extract::Extracted::Unsupported(reason),
+            }
         } else {
             extract::extract(plan, data)
         };
@@ -567,20 +584,22 @@ fn map_failure(failure: JobFailure) -> AppError {
     }
 }
 
-/// Run document extraction on the blocking pool.
+/// Run one document through the extraction worker, on the blocking pool.
 ///
 /// `JobContext::run_blocking` checkpoints *before* taking a blocking thread, so
 /// a job that has parked under load stops replenishing the pool instead of
 /// queueing ahead of interactive work. The manual single-file endpoint has no
 /// context to check in with, and gets a plain blocking task.
 ///
-/// The closure runs inside the extractor's panic boundary: one unreadable file
-/// is never a reason to fail the run that carried it.
-async fn offload_extract<F>(ctx: Option<&JobContext>, f: F) -> Result<extract::Extracted, AppError>
+/// The client side of the worker runs inside the extractor's panic boundary:
+/// one unreadable file is never a reason to fail the run that carried it.
+async fn offload_extract<F>(ctx: Option<&JobContext>, f: F) -> Result<worker::Outcome, AppError>
 where
-    F: FnOnce() -> extract::Extracted + Send + 'static,
+    F: FnOnce() -> worker::Outcome + Send + 'static,
 {
-    let run = move || extract::guard("index", f);
+    let run = move || {
+        extract::guard("index", |_| worker::Outcome::Failed(extract::reason::PANIC), f)
+    };
     match ctx {
         Some(ctx) => ctx.run_blocking(run).await.map_err(map_failure),
         None => tokio::task::spawn_blocking(run)

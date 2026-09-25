@@ -305,9 +305,14 @@ impl AppState {
         // Full-text indexer (its commit task is registered below alongside the
         // other background tasks).
         let indexer = if config.index.enabled {
-            // Document parsing carries its own per-document budgets, which are
-            // process-global: set them once, before any file is read.
-            crate::indexer::extract::configure_limits();
+            // The extraction worker's confinement policy is process-global:
+            // resolve it once, before any document is handed to a child. The
+            // parser limits themselves are set inside the child, which is the
+            // only process that parses anything.
+            crate::indexer::extract::worker::configure_policy(
+                crate::indexer::extract::sandbox::Policy::parse(&config.index.sandbox)
+                    .unwrap_or(crate::indexer::extract::sandbox::Policy::Require),
+            );
             match TextIndexer::new(&config.index.index_dir) {
                 Ok(idx) => {
                     tracing::info!(

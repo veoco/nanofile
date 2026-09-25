@@ -853,6 +853,7 @@ mod tests {
             "index.enabled",
             "index.index_dir",
             "index.backfill_enabled",
+            "index.sandbox",
             "notification.enabled",
             "notification.private_key",
             "notification.ping_interval",

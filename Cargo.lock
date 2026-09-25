@@ -5932,6 +5932,7 @@ dependencies = [
  "jsonwebtoken",
  "kamadak-exif",
  "lettre",
+ "libc",
  "lopdf",
  "migration",
  "multer",

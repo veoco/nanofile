@@ -481,6 +481,7 @@ load_sample_interval_secs = 5
 #   NANOFILE_INDEX_ENABLED
 #   NANOFILE_INDEX_INDEX_DIR
 #   NANOFILE_INDEX_BACKFILL_ENABLED
+#   NANOFILE_INDEX_SANDBOX
 enabled = true
 # Relative paths resolve against the binary's directory, like `[database] url`.
 index_dir = "data/index"
@@ -489,6 +490,14 @@ index_dir = "data/index"
 # `tasks.load_aware = true`; without it the pass runs in small increments
 # regardless of load.
 backfill_enabled = true
+# Documents are parsed in a separate, confined process: an address-space and CPU
+# limit, a wall-clock timeout, and this platform's file, network and process
+# confinement. "require" (the default) refuses to index a document when this
+# host cannot confine that process at all, and leaves it to be retried once it
+# can; "prefer" indexes it with whatever layers the host does have. A container
+# may need the Landlock syscalls allowed (`landlock_create_ruleset`,
+# `landlock_add_rule`, `landlock_restrict_self`) for "require" to hold.
+sandbox = "require"
 
 [notification]
 # Environment variables:

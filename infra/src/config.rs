@@ -1416,6 +1416,23 @@ pub struct IndexConfig {
     /// Env: NANOFILE_INDEX_BACKFILL_ENABLED
     #[serde(default = "default_true")]
     pub backfill_enabled: bool,
+    /// What to do when the extraction worker cannot confine itself on this
+    /// host.
+    ///
+    /// Documents are parsed in a separate, confined process; `require` (the
+    /// default) refuses to index one that would run with nothing but resource
+    /// limits, and records it as a failure the backfill retries once the host
+    /// can confine it. `prefer` indexes it anyway, which is the escape hatch
+    /// for a kernel or container that blocks the sandbox: the worker still
+    /// applies every layer it can.
+    ///
+    /// Env: NANOFILE_INDEX_SANDBOX
+    #[serde(default = "default_index_sandbox")]
+    pub sandbox: String,
+}
+
+fn default_index_sandbox() -> String {
+    "require".to_string()
 }
 
 impl Default for IndexConfig {
@@ -1424,6 +1441,7 @@ impl Default for IndexConfig {
             enabled: true,
             index_dir: PathBuf::from("data/index"),
             backfill_enabled: true,
+            sandbox: default_index_sandbox(),
         }
     }
 }

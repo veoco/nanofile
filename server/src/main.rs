@@ -96,6 +96,28 @@ enum Command {
         #[command(subcommand)]
         action: startup::service::ServiceAction,
     },
+    /// Extract one document in a confined process (`indexer::extract::worker`).
+    ///
+    /// The server spawns this on itself for every document it indexes, so the
+    /// parser runs with an address-space limit, a CPU limit, a timeout and the
+    /// platform's file, network and process confinement rather than inside the
+    /// server. Hidden because it is not an operator command: running it by hand
+    /// reads one request from standard input, and `--selftest` prints what the
+    /// sandbox could establish on this host.
+    #[command(hide = true)]
+    ExtractWorker {
+        /// The parent says it wrapped this process in the platform runner
+        /// (macOS `sandbox-exec`), so files, the network and process creation
+        /// are not its own layers to establish.
+        #[arg(long, default_value_t = false)]
+        seatbelt: bool,
+        /// Report the confinement this host can give, then exit.
+        #[arg(long, default_value_t = false)]
+        selftest: bool,
+        /// What to do when the confinement is below what the server requires.
+        #[arg(long, value_name = "require|prefer", default_value = "require")]
+        policy: String,
+    },
 }
 
 /// Commands sent from the optional system tray menu (and, on Windows, from the
@@ -164,6 +186,26 @@ fn main() -> anyhow::Result<()> {
 
     // ── Decide the run mode first: the log target depends on it ────────
     let command = cli.command.unwrap_or(Command::Server);
+
+    // The extraction worker runs before anything else: it is a child of a
+    // serving process, has no state of its own, and must not need a config
+    // file, a database, a log target or a working directory. Confining itself
+    // is the first thing it does either way (`worker::run`).
+    if let Command::ExtractWorker {
+        seatbelt,
+        selftest,
+        policy,
+    } = &command
+    {
+        let job = if *selftest {
+            server::indexer::extract::worker::Job::Selftest
+        } else {
+            server::indexer::extract::worker::Job::Extract
+        };
+        let policy = server::indexer::extract::sandbox::Policy::parse(policy)
+            .unwrap_or(server::indexer::extract::sandbox::Policy::Require);
+        return server::indexer::extract::worker::run(job, *seatbelt, policy);
+    }
     // A service is the server without a desktop: it has no console a person can
     // read, no session to show a dialog in, and it must never try to put an icon
     // where there is no desktop. Everything else about it is the ordinary
@@ -515,6 +557,8 @@ fn main() -> anyhow::Result<()> {
         Command::Service { action } => {
             startup::service::run_cli(action, &config, &config_path, env_keys)
         }
+        // Handled by the early return above, before any configuration is read.
+        Command::ExtractWorker { .. } => Ok(()),
     }
 }
 

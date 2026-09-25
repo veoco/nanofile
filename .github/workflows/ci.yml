@@ -136,6 +136,12 @@ jobs:
       # configurations have to compile.
       - name: Check the Windows code without the tray
         run: cargo check -p server --bin nanofile
+      # The extraction worker confines *itself* on Windows with a Job Object,
+      # and the platform-specific module is only type-checked when its target's
+      # test code is built too. Only a check: the tests themselves need a
+      # running server.
+      - name: Check the Windows test code
+        run: cargo check -p server --tests --bin nanofile
 
   # ── Frontend tests (pure JS, no npm deps) ──────────────────────────
   frontend-test:
@@ -221,6 +227,19 @@ jobs:
 
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      # The sandbox's own report, before the suite: it says which layers this
+      # kernel gave the worker and why, which is the first thing to look at when
+      # a document test fails. Both levels pass here — a runner whose kernel
+      # lacks Landlock is a fact about the runner, not a broken build — while
+      # the integration test that insists the worker confines itself is
+      # conditional on what the kernel supports.
+      - name: Report the document extraction sandbox
+        run: |
+          cargo build --bin nanofile
+          ./target/debug/nanofile extract-worker --selftest |
+            tee /tmp/sandbox.txt
+          grep -qE 'level=(full|partial)' /tmp/sandbox.txt
 
       - name: Run tests
         run: cargo test --workspace -- --nocapture

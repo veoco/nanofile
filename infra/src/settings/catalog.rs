@@ -911,6 +911,18 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    setting!(
+        "index.sandbox",
+        Maintenance,
+        "NANOFILE_INDEX_SANDBOX",
+        Kind::Enum(&["require", "prefer"]),
+        Apply::Restart,
+        |c| c.index.sandbox.clone(),
+        |c, v| {
+            c.index.sandbox = parse_enum(v, &["require", "prefer"])?;
+            Ok(())
+        }
+    ),
     // · Garbage collection
     setting!(
         "gc.enabled",
@@ -1673,7 +1685,12 @@ pub static GROUPS: &[GroupDef] = &[
         section: Section::Maintenance,
         id: "maintenance_index",
         title_key: "setting.group_maintenance_index",
-        keys: &["index.enabled", "index.index_dir", "index.backfill_enabled"],
+        keys: &[
+            "index.enabled",
+            "index.index_dir",
+            "index.backfill_enabled",
+            "index.sandbox",
+        ],
     },
     GroupDef {
         section: Section::Maintenance,

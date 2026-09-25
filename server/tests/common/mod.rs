@@ -386,6 +386,32 @@ impl TestServer {
         let port = listener.local_addr().unwrap().port();
         let base_url = format!("http://127.0.0.1:{}", port);
 
+        // Documents are parsed by the extraction worker, which is this package's
+        // binary re-executed: an integration test runs in its own process, so the
+        // server cannot re-execute itself and has to be told where the binary is.
+        // Setting it here means every document test goes through the real
+        // confined child, and the self-test below fails in one place — with the
+        // reason — if this host cannot confine it, instead of letting each
+        // document test fail on its own.
+        //
+        // `configure_executable` is process-global and set once; a test that
+        // wants a worker that cannot run points it elsewhere before the first
+        // fixture and is then responsible for the outcome.
+        if server::indexer::extract::worker::configure_executable(std::path::PathBuf::from(
+            env!("CARGO_BIN_EXE_nanofile"),
+        )) {
+            match server::indexer::extract::worker::status() {
+                server::indexer::extract::worker::Status::Ready(report) => assert!(
+                    report.level() >= server::indexer::extract::sandbox::Level::Partial,
+                    "the extraction sandbox must confine the worker: {}",
+                    report.detail
+                ),
+                server::indexer::extract::worker::Status::Unavailable(reason) => {
+                    panic!("the extraction worker is not available: {reason}")
+                }
+            }
+        }
+
         // Temp directories are derived from the random port so each server gets
         // a unique path; they are cleaned up in `Drop for TestServer`.
         let block_root = std::env::temp_dir().join(format!("nf-test-{port}"));

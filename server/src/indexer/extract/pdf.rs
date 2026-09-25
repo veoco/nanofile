@@ -38,7 +38,7 @@ use std::collections::HashSet;
 
 use lopdf::{Document, LoadOptions, Object, ObjectId};
 
-use super::{Extracted, MAX_INDEXED_CONTENT_BYTES, MAX_STRUCTURED_BYTES, finish, guard};
+use super::{Extracted, MAX_INDEXED_CONTENT_BYTES, MAX_STRUCTURED_BYTES, finish, guard, reason};
 
 /// How many pages of one document are read.
 ///
@@ -78,12 +78,12 @@ fn load_options() -> LoadOptions {
 
 /// Extract the text of a PDF, or why it cannot be read.
 pub(super) fn extract_text(data: Vec<u8>) -> Extracted {
-    guard("pdf", move || {
+    guard("pdf", |_| Extracted::Unsupported(reason::PANIC), move || {
         let mut doc = match Document::load_mem_with_options(&data, load_options()) {
             Ok(doc) => doc,
             Err(e) => {
                 tracing::debug!("pdf: cannot parse: {e}");
-                return Extracted::Unsupported("could not parse document");
+                return Extracted::Unsupported(reason::PARSE);
             }
         };
 
@@ -92,7 +92,7 @@ pub(super) fn extract_text(data: Vec<u8>) -> Extracted {
         // lumping it in with "unparseable"; without a password to offer the
         // content is out of reach either way.
         if doc.is_encrypted() && doc.decrypt("").is_err() {
-            return Extracted::Unsupported("encrypted pdf");
+            return Extracted::Unsupported(reason::ENCRYPTED);
         }
 
         // `get_pages` returns an owned map keyed by 1-based page number.
@@ -396,7 +396,7 @@ mod tests {
     fn a_file_that_is_not_a_pdf_is_unsupported() {
         assert_eq!(
             extract_text(b"this file is not a PDF, whatever its name says".to_vec()),
-            Extracted::Unsupported("could not parse document")
+            Extracted::Unsupported(reason::PARSE)
         );
     }
 
