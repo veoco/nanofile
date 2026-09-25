@@ -392,13 +392,15 @@ impl AppState {
         if enc_mode == infra::storage::encrypting_block_store::BlockEncryptionMode::Lazy {
             let tasks = tasks.clone();
             tokio::spawn(async move {
+                // A startup pass: nobody can press it again, so its record is
+                // the only account of what it said. The row names the job from
+                // its slug, so there is no summary to pass.
                 if let Err(e) = tasks
-                    .submit(
+                    .submit_system(
+                        crate::tasks::Origin::Startup,
                         crate::tasks::spec::JobKey::BlockEncryptionConvert,
-                        None,
                         serde_json::Value::Null,
-                        "block encryption convert",
-                        None,
+                        String::new(),
                     )
                     .await
                 {

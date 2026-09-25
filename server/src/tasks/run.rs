@@ -115,6 +115,15 @@ pub struct Progress {
 pub struct Outcome {
     pub message: String,
     pub processed: Option<u64>,
+    /// The body found nothing to do.
+    ///
+    /// A pass on a timer fires far more often than it has work, and "nothing
+    /// was expired" is not an event worth a run record: a job whose
+    /// [`History`](super::spec::History) is `Notable` therefore leaves no trace
+    /// for an idle run it was not asked for. A manual trigger or a request is
+    /// always recorded, so an operator who pressed the button still gets an
+    /// answer — and a failure is alway recorded, whatever this says.
+    pub idle: bool,
 }
 
 impl Outcome {
@@ -122,6 +131,16 @@ impl Outcome {
         Self {
             message: message.into(),
             processed,
+            idle: false,
+        }
+    }
+
+    /// A pass that found nothing to do.
+    pub fn idle(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            processed: None,
+            idle: true,
         }
     }
 
@@ -158,6 +177,27 @@ impl JobFailure {
     }
 }
 
+/// Who asked for a run.
+///
+/// The task system records two very different kinds of work in one table: what
+/// somebody asked for, and what a timer does on its own. The difference decides
+/// whether a run that found nothing to do is worth remembering at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// A periodic timer. Nobody is waiting for it and its next tick re-does
+    /// whatever this one would have done, so an idle pass leaves no history.
+    Schedule,
+    /// A request handler, for a client that polls the id.
+    Request,
+    /// An administrator pressing "Run now". The record is the answer to the
+    /// press, so it is kept even when the job found nothing to do.
+    Operator,
+    /// A one-shot pass the server starts itself: recovery, or the startup
+    /// conversion. Kept for the same reason as `Operator` — nobody can press it
+    /// again, so the record is the only account of what it said.
+    Startup,
+}
+
 /// Who is asking to see a run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Viewer {
@@ -183,6 +223,8 @@ impl Viewer {
 pub struct JobRun {
     pub id: RunId,
     pub key: JobKey,
+    /// Who asked for this run, which decides what an idle one leaves behind.
+    pub origin: Origin,
     /// Denormalized from the spec so the store can filter without the registry.
     pub visibility: Visibility,
     /// `None` for a system job.
@@ -220,8 +262,10 @@ pub type Params = serde_json::Value;
 
 impl JobRun {
     /// Build a run in `Queued`.
+    #[allow(clippy::too_many_arguments)]
     pub fn queued(
         key: JobKey,
+        origin: Origin,
         visibility: Visibility,
         owner: Option<i32>,
         params: Params,
@@ -232,6 +276,7 @@ impl JobRun {
         Self {
             id: RunId::new(),
             key,
+            origin,
             visibility,
             owner,
             state: JobState::Queued,
@@ -315,6 +360,7 @@ mod tests {
     fn run(visibility: Visibility, owner: Option<i32>) -> JobRun {
         JobRun::queued(
             JobKey::Copy,
+            Origin::Request,
             visibility,
             owner,
             serde_json::json!({"src_dirents": ["a", "b"]}),
@@ -322,6 +368,16 @@ mod tests {
             Some(2),
             0,
         )
+    }
+
+    /// An idle verdict is opt-in: a body that does not say so did work.
+    #[test]
+    fn only_an_idle_outcome_says_it_found_nothing() {
+        assert!(!Outcome::success("did it", Some(1)).idle);
+        assert!(!Outcome::ok().idle);
+        assert!(Outcome::idle("nothing to do").idle);
+        assert_eq!(Outcome::idle("nothing to do").message, "nothing to do");
+        assert_eq!(Outcome::idle("nothing to do").processed, None);
     }
 
     #[test]

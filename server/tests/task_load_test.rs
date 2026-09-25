@@ -15,8 +15,8 @@ use server::tasks::admission::LoadThresholds;
 use server::tasks::registry::RegisteredJob;
 use server::tasks::run::{JobState, Outcome, Params, Viewer};
 use server::tasks::spec::{
-    ChunkPolicy, Dedup, Durability, JobKey, JobSpec, Priority, Resource, Retention, RetryPolicy,
-    TimeoutPolicy, Trigger, Visibility,
+    ChunkPolicy, Dedup, Durability, History, JobKey, JobSpec, Priority, Resource, Retention,
+    RetryPolicy, TimeoutPolicy, Trigger, Visibility,
 };
 use tokio::io::AsyncWriteExt;
 
@@ -79,6 +79,7 @@ fn heavy_spec() -> JobSpec {
         retry: RetryPolicy::Never,
         dedup: Dedup::None,
         retention: Retention::default(),
+        history: History::EveryRun,
         visibility: Visibility::OwnerOrAdmin,
         durability: Durability::Memory,
         resumable: true,

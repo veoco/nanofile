@@ -343,6 +343,42 @@ pub enum Durability {
     Durable,
 }
 
+/// How much of a job's run belongs in the history.
+///
+/// The task system records two different kinds of work: what somebody asked
+/// for, and what a timer does on its own. A copy, a move and a reindex are
+/// events — a run happened, and its record is the account of it. A cleanup pass
+/// on a 15-minute timer is a heartbeat: it fires far more often than it has
+/// work, and a row saying "nothing was expired" is noise that buries the rows
+/// that matter. This is where a job says which of the two it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum History {
+    /// A row per run: queued, running, then terminal. For anything somebody
+    /// asked for, and for a pass that runs too seldom for its rows to crowd
+    /// anything out.
+    #[default]
+    EveryRun,
+    /// Only the runs with something to report.
+    ///
+    /// A scheduled run that found nothing to do leaves no row and no run in
+    /// memory — it is still counted in the job's lifetime totals, which is what
+    /// says the job is ticking. A run that failed, or that did work, is always
+    /// recorded, and so is a run somebody asked for by hand: the record is the
+    /// answer to the press.
+    Notable,
+}
+
+impl History {
+    /// Whether a run of this kind is written down before it starts.
+    ///
+    /// Only an `EveryRun` job gets the queued/running rows; a `Notable` one
+    /// writes a single terminal row when it has something to say, which is what
+    /// makes an idle tick cost no database write at all.
+    pub const fn journals_from_the_start(self) -> bool {
+        matches!(self, Self::EveryRun)
+    }
+}
+
 /// How long a finished run is kept, and how much may accumulate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Retention {
@@ -407,6 +443,8 @@ pub struct JobSpec {
     pub retention: Retention,
     pub visibility: Visibility,
     pub durability: Durability,
+    /// How much of each run survives in the history.
+    pub history: History,
     /// Whether a run may be interrupted at a checkpoint without harm.
     pub resumable: bool,
     /// Whether a caller may ask for a run to stop.
@@ -433,6 +471,10 @@ pub enum SpecError {
     /// `Durable` without idempotency: after a crash the run would be replayed,
     /// and for a destructive job that is data loss.
     DurableWithoutIdempotency(JobKey),
+    /// `Notable` while `Durable`: a run that must be replayed after a crash has
+    /// to have been written down before it started, or there is nothing to
+    /// replay and nothing to report.
+    NotableButReplayable(JobKey),
     /// A retry policy on a job whose rerun is not harmless.
     RetryOnNonIdempotent(JobKey),
     /// Zero total attempts would mean the job never runs.
@@ -458,6 +500,12 @@ impl std::fmt::Display for SpecError {
                 f,
                 "job {:?} is durable but not marked idempotent: replaying it after a crash \
                  would not be safe",
+                k
+            ),
+            Self::NotableButReplayable(k) => write!(
+                f,
+                "job {:?} keeps only the runs worth reporting but is durable: a run that \
+                 must be replayed after a crash has to be written down when it starts",
                 k
             ),
             Self::RetryOnNonIdempotent(k) => {
@@ -489,6 +537,9 @@ impl JobSpec {
         if self.durability == Durability::Durable && !self.idempotent {
             return Err(SpecError::DurableWithoutIdempotency(self.key));
         }
+        if self.durability == Durability::Durable && !self.history.journals_from_the_start() {
+            return Err(SpecError::NotableButReplayable(self.key));
+        }
         if self.retry != RetryPolicy::Never && !self.idempotent {
             return Err(SpecError::RetryOnNonIdempotent(self.key));
         }
@@ -515,6 +566,7 @@ mod tests {
             retention: Retention::default(),
             visibility: Visibility::Owner,
             durability: Durability::Memory,
+            history: History::EveryRun,
             resumable: true,
             cancellable: true,
             chunkable: None,
@@ -594,6 +646,25 @@ mod tests {
             s.validate(),
             Err(SpecError::RetryOnNonIdempotent(JobKey::Copy))
         );
+    }
+
+    /// A run that has to be replayed after a crash must have been written down
+    /// when it started, so `Notable` and `Durable` cannot be declared together.
+    #[test]
+    fn a_notable_job_is_never_replayable() {
+        let mut s = spec(JobKey::IndexCommit);
+        s.history = History::Notable;
+        s.durability = Durability::Audit;
+        assert_eq!(s.validate(), Ok(()), "notable audit-only is the point");
+
+        s.durability = Durability::Durable;
+        assert_eq!(
+            s.validate(),
+            Err(SpecError::NotableButReplayable(JobKey::IndexCommit))
+        );
+
+        s.history = History::EveryRun;
+        assert_eq!(s.validate(), Ok(()));
     }
 
     #[test]

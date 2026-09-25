@@ -273,9 +273,10 @@ fn mark_terminal(store: &RunStore, run: &JobRun, state: JobState, outcome: Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tasks::run::Origin;
     use crate::tasks::spec::{
-        Dedup, Durability, JobKey, JobSpec, Priority, Resource, Retention, RetryPolicy, Trigger,
-        Visibility,
+        Dedup, Durability, History, JobKey, JobSpec, Priority, Resource, Retention, RetryPolicy,
+        Trigger, Visibility,
     };
     use crate::tasks::store::RunLimits;
     use std::pin::Pin;
@@ -305,6 +306,7 @@ mod tests {
                 retry,
                 dedup: Dedup::None,
                 retention: Retention::default(),
+                history: History::EveryRun,
                 visibility: Visibility::Owner,
                 durability: Durability::Memory,
                 resumable: true,
@@ -321,6 +323,7 @@ mod tests {
     fn queued() -> JobRun {
         JobRun::queued(
             JobKey::Copy,
+            Origin::Request,
             Visibility::Owner,
             Some(1),
             serde_json::json!({"src_dirents": ["a"]}),

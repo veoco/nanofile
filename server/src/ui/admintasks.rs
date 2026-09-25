@@ -20,7 +20,7 @@ use crate::AppState;
 use crate::i18n::I18n;
 use crate::tasks::JobStats;
 use crate::tasks::registry::RegisteredJob;
-use crate::tasks::run::{JobRun, JobState};
+use crate::tasks::run::{JobRun, JobState, Origin};
 use crate::tasks::spec::{
     Durability, JobKey, JobSpec, OverlapPolicy, Priority, Resource, RetryPolicy, ServiceKey,
     SkipReason, Trigger,
@@ -1015,18 +1015,16 @@ pub async fn trigger_task(
         return render_registered(&state, &user, Some(msg), None).await;
     }
 
+    // Submitted as an operator's run: the record is the answer to the press, so
+    // it is kept even when the job finds nothing to do. No summary — the row
+    // names the job from its slug, and the job's own report says what it did.
     if let Err(e) = state
         .tasks
-        .submit(
+        .submit_system(
+            Origin::Operator,
             key,
-            None,
             serde_json::Value::Null,
-            state
-                .tasks
-                .job(key)
-                .map(|job| job.spec.name)
-                .unwrap_or(&name),
-            None,
+            String::new(),
         )
         .await
     {
@@ -1363,6 +1361,7 @@ mod tests {
     fn progress_reports_only_the_total_the_run_knows() {
         let mut run = JobRun::queued(
             JobKey::Reindex,
+            Origin::Request,
             Visibility::OwnerOrAdmin,
             None,
             Params::Null,

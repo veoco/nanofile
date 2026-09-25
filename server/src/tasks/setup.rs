@@ -224,7 +224,7 @@ pub fn install_default_jobs(
                         Some(expired),
                     )
                 } else {
-                    Outcome::success("no token has expired", None)
+                    Outcome::idle("no token has expired")
                 })
             }
         }));
@@ -242,7 +242,7 @@ pub fn install_default_jobs(
                         Some(count),
                     )
                 } else {
-                    Outcome::success("no expired entries", None)
+                    Outcome::idle("no expired password cache entry")
                 })
             }
         }
@@ -420,7 +420,7 @@ pub fn install_default_jobs(
                 let idx = idx.clone();
                 async move {
                     if !idx.has_pending() {
-                        return Ok(Outcome::success("index clean, nothing to commit", None));
+                        return Ok(Outcome::idle("index clean, nothing to commit"));
                     }
                     tokio::task::spawn_blocking(move || idx.commit())
                         .await
@@ -470,7 +470,7 @@ pub fn install_default_jobs(
                 Some(dropped as u64),
             )
         } else {
-            Outcome::success("no zip download had expired", None)
+            Outcome::idle("no zip download had expired")
         })
     }));
 

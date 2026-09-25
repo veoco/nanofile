@@ -120,12 +120,13 @@ fn detail_u64(run: &JobRun, key: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::run::{JobRun, RunId};
+    use crate::tasks::run::{JobRun, Origin, RunId};
     use crate::tasks::spec::{JobKey, Visibility};
 
     fn run(key: JobKey, state: JobState, total: Option<u64>) -> JobRun {
         let mut run = JobRun::queued(
             key,
+            Origin::Request,
             Visibility::Owner,
             Some(7),
             serde_json::json!({"repo_id": "r1", "src_dirents": ["a", "b"]}),

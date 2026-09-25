@@ -11,7 +11,7 @@
 //! body captures the current server generation's resources.
 
 use super::spec::{
-    ChunkPolicy, Dedup, Durability, JobKey, JobSpec, OverlapPolicy, Priority, QuietPolicy,
+    ChunkPolicy, Dedup, Durability, History, JobKey, JobSpec, OverlapPolicy, Priority, QuietPolicy,
     Resource, Retention, RetryPolicy, SpikePolicy, TimeoutPolicy, Trigger, Visibility,
 };
 
@@ -23,6 +23,18 @@ fn fixed_timer(interval_secs: u64) -> Trigger {
         interval_secs,
         overlap: OverlapPolicy::Skip,
     }
+}
+
+/// A pass that fires far more often than it has work, and whose idle ticks are
+/// therefore not history.
+///
+/// The interval of such a job is a reaction time, not a schedule: what it costs
+/// when it fires is a tick, and what it must not do is bury the runs that did
+/// something under rows saying "nothing to do". Its lifetime counters on the
+/// registry page still show every tick.
+fn notable(mut spec: JobSpec) -> JobSpec {
+    spec.history = History::Notable;
+    spec
 }
 
 /// The policy for `key`.
@@ -60,18 +72,27 @@ pub fn policy(key: JobKey) -> JobSpec {
         },
 
         // ── Housekeeping ─────────────────────────────────────────────────
-        JobKey::TokenExpiryCheck => housekeeping(key, "token expiry check", fixed_timer(3600)),
-        JobKey::PasswordCacheCleanup => {
-            housekeeping(key, "password cache cleanup", fixed_timer(300))
+        JobKey::TokenExpiryCheck => {
+            notable(housekeeping(key, "token expiry check", fixed_timer(3600)))
         }
+        JobKey::PasswordCacheCleanup => notable(housekeeping(
+            key,
+            "password cache cleanup",
+            fixed_timer(900),
+        )),
         JobKey::ExpiredTokenCleanup => {
             housekeeping(key, "expired token cleanup", fixed_timer(3600))
         }
         JobKey::ShareLinkCleanup => housekeeping(key, "share link cleanup", fixed_timer(3600)),
         JobKey::UploadLinkCleanup => housekeeping(key, "upload link cleanup", fixed_timer(3600)),
-        JobKey::IndexCommit => housekeeping(key, "index commit", fixed_timer(30)),
+        // A backstop, not the commit path: the indexer commits a debounced
+        // write within 100ms on its own, and this pass only has something to do
+        // when that commit failed. Two minutes is short enough that such a
+        // failure cannot leave much uncommitted, and long enough that the pass
+        // stops being most of what the run list holds.
+        JobKey::IndexCommit => notable(housekeeping(key, "index commit", fixed_timer(120))),
         JobKey::MailDelivery => housekeeping(key, "mail delivery", fixed_timer(30)),
-        JobKey::ZipTaskCleanup => housekeeping(key, "zip task cleanup", fixed_timer(600)),
+        JobKey::ZipTaskCleanup => notable(housekeeping(key, "zip task cleanup", fixed_timer(600))),
         JobKey::TempUploadCleanup => housekeeping(key, "temp upload cleanup", fixed_timer(1800)),
 
         JobKey::GarbageCollection => JobSpec {
@@ -167,6 +188,7 @@ fn client_job(key: JobKey, name: &'static str) -> JobSpec {
         // 404-for-everyone-else on the copy/move progress endpoint.
         visibility: Visibility::Owner,
         durability: Durability::Memory,
+        history: History::EveryRun,
         // A move is two commits; interrupting between them loses the entry from
         // HEAD, and a copy has nothing to resume. Neither can be interrupted
         // safely, so neither is cancellable.
@@ -199,7 +221,9 @@ fn housekeeping(key: JobKey, name: &'static str, trigger: Trigger) -> JobSpec {
         visibility: Visibility::OwnerOrAdmin,
         // Audited: recording a cleanup pass is useful history and needs no
         // idempotency, but replaying it buys nothing, so it is not `Durable`.
+        // `Notable` jobs narrow this further, to the passes worth reporting.
         durability: Durability::Audit,
+        history: History::EveryRun,
         resumable: true,
         cancellable: false,
         chunkable: None,
@@ -330,5 +354,68 @@ mod tests {
         assert_eq!(policy(JobKey::Move).max_concurrent, 8);
         assert_eq!(policy(JobKey::Reindex).max_concurrent, 4);
         assert_eq!(policy(JobKey::GarbageCollection).max_concurrent, 1);
+    }
+
+    /// The interval is a reaction time, so it is pinned here rather than left to
+    /// whatever a later edit happens to type: a job that fires every 30 seconds
+    /// also decides how much of the run list is about it.
+    #[test]
+    fn the_intervals_are_the_ones_this_catalog_argues_for() {
+        let interval = |key| match policy(key).trigger {
+            Trigger::Periodic { interval_secs, .. } => interval_secs,
+            other => panic!("{key:?} is not periodic: {other:?}"),
+        };
+        assert_eq!(
+            interval(JobKey::IndexCommit),
+            120,
+            "a backstop, not a poller"
+        );
+        assert_eq!(interval(JobKey::PasswordCacheCleanup), 900);
+        assert_eq!(interval(JobKey::TokenExpiryCheck), 3600);
+        assert_eq!(interval(JobKey::ShareLinkCleanup), 3600);
+        assert_eq!(interval(JobKey::UploadLinkCleanup), 3600);
+        assert_eq!(interval(JobKey::ExpiredTokenCleanup), 3600);
+        assert_eq!(interval(JobKey::ZipTaskCleanup), 600);
+        assert_eq!(interval(JobKey::TempUploadCleanup), 1800);
+    }
+
+    /// Only a pass that usually finds nothing is allowed to keep no history for
+    /// an idle tick, and nothing that must be replayed after a crash may.
+    #[test]
+    fn only_the_passes_that_usually_find_nothing_are_notable() {
+        let notable: Vec<JobKey> = JobKey::ALL
+            .iter()
+            .copied()
+            .filter(|key| policy(*key).history == History::Notable)
+            .collect();
+        assert_eq!(
+            notable,
+            vec![
+                JobKey::TokenExpiryCheck,
+                JobKey::PasswordCacheCleanup,
+                JobKey::IndexCommit,
+                JobKey::ZipTaskCleanup,
+            ]
+        );
+        for key in notable {
+            assert_eq!(
+                policy(key).durability,
+                Durability::Audit,
+                "{key:?} keeps no queued row but is not audit-only"
+            );
+        }
+    }
+
+    /// Every run a request or an administrator can start is recorded from the
+    /// moment it is submitted, so a client polling it always finds something.
+    #[test]
+    fn a_run_somebody_asked_for_is_journalled_from_the_start() {
+        for key in [JobKey::Copy, JobKey::Move, JobKey::Reindex] {
+            assert_eq!(
+                policy(key).history,
+                History::EveryRun,
+                "{key:?} is submitted by a caller and must leave a row"
+            );
+        }
     }
 }

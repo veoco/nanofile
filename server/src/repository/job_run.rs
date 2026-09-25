@@ -31,6 +31,26 @@ pub struct NewJobRun {
     pub created_at: i64,
 }
 
+/// A run recorded only once it has something to report.
+///
+/// A job that keeps only its notable runs is never written down before it
+/// starts, so its whole row is built at the end. There are no params: nothing
+/// reads them, and a run that was never going to be replayed has no reason to
+/// keep its input.
+pub struct FinishedJobRun {
+    pub id: String,
+    pub kind: String,
+    pub owner: Option<i32>,
+    pub phase: String,
+    pub summary: String,
+    pub error: Option<String>,
+    pub processed: Option<i64>,
+    pub attempt: i32,
+    pub created_at: i64,
+    pub started_at: Option<i64>,
+    pub finished_at: i64,
+}
+
 #[async_trait]
 pub trait JobRunRepository: Send + Sync {
     /// Record a submitted run as queued, holding a lease so a concurrent
@@ -52,6 +72,10 @@ pub trait JobRunRepository: Send + Sync {
         summary: Option<&str>,
         finished_at: i64,
     ) -> Result<(), AppError>;
+
+    /// Record a run that was never written down before it started, because its
+    /// job keeps only the runs with something to report.
+    async fn record_finished(&self, run: FinishedJobRun) -> Result<(), AppError>;
 
     /// Record that a run is executing, so a crash leaves a `running` row rather
     /// than a `queued` one.
@@ -119,6 +143,33 @@ impl JobRunRepository for DbJobRunRepository {
             started_at: Set(None),
             finished_at: Set(None),
             lease_until: Set(Some(lease_until)),
+        }
+        .insert(self.db.as_ref())
+        .await?;
+        Ok(())
+    }
+
+    async fn record_finished(&self, run: FinishedJobRun) -> Result<(), AppError> {
+        debug_assert!(
+            is_terminal(&run.phase),
+            "record_finished is for a terminal phase"
+        );
+        job_run::ActiveModel {
+            id: Set(run.id),
+            kind: Set(run.kind),
+            owner: Set(run.owner),
+            phase: Set(run.phase),
+            summary: Set(run.summary),
+            // Nothing reads a finished run's input, and this one was never
+            // written down as replayable work.
+            params: Set(None),
+            error: Set(run.error),
+            processed: Set(run.processed),
+            attempt: Set(run.attempt),
+            created_at: Set(run.created_at),
+            started_at: Set(run.started_at),
+            finished_at: Set(Some(run.finished_at)),
+            lease_until: Set(None),
         }
         .insert(self.db.as_ref())
         .await?;

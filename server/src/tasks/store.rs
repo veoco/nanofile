@@ -280,6 +280,21 @@ impl RunStore {
             .count()
     }
 
+    /// Drop one run and reclaim its bytes, whatever state it is in.
+    ///
+    /// For a run whose job keeps only what is worth reporting: a pass that
+    /// found nothing to do is finished the moment it is over, and holding it
+    /// for the retention window would only push a run somebody cares about out
+    /// of the budget.
+    pub fn discard(&self, id: &RunId) -> bool {
+        let mut runs = self.write();
+        let Some(run) = runs.remove(id) else {
+            return false;
+        };
+        self.inner.bytes.fetch_sub(run.bytes(), Ordering::Relaxed);
+        true
+    }
+
     /// Drop expired terminal runs and reclaim their bytes. Returns how many
     /// were removed.
     ///
@@ -364,12 +379,13 @@ impl RunStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::run::{JobRun, Progress};
+    use crate::tasks::run::{JobRun, Origin, Progress};
     use crate::tasks::spec::Visibility;
 
     fn run_at(owner: i32, created_at: i64) -> JobRun {
         JobRun::queued(
             JobKey::Copy,
+            Origin::Request,
             Visibility::Owner,
             Some(owner),
             serde_json::json!({"src_dirents": ["a"]}),
@@ -494,6 +510,29 @@ mod tests {
         s.insert(run).unwrap();
         assert_eq!(s.sweep(201), 1);
         assert!(s.is_empty());
+    }
+
+    /// Discarding is what makes an idle tick cost nothing: the run leaves the
+    /// table and its bytes with it, whatever state it reached.
+    #[test]
+    fn discard_drops_one_run_and_frees_its_bytes() {
+        let s = store(10, 0, 3600);
+        let kept = run_at(1, 100);
+        let kept_id = kept.id.clone();
+        let gone = finish(run_at(1, 200), 200);
+        let gone_id = gone.id.clone();
+        s.insert(kept).unwrap();
+        s.insert(gone).unwrap();
+        let before = s.bytes();
+
+        assert!(s.discard(&gone_id));
+        assert_eq!(s.len(), 1);
+        assert!(s.get(&gone_id).is_none());
+        assert!(s.get(&kept_id).is_some());
+        assert!(s.bytes() < before);
+
+        assert!(!s.discard(&gone_id), "discarding twice is not an error");
+        assert_eq!(s.len(), 1);
     }
 
     #[test]

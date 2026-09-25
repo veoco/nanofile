@@ -389,7 +389,7 @@ impl JobContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::run::JobRun;
+    use crate::tasks::run::{JobRun, Origin};
     use crate::tasks::spec::Visibility;
     use crate::tasks::store::RunLimits;
 
@@ -397,6 +397,7 @@ mod tests {
         let store = RunStore::new(RunLimits::default());
         let run = JobRun::queued(
             JobKey::Copy,
+            Origin::Request,
             Visibility::Owner,
             Some(1),
             serde_json::json!({}),

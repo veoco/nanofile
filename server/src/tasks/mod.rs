@@ -41,7 +41,7 @@ use self::run::{JobRun, JobState, Params, RunId, Viewer};
 use self::spec::{Dedup, JobKey, OverlapPolicy, Priority, SkipReason};
 use self::store::{RunFilter, RunLimits, RunStore};
 
-pub use self::run::{JobFailure, Outcome, Progress};
+pub use self::run::{JobFailure, Origin, Outcome, Progress};
 pub use self::spec::{
     ChunkPolicy, Durability, Resource, ServiceKey, TimeoutPolicy, Trigger, Visibility,
 };
@@ -332,8 +332,16 @@ impl TaskSystem {
         summary: impl Into<String>,
         expected_total: Option<u64>,
     ) -> Result<RunId, AppError> {
-        self.submit_with_details(key, owner, params, summary, expected_total, Vec::new())
-            .await
+        self.submit_as(
+            Origin::Request,
+            key,
+            owner,
+            params,
+            summary,
+            expected_total,
+            Vec::new(),
+        )
+        .await
     }
 
     /// Submit with small job-specific facts for the wire projection that must
@@ -341,6 +349,47 @@ impl TaskSystem {
     #[allow(clippy::too_many_arguments)]
     pub async fn submit_with_details(
         &self,
+        key: JobKey,
+        owner: Option<i32>,
+        params: Params,
+        summary: impl Into<String>,
+        expected_total: Option<u64>,
+        details: Vec<(&str, serde_json::Value)>,
+    ) -> Result<RunId, AppError> {
+        self.submit_as(
+            Origin::Request,
+            key,
+            owner,
+            params,
+            summary,
+            expected_total,
+            details,
+        )
+        .await
+    }
+
+    /// Submit work the timer started, or a one-shot pass the server started
+    /// itself.
+    ///
+    /// Separate from [`TaskSystem::submit`] because who asked decides whether an
+    /// idle run is worth remembering: a timer's tick nobody asked for leaves no
+    /// history, while a run a caller or an administrator asked for always does.
+    pub(crate) async fn submit_system(
+        &self,
+        origin: Origin,
+        key: JobKey,
+        params: Params,
+        summary: impl Into<String>,
+    ) -> Result<RunId, AppError> {
+        self.submit_as(origin, key, None, params, summary, None, Vec::new())
+            .await
+    }
+
+    /// The one submission path.
+    #[allow(clippy::too_many_arguments)]
+    async fn submit_as(
+        &self,
+        origin: Origin,
         key: JobKey,
         owner: Option<i32>,
         params: Params,
@@ -391,6 +440,7 @@ impl TaskSystem {
 
         let mut run = JobRun::queued(
             key,
+            origin,
             job.spec.visibility,
             owner,
             params.clone(),
@@ -402,17 +452,20 @@ impl TaskSystem {
             run.set_detail(name, value);
         }
         let id = run.id.clone();
-        // Every run whose job keeps a record is written down before it starts,
-        // so a crash leaves a row rather than nothing at all. `Audit` is
+        // Every run whose job keeps a row per run is written down before it
+        // starts, so a crash leaves a row rather than nothing at all. `Audit` is
         // recorded and, if the process dies, closed by recovery rather than
         // replayed; `Durable` is resumed. A `Memory` run — the request-scoped
-        // copies and moves — is not recorded anywhere.
+        // copies and moves — is not recorded anywhere, and neither is a
+        // `Notable` run until it has something to report.
         //
         // The condition has to match the one that writes the terminal state
         // below, or an `Audit` job's finish updates a row that was never
         // inserted and the journal stays empty.
+        let journaled_from_the_start =
+            job.spec.durability >= Durability::Audit && job.spec.history.journals_from_the_start();
         if let Some(journal) = self.journal()
-            && job.spec.durability >= Durability::Audit
+            && journaled_from_the_start
         {
             let now = chrono::Utc::now().timestamp();
             journal
@@ -483,12 +536,16 @@ impl TaskSystem {
         // a running pass cannot defer itself.
         let _background = self.inner.load.background_guard();
         let journal = self.journal();
+        // Whether this job was written down before it started. A job that keeps
+        // only its notable runs has no row yet, and gets one at the end.
+        let journaled_from_the_start =
+            job.spec.durability >= Durability::Audit && job.spec.history.journals_from_the_start();
         // The same set of jobs the submit path recorded a row for: an audited
         // run is written down when it starts as well as when it ends, so its
         // row says when it began and does not read as pending work for longer
         // than the run lasts.
         if let Some(journal) = &journal
-            && job.spec.durability >= Durability::Audit
+            && journaled_from_the_start
         {
             let now = chrono::Utc::now().timestamp();
             let lease = crate::tasks::queue::QueuePolicy::DEFAULT.lease_until(now);
@@ -500,50 +557,96 @@ impl TaskSystem {
         let report =
             executor::execute(&job, &run, params, &self.inner.store, cancel.clone(), gate).await;
         self.record_stats(job.key(), &report, started.elapsed());
+
+        // An idle run of a timer is not an event: nobody asked for it, and its
+        // next tick re-does whatever this one would have done. It is counted in
+        // the job's totals above and then dropped, so the history holds what
+        // happened rather than that time passed. Everything else — any failure,
+        // any run that did work, and any idle run somebody asked for by hand —
+        // is recorded.
+        let idle = report.state == JobState::Succeeded
+            && report.outcome.as_ref().is_some_and(|outcome| outcome.idle);
+        let silent = idle && run.origin == Origin::Schedule;
+
+        let finished_at = report
+            .finished_at
+            .unwrap_or_else(|| chrono::Utc::now().timestamp());
+        let error = match &report.state {
+            JobState::Failed(message) => Some(message.as_str()),
+            JobState::TimedOut => Some("timed out"),
+            JobState::Cancelled => Some("cancelled"),
+            JobState::Interrupted => Some("interrupted by a restart"),
+            _ => None,
+        };
+        // The job's own account of what it did is what the column is for. A run
+        // that failed before it could report anything keeps the summary its
+        // submitter gave, which is `None` here.
+        let summary = report
+            .outcome
+            .as_ref()
+            .map(|outcome| outcome.message.as_str())
+            .filter(|message| !message.is_empty());
+        // A `Notable` run that failed before it reported anything has no
+        // summary of its own to write; its error is the account, so the summary
+        // column stays empty rather than repeating the job's slug.
+        let recorded_summary = summary.unwrap_or_default().to_string();
+        // A `Memory` job is not recorded anywhere, whatever its history policy
+        // says: the request-scoped copies and moves leave no trace at all.
+        let keeps_a_record = job.spec.durability >= Durability::Audit;
         if let Some(journal) = &journal
-            && job.spec.durability >= Durability::Audit
+            && keeps_a_record
         {
-            let error = match &report.state {
-                JobState::Failed(message) => Some(message.as_str()),
-                JobState::TimedOut => Some("timed out"),
-                JobState::Cancelled => Some("cancelled"),
-                JobState::Interrupted => Some("interrupted by a restart"),
-                _ => None,
-            };
-            let processed = report
-                .outcome
-                .as_ref()
-                .and_then(|o| o.processed)
-                .map(|p| p as i64);
-            // The job's own account of what it did is what the column is for.
-            // A run that failed before it could report anything keeps the
-            // summary its submitter gave, which is `None` here.
-            let summary = report
-                .outcome
-                .as_ref()
-                .map(|outcome| outcome.message.as_str())
-                .filter(|message| !message.is_empty());
-            if let Err(e) = journal
-                .finish(
-                    run.id.as_str(),
-                    report.state.as_str(),
-                    error,
-                    processed,
-                    summary,
-                    report
-                        .finished_at
-                        .unwrap_or_else(|| chrono::Utc::now().timestamp()),
-                )
-                .await
+            if journaled_from_the_start {
+                if let Err(e) = journal
+                    .finish(
+                        run.id.as_str(),
+                        report.state.as_str(),
+                        error,
+                        report
+                            .outcome
+                            .as_ref()
+                            .and_then(|o| o.processed)
+                            .map(|p| p as i64),
+                        summary,
+                        finished_at,
+                    )
+                    .await
+                {
+                    tracing::warn!(run = %run.id, "could not record the finished run: {e}");
+                }
+            } else if !silent
+                && let Err(e) = journal
+                    .record_finished(crate::repository::job_run::FinishedJobRun {
+                        id: run.id.as_str().to_string(),
+                        kind: job.key().as_str().to_string(),
+                        owner: run.owner,
+                        phase: report.state.as_str().to_string(),
+                        summary: recorded_summary,
+                        error: error.map(str::to_string),
+                        processed: report
+                            .outcome
+                            .as_ref()
+                            .and_then(|o| o.processed)
+                            .map(|p| p as i64),
+                        attempt: report.attempts as i32,
+                        created_at: run.created_at,
+                        started_at: report.started_at,
+                        finished_at,
+                    })
+                    .await
             {
                 tracing::warn!(run = %run.id, "could not record the finished run: {e}");
             }
+        }
+        if silent {
+            self.inner.store.discard(&run.id);
         }
         tracing::debug!(
             job = job.name(),
             run = %run.id,
             state = report.state.as_str(),
             attempts = report.attempts,
+            silent,
             "job finished"
         );
     }
@@ -690,7 +793,20 @@ impl TaskSystem {
             } else {
                 format!("{} (recovered)", row.summary)
             };
-            match self.submit(key, row.owner, params, summary, None).await {
+            // The owner is kept: a recovered run is the continuation of the
+            // caller's work, so owner-scoped visibility must still find it.
+            match self
+                .submit_as(
+                    Origin::Startup,
+                    key,
+                    row.owner,
+                    params,
+                    summary,
+                    None,
+                    Vec::new(),
+                )
+                .await
+            {
                 Ok(_) => {
                     // The old attempt is closed as interrupted, so it is not
                     // read as pending work by the next start.
@@ -1190,7 +1306,7 @@ impl TaskSystem {
         // timer has nothing to say about a run before it has run. The job's own
         // report fills the column in when it finishes.
         match self
-            .submit(job.key(), None, Params::Null, String::new(), None)
+            .submit_system(Origin::Schedule, job.key(), Params::Null, String::new())
             .await
         {
             Ok(_) => true,
@@ -1278,6 +1394,7 @@ pub mod test_support {
         let store = RunStore::new(RunLimits::default());
         let run = JobRun::queued(
             JobKey::GarbageCollection,
+            Origin::Schedule,
             Visibility::OwnerOrAdmin,
             None,
             Params::Null,
@@ -2072,6 +2189,192 @@ mod tests {
                 .unwrap_or_default()
                 .contains("locked")
         );
+    }
+
+    /// A `Notable` job, as the catalog declares it, with a body that reports
+    /// `outcome` when it runs.
+    fn notable_job(outcome: Outcome) -> RegisteredJob {
+        RegisteredJob::new(
+            catalog::policy(JobKey::PasswordCacheCleanup),
+            Arc::new(move |_ctx, _params| {
+                let outcome = outcome.clone();
+                Box::pin(async move { Ok(outcome) })
+            }),
+        )
+    }
+
+    /// Wait until a run of `key` has finished, returning nothing.
+    async fn settle(system: &Arc<TaskSystem>) {
+        for _ in 0..400 {
+            if system
+                .stats(JobKey::PasswordCacheCleanup)
+                .last_state
+                .is_some()
+            {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("the run never finished");
+    }
+
+    /// An idle tick is not an event: it is counted, and then it is gone — from
+    /// the run table as well as from the journal. This is what stops a pass that
+    /// fires every couple of minutes from burying the runs that did something.
+    #[tokio::test]
+    async fn an_idle_tick_leaves_no_run_record() {
+        let (system, repos) = journal_system().await;
+        system
+            .register(notable_job(Outcome::idle(
+                "no expired password cache entry",
+            )))
+            .unwrap();
+
+        let id = system
+            .submit_system(
+                Origin::Schedule,
+                JobKey::PasswordCacheCleanup,
+                Params::Null,
+                String::new(),
+            )
+            .await
+            .unwrap();
+        settle(&system).await;
+
+        // The discard runs after the stats are folded in, so wait for the run
+        // to leave the table rather than guessing at the order.
+        for _ in 0..400 {
+            if system.store().get(&id).is_none() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(
+            system.store().get(&id).is_none(),
+            "an idle tick is not kept in memory"
+        );
+        assert!(
+            repos.job_run.recent(10).await.unwrap().is_empty(),
+            "and it leaves no journal row"
+        );
+
+        // What it does not lose is the count: the registry page still has to be
+        // able to say the job is ticking.
+        let stats = system.stats(JobKey::PasswordCacheCleanup);
+        assert_eq!(stats.run_count, 1);
+        assert_eq!(stats.success_count, 1);
+        assert!(stats.last_run_at.is_some());
+        assert_eq!(
+            stats.last_success_message,
+            "no expired password cache entry"
+        );
+    }
+
+    /// The same idle run, asked for by hand, is the answer to the press and is
+    /// therefore written down.
+    #[tokio::test]
+    async fn an_idle_run_somebody_asked_for_is_recorded() {
+        let (system, repos) = journal_system().await;
+        system
+            .register(notable_job(Outcome::idle(
+                "no expired password cache entry",
+            )))
+            .unwrap();
+
+        let id = system
+            .submit_system(
+                Origin::Operator,
+                JobKey::PasswordCacheCleanup,
+                Params::Null,
+                String::new(),
+            )
+            .await
+            .unwrap();
+        settle(&system).await;
+
+        let mut rows = Vec::new();
+        for _ in 0..400 {
+            rows = repos.job_run.recent(10).await.unwrap();
+            if !rows.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(rows.len(), 1, "a run somebody asked for is recorded");
+        assert_eq!(rows[0].kind, "password-cache-cleanup");
+        assert_eq!(rows[0].phase, "succeeded");
+        assert_eq!(rows[0].summary, "no expired password cache entry");
+        assert!(rows[0].params.is_none(), "nothing needs its input");
+        assert!(rows[0].lease_until.is_none());
+        assert!(
+            system.store().get(&id).is_some(),
+            "and it stays readable in memory"
+        );
+    }
+
+    /// A notable job that did work, and one that failed, are both recorded —
+    /// the policy is about idle ticks, not about hiding bad news.
+    #[tokio::test]
+    async fn a_notable_run_is_recorded_when_it_did_work_or_failed() {
+        let (system, repos) = journal_system().await;
+        system
+            .register(notable_job(Outcome::success(
+                "evicted 3 expired password cache entries",
+                Some(3),
+            )))
+            .unwrap();
+        system
+            .submit_system(
+                Origin::Schedule,
+                JobKey::PasswordCacheCleanup,
+                Params::Null,
+                String::new(),
+            )
+            .await
+            .unwrap();
+        settle(&system).await;
+        let rows = repos.job_run.recent(10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].phase, "succeeded");
+        assert_eq!(rows[0].summary, "evicted 3 expired password cache entries");
+        assert_eq!(rows[0].processed, Some(3));
+        assert_eq!(rows[0].attempt, 1);
+
+        // A second system, so the failing run stands alone.
+        let (system, repos) = journal_system().await;
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::PasswordCacheCleanup),
+                Arc::new(|_ctx, _params| {
+                    Box::pin(async {
+                        Err(JobFailure::App(AppError::Internal(
+                            "the cache is locked".into(),
+                        )))
+                    })
+                }),
+            ))
+            .unwrap();
+        system
+            .submit_system(
+                Origin::Schedule,
+                JobKey::PasswordCacheCleanup,
+                Params::Null,
+                String::new(),
+            )
+            .await
+            .unwrap();
+        settle(&system).await;
+        let rows = repos.job_run.recent(10).await.unwrap();
+        assert_eq!(rows.len(), 1, "a failure is never silent");
+        assert_eq!(rows[0].phase, "failed");
+        assert!(
+            rows[0]
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("locked")
+        );
+        assert!(rows[0].summary.is_empty(), "the error is the account");
     }
 
     /// A destructive job is never recorded as replayable, so a crash can never
