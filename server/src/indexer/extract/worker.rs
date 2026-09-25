@@ -81,6 +81,16 @@ const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 /// How long an unavailable sandbox is left alone before it is probed again.
 const UNAVAILABLE_RETRY: Duration = Duration::from_secs(300);
 
+/// `STATUS_DLL_INIT_FAILED`, which Windows gives a process whose loader could
+/// not finish.
+///
+/// Nothing of the document has been read at that point — the child confines
+/// itself before it reads its request, and the loader runs before that — so this
+/// is the environment rather than the file, and the document is a failure the
+/// backfill retries rather than a verdict on its bytes.
+#[cfg(windows)]
+const STATUS_DLL_INIT_FAILED: i32 = 0xC000_0142u32 as i32;
+
 /// Exit code the child uses when it will not run unconfined.
 ///
 /// Nothing the child does on its own uses it, and it is outside the range a
@@ -90,6 +100,25 @@ const EXIT_SANDBOX_UNAVAILABLE: i32 = 125;
 /// The prefix of the child's own refusal, which the parent recognises when the
 /// exit code alone is not enough (a runner in between may rewrite it).
 const SANDBOX_REFUSAL: &str = "extract-worker: sandbox unavailable";
+
+/// Which rung of confinement a child is started on.
+///
+/// `Confined` is what a document and the probe use. The other two exist for the
+/// diagnosis a failed launch prints ([`token_diagnosis`]): they are never a
+/// fallback, because a child that only runs on one of them is a child that does
+/// not run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Start {
+    /// Whatever this host can give: the runner on macOS, the container and the
+    /// restricted token on Windows.
+    Confined,
+    /// The restricted token without the container, on Windows.
+    #[cfg(windows)]
+    TokenOnly,
+    /// Neither: this process's own token, ideally nothing else.
+    #[cfg(windows)]
+    Plain,
+}
 
 /// What the child was asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,7 +323,7 @@ pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
         return Outcome::Unavailable("cannot resolve the extraction worker".to_string());
     };
 
-    let run = match run_child(&invocation, Some((plan, data)), TIMEOUT, true) {
+    let run = match run_child(&invocation, Some((plan, data)), TIMEOUT, Start::Confined) {
         Ok(run) => run,
         Err(e) => return Outcome::Unavailable(format!("cannot start the extraction worker: {e}")),
     };
@@ -404,7 +433,7 @@ fn probe() -> Status {
         return Status::Unavailable("cannot resolve the extraction worker".to_string());
     };
 
-    let run = match run_child(&invocation, None, PROBE_TIMEOUT, true) {
+    let run = match run_child(&invocation, None, PROBE_TIMEOUT, Start::Confined) {
         Ok(run) => run,
         Err(e) => return Status::Unavailable(format!("cannot start the extraction worker: {e}")),
     };
@@ -621,11 +650,7 @@ struct Pipes {
 
 /// Start the child, with `--selftest` when the parent wants a report.
 #[cfg(not(windows))]
-fn spawn_child(
-    invocation: &Invocation,
-    selftest: bool,
-    _restricted: bool,
-) -> std::io::Result<Child> {
+fn spawn_child(invocation: &Invocation, selftest: bool, _start: Start) -> std::io::Result<Child> {
     let mut command = Command::new(&invocation.program);
     command.args(&invocation.args);
     if selftest {
@@ -659,52 +684,56 @@ fn spawn_child(
 /// The environment, the working directory and the handle inheritance are all
 /// part of the creation call on Windows, so they are set inside `sandbox`.
 #[cfg(windows)]
-fn spawn_child(
-    invocation: &Invocation,
-    selftest: bool,
-    restricted: bool,
-) -> std::io::Result<Child> {
+fn spawn_child(invocation: &Invocation, selftest: bool, start: Start) -> std::io::Result<Child> {
     let mut args = invocation.args.clone();
     if selftest {
         args.push(OsString::from("--selftest"));
     }
-    if restricted {
-        sandbox::spawn(&invocation.program, &args)
-    } else {
-        sandbox::spawn_unrestricted(&invocation.program, &args)
+    match start {
+        Start::Confined => sandbox::spawn(&invocation.program, &args),
+        Start::TokenOnly => sandbox::spawn_token_only(&invocation.program, &args),
+        Start::Plain => sandbox::spawn_unrestricted(&invocation.program, &args),
     }
     .map(Child::Windows)
 }
 
-/// A second run without the restricted token, when the first one said nothing.
+/// What each weaker rung of the launch does, when the confined one said nothing.
 ///
-/// Empty on every platform that does not start the child differently without a
-/// token, which is every platform but Windows. The result is a diagnosis, never
-/// a fallback: a child that only runs unrestricted is a child that does not run.
-/// The run carries neither the token nor the AppContainer the token was paired
-/// with, so a child that reports here is one whose *creation* is what failed.
+/// Empty on every platform that does not start the child differently, which is
+/// every platform but Windows. The result is a diagnosis, never a fallback: a
+/// child that only runs on a weaker rung is a child that does not run. Which
+/// rung still reports is the whole answer — a token that cannot start names the
+/// token, a container that cannot start names the container, and neither leaves
+/// the rest of the launch (`sandbox::windows` records what the container was
+/// refused for).
 fn token_diagnosis(invocation: &Invocation) -> String {
     #[cfg(windows)]
     {
-        match run_child(invocation, None, PROBE_TIMEOUT, false) {
-            Ok(run) => {
-                let line = String::from_utf8_lossy(
-                    run.stdout
-                        .split(|byte| *byte == b'\n')
-                        .next()
-                        .unwrap_or_default(),
-                );
-                let reported = Report::parse(line.trim()).is_some();
-                format!(
-                    "; without a token or a container: {}: {}",
-                    if reported { "reported" } else { "still silent" },
-                    run.summary()
-                )
-            }
-            Err(error) => {
-                format!("; without a token or a container: cannot start ({error})")
-            }
+        let mut rungs = Vec::new();
+        for (label, start) in [
+            ("with a token and no container", Start::TokenOnly),
+            ("without a token or a container", Start::Plain),
+        ] {
+            let verdict = match run_child(invocation, None, PROBE_TIMEOUT, start) {
+                Ok(run) => {
+                    let line = String::from_utf8_lossy(
+                        run.stdout
+                            .split(|byte| *byte == b'\n')
+                            .next()
+                            .unwrap_or_default(),
+                    );
+                    let reported = Report::parse(line.trim()).is_some();
+                    format!(
+                        "{}: {}",
+                        if reported { "reported" } else { "still silent" },
+                        run.summary()
+                    )
+                }
+                Err(error) => format!("cannot start ({error})"),
+            };
+            rungs.push(format!("{label}: {verdict}"));
         }
+        format!("; {}", rungs.join("; "))
     }
     #[cfg(not(windows))]
     {
@@ -782,9 +811,9 @@ fn run_child(
     invocation: &Invocation,
     request: Option<(Plan, Vec<u8>)>,
     timeout: Duration,
-    restricted: bool,
+    start: Start,
 ) -> std::io::Result<Run> {
-    let mut child = spawn_child(invocation, request.is_none(), restricted)?;
+    let mut child = spawn_child(invocation, request.is_none(), start)?;
     let pipes = child.pipes();
 
     let writer = match (request, pipes.stdin) {
@@ -912,6 +941,13 @@ fn classify(run: &Run) -> Outcome {
 fn interpret(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Outcome {
     if exit_code == Some(EXIT_SANDBOX_UNAVAILABLE) || stderr.contains(SANDBOX_REFUSAL) {
         return Outcome::Unavailable(detail_or(stderr, "the sandbox refused to run"));
+    }
+    #[cfg(windows)]
+    if exit_code == Some(STATUS_DLL_INIT_FAILED) {
+        return Outcome::Unavailable(detail_or(
+            stderr,
+            "the extraction worker could not initialize",
+        ));
     }
     // A process that stopped itself at its memory bound has no reply to write,
     // and what it ran into is the same thing a parser that expands past its

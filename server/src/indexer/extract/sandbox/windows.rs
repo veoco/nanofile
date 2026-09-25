@@ -108,14 +108,15 @@ use windows_sys::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
 };
 use windows_sys::Win32::Security::{
-    ACL, CopySid, CreateRestrictedToken, CreateWellKnownSid, DACL_SECURITY_INFORMATION,
-    DISABLE_MAX_PRIVILEGE, GetLengthSid, GetTokenInformation, IsValidSid, LUA_TOKEN,
-    NO_INHERITANCE, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
-    SID_AND_ATTRIBUTES, SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY,
+    ACCESS_ALLOWED_ACE, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, CopySid,
+    CreateRestrictedToken, CreateWellKnownSid, DACL_SECURITY_INFORMATION, DISABLE_MAX_PRIVILEGE,
+    GetLengthSid, GetTokenInformation, IsValidSid, LUA_TOKEN, NO_INHERITANCE, PSECURITY_DESCRIPTOR,
+    PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES, TOKEN_ASSIGN_PRIMARY,
     TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER, TokenGroups,
     TokenIntegrityLevel, TokenIsAppContainer, TokenUser, WELL_KNOWN_SID_TYPE, WRITE_RESTRICTED,
-    WinAuthenticatedUserSid, WinBuiltinUsersSid, WinInteractiveSid, WinLowLabelSid, WinWorldSid,
+    WinAuthenticatedUserSid, WinBuiltinUsersSid, WinInteractiveSid, WinWorldSid,
 };
+use windows_sys::Win32::Security::{EqualSid, GetAce, GetAclInformation};
 use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
 use windows_sys::Win32::System::JobObjects::{
     CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
@@ -135,10 +136,6 @@ use windows_sys::Win32::System::Threading::{
     STARTF_USESTDHANDLES, STARTUPINFOEXW, SetProcessMitigationPolicy, TerminateProcess,
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
-
-/// `SE_GROUP_INTEGRITY`, from `winnt.h`: the attribute that marks the one entry
-/// of a mandatory label as the integrity level itself.
-const SE_GROUP_INTEGRITY: u32 = 0x20;
 
 use super::Layers;
 
@@ -593,12 +590,31 @@ pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child
 
 /// Start the child with this process's own token and no container.
 ///
-/// Only the probe uses this. A child that was created and then died before it
-/// reported can be failing because of its token or its container, or because of
-/// everything else about how it was started, and the two are told apart the only
-/// way that cannot be argued with: start it again without either and see.
+/// Only the diagnosis uses this. A child that was created and then died before
+/// it reported can be failing because of its token, because of its container or
+/// because of everything else about how it was started, and the rungs are told
+/// apart the only way that cannot be argued with: start it again without them
+/// and see.
 pub(crate) fn spawn_unrestricted(program: &OsStr, args: &[OsString]) -> std::io::Result<Child> {
     start(program, args, None, None)
+}
+
+/// Start the child with the restricted token and no container.
+///
+/// The rung between the other two: a host whose container will not start still
+/// gets the token, and a run that fails here names the token rather than the
+/// container.
+pub(crate) fn spawn_token_only(program: &OsStr, args: &[OsString]) -> std::io::Result<Child> {
+    match restricted_token() {
+        Some(token) => {
+            let mut attempt = args.to_vec();
+            attempt.push(OsString::from("--restricted"));
+            start(program, &attempt, Some(token), None)
+        }
+        None => Err(std::io::Error::other(
+            "the system refused a restricted token",
+        )),
+    }
 }
 
 /// Create the process, its pipes and the handle list that keeps inheritance to
@@ -1162,6 +1178,14 @@ fn add_read_execute(program: &OsStr, sid: PSID) -> std::io::Result<()> {
             "the image has no discretionary ACL to add to",
         ));
     }
+    // A grant an earlier run made is read rather than written again: the merge
+    // below is a write to a file another process may be running from, and the
+    // question the caller asks is whether the container can read the image, not
+    // whether this call changed anything.
+    if dacl_already_grants(dacl, sid) {
+        unsafe { LocalFree(descriptor) };
+        return Ok(());
+    }
 
     let entry = EXPLICIT_ACCESS_W {
         grfAccessPermissions: FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
@@ -1206,6 +1230,49 @@ fn add_read_execute(program: &OsStr, sid: PSID) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Whether `dacl` already gives `sid` the read and execute the container needs.
+///
+/// The second run of this process finds the ACE the first one left, and a plain
+/// merge would depend on how the system treats a duplicate entry. Walking the
+/// ACL answers the question the caller actually has.
+fn dacl_already_grants(dacl: *const ACL, sid: PSID) -> bool {
+    /// `ACCESS_ALLOWED_ACE_TYPE` from `winnt.h`, which is where this file keeps
+    /// the few Windows constants `windows-sys` does not carry behind a feature.
+    const ALLOWED: u8 = 0x00;
+    const WANTED: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+
+    let mut info: ACL_SIZE_INFORMATION = unsafe { std::mem::zeroed() };
+    let read = unsafe {
+        GetAclInformation(
+            dacl,
+            std::ptr::addr_of_mut!(info).cast::<c_void>(),
+            size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    };
+    if read == 0 {
+        return false;
+    }
+
+    for index in 0..info.AceCount {
+        let mut ace: *mut c_void = null_mut();
+        if unsafe { GetAce(dacl, index, &mut ace) } == 0 || ace.is_null() {
+            continue;
+        }
+        let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
+        if allowed.Header.AceType != ALLOWED {
+            continue;
+        }
+        // `SidStart` is the first four bytes of the SID that follows the header,
+        // so its address is the SID's address.
+        let entry = std::ptr::addr_of!(allowed.SidStart).cast::<c_void>() as PSID;
+        if unsafe { EqualSid(entry, sid) } != 0 && allowed.Mask & WANTED == WANTED {
+            return true;
+        }
+    }
+    false
+}
+
 /// Whether this process's token is an AppContainer's.
 ///
 /// The parent asks for the container through the process attributes rather than
@@ -1238,13 +1305,10 @@ fn is_app_container() -> bool {
 /// ordinary child rather than not starting one at all.
 fn restricted_token() -> Option<HANDLE> {
     let mut own: HANDLE = null_mut();
-    // `TOKEN_ADJUST_DEFAULT` is for the integrity label set below: the token
-    // this process creates is its own, and lowering its integrity is the one
-    // change to it that is allowed without a privilege.
     let opened = unsafe {
         OpenProcessToken(
             GetCurrentProcess(),
-            TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT,
+            TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_QUERY,
             &mut own,
         )
     };
@@ -1283,54 +1347,17 @@ fn restricted_token() -> Option<HANDLE> {
         return None;
     }
 
-    // Integrity is the one mechanism that bounds a *write* on its own: a
-    // low-integrity token cannot write an object at medium integrity whatever
-    // its ACL says, because the mandatory check is the second half of the
-    // access check. The container path already runs low; this is what gives
-    // the token-only path — the one a host falls back to when it will not
-    // start a container — a write bound of its own, and it is why Chromium
-    // runs its renderers below medium for the same reason.
-    set_low_integrity(restricted);
+    // No integrity label is set here, and that is a measured decision rather
+    // than an omission: a low label applied to the token-only path — the one a
+    // host falls back to when it will not start a container — leaves the child
+    // unable to open the desktop its loader attaches to, and it dies with
+    // `STATUS_DLL_INIT_FAILED` before it can print anything. Chromium runs its
+    // renderers below medium because it gives them a window station of their
+    // own; this child has the interactive one, and the container is where the
+    // write bound comes from instead. The report says which level the token
+    // ended up with ([`integrity_level`]), which is what the container's own
+    // label shows up as.
     Some(restricted)
-}
-
-/// Put `token` at low integrity, ignoring a host that will not.
-///
-/// The report says which level the child actually got ([`integrity_level`]),
-/// so a refusal here is a fact the report carries rather than a failure to
-/// start: a host without integrity levels still runs the child, with fewer
-/// mechanisms.
-fn set_low_integrity(token: HANDLE) {
-    let mut sid = [0u64; MAX_SID_BYTES / 8];
-    let mut length = size_of_val(&sid) as u32;
-    let created = unsafe {
-        CreateWellKnownSid(
-            WinLowLabelSid,
-            null_mut(),
-            sid.as_mut_ptr().cast::<c_void>(),
-            &mut length,
-        )
-    };
-    if created == 0 {
-        return;
-    }
-
-    let label = TOKEN_MANDATORY_LABEL {
-        Label: SID_AND_ATTRIBUTES {
-            Sid: sid.as_mut_ptr().cast::<c_void>(),
-            Attributes: SE_GROUP_INTEGRITY,
-        },
-    };
-    // `TOKEN_ADJUST_DEFAULT` is what this class needs, and a token this process
-    // just created carries every right to itself.
-    unsafe {
-        SetTokenInformation(
-            token,
-            TokenIntegrityLevel,
-            std::ptr::from_ref(&label).cast::<c_void>(),
-            size_of::<TOKEN_MANDATORY_LABEL>() as u32,
-        )
-    };
 }
 
 /// The restricting SIDs of a restricted token, and the storage they live in.

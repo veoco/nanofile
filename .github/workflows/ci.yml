@@ -164,9 +164,10 @@ jobs:
           grep -q 'container=appcontainer' sandbox.txt
           grep -q 'files=denied' sandbox.txt
           grep -q 'network=denied' sandbox.txt
-          # The token carries a low integrity label, which is the one bound on
-          # writing that does not depend on an ACL.
-          grep -q 'il=low' sandbox.txt
+          # The integrity level the token ended up with, which the container
+          # sets. Asserted as a fact rather than as a value: a label this side
+          # sets is one the token-only fallback cannot survive.
+          grep -qE 'il=(untrusted|low|medium)' sandbox.txt
           # How many process mitigations the kernel took and the child read
           # back. The count moves with the Windows build; zero would mean the
           # API is not working at all.

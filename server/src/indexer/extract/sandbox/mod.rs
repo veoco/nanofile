@@ -122,7 +122,7 @@ mod windows;
 /// same start without the token, which is how the probe tells a child its token
 /// killed from a child that never started.
 #[cfg(target_os = "windows")]
-pub(super) use windows::{Child as WindowsChild, spawn, spawn_unrestricted};
+pub(super) use windows::{Child as WindowsChild, spawn, spawn_token_only, spawn_unrestricted};
 
 /// Why the child was not started in an AppContainer, where the platform has one.
 ///
