@@ -138,10 +138,59 @@ jobs:
         run: cargo check -p server --bin nanofile
       # The extraction worker confines *itself* on Windows with a Job Object,
       # and the platform-specific module is only type-checked when its target's
-      # test code is built too. Only a check: the tests themselves need a
-      # running server.
+      # test code is built too.
       - name: Check the Windows test code
         run: cargo check -p server --tests --bin nanofile
+      # ... and the Job Object, the restricted token and the pipes the protocol
+      # runs over only exist at runtime, which no other job can reach: everything
+      # else runs on Linux, where none of this code is compiled. The probe
+      # starts the child exactly as the server does and reports what the child
+      # found, so a Job Object that could not be created or a token the system
+      # refused shows up here rather than in a release.
+      - name: Run the extraction sandbox probe
+        run: |
+          cargo build --bin nanofile
+          ./target/debug/nanofile.exe extract-worker --probe | tee sandbox.txt
+          grep -q 'token=restricted' sandbox.txt
+          grep -q 'job=memory' sandbox.txt
+          grep -q 'threads=ok' sandbox.txt
+          grep -qE 'level=(partial|full)' sandbox.txt
+
+  # ── macOS-only code: the tray back-end, and the Seatbelt profile the
+  #    extraction worker runs under. Every other job runs on Linux, where
+  #    `#[cfg(target_os = "macos")]` blocks are not compiled at all — and the
+  #    profile is not merely compiled but *applied* by `/usr/bin/sandbox-exec`,
+  #    so the probe and the document tests below are the only places its effect
+  #    on files and on the network is checked well enough to trust.
+  macos-check:
+    name: macOS check
+    runs-on: macos-latest
+    needs: [changes, lint]
+    if: needs.changes.outputs.rust == 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          shared-key: "nanofile"
+      - name: Install Tailwind CSS
+        run: npm ci
+      - name: Check the macOS-only code
+        run: cargo check -p server --tests --bin nanofile
+      - name: Run the extraction sandbox probe
+        run: |
+          cargo build --bin nanofile
+          ./target/debug/nanofile extract-worker --probe | tee sandbox.txt
+          grep -q 'files=denied' sandbox.txt
+          grep -q 'network=denied' sandbox.txt
+          grep -q 'threads=ok' sandbox.txt
+          grep -qE 'level=(full|partial)' sandbox.txt
+      # Parsing *under* the profile, which the probe above does not do: a
+      # profile that denies something the parsers need shows up as a document
+      # that cannot be read, not as a missing layer. The fixture also insists
+      # the worker confines itself before the tests run.
+      - name: Extract documents under the profile
+        run: cargo test -p server --test index_test -- document
 
   # ── Frontend tests (pure JS, no npm deps) ──────────────────────────
   frontend-test:
