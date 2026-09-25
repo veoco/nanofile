@@ -143,6 +143,19 @@ test("a day header is emitted once per local calendar day", () => {
   ]);
 });
 
+// The band's own two hairlines are the boundary; a rule inside the header would
+// be the second line the reader sees against the row's edge.
+test("a day header is the heading alone, with no rule of its own", () => {
+  const list = activityList([localTs(2020, 3, 5, 12)]);
+
+  renderAll(list);
+
+  const header = list.children[0];
+  assert.equal(header.classList.contains("nf-sec"), true);
+  assert.equal(header.children.length, 1);
+  assert.equal(header.children[0].tagName, "H2");
+});
+
 test("re-rendering the same list does not stack duplicate headers", () => {
   const list = activityList([
     localTs(2020, 3, 5, 12),

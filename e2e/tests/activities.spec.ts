@@ -124,3 +124,47 @@ test("activity rows are grouped on the reader's local calendar day", async ({ pa
   // more than one row: otherwise the loop above proves nothing.
   expect(groups.length).toBeGreaterThan(seen.size);
 });
+
+// The day heading is the group boundary, so the row that ends a group draws no
+// hairline of its own: the two against each other read as one thick line, and
+// the heading's rule beside the label was the second line the reader noticed.
+test("a day heading draws the only line above its group", async ({ page }) => {
+  const repoId = await seedRepo(state.baseURL, state.adminToken, `act-${Date.now()}`);
+  await uploadFile(state.baseURL, state.adminToken, repoId, "/", `boundary-${Date.now()}.txt`, "x");
+  await page.goto("/activities/");
+  await page.waitForSelector("main .nf-prow[data-ts-day]");
+
+  // A second local day, without depending on the wall clock or on data seeded a
+  // day earlier: the reader's copy of yesterday is the newest row, one day back.
+  await page.evaluate(() => {
+    const row = document.querySelector("main .nf-prow[data-ts-day]") as HTMLElement;
+    const clone = row.cloneNode(true) as HTMLElement;
+    clone.dataset.tsDay = String(parseInt(row.dataset.tsDay as string, 10) - 86_400);
+    row.parentElement!.appendChild(clone);
+  });
+
+  const headings = page.locator("main .nf-list > .nf-sec");
+  // The clone's own day opens under a heading the observer inserts for it.
+  await expect(headings.last()).toHaveText("Yesterday");
+  // The heading's band carries both edges of the boundary …
+  await expect(headings.last()).toHaveCSS("border-top-width", "1px");
+  await expect(headings.last()).toHaveCSS("border-bottom-width", "1px");
+  // … the row it closes draws none of its own …
+  await expect(page.locator("main .nf-list > .nf-prow:has(+ .nf-sec)").last()).toHaveCSS(
+    "border-bottom-width",
+    "0px",
+  );
+  // … and the first group leaves the panel's own top border to close it.
+  await expect(headings.first()).toHaveCSS("border-top-width", "0px");
+
+  // The heading is a surface, not just a label: without it the groups read as
+  // one run of rows again.
+  const [band, row] = await page.evaluate(() => {
+    const bg = (el: Element | null) => (el ? getComputedStyle(el).backgroundColor : "");
+    return [
+      bg(document.querySelector("main .nf-list > .nf-sec")),
+      bg(document.querySelector("main .nf-list > .nf-prow")),
+    ];
+  });
+  expect(band).not.toBe(row);
+});

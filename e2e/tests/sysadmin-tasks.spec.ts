@@ -52,6 +52,21 @@ test("the registry groups jobs by how they run", async ({ page }) => {
   }
 });
 
+// The registry wraps each group in a `<section>`, so the heading's own hairline
+// has to be the boundary here too: the row that closes a group must not draw
+// one, or the two read as a single thick line.
+test("a group heading is the only line between two groups", async ({ page }) => {
+  await page.goto(REGISTRY);
+  const periodic = page.locator('main [data-task-group="periodic"]');
+  const onDemand = page.locator('main [data-task-group="on_demand"]');
+
+  await expect(periodic.locator(".nf-xrow").last()).toHaveCSS("border-bottom-width", "0px");
+  await expect(onDemand.locator(".nf-sec")).toHaveCSS("border-top-width", "1px");
+  await expect(onDemand.locator(".nf-sec")).toHaveCSS("border-bottom-width", "1px");
+  // The first group's heading leaves the panel's top border alone.
+  await expect(periodic.locator(".nf-sec")).toHaveCSS("border-top-width", "0px");
+});
+
 // Zero and "no such number" must not look the same: the old page showed
 // `0 / 0 / 0` and a dash for a job that had never run at all.
 test("a job that has never run shows no counters", async ({ page }) => {
