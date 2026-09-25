@@ -1439,8 +1439,11 @@ async fn document_formats_are_searchable() {
 fn the_extraction_worker_reports_its_confinement() {
     use server::indexer::extract::sandbox::{Level, Report};
 
+    // `--probe` rather than `--selftest`: it starts the child the way the
+    // server does, with the platform's runner around it, which is the level a
+    // document actually gets.
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_nanofile"))
-        .args(["extract-worker", "--selftest"])
+        .args(["extract-worker", "--probe"])
         .output()
         .expect("the binary runs");
     assert!(output.status.success(), "self-test failed: {output:?}");

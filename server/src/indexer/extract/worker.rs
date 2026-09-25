@@ -25,7 +25,10 @@
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
+#[cfg(not(windows))]
+use std::path::Path;
 use std::path::PathBuf;
+#[cfg(not(windows))]
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -74,6 +77,17 @@ pub enum Job {
     Extract,
 }
 
+/// What the parent did around this process that the child cannot see itself.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct External {
+    /// The parent wrapped this process in the platform's runner (macOS
+    /// `sandbox-exec`), so files, the network and process creation are not its
+    /// own layers to establish.
+    pub runner: bool,
+    /// The parent created this process with a restricted token (Windows).
+    pub restricted_token: bool,
+}
+
 /// What the parent learned from running the child.
 #[derive(Debug)]
 pub enum Outcome {
@@ -107,15 +121,16 @@ impl Status {
 }
 
 /// Run the child side of the protocol and exit.
-///
-/// `selftest` prints the confinement report instead of reading a request, and
-/// `seatbelt` says the parent wrapped this process in a runner that governs
-/// files, the network and process creation.
-pub fn run(job: Job, seatbelt: bool, policy: Policy) -> anyhow::Result<()> {
+pub fn run(job: Job, external: External, policy: Policy) -> anyhow::Result<()> {
     // The parser limits are process-global and this process never runs the
     // server, so they are set here and nowhere else.
     configure_parser_limits();
-    let report = sandbox::confine(seatbelt);
+    let mut report = sandbox::confine(external.runner);
+    if external.restricted_token {
+        // A restricted token is a property of the process, not a layer this
+        // process installed, so it is reported rather than claimed as one.
+        report.detail.push_str(",token=restricted");
+    }
 
     if job == Job::Selftest {
         println!("{}", selftest_line(&report));
@@ -133,6 +148,24 @@ pub fn run(job: Job, seatbelt: bool, policy: Policy) -> anyhow::Result<()> {
 
     let (plan, data) = read_request()?;
     write_reply(super::extract(plan, data))
+}
+
+/// Print what the probe a serving process runs at startup found, and exit.
+///
+/// `extract-worker --probe` calls this. It starts the child exactly as the
+/// server does — the platform runner around it included — which makes it the
+/// only way to observe the macOS profile's effect from outside, and what CI
+/// asserts on.
+pub fn probe_report() -> anyhow::Result<()> {
+    match status() {
+        Status::Ready(report) => {
+            println!("{} text_chars={}", report.line(), MAX_INDEXED_CONTENT_BYTES);
+            Ok(())
+        }
+        Status::Unavailable(reason) => {
+            anyhow::bail!("the extraction worker is not available: {reason}")
+        }
+    }
 }
 
 /// The parser limits the child sets for itself.
@@ -355,6 +388,130 @@ fn invocation(policy: Policy) -> Option<Invocation> {
     }
 }
 
+/// A started child, whichever way the platform had to start it.
+///
+/// Windows needs `CreateProcessAsUser` to give the child a restricted token,
+/// which `std::process::Command` cannot do; everywhere else the standard child
+/// is used. The pipes and the wait are what this hides.
+enum Child {
+    #[cfg(not(windows))]
+    Standard(std::process::Child),
+    #[cfg(windows)]
+    Windows(sandbox::WindowsChild),
+}
+
+impl Child {
+    /// The child's exit code, or `None` while it is still running.
+    ///
+    /// A death by signal has no code; `-1` stands in for it, and is not a code
+    /// the child itself produces.
+    fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+        match self {
+            #[cfg(not(windows))]
+            Child::Standard(child) => {
+                Ok(child.try_wait()?.map(|status| status.code().unwrap_or(-1)))
+            }
+            #[cfg(windows)]
+            Child::Windows(child) => child.try_wait(),
+        }
+    }
+
+    fn kill(&mut self) {
+        match self {
+            #[cfg(not(windows))]
+            Child::Standard(child) => {
+                let _ = child.kill();
+            }
+            #[cfg(windows)]
+            Child::Windows(child) => child.kill(),
+        }
+    }
+
+    fn wait(&mut self) {
+        match self {
+            #[cfg(not(windows))]
+            Child::Standard(child) => {
+                let _ = child.wait();
+            }
+            #[cfg(windows)]
+            Child::Windows(child) => child.wait(),
+        }
+    }
+
+    /// Take the three protocol streams.
+    fn pipes(&mut self) -> Pipes {
+        match self {
+            #[cfg(not(windows))]
+            Child::Standard(child) => Pipes {
+                stdin: child
+                    .stdin
+                    .take()
+                    .map(|stdin| Box::new(stdin) as Box<dyn Write + Send>),
+                stdout: child
+                    .stdout
+                    .take()
+                    .map(|stdout| Box::new(stdout) as Box<dyn Read + Send>),
+                stderr: child
+                    .stderr
+                    .take()
+                    .map(|stderr| Box::new(stderr) as Box<dyn Read + Send>),
+            },
+            #[cfg(windows)]
+            Child::Windows(child) => {
+                let (stdin, stdout, stderr) = child.take_pipes();
+                Pipes {
+                    stdin: stdin.map(|stdin| Box::new(stdin) as Box<dyn Write + Send>),
+                    stdout: stdout.map(|stdout| Box::new(stdout) as Box<dyn Read + Send>),
+                    stderr: stderr.map(|stderr| Box::new(stderr) as Box<dyn Read + Send>),
+                }
+            }
+        }
+    }
+}
+
+/// The child's standard streams, boxed so both ways of starting one look alike.
+struct Pipes {
+    stdin: Option<Box<dyn Write + Send>>,
+    stdout: Option<Box<dyn Read + Send>>,
+    stderr: Option<Box<dyn Read + Send>>,
+}
+
+/// Start the child, with `--selftest` when the parent wants a report.
+#[cfg(not(windows))]
+fn spawn_child(invocation: &Invocation, selftest: bool) -> std::io::Result<Child> {
+    let mut command = Command::new(&invocation.program);
+    command.args(&invocation.args);
+    if selftest {
+        command.arg("--selftest");
+    }
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // A parser has no business reading the server's environment: it holds
+        // the master secret, the storage keys and every path this deployment
+        // resolved.
+        .env_clear()
+        .env("RUST_BACKTRACE", "0")
+        // Nothing here is relative, and the server's own directory is not the
+        // child's business.
+        .current_dir(Path::new("/"));
+    command.spawn().map(Child::Standard)
+}
+
+/// Start the child with a restricted token where the system will make one.
+///
+/// The environment, the working directory and the handle inheritance are all
+/// part of the creation call on Windows, so they are set inside `sandbox`.
+#[cfg(windows)]
+fn spawn_child(invocation: &Invocation, selftest: bool) -> std::io::Result<Child> {
+    let mut args = invocation.args.clone();
+    if selftest {
+        args.push(OsString::from("--selftest"));
+    }
+    sandbox::spawn(&invocation.program, &args).map(Child::Windows)
+}
+
 /// Everything one child run produced.
 struct Run {
     exit_code: Option<i32>,
@@ -373,28 +530,11 @@ fn run_child(
     request: Option<(Plan, Vec<u8>)>,
     timeout: Duration,
 ) -> std::io::Result<Run> {
-    let mut command = Command::new(&invocation.program);
-    command.args(&invocation.args);
-    if request.is_none() {
-        command.arg("--selftest");
-    }
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // A parser has no business reading the server's environment: it holds
-        // the master secret, the storage keys and every path this deployment
-        // resolved.
-        .env_clear()
-        .env("RUST_BACKTRACE", "0");
-    #[cfg(unix)]
-    command.current_dir("/");
+    let mut child = spawn_child(invocation, request.is_none())?;
+    let pipes = child.pipes();
 
-    let mut child = command.spawn()?;
-
-    let mut stdin = child.stdin.take().expect("stdin is piped");
-    let writer = request.map(|(plan, data)| {
-        std::thread::spawn(move || {
+    let writer = match (request, pipes.stdin) {
+        (Some((plan, data)), Some(mut stdin)) => Some(std::thread::spawn(move || {
             let mut prologue = Vec::with_capacity(5);
             prologue.extend_from_slice(MAGIC);
             prologue.push(plan.tag());
@@ -402,20 +542,23 @@ fn run_child(
             let _ = stdin.write_all(&data);
             // Dropping the handle closes the child's stdin, which is how it
             // knows the request is complete.
-        })
-    });
+        })),
+        _ => None,
+    };
 
-    let stdout = child.stdout.take().expect("stdout is piped");
     let reader = std::thread::spawn(move || {
         let mut reply = Vec::new();
-        let _ = stdout.take(MAX_REPLY_BYTES).read_to_end(&mut reply);
+        if let Some(stdout) = pipes.stdout {
+            let _ = stdout.take(MAX_REPLY_BYTES).read_to_end(&mut reply);
+        }
         reply
     });
 
-    let mut stderr = child.stderr.take().expect("stderr is piped");
     let drain = std::thread::spawn(move || {
         let mut text = String::new();
-        let _ = stderr.read_to_string(&mut text);
+        if let Some(mut stderr) = pipes.stderr {
+            let _ = stderr.read_to_string(&mut text);
+        }
         text
     });
 
@@ -423,19 +566,19 @@ fn run_child(
     let mut timed_out = false;
     let exit_code = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status.code(),
+            Ok(Some(code)) => break Some(code),
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    child.kill();
+                    child.wait();
                     timed_out = true;
                     break None;
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                child.kill();
+                child.wait();
                 break None;
             }
         }

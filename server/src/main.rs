@@ -114,6 +114,14 @@ enum Command {
         /// Report the confinement this host can give, then exit.
         #[arg(long, default_value_t = false)]
         selftest: bool,
+        /// Run the probe a serving process runs at startup — the child, and the
+        /// platform runner around it — print what it found, and exit non-zero
+        /// when the worker is unavailable.
+        #[arg(long, default_value_t = false)]
+        probe: bool,
+        /// The parent created this process with a restricted token (Windows).
+        #[arg(long, default_value_t = false)]
+        restricted: bool,
         /// What to do when the confinement is below what the server requires.
         #[arg(long, value_name = "require|prefer", default_value = "require")]
         policy: String,
@@ -194,9 +202,14 @@ fn main() -> anyhow::Result<()> {
     if let Command::ExtractWorker {
         seatbelt,
         selftest,
+        probe,
+        restricted,
         policy,
     } = &command
     {
+        if *probe {
+            return server::indexer::extract::worker::probe_report();
+        }
         let job = if *selftest {
             server::indexer::extract::worker::Job::Selftest
         } else {
@@ -204,7 +217,11 @@ fn main() -> anyhow::Result<()> {
         };
         let policy = server::indexer::extract::sandbox::Policy::parse(policy)
             .unwrap_or(server::indexer::extract::sandbox::Policy::Require);
-        return server::indexer::extract::worker::run(job, *seatbelt, policy);
+        let external = server::indexer::extract::worker::External {
+            runner: *seatbelt,
+            restricted_token: *restricted,
+        };
+        return server::indexer::extract::worker::run(job, external, policy);
     }
     // A service is the server without a desktop: it has no console a person can
     // read, no session to show a dialog in, and it must never try to put an icon

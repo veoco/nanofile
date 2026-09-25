@@ -64,6 +64,10 @@ mod linux;
 mod seatbelt;
 #[cfg(target_os = "windows")]
 mod windows;
+/// Start the child the way Windows has to: a restricted token cannot be applied
+/// to a running process, so it is part of creation.
+#[cfg(target_os = "windows")]
+pub(super) use windows::{Child as WindowsChild, spawn};
 
 /// Most address space a child may use.
 ///
