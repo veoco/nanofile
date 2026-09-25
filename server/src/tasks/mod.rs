@@ -839,14 +839,21 @@ impl TaskSystem {
     }
 
     /// Drop journal rows past retention. Called by the sweeper.
+    ///
+    /// The journal has a policy of its own rather than the outbound-mail
+    /// queue's: what a run means to keep is not what a delivered message means
+    /// to keep, and the two only looked alike.
     pub async fn prune_journal(&self) -> usize {
         let Some(journal) = self.journal() else {
             return 0;
         };
-        let policy = crate::tasks::queue::QueuePolicy::DEFAULT;
+        let policy = crate::tasks::queue::JobHistoryPolicy::DEFAULT;
         let now = chrono::Utc::now().timestamp();
-        let (sent, _failed) = policy.retention_cutoffs(now);
-        match journal.prune(sent, policy.max_finished_rows).await {
+        let (succeeded_before, failed_before) = policy.cutoffs(now);
+        match journal
+            .prune(succeeded_before, failed_before, policy.max_rows)
+            .await
+        {
             Ok(pruned) => pruned as usize,
             Err(e) => {
                 tracing::warn!("could not prune the run journal: {e}");
@@ -1203,13 +1210,18 @@ impl TaskSystem {
         });
 
         // One sweeper for the whole run table, rather than each read path
-        // tidying up after itself while holding a lock.
+        // tidying up after itself while holding a lock. The in-memory table is
+        // swept every minute — it is a walk over a map — while the journal, which
+        // is a database round trip per pass, is pruned every fifth.
         let system = self.clone();
         let shutdown = self.shutdown_token().child_token();
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+            const SWEEP_SECS: u64 = 60;
+            const PRUNE_EVERY: u32 = 5;
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(SWEEP_SECS));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             ticker.tick().await;
+            let mut sweeps = 0u32;
             loop {
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
@@ -1218,7 +1230,13 @@ impl TaskSystem {
                         if dropped > 0 {
                             tracing::debug!(dropped, "swept expired job runs");
                         }
-                        system.prune_journal().await;
+                        // Once at startup, then every fifth minute: a journal
+                        // that grew before the restart is tidied promptly, and
+                        // after that the pass is cheap and rarely needed.
+                        sweeps += 1;
+                        if sweeps == 1 || sweeps.is_multiple_of(PRUNE_EVERY) {
+                            system.prune_journal().await;
+                        }
                     }
                 }
             }

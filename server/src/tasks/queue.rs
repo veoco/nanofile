@@ -1,11 +1,18 @@
-//! The scheduling policy a persistent work queue runs on.
+//! The scheduling policies the two persistent queues run on: the outbound-mail
+//! queue, and the journal of finished job runs.
 //!
 //! Extracted from the outbound-mail queue, which is the one persistent queue in
 //! the codebase and therefore the one whose behaviour is known to work. The
 //! claim and lease mechanics stay in the repository that owns the table — an
 //! abstraction with a single implementation would only add indirection — but
-//! the numbers and the shape of the schedule are shared here, so a second queue
-//! (the job history table) cannot invent a different backoff or forget to lease.
+//! the numbers live here, where the two can be read side by side.
+//!
+//! They are two policies rather than one because the two queues keep very
+//! different things. A delivered message is a receipt somebody may need to find
+//! months later; a finished run is a record of what the server did, and past its
+//! window nobody reads it. Sharing mail's numbers gave job history 30 days of
+//! rows it had no room for — the count cap did all the work, and a 30-second
+//! timer filled it.
 
 /// Exponential backoff with a ceiling, the shape both queues use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,8 +32,7 @@ pub struct QueuePolicy {
 }
 
 impl QueuePolicy {
-    /// The policy the outbound-mail queue has always used, and the default for
-    /// any other queue.
+    /// The policy the outbound-mail queue has always used.
     pub const DEFAULT: Self = Self {
         base_backoff_secs: 30,
         max_backoff_secs: 3600,
@@ -74,6 +80,48 @@ impl QueuePolicy {
     }
 }
 
+/// How long the journal of finished runs keeps its rows.
+///
+/// Separate from [`QueuePolicy`] because the numbers mean something different
+/// there: a message that was delivered is a receipt, while a run is a record
+/// that something happened. Sizes are chosen to hold weeks of a healthy
+/// server's runs, which — now that an idle tick leaves no row — is a handful a
+/// day rather than thousands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JobHistoryPolicy {
+    /// How long a successful run stays readable.
+    pub succeeded_retention_secs: i64,
+    /// How long a run that did not succeed stays readable. Longer, because a
+    /// failure is what somebody comes back for.
+    pub failed_retention_secs: i64,
+    /// Finished rows kept, oldest dropped first. Never applies to a row whose
+    /// run has not finished: that is somebody's pending work.
+    pub max_rows: u64,
+}
+
+impl JobHistoryPolicy {
+    pub const DEFAULT: Self = Self {
+        succeeded_retention_secs: 30 * 86_400,
+        failed_retention_secs: 90 * 86_400,
+        max_rows: 5000,
+    };
+
+    /// The age cutoffs for a prune at `now`: a successful run older than the
+    /// first, or any other finished run older than the second, is dropped.
+    pub fn cutoffs(&self, now: i64) -> (i64, i64) {
+        (
+            now.saturating_sub(self.succeeded_retention_secs),
+            now.saturating_sub(self.failed_retention_secs),
+        )
+    }
+}
+
+impl Default for JobHistoryPolicy {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,6 +158,24 @@ mod tests {
         assert_eq!(sent, 1_000_000_000 - 30 * 86_400);
         assert_eq!(failed, 1_000_000_000 - 90 * 86_400);
         assert!(sent > failed, "sent rows are dropped sooner");
+    }
+
+    /// The journal's cutoffs come from its own policy, and they are not the
+    /// mail queue's: a failed run outlives a successful one, and neither is
+    /// measured in a receipt's terms.
+    #[test]
+    fn the_journal_has_its_own_retention() {
+        let p = JobHistoryPolicy::DEFAULT;
+        let (succeeded, failed) = p.cutoffs(1_000_000_000);
+        assert_eq!(succeeded, 1_000_000_000 - 30 * 86_400);
+        assert_eq!(failed, 1_000_000_000 - 90 * 86_400);
+        assert!(succeeded > failed, "a failure is kept longer");
+        assert_ne!(
+            p.max_rows,
+            QueuePolicy::DEFAULT.max_finished_rows,
+            "the two queues do not share a size"
+        );
+        assert_eq!(p.cutoffs(i64::MIN).0, i64::MIN, "saturates at the minimum");
     }
 
     #[test]

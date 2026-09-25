@@ -275,8 +275,8 @@ mod tests {
     use super::*;
     use crate::tasks::run::Origin;
     use crate::tasks::spec::{
-        Dedup, Durability, History, JobKey, JobSpec, Priority, Resource, Retention, RetryPolicy,
-        Trigger, Visibility,
+        Dedup, Durability, History, JobKey, JobSpec, Priority, Resource, RetryPolicy, Trigger,
+        Visibility,
     };
     use crate::tasks::store::RunLimits;
     use std::pin::Pin;
@@ -305,7 +305,6 @@ mod tests {
                 timeout,
                 retry,
                 dedup: Dedup::None,
-                retention: Retention::default(),
                 history: History::EveryRun,
                 visibility: Visibility::Owner,
                 durability: Durability::Memory,

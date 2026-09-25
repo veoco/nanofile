@@ -42,6 +42,10 @@ pub struct RunsTemplate {
     pub active_page: &'static str,
     pub active: Vec<ActiveRunRow>,
     pub runs: Vec<RunRow>,
+    /// How long a run stays readable, in the reader's words. The journal's own
+    /// policy rather than a per-job setting: one bounded table is what the
+    /// system actually keeps.
+    pub retention_hint: String,
     pub load: LoadRow,
     pub error: Option<String>,
     pub success: Option<String>,
@@ -539,19 +543,6 @@ fn job_details(spec: &JobSpec, t: &I18n) -> Vec<DetailRow> {
         .to_string(),
     ));
     rows.push(detail(
-        "admin.detail_retention",
-        t.trf(
-            "admin.detail_retention_value",
-            &[
-                ("count", spec.retention.max_retained.to_string()),
-                (
-                    "hours",
-                    (spec.retention.terminal_ttl_secs / 3600).to_string(),
-                ),
-            ],
-        ),
-    ));
-    rows.push(detail(
         "admin.detail_durability",
         t.tr(durability_label_key(spec.durability)).to_string(),
     ));
@@ -883,6 +874,22 @@ async fn render_runs(state: &Arc<AppState>, user: &WebUser) -> Result<Response, 
 
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
 
+    let policy = crate::tasks::queue::JobHistoryPolicy::DEFAULT;
+    let retention_hint = t.trf(
+        "admin.runs_retention_hint",
+        &[
+            ("rows", policy.max_rows.to_string()),
+            (
+                "days",
+                (policy.succeeded_retention_secs / 86_400).to_string(),
+            ),
+            (
+                "failed_days",
+                (policy.failed_retention_secs / 86_400).to_string(),
+            ),
+        ],
+    );
+
     let tpl = RunsTemplate {
         urls: ctx.urls,
         t: ctx.t,
@@ -892,6 +899,7 @@ async fn render_runs(state: &Arc<AppState>, user: &WebUser) -> Result<Response, 
         active_page: "admintasks",
         active,
         runs,
+        retention_hint,
         load: LoadRow::from_state(state),
         error: None,
         success: None,

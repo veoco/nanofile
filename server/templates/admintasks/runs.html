@@ -118,7 +118,10 @@
         <h2>{{ t.tr("admin.runs_title") }}</h2>
         <span class="n num">{{ runs.len() }}</span>
     </div>
-    <p class="px-3.5 pb-2 text-[12px] text-ink-3">{{ t.tr("admin.runs_hint") }}</p>
+    <p class="px-3.5 pb-1 text-[12px] text-ink-3">{{ t.tr("admin.runs_hint") }}</p>
+    {# How long a row lasts is a property of the journal, not of a job, so it is
+       said once here rather than repeated in every row's disclosure. #}
+    <p class="px-3.5 pb-2 text-[11px] text-ink-3">{{ retention_hint }}</p>
     {% if runs.is_empty() %}
     <p class="px-3.5 py-3 text-[12px] text-ink-3">{{ t.tr("admin.runs_none") }}</p>
     {% else %}

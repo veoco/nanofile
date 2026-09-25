@@ -103,9 +103,17 @@ pub trait JobRunRepository: Send + Sync {
     /// Newest finished runs, for the administrator's listing.
     async fn recent(&self, limit: u64) -> Result<Vec<job_run::Model>, AppError>;
 
-    /// Retention: drop finished rows older than `before`, keeping at most
-    /// `max_finished`.
-    async fn prune(&self, before: i64, max_finished: u64) -> Result<u64, AppError>;
+    /// Retention: drop finished rows past either age cutoff, then drop the
+    /// oldest finished rows until at most `max_rows` are left.
+    ///
+    /// A run that has not finished is never dropped: it is somebody's pending
+    /// work, and the store's own bookkeeping reads it.
+    async fn prune(
+        &self,
+        succeeded_before: i64,
+        failed_before: i64,
+        max_rows: u64,
+    ) -> Result<u64, AppError>;
 }
 
 pub struct DbJobRunRepository {
@@ -281,34 +289,171 @@ impl JobRunRepository for DbJobRunRepository {
             .await?)
     }
 
-    async fn prune(&self, before: i64, max_finished: u64) -> Result<u64, AppError> {
+    async fn prune(
+        &self,
+        succeeded_before: i64,
+        failed_before: i64,
+        max_rows: u64,
+    ) -> Result<u64, AppError> {
+        // Age first, and by phase: a failure is worth keeping for longer than a
+        // success, which one shared cutoff cannot express.
         let by_age = job_run::Entity::delete_many()
             .filter(job_run::Column::FinishedAt.is_not_null())
-            .filter(job_run::Column::FinishedAt.lt(before))
+            .filter(
+                job_run::Column::Phase
+                    .eq("succeeded")
+                    .and(job_run::Column::FinishedAt.lt(succeeded_before))
+                    .or(job_run::Column::Phase
+                        .ne("succeeded")
+                        .and(job_run::Column::FinishedAt.lt(failed_before))),
+            )
             .exec(self.db.as_ref())
             .await?
             .rows_affected;
 
-        // Then the count cap, oldest first. Unfinished rows are never pruned:
-        // they are somebody's pending work.
-        let finished = job_run::Entity::find()
+        // Then the count cap. The row the cap lands on is found by asking the
+        // database for it rather than by reading the table into memory, and
+        // everything up to and including it goes — so the cap is exact, and a
+        // few rows that share its second with it go too.
+        let by_count = match job_run::Entity::find()
             .filter(job_run::Column::FinishedAt.is_not_null())
             .order_by_desc(job_run::Column::FinishedAt)
-            .all(self.db.as_ref())
-            .await?;
-        let excess: Vec<String> = finished
-            .into_iter()
-            .skip(max_finished as usize)
-            .map(|row| row.id)
-            .collect();
-        let mut by_count = 0u64;
-        if !excess.is_empty() {
-            by_count = job_run::Entity::delete_many()
-                .filter(job_run::Column::Id.is_in(excess))
-                .exec(self.db.as_ref())
-                .await?
-                .rows_affected;
-        }
+            .offset(max_rows)
+            .limit(1)
+            .one(self.db.as_ref())
+            .await?
+        {
+            Some(row) => match row.finished_at {
+                Some(cutoff) => {
+                    job_run::Entity::delete_many()
+                        .filter(job_run::Column::FinishedAt.is_not_null())
+                        .filter(job_run::Column::FinishedAt.lte(cutoff))
+                        .exec(self.db.as_ref())
+                        .await?
+                        .rows_affected
+                }
+                None => 0,
+            },
+            None => 0,
+        };
+
         Ok(by_age + by_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use migration::MigratorTrait;
+
+    /// A repository over a real (in-memory) schema, migrated.
+    async fn repo() -> DbJobRunRepository {
+        let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+        migration::Migrator::up(&db, None).await.unwrap();
+        DbJobRunRepository::new(Arc::new(db))
+    }
+
+    /// A finished row with the fields retention acts on.
+    async fn finished(
+        repo: &DbJobRunRepository,
+        id: &str,
+        phase: &str,
+        finished_at: i64,
+        summary: &str,
+    ) {
+        repo.record_finished(FinishedJobRun {
+            id: id.to_string(),
+            kind: "gc".to_string(),
+            owner: None,
+            phase: phase.to_string(),
+            summary: summary.to_string(),
+            error: None,
+            processed: Some(1),
+            attempt: 1,
+            created_at: finished_at - 5,
+            started_at: Some(finished_at - 5),
+            finished_at,
+        })
+        .await
+        .unwrap();
+    }
+
+    /// The age cutoff is per phase: a failure is kept for longer than a success,
+    /// which one shared cutoff cannot express.
+    #[tokio::test]
+    async fn a_failure_outlives_a_success_of_the_same_age() {
+        let repo = repo().await;
+        let now = 1_000_000_000;
+        // Old enough to be past the success window, not the failure window.
+        let age = 45 * 86_400;
+        finished(&repo, "old-success", "succeeded", now - age, "did work").await;
+        finished(&repo, "old-failure", "failed", now - age, "did not").await;
+
+        let policy = crate::tasks::queue::JobHistoryPolicy::DEFAULT;
+        let (succeeded_before, failed_before) = policy.cutoffs(now);
+        assert_eq!(
+            repo.prune(succeeded_before, failed_before, 1000)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let left = repo.recent(10).await.unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, "old-failure");
+    }
+
+    /// The count cap drops the oldest rows and leaves the newest alone, and the
+    /// row that writes a run's end is the row the listing reads back.
+    #[tokio::test]
+    async fn the_count_cap_drops_the_oldest_rows() {
+        let repo = repo().await;
+        let now = 1_000_000_000;
+        for i in 0..5 {
+            finished(
+                &repo,
+                &format!("run-{i}"),
+                "succeeded",
+                now - 10 + i,
+                &format!("did {i}"),
+            )
+            .await;
+        }
+
+        // Keep the newest two: the cap lands on the third, and everything up to
+        // and including it goes.
+        assert_eq!(repo.prune(0, 0, 2).await.unwrap(), 3);
+        let left = repo.recent(10).await.unwrap();
+        assert_eq!(left.len(), 2);
+        assert_eq!(left[0].id, "run-4");
+        assert_eq!(left[0].summary, "did 4", "the run's own report survives");
+        assert_eq!(left[1].id, "run-3");
+
+        // Nothing left to drop.
+        assert_eq!(repo.prune(0, 0, 2).await.unwrap(), 0);
+    }
+
+    /// A run that has not finished is somebody's pending work: no cutoff and no
+    /// count cap may drop it.
+    #[tokio::test]
+    async fn an_unfinished_run_is_never_pruned() {
+        let repo = repo().await;
+        repo.enqueue(
+            NewJobRun {
+                id: "pending".to_string(),
+                kind: "reindex".to_string(),
+                owner: Some(1),
+                summary: "Reindex \"r1\"".to_string(),
+                params: Some(serde_json::json!({"repo_id": "r1"}).to_string()),
+                created_at: 0,
+            },
+            -1,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(repo.prune(i64::MAX, i64::MAX, 0).await.unwrap(), 0);
+        assert!(repo.recent(10).await.unwrap().is_empty());
+        assert_eq!(repo.recoverable(i64::MAX, 10).await.unwrap().len(), 1);
     }
 }

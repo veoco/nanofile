@@ -123,8 +123,8 @@ impl JobRegistry {
 mod tests {
     use super::*;
     use crate::tasks::spec::{
-        ChunkPolicy, Dedup, Durability, History, Priority, QuietPolicy, Resource, Retention,
-        RetryPolicy, SpikePolicy, TimeoutPolicy, Trigger, Visibility,
+        ChunkPolicy, Dedup, Durability, History, Priority, QuietPolicy, Resource, RetryPolicy,
+        SpikePolicy, TimeoutPolicy, Trigger, Visibility,
     };
 
     fn policy(key: JobKey) -> JobSpec {
@@ -139,7 +139,6 @@ mod tests {
             timeout: TimeoutPolicy::default(),
             retry: RetryPolicy::Never,
             dedup: Dedup::None,
-            retention: Retention::default(),
             history: History::EveryRun,
             visibility: Visibility::Owner,
             durability: Durability::Memory,

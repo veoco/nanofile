@@ -12,11 +12,8 @@
 
 use super::spec::{
     ChunkPolicy, Dedup, Durability, History, JobKey, JobSpec, OverlapPolicy, Priority, QuietPolicy,
-    Resource, Retention, RetryPolicy, SpikePolicy, TimeoutPolicy, Trigger, Visibility,
+    Resource, RetryPolicy, SpikePolicy, TimeoutPolicy, Trigger, Visibility,
 };
-
-/// How long a client-submitted run stays pollable.
-const CLIENT_RUN_KEPT_FOR: i64 = 3600;
 
 fn fixed_timer(interval_secs: u64) -> Trigger {
     Trigger::Periodic {
@@ -176,10 +173,6 @@ fn client_job(key: JobKey, name: &'static str) -> JobSpec {
         // generating a unique one, so a rerun would leave a duplicate behind.
         retry: RetryPolicy::Never,
         dedup: Dedup::None,
-        retention: Retention {
-            terminal_ttl_secs: CLIENT_RUN_KEPT_FOR,
-            ..Retention::default()
-        },
         // Owner-only with no administrator override, matching the long-standing
         // 404-for-everyone-else on the copy/move progress endpoint.
         visibility: Visibility::Owner,
@@ -213,7 +206,6 @@ fn housekeeping(key: JobKey, name: &'static str, trigger: Trigger) -> JobSpec {
         },
         retry: RetryPolicy::Never,
         dedup: Dedup::None,
-        retention: Retention::default(),
         visibility: Visibility::OwnerOrAdmin,
         // Audited: recording a cleanup pass is useful history and needs no
         // idempotency, but replaying it buys nothing, so it is not `Durable`.

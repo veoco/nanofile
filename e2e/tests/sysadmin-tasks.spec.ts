@@ -145,7 +145,6 @@ test("a job's scheduling policy is one disclosure away", async ({ page }) => {
     "Waits for a quiet server",
     "Interruptible",
     "Can be stopped",
-    "History kept",
     "After a crash",
   ]) {
     await expect(detail).toContainText(label);

@@ -458,27 +458,6 @@ impl History {
     }
 }
 
-/// How long a finished run is kept, and how much may accumulate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Retention {
-    /// How long a terminal run stays readable.
-    pub terminal_ttl_secs: i64,
-    /// Maximum number of runs held (active runs are never evicted).
-    pub max_retained: usize,
-    /// Maximum total heap footprint, as measured by `JobRun::bytes`.
-    pub max_retained_bytes: usize,
-}
-
-impl Default for Retention {
-    fn default() -> Self {
-        Self {
-            terminal_ttl_secs: 3600,
-            max_retained: 1000,
-            max_retained_bytes: 8 * 1024 * 1024,
-        }
-    }
-}
-
 /// Who may read a run's record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Visibility {
@@ -519,7 +498,6 @@ pub struct JobSpec {
     pub timeout: TimeoutPolicy,
     pub retry: RetryPolicy,
     pub dedup: Dedup,
-    pub retention: Retention,
     pub visibility: Visibility,
     pub durability: Durability,
     /// How much of each run survives in the history.
@@ -642,7 +620,6 @@ mod tests {
             timeout: TimeoutPolicy::default(),
             retry: RetryPolicy::Never,
             dedup: Dedup::None,
-            retention: Retention::default(),
             visibility: Visibility::Owner,
             durability: Durability::Memory,
             history: History::EveryRun,
