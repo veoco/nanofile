@@ -1429,12 +1429,12 @@ async fn document_formats_are_searchable() {
     }
 }
 
-/// Files the PDF parser cannot handle are recorded as skipped, and neither the
-/// request nor the batch that carried them fails.
+/// Files the PDF parser cannot turn into text are recorded as skipped, and
+/// neither the request nor the batch that carried them fails.
 ///
-/// Two shapes: one the parser rejects outright, and one that makes it *panic*.
-/// The second is the one the panic boundary exists for, so it is exercised
-/// through the whole pipeline rather than only in a unit test.
+/// Two shapes: a damaged container the lenient reader still opens, and input
+/// that is not a PDF at all. The second is what makes the loader refuse, and it
+/// is exercised through the whole pipeline rather than only in a unit test.
 #[tokio::test]
 async fn an_unreadable_document_is_skipped_without_breaking_the_batch() {
     let f = common::TestFixture::new_with_index().await;
@@ -1442,7 +1442,10 @@ async fn an_unreadable_document_is_skipped_without_breaking_the_batch() {
 
     let unreadable: [(&str, &[u8]); 2] = [
         ("corrupt.pdf", include_bytes!("fixtures/corrupt.pdf")),
-        ("panics.pdf", include_bytes!("fixtures/panics.pdf")),
+        (
+            "garbage.pdf",
+            b"this file is not a PDF, whatever its name says" as &[u8],
+        ),
     ];
 
     for (name, data) in unreadable {

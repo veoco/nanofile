@@ -124,11 +124,20 @@ tantivy-jieba = "0.20.0"
 
 # Document text extraction for the full-text index. Both are pure Rust (no
 # pdfium, no C/C++), so the "no system library" property holds. Neither drags
-# in a layout engine or a font stack: PDF text comes from `pdf-extract`, a thin
-# text layer over `lopdf`, and Office text from `office_oxide`.
-# `indexer::extract` holds the format table and the limits that keep these
-# crates safe on untrusted content.
-pdf-extract = "0.12"
+# in a layout engine or a font stack: PDF text comes from `lopdf` directly and
+# Office text from `office_oxide`.
+#
+# PDF used to go through `pdf-extract`, a thin text layer over an older lopdf.
+# It has no bound on decompression or on recursion, so a small file could
+# allocate without limit or overflow the stack (which aborts, and no panic
+# boundary can catch it). `lopdf` 0.45 carries the bounds we need —
+# `LoadOptions::max_decompressed_size`, `Stream::*_with_limit`,
+# `Document::get_page_content_with_limit`, `extract_text_chunks_with_limit` —
+# and its reader bounds bracket nesting, so the module can cap every stream it
+# decodes. `default-features = false` keeps its optional date and rayon
+# features out of the binary. See `indexer::extract` for the format table and
+# the limits that keep these crates safe on untrusted content.
+lopdf = { version = "0.45", default-features = false }
 office_oxide = "0.1.12"
 
 # ── Optional system tray dependencies (enabled by the `tray` feature) ───────
@@ -194,6 +203,10 @@ image = { version = "0.25", features = ["tiff"] }
 tempfile = "3"
 tokio-tungstenite = "0.29"
 zip = "2"
+# Building the adversarial fixtures: a Flate stream that expands past the
+# per-stream cap (see `indexer::extract::pdf`). Compressing is all the tests
+# need it for; the decoder side is lopdf's own flate2.
+flate2 = "1"
 # `test-util` gives the task-system tests a paused clock (`start_paused`), so a
 # timeout policy is exercised deterministically instead of by sleeping. It is a
 # dev-dependency on purpose: `full` does not include it, and the production
