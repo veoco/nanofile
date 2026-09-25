@@ -15,6 +15,7 @@ use crate::handler::web::temp_file::TempFileManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
 use crate::repository::Repositories;
+use crate::service::index::{IndexScheduler, IndexService};
 use crate::service::mail::Mailer;
 use crate::tasks::TaskSystem;
 use crate::tasks::registry::RegisteredJob;
@@ -48,6 +49,7 @@ pub fn install_default_jobs(
     gc_config: &GcConfig,
     block_store: &DynBlockStorage,
     indexer: Option<&TextIndexer>,
+    index_backfill_enabled: bool,
     temp_file_manager: &TempFileManager,
     temp_upload_ttl_hours: u64,
     enc_mode: BlockEncryptionMode,
@@ -77,6 +79,10 @@ pub fn install_default_jobs(
     // installing is what clears the record.
     let mut skipped: Vec<SkippedTask> = Vec::new();
 
+    // The handle the file services submit index work through. Disabled when
+    // there is no indexer to write to, so a call site never has to ask.
+    let scheduler = IndexScheduler::new(tasks.clone(), indexer.is_some());
+
     // ── Jobs a request submits ───────────────────────────────────────────
     //
     // These are reference operations: the destination entry points at the
@@ -86,22 +92,18 @@ pub fn install_default_jobs(
     jobs.push(job(JobKey::Copy, {
         let db = db.clone();
         let repos = repos.clone();
-        let block_store = block_store.clone();
         let indexer = indexer.cloned();
+        let scheduler = scheduler.clone();
         move |ctx, params| {
             let db = db.clone();
             let repos = repos.clone();
-            let block_store = block_store.clone();
             let indexer = indexer.clone();
+            let scheduler = scheduler.clone();
             async move {
                 let p: BatchParams = parse_params(params)?;
                 let user_id = ctx.owner().unwrap_or(0);
-                let svc = crate::service::fs::fileops::FileOpsService::new(
-                    db,
-                    repos,
-                    block_store,
-                    indexer,
-                );
+                let svc =
+                    crate::service::fs::fileops::FileOpsService::new(db, repos, indexer, scheduler);
                 let copied = svc
                     .batch_copy(
                         &p.repo_id,
@@ -122,22 +124,18 @@ pub fn install_default_jobs(
     jobs.push(job(JobKey::Move, {
         let db = db.clone();
         let repos = repos.clone();
-        let block_store = block_store.clone();
         let indexer = indexer.cloned();
+        let scheduler = scheduler.clone();
         move |ctx, params| {
             let db = db.clone();
             let repos = repos.clone();
-            let block_store = block_store.clone();
             let indexer = indexer.clone();
+            let scheduler = scheduler.clone();
             async move {
                 let p: BatchParams = parse_params(params)?;
                 let user_id = ctx.owner().unwrap_or(0);
-                let svc = crate::service::fs::fileops::FileOpsService::new(
-                    db,
-                    repos,
-                    block_store,
-                    indexer,
-                );
+                let svc =
+                    crate::service::fs::fileops::FileOpsService::new(db, repos, indexer, scheduler);
                 let moved = svc
                     .batch_move(
                         &p.repo_id,
@@ -180,39 +178,77 @@ pub fn install_default_jobs(
                         "full-text indexing is not enabled".into(),
                     ))
                 })?;
-                let svc = crate::service::admin::AdminService::new(repos);
-                let progress = ctx.clone();
+                let svc = IndexService::new(repos, block_store, indexer);
                 // The pass checks in before every file, so it parks while the
                 // server is busy and resumes when it is not. Those checkpoints
                 // are also where a cancellation lands.
-                let (indexed, skipped) = svc
-                    .reindex(
-                        &indexer,
-                        &repo_id,
-                        &block_store,
-                        Some(&ctx),
-                        move |done, total| {
-                            progress.report(done, Some(total));
-                        },
-                    )
+                let counts = svc
+                    .reindex_repo(Some(&ctx), &repo_id)
                     .await
-                    .map_err(|e| {
-                        // A pass that stopped at a checkpoint comes back as an
-                        // opaque failure; the context knows whether it was a
-                        // cancellation, which is a different terminal state.
-                        if ctx.is_cancelled() {
-                            JobFailure::Cancelled
-                        } else {
-                            JobFailure::App(e)
-                        }
-                    })?;
+                    .map_err(|e| map_abort(&ctx, e))?;
                 // Kept past the params drop so the progress endpoint can still
                 // report which repository this was and what it did.
-                ctx.set_detail("indexed", serde_json::json!(indexed));
+                let skipped = counts.skipped + counts.failed + counts.gone;
+                ctx.set_detail("indexed", serde_json::json!(counts.indexed));
                 ctx.set_detail("skipped", serde_json::json!(skipped));
                 Ok(Outcome::success(
-                    format!("Indexed {indexed} files, skipped {skipped}"),
-                    Some(indexed + skipped),
+                    format!("Indexed {} files, skipped {skipped}", counts.indexed),
+                    Some(counts.total()),
+                ))
+            }
+        }
+    }));
+
+    // Indexing the files a mutation just produced (an upload, a sync commit, a
+    // rename). One run carries a bounded batch, and the job's own concurrency
+    // cap is what stops a mass upload from tokenizing everything at once.
+    jobs.push(job(JobKey::IndexFiles, {
+        let repos = repos.clone();
+        let block_store = block_store.clone();
+        let indexer = indexer.cloned();
+        move |ctx, params| {
+            let repos = repos.clone();
+            let block_store = block_store.clone();
+            let indexer = indexer.clone();
+            async move {
+                let p: IndexFilesParams = parse_params(params)?;
+                let indexer = indexer.ok_or_else(|| {
+                    JobFailure::App(base::error::AppError::BadRequest(
+                        "full-text indexing is not enabled".into(),
+                    ))
+                })?;
+                let svc = IndexService::new(repos, block_store, indexer);
+                // Explicit work: the caller is saying these paths changed, so a
+                // document a client pinned by hand is refreshed rather than
+                // left alone.
+                let counts = svc
+                    .index_batch(
+                        Some(&ctx),
+                        &p.repo_id,
+                        &p.files,
+                        crate::service::index::IndexMode::Explicit,
+                    )
+                    .await
+                    .map_err(|e| map_abort(&ctx, e))?;
+                ctx.set_detail("indexed", serde_json::json!(counts.indexed));
+                ctx.set_detail("skipped", serde_json::json!(counts.skipped));
+                ctx.set_detail("failed", serde_json::json!(counts.failed));
+                if counts.indexed == 0 && counts.failed == 0 {
+                    // A binary upload and a no-op rename both land here: the
+                    // tick found nothing worth a run record.
+                    return Ok(Outcome::idle(format!(
+                        "nothing to index ({} skipped, {} gone)",
+                        counts.skipped, counts.gone
+                    )));
+                }
+                Ok(Outcome::success(
+                    format!(
+                        "Indexed {} file(s), skipped {}, failed {}",
+                        counts.indexed,
+                        counts.skipped + counts.gone,
+                        counts.failed
+                    ),
+                    Some(counts.total()),
                 ))
             }
         }
@@ -449,6 +485,53 @@ pub fn install_default_jobs(
         }));
     }
 
+    // The low-load pass over files the index has never seen, or whose document
+    // was written by an older extractor. Its cursor is process-local and
+    // advances across repositories, so a server that is usually busy still
+    // reaches every library in turn rather than retrying the first forever.
+    if let Some(idx) = indexer.filter(|_| index_backfill_enabled) {
+        let cursor = Arc::new(std::sync::Mutex::new(0usize));
+        jobs.push(job(JobKey::IndexBackfill, {
+            let repos = repos.clone();
+            let block_store = block_store.clone();
+            let idx = idx.clone();
+            let cursor = cursor.clone();
+            move |ctx, _params| {
+                let repos = repos.clone();
+                let block_store = block_store.clone();
+                let idx = idx.clone();
+                let cursor = cursor.clone();
+                async move {
+                    let svc = IndexService::new(repos, block_store, idx);
+                    let report = svc
+                        .backfill_pass(Some(&ctx), &cursor)
+                        .await
+                        .map_err(|e| map_abort(&ctx, e))?;
+                    ctx.set_detail("checked", serde_json::json!(report.files_checked));
+                    ctx.set_detail("repos", serde_json::json!(report.repos_scanned));
+                    ctx.set_detail("indexed", serde_json::json!(report.counts.indexed));
+                    if report.counts.indexed == 0 && report.counts.failed == 0 {
+                        return Ok(Outcome::idle(format!(
+                            "checked {} file(s) in {} librar(ies), nothing to index",
+                            report.files_checked, report.repos_scanned
+                        )));
+                    }
+                    Ok(Outcome::success(
+                        format!(
+                            "Checked {} file(s) in {} librar(ies): indexed {}, skipped {}, failed {}",
+                            report.files_checked,
+                            report.repos_scanned,
+                            report.counts.indexed,
+                            report.counts.skipped + report.counts.gone,
+                            report.counts.failed
+                        ),
+                        Some(report.counts.indexed),
+                    ))
+                }
+            }
+        }));
+    }
+
     jobs.push(job(JobKey::ZipTaskCleanup, |_ctx, _params| async move {
         let dropped =
             crate::handler::web::zip_download::cleanup_expired(chrono::Utc::now().timestamp());
@@ -486,6 +569,15 @@ pub fn install_default_jobs(
     }
     if indexer.is_none() {
         skipped.push(SkippedTask::job(JobKey::IndexCommit, SkipReason::IndexOff));
+        skipped.push(SkippedTask::job(
+            JobKey::IndexBackfill,
+            SkipReason::IndexOff,
+        ));
+    } else if !index_backfill_enabled {
+        skipped.push(SkippedTask::job(
+            JobKey::IndexBackfill,
+            SkipReason::IndexBackfillOff,
+        ));
     }
     if mail.is_none() {
         // Not a job any more, which is exactly why it has to be reported: the
@@ -599,12 +691,34 @@ struct BatchParams {
     email: String,
 }
 
-fn parse_params(params: crate::tasks::run::Params) -> Result<BatchParams, JobFailure> {
+fn parse_params<T: serde::de::DeserializeOwned>(
+    params: crate::tasks::run::Params,
+) -> Result<T, JobFailure> {
     serde_json::from_value(params).map_err(|e| {
         JobFailure::App(base::error::AppError::BadRequest(format!(
             "invalid job params: {e}"
         )))
     })
+}
+
+/// The files a mutation submitted for indexing.
+#[derive(serde::Deserialize)]
+struct IndexFilesParams {
+    repo_id: String,
+    #[serde(default)]
+    files: Vec<crate::service::index::IndexTarget>,
+}
+
+/// Map a pass that stopped at a checkpoint onto a cancellation.
+///
+/// The pipeline reports an aborted pass as an opaque failure; only the job body
+/// knows whether the run was cancelled, which is a different terminal state.
+fn map_abort(ctx: &crate::tasks::context::JobContext, e: base::error::AppError) -> JobFailure {
+    if ctx.is_cancelled() {
+        JobFailure::Cancelled
+    } else {
+        JobFailure::App(e)
+    }
 }
 
 /// Pair a catalog policy with a body, keeping the catalog's trigger.

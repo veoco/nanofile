@@ -10,6 +10,7 @@ pub mod api_key;
 pub mod auth;
 pub mod credential;
 pub mod fs;
+pub mod index;
 pub mod mail;
 pub mod repo;
 pub mod sharing;

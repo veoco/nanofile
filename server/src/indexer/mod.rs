@@ -4,25 +4,30 @@
 //! Chinese tokenizer (via tantivy-jieba) for content fields so both CJK and
 //! Latin text are searchable.
 //!
-//! # Text Detection
+//! This module is deliberately only the *document store*: it writes, deletes
+//! and searches index documents, and knows nothing about where a file's bytes
+//! come from or what format they are. Format dispatch lives in [`extract`],
+//! and the read → extract → write pipeline lives in [`crate::service::index`].
 //!
-//! `is_indexable_text()` determines whether a file should be indexed:
-//! 1. Known text-file extensions (`.txt .rs .py .md …`)
-//! 2. Content sniffing — first 1024 bytes contain no NUL bytes and are
-//!    valid UTF-8.
+//! Every document carries the state that decides whether it still needs work:
+//! the file's `fs_id` (its content identity in the repo), the
+//! [`extract::EXTRACTOR_VERSION`] that produced it, and a `status`. That is
+//! what lets the backfill tell "already processed as unsupported" from "never
+//! seen" — without it, every binary file would be re-read on every pass.
 //!
 //! # Background Commit
 //!
 //! A tokio task commits the Tantivy writer every 30 seconds so uncommitted
 //! documents don't stall on a crash.
 
+pub mod extract;
+
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use futures::StreamExt;
-use std::sync::Arc;
 use tantivy::Index;
 use tantivy::ReloadPolicy;
 use tantivy::TantivyDocument;
@@ -33,13 +38,167 @@ use tantivy::tokenizer::TextAnalyzer;
 
 use crate::repository::Repositories;
 use base::error::AppError;
-use infra::storage::DynBlockStorage;
 
 // ── Schema field names ────────────────────────────────────────────────
 const FIELD_REPO_ID: &str = "repo_id";
 const FIELD_FULLPATH: &str = "fullpath";
 const FIELD_FILENAME: &str = "filename";
 const FIELD_CONTENT: &str = "content";
+/// Content identity of the file the document was built from (the repo's
+/// `fs_id`). Lets a later pass tell "the file changed" from "we already
+/// indexed exactly this content".
+const FIELD_FS_ID: &str = "fs_id";
+/// [`extract::EXTRACTOR_VERSION`] that produced this document.
+const FIELD_EXTRACTOR_VERSION: &str = "extractor_version";
+/// [`DocStatus::as_str`] of the document.
+const FIELD_STATUS: &str = "status";
+/// When the last attempt was made, for a failed document's retry cooldown.
+const FIELD_ATTEMPTED_AT: &str = "attempted_at";
+
+/// Marks the on-disk schema generation inside `index_dir`.
+///
+/// `Index::open_in_dir` happily opens an index whose schema predates the code,
+/// and the mismatch only surfaces later as a panic on a missing field. The
+/// marker turns that into an explicit rebuild at startup.
+const SCHEMA_VERSION_FILE: &str = ".nanofile_schema_version";
+/// Bump whenever the field set below changes.
+const SCHEMA_VERSION: u32 = 2;
+
+/// How long a failed document waits before the backfill retries it.
+///
+/// Without this a corrupt or unreadable file would be re-read on every pass;
+/// the extractor version is stamped at the same value, so the version check
+/// alone cannot hold it back.
+pub const FAILED_RETRY_AFTER_SECS: i64 = 3600;
+
+/// What the index recorded about a file, independent of its content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocStatus {
+    /// Text was extracted and is searchable.
+    Indexed,
+    /// The file was examined and deliberately not indexed (binary, or a format
+    /// no extractor claims). Recorded so the backfill does not re-read it.
+    Skipped,
+    /// Extraction or the block read failed. Retried after a cooldown.
+    Failed,
+}
+
+impl DocStatus {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Indexed => "indexed",
+            Self::Skipped => "skipped",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn from_str(s: &str) -> Self {
+        match s {
+            "skipped" => Self::Skipped,
+            "failed" => Self::Failed,
+            _ => Self::Indexed,
+        }
+    }
+}
+
+/// The per-document state written alongside the content.
+#[derive(Debug, Clone)]
+pub struct DocMeta {
+    /// The repo `fs_id` this document was built from. Empty when unknown (a
+    /// caller that only has content), which the backfill reads as stale.
+    pub fs_id: String,
+    /// [`extract::EXTRACTOR_VERSION`] that produced the content. `u32::MAX` is
+    /// the sentinel for text injected by hand (`/api2/index-file-text/`):
+    /// never overwritten by the automatic pipeline.
+    pub extractor_version: u32,
+    pub status: DocStatus,
+    /// Unix seconds of the last attempt, used only for [`DocStatus::Failed`].
+    pub attempted_at: i64,
+}
+
+impl DocMeta {
+    /// The version stamped on text a client supplied directly.
+    pub const MANUAL_VERSION: u32 = u32::MAX;
+
+    /// State for a freshly extracted document.
+    pub fn indexed(fs_id: impl Into<String>) -> Self {
+        Self {
+            fs_id: fs_id.into(),
+            extractor_version: extract::EXTRACTOR_VERSION,
+            status: DocStatus::Indexed,
+            attempted_at: chrono::Utc::now().timestamp(),
+        }
+    }
+
+    /// State for a file the pipeline examined and does not index.
+    pub fn skipped(fs_id: impl Into<String>) -> Self {
+        Self {
+            fs_id: fs_id.into(),
+            extractor_version: extract::EXTRACTOR_VERSION,
+            status: DocStatus::Skipped,
+            attempted_at: chrono::Utc::now().timestamp(),
+        }
+    }
+
+    /// State for a document whose extraction failed.
+    pub fn failed(fs_id: impl Into<String>) -> Self {
+        Self {
+            fs_id: fs_id.into(),
+            extractor_version: extract::EXTRACTOR_VERSION,
+            status: DocStatus::Failed,
+            attempted_at: chrono::Utc::now().timestamp(),
+        }
+    }
+
+    /// Whether this document was pinned by a client and must not be refreshed.
+    pub fn is_manual(&self) -> bool {
+        self.extractor_version == Self::MANUAL_VERSION
+    }
+
+    /// Whether the stored state means "no further work for this content at this
+    /// extractor version".
+    pub fn is_current(&self, fs_id: &str, now: i64) -> bool {
+        if self.is_manual() {
+            return true;
+        }
+        if self.extractor_version != extract::EXTRACTOR_VERSION || self.fs_id != fs_id {
+            return false;
+        }
+        match self.status {
+            DocStatus::Indexed | DocStatus::Skipped => true,
+            // A failure is retried, but not on every pass.
+            DocStatus::Failed => now.saturating_sub(self.attempted_at) >= FAILED_RETRY_AFTER_SECS,
+        }
+    }
+}
+
+/// What the index knows about one `(repo_id, fullpath)`.
+#[derive(Debug, Clone)]
+pub struct DocState {
+    pub fs_id: String,
+    pub extractor_version: u32,
+    pub status: DocStatus,
+    pub attempted_at: i64,
+}
+
+impl DocState {
+    /// Whether this document was pinned by a client and must not be refreshed
+    /// by an automatic pass.
+    pub fn is_manual(&self) -> bool {
+        self.extractor_version == DocMeta::MANUAL_VERSION
+    }
+
+    /// Whether this document needs no further work for `fs_id` at `now`.
+    pub fn is_current(&self, fs_id: &str, now: i64) -> bool {
+        DocMeta {
+            fs_id: self.fs_id.clone(),
+            extractor_version: self.extractor_version,
+            status: self.status.clone(),
+            attempted_at: self.attempted_at,
+        }
+        .is_current(fs_id, now)
+    }
+}
 
 /// A single full-text hit, optionally carrying a highlighted content snippet.
 #[derive(Debug, Clone)]
@@ -52,36 +211,6 @@ pub struct IndexHit {
     pub content_highlight: String,
 }
 
-/// File extensions considered indexable plain text.
-const TEXT_EXTENSIONS: &[&str] = &[
-    // Code
-    "rs", "py", "js", "ts", "jsx", "tsx", "go", "java", "rb", "php", "c", "cpp", "h", "hpp", "cs",
-    "swift", "kt", "scala", "dart", "lua", "pl", "pm", "r", "m", "mm", "clj", "cljs", "coffee",
-    "groovy", "erl", "hrl", "fs", "fsx", "hs", "lhs", "nim", "zig", "v", "vhdl", "asm", "s", "awk",
-    "cbl", "cc", "cfc", "cfm", "cob", "cpy", "d", "e", "el", "ex", "exs", "f", "f90", "f95", "for",
-    "frag", "fsh", "geo", "glsl", "gml", "gql", "graphql", "gyp", "hbs", "hxx", "ino", "ipp", "j",
-    "jl", "kt", "kts", "lagda", "lisp", "ll", "lm", "lpr", "ls", "m4", "mak", "ml", "mli", "mll",
-    "mly", "mo", "mod", "ms", "mt", "nix", "njk", "nqp", "ox", "oxh", "oxo", "p6", "p7s", "pas",
-    "pck", "pd", "pdd", "pkh", "pig", "pl6", "pls", "pm6", "pod", "pod6", "pp", "prc", "prefs",
-    "pro", "proto", "ps", "ps1", "psd1", "psm1", "pt", "purs", "pxd", "pxi", "pyx", "qbs", "qml",
-    "r2", "r3", "rake", "rbw", "rbx", "rhtml", "rkt", "rmd", "rno", "roff", "rpy", "rq", "rsx",
-    "ru", "sage", "sas", "sass", "sc", "scad", "scm", "scss", "sed", "sfd", "sh", "sjs", "sls",
-    "sml", "sps", "sqf", "sr", "ss", "st", "styl", "sv", "t", "tcc", "tcl", "tex", "textile",
-    "tla", "tlx", "tpl", "tpp", "tst", "ttl", "twig", "uc", "udf", "vala", "vbs", "vhd", "vim",
-    "vm", "vsh", "w", "wast", "wat", "webidl", "xib", "xl", "xqy", "xquery", "xsd", "xsl", "xslt",
-    "xul", "yang", "yaws", "yxx", "yy", "zep", // Scripts / config
-    "sh", "bash", "zsh", "fish", "bat", "cmd", "ps1", "gradle", "cmake", "make", "mk",
-    // Web
-    "html", "htm", "xhtml", "css", "scss", "less", "sass", "vue", "svelte", "ejs", "erb", "hbs",
-    "mustache", "haml", "slim", "jade", "pug", // Data / markup
-    "json", "xml", "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "csv", "tsv", "sql",
-    "graphql", // Docs
-    "txt", "text", "md", "markdown", "mdown", "mkd", "mkdn", "mdwn", "rst", "rtf", "tex", "bib",
-    "log", "org", "pod", "wiki", "creole", "rest", "asc", "adoc", "asciidoc", "docbook",
-    // Other
-    "diff", "patch", "po", "pot", "spec",
-];
-
 /// Full-text indexer wrapping Tantivy.
 #[derive(Clone)]
 pub struct TextIndexer {
@@ -89,7 +218,6 @@ pub struct TextIndexer {
     writer: Arc<Mutex<tantivy::IndexWriter<TantivyDocument>>>,
     schema: Schema,
     reader: tantivy::IndexReader,
-    repos: Option<Arc<Repositories>>,
     /// Number of uncommitted index operations since the last `commit()`.
     /// Lets the background committer skip a needless commit+fsync when nothing
     /// changed. `Arc` so the `Clone` derive shares the counter across clones.
@@ -104,7 +232,7 @@ impl TextIndexer {
     ///
     /// Registers the `jieba` Chinese tokenizer. Returns an error if the
     /// directory cannot be created or the index is incompatible.
-    pub fn new(index_dir: &Path, repos: Option<Arc<Repositories>>) -> Result<Self, AppError> {
+    pub fn new(index_dir: &Path) -> Result<Self, AppError> {
         std::fs::create_dir_all(index_dir)
             .map_err(|e| AppError::internal(format!("create index dir: {e}")))?;
 
@@ -120,7 +248,31 @@ impl TextIndexer {
                     .set_index_option(IndexRecordOption::WithFreqsAndPositions),
             ),
         );
+        schema_builder.add_text_field(FIELD_FS_ID, STRING | STORED);
+        schema_builder.add_text_field(FIELD_EXTRACTOR_VERSION, STRING | STORED);
+        schema_builder.add_text_field(FIELD_STATUS, STRING | STORED);
+        schema_builder.add_text_field(FIELD_ATTEMPTED_AT, STRING | STORED);
         let schema = schema_builder.build();
+
+        // An index written by an older field set cannot be served by this code
+        // (`get_field` on a missing field panics), and the index is derived data
+        // that the backfill can rebuild, so a version mismatch means "start
+        // over" rather than "run with the old schema".
+        let marker = index_dir.join(SCHEMA_VERSION_FILE);
+        let on_disk: Option<u32> = std::fs::read_to_string(&marker)
+            .ok()
+            .and_then(|s| s.trim().parse().ok());
+        if on_disk.is_some_and(|v| v != SCHEMA_VERSION) {
+            tracing::warn!(
+                "full-text index at {:?} has schema version {:?}, current is {SCHEMA_VERSION}; rebuilding",
+                index_dir,
+                on_disk
+            );
+            std::fs::remove_dir_all(index_dir)
+                .map_err(|e| AppError::internal(format!("remove stale index dir: {e}")))?;
+            std::fs::create_dir_all(index_dir)
+                .map_err(|e| AppError::internal(format!("create index dir: {e}")))?;
+        }
 
         // Try to open an existing index first. This preserves indexed data
         // across restarts. Only if no valid index exists do we create a new one.
@@ -148,6 +300,15 @@ impl TextIndexer {
                     .map_err(|e| AppError::internal(format!("create tantivy index: {e}")))?
             }
         };
+
+        if let Err(e) = std::fs::write(&marker, SCHEMA_VERSION.to_string()) {
+            tracing::warn!("could not write the index schema marker: {e}");
+        }
+
+        // The schema the writer must use is the one on disk, not the one just
+        // built: they are equal (the guard above guarantees it) and taking it
+        // from the index keeps a future edit from silently disagreeing.
+        let schema = index.schema();
 
         // Register the jieba Chinese tokenizer for content fields.
         // LowerCaser ensures case-insensitive search for non-CJK text.
@@ -177,16 +338,9 @@ impl TextIndexer {
             writer: writer_arc,
             schema,
             reader,
-            repos,
             pending: Arc::new(AtomicUsize::new(0)),
             commit_scheduled: Arc::new(AtomicBool::new(false)),
         })
-    }
-
-    fn repos(&self) -> &Repositories {
-        self.repos
-            .as_ref()
-            .expect("TextIndexer::repos: Repositories not set (did you use the test constructor?)")
     }
 
     /// Index a file's text content.
@@ -198,12 +352,58 @@ impl TextIndexer {
     ///
     /// If a document with the same `(repo_id, fullpath)` already exists, it
     /// is replaced (delete + add).
+    ///
+    /// This is the content-only entry point: it records the document as indexed
+    /// at the current extractor version but with no `fs_id`, which the backfill
+    /// reads as "content identity unknown" and refreshes. The pipeline uses
+    /// [`Self::index_file_with_meta`].
     pub fn index_file(
         &self,
         repo_id: &str,
         fullpath: &str,
         filename: &str,
         content: &str,
+    ) -> Result<(), AppError> {
+        self.write_doc(repo_id, fullpath, filename, content, &DocMeta::indexed(""))
+    }
+
+    /// Index a file's text content together with the state that says which
+    /// content and which extractor produced it.
+    pub fn index_file_with_meta(
+        &self,
+        repo_id: &str,
+        fullpath: &str,
+        filename: &str,
+        content: &str,
+        meta: &DocMeta,
+    ) -> Result<(), AppError> {
+        self.write_doc(repo_id, fullpath, filename, content, meta)
+    }
+
+    /// Record that a file was examined and is not searchable, without storing
+    /// any content.
+    ///
+    /// The document exists only for its state: it is what makes the backfill
+    /// skip a binary file instead of re-reading it on every pass.
+    pub fn mark_file(
+        &self,
+        repo_id: &str,
+        fullpath: &str,
+        filename: &str,
+        meta: &DocMeta,
+    ) -> Result<(), AppError> {
+        self.write_doc(repo_id, fullpath, filename, "", meta)
+    }
+
+    /// The shared body of the write paths: replace any document at
+    /// `(repo_id, fullpath)` and add the new one.
+    fn write_doc(
+        &self,
+        repo_id: &str,
+        fullpath: &str,
+        filename: &str,
+        content: &str,
+        meta: &DocMeta,
     ) -> Result<(), AppError> {
         let mut writer = self
             .writer
@@ -229,12 +429,32 @@ impl TextIndexer {
             .schema
             .get_field(FIELD_CONTENT)
             .expect("content field defined");
+        let fs_id_field = self
+            .schema
+            .get_field(FIELD_FS_ID)
+            .expect("fs_id field defined");
+        let version_field = self
+            .schema
+            .get_field(FIELD_EXTRACTOR_VERSION)
+            .expect("extractor_version field defined");
+        let status_field = self
+            .schema
+            .get_field(FIELD_STATUS)
+            .expect("status field defined");
+        let attempted_field = self
+            .schema
+            .get_field(FIELD_ATTEMPTED_AT)
+            .expect("attempted_at field defined");
 
         let doc = doc!(
             repo_id_field => repo_id,
             fullpath_field => fullpath,
             filename_field => filename,
             content_field => content,
+            fs_id_field => meta.fs_id.as_str(),
+            version_field => meta.extractor_version.to_string(),
+            status_field => meta.status.as_str(),
+            attempted_field => meta.attempted_at.to_string(),
         );
 
         writer
@@ -245,6 +465,166 @@ impl TextIndexer {
         // No automatic commit here — the background committer persists pending
         // documents periodically.  Call commit() manually when immediate
         // durability is required (e.g. before server shutdown).
+        Ok(())
+    }
+
+    /// The stored state of every requested path, keyed by path.
+    ///
+    /// Paths the index has never seen are absent from the map. The lookup is
+    /// chunked so a whole-repository pass does not build one enormous query.
+    pub fn doc_states(
+        &self,
+        repo_id: &str,
+        paths: &[String],
+    ) -> Result<std::collections::HashMap<String, DocState>, AppError> {
+        use std::collections::HashMap;
+        use tantivy::query::{BooleanQuery, Occur, TermQuery};
+        use tantivy::schema::IndexRecordOption;
+
+        let mut out: HashMap<String, DocState> = HashMap::new();
+        if paths.is_empty() {
+            return Ok(out);
+        }
+        if let Err(e) = self.reader.reload() {
+            tracing::warn!("doc_states: reload failed: {e}");
+        }
+        let searcher = self.reader.searcher();
+
+        let repo_id_field = self
+            .schema
+            .get_field(FIELD_REPO_ID)
+            .expect("repo_id field defined");
+        let fullpath_field = self
+            .schema
+            .get_field(FIELD_FULLPATH)
+            .expect("fullpath field defined");
+        let fs_id_field = self
+            .schema
+            .get_field(FIELD_FS_ID)
+            .expect("fs_id field defined");
+        let version_field = self
+            .schema
+            .get_field(FIELD_EXTRACTOR_VERSION)
+            .expect("extractor_version field defined");
+        let status_field = self
+            .schema
+            .get_field(FIELD_STATUS)
+            .expect("status field defined");
+        let attempted_field = self
+            .schema
+            .get_field(FIELD_ATTEMPTED_AT)
+            .expect("attempted_at field defined");
+
+        // 256 paths per query: large enough that a repository pass is a few
+        // round trips, small enough that the query stays cheap.
+        const CHUNK: usize = 256;
+        for chunk in paths.chunks(CHUNK) {
+            let path_clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = chunk
+                .iter()
+                .map(|path| {
+                    (
+                        Occur::Should,
+                        Box::new(TermQuery::new(
+                            tantivy::Term::from_field_text(fullpath_field, path),
+                            IndexRecordOption::Basic,
+                        )) as Box<dyn tantivy::query::Query>,
+                    )
+                })
+                .collect();
+            let query = BooleanQuery::new(vec![
+                (
+                    Occur::Must,
+                    Box::new(TermQuery::new(
+                        tantivy::Term::from_field_text(repo_id_field, repo_id),
+                        IndexRecordOption::Basic,
+                    )) as Box<dyn tantivy::query::Query>,
+                ),
+                (
+                    Occur::Must,
+                    Box::new(BooleanQuery::new(path_clauses)) as Box<dyn tantivy::query::Query>,
+                ),
+            ]);
+
+            let top_docs = searcher
+                .search(&query, &TopDocs::with_limit(chunk.len()).order_by_score())
+                .map_err(|e| AppError::internal(format!("doc_states search: {e}")))?;
+            for (_score, doc_address) in top_docs {
+                let doc = searcher
+                    .doc::<TantivyDocument>(doc_address)
+                    .map_err(|e| AppError::internal(format!("doc_states retrieve doc: {e}")))?;
+                let Some(path) = doc.get_first(fullpath_field).and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let state = DocState {
+                    fs_id: doc
+                        .get_first(fs_id_field)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    extractor_version: doc
+                        .get_first(version_field)
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0),
+                    status: DocStatus::from_str(
+                        doc.get_first(status_field)
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("indexed"),
+                    ),
+                    attempted_at: doc
+                        .get_first(attempted_field)
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0),
+                };
+                out.insert(path.to_string(), state);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Run [`Self::index_file_with_meta`] on a blocking thread (tokenization is
+    /// CPU-heavy), then schedule the debounced commit.
+    pub async fn index_file_with_meta_async(
+        &self,
+        repo_id: &str,
+        fullpath: &str,
+        filename: &str,
+        content: &str,
+        meta: DocMeta,
+    ) -> Result<(), AppError> {
+        let idx = self.clone();
+        let repo_id = repo_id.to_string();
+        let fullpath = fullpath.to_string();
+        let filename = filename.to_string();
+        let content = content.to_string();
+        tokio::task::spawn_blocking(move || {
+            idx.index_file_with_meta(&repo_id, &fullpath, &filename, &content, &meta)
+        })
+        .await
+        .map_err(|e| AppError::internal(format!("indexer index task failed: {e}")))??;
+
+        self.schedule_debounced_commit();
+        Ok(())
+    }
+
+    /// Run [`Self::mark_file`] on a blocking thread.
+    pub async fn mark_file_async(
+        &self,
+        repo_id: &str,
+        fullpath: &str,
+        filename: &str,
+        meta: DocMeta,
+    ) -> Result<(), AppError> {
+        let idx = self.clone();
+        let repo_id = repo_id.to_string();
+        let fullpath = fullpath.to_string();
+        let filename = filename.to_string();
+        tokio::task::spawn_blocking(move || idx.mark_file(&repo_id, &fullpath, &filename, &meta))
+            .await
+            .map_err(|e| AppError::internal(format!("indexer mark task failed: {e}")))??;
+
+        self.schedule_debounced_commit();
         Ok(())
     }
 
@@ -354,59 +734,6 @@ impl TextIndexer {
         self.pending.load(Ordering::Relaxed) > 0
     }
 
-    /// Re-index a directory's files by absolute path, returning how many were
-    /// indexed.
-    ///
-    /// The read + tokenize per file is heavy, so the batch is bounded; Tantivy
-    /// writes coalesce into the usual debounced commit.
-    pub async fn reindex_files(
-        &self,
-        repo_id: &str,
-        paths: &[String],
-        block_store: &DynBlockStorage,
-    ) -> Result<u64, AppError> {
-        if paths.is_empty() {
-            return Ok(0);
-        }
-        let results: Vec<Result<bool, AppError>> = futures::stream::iter(paths.iter().cloned())
-            .map(|fullpath| {
-                let indexer = self.clone();
-                let block_store = block_store.clone();
-                let rid = repo_id.to_string();
-                async move { indexer.reindex_file(&rid, &fullpath, &block_store).await }
-            })
-            .buffer_unordered(8)
-            .collect()
-            .await;
-        let mut indexed = 0;
-        for (path, result) in paths.iter().zip(results) {
-            match result {
-                Ok(true) => indexed += 1,
-                Ok(false) => {}
-                // Empty/Binary files resolve to false; a failure means the
-                // content could not be read, which the caller cannot act on.
-                Err(e) => tracing::warn!("failed to reindex {path}: {e}"),
-            }
-        }
-        Ok(indexed)
-    }
-
-    /// Re-index every file underneath a directory, returning how many were
-    /// indexed.
-    ///
-    /// Used when a directory is renamed or moved: every file below it has a new
-    /// path, so each one must be re-read and re-written even though its content
-    /// did not change. `dir_fs_id` is the directory's *new* fs object id.
-    pub async fn reindex_dir(
-        &self,
-        repo_id: &str,
-        dir_fs_id: &str,
-        block_store: &DynBlockStorage,
-    ) -> Result<u64, AppError> {
-        let paths = collect_file_paths_under(self.repos(), repo_id, dir_fs_id, "").await?;
-        self.reindex_files(repo_id, &paths, block_store).await
-    }
-
     /// Coalesce writes into a single commit shortly after the last one: when
     /// the first write of a batch arrives, spawn a task that commits after a
     /// short delay, then re-schedules if more writes landed during the commit.
@@ -453,61 +780,6 @@ impl TextIndexer {
         self.reader
             .reload()
             .map_err(|e| AppError::internal(format!("index reload: {e}")))
-    }
-
-    /// Re-index a file by reading its content from block storage.
-    ///
-    /// Returns `true` if the file was indexed, or `false` if it was skipped
-    /// (binary or otherwise non-indexable file).
-    ///
-    /// Used after rename/move operations (the content is still in storage but
-    /// the path has changed), and by the re-index API for backfilling existing
-    /// files.
-    pub async fn reindex_file(
-        &self,
-        repo_id: &str,
-        fullpath: &str,
-        block_store: &DynBlockStorage,
-    ) -> Result<bool, AppError> {
-        // Only the file prefix is indexed; whole files are not loaded.
-        const MAX_REINDEX_BYTES: usize = 8 * 1024 * 1024;
-        let filename = fullpath
-            .rsplit_once('/')
-            .map(|(_, name)| name)
-            .unwrap_or(fullpath);
-
-        // Read file content from block storage. Cap the read so huge files
-        // don't get loaded fully into memory just for indexing — the prefix is
-        // sufficient for searchable content.
-        let data = match crate::fs::core::download::Downloader::download_file_limited(
-            self.repos(),
-            repo_id,
-            fullpath,
-            block_store,
-            None,
-            MAX_REINDEX_BYTES,
-        )
-        .await
-        {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!("reindex_file: failed to read {fullpath}: {e}");
-                return Err(AppError::internal(format!(
-                    "reindex_file: read {fullpath}: {e}"
-                )));
-            }
-        };
-
-        if is_indexable_text(filename, &data) {
-            let content = String::from_utf8_lossy(&data);
-            self.index_file_async(repo_id, fullpath, filename, &content)
-                .await?;
-            Ok(true)
-        } else {
-            // Not indexable — clean up any old index entry.
-            self.delete_file_async(repo_id, fullpath).await?;
-            Ok(false)
-        }
     }
 
     /// Search the full-text index.
@@ -709,9 +981,23 @@ impl TextIndexer {
             Box::new(BooleanQuery::new(repo_subqueries))
         };
 
+        // Only documents that actually carry text are searchable. A "skipped"
+        // or "failed" document exists for its state alone: it records that the
+        // backfill need not look at the file again, and must not surface as a
+        // hit with no content.
+        let status_field = self
+            .schema
+            .get_field(FIELD_STATUS)
+            .expect("status field defined");
+        let status_query: Box<dyn tantivy::query::Query> = Box::new(TermQuery::new(
+            tantivy::Term::from_field_text(status_field, DocStatus::Indexed.as_str()),
+            IndexRecordOption::Basic,
+        ));
+
         let query: Box<dyn tantivy::query::Query> = Box::new(BooleanQuery::new(vec![
             (Occur::Must, text_query),
             (Occur::Must, repo_query),
+            (Occur::Must, status_query),
         ]));
 
         // Collect enough results for offset + limit.
@@ -834,6 +1120,10 @@ impl TextIndexer {
             .schema
             .get_field(FIELD_CONTENT)
             .expect("content field defined");
+        let status_field = self
+            .schema
+            .get_field(FIELD_STATUS)
+            .expect("status field defined");
 
         let subqueries: Vec<(Occur, Box<dyn tantivy::query::Query>)> = vec![
             (
@@ -847,6 +1137,16 @@ impl TextIndexer {
                 Occur::Must,
                 Box::new(TermQuery::new(
                     tantivy::Term::from_field_text(fullpath_field, fullpath),
+                    IndexRecordOption::Basic,
+                )),
+            ),
+            // A "skipped"/"failed" document has no text; reporting it as an
+            // empty indexed content would be indistinguishable from a file
+            // whose content really is empty.
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    tantivy::Term::from_field_text(status_field, DocStatus::Indexed.as_str()),
                     IndexRecordOption::Basic,
                 )),
             ),
@@ -1021,62 +1321,28 @@ fn html_escape(s: &str) -> String {
     out
 }
 
-/// Determine whether a file should be indexed as plain text.
-///
-/// Uses a two-phase check:
-/// 1. Extension whitelist — fast, file-specific.
-/// 2. Content sniffing — for unknown extensions, check the first 1024 bytes
-///    contain no NUL bytes and are valid UTF-8.
-pub fn is_indexable_text(filename: &str, data: &[u8]) -> bool {
-    // Extract extension, lowercased.
-    let ext = filename
-        .rsplit_once('.')
-        .map(|(_, e)| e.to_lowercase())
-        .unwrap_or_default();
-
-    // Phase 1: known text extensions.
-    if TEXT_EXTENSIONS.contains(&ext.as_str()) {
-        return true;
-    }
-
-    // Phase 2: content sniffing for unknown extensions / no extension.
-    text_content_sniff(data)
+/// One file found by a subtree walk: everything the index pipeline needs
+/// without re-reading the directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEntry {
+    /// Repo-absolute path with a leading `/`.
+    pub path: String,
+    /// The file's `fs_id`, i.e. its content identity.
+    pub fs_id: String,
+    pub size: i64,
 }
 
-/// Sniff whether `data` looks like plain text by checking the first 1024
-/// bytes for NUL bytes and UTF-8 validity.
-fn text_content_sniff(data: &[u8]) -> bool {
-    let head = if data.len() > 1024 {
-        &data[..1024]
-    } else {
-        data
-    };
-
-    // NUL byte → binary.
-    if head.contains(&0) {
-        return false;
-    }
-
-    // Must be valid UTF-8.
-    std::str::from_utf8(head).is_ok()
-}
-
-/// Collect the absolute repo paths (with a leading `/`) of every file in the
-/// tree rooted at `dir_fs_id`.
+/// Collect every file in the tree rooted at `dir_fs_id`.
 ///
-/// `base_path` is the directory's own repo path (`/docs`, or `""` for the repo
-/// root); returned paths are `base_path` joined with each descendant's relative
-/// path, so they match the paths the index stores.
-///
-/// Directories themselves are not indexable, so only files are returned. The
-/// queue is bounded by `TreeGuard` (level count and visited nodes), matching the
-/// other tree walks, so a pathological tree cannot run away here.
-pub(crate) async fn collect_file_paths_under(
+/// This is [`collect_file_paths_under`] plus each file's `fs_id` and size,
+/// which is what lets the backfill decide "already indexed exactly this
+/// content" without a separate tree lookup per file.
+pub(crate) async fn collect_file_entries_under(
     repos: &Repositories,
     repo_id: &str,
     dir_fs_id: &str,
     base_path: &str,
-) -> Result<Vec<String>, AppError> {
+) -> Result<Vec<FileEntry>, AppError> {
     use base::common::S_IFDIR;
 
     let join = |prefix: &str, name: &str| {
@@ -1106,7 +1372,11 @@ pub(crate) async fn collect_file_paths_under(
                 if entry.mode & S_IFDIR != 0 {
                     next.push((entry.id.clone(), path));
                 } else {
-                    results.push(path);
+                    results.push(FileEntry {
+                        path,
+                        fs_id: entry.id.clone(),
+                        size: entry.size,
+                    });
                 }
             }
         }
@@ -1118,42 +1388,6 @@ pub(crate) async fn collect_file_paths_under(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_is_indexable_text_known_extensions() {
-        assert!(is_indexable_text("hello.rs", b"fn main() {}"));
-        assert!(is_indexable_text("main.py", b"print('hello')"));
-        assert!(is_indexable_text("readme.md", b"# Title"));
-        assert!(is_indexable_text("config.toml", b"[server]"));
-        assert!(is_indexable_text("index.html", b"<html>"));
-        assert!(is_indexable_text("style.css", b"body {}"));
-        assert!(is_indexable_text("data.json", b"{}"));
-        assert!(is_indexable_text("script.sh", b"#!/bin/bash"));
-        assert!(is_indexable_text("README.txt", b"plain text"));
-    }
-
-    #[test]
-    fn test_is_indexable_text_binary() {
-        assert!(!is_indexable_text("image.png", b"\x89PNG\r\n\x1a\n"));
-        // PDF starts with %PDF-1.4 which looks like text, so it's caught by extension check.
-        // Binary detection via content: has null bytes.
-        assert!(!is_indexable_text("binary.bin", &[0, 1, 2, 3, 4, 5]));
-        assert!(!is_indexable_text("data.raw", b"text\x00binary"));
-    }
-
-    #[test]
-    fn test_is_indexable_text_sniffing() {
-        // File with no extension but valid text content.
-        assert!(is_indexable_text("README", b"Hello World"));
-        // File with no extension and binary content.
-        assert!(!is_indexable_text("data", &[0x00, 0x01, 0x02]));
-    }
-
-    #[test]
-    fn test_is_indexable_text_empty() {
-        // Empty file should be valid.
-        assert!(is_indexable_text("notes.txt", b""));
-    }
 
     /// One directory object: its fs id and its `(entry id, is_dir, name)` list.
     type TreeDir<'a> = (&'a str, &'a [(&'a str, bool, &'a str)]);
@@ -1217,9 +1451,12 @@ mod tests {
         ])
         .await;
 
-        let mut paths = collect_file_paths_under(&repos, "repo-1", "d1", "/docs")
+        let mut paths: Vec<String> = collect_file_entries_under(&repos, "repo-1", "d1", "/docs")
             .await
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
         paths.sort();
         assert_eq!(paths, vec!["/docs/sub/nested.txt", "/docs/top.txt"]);
     }
@@ -1228,7 +1465,7 @@ mod tests {
     #[tokio::test]
     async fn test_collect_file_paths_under_empty_dir() {
         let repos = setup_tree_db(&[("d1", &[])]).await;
-        let paths = collect_file_paths_under(&repos, "repo-1", "d1", "/empty")
+        let paths = collect_file_entries_under(&repos, "repo-1", "d1", "/empty")
             .await
             .unwrap();
         assert!(paths.is_empty());
@@ -1238,7 +1475,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_files_batch() {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path(), None).unwrap();
+        let indexer = TextIndexer::new(dir.path()).unwrap();
         for name in ["/a.txt", "/b.txt", "/keep.txt"] {
             indexer
                 .index_file("repo-1", name, name, "shared batchdeleteword")
@@ -1299,7 +1536,7 @@ mod tests {
     #[tokio::test]
     async fn test_index_and_search() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path(), None)?;
+        let indexer = TextIndexer::new(dir.path())?;
 
         indexer.index_file(
             "repo-1",
@@ -1342,7 +1579,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_filter_by_repo() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path(), None)?;
+        let indexer = TextIndexer::new(dir.path())?;
 
         indexer.index_file("repo-1", "/a.txt", "a.txt", "alpha")?;
         indexer.index_file("repo-2", "/b.txt", "b.txt", "beta")?;
@@ -1368,7 +1605,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_file() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path(), None)?;
+        let indexer = TextIndexer::new(dir.path())?;
 
         indexer.index_file("repo-1", "/hello.txt", "hello.txt", "Hello World")?;
         indexer.commit()?;
@@ -1397,7 +1634,7 @@ mod tests {
     #[tokio::test]
     async fn test_index_update_replaces() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path(), None)?;
+        let indexer = TextIndexer::new(dir.path())?;
 
         indexer.index_file("repo-1", "/file.txt", "file.txt", "old content")?;
         indexer.commit()?;
@@ -1434,7 +1671,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_pagination() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path(), None)?;
+        let indexer = TextIndexer::new(dir.path())?;
 
         for i in 0..10 {
             let name = format!("file-{}.txt", i);
@@ -1470,7 +1707,7 @@ mod tests {
     #[tokio::test]
     async fn test_debounce_commit_makes_docs_searchable() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path(), None)?;
+        let indexer = TextIndexer::new(dir.path())?;
 
         indexer
             .index_file_async("repo-1", "/hello.txt", "hello.txt", "Hello World")
@@ -1503,7 +1740,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_repo_allow_list_returns_nothing() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
-        let indexer = TextIndexer::new(dir.path(), None)?;
+        let indexer = TextIndexer::new(dir.path())?;
 
         indexer.index_file("repo-1", "/secret.txt", "secret.txt", "top secret content")?;
         indexer.commit()?;
@@ -1556,5 +1793,136 @@ mod highlight_regression_tests {
     fn ascii_matching_still_marks() {
         let out = build_content_highlight("Hello World", "hello");
         assert!(out.contains("<mark>Hello</mark>"), "got {out:?}");
+    }
+}
+
+#[cfg(test)]
+mod document_state_tests {
+    use super::*;
+
+    fn temp_index() -> (tempfile::TempDir, TextIndexer) {
+        let dir = tempfile::tempdir().unwrap();
+        let indexer = TextIndexer::new(dir.path()).unwrap();
+        (dir, indexer)
+    }
+
+    /// A file the pipeline chose not to index still leaves a document, so the
+    /// backfill can tell "examined and unsupported" from "never seen".
+    #[tokio::test]
+    async fn a_skipped_document_records_state_but_is_not_searchable() {
+        let (_dir, indexer) = temp_index();
+        indexer
+            .mark_file("repo-1", "/pic.png", "pic.png", &DocMeta::skipped("fsid-1"))
+            .unwrap();
+        indexer.commit().unwrap();
+
+        let states = indexer
+            .doc_states("repo-1", &["/pic.png".to_string()])
+            .unwrap();
+        let state = states.get("/pic.png").expect("state recorded");
+        assert_eq!(state.fs_id, "fsid-1");
+        assert_eq!(state.status, DocStatus::Skipped);
+        assert_eq!(state.extractor_version, extract::EXTRACTOR_VERSION);
+        assert!(state.is_current("fsid-1", 0), "same content is done");
+        assert!(!state.is_current("fsid-2", 0), "changed content is not");
+
+        // A state-only document has no text and must not surface as a hit.
+        let hits = indexer
+            .search("pic", &["repo-1".to_string()], 10, 0, false)
+            .await
+            .unwrap();
+        assert!(hits.is_empty(), "a skipped document is not a hit: {hits:?}");
+    }
+
+    /// Text a client supplied by hand is pinned: no automatic pass may replace
+    /// it, whatever content the file has.
+    #[tokio::test]
+    async fn a_manual_document_is_never_stale() {
+        let (_dir, indexer) = temp_index();
+        let meta = DocMeta {
+            fs_id: "manual".to_string(),
+            extractor_version: DocMeta::MANUAL_VERSION,
+            status: DocStatus::Indexed,
+            attempted_at: 0,
+        };
+        indexer
+            .index_file_with_meta("repo-1", "/scan.pdf", "scan.pdf", "ocr text", &meta)
+            .unwrap();
+        indexer.commit().unwrap();
+
+        let states = indexer
+            .doc_states("repo-1", &["/scan.pdf".to_string()])
+            .unwrap();
+        let state = states.get("/scan.pdf").unwrap();
+        assert!(state.is_manual());
+        assert!(
+            state.is_current("anything", 0),
+            "a pinned document is current for whatever content is there"
+        );
+        assert_eq!(
+            indexer
+                .get_indexed_content("repo-1", "/scan.pdf")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("ocr text")
+        );
+    }
+
+    /// A failed attempt is retried, but only after the cooldown, so a corrupt
+    /// file does not become the whole backfill.
+    #[tokio::test]
+    async fn a_failed_document_waits_for_its_cooldown() {
+        let (_dir, indexer) = temp_index();
+        indexer
+            .mark_file(
+                "repo-1",
+                "/broken.txt",
+                "broken.txt",
+                &DocMeta::failed("fsid-9"),
+            )
+            .unwrap();
+        indexer.commit().unwrap();
+
+        let states = indexer
+            .doc_states("repo-1", &["/broken.txt".to_string()])
+            .unwrap();
+        let state = states.get("/broken.txt").unwrap();
+        assert_eq!(state.status, DocStatus::Failed);
+        assert!(
+            !state.is_current("fsid-9", state.attempted_at + FAILED_RETRY_AFTER_SECS - 1),
+            "still inside the cooldown"
+        );
+        assert!(
+            state.is_current("fsid-9", state.attempted_at + FAILED_RETRY_AFTER_SECS),
+            "due again once the cooldown has passed"
+        );
+        // A different content bypasses the cooldown: the file really changed.
+        assert!(!state.is_current("fsid-10", state.attempted_at));
+    }
+
+    /// The on-disk marker is what turns a schema change into a rebuild instead
+    /// of a panic on a field the old documents do not have.
+    #[tokio::test]
+    async fn a_stale_schema_version_rebuilds_the_index() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let indexer = TextIndexer::new(dir.path()).unwrap();
+            indexer
+                .index_file("repo-1", "/a.txt", "a.txt", "hello")
+                .unwrap();
+            indexer.commit().unwrap();
+        }
+        assert!(
+            dir.path().join(SCHEMA_VERSION_FILE).exists(),
+            "the marker is written"
+        );
+
+        std::fs::write(dir.path().join(SCHEMA_VERSION_FILE), "0").unwrap();
+        let indexer = TextIndexer::new(dir.path()).unwrap();
+        let states = indexer
+            .doc_states("repo-1", &["/a.txt".to_string()])
+            .unwrap();
+        assert!(states.is_empty(), "the stale index was rebuilt empty");
     }
 }

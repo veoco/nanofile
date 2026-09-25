@@ -4,7 +4,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::fs::core::file_ops::FileOps;
 use crate::repository::Repositories;
-use crate::service::sync::spawn_reindex;
+use crate::service::index::{IndexScheduler, IndexTarget};
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::activity_log;
@@ -27,22 +27,23 @@ pub fn parse_file_names(s: &str) -> Vec<String> {
 pub struct FileOpsService {
     db: Arc<DatabaseConnection>,
     repos: Arc<Repositories>,
-    block_store: infra::storage::DynBlockStorage,
     indexer: Option<crate::indexer::TextIndexer>,
+    /// Where a copy or move submits the index work it implies.
+    scheduler: IndexScheduler,
 }
 
 impl FileOpsService {
     pub fn new(
         db: Arc<DatabaseConnection>,
         repos: Arc<Repositories>,
-        block_store: infra::storage::DynBlockStorage,
         indexer: Option<crate::indexer::TextIndexer>,
+        scheduler: IndexScheduler,
     ) -> Self {
         Self {
             db,
             repos,
-            block_store,
             indexer,
+            scheduler,
         }
     }
 
@@ -350,18 +351,17 @@ impl FileOpsService {
             .await;
         }
 
-        // Index copied files in the background — reindexing reads the whole
-        // file from block storage and must not block the batch-copy response.
-        if let Some(indexer) = &self.indexer {
-            for entry in &entries_to_add {
-                let fp = join_path(dst_dir, &entry.name);
-                spawn_reindex(
-                    indexer.clone(),
-                    self.block_store.clone(),
-                    repo_id.to_string(),
-                    fp,
-                );
-            }
+        // Copied entries point at the same fs objects, so the new paths carry
+        // the same content identity. Reading that content back is the index
+        // job's business, not this response's.
+        if self.scheduler.is_enabled() {
+            let targets: Vec<IndexTarget> = entries_to_add
+                .iter()
+                .map(|entry| {
+                    IndexTarget::new(join_path(dst_dir, &entry.name), Some(entry.id.clone()))
+                })
+                .collect();
+            self.scheduler.schedule(repo_id, targets, "copy").await;
         }
 
         let total_copied: i64 = entries_to_add.iter().map(|e| e.size).sum();
@@ -578,23 +578,25 @@ impl FileOpsService {
             .await;
         }
 
-        // Update full-text search index. Deleting the old entry is cheap and
-        // stays synchronous; reindexing reads the whole file, so it runs in
-        // the background.
+        // Update full-text search index. Deleting the old entries is cheap and
+        // stays synchronous; writing the new paths is scheduled, since it reads
+        // each file's content.
         if let Some(indexer) = &self.indexer {
             for entry in &entries_to_move {
                 let old_fp = join_path(src_parent_dir, &entry.name);
-                let new_fp = join_path(dst_dir, &entry.name);
                 if let Err(e) = indexer.delete_file_async(repo_id, &old_fp).await {
                     tracing::warn!("Failed to delete old index on batch move: {e}");
                 }
-                spawn_reindex(
-                    indexer.clone(),
-                    self.block_store.clone(),
-                    repo_id.to_string(),
-                    new_fp,
-                );
             }
+        }
+        if self.scheduler.is_enabled() {
+            let targets: Vec<IndexTarget> = entries_to_move
+                .iter()
+                .map(|entry| {
+                    IndexTarget::new(join_path(dst_dir, &entry.name), Some(entry.id.clone()))
+                })
+                .collect();
+            self.scheduler.schedule(repo_id, targets, "move").await;
         }
 
         Ok(results)

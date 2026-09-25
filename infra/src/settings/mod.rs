@@ -852,6 +852,7 @@ mod tests {
             "gc.min_block_age_secs",
             "index.enabled",
             "index.index_dir",
+            "index.backfill_enabled",
             "notification.enabled",
             "notification.private_key",
             "notification.ping_interval",

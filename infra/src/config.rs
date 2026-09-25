@@ -1410,6 +1410,12 @@ fn default_gc_min_block_age_secs() -> u64 {
 pub struct IndexConfig {
     pub enabled: bool,
     pub index_dir: PathBuf,
+    /// Let the background pass index files the index has never seen (and files
+    /// whose extractor has changed) when the server is quiet.
+    ///
+    /// Env: NANOFILE_INDEX_BACKFILL_ENABLED
+    #[serde(default = "default_true")]
+    pub backfill_enabled: bool,
 }
 
 impl Default for IndexConfig {
@@ -1417,6 +1423,7 @@ impl Default for IndexConfig {
         Self {
             enabled: true,
             index_dir: PathBuf::from("data/index"),
+            backfill_enabled: true,
         }
     }
 }

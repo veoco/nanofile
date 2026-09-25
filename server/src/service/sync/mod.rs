@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, OnceLock};
-use tokio::sync::Semaphore;
 
 use rand::RngExt;
 use sea_orm::DatabaseConnection;
@@ -48,13 +47,6 @@ fn fs_object_verify_mode() -> FsObjectVerifyMode {
     }
 }
 
-/// Cap on concurrent background reindex tasks spawned from sync commits and
-/// REST batch file ops. Each task reads up to 8MB from block storage and
-/// tokenizes on a blocking thread, so an unbounded batch (e.g. an initial sync
-/// of a large repo, or a batch copy of many files) could saturate CPU and disk.
-/// Callers queue on the semaphore; the permit is released when the task ends.
-const MAX_CONCURRENT_REINDEX: usize = 4;
-
 /// Description upstream gives a server-side merge commit with no conflict
 /// (`fast_forward_or_merge()`, `server/http-server.c`).
 ///
@@ -78,34 +70,6 @@ const MAX_FS_PACK_ENTRIES: usize = 4096;
 /// single batched insert.
 const MAX_FS_PACK_DECOMPRESSED_BYTES: u64 = 128 * 1024 * 1024;
 
-static REINDEX_CONCURRENCY: OnceLock<Arc<Semaphore>> = OnceLock::new();
-
-fn reindex_semaphore() -> &'static Arc<Semaphore> {
-    REINDEX_CONCURRENCY.get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_REINDEX)))
-}
-
-/// Reindex a file in the background so the full-file read + index write
-/// doesn't block the sync commit response. The 30s background committer
-/// persists the writer afterwards, so the index converges within that window.
-pub(crate) fn spawn_reindex(
-    indexer: TextIndexer,
-    block_store: DynBlockStorage,
-    repo_id: String,
-    path: String,
-) {
-    let permit = reindex_semaphore().clone();
-    tokio::spawn(async move {
-        // Wait for a slot so a large batch can't run an unbounded number of
-        // concurrent 8MB reads + tokenization passes.
-        let Ok(_permit) = permit.acquire_owned().await else {
-            return;
-        };
-        if let Err(e) = indexer.reindex_file(&repo_id, &path, &block_store).await {
-            tracing::warn!("sync index file {}: {e}", path);
-        }
-    });
-}
-
 /// Join a directory prefix and entry name into an absolute path.
 fn join_sync_path(prefix: &str, name: &str) -> String {
     if prefix.is_empty() {
@@ -121,6 +85,8 @@ pub struct SyncService {
     pub(super) db: Arc<DatabaseConnection>,
     pub(super) block_store: DynBlockStorage,
     pub(super) indexer: Option<TextIndexer>,
+    /// Where a commit's changed paths submit their index work.
+    pub(super) scheduler: crate::service::index::IndexScheduler,
 }
 
 impl SyncService {
@@ -129,12 +95,14 @@ impl SyncService {
         db: Arc<DatabaseConnection>,
         block_store: DynBlockStorage,
         indexer: Option<TextIndexer>,
+        scheduler: crate::service::index::IndexScheduler,
     ) -> Self {
         Self {
             repos,
             db,
             block_store,
             indexer,
+            scheduler,
         }
     }
 
@@ -1530,81 +1498,65 @@ impl SyncService {
                 .await;
             }
 
-            if let Some(indexer) = self.indexer.clone() {
-                let block_store = self.block_store.clone();
+            if let Some(indexer) = self.indexer.as_ref() {
+                // Reading a changed file's content is the index job's business,
+                // so the new paths go out as one scheduled batch rather than
+                // being read on this commit's time. Deletes stay here: they are
+                // cheap (no content is read) and leaving a deleted path
+                // searchable is the worse failure.
+                let mut targets: Vec<crate::service::index::IndexTarget> = Vec::new();
                 for change in &changes {
                     if change.obj_type != "file" {
                         continue;
                     }
                     match change.op_type {
-                        // Reindexing reads the whole file from block storage, so
-                        // run it in the background rather than blocking the commit
-                        // response. Delete ops stay synchronous (they're cheap).
-                        "create" | "edit" | "recover" => {
-                            spawn_reindex(
-                                indexer.clone(),
-                                block_store.clone(),
-                                repo_id.to_string(),
+                        "create" | "edit" | "recover" | "rename" | "move" => {
+                            targets.push(crate::service::index::IndexTarget::new(
                                 change.path.clone(),
-                            );
+                                Some(change.obj_id.clone()),
+                            ));
                         }
                         "delete" => {
                             if let Err(e) = indexer.delete_file_async(repo_id, &change.path).await {
                                 tracing::warn!("sync delete index {}: {e}", change.path);
                             }
                         }
-                        "rename" | "move" => {
-                            // The old path is removed by its own `delete`
-                            // change in this batch (diff_trees keeps it, marked
-                            // `superseded`), so only reindex the new path here.
-                            spawn_reindex(
-                                indexer.clone(),
-                                block_store.clone(),
-                                repo_id.to_string(),
-                                change.path.clone(),
-                            );
-                        }
                         _ => {}
                     }
                 }
+                self.scheduler.schedule(repo_id, targets, "sync").await;
 
                 // A directory whose path changed stands for every file under it.
                 // `diff_trees` reports such a directory once (its contents are
                 // byte-identical, so it does not descend), which means the file
                 // loop above never sees those files — the subtree has to be
-                // re-indexed explicitly.
+                // scheduled explicitly.
                 for change in &changes {
                     if change.obj_type != "dir" {
                         continue;
                     }
-                    match (change.op_type, change.old_path.as_deref()) {
+                    let (old_path, new_path) = match (change.op_type, change.old_path.as_deref()) {
                         ("rename" | "move", Some(old_path)) => {
-                            crate::service::fs::index_sync::spawn_reindex_dir_change(
-                                self.repos.clone(),
-                                indexer.clone(),
-                                block_store.clone(),
-                                repo_id.to_string(),
-                                Some(old_path.to_string()),
-                                Some(change.path.clone()),
-                                diff_base_root.clone(),
-                                target_root.clone(),
-                            );
+                            (Some(old_path), Some(change.path.as_str()))
                         }
-                        ("delete", _) => {
-                            // The directory is gone from the new tree, so the old
-                            // path must be resolved against the parent root.
-                            crate::service::fs::index_sync::spawn_reindex_dir_change(
-                                self.repos.clone(),
-                                indexer.clone(),
-                                block_store.clone(),
-                                repo_id.to_string(),
-                                Some(change.path.clone()),
-                                None,
-                                diff_base_root.clone(),
-                                target_root.clone(),
-                            );
-                        }
-                        _ => {}
+                        ("delete", _) => (Some(change.path.as_str()), None),
+                        _ => continue,
+                    };
+                    // A delete resolves against the old tree; a rename reads the
+                    // old subtree for cleanup and the new one to index.
+                    if let Err(e) = crate::service::fs::index_sync::reindex_dir_change(
+                        &self.repos,
+                        self.indexer.as_ref(),
+                        &self.scheduler,
+                        repo_id,
+                        old_path,
+                        new_path,
+                        diff_base_root.as_deref(),
+                        target_root.as_str(),
+                    )
+                    .await
+                    {
+                        tracing::warn!("sync dir index update: {e}");
                     }
                 }
             }

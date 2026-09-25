@@ -1278,3 +1278,87 @@ async fn test_search_pagination_is_clamped() {
         .unwrap();
     assert!(body["results"].is_array());
 }
+
+/// The low-load backfill is what indexes files the pipeline never saw: files
+/// that predate it, and files an extractor gained support for since.
+///
+/// The document is removed by hand to stand in for "this file was uploaded
+/// before the pipeline existed"; the pass must find it from the repository tree
+/// alone, and a second pass must then find nothing left to do.
+#[tokio::test]
+async fn a_backfill_pass_indexes_a_file_the_index_never_saw() {
+    use server::service::index::IndexService;
+    use server::tasks::spec::JobKey;
+
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+    let path = "/legacy-note.txt";
+
+    let resp = f
+        .client
+        .upload_file(
+            token,
+            &f.repo_id,
+            "/",
+            "legacy-note.txt",
+            b"backfill unique needle",
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed");
+
+    // Wait until the scheduled index run has both written the document and
+    // finished, so removing it below is not racing a run in flight.
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            !search_results(&f, token, "needle").await.is_empty()
+                && f.server
+                    .state
+                    .tasks
+                    .store()
+                    .count_active(JobKey::IndexFiles, None)
+                    == 0
+        })
+        .await,
+        "the upload should have been indexed"
+    );
+
+    let indexer = f.server.state.indexer.clone().expect("indexer is enabled");
+    indexer
+        .delete_file_async(&f.repo_id, path)
+        .await
+        .expect("delete the document");
+    indexer.commit().expect("commit the delete");
+    assert!(
+        search_results(&f, token, "needle").await.is_empty(),
+        "the file is invisible to search until it is indexed again"
+    );
+
+    let svc = IndexService::new(
+        f.server.state.repos.clone(),
+        f.server.state.block_store.clone(),
+        indexer.clone(),
+    );
+    let cursor = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    let report = svc.backfill_pass(None, &cursor).await.expect("pass runs");
+    assert!(
+        report.counts.indexed >= 1,
+        "the pass should have indexed the file: {report:?}"
+    );
+    indexer.commit().expect("commit");
+
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            !search_results(&f, token, "needle").await.is_empty()
+        })
+        .await,
+        "the backfilled file should be searchable"
+    );
+
+    // The state the pass wrote says the file is done, so a second pass is a
+    // no-op rather than a re-read.
+    let report = svc.backfill_pass(None, &cursor).await.expect("pass runs");
+    assert_eq!(
+        report.counts.indexed, 0,
+        "nothing is left to index: {report:?}"
+    );
+}

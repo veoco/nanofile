@@ -810,6 +810,7 @@ fn skip_reason_key(reason: SkipReason) -> &'static str {
         SkipReason::GcDisabled => "admin.skip_gc_disabled",
         SkipReason::EncryptionNotLazy => "admin.skip_encryption_not_lazy",
         SkipReason::IndexOff => "admin.skip_index_off",
+        SkipReason::IndexBackfillOff => "admin.skip_index_backfill_off",
         SkipReason::MailOff => "admin.skip_mail_off",
     }
 }

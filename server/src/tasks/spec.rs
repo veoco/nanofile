@@ -22,6 +22,11 @@ pub enum JobKey {
     Copy,
     Move,
     Reindex,
+    /// Index a batch of files a file mutation just produced (an upload, a sync
+    /// commit, a rename). Submitting a run per *batch* rather than per file is
+    /// deliberate: active runs are never evicted from the run table, so one run
+    /// per file would grow it without bound on a mass sync.
+    IndexFiles,
     // ── Housekeeping ─────────────────────────────────────────────────────
     TokenExpiryCheck,
     PasswordCacheCleanup,
@@ -33,6 +38,9 @@ pub enum JobKey {
     GarbageCollection,
     BlockEncryptionConvert,
     IndexCommit,
+    /// The low-load pass that finds files the index has never seen, or whose
+    /// document was written by an older extractor, and indexes them.
+    IndexBackfill,
     ZipTaskCleanup,
 }
 
@@ -42,12 +50,14 @@ impl JobKey {
         Self::Copy,
         Self::Move,
         Self::Reindex,
+        Self::IndexFiles,
         Self::TokenExpiryCheck,
         Self::PasswordCacheCleanup,
         Self::ExpiredDataCleanup,
         Self::GarbageCollection,
         Self::BlockEncryptionConvert,
         Self::IndexCommit,
+        Self::IndexBackfill,
         Self::ZipTaskCleanup,
     ];
 
@@ -77,12 +87,14 @@ impl JobKey {
             Self::Copy => "copy",
             Self::Move => "move",
             Self::Reindex => "reindex",
+            Self::IndexFiles => "index-files",
             Self::TokenExpiryCheck => "token-expiry-check",
             Self::PasswordCacheCleanup => "password-cache-cleanup",
             Self::ExpiredDataCleanup => "expired-data-cleanup",
             Self::GarbageCollection => "gc",
             Self::BlockEncryptionConvert => "block-encryption-convert",
             Self::IndexCommit => "index-commit",
+            Self::IndexBackfill => "index-backfill",
             Self::ZipTaskCleanup => "zip-task-cleanup",
         }
     }
@@ -171,6 +183,8 @@ pub enum SkipReason {
     EncryptionNotLazy,
     /// No full-text indexer, so there is no index to commit.
     IndexOff,
+    /// `index.backfill_enabled = false`.
+    IndexBackfillOff,
     /// No mailer, so there is no outbox to drain.
     MailOff,
 }
@@ -183,6 +197,7 @@ impl SkipReason {
         Self::GcDisabled,
         Self::EncryptionNotLazy,
         Self::IndexOff,
+        Self::IndexBackfillOff,
         Self::MailOff,
     ];
 }

@@ -305,7 +305,7 @@ impl AppState {
         // Full-text indexer (its commit task is registered below alongside the
         // other background tasks).
         let indexer = if config.index.enabled {
-            match TextIndexer::new(&config.index.index_dir, Some(repos.clone())) {
+            match TextIndexer::new(&config.index.index_dir) {
                 Ok(idx) => {
                     tracing::info!(
                         "Full-text indexer initialized at {:?}",
@@ -352,6 +352,7 @@ impl AppState {
             &config.gc,
             &block_store,
             indexer.as_ref(),
+            config.index.backfill_enabled,
             &temp_file_manager,
             config.storage.temp_upload_ttl_hours,
             enc_mode,
@@ -363,28 +364,6 @@ impl AppState {
             // than refusing.
             panic!("the job catalog is invalid: {e}");
         }
-        // Bind this generation's job bodies and start their intervals. The
-        // policies come from the catalog; the bodies capture the resources built
-        // above. A mis-declared job is a programming error the catalog tests
-        // catch before release, and starting with half a job set would be worse
-        // than refusing.
-        crate::tasks::setup::install_default_jobs(
-            &tasks,
-            shutdown_token.child_token(),
-            &repos,
-            &db,
-            notification_manager.as_ref(),
-            &password_manager,
-            &config.gc,
-            &block_store,
-            indexer.as_ref(),
-            &temp_file_manager,
-            config.storage.temp_upload_ttl_hours,
-            enc_mode,
-            block_dir.as_ref(),
-            Some(&mail),
-        )
-        .unwrap_or_else(|e| panic!("the job catalog is invalid: {e}"));
         tasks.start_schedules();
 
         // In Lazy mode, run the one-shot legacy-block conversion once at
@@ -537,12 +516,20 @@ impl AppState {
         self.config.get()
     }
 
+    /// Where a file mutation submits the index work it implies.
+    ///
+    /// Disabled when there is no indexer, so a call site never has to ask.
+    pub fn index_scheduler(&self) -> crate::service::index::IndexScheduler {
+        crate::service::index::IndexScheduler::new(self.tasks.clone(), self.indexer.is_some())
+    }
+
     pub fn file_service(&self) -> crate::service::fs::file::FileService {
         crate::service::fs::file::FileService::new(
             self.repos.clone(),
             self.db.clone(),
             self.block_store.clone(),
             self.indexer.clone(),
+            self.index_scheduler(),
             self.token_manager.clone(),
             self.config.clone(),
             self.notification_manager.clone(),
@@ -554,6 +541,7 @@ impl AppState {
             self.repos.clone(),
             self.db.clone(),
             self.indexer.clone(),
+            self.index_scheduler(),
             self.block_store.clone(),
             self.config.clone(),
         )
@@ -571,8 +559,8 @@ impl AppState {
         crate::service::fs::fileops::FileOpsService::new(
             self.db.clone(),
             self.repos.clone(),
-            self.block_store.clone(),
             self.indexer.clone(),
+            self.index_scheduler(),
         )
     }
 
@@ -635,6 +623,7 @@ impl AppState {
             self.db.clone(),
             self.block_store.clone(),
             self.indexer.clone(),
+            self.index_scheduler(),
         )
     }
 }

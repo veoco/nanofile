@@ -502,6 +502,7 @@ impl TestServer {
             index: infra::config::IndexConfig {
                 enabled: enable_index,
                 index_dir: index_dir.clone(),
+                ..Default::default()
             },
             tasks: infra::config::TaskConfig {
                 max_active_tasks: task_limits.unwrap_or_default().max_active_tasks,

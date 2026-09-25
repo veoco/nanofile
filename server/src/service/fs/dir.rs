@@ -341,6 +341,8 @@ pub struct DirService {
     repos: Arc<Repositories>,
     db: Arc<DatabaseConnection>,
     indexer: Option<crate::indexer::TextIndexer>,
+    /// Where a path change submits the index work it implies.
+    scheduler: crate::service::index::IndexScheduler,
     /// Needed by `create_sub_repo`: the new library's FS objects reference the
     /// parent library's block ids, so the blocks themselves have to be copied
     /// into the new library's own block directory.
@@ -351,10 +353,12 @@ pub struct DirService {
 }
 
 impl DirService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         repos: Arc<Repositories>,
         db: Arc<DatabaseConnection>,
         indexer: Option<crate::indexer::TextIndexer>,
+        scheduler: crate::service::index::IndexScheduler,
         block_store: infra::storage::DynBlockStorage,
         config: crate::settings::RuntimeConfig,
     ) -> Self {
@@ -362,6 +366,7 @@ impl DirService {
             repos,
             db,
             indexer,
+            scheduler,
             block_store,
             config,
         }
@@ -419,7 +424,7 @@ impl DirService {
             user_id,
             true,
             self.indexer.as_ref(),
-            &self.block_store,
+            &self.scheduler,
         )
         .await
     }
@@ -515,7 +520,7 @@ impl DirService {
             user_id,
             true,
             self.indexer.as_ref(),
-            &self.block_store,
+            &self.scheduler,
         )
         .await
         .map(|_| ())

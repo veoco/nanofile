@@ -77,6 +77,45 @@ pub fn policy(key: JobKey) -> JobSpec {
             idempotent: true,
             ..client_job(key, "reindex")
         },
+        // Indexing the files a mutation produced. One run carries a batch, so
+        // a sync of thousands of files is a handful of runs rather than
+        // thousands of active runs the store may not evict.
+        //
+        // `Memory` and `EveryRun`: nobody polls this run, and a run that found
+        // nothing to do (a binary upload) is dropped at completion because its
+        // origin is the schedule rather than a caller. Redoing a file is
+        // idempotent, which makes the job safely cancellable.
+        JobKey::IndexFiles => JobSpec {
+            key,
+            name: "index files",
+            trigger: Trigger::OnDemand,
+            priority: Priority::Normal,
+            resource: Resource::Cpu,
+            max_concurrent: 4,
+            queue_depth: 0,
+            timeout: TimeoutPolicy {
+                no_progress_for_secs: Some(300),
+                max_total_secs: None,
+            },
+            retry: RetryPolicy::Never,
+            dedup: Dedup::None,
+            visibility: Visibility::OwnerOrAdmin,
+            durability: Durability::Memory,
+            history: History::EveryRun,
+            resumable: false,
+            // A batch is a sequence of independent files, so stopping between
+            // them loses nothing the backfill will not rediscover.
+            cancellable: true,
+            chunkable: Some(ChunkPolicy {
+                max_chunk_ms: 500,
+                unit: "file",
+            }),
+            force_safe: false,
+            // An upload is waiting for the file to be searchable. Deferring
+            // this behind idle time is what the backfill is for.
+            quiet: None,
+            idempotent: true,
+        },
 
         // ── Housekeeping ─────────────────────────────────────────────────
         JobKey::TokenExpiryCheck => {
@@ -96,6 +135,48 @@ pub fn policy(key: JobKey) -> JobSpec {
         // failure cannot leave much uncommitted, and long enough that the pass
         // stops being most of what the run list holds.
         JobKey::IndexCommit => notable(housekeeping(key, "index commit", fixed_timer(120))),
+        // The low-load pass that catches up with pre-existing files and with
+        // files an extractor gained support for since they were last seen.
+        //
+        // Optional work nobody waits for, so the deferral cap is zero — never
+        // forced. It yields rather than throttles: a pass that is half-done is
+        // resumable by construction (the next tick continues from its cursor),
+        // and the checkpoint it parks at is a file boundary, so nothing is
+        // torn.
+        JobKey::IndexBackfill => JobSpec {
+            key,
+            name: "index backfill",
+            trigger: fixed_timer(300),
+            priority: Priority::Background,
+            resource: Resource::Cpu,
+            max_concurrent: 1,
+            queue_depth: 0,
+            timeout: TimeoutPolicy {
+                no_progress_for_secs: Some(1800),
+                max_total_secs: None,
+            },
+            retry: RetryPolicy::Never,
+            dedup: Dedup::None,
+            visibility: Visibility::OwnerOrAdmin,
+            // Audited rather than durable: the run is idempotent, but replaying
+            // a pass after a crash buys nothing the next tick does not do.
+            // `Notable` keeps a tick that found nothing out of the run list.
+            durability: Durability::Audit,
+            history: History::Notable,
+            resumable: true,
+            cancellable: false,
+            chunkable: Some(ChunkPolicy {
+                max_chunk_ms: 500,
+                unit: "file",
+            }),
+            force_safe: false,
+            quiet: Some(QuietPolicy {
+                min_idle_for_secs: 30,
+                max_deferral_hours: 0,
+                on_spike: SpikePolicy::Yield,
+            }),
+            idempotent: true,
+        },
         JobKey::ZipTaskCleanup => notable(housekeeping(key, "zip task cleanup", fixed_timer(600))),
 
         JobKey::GarbageCollection => JobSpec {
@@ -372,6 +453,7 @@ mod tests {
         assert_eq!(interval(JobKey::PasswordCacheCleanup), 900);
         assert_eq!(interval(JobKey::TokenExpiryCheck), 3600);
         assert_eq!(interval(JobKey::ExpiredDataCleanup), 3600);
+        assert_eq!(interval(JobKey::IndexBackfill), 300);
         assert_eq!(interval(JobKey::ZipTaskCleanup), 600);
     }
 
@@ -391,6 +473,7 @@ mod tests {
                 JobKey::PasswordCacheCleanup,
                 JobKey::ExpiredDataCleanup,
                 JobKey::IndexCommit,
+                JobKey::IndexBackfill,
                 JobKey::ZipTaskCleanup,
             ]
         );

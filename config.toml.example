@@ -480,9 +480,15 @@ load_sample_interval_secs = 5
 # Environment variables:
 #   NANOFILE_INDEX_ENABLED
 #   NANOFILE_INDEX_INDEX_DIR
+#   NANOFILE_INDEX_BACKFILL_ENABLED
 enabled = true
 # Relative paths resolve against the binary's directory, like `[database] url`.
 index_dir = "data/index"
+# Index files the index has never seen (and files an extractor gained support
+# for) while the server is quiet. Load-aware deferral also needs
+# `tasks.load_aware = true`; without it the pass runs in small increments
+# regardless of load.
+backfill_enabled = true
 
 [notification]
 # Environment variables:

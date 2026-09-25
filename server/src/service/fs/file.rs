@@ -32,7 +32,7 @@ pub(crate) async fn rename_entry(
     user_id: i32,
     is_dir: bool,
     indexer: Option<&crate::indexer::TextIndexer>,
-    block_store: &infra::storage::DynBlockStorage,
+    scheduler: &crate::service::index::IndexScheduler,
 ) -> Result<(), AppError> {
     base::sanitize::validate_filename(new_name)
         .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
@@ -100,16 +100,17 @@ pub(crate) async fn rename_entry(
     )
     .await;
 
-    update_dir_index_on_path_change(
+    update_index_on_path_change(
         repos,
         indexer,
-        block_store,
+        scheduler,
         repo_id,
         path,
         &new_path,
         &head_root_id,
         &new_root,
         is_dir,
+        &child_id,
     )
     .await;
 
@@ -136,44 +137,63 @@ pub(crate) async fn rename_entry(
 
 // ── Move entry (shared by file and dir services) ─────────────────────────
 
-/// Update the full-text index after a directory's path changed.
+/// Update the full-text index after a path changed.
 ///
-/// A file's index update is handled by the callers (`FileService::rename_file` /
-/// `move_file`); a directory stands for every file underneath it, so it needs a
-/// subtree walk that a single path cannot express. No-op for files and when
-/// indexing is disabled.
+/// A file needs its old document dropped and a new one at the new path; a
+/// directory stands for every file underneath it, so it needs a subtree walk
+/// that a single path cannot express. No-op when indexing is disabled.
 #[allow(clippy::too_many_arguments)]
-async fn update_dir_index_on_path_change(
+async fn update_index_on_path_change(
     repos: &Repositories,
     indexer: Option<&crate::indexer::TextIndexer>,
-    block_store: &infra::storage::DynBlockStorage,
+    scheduler: &crate::service::index::IndexScheduler,
     repo_id: &str,
     old_path: &str,
     new_path: &str,
     old_root: &str,
     new_root: &str,
     is_dir: bool,
+    fs_id: &str,
 ) {
-    if !is_dir {
+    if !scheduler.is_enabled() {
         return;
     }
-    let Some(indexer) = indexer else {
+    if is_dir {
+        if let Err(e) = crate::service::fs::index_sync::reindex_dir_change(
+            repos,
+            indexer,
+            scheduler,
+            repo_id,
+            Some(old_path),
+            Some(new_path),
+            Some(old_root),
+            new_root,
+        )
+        .await
+        {
+            tracing::warn!("failed to update index for {old_path} -> {new_path}: {e}");
+        }
         return;
-    };
-    if let Err(e) = crate::service::fs::index_sync::reindex_dir_change(
-        repos,
-        indexer,
-        block_store,
-        repo_id,
-        Some(old_path),
-        Some(new_path),
-        Some(old_root),
-        new_root,
-    )
-    .await
+    }
+
+    // The path changed but the content did not, so the new document carries the
+    // same fs_id. Dropping the old document is cheap and stays here; the new one
+    // is scheduled so the read happens off the rename request.
+    if let Some(indexer) = indexer
+        && let Err(e) = indexer.delete_file_async(repo_id, old_path).await
     {
-        tracing::warn!("failed to update index for {old_path} -> {new_path}: {e}");
+        tracing::warn!("failed to delete old index entry for {old_path}: {e}");
     }
+    scheduler
+        .schedule(
+            repo_id,
+            vec![crate::service::index::IndexTarget::new(
+                new_path,
+                Some(fs_id.to_string()),
+            )],
+            "path-change",
+        )
+        .await;
 }
 
 /// Move a file or directory to a new parent directory using the two-phase
@@ -192,7 +212,7 @@ pub(crate) async fn move_entry(
     user_id: i32,
     is_dir: bool,
     indexer: Option<&crate::indexer::TextIndexer>,
-    block_store: &infra::storage::DynBlockStorage,
+    scheduler: &crate::service::index::IndexScheduler,
 ) -> Result<String, AppError> {
     let head_root_id = get_head_root_id(db, repo_id).await?;
     let entry_name = basename(path);
@@ -346,16 +366,17 @@ pub(crate) async fn move_entry(
     )
     .await;
 
-    update_dir_index_on_path_change(
+    update_index_on_path_change(
         repos,
         indexer,
-        block_store,
+        scheduler,
         repo_id,
         path,
         &new_path,
         &head_root_id,
         &new_root,
         is_dir,
+        &entry_fs_id,
     )
     .await;
 
@@ -378,17 +399,20 @@ pub struct FileService {
     db: Arc<DatabaseConnection>,
     block_store: infra::storage::DynBlockStorage,
     indexer: Option<crate::indexer::TextIndexer>,
+    scheduler: crate::service::index::IndexScheduler,
     token_manager: Arc<crate::AccessTokenManager>,
     config: crate::settings::RuntimeConfig,
     notification_manager: Option<crate::notification::manager::NotificationManager>,
 }
 
 impl FileService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         repos: Arc<Repositories>,
         db: Arc<DatabaseConnection>,
         block_store: infra::storage::DynBlockStorage,
         indexer: Option<crate::indexer::TextIndexer>,
+        scheduler: crate::service::index::IndexScheduler,
         token_manager: Arc<crate::AccessTokenManager>,
         config: crate::settings::RuntimeConfig,
         notification_manager: Option<crate::notification::manager::NotificationManager>,
@@ -398,6 +422,7 @@ impl FileService {
             db,
             block_store,
             indexer,
+            scheduler,
             token_manager,
             config,
             notification_manager,
@@ -635,21 +660,17 @@ impl FileService {
             .await;
         }
 
-        // Index the written file in the background so the search index stays
-        // fresh without blocking the upload response. `reindex_file` reads the
-        // content back from block storage (bounded — the same read path rename
-        // and reindex already use) and handles both text → index and binary-or-
-        // replace → drop the old index entry.
-        if let Some(indexer) = &self.indexer {
-            let idx = indexer.clone();
-            let repo_id = repo_id.to_string();
-            let full_path = effective_fp;
-            let block_store = self.block_store.clone();
-            tokio::spawn(async move {
-                if let Err(e) = idx.reindex_file(&repo_id, &full_path, &block_store).await {
-                    tracing::warn!("background content index failed for {full_path}: {e}");
-                }
-            });
+        // The file is saved; indexing it is a separate piece of work. Rather
+        // than read the content back on this request's time, schedule an
+        // `index-files` run for it — the job owns the read, the extraction and
+        // the index write, and the backfill picks the file up if the run is
+        // lost.
+        if self.scheduler.is_enabled() {
+            let target =
+                crate::service::index::IndexTarget::new(effective_fp.clone(), Some(fs_id.clone()));
+            self.scheduler
+                .schedule(repo_id, vec![target], "upload")
+                .await;
         }
 
         Ok((fs_id, effective_name))
@@ -856,27 +877,9 @@ impl FileService {
             user_id,
             false,
             self.indexer.as_ref(),
-            &self.block_store,
+            &self.scheduler,
         )
         .await?;
-
-        if let Some(indexer) = &self.indexer {
-            let new_fullpath = if path == "/" || path.is_empty() {
-                format!("/{new_name}")
-            } else {
-                let parent = parent_path_from(path);
-                format!("{parent}/{new_name}")
-            };
-            if let Err(e) = indexer.delete_file_async(repo_id, path).await {
-                tracing::warn!("Failed to delete old index on rename: {e}");
-            }
-            if let Err(e) = indexer
-                .reindex_file(repo_id, &new_fullpath, &self.block_store)
-                .await
-            {
-                tracing::warn!("Failed to reindex renamed file: {e}");
-            }
-        }
 
         Ok(())
     }
@@ -890,7 +893,7 @@ impl FileService {
         email: &str,
         user_id: i32,
     ) -> Result<(), AppError> {
-        let new_path = move_entry(
+        let _new_path = move_entry(
             self.db(),
             &self.repos,
             repo_id,
@@ -900,22 +903,9 @@ impl FileService {
             user_id,
             false,
             self.indexer.as_ref(),
-            &self.block_store,
+            &self.scheduler,
         )
         .await?;
-
-        // Update full-text search index
-        if let Some(indexer) = &self.indexer {
-            if let Err(e) = indexer.delete_file_async(repo_id, path).await {
-                tracing::warn!("Failed to delete old index on move: {e}");
-            }
-            if let Err(e) = indexer
-                .reindex_file(repo_id, &new_path, &self.block_store)
-                .await
-            {
-                tracing::warn!("Failed to reindex moved file: {e}");
-            }
-        }
 
         Ok(())
     }

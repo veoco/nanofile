@@ -899,6 +899,18 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    setting!(
+        "index.backfill_enabled",
+        Maintenance,
+        "NANOFILE_INDEX_BACKFILL_ENABLED",
+        Kind::Bool,
+        Apply::Restart,
+        |c| fmt_bool(c.index.backfill_enabled),
+        |c, v| {
+            c.index.backfill_enabled = parse_bool(v)?;
+            Ok(())
+        }
+    ),
     // · Garbage collection
     setting!(
         "gc.enabled",
@@ -1661,7 +1673,7 @@ pub static GROUPS: &[GroupDef] = &[
         section: Section::Maintenance,
         id: "maintenance_index",
         title_key: "setting.group_maintenance_index",
-        keys: &["index.enabled", "index.index_dir"],
+        keys: &["index.enabled", "index.index_dir", "index.backfill_enabled"],
     },
     GroupDef {
         section: Section::Maintenance,

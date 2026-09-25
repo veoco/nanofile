@@ -242,6 +242,10 @@ pub async fn file_post_handler(
                 .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
             let path = safe_normalize_path(&query.p.unwrap_or_default())
                 .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
+            let scheduler = crate::service::index::IndexScheduler::new(
+                state.tasks.clone(),
+                state.indexer.is_some(),
+            );
             rename_entry(
                 state.db.as_ref(),
                 &state.repos,
@@ -251,8 +255,8 @@ pub async fn file_post_handler(
                 &access.user.email,
                 access.user.user_id,
                 false,
-                None,
-                &state.block_store,
+                state.indexer.as_ref(),
+                &scheduler,
             )
             .await?;
             if reload_requested(query.reloaddir.as_deref()) {
@@ -519,9 +523,15 @@ pub async fn reindex_file_handler(
         .as_ref()
         .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
 
-    let indexed = indexer
-        .reindex_file(repo_id, &path, &state.block_store)
-        .await?;
+    // One explicit file, one synchronous answer: the Web UI's right panel asks
+    // "did this become searchable?" and needs a boolean, not a task id.
+    let svc = crate::service::index::IndexService::new(
+        state.repos.clone(),
+        state.block_store.clone(),
+        indexer.clone(),
+    );
+    let outcome = svc.index_path(repo_id, &path).await?;
+    let indexed = outcome == crate::service::index::OneOutcome::Indexed;
 
     Ok(Json(
         serde_json::json!({"status": "ok", "indexed": indexed}),
@@ -596,6 +606,10 @@ pub async fn create_file_v21(
     {
         let newname = extract_multipart_field(&bytes, "newname")
             .ok_or_else(|| AppError::BadRequest("newname required".into()))?;
+        let scheduler = crate::service::index::IndexScheduler::new(
+            state.tasks.clone(),
+            state.indexer.is_some(),
+        );
         self::rename_entry(
             state.db.as_ref(),
             &state.repos,
@@ -605,8 +619,8 @@ pub async fn create_file_v21(
             &access.user.email,
             access.user.user_id,
             false,
-            None,
-            &state.block_store,
+            state.indexer.as_ref(),
+            &scheduler,
         )
         .await?;
         return Ok(ok_json());
