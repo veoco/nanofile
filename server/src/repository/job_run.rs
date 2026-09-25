@@ -139,6 +139,13 @@ pub trait JobRunRepository: Send + Sync {
     /// filter offering a job with no rows would only ever show an empty page.
     async fn recent_kinds(&self, window: u64) -> Result<Vec<String>, AppError>;
 
+    /// The newest finished run of each job the `window` reaches.
+    ///
+    /// Read once at start-up: the counters the registry page shows are
+    /// process-lifetime, so a restart empties them, and the journal is where the
+    /// last verdict actually lives.
+    async fn latest_per_kind(&self, window: u64) -> Result<Vec<job_run::Model>, AppError>;
+
     /// Retention: drop finished rows past either age cutoff, then drop the
     /// oldest finished rows until at most `max_rows` are left.
     ///
@@ -346,13 +353,24 @@ impl JobRunRepository for DbJobRunRepository {
     }
 
     async fn recent_kinds(&self, window: u64) -> Result<Vec<String>, AppError> {
-        let mut kinds: Vec<String> = Vec::new();
+        Ok(self
+            .latest_per_kind(window)
+            .await?
+            .into_iter()
+            .map(|row| row.kind)
+            .collect())
+    }
+
+    async fn latest_per_kind(&self, window: u64) -> Result<Vec<job_run::Model>, AppError> {
+        let mut seen: Vec<String> = Vec::new();
+        let mut newest = Vec::new();
         for row in self.recent(window).await? {
-            if !kinds.contains(&row.kind) {
-                kinds.push(row.kind);
+            if !seen.contains(&row.kind) {
+                seen.push(row.kind.clone());
+                newest.push(row);
             }
         }
-        Ok(kinds)
+        Ok(newest)
     }
 
     async fn prune(

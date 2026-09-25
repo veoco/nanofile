@@ -838,6 +838,59 @@ impl TaskSystem {
         }
     }
 
+    /// Fill the lifetime counters a restart emptied, from the journal.
+    ///
+    /// The registry page reports the verdict of each job's last run, and those
+    /// counters live in this process. An in-place restart — the button on the
+    /// settings page — would otherwise read "has not run yet" for every job
+    /// while the journal holds the answer. Only empty entries are filled: a run
+    /// this process has already recorded is the more recent truth.
+    ///
+    /// The window is bounded, because this is a read of recent history rather
+    /// than of the whole journal: a job whose last run is older than the window
+    /// is reported as it was, which is not a lie about this process.
+    pub async fn seed_stats_from_journal(&self) {
+        const WINDOW: u64 = 500;
+        let Some(journal) = self.journal() else {
+            return;
+        };
+        let rows = match journal.latest_per_kind(WINDOW).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("could not read the run journal for the last verdicts: {e}");
+                return;
+            }
+        };
+        let mut stats = self
+            .inner
+            .stats
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        for row in rows {
+            let Some(key) = JobKey::from_slug(&row.kind) else {
+                // A retired job's rows are history, not a counter anybody
+                // reads: the registry has no row to show them on.
+                continue;
+            };
+            let entry = stats.entry(key).or_default();
+            if entry.last_run_at.is_some() {
+                continue;
+            }
+            let state = JobState::from_wire(&row.phase, row.error.as_deref());
+            entry.last_run_at = row.finished_at;
+            if state == JobState::Succeeded {
+                entry.last_success_message = row.summary.clone();
+            } else {
+                entry.last_error_message = row
+                    .error
+                    .clone()
+                    .filter(|error| !error.is_empty())
+                    .unwrap_or_else(|| state.as_str().to_string());
+            }
+            entry.last_state = Some(state);
+        }
+    }
+
     /// Drop journal rows past retention. Called by the sweeper.
     ///
     /// The journal has a policy of its own rather than the outbound-mail
@@ -2396,6 +2449,100 @@ mod tests {
                 .contains("locked")
         );
         assert!(rows[0].summary.is_empty(), "the error is the account");
+    }
+
+    /// A restart empties the process-lifetime counters but not the journal, so
+    /// the last verdict is read back rather than every job reading as never run.
+    #[tokio::test]
+    async fn a_restart_reads_the_last_verdicts_back() {
+        let (_, repos) = journal_system().await;
+        let now = chrono::Utc::now().timestamp();
+        for (id, kind, phase, summary, error, finished_at) in [
+            (
+                "gc-run",
+                "gc",
+                "succeeded",
+                "removed 3 unreferenced blocks",
+                None,
+                now,
+            ),
+            (
+                "reindex-run",
+                "reindex",
+                "failed",
+                "",
+                Some("the index is corrupt"),
+                now - 10,
+            ),
+            // A job this build no longer has: history, not a verdict.
+            ("old-run", "share-link-cleanup", "succeeded", "", None, now),
+        ] {
+            repos
+                .job_run
+                .record_finished(crate::repository::job_run::FinishedJobRun {
+                    id: id.to_string(),
+                    kind: kind.to_string(),
+                    owner: None,
+                    phase: phase.to_string(),
+                    summary: summary.to_string(),
+                    error: error.map(str::to_string),
+                    processed: None,
+                    attempt: 1,
+                    created_at: finished_at - 5,
+                    started_at: Some(finished_at - 5),
+                    finished_at,
+                })
+                .await
+                .unwrap();
+        }
+
+        // A fresh process, with a journal behind it.
+        let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
+        system.set_journal(repos.job_run.clone());
+        system.seed_stats_from_journal().await;
+
+        let gc = system.stats(JobKey::GarbageCollection);
+        assert_eq!(gc.last_run_at, Some(now));
+        assert_eq!(gc.last_state, Some(JobState::Succeeded));
+        assert_eq!(gc.last_success_message, "removed 3 unreferenced blocks");
+        assert_eq!(gc.run_count, 0, "the counts are this process's own");
+
+        let reindex = system.stats(JobKey::Reindex);
+        assert_eq!(
+            reindex.last_state,
+            Some(JobState::Failed("the index is corrupt".to_string()))
+        );
+        assert_eq!(reindex.last_error_message, "the index is corrupt");
+
+        // Nothing ran in this process, so nothing is overwritten by the seed:
+        // a run that has already been recorded here is the newer truth.
+        system
+            .register(RegisteredJob::new(
+                catalog::policy(JobKey::GarbageCollection),
+                Arc::new(|_ctx, _params| {
+                    Box::pin(async { Ok(Outcome::success("removed nothing", None)) })
+                }),
+            ))
+            .unwrap();
+        system
+            .submit(JobKey::GarbageCollection, None, Params::Null, "gc", None)
+            .await
+            .unwrap();
+        // The counters, not the last state: the seed has already given this job
+        // a last state, so waiting for one would wait for nothing.
+        for _ in 0..400 {
+            if system.stats(JobKey::GarbageCollection).run_count == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(system.stats(JobKey::GarbageCollection).run_count, 1);
+        system.seed_stats_from_journal().await;
+        assert_eq!(
+            system.stats(JobKey::GarbageCollection).last_success_message,
+            "removed nothing",
+            "a run this process recorded is not replaced by an older one"
+        );
     }
 
     /// A destructive job is never recorded as replayable, so a crash can never

@@ -96,6 +96,7 @@ migrations!(
     m20260922_000001_create_settings,
     m20260923_000001_add_lease_to_email_messages,
     m20260924_000001_create_job_runs,
+    m20260925_000001_purge_tick_run_history,
 );
 
 #[cfg(test)]

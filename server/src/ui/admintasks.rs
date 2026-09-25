@@ -607,7 +607,9 @@ fn job_row(job: &RegisteredJob, stats: &JobStats, t: &I18n) -> RegisteredRow {
             .last_state
             .as_ref()
             .map(|state| state_badge(t, state.as_str())),
-        never_run: stats.run_count == 0,
+        // Not `run_count == 0`: a restart empties the counters but not the
+        // journal, and a job whose last run was read back from it has run.
+        never_run: stats.run_count == 0 && stats.last_run_at.is_none(),
         last_run_ts: stats.last_run_at,
         last_duration: last_duration(stats),
         counters: job_counters(stats, t),

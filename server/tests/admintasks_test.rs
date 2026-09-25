@@ -566,6 +566,54 @@ async fn a_job_that_has_never_run_reports_no_counters_on_the_page() {
     );
 }
 
+/// A restart empties the process-lifetime counters but not the journal, so the
+/// registry reads the last verdict back rather than claiming the job never ran.
+#[tokio::test]
+async fn the_registry_reads_the_last_verdict_back_after_a_restart() {
+    let (server, admin) = admin_server().await;
+    let now = chrono::Utc::now().timestamp();
+    server
+        .state
+        .repos
+        .job_run
+        .record_finished(server::repository::job_run::FinishedJobRun {
+            id: "before-the-restart".to_string(),
+            kind: JobKey::ExpiredDataCleanup.as_str().to_string(),
+            owner: None,
+            phase: "succeeded".to_string(),
+            summary: "Removed 3 expired tokens".to_string(),
+            error: None,
+            processed: Some(3),
+            attempt: 1,
+            created_at: now - 5,
+            started_at: Some(now - 5),
+            finished_at: now,
+        })
+        .await
+        .unwrap();
+
+    // The fresh process reading the journal behind it.
+    server.state.tasks.seed_stats_from_journal().await;
+
+    let (_, html) = page(&server, &admin, REGISTRY).await;
+    let body = page_content(&html);
+    // A job this configuration runs, so the row is a task rather than a
+    // "not registered" entry: the default test server switches GC off.
+    let row = row_of(body, "data-task=\"expired-data-cleanup\"", "data-task=\"");
+    assert!(
+        !row.contains("Has not run yet"),
+        "the journal says it ran: {row}"
+    );
+    assert!(
+        row.contains("data-ts="),
+        "the last run has a stamp the browser renders: {row}"
+    );
+    assert!(
+        row.contains("Removed 3 expired tokens"),
+        "and the job's own report: {row}"
+    );
+}
+
 /// Triggering a job answers the browser with the page its button lives on,
 /// carrying the confirmation.
 #[tokio::test]

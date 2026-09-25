@@ -84,6 +84,26 @@ impl JobState {
         matches!(self, Self::Queued | Self::Running | Self::Yielded)
     }
 
+    /// The state a stored row means.
+    ///
+    /// The inverse of [`JobState::as_str`], for the one reader that starts from
+    /// the database: an in-place restart empties the process-lifetime counters,
+    /// so the last verdict is read back out of the journal. A phase this build
+    /// does not know is shown as a failure rather than dropped, matching how the
+    /// listing renders an unknown badge.
+    pub fn from_wire(phase: &str, error: Option<&str>) -> Self {
+        match phase {
+            "queued" => Self::Queued,
+            "running" => Self::Running,
+            "yielded" => Self::Yielded,
+            "succeeded" => Self::Succeeded,
+            "cancelled" => Self::Cancelled,
+            "timed_out" => Self::TimedOut,
+            "interrupted" => Self::Interrupted,
+            _ => Self::Failed(error.unwrap_or_default().to_string()),
+        }
+    }
+
     /// Stable wire name, used by the client-compatibility projections.
     pub fn as_str(&self) -> &'static str {
         match self {

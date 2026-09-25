@@ -504,12 +504,16 @@ pub fn install_default_jobs(
         tasks.record_skipped(task);
     }
 
-    // Then resume whatever the previous process left unfinished. Spawned
-    // rather than awaited because this runs from a synchronous constructor, and
-    // recovery does not have to finish before the server starts serving.
+    // Then read back what the previous process left behind: the verdict of each
+    // job's last run, and whatever run it did not finish. Spawned rather than
+    // awaited because this runs from a synchronous constructor, and neither has
+    // to finish before the server starts serving.
     {
         let tasks = tasks.clone();
-        tokio::spawn(async move { tasks.recover().await });
+        tokio::spawn(async move {
+            tasks.seed_stats_from_journal().await;
+            tasks.recover().await;
+        });
     }
 
     // The outbox worker is a service, not a job: a loop with no owner, no
