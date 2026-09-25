@@ -178,7 +178,10 @@ pub(super) fn confine() -> (Layers, Vec<String>) {
 /// The parent's descriptors are close-on-exec where the standard library
 /// created them, but a parser exploited for a file read would still rather be
 /// handed one than have to open it. `close_range` cannot be raced against a
-/// concurrent open; the loop is the fallback for kernels before 5.9.
+/// concurrent open; the loop is the fallback for kernels before 5.9, and it
+/// walks to this process's own descriptor limit rather than to a constant —
+/// a parent with a raised `RLIMIT_NOFILE` can hold a descriptor the constant
+/// would have missed.
 fn close_extra_descriptors() {
     let closed = unsafe {
         libc::syscall(
@@ -191,8 +194,23 @@ fn close_extra_descriptors() {
     if closed == 0 {
         return;
     }
-    for descriptor in 3..1024 {
-        unsafe { libc::close(descriptor) };
+
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    let highest = if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } == 0
+        && limit.rlim_cur != libc::RLIM_INFINITY
+    {
+        // The clamp below lowers this to `NOFILE_LIMIT`; what matters is the
+        // *current* limit, which is what the parent's descriptors were opened
+        // under.
+        u64::try_from(limit.rlim_cur).unwrap_or(u64::MAX)
+    } else {
+        1024
+    };
+    for descriptor in 3..highest {
+        unsafe { libc::close(descriptor as libc::c_int) };
     }
 }
 

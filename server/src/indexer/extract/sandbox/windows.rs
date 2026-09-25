@@ -413,9 +413,17 @@ fn start_with(
         .chain(std::iter::once(0))
         .collect();
     let environment = environment_block();
+    // `null` here would inherit the *server's* working directory, which is a
+    // path out of the deployment the child has no business knowing and the
+    // container may not even be able to read. Unix sets the child's directory
+    // to `/` for the same reason.
+    let directory = current_directory();
 
     let flags = CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
     let environment = environment.as_ptr().cast::<c_void>();
+    let directory = directory
+        .as_ref()
+        .map_or(null(), |directory| directory.as_ptr());
     let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
     let created = unsafe {
         match token {
@@ -428,7 +436,7 @@ fn start_with(
                 1,
                 flags,
                 environment,
-                null(),
+                directory,
                 &startup.StartupInfo,
                 &mut info,
             ),
@@ -440,7 +448,7 @@ fn start_with(
                 1,
                 flags,
                 environment,
-                null(),
+                directory,
                 &startup.StartupInfo,
                 &mut info,
             ),
@@ -467,6 +475,29 @@ fn close_all(handles: &[HANDLE]) {
     for handle in handles {
         unsafe { CloseHandle(*handle) };
     }
+}
+
+/// The directory the child starts in, as a NUL-terminated wide string.
+///
+/// The system directory rather than the server's: it is part of the tree
+/// `ALL APPLICATION PACKAGES` covers, so a container can always read it, and it
+/// is a fact about Windows rather than about this deployment. `None` leaves
+/// `CreateProcess` to inherit the caller's directory, which is the behaviour
+/// this exists to avoid — the same choice unix makes in setting the child's
+/// directory to `/`.
+fn current_directory() -> Option<Vec<u16>> {
+    let root = std::env::var_os("SystemRoot")?;
+    let mut directory: Vec<u16> = root.encode_wide().collect();
+    // A root that already ends in a separator would otherwise double it.
+    if directory.last() == Some(&(b'\\' as u16)) {
+        directory.pop();
+    }
+    if directory.is_empty() {
+        return None;
+    }
+    directory.extend("\\System32".encode_utf16());
+    directory.push(0);
+    Some(directory)
 }
 
 /// The three pipe pairs the protocol needs, cleaned up if one cannot be made.

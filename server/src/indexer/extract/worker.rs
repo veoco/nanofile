@@ -25,12 +25,15 @@
 
 use std::ffi::OsString;
 use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 #[cfg(not(windows))]
 use std::path::Path;
 use std::path::PathBuf;
 #[cfg(not(windows))]
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use super::sandbox::{self, Level, Policy, Report};
@@ -54,6 +57,26 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Most bytes of a reply the parent will read.
 const MAX_REPLY_BYTES: u64 = (MAX_INDEXED_CONTENT_BYTES + (1 << 20)) as u64;
+
+/// Most bytes of the child's *diagnostics* the parent will hold.
+///
+/// A parser that logs per page, or a document that makes it loop, would
+/// otherwise let the child spend the server's memory through the one channel
+/// nothing bounds: the reply is capped and so is the request, and stderr was
+/// not. What is kept is the head, which is where the reason is; the rest is
+/// drained and dropped so the child never blocks writing into a full pipe.
+const MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
+
+/// How long the parent waits for the protocol pipes after the child is gone.
+///
+/// The child has already exited by then, so what is left to read is at most one
+/// pipe buffer. The deadline exists for the case it is not: a process the child
+/// started can hold the inherited pipes open past its parent's death, and an
+/// unbounded read there would hold this call — and the caller's extraction
+/// permit — for as long as that process lives. Whatever was not read by the
+/// deadline is abandoned and the run is decided on what *was* read, which is
+/// the fail-closed direction: no reply is a failed document.
+const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// How long an unavailable sandbox is left alone before it is probed again.
 const UNAVAILABLE_RETRY: Duration = Duration::from_secs(300);
@@ -470,6 +493,27 @@ impl Child {
         }
     }
 
+    /// Kill the child and whatever it started.
+    ///
+    /// The child leads its own process group on unix ([`spawn_child`]), so the
+    /// group is what gets the signal: killing the leader alone leaves a forked
+    /// copy holding the protocol pipes, and the read after this would then wait
+    /// on a pipe nobody will close. Windows needs nothing extra here — the
+    /// active-process limit keeps the child alone, and the Job Object takes the
+    /// rest when it is the parent's (see `sandbox::windows`).
+    fn kill_tree(&mut self) {
+        #[cfg(unix)]
+        {
+            // The only variant on unix; Windows starts a child another way and
+            // reaches its whole tree through the Job Object instead.
+            let Child::Standard(child) = self;
+            // `killpg` on the group the child leads; the child's own pid is the
+            // group id because it was made a group leader at spawn.
+            unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
+        }
+        self.kill();
+    }
+
     fn wait(&mut self) {
         match self {
             #[cfg(not(windows))]
@@ -543,6 +587,14 @@ fn spawn_child(
         // Nothing here is relative, and the server's own directory is not the
         // child's business.
         .current_dir(Path::new("/"));
+    // The child leads a process group of its own, so a timeout can end what it
+    // started and not only the child itself. macOS is where this matters: the
+    // Seatbelt profile has to allow `process-fork` for the parsers' thread, so
+    // a document that got code running can leave copies behind, and a copy that
+    // holds the protocol pipes would keep this call waiting on a pipe that
+    // never closes.
+    #[cfg(unix)]
+    command.process_group(0);
     command.spawn().map(Child::Standard)
 }
 
@@ -700,12 +752,9 @@ fn run_child(
         reply
     });
 
-    let drain = std::thread::spawn(move || {
-        let mut text = String::new();
-        if let Some(mut stderr) = pipes.stderr {
-            let _ = stderr.read_to_string(&mut text);
-        }
-        text
+    let drain = std::thread::spawn(move || match pipes.stderr {
+        Some(mut stderr) => read_diagnostics(&mut stderr),
+        None => String::new(),
     });
 
     let deadline = Instant::now() + timeout;
@@ -715,7 +764,7 @@ fn run_child(
             Ok(Some(code)) => break Some(code),
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    child.kill();
+                    child.kill_tree();
                     child.wait();
                     timed_out = true;
                     break None;
@@ -723,18 +772,23 @@ fn run_child(
                 std::thread::sleep(Duration::from_millis(10));
             }
             Err(_) => {
-                child.kill();
+                child.kill_tree();
                 child.wait();
                 break None;
             }
         }
     };
 
+    // Bounded, because the child being gone is not the same as the pipes being
+    // closed: see `PIPE_DRAIN_TIMEOUT`. A writer that never finishes is dropped
+    // the same way — the request it was still sending is a request no reply
+    // will be read for.
+    let drained = Instant::now() + PIPE_DRAIN_TIMEOUT;
     if let Some(writer) = writer {
-        let _ = writer.join();
+        let _ = join_bounded(writer, drained);
     }
-    let stdout = reader.join().unwrap_or_default();
-    let stderr = drain.join().unwrap_or_default();
+    let stdout = join_bounded(reader, drained).unwrap_or_default();
+    let stderr = join_bounded(drain, drained).unwrap_or_default();
 
     Ok(Run {
         exit_code,
@@ -742,6 +796,48 @@ fn run_child(
         stderr,
         timed_out,
     })
+}
+
+/// Wait for a thread that should already be done, giving up at `deadline`.
+///
+/// `None` means the thread is still running and its handles were dropped with
+/// it: the pipe it holds is the reason this exists, and the caller has a
+/// fail-closed answer for the missing half (`stdout` empty is no reply,
+/// `stderr` empty is no diagnostic).
+fn join_bounded<T>(handle: JoinHandle<T>, deadline: Instant) -> Option<T> {
+    while !handle.is_finished() {
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    handle.join().ok()
+}
+
+/// Read a child's diagnostics up to [`MAX_DIAGNOSTIC_BYTES`], then drain.
+///
+/// Bytes rather than `read_to_string`: a parser's diagnostics are not required
+/// to be UTF-8, and a partial read that failed to decode would throw away the
+/// reason this is here for. Past the cap the bytes are still read and dropped,
+/// so a child that writes more than the cap is never the side that blocks.
+fn read_diagnostics(reader: &mut impl Read) -> String {
+    let mut kept: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => {
+                if let Some(room) = MAX_DIAGNOSTIC_BYTES.checked_sub(kept.len())
+                    && room > 0
+                {
+                    kept.extend_from_slice(&chunk[..read.min(room)]);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&kept).into_owned()
 }
 
 /// Turn one run into an outcome.
@@ -774,7 +870,10 @@ fn interpret(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Outcome {
         }
     }
     if !stderr.trim().is_empty() {
-        tracing::debug!("extract-worker: {}", stderr.trim());
+        // Clipped here as well as at the source: what a log line can carry is
+        // smaller than what the parent is willing to hold, and the head is the
+        // part that says why.
+        tracing::debug!("extract-worker: {}", clipped(stderr.trim(), 400));
     }
 
     match (exit_code, parse_reply(stdout)) {
@@ -799,12 +898,17 @@ fn runner_failure_signatures() -> &'static [&'static str] {
     }
 }
 
+/// The child's own words when it has any, clipped to what a log line carries.
+///
+/// The refusal line carries the policy and the detail, and the runner failures
+/// carry their own sentence; both are at the head, and the tail is the part a
+/// document can fill.
 fn detail_or(stderr: &str, fallback: &str) -> String {
     let detail = stderr.trim();
     if detail.is_empty() {
         fallback.to_string()
     } else {
-        detail.to_string()
+        clipped(detail, 512)
     }
 }
 
@@ -1019,5 +1123,49 @@ mod tests {
     fn an_unreadable_report_line_is_not_a_status() {
         assert!(Report::parse("NFX1-sandbox level=full").is_none());
         assert!(Report::parse("something else entirely").is_none());
+    }
+
+    /// What a document can make the child print is bounded, and the head is
+    /// what survives: the reason is written first, the noise after it.
+    #[test]
+    fn diagnostics_are_capped_at_the_head() {
+        let mut noise = vec![b'x'; MAX_DIAGNOSTIC_BYTES + 4096];
+        noise[..4].copy_from_slice(b"head");
+        let kept = read_diagnostics(&mut std::io::Cursor::new(noise));
+        assert_eq!(kept.len(), MAX_DIAGNOSTIC_BYTES, "the cap is the cap");
+        assert!(kept.starts_with("head"), "the head is what is kept");
+
+        // A reader that is not UTF-8 does not lose the bytes that are.
+        let kept = read_diagnostics(&mut std::io::Cursor::new(b"reason\xff\xfe".to_vec()));
+        assert!(kept.starts_with("reason"));
+    }
+
+    /// A thread that never finishes is abandoned at its deadline rather than
+    /// joined: this is what keeps a process holding the protocol pipes from
+    /// holding the extraction permit with them.
+    #[test]
+    fn a_thread_that_never_finishes_is_abandoned() {
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let _ = held.recv();
+            7u8
+        });
+        let started = Instant::now();
+        assert_eq!(
+            join_bounded(handle, Instant::now() + Duration::from_millis(50)),
+            None
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the deadline is what ends the wait"
+        );
+        drop(release);
+
+        // A thread that is already done still hands its value over.
+        let done = std::thread::spawn(|| 7u8);
+        assert_eq!(
+            join_bounded(done, Instant::now() + Duration::from_secs(5)),
+            Some(7)
+        );
     }
 }
