@@ -43,14 +43,14 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Security::{
     CopySid, CreateRestrictedToken, CreateWellKnownSid, DISABLE_MAX_PRIVILEGE, GetLengthSid,
     GetTokenInformation, IsValidSid, LUA_TOKEN, PSID, SECURITY_ATTRIBUTES, SID_AND_ATTRIBUTES,
-    TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY, TokenGroups, WRITE_RESTRICTED,
-    WinWorldSid,
+    TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY, TokenGroups,
+    WRITE_RESTRICTED, WinWorldSid,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
     JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_LIMIT_PROCESS_TIME,
-    JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
+    JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_LIMIT_PROCESS_TIME, JOB_OBJECT_UILIMIT_DESKTOP,
+    JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
     JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES, JOB_OBJECT_UILIMIT_READCLIPBOARD,
     JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
     JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
@@ -209,13 +209,7 @@ impl Child {
     }
 
     /// Take the three pipe ends the protocol uses.
-    pub(crate) fn take_pipes(
-        &mut self,
-    ) -> (
-        Option<File>,
-        Option<File>,
-        Option<File>,
-    ) {
+    pub(crate) fn take_pipes(&mut self) -> (Option<File>, Option<File>, Option<File>) {
         (self.stdin.take(), self.stdout.take(), self.stderr.take())
     }
 }
@@ -239,9 +233,9 @@ pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child
         args.push(OsString::from("--restricted"));
         match start(program, &args, Some(token)) {
             Ok(child) => return Ok(child),
-            Err(error) => tracing::warn!(
-                "extract-worker: {error}; starting the child with the default token"
-            ),
+            Err(error) => {
+                tracing::warn!("extract-worker: {error}; starting the child with the default token")
+            }
         }
     }
     start(program, args, None)
@@ -382,7 +376,13 @@ fn open_pipe() -> std::io::Result<(HANDLE, HANDLE)> {
     // Both ends are created inheritable; the parent's end must not be, or the
     // child would hold its own reader open and never see end of input.
     for handle in [read, write] {
-        unsafe { SetHandleInformation(handle, windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT, 0) };
+        unsafe {
+            SetHandleInformation(
+                handle,
+                windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT,
+                0,
+            )
+        };
     }
     Ok((read, write))
 }
@@ -415,15 +415,15 @@ impl AttributeList {
         };
         if updated == 0 {
             let error = std::io::Error::last_os_error();
-            unsafe {
-                windows_sys::Win32::System::Threading::DeleteProcThreadAttributeList(list)
-            };
+            unsafe { windows_sys::Win32::System::Threading::DeleteProcThreadAttributeList(list) };
             return Err(error);
         }
         Ok(Self { buffer })
     }
 
-    fn as_mut_ptr(&mut self) -> windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST {
+    fn as_mut_ptr(
+        &mut self,
+    ) -> windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST {
         self.buffer.as_mut_ptr().cast()
     }
 }
@@ -678,13 +678,19 @@ mod tests {
 
     #[test]
     fn a_path_with_spaces_is_quoted() {
-        assert_eq!(quote(OsStr::new(r"C:\Program Files\nanofile.exe")), r#""C:\Program Files\nanofile.exe""#);
+        assert_eq!(
+            quote(OsStr::new(r"C:\Program Files\nanofile.exe")),
+            r#""C:\Program Files\nanofile.exe""#
+        );
     }
 
     /// The closing quote must stay a quote: a trailing backslash doubles.
     #[test]
     fn trailing_backslashes_are_doubled() {
-        assert_eq!(quote(OsStr::new(r"C:\dir with space\")), r#""C:\dir with space\\""#);
+        assert_eq!(
+            quote(OsStr::new(r"C:\dir with space\")),
+            r#""C:\dir with space\\""#
+        );
     }
 
     #[test]

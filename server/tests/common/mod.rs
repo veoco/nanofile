@@ -397,9 +397,9 @@ impl TestServer {
         // `configure_executable` is process-global and set once; a test that
         // wants a worker that cannot run points it elsewhere before the first
         // fixture and is then responsible for the outcome.
-        if server::indexer::extract::worker::configure_executable(std::path::PathBuf::from(
-            env!("CARGO_BIN_EXE_nanofile"),
-        )) {
+        if server::indexer::extract::worker::configure_executable(std::path::PathBuf::from(env!(
+            "CARGO_BIN_EXE_nanofile"
+        ))) {
             match server::indexer::extract::worker::status() {
                 server::indexer::extract::worker::Status::Ready(report) => assert!(
                     report.level() >= server::indexer::extract::sandbox::Level::Partial,

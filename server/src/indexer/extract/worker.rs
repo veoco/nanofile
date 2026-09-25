@@ -138,11 +138,7 @@ pub fn run(job: Job, external: External, policy: Policy) -> anyhow::Result<()> {
     }
 
     if !policy.accepts(report.level()) {
-        eprintln!(
-            "{SANDBOX_REFUSAL}: {} ({})",
-            policy.as_str(),
-            report.detail
-        );
+        eprintln!("{SANDBOX_REFUSAL}: {} ({})", policy.as_str(), report.detail);
         std::process::exit(EXIT_SANDBOX_UNAVAILABLE);
     }
 
@@ -235,10 +231,7 @@ pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
         Err(e) => return Outcome::Unavailable(format!("cannot start the extraction worker: {e}")),
     };
     if run.timed_out {
-        tracing::warn!(
-            "extract-worker: no answer within {:?}; killing it",
-            TIMEOUT
-        );
+        tracing::warn!("extract-worker: no answer within {:?}; killing it", TIMEOUT);
         return Outcome::Failed(reason::TIMED_OUT);
     }
     interpret(run.exit_code, &run.stdout, &run.stderr)
@@ -247,7 +240,9 @@ pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
 /// The confinement status of this process's worker, probed once and cached.
 pub fn status() -> Status {
     let cache = STATUS.get_or_init(|| Mutex::new(Cache::default()));
-    let mut cache = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     if let Some(status) = &cache.status {
         return status.clone();
@@ -727,7 +722,10 @@ mod tests {
     fn a_refusal_reply_round_trips_as_its_reason() {
         let reply = {
             let mut out = Vec::new();
-            let mut input = std::io::Cursor::new(request(Plan::Document(super::super::Document::Pdf), b"not a pdf"));
+            let mut input = std::io::Cursor::new(request(
+                Plan::Document(super::super::Document::Pdf),
+                b"not a pdf",
+            ));
             serve(&mut input, &mut out).expect("serve");
             out
         };

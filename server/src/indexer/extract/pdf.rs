@@ -78,47 +78,51 @@ fn load_options() -> LoadOptions {
 
 /// Extract the text of a PDF, or why it cannot be read.
 pub(super) fn extract_text(data: Vec<u8>) -> Extracted {
-    guard("pdf", |_| Extracted::Unsupported(reason::PANIC), move || {
-        let mut doc = match Document::load_mem_with_options(&data, load_options()) {
-            Ok(doc) => doc,
-            Err(e) => {
-                tracing::debug!("pdf: cannot parse: {e}");
-                return Extracted::Unsupported(reason::PARSE);
-            }
-        };
-
-        // A PDF encrypted with a user password is opened with an empty one.
-        // Doing it here is what lets the caller record "encrypted" rather than
-        // lumping it in with "unparseable"; without a password to offer the
-        // content is out of reach either way.
-        if doc.is_encrypted() && doc.decrypt("").is_err() {
-            return Extracted::Unsupported(reason::ENCRYPTED);
-        }
-
-        // `get_pages` returns an owned map keyed by 1-based page number.
-        let pages = doc.get_pages();
-        if pages.len() > MAX_PAGES {
-            tracing::debug!(
-                "pdf: reading the first {MAX_PAGES} of {} pages",
-                pages.len()
-            );
-        }
-
-        let mut text = String::new();
-        for page_num in pages.keys().copied().take(MAX_PAGES) {
-            let Some(&page_id) = pages.get(&page_num) else {
-                continue;
+    guard(
+        "pdf",
+        |_| Extracted::Unsupported(reason::PANIC),
+        move || {
+            let mut doc = match Document::load_mem_with_options(&data, load_options()) {
+                Ok(doc) => doc,
+                Err(e) => {
+                    tracing::debug!("pdf: cannot parse: {e}");
+                    return Extracted::Unsupported(reason::PARSE);
+                }
             };
-            append_page(&mut text, &mut doc, page_id, page_num);
-            if text.len() >= MAX_INDEXED_CONTENT_BYTES {
-                break;
-            }
-        }
 
-        // Nothing at all means no text layer — a scan — which is recorded as
-        // skipped rather than as an indexed document with empty content.
-        finish(text)
-    })
+            // A PDF encrypted with a user password is opened with an empty one.
+            // Doing it here is what lets the caller record "encrypted" rather than
+            // lumping it in with "unparseable"; without a password to offer the
+            // content is out of reach either way.
+            if doc.is_encrypted() && doc.decrypt("").is_err() {
+                return Extracted::Unsupported(reason::ENCRYPTED);
+            }
+
+            // `get_pages` returns an owned map keyed by 1-based page number.
+            let pages = doc.get_pages();
+            if pages.len() > MAX_PAGES {
+                tracing::debug!(
+                    "pdf: reading the first {MAX_PAGES} of {} pages",
+                    pages.len()
+                );
+            }
+
+            let mut text = String::new();
+            for page_num in pages.keys().copied().take(MAX_PAGES) {
+                let Some(&page_id) = pages.get(&page_num) else {
+                    continue;
+                };
+                append_page(&mut text, &mut doc, page_id, page_num);
+                if text.len() >= MAX_INDEXED_CONTENT_BYTES {
+                    break;
+                }
+            }
+
+            // Nothing at all means no text layer — a scan — which is recorded as
+            // skipped rather than as an indexed document with empty content.
+            finish(text)
+        },
+    )
 }
 
 /// Append everything one page draws: its own content streams, then the Form
@@ -322,7 +326,11 @@ impl<'a> PageRedirect<'a> {
 
 impl Drop for PageRedirect<'_> {
     fn drop(&mut self) {
-        let Ok(page) = self.doc.get_object_mut(self.page_id).and_then(Object::as_dict_mut) else {
+        let Ok(page) = self
+            .doc
+            .get_object_mut(self.page_id)
+            .and_then(Object::as_dict_mut)
+        else {
             return;
         };
         match self.contents.take() {
@@ -430,7 +438,10 @@ mod tests {
     #[test]
     fn text_is_extracted() {
         let Extracted::Text(text) = extract_text(pdf_with_text("zebraquartz")) else {
-            panic!("text expected: {}", describe(&extract_text(pdf_with_text("zebraquartz"))));
+            panic!(
+                "text expected: {}",
+                describe(&extract_text(pdf_with_text("zebraquartz")))
+            );
         };
         assert!(text.contains("zebraquartz"), "extracted {text:?}");
     }

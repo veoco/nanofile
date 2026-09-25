@@ -354,7 +354,14 @@ pub fn confine(external_confinement: bool) -> Report {
     // The parsers spawn one thread of their own; a sandbox that breaks that
     // would make every document unreadable, so it is reported rather than
     // assumed.
-    detail.push(if threads_work() { "threads=ok" } else { "threads=failed" }.to_string());
+    detail.push(
+        if threads_work() {
+            "threads=ok"
+        } else {
+            "threads=failed"
+        }
+        .to_string(),
+    );
 
     Report {
         layers,
@@ -457,7 +464,11 @@ fn threads_work() -> bool {
     std::thread::Builder::new()
         .stack_size(64 * 1024)
         .spawn(|| ())
-        .and_then(|handle| handle.join().map_err(|_| std::io::Error::other("thread panicked")))
+        .and_then(|handle| {
+            handle
+                .join()
+                .map_err(|_| std::io::Error::other("thread panicked"))
+        })
         .is_ok()
 }
 
@@ -570,13 +581,17 @@ mod tests {
         assert!(Report::parse("").is_none());
         assert!(Report::parse("level=full limits=on").is_none());
         assert!(
-            Report::parse("NFX1-sandbox level=full limits=on files=open network=open process=open detail=x")
-                .is_none(),
+            Report::parse(
+                "NFX1-sandbox level=full limits=on files=open network=open process=open detail=x"
+            )
+            .is_none(),
             "the level token must match the layers"
         );
         assert!(
-            Report::parse("NFX1-sandbox level=none limits=maybe files=open network=open process=open detail=x")
-                .is_none()
+            Report::parse(
+                "NFX1-sandbox level=none limits=maybe files=open network=open process=open detail=x"
+            )
+            .is_none()
         );
     }
 }

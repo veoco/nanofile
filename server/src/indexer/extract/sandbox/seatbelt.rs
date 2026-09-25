@@ -97,7 +97,11 @@ mod tests {
         assert!(profile.contains("(literal \"/opt/nanofile/nanofile\")"));
         // Nothing may grant a write, a socket, or another program.
         for forbidden in [
-            "file-write", "network", "process-exec", "mach-lookup", "iokit",
+            "file-write",
+            "network",
+            "process-exec",
+            "mach-lookup",
+            "iokit",
         ] {
             assert!(
                 !profile.contains(forbidden),

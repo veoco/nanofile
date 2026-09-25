@@ -64,26 +64,26 @@ pub(super) fn extract_text(data: Vec<u8>, format: DocumentFormat) -> Extracted {
         "office",
         |_| Extracted::Unsupported(reason::PANIC),
         move || {
-        // The OOXML formats are ZIP packages; the legacy ones are compound
-        // files, which store their streams uncompressed and are therefore
-        // bounded by the file itself.
-        if is_package(format)
-            && let Err(reason) =
-                within_budget(&data, MAX_OFFICE_UNCOMPRESSED_BYTES, MAX_OFFICE_ENTRIES)
-        {
-            tracing::debug!("office: not indexable: {reason}");
-            return Extracted::Unsupported(reason);
-        }
-
-        let document = match Document::from_reader(std::io::Cursor::new(data), format) {
-            Ok(document) => document,
-            Err(e) => {
-                tracing::debug!("office: cannot parse {format:?}: {e}");
-                return Extracted::Unsupported(reason::PARSE);
+            // The OOXML formats are ZIP packages; the legacy ones are compound
+            // files, which store their streams uncompressed and are therefore
+            // bounded by the file itself.
+            if is_package(format)
+                && let Err(reason) =
+                    within_budget(&data, MAX_OFFICE_UNCOMPRESSED_BYTES, MAX_OFFICE_ENTRIES)
+            {
+                tracing::debug!("office: not indexable: {reason}");
+                return Extracted::Unsupported(reason);
             }
-        };
-        finish(document.plain_text())
-    },
+
+            let document = match Document::from_reader(std::io::Cursor::new(data), format) {
+                Ok(document) => document,
+                Err(e) => {
+                    tracing::debug!("office: cannot parse {format:?}: {e}");
+                    return Extracted::Unsupported(reason::PARSE);
+                }
+            };
+            finish(document.plain_text())
+        },
     )
 }
 
@@ -183,24 +183,19 @@ mod tests {
         patch_declared_size(&mut package, (MAX_OFFICE_UNCOMPRESSED_BYTES + 1) as u32);
 
         assert_eq!(
-            within_budget(
-                &package,
-                MAX_OFFICE_UNCOMPRESSED_BYTES,
-                MAX_OFFICE_ENTRIES
-            ),
+            within_budget(&package, MAX_OFFICE_UNCOMPRESSED_BYTES, MAX_OFFICE_ENTRIES),
             Err(reason::BUDGET)
         );
     }
 
     #[test]
     fn too_many_parts_is_refused() {
-        let names: Vec<String> = (0..12).map(|index| format!("word/part{index}.xml")).collect();
+        let names: Vec<String> = (0..12)
+            .map(|index| format!("word/part{index}.xml"))
+            .collect();
         let parts: Vec<(&str, usize)> = names.iter().map(|name| (name.as_str(), 16)).collect();
         let package = package(&parts);
-        assert_eq!(
-            within_budget(&package, 1024 * 1024, 10),
-            Err(reason::PARTS)
-        );
+        assert_eq!(within_budget(&package, 1024 * 1024, 10), Err(reason::PARTS));
     }
 
     #[test]

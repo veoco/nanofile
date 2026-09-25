@@ -598,7 +598,11 @@ where
     F: FnOnce() -> worker::Outcome + Send + 'static,
 {
     let run = move || {
-        extract::guard("index", |_| worker::Outcome::Failed(extract::reason::PANIC), f)
+        extract::guard(
+            "index",
+            |_| worker::Outcome::Failed(extract::reason::PANIC),
+            f,
+        )
     };
     match ctx {
         Some(ctx) => ctx.run_blocking(run).await.map_err(map_failure),

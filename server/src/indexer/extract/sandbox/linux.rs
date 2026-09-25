@@ -306,13 +306,8 @@ fn install_landlock() -> Result<i64, &'static str> {
         return Err("ruleset");
     }
 
-    let restricted = unsafe {
-        libc::syscall(
-            libc::SYS_landlock_restrict_self,
-            ruleset,
-            0 as libc::c_uint,
-        )
-    };
+    let restricted =
+        unsafe { libc::syscall(libc::SYS_landlock_restrict_self, ruleset, 0 as libc::c_uint) };
     unsafe { libc::close(ruleset as libc::c_int) };
     if restricted != 0 {
         return Err("restrict");
@@ -551,11 +546,11 @@ mod tests {
         assert_eq!(program.last().expect("non-empty").k, SECCOMP_RET_ALLOW);
 
         for number in denied_syscalls() {
-            let matches_rule = program
-                .windows(2)
-                .any(|pair| pair[0].code == BPF_JEQ_K
+            let matches_rule = program.windows(2).any(|pair| {
+                pair[0].code == BPF_JEQ_K
                     && pair[0].k == number as u32
-                    && pair[1].k == SECCOMP_RET_ERRNO | EPERM);
+                    && pair[1].k == SECCOMP_RET_ERRNO | EPERM
+            });
             assert!(matches_rule, "syscall {number} is not refused");
         }
     }
@@ -691,10 +686,7 @@ mod tests {
     /// falls back to the `clone` whose flags this filter can read.
     #[test]
     fn the_filter_answers_clone3_with_enosys() {
-        assert_eq!(
-            run_filter(libc::SYS_clone3, 0),
-            SECCOMP_RET_ERRNO | ENOSYS
-        );
+        assert_eq!(run_filter(libc::SYS_clone3, 0), SECCOMP_RET_ERRNO | ENOSYS);
     }
 
     /// A thread must survive the filter, and a clone without `CLONE_THREAD` —
