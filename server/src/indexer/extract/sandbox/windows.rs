@@ -681,15 +681,44 @@ fn quote(argument: &OsStr) -> String {
     quoted
 }
 
-/// The environment the child starts with: the two variables the runtime reads,
-/// and nothing else.
+/// The variables a Windows process needs before its own code runs.
+///
+/// A process started with an empty environment does not work here: `winsock`
+/// fails to initialize without `SystemRoot`, the loader and the temporary
+/// directory helpers read the others, and both Go and libuv put a list like this
+/// back into a block that was cleared for the same reason (libuv: "Windows has a
+/// few essential environment variables"). None of them is a secret.
+///
+/// The identity variables a parser has no use for (`USERNAME`, `USERPROFILE`,
+/// `LOGONSERVER`, …) are deliberately not on the list, and neither is anything
+/// this deployment set.
+const SYSTEM_VARIABLES: &[&str] = &["Path", "SystemDrive", "SystemRoot", "TEMP", "TMP", "WINDIR"];
+
+/// The environment the child starts with: the system variables above, the two
+/// switches the Rust runtime reads, and nothing else.
 ///
 /// The server's environment holds the master secret, the storage keys and every
 /// resolved path, so it is not passed on.
 fn environment_block() -> Vec<u16> {
+    let mut entries: Vec<(OsString, OsString)> = SYSTEM_VARIABLES
+        .iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (OsString::from(*name), value)))
+        .collect();
+    entries.push((OsString::from("RUST_BACKTRACE"), OsString::from("0")));
+    entries.push((OsString::from("RUST_LIB_BACKTRACE"), OsString::from("0")));
+    // Windows reads the block in the order it was written and expects the order
+    // an environment is kept in: by name, case-insensitively.
+    entries.sort_by(|(left, _), (right, _)| {
+        left.to_string_lossy()
+            .to_ascii_uppercase()
+            .cmp(&right.to_string_lossy().to_ascii_uppercase())
+    });
+
     let mut block: Vec<u16> = Vec::new();
-    for entry in ["RUST_BACKTRACE=0", "RUST_LIB_BACKTRACE=0"] {
-        block.extend(entry.encode_utf16());
+    for (name, value) in entries {
+        block.extend(name.encode_wide());
+        block.push(b'=' as u16);
+        block.extend(value.encode_wide());
         block.push(0);
     }
     // A block ends with an empty string, i.e. a second terminator.
@@ -737,14 +766,32 @@ mod tests {
         assert_eq!(line, r#""C:\Program Files\nanofile.exe" extract-worker"#);
     }
 
+    /// The block carries what Windows needs to start a process and nothing this
+    /// deployment set: the names are the whole allowlist.
     #[test]
-    fn the_environment_block_holds_only_the_backtrace_switches() {
+    fn the_environment_block_holds_the_system_variables_and_nothing_else() {
         let block = environment_block();
         assert_eq!(block.last(), Some(&0));
         assert_eq!(block[block.len() - 2], 0, "the block ends with two zeros");
         let text = String::from_utf16_lossy(&block);
         assert!(text.contains("RUST_BACKTRACE=0"));
         assert!(text.contains("RUST_LIB_BACKTRACE=0"));
-        assert_eq!(text.matches('=').count(), 2);
+
+        let mut names: Vec<&str> = text
+            .split('\0')
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| entry.split('=').next().unwrap_or_default())
+            .collect();
+        for name in &names {
+            assert!(
+                SYSTEM_VARIABLES.contains(name)
+                    || matches!(*name, "RUST_BACKTRACE" | "RUST_LIB_BACKTRACE"),
+                "unexpected variable {name}"
+            );
+        }
+        // Case-insensitive by name, which is the order Windows reads it in.
+        let written = names.clone();
+        names.sort_by_key(|name| name.to_ascii_uppercase());
+        assert_eq!(written, names, "{written:?}");
     }
 }

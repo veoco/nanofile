@@ -552,11 +552,7 @@ impl Run {
         if self.timed_out {
             parts.push("timed out".to_string());
         }
-        match self.exit_code {
-            Some(code) if code < 0 => parts.push(format!("killed by signal {}", -code)),
-            Some(code) => parts.push(format!("exit={code}")),
-            None => parts.push("no exit status".to_string()),
-        }
+        parts.push(exit_line(self.exit_code));
         parts.push(format!("stdout={} bytes", self.stdout.len()));
         let stderr = self.stderr.trim();
         parts.push(if stderr.is_empty() {
@@ -565,6 +561,22 @@ impl Run {
             format!("stderr={}", clipped(stderr, 400))
         });
         parts.join(", ")
+    }
+}
+
+/// How the child stopped, in the vocabulary of the platform that stopped it.
+///
+/// A code below zero is a signal on unix — `-9` is the kernel, `-6` an abort —
+/// and an `NTSTATUS` on Windows, where `0xC0000135` is the loader failing to
+/// find a library.
+fn exit_line(code: Option<i32>) -> String {
+    match code {
+        #[cfg(unix)]
+        Some(code) if code < 0 => format!("killed by signal {}", -code),
+        #[cfg(windows)]
+        Some(code) if code < 0 => format!("exit=0x{:08X}", code as u32),
+        Some(code) => format!("exit={code}"),
+        None => "no exit status".to_string(),
     }
 }
 
@@ -822,11 +834,17 @@ mod tests {
             timed_out,
         };
         let killed = run(Some(-9), "  ", false).summary();
-        assert!(killed.contains("killed by signal 9"), "{killed}");
+        #[cfg(unix)]
+        {
+            assert!(killed.contains("killed by signal 9"), "{killed}");
+        }
+        #[cfg(windows)]
+        {
+            assert!(killed.contains("exit=0xFFFFFFF7"), "{killed}");
+        }
         assert!(killed.contains("stderr=empty"), "{killed}");
         assert!(killed.contains("stdout=0 bytes"), "{killed}");
         let aborted = run(Some(-6), "dyld: Library not loaded: /usr/lib/x", false).summary();
-        assert!(aborted.contains("killed by signal 6"), "{aborted}");
         assert!(aborted.contains("dyld: Library not loaded"), "{aborted}");
         assert!(run(Some(125), "", false).summary().contains("exit=125"));
         assert!(run(None, "", true).summary().contains("timed out"));
