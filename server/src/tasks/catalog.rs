@@ -80,11 +80,9 @@ pub fn policy(key: JobKey) -> JobSpec {
             "password cache cleanup",
             fixed_timer(900),
         )),
-        JobKey::ExpiredTokenCleanup => {
-            housekeeping(key, "expired token cleanup", fixed_timer(3600))
+        JobKey::ExpiredDataCleanup => {
+            notable(housekeeping(key, "expired data cleanup", fixed_timer(3600)))
         }
-        JobKey::ShareLinkCleanup => housekeeping(key, "share link cleanup", fixed_timer(3600)),
-        JobKey::UploadLinkCleanup => housekeeping(key, "upload link cleanup", fixed_timer(3600)),
         // A backstop, not the commit path: the indexer commits a debounced
         // write within 100ms on its own, and this pass only has something to do
         // when that commit failed. Two minutes is short enough that such a
@@ -93,7 +91,6 @@ pub fn policy(key: JobKey) -> JobSpec {
         JobKey::IndexCommit => notable(housekeeping(key, "index commit", fixed_timer(120))),
         JobKey::MailDelivery => housekeeping(key, "mail delivery", fixed_timer(30)),
         JobKey::ZipTaskCleanup => notable(housekeeping(key, "zip task cleanup", fixed_timer(600))),
-        JobKey::TempUploadCleanup => housekeeping(key, "temp upload cleanup", fixed_timer(1800)),
 
         JobKey::GarbageCollection => JobSpec {
             name: "gc",
@@ -372,11 +369,8 @@ mod tests {
         );
         assert_eq!(interval(JobKey::PasswordCacheCleanup), 900);
         assert_eq!(interval(JobKey::TokenExpiryCheck), 3600);
-        assert_eq!(interval(JobKey::ShareLinkCleanup), 3600);
-        assert_eq!(interval(JobKey::UploadLinkCleanup), 3600);
-        assert_eq!(interval(JobKey::ExpiredTokenCleanup), 3600);
+        assert_eq!(interval(JobKey::ExpiredDataCleanup), 3600);
         assert_eq!(interval(JobKey::ZipTaskCleanup), 600);
-        assert_eq!(interval(JobKey::TempUploadCleanup), 1800);
     }
 
     /// Only a pass that usually finds nothing is allowed to keep no history for
@@ -393,6 +387,7 @@ mod tests {
             vec![
                 JobKey::TokenExpiryCheck,
                 JobKey::PasswordCacheCleanup,
+                JobKey::ExpiredDataCleanup,
                 JobKey::IndexCommit,
                 JobKey::ZipTaskCleanup,
             ]

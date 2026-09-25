@@ -248,58 +248,65 @@ pub fn install_default_jobs(
         }
     }));
 
-    jobs.push(job(JobKey::ExpiredTokenCleanup, {
+    // One pass for everything whose only record is an expiry date. Four jobs
+    // with four timers did the same kind of work and each reported a number on
+    // its own; one pass reports them together, and one part failing does not
+    // hide what the others did.
+    //
+    // The temporary-upload part is skipped when the TTL is zero, which is how
+    // that cleanup is switched off: the pass says so in its own report rather
+    // than leaving a reader to wonder why nothing was deleted.
+    jobs.push(job(JobKey::ExpiredDataCleanup, {
         let db = db.clone();
+        let repos = repos.clone();
+        let block_store = block_store.clone();
+        let temp_file_manager = temp_file_manager.clone();
         move |_ctx, _params| {
             let db = db.clone();
-            async move {
-                let now = chrono::Utc::now().timestamp();
-                match crate::repository::token_cleanup::delete_expired_tokens(db.as_ref(), now)
-                    .await
-                {
-                    Ok(count) if count > 0 => Ok(Outcome::success(
-                        format!("Deleted {count} expired tokens"),
-                        Some(count),
-                    )),
-                    Ok(_) => Ok(Outcome::success("no expired tokens", None)),
-                    Err(e) => Err(JobFailure::App(e)),
-                }
-            }
-        }
-    }));
-
-    jobs.push(job(JobKey::ShareLinkCleanup, {
-        let repos = repos.clone();
-        move |_ctx, _params| {
             let repos = repos.clone();
+            let block_store = block_store.clone();
+            let temp_file_manager = temp_file_manager.clone();
             async move {
                 let now = chrono::Utc::now().timestamp();
-                match repos.share_link.delete_expired(now).await {
-                    Ok(count) if count > 0 => Ok(Outcome::success(
-                        format!("Cleaned up {count} expired share links"),
-                        Some(count),
-                    )),
-                    Ok(_) => Ok(Outcome::success("no expired share links", None)),
-                    Err(e) => Err(JobFailure::App(e)),
-                }
-            }
-        }
-    }));
+                // (what was cleaned, how much, or why it could not be)
+                let mut parts: Vec<String> = Vec::new();
+                let mut failures: Vec<String> = Vec::new();
+                let mut removed = 0u64;
 
-    jobs.push(job(JobKey::UploadLinkCleanup, {
-        let repos = repos.clone();
-        move |_ctx, _params| {
-            let repos = repos.clone();
-            async move {
-                let now = chrono::Utc::now().timestamp();
-                match repos.upload_link.delete_expired(now).await {
-                    Ok(count) if count > 0 => Ok(Outcome::success(
-                        format!("Cleaned up {count} expired upload links"),
-                        Some(count),
-                    )),
-                    Ok(_) => Ok(Outcome::success("no expired upload links", None)),
-                    Err(e) => Err(JobFailure::App(e)),
+                let mut part =
+                    |label: &str, result: Result<u64, base::error::AppError>| match result {
+                        Ok(count) => {
+                            removed += count;
+                            parts.push(format!("{count} {label}"));
+                        }
+                        Err(e) => failures.push(format!("{label} ({e})")),
+                    };
+
+                part(
+                    "expired tokens",
+                    crate::repository::token_cleanup::delete_expired_tokens(db.as_ref(), now).await,
+                );
+                part(
+                    "expired share links",
+                    repos.share_link.delete_expired(now).await,
+                );
+                part(
+                    "expired upload links",
+                    repos.upload_link.delete_expired(now).await,
+                );
+
+                if temp_upload_ttl_hours > 0 {
+                    let ttl = Duration::from_secs(temp_upload_ttl_hours * 3600);
+                    let dropped = temp_file_manager
+                        .cleanup_stale(&repos, ttl, &block_store)
+                        .await;
+                    removed += dropped as u64;
+                    parts.push(format!("{dropped} abandoned uploads"));
+                } else {
+                    parts.push("temporary uploads never expire".to_string());
                 }
+
+                cleanup_outcome(&parts, &failures, removed)
             }
         }
     }));
@@ -474,34 +481,6 @@ pub fn install_default_jobs(
         })
     }));
 
-    // Skipped entirely when the TTL is 0, which is what disables the cleanup.
-    if temp_upload_ttl_hours > 0 {
-        let ttl = Duration::from_secs(temp_upload_ttl_hours * 3600);
-        jobs.push(job(JobKey::TempUploadCleanup, {
-            let temp_file_manager = temp_file_manager.clone();
-            let block_store = block_store.clone();
-            let repos = repos.clone();
-            move |_ctx, _params| {
-                let temp_file_manager = temp_file_manager.clone();
-                let block_store = block_store.clone();
-                let repos = repos.clone();
-                async move {
-                    let dropped = temp_file_manager
-                        .cleanup_stale(&repos, ttl, &block_store)
-                        .await;
-                    Ok(if dropped > 0 {
-                        Outcome::success(
-                            format!("Dropped {dropped} abandoned uploads"),
-                            Some(dropped as u64),
-                        )
-                    } else {
-                        Outcome::success("no upload had been abandoned", None)
-                    })
-                }
-            }
-        }));
-    }
-
     // The other half of the conditions above: a job whose subsystem is switched
     // off is not registered, which is right and also invisible. Recording why
     // lets the admin listing say "this server does not run it" instead of
@@ -523,9 +502,6 @@ pub fn install_default_jobs(
     }
     if mail.is_none() {
         skipped.push((JobKey::MailDelivery, SkipReason::MailOff));
-    }
-    if temp_upload_ttl_hours == 0 {
-        skipped.push((JobKey::TempUploadCleanup, SkipReason::TempUploadTtlZero));
     }
 
     // Install first: it replaces the generation's job set *and* clears the
@@ -554,6 +530,30 @@ pub fn install_default_jobs(
     }
 
     Ok(())
+}
+
+/// What an expired-data pass reports.
+///
+/// Every part is named, including the one that could not be run: a pass that
+/// silently skipped a part would read exactly like a pass that found nothing,
+/// and a part that failed must not hide what the others did.
+fn cleanup_outcome(
+    parts: &[String],
+    failures: &[String],
+    removed: u64,
+) -> Result<Outcome, JobFailure> {
+    if !failures.is_empty() {
+        return Err(JobFailure::App(base::error::AppError::Internal(format!(
+            "removed {}; could not clean up {}",
+            parts.join(", "),
+            failures.join(", ")
+        ))));
+    }
+    Ok(if removed > 0 {
+        Outcome::success(format!("Removed {}", parts.join(", ")), Some(removed))
+    } else {
+        Outcome::idle(format!("nothing had expired: {}", parts.join(", ")))
+    })
 }
 
 /// The request payload the copy/move handlers submit.
@@ -612,4 +612,60 @@ where
     Fut: std::future::Future<Output = Result<Outcome, JobFailure>> + Send + 'static,
 {
     Arc::new(move |ctx, params| Box::pin(run(ctx, params)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tasks::run::JobState;
+
+    /// Every part is named, so the report says what the pass actually looked at
+    /// rather than a bare count.
+    #[test]
+    fn a_pass_that_removed_something_reports_each_part() {
+        let parts = vec![
+            "3 expired tokens".to_string(),
+            "2 expired share links".to_string(),
+        ];
+        let outcome = cleanup_outcome(&parts, &[], 5).unwrap();
+        assert_eq!(
+            outcome.message,
+            "Removed 3 expired tokens, 2 expired share links"
+        );
+        assert_eq!(outcome.processed, Some(5));
+        assert!(!outcome.idle);
+    }
+
+    /// Nothing expired is not the same as nothing checked: the idle report still
+    /// names every part, including one that is switched off.
+    #[test]
+    fn a_pass_with_nothing_to_do_says_what_it_checked() {
+        let parts = vec![
+            "0 expired tokens".to_string(),
+            "temporary uploads never expire".to_string(),
+        ];
+        let outcome = cleanup_outcome(&parts, &[], 0).unwrap();
+        assert!(outcome.idle);
+        assert_eq!(
+            outcome.message,
+            "nothing had expired: 0 expired tokens, temporary uploads never expire"
+        );
+    }
+
+    /// One part failing must not hide what the others did: the error names both.
+    #[test]
+    fn a_failing_part_does_not_hide_the_others() {
+        let parts = vec!["3 expired tokens".to_string()];
+        let failures = vec!["expired share links (the database is locked)".to_string()];
+        let failure = cleanup_outcome(&parts, &failures, 3).unwrap_err();
+        let message = failure.into_state();
+        let JobState::Failed(message) = message else {
+            panic!("a failed part is a failed run: {message:?}");
+        };
+        assert!(message.contains("3 expired tokens"), "{message}");
+        assert!(
+            message.contains("expired share links (the database is locked)"),
+            "{message}"
+        );
+    }
 }

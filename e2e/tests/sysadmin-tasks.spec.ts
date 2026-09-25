@@ -41,7 +41,7 @@ test("the registry groups jobs by how they run", async ({ page }) => {
   // supply its parameters — and the row says when it runs instead.
   await expect(taskRow(page, "copy")).toBeVisible();
   await expect(taskRow(page, "copy").locator("form.trigger-form")).toHaveCount(0);
-  await expect(taskRow(page, "share-link-cleanup").locator("form.trigger-form")).toHaveCount(1);
+  await expect(taskRow(page, "expired-data-cleanup").locator("form.trigger-form")).toHaveCount(1);
 
   // A long-lived service is its own group and carries no counters: it never
   // finishes, so it has no run count to show.
@@ -105,7 +105,7 @@ test("the registry columns line up down the list", async ({ page }) => {
 // never a bare triple.
 test("a job's counters are labelled behind its disclosure", async ({ page }) => {
   await page.goto(REGISTRY);
-  await taskRow(page, "share-link-cleanup")
+  await taskRow(page, "expired-data-cleanup")
     .locator('form.trigger-form button[type="submit"]')
     .click();
   await page.locator(".js-confirm-ok").click();
@@ -115,11 +115,11 @@ test("a job's counters are labelled behind its disclosure", async ({ page }) => 
   await expect
     .poll(async () => {
       await page.goto(REGISTRY);
-      return taskRow(page, "share-link-cleanup").locator("[data-counter]").count();
+      return taskRow(page, "expired-data-cleanup").locator("[data-counter]").count();
     })
     .toBeGreaterThan(0);
 
-  const detail = taskRow(page, "share-link-cleanup").locator("details.nf-xrow-more");
+  const detail = taskRow(page, "expired-data-cleanup").locator("details.nf-xrow-more");
   await expect(detail.locator("[data-counter]").first()).toBeHidden();
   await detail.locator("summary").click();
   await expect(detail).toContainText("Totals");
@@ -130,7 +130,7 @@ test("a job's counters are labelled behind its disclosure", async ({ page }) => 
 // them changes what the list is for, and a service has none of them at all.
 test("a job's scheduling policy is one disclosure away", async ({ page }) => {
   await page.goto(REGISTRY);
-  const row = taskRow(page, "share-link-cleanup");
+  const row = taskRow(page, "expired-data-cleanup");
   const detail = row.locator("details.nf-xrow-more");
   await expect(detail.locator("summary")).toContainText("Stats and policy");
   await expect(detail.locator(".nf-kv").first()).toBeHidden();
@@ -185,7 +185,7 @@ test("a declared job this server does not run says why", async ({ page }) => {
 // holds.
 test("a finished run is named and labelled on the run list", async ({ page }) => {
   await page.goto(REGISTRY);
-  await taskRow(page, "share-link-cleanup")
+  await taskRow(page, "expired-data-cleanup")
     .locator('form.trigger-form button[type="submit"]')
     .click();
   await page.locator(".js-confirm-ok").click();
@@ -198,23 +198,28 @@ test("a finished run is named and labelled on the run list", async ({ page }) =>
       await page.goto("/sysadmin/tasks/");
       return page
         .locator('main .nf-xrow[data-run]')
-        .filter({ hasText: "Share link cleanup" })
+        .filter({ hasText: "Expired data cleanup" })
         .count();
     })
     .not.toBe(0);
 
   const run = page
     .locator('main .nf-xrow[data-run]')
-    .filter({ hasText: "Share link cleanup" })
+    .filter({ hasText: "Expired data cleanup" })
     .first();
   await expect(run.locator(".badge")).toHaveText("Succeeded");
-  await expect(run).not.toContainText("share-link-cleanup");
+  await expect(run).not.toContainText("expired-data-cleanup");
   await expect(run.locator('[data-fact="owner"]')).toContainText("The server");
 
-  // The id and the job's own report are one disclosure away.
+  // The id and the job's own report are one disclosure away. The report is what
+  // the job said it did, never the name the row already carries.
   await expect(run.locator("details.nf-xrow-more .nf-kv").first()).toBeHidden();
   await run.locator("details.nf-xrow-more summary").click();
   await expect(run.locator("details.nf-xrow-more")).toContainText("Run id");
+  await expect(run.locator("details.nf-xrow-more")).toContainText("Summary");
+  const summary = run.locator("details.nf-xrow-more .nf-kv", { hasText: "Summary" });
+  await expect(summary.locator(".v")).not.toHaveText("Expired data cleanup");
+  await expect(summary.locator(".v")).toContainText("expired");
 });
 
 // The run columns are fixed-width and right-aligned, so the finish times can be
@@ -225,7 +230,7 @@ test("the run columns line up down the list", async ({ page }) => {
   // concurrency cap turns the duplicate away.
   for (let i = 0; i < 2; i++) {
     await page.goto(REGISTRY);
-    await taskRow(page, "share-link-cleanup")
+    await taskRow(page, "expired-data-cleanup")
       .locator('form.trigger-form button[type="submit"]')
       .click();
     await page.locator(".js-confirm-ok").click();
@@ -282,7 +287,7 @@ test("the server load sits above the run lists", async ({ page }) => {
 
 test("trigger a periodic task manually", async ({ page }) => {
   await page.goto(REGISTRY);
-  const row = taskRow(page, "share-link-cleanup");
+  const row = taskRow(page, "expired-data-cleanup");
   await expect(row).toBeVisible();
   // A periodic job exposes a trigger button; a service has nothing to run.
   await expect(row.locator("form.trigger-form")).toBeVisible();
@@ -292,12 +297,12 @@ test("trigger a periodic task manually", async ({ page }) => {
   // which a fast job can leave reading the same as before.
   const runs = async () => {
     await page.goto(REGISTRY);
-    const counter = taskRow(page, "share-link-cleanup")
+    const counter = taskRow(page, "expired-data-cleanup")
       .locator("details.nf-xrow-more")
       .locator("[data-counter]")
       .first();
     if ((await counter.count()) === 0) return 0;
-    await taskRow(page, "share-link-cleanup").locator("details.nf-xrow-more summary").click();
+    await taskRow(page, "expired-data-cleanup").locator("details.nf-xrow-more summary").click();
     return Number((await counter.innerText()).replace(/\D+/g, ""));
   };
   const before = await runs();

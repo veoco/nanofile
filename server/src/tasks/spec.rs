@@ -25,15 +25,16 @@ pub enum JobKey {
     // ── Housekeeping ─────────────────────────────────────────────────────
     TokenExpiryCheck,
     PasswordCacheCleanup,
-    ExpiredTokenCleanup,
-    ShareLinkCleanup,
-    UploadLinkCleanup,
+    /// One pass for everything whose only record is an expiry date: tokens,
+    /// share links, upload links and abandoned temporary uploads. They were
+    /// four jobs with four timers doing the same kind of work, and their
+    /// summaries said nothing a reader could act on.
+    ExpiredDataCleanup,
     GarbageCollection,
     BlockEncryptionConvert,
     IndexCommit,
     MailDelivery,
     ZipTaskCleanup,
-    TempUploadCleanup,
 }
 
 impl JobKey {
@@ -44,15 +45,12 @@ impl JobKey {
         Self::Reindex,
         Self::TokenExpiryCheck,
         Self::PasswordCacheCleanup,
-        Self::ExpiredTokenCleanup,
-        Self::ShareLinkCleanup,
-        Self::UploadLinkCleanup,
+        Self::ExpiredDataCleanup,
         Self::GarbageCollection,
         Self::BlockEncryptionConvert,
         Self::IndexCommit,
         Self::MailDelivery,
         Self::ZipTaskCleanup,
-        Self::TempUploadCleanup,
     ];
 
     /// Look a key up by its stored slug, for recovery from the run table.
@@ -68,17 +66,37 @@ impl JobKey {
             Self::Reindex => "reindex",
             Self::TokenExpiryCheck => "token-expiry-check",
             Self::PasswordCacheCleanup => "password-cache-cleanup",
-            Self::ExpiredTokenCleanup => "expired-token-cleanup",
-            Self::ShareLinkCleanup => "share-link-cleanup",
-            Self::UploadLinkCleanup => "upload-link-cleanup",
+            Self::ExpiredDataCleanup => "expired-data-cleanup",
             Self::GarbageCollection => "gc",
             Self::BlockEncryptionConvert => "block-encryption-convert",
             Self::IndexCommit => "index-commit",
             Self::MailDelivery => "mail-delivery",
             Self::ZipTaskCleanup => "zip-task-cleanup",
-            Self::TempUploadCleanup => "temp-upload-cleanup",
         }
     }
+}
+
+/// Jobs the catalog no longer declares, with the locale key of the name they
+/// were known by.
+///
+/// The journal outlives the job set: merging or removing a job leaves rows
+/// carrying a slug nothing resolves any more, and a run list that printed the
+/// slug would show code vocabulary to a person reading history. The names stay
+/// in the dictionary for exactly these rows, and only the name — a retired job
+/// has no description to show, because it is not on the registry page.
+pub const RETIRED_JOBS: &[(&str, &str)] = &[
+    ("expired-token-cleanup", "admin.job_expired_token_cleanup"),
+    ("share-link-cleanup", "admin.job_share_link_cleanup"),
+    ("upload-link-cleanup", "admin.job_upload_link_cleanup"),
+    ("temp-upload-cleanup", "admin.job_temp_upload_cleanup"),
+];
+
+/// The locale key a retired slug was named by, if it was retired.
+pub fn retired_job_name_key(slug: &str) -> Option<&'static str> {
+    RETIRED_JOBS
+        .iter()
+        .find(|(retired, _)| *retired == slug)
+        .map(|(_, key)| *key)
 }
 
 /// Stable identity of a long-lived service.
@@ -125,8 +143,6 @@ pub enum SkipReason {
     IndexOff,
     /// No mailer, so there is no outbox to drain.
     MailOff,
-    /// Temporary uploads never expire, so there is nothing to clean up.
-    TempUploadTtlZero,
 }
 
 impl SkipReason {
@@ -138,7 +154,6 @@ impl SkipReason {
         Self::EncryptionNotLazy,
         Self::IndexOff,
         Self::MailOff,
-        Self::TempUploadTtlZero,
     ];
 }
 

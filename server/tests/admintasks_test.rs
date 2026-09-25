@@ -304,7 +304,7 @@ async fn a_journal_row_is_named_and_state_labelled() {
         .enqueue(
             NewJobRun {
                 id: "journalled-other".to_string(),
-                kind: JobKey::ShareLinkCleanup.as_str().to_string(),
+                kind: JobKey::ExpiredDataCleanup.as_str().to_string(),
                 owner: None,
                 summary: "no links to clean".to_string(),
                 params: None,
@@ -489,7 +489,7 @@ async fn triggering_redirects_back_to_the_registry() {
 
     let resp = admin
         .post(format!(
-            "{}/sysadmin/tasks/share-link-cleanup/trigger/",
+            "{}/sysadmin/tasks/expired-data-cleanup/trigger/",
             server.base_url
         ))
         .form(&[("csrf_token", &csrf)])

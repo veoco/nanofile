@@ -2093,15 +2093,17 @@ mod tests {
         let (system, repos) = journal_system().await;
         system
             .register(RegisteredJob::new(
-                catalog::policy(JobKey::ShareLinkCleanup),
+                catalog::policy(JobKey::GarbageCollection),
                 Arc::new(|_ctx, _params| {
-                    Box::pin(async { Ok(Outcome::success("cleaned up 3 expired links", Some(3))) })
+                    Box::pin(async {
+                        Ok(Outcome::success("removed 3 unreferenced blocks", Some(3)))
+                    })
                 }),
             ))
             .unwrap();
         let id = system
             .submit(
-                JobKey::ShareLinkCleanup,
+                JobKey::GarbageCollection,
                 Some(1),
                 Params::Null,
                 "share link cleanup",
@@ -2126,7 +2128,7 @@ mod tests {
         }
         assert_eq!(rows.len(), 1, "one finished run is recorded");
         let row = &rows[0];
-        assert_eq!(row.kind, "share-link-cleanup");
+        assert_eq!(row.kind, "gc");
         assert_eq!(row.phase, "succeeded");
         assert_eq!(row.owner, Some(1));
         assert!(row.finished_at.is_some());
@@ -2134,7 +2136,7 @@ mod tests {
         assert!(row.params.is_none(), "the input is dropped once it is over");
         // What the job reported is what the record says it did — not the name
         // its submitter called it.
-        assert_eq!(row.summary, "cleaned up 3 expired links");
+        assert_eq!(row.summary, "removed 3 unreferenced blocks");
         assert_eq!(row.processed, Some(3));
     }
 
@@ -2145,7 +2147,7 @@ mod tests {
         let (system, repos) = journal_system().await;
         system
             .register(RegisteredJob::new(
-                catalog::policy(JobKey::ShareLinkCleanup),
+                catalog::policy(JobKey::GarbageCollection),
                 Arc::new(|_ctx, _params| {
                     Box::pin(async {
                         Err(JobFailure::App(AppError::Internal(
@@ -2157,7 +2159,7 @@ mod tests {
             .unwrap();
         let id = system
             .submit(
-                JobKey::ShareLinkCleanup,
+                JobKey::GarbageCollection,
                 Some(1),
                 Params::Null,
                 "share link cleanup",
@@ -2420,7 +2422,7 @@ mod tests {
         let (system, repos) = journal_system().await;
         system
             .register(RegisteredJob::new(
-                catalog::policy(JobKey::ShareLinkCleanup),
+                catalog::policy(JobKey::GarbageCollection),
                 Arc::new(|_ctx, _params| Box::pin(async { Ok(Outcome::ok()) })),
             ))
             .unwrap();
@@ -2429,7 +2431,7 @@ mod tests {
             .enqueue(
                 crate::repository::job_run::NewJobRun {
                     id: "crashed-audit".to_string(),
-                    kind: "share-link-cleanup".to_string(),
+                    kind: "gc".to_string(),
                     owner: Some(7),
                     summary: String::new(),
                     params: Some(Params::Null.to_string()),

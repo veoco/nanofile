@@ -438,6 +438,12 @@ mod tests {
         for key in ServiceKey::ALL {
             slug_keys("admin.service_", key.as_str());
         }
+        // A retired job keeps its name and only its name: the journal still
+        // holds rows under that slug, so the label has a reader, but there is no
+        // row on the registry page to describe.
+        for (_, name_key) in crate::tasks::spec::RETIRED_JOBS {
+            keys.push((*name_key).to_string());
+        }
 
         // Not a hard-coded list: `missing()` is what `missing_labels` translates,
         // so the mail fields are elicited by breaking all three at once.

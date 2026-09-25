@@ -742,18 +742,21 @@ fn skip_reason_key(reason: SkipReason) -> &'static str {
         SkipReason::EncryptionNotLazy => "admin.skip_encryption_not_lazy",
         SkipReason::IndexOff => "admin.skip_index_off",
         SkipReason::MailOff => "admin.skip_mail_off",
-        SkipReason::TempUploadTtlZero => "admin.skip_temp_upload_ttl_zero",
     }
 }
 
 /// The name of the job a run belongs to.
 ///
 /// A run outlives the job that wrote it: the journal is kept across upgrades
-/// and a job can be removed, so an unknown slug is shown as it is rather than
-/// left blank or dropped.
+/// and a job can be merged away or removed, so the lookup walks three steps —
+/// a job this build still runs, then a slug it retired but still names, then the
+/// slug itself, which is at least the truth about a row nobody can explain.
 fn run_name(slug: &str, t: &I18n) -> String {
-    match JobKey::from_slug(slug) {
-        Some(key) => t.tr(&job_name_key(key)).to_string(),
+    if let Some(key) = JobKey::from_slug(slug) {
+        return t.tr(&job_name_key(key)).to_string();
+    }
+    match crate::tasks::spec::retired_job_name_key(slug) {
+        Some(key) => t.tr(key).to_string(),
         None => slug.to_string(),
     }
 }
@@ -1254,7 +1257,7 @@ mod tests {
             ..JobStats::default()
         };
         let row = job_row(
-            &registered(JobKey::ShareLinkCleanup),
+            &registered(JobKey::ExpiredDataCleanup),
             &stats,
             I18n::get(None),
         );
@@ -1286,7 +1289,7 @@ mod tests {
         let t = I18n::get(None);
         let groups = build_groups(vec![
             job_row(
-                &registered(JobKey::ShareLinkCleanup),
+                &registered(JobKey::ExpiredDataCleanup),
                 &JobStats::default(),
                 t,
             ),
@@ -1331,6 +1334,33 @@ mod tests {
         let t = I18n::get(None);
         assert_eq!(run_name("gc", t), "Garbage collection");
         assert_eq!(run_name("retired-job", t), "retired-job");
+        // A slug this build retired still has a name, so the rows the journal
+        // kept under it do not read as code vocabulary.
+        assert_eq!(run_name("share-link-cleanup", t), "Share link cleanup");
+        assert_eq!(
+            run_name("temp-upload-cleanup", t),
+            "Temporary upload cleanup"
+        );
+    }
+
+    /// Every retired slug has a name in every language: its rows are still in
+    /// the journal, and only the name stays in the dictionary for them.
+    #[test]
+    fn every_retired_job_is_named_in_every_language() {
+        for (slug, name_key) in crate::tasks::spec::RETIRED_JOBS {
+            assert_eq!(
+                crate::tasks::spec::retired_job_name_key(slug),
+                Some(*name_key),
+                "{slug} is not resolvable"
+            );
+            assert!(
+                !name_key.ends_with("_desc"),
+                "{slug} has no registry row to describe"
+            );
+            for t in languages() {
+                assert_ne!(t.tr(name_key), *name_key, "{name_key} is missing");
+            }
+        }
     }
 
     /// A submitted run has no account when the server scheduled it, and an
