@@ -148,9 +148,19 @@ pub fn run(job: Job, external: External, policy: Policy) -> anyhow::Result<()> {
     // The parser limits are process-global and this process never runs the
     // server, so they are set here and nowhere else.
     configure_parser_limits();
-    let mut report = sandbox::confine(sandbox::External {
-        runner: external.runner,
-    });
+    // The self-test is the one run that can afford every effect probe; a
+    // document's child is not, and it is not where the decision is made.
+    let measure = if job == Job::Selftest {
+        sandbox::Measure::Thorough
+    } else {
+        sandbox::Measure::Cheap
+    };
+    let mut report = sandbox::confine(
+        sandbox::External {
+            runner: external.runner,
+        },
+        measure,
+    );
     if external.restricted_token {
         // A restricted token is a property of the process, not a layer this
         // process installed, so it is reported rather than claimed as one.
@@ -165,7 +175,7 @@ pub fn run(job: Job, external: External, policy: Policy) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if !policy.accepts(report.level()) {
+    if !policy.accepts(&report) {
         eprintln!("{SANDBOX_REFUSAL}: {} ({})", policy.as_str(), report.detail);
         std::process::exit(EXIT_SANDBOX_UNAVAILABLE);
     }
@@ -409,7 +419,26 @@ fn probe() -> Status {
     );
     let line = line.trim();
     match Report::parse(line) {
-        Some(report) => Status::Ready(report),
+        Some(report) => {
+            // The policy is decided here, once, and not left to each child. A
+            // host that cannot give what the setting asks for is an environment
+            // problem the operator has to see once at startup — with the reason
+            // — rather than one spawn per document that ends in exit 125 and a
+            // warning nothing aggregates. The child keeps the same check before
+            // it reads a request; this is the half that makes the shortfall
+            // visible and stops the spawns.
+            let policy = configured_policy();
+            if policy.accepts(&report) {
+                Status::Ready(report)
+            } else {
+                Status::Unavailable(format!(
+                    "`index.sandbox` is `{}` and this host gives `{}` confinement: {}",
+                    policy.as_str(),
+                    report.level().as_str(),
+                    report.detail
+                ))
+            }
+        }
         // A child that never printed its report says why on stderr, and the
         // probe is the only place that can be read: `tracing` has no subscriber
         // on this path, so the summary is the whole diagnosis.

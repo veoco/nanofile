@@ -339,11 +339,43 @@ impl Policy {
         }
     }
 
-    pub fn accepts(self, level: Level) -> bool {
+    /// Whether this confinement is enough for this policy.
+    ///
+    /// Takes the whole report rather than its level because the decision is
+    /// made from the report's facts on both sides of the process boundary: the
+    /// parent asks it once at startup, and the child asks it again before it
+    /// reads a request.
+    pub fn accepts(self, report: &Report) -> bool {
+        let level = report.level();
         match self {
             Policy::Require => level >= Level::Partial,
             Policy::Strict => level == Level::Full,
             Policy::Prefer => true,
+        }
+    }
+}
+
+/// How much of the report is measured by effect.
+///
+/// Both tiers are honest about what they did — the report says which one
+/// produced it — and the difference is only which probes a process can afford.
+/// The *decision* is made from the thorough tier (the parent probes once at
+/// startup); the per-document child uses the cheap one, where a probe that
+/// costs a connection attempt or a started program is left to the probe that
+/// runs once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Measure {
+    /// The effect probes that cost no more than a syscall.
+    Cheap,
+    /// Everything this platform can measure, however long it takes.
+    Thorough,
+}
+
+impl Measure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Measure::Cheap => "cheap",
+            Measure::Thorough => "thorough",
         }
     }
 }
@@ -393,7 +425,7 @@ pub fn runner(exe: &Path) -> Option<Runner> {
 /// Must be called on the child's only thread and before the document is read:
 /// Landlock and seccomp are inherited by threads created afterwards, and the
 /// parsers create one.
-pub fn confine(external: External) -> Report {
+pub fn confine(external: External, measure: Measure) -> Report {
     let (mut layers, mut detail) = platform_confine();
 
     if external.runner {
@@ -420,11 +452,18 @@ pub fn confine(external: External) -> Report {
             }
         }
         if layers.network {
-            if network_is_denied() {
-                detail.push("network=measured-denied".to_string());
+            if network_is_measured(measure) {
+                if network_is_denied() {
+                    detail.push("network=measured-denied".to_string());
+                } else {
+                    layers.network = false;
+                    detail.push("network=measured-open".to_string());
+                }
             } else {
-                layers.network = false;
-                detail.push("network=measured-open".to_string());
+                // The layer is what the kernel's token says it is; the effect
+                // probe that would confirm it costs a connection attempt, and
+                // the probe that runs once is where that belongs.
+                detail.push("network=installed".to_string());
             }
         }
     }
@@ -438,16 +477,29 @@ pub fn confine(external: External) -> Report {
         detail.push(format!("system={}", system_tree()));
     }
 
-    // Process creation is only ever claimed by an external runner: Windows
-    // bounds it with the Job Object this process installs itself, which is not
-    // something the child can measure by trying to start a program.
+    // Process creation is only ever claimed by a mechanism this process cannot
+    // see the effect of cheaply: an external runner's profile on macOS, and on
+    // Linux the seccomp filter that is installed in the same step that denies
+    // `fork`. Both are checked here, in the tier that can afford a fork; the
+    // per-document child claims what it installed and leaves the effect to the
+    // probe.
     #[cfg(unix)]
-    if external.runner {
-        if process_is_denied() {
-            detail.push("process=measured-denied".to_string());
-        } else {
-            layers.process = false;
-            detail.push("process=measured-open".to_string());
+    if measure == Measure::Thorough {
+        let facts = process_facts();
+        detail.push(format!("fork={}", denial_token(facts.fork_denied)));
+        detail.push(format!("exec={}", denial_token(facts.exec_denied)));
+        if external.runner {
+            match facts.exec_denied {
+                Some(true) => detail.push("process=measured-denied".to_string()),
+                Some(false) => {
+                    layers.process = false;
+                    detail.push("process=measured-open".to_string());
+                }
+                // The fork itself was refused, so the exec probe never ran: the
+                // runner's claim stands unmeasured rather than being cleared by
+                // a measurement that did not happen.
+                None => detail.push("process=unmeasured".to_string()),
+            }
         }
     }
 
@@ -462,6 +514,7 @@ pub fn confine(external: External) -> Report {
         }
         .to_string(),
     );
+    detail.push(format!("measure={}", measure.as_str()));
 
     Report {
         layers,
@@ -469,23 +522,72 @@ pub fn confine(external: External) -> Report {
     }
 }
 
+/// How a three-valued denial is spelled in the report.
+#[cfg(unix)]
+fn denial_token(denied: Option<bool>) -> &'static str {
+    match denied {
+        Some(true) => "denied",
+        Some(false) => "open",
+        None => "unmeasured",
+    }
+}
+
+/// Whether this tier runs the network layer's effect probe.
+///
+/// On unix it always does: binding an ephemeral port needs no peer, cannot fail
+/// for any reason other than the sandbox, and returns immediately. On Windows
+/// the probe is a connection attempt that a host which neither refuses nor
+/// answers makes take its whole timeout, once per document — so there the
+/// per-document child claims the layer from the container token the kernel gave
+/// it and leaves the connection to the probe that runs once.
+#[cfg(any(unix, windows))]
+fn network_is_measured(measure: Measure) -> bool {
+    #[cfg(windows)]
+    {
+        measure == Measure::Thorough
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = measure;
+        true
+    }
+}
+
 /// Whether reading or writing a path outside the document is refused, measured.
 ///
-/// Any one of these failing to open is the denial: `/` always exists, and the
-/// other three are readable by every process that is not confined. The macOS
-/// profile grants `/` on purpose — the child's working directory is there, and
-/// a process that cannot read it is aborted rather than refused — so the
+/// Both directions: a ruleset that granted writes would still deny every read
+/// here, and a parser that can write the host is the thing the layer is for.
+/// The temporary directory is the one place a process may write without asking
+/// anyone, so a refusal there is the sandbox and nothing else.
+///
+/// Any one of the read paths failing to open is the denial: `/` always exists,
+/// and the other three are readable by every process that is not confined. The
+/// macOS profile grants `/` on purpose — the child's working directory is there,
+/// and a process that cannot read it is aborted rather than refused — so the
 /// measurement rests on the paths beneath it, which no profile of ours grants.
 #[cfg(unix)]
 fn files_are_denied() -> bool {
-    ["/", "/etc/hostname", "/etc/passwd", "/usr/lib"]
+    let reads = ["/", "/etc/hostname", "/etc/passwd", "/usr/lib"]
         .iter()
         .any(|path| {
             matches!(
                 std::fs::File::open(path),
                 Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied
             )
-        })
+        });
+
+    let probe = std::env::temp_dir().join("nanofile-extraction-write-probe");
+    let writes = match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            false
+        }
+        // A temporary directory that is not there says nothing about the
+        // sandbox; only a refusal does.
+        Err(error) => error.kind() == std::io::ErrorKind::PermissionDenied,
+    };
+
+    reads || writes
 }
 
 /// Whether reading or writing a path outside the document is refused, measured.
@@ -602,29 +704,103 @@ fn system_tree() -> &'static str {
     if refused { "denied" } else { "absent" }
 }
 
-/// Whether starting another program is refused, measured.
+/// What trying to fork and to start a program answered.
 ///
-/// Only used to check a claim made by an external runner. A missing helper is
-/// not a denial: only a permission failure counts.
-///
-/// The standard streams are inherited rather than set to null: a null stream
-/// opens `/dev/null` for writing, which the macOS profile denies, and the probe
-/// would then measure that open instead of the `exec` it is about.
+/// Two facts from one probe, because on unix they are one call apart: the copy
+/// made by `fork` is where `execve` is tried, and which of the two failed is
+/// what tells a profile that denies starting programs from one that denies
+/// nothing. `None` means the question could not be asked (the fork was refused,
+/// so there was no copy to try `execve` in, or the attempt failed in a way that
+/// says nothing about the sandbox).
 #[cfg(unix)]
-fn process_is_denied() -> bool {
+#[derive(Debug, Clone, Copy)]
+struct ProcessFacts {
+    fork_denied: Option<bool>,
+    exec_denied: Option<bool>,
+}
+
+/// Whether forking and starting a program are refused, measured.
+///
+/// The probe is a syscall pair rather than a started program: the version this
+/// replaced ran `/usr/bin/true` for every document, which made measuring the
+/// sandbox into one of the things the sandbox exists to bound. Nothing of ours
+/// runs in the copy — the argument vectors are built before the `fork` and only
+/// `execve` and `_exit` are called after it, so no allocation and no lock is
+/// touched in a child of a process that may have had threads before.
+///
+/// `exit 0` from the copy means the helper *ran*, which is the only way to tell
+/// a refusal from a program that started and finished.
+#[cfg(unix)]
+fn process_facts() -> ProcessFacts {
+    use std::ffi::CString;
+
+    /// The copy's code for "`execve` was refused for permission".
+    const DENIED: libc::c_int = 2;
+    /// The copy's code for "`execve` failed for some other reason": the syscall
+    /// itself was allowed, so this says nothing about the sandbox.
+    const OTHER: libc::c_int = 3;
+
     let helper = if cfg!(target_os = "macos") {
         "/usr/bin/true"
     } else {
         "/bin/true"
     };
-    match std::process::Command::new(helper)
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()
-    {
-        Ok(_) => false,
-        Err(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
+    let Ok(program) = CString::new(helper) else {
+        return ProcessFacts {
+            fork_denied: None,
+            exec_denied: None,
+        };
+    };
+    // The standard streams are inherited rather than set to null: a null stream
+    // opens `/dev/null` for writing, which the macOS profile denies, and the
+    // probe would then measure that open instead of the `exec` it is about.
+    let argv: [*const libc::c_char; 2] = [program.as_ptr(), std::ptr::null()];
+    let envp: [*const libc::c_char; 1] = [std::ptr::null()];
+
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        let refused = matches!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EPERM) | Some(libc::EACCES)
+        );
+        return ProcessFacts {
+            fork_denied: refused.then_some(true),
+            exec_denied: None,
+        };
+    }
+    if pid == 0 {
+        let code = unsafe {
+            libc::execve(program.as_ptr(), argv.as_ptr(), envp.as_ptr());
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) {
+                DENIED
+            } else {
+                OTHER
+            }
+        };
+        unsafe { libc::_exit(code) };
+    }
+
+    let mut status: libc::c_int = 0;
+    if unsafe { libc::waitpid(pid, &mut status, 0) } < 0 {
+        return ProcessFacts {
+            fork_denied: Some(false),
+            exec_denied: None,
+        };
+    }
+    let exited = libc::WIFEXITED(status);
+    let code = if exited {
+        libc::WEXITSTATUS(status)
+    } else {
+        -1
+    };
+    ProcessFacts {
+        fork_denied: Some(false),
+        exec_denied: match code {
+            // The helper ran: `execve` was allowed through.
+            0 => Some(false),
+            DENIED => Some(true),
+            _ => None,
+        },
     }
 }
 
@@ -829,6 +1005,21 @@ mod tests {
         }
     }
 
+    /// Unconfined, the probe has to *say* unconfined. A probe that could only
+    /// answer "denied" would certify a sandbox that is not there, which is the
+    /// failure the whole report exists to prevent.
+    #[cfg(unix)]
+    #[test]
+    fn the_process_probe_reports_what_it_finds() {
+        let facts = process_facts();
+        assert_eq!(facts.fork_denied, Some(false), "a test process may fork");
+        assert_eq!(
+            facts.exec_denied,
+            Some(false),
+            "and may start a program it can read"
+        );
+    }
+
     /// The report names every limit that took and every one the kernel refused,
     /// so a missing limits layer says which limit to look at.
     #[cfg(unix)]
@@ -886,14 +1077,45 @@ mod tests {
 
     #[test]
     fn each_policy_refuses_the_levels_below_it() {
-        assert!(!Policy::Require.accepts(Level::None));
-        assert!(Policy::Require.accepts(Level::Partial));
-        assert!(Policy::Require.accepts(Level::Full));
-        assert!(!Policy::Strict.accepts(Level::None));
-        assert!(!Policy::Strict.accepts(Level::Partial));
-        assert!(Policy::Strict.accepts(Level::Full));
+        /// A report whose layers add up to `level`.
+        fn report_at(level: Level) -> Report {
+            let layers = match level {
+                Level::None => Layers {
+                    limits: true,
+                    ..Layers::default()
+                },
+                Level::Partial => Layers {
+                    limits: true,
+                    files: true,
+                    ..Layers::default()
+                },
+                Level::Full => Layers {
+                    limits: true,
+                    files: true,
+                    network: true,
+                    process: true,
+                },
+            };
+            Report {
+                layers,
+                detail: String::new(),
+            }
+        }
+
         for level in [Level::None, Level::Partial, Level::Full] {
-            assert!(Policy::Prefer.accepts(level));
+            let report = report_at(level);
+            assert_eq!(report.level(), level, "the fixture is the level it says");
+            assert_eq!(
+                Policy::Require.accepts(&report),
+                level >= Level::Partial,
+                "require at {level:?}"
+            );
+            assert_eq!(
+                Policy::Strict.accepts(&report),
+                level == Level::Full,
+                "strict at {level:?}"
+            );
+            assert!(Policy::Prefer.accepts(&report), "prefer at {level:?}");
         }
         assert_eq!(Policy::parse(" require "), Some(Policy::Require));
         assert_eq!(Policy::parse("strict"), Some(Policy::Strict));
