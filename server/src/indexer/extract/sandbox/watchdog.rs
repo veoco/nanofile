@@ -23,6 +23,16 @@
 //! the weaker bound (a thread has to be scheduled, and a `fork` does not carry
 //! it), which is why it is the fallback and not the plan.
 //!
+//! It is also the one bound a `fork` does not carry: the thread that watches is
+//! not duplicated by `fork`, and the copy that a `process-fork`-allowed profile
+//! permits therefore watches nothing. The address-space limit the newer kernels
+//! take *is* inherited, so this is the ≤ macOS 11 case only. Re-arming the
+//! watchdog from a `pthread_atfork` handler was considered and rejected: the
+//! handler runs in a copy of a process that may have been multithreaded, and the
+//! allocation a new thread needs can deadlock there — an unbounded copy is the
+//! better failure of the two. `seatbelt`'s module docs carry the same note next
+//! to the `fork=` fact the child reports.
+//!
 //! [`proc_pid_rusage`]: https://developer.apple.com/documentation/kernel/1502863-proc_pid_rusage
 
 use std::time::Duration;

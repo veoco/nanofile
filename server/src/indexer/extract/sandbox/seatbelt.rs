@@ -10,6 +10,23 @@
 //! The profile is deny-by-default, which is what makes it worth more than the
 //! write-denial profiles in circulation: a socket is refused by `(deny default)`
 //! unless something allows it, and nothing here does.
+//!
+//! # What this cannot close
+//!
+//! `process-fork` is allowed because Seatbelt charges the parsers' thread to it,
+//! so the process layer here is an *exec* bound: a document that got code running
+//! could still make copies of this process. Each copy inherits the profile and
+//! the resource limits — the address-space limit with them on a kernel that took
+//! it — so the copies are confined, but nothing bounds how many there are. The
+//! child says so (`fork=` in its report), which is what keeps `level=full` from
+//! reading as a process bound this platform does not provide, and what makes
+//! `sealed` refuse on macOS.
+//!
+//! The one mechanism that could have softened the ≤ macOS 11 fallback — a
+//! `pthread_atfork` handler that re-arms the footprint watchdog in the copy —
+//! is deliberately not used: a post-`fork` child may be inside a threaded
+//! process, and starting a thread there (which allocates) can deadlock where the
+//! alternative is only that the copy is unbounded for the rest of its life.
 
 #[cfg(target_os = "macos")]
 use super::Layers;
