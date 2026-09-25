@@ -15,12 +15,14 @@
 //!   Privileges are gone, the administrative SIDs are deny-only, and write
 //!   access is checked against the restricting SIDs alone.
 //!
-//! The restricting SIDs are `Everyone` and the logon SID, and both are needed
-//! for different reasons: `Everyone` is what still lets the process read the
-//! system files it loads DLLs from — dropping it fails the process with
-//! `STATUS_DLL_INIT_FAILED` before any of our code runs — and the logon SID is
-//! what the session's own objects are granted to. Nothing else is granted, so a
-//! parser that tries to leave a mark has nowhere to write.
+//! The restricting SIDs are the logon SID, `INTERACTIVE` and `Everyone`, for
+//! three different reasons: the session's own objects are granted to the logon
+//! SID, the rights a process needs to attach to the window station it inherits
+//! are granted to `INTERACTIVE` — without it the child is created and then dies
+//! inside the loader with `STATUS_DLL_INIT_FAILED`, before any of our code runs
+//! — and `Everyone` is the world SID a logon-session restricted token is built
+//! with. None of the three has write access to the user's own profile, so a
+//! parser that tries to leave a mark there has nowhere to write.
 //!
 //! This is what both of the sandboxes this follows report as *partial*: reads
 //! are only partly confined (`Everyone` cannot be dropped, and NTFS hard links
@@ -44,7 +46,7 @@ use windows_sys::Win32::Security::{
     CopySid, CreateRestrictedToken, CreateWellKnownSid, DISABLE_MAX_PRIVILEGE, GetLengthSid,
     GetTokenInformation, IsValidSid, LUA_TOKEN, PSID, SECURITY_ATTRIBUTES, SID_AND_ATTRIBUTES,
     TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY, TokenGroups,
-    WRITE_RESTRICTED, WinWorldSid,
+    WELL_KNOWN_SID_TYPE, WRITE_RESTRICTED, WinInteractiveSid, WinWorldSid,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -486,7 +488,10 @@ fn restricted_token() -> Option<HANDLE> {
     }
 
     let mut sids = RestrictingSids::new();
-    if !sids.push_logon_sid(own) || !sids.push_everyone() {
+    if !sids.push_logon_sid(own)
+        || !sids.push_well_known(WinInteractiveSid)
+        || !sids.push_well_known(WinWorldSid)
+    {
         unsafe { CloseHandle(own) };
         return None;
     }
@@ -515,7 +520,7 @@ fn restricted_token() -> Option<HANDLE> {
 /// call must be given memory that outlives the call.
 struct RestrictingSids {
     storage: [u64; 32],
-    entries: [SID_AND_ATTRIBUTES; 2],
+    entries: [SID_AND_ATTRIBUTES; 3],
     used: usize,
     count: usize,
 }
@@ -527,7 +532,7 @@ impl RestrictingSids {
             entries: [SID_AND_ATTRIBUTES {
                 Sid: null_mut(),
                 Attributes: 0,
-            }; 2],
+            }; 3],
             used: 0,
             count: 0,
         }
@@ -615,13 +620,29 @@ impl RestrictingSids {
         false
     }
 
-    /// The `Everyone` group, which every system file grants read access to.
-    fn push_everyone(&mut self) -> bool {
+    /// A well-known SID, by the identifier Windows gives it.
+    ///
+    /// The two the token needs are:
+    ///
+    /// * `INTERACTIVE` (`S-1-5-4`), because a restricted token is checked for
+    ///   *write* access against its restricting SIDs alone, and the rights a
+    ///   process needs to attach to the window station it inherits are the ones
+    ///   the default descriptor grants `INTERACTIVE` rather than `Everyone`.
+    ///   Without it the child is created and then dies inside the loader with
+    ///   `STATUS_DLL_INIT_FAILED` (`0xC0000142`), which is the failure
+    ///   Microsoft's KB 184802 attributes to a process that "does not have
+    ///   correct security access to the window station and desktop". Chromium's
+    ///   restricted tokens carry `INTERACTIVE` for the same reason, and the
+    ///   rights it brings — the window station, its desktop, the public
+    ///   directories — do not include the user's own profile.
+    /// * `Everyone` (`S-1-5-1`), the world SID a logon-session restricted token
+    ///   is built with.
+    fn push_well_known(&mut self, kind: WELL_KNOWN_SID_TYPE) -> bool {
         let mut sid = [0u64; MAX_SID_BYTES / 8];
         let mut length = size_of_val(&sid) as u32;
         let created = unsafe {
             CreateWellKnownSid(
-                WinWorldSid,
+                kind,
                 null_mut(),
                 sid.as_mut_ptr().cast::<c_void>(),
                 &mut length,
