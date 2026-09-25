@@ -518,24 +518,16 @@ impl AttributeList {
         }
 
         let mut attributes = Self { buffer };
-        let handles = unsafe {
-            attributes.set(
-                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                handles.as_ptr().cast::<c_void>(),
-                size_of_val(&handles),
-            )
+        let filled = unsafe {
+            match attributes.handles(handles) {
+                Ok(()) => match capabilities {
+                    Some(capabilities) => attributes.container(capabilities),
+                    None => Ok(()),
+                },
+                Err(error) => Err(error),
+            }
         };
-        let container = match capabilities {
-            Some(capabilities) => unsafe {
-                attributes.set(
-                    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
-                    std::ptr::from_ref(capabilities).cast::<c_void>(),
-                    size_of::<SECURITY_CAPABILITIES>(),
-                )
-            },
-            None => Ok(()),
-        };
-        match handles.and(container) {
+        match filled {
             Ok(()) => Ok(attributes),
             Err(error) => {
                 // The buffer is a live attribute list, so the failing path drops
@@ -543,6 +535,38 @@ impl AttributeList {
                 drop(attributes);
                 Err(error)
             }
+        }
+    }
+
+    /// The handles the child may inherit, and nothing else.
+    ///
+    /// # Safety
+    ///
+    /// `handles` must outlive the list: the attribute names it rather than
+    /// copying it.
+    unsafe fn handles(&mut self, handles: &[HANDLE; 3]) -> std::io::Result<()> {
+        unsafe {
+            self.set(
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                handles.as_ptr().cast::<c_void>(),
+                size_of::<[HANDLE; 3]>(),
+            )
+        }
+    }
+
+    /// The AppContainer the child runs in.
+    ///
+    /// # Safety
+    ///
+    /// `capabilities` must outlive the list, and the SID it names must outlive
+    /// the process creation.
+    unsafe fn container(&mut self, capabilities: &SECURITY_CAPABILITIES) -> std::io::Result<()> {
+        unsafe {
+            self.set(
+                PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
+                std::ptr::from_ref(capabilities).cast::<c_void>(),
+                size_of::<SECURITY_CAPABILITIES>(),
+            )
         }
     }
 
