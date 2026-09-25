@@ -207,15 +207,7 @@ fn main() -> anyhow::Result<()> {
         policy,
     } = &command
     {
-        let policy = server::indexer::extract::sandbox::Policy::parse(policy)
-            .unwrap_or(server::indexer::extract::sandbox::Policy::Require);
         if *probe {
-            // The probe starts the child exactly as a serving process would, so
-            // it has to be told what that process requires. `--policy strict` is
-            // therefore how a host is asked whether it can give every layer it
-            // has, which is what CI runs to keep a layer from disappearing
-            // quietly: the probe exits non-zero when one is missing.
-            server::indexer::extract::worker::configure_policy(policy);
             return server::indexer::extract::worker::probe_report();
         }
         let job = if *selftest {
@@ -223,6 +215,8 @@ fn main() -> anyhow::Result<()> {
         } else {
             server::indexer::extract::worker::Job::Extract
         };
+        let policy = server::indexer::extract::sandbox::Policy::parse(policy)
+            .unwrap_or(server::indexer::extract::sandbox::Policy::Require);
         let external = server::indexer::extract::worker::External {
             runner: *seatbelt,
             restricted_token: *restricted,
