@@ -442,6 +442,43 @@ async fn a_run_without_a_start_says_its_duration_is_unknown() {
     assert!(row.contains("&mdash;"), "{row}");
 }
 
+/// The registry columns are fixed-width and right-aligned, so the jobs' last
+/// runs and durations can be compared down the list rather than read one row at
+/// a time. The classes are the whole mechanism, and only a page test sees them.
+#[tokio::test]
+async fn a_registry_row_pins_its_columns() {
+    let (server, admin) = admin_server().await;
+    let (_, html) = page(&server, &admin, REGISTRY).await;
+    let body = page_content(&html);
+
+    for expected in ["data-fact=\"last_run\"", "data-fact=\"duration\""] {
+        assert!(body.contains(expected), "the registry has no {expected}");
+    }
+    // Both branches of each column keep the width, or the rows above and below
+    // a dash would stop lining up.
+    for width in ["w-[112px] text-right", "w-[64px] text-right"] {
+        assert!(body.contains(width), "the registry has no {width} column");
+    }
+}
+
+/// A job that has never run reports no counters at all: zero and "no such
+/// number" must not look the same, in the row or in its disclosure.
+#[tokio::test]
+async fn a_job_that_has_never_run_reports_no_counters_on_the_page() {
+    let (server, admin) = admin_server().await;
+    let (_, html) = page(&server, &admin, REGISTRY).await;
+    let body = page_content(&html);
+
+    // An on-demand job only runs when a client asks, so a fresh server has one
+    // that has never run. The slice ends at the next row, so it covers this
+    // row's own disclosure and nothing after it.
+    let row = row_of(body, ">Has not run yet<", "data-task=\"");
+    assert!(
+        !row.contains("data-counter"),
+        "a job that has never run reported counters: {row}"
+    );
+}
+
 /// Triggering a job answers the browser with the page its button lives on,
 /// carrying the confirmation.
 #[tokio::test]

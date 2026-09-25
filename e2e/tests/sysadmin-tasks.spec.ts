@@ -60,7 +60,29 @@ test("a job that has never run shows no counters", async ({ page }) => {
     .locator('main [data-task-kind="job"]')
     .filter({ hasText: "Has not run yet" });
   test.skip((await never.count()) === 0, "every job has already run on this server");
+  await expect(never.first()).toContainText("Has not run yet");
   await expect(never.first().locator("[data-counter]")).toHaveCount(0);
+});
+
+// The registry columns are what let the jobs be compared down the list: every
+// row puts its last run and its duration in the same place, whether that is a
+// time, "has not run yet", or a dash for a service.
+test("the registry columns line up down the list", async ({ page }) => {
+  await page.goto(REGISTRY);
+  const columns = await page
+    .locator('main [data-fact="last_run"]')
+    .evaluateAll((els) =>
+      els.map((el) => {
+        const box = el.getBoundingClientRect();
+        return { right: Math.round(box.right), width: Math.round(box.width) };
+      }),
+    );
+
+  expect(columns.length).toBeGreaterThanOrEqual(2);
+  for (const column of columns) {
+    expect(column.width).toBe(112);
+    expect(Math.abs(column.right - columns[0].right)).toBeLessThanOrEqual(1);
+  }
 });
 
 // The lifetime counters are reference data rather than something the list is

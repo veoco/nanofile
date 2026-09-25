@@ -66,31 +66,47 @@
                         <span class="badge {{ state.class }} shrink-0">{{ state.label }}</span>
                         {% endif %}
                     </div>
-                    {# What the row does, in words: a name like "gc" says nothing
-                       on its own, and the job's own slug is not the operator's
-                       vocabulary. #}
-                    <p class="nf-prow-hi text-ink-3">{{ row.desc }}</p>
-                    <div class="nf-prow-sub flex-wrap">
-                        <span class="t">{{ row.schedule }}</span>
-                        {% if row.never_run %}
+                    {# When it runs, and what it does, in words: a name like "gc"
+                       says nothing on its own, and the job's own slug is not the
+                       operator's vocabulary. The schedule stays on this line
+                       rather than in a right-hand column, because that column is
+                       shed on a phone and the schedule is not. #}
+                    <div class="nf-prow-sub">
+                        <span class="t shrink-0">{{ row.schedule }}</span>
                         <span class="sep">&middot;</span>
-                        <span class="t">{{ t.tr("admin.task_never_run") }}</span>
-                        {% endif %}
-                        {% for fact in row.facts %}
-                        <span class="sep">&middot;</span>
-                        {# A time is a raw stamp the browser renders in the
-                           reader's timezone; the server never formats one. #}
-                        <span class="t" data-fact="{{ fact.key }}">
-                            <span class="text-ink-3">{{ fact.label }}</span>
-                            {% match fact.ts %}
-                            {% when Some with (ts) %}{{ time::ts_class(ts, "text-ink-2 tabular-nums", "relative") }}
-                            {% when None %}<span class="text-ink-2 tabular-nums">{{ fact.value }}</span>
-                            {% endmatch %}
-                        </span>
-                        {% endfor %}
+                        <span class="t" title="{{ row.desc }}">{{ row.desc }}</span>
                     </div>
                 </div>
-                <div class="nf-prow-act">
+                {# When the job last ran, and how long it took: fixed columns,
+                   right-aligned, so they compare down the list. A job that has
+                   never run says so rather than showing zeroes, and a service,
+                   which never finishes, has no such number at all. #}
+                <div class="nf-prow-meta flex items-center gap-3">
+                    {% if row.never_run %}
+                    <span class="w-[112px] text-right" data-fact="last_run">{{ t.tr("admin.task_never_run") }}</span>
+                    {% else %}
+                    {% match row.last_run_ts %}
+                    {% when Some with (ts) %}
+                    {# A time is a raw stamp the browser renders in the reader's
+                       timezone; the server never formats one. #}
+                    <span class="w-[112px] text-right" data-fact="last_run">{{ time::ts_class(ts, "", "relative") }}</span>
+                    {% when None %}
+                    <span class="w-[112px] text-right text-ink-3" data-fact="last_run">&mdash;</span>
+                    {% endmatch %}
+                    {% endif %}
+                    {% match row.last_duration %}
+                    {% when Some with (duration) %}
+                    <span class="w-[64px] text-right" data-fact="duration"
+                          title="{{ t.tr("admin.task_duration") }}">{{ duration }}</span>
+                    {% when None %}
+                    <span class="w-[64px] text-right text-ink-3" data-fact="duration"
+                          title="{{ t.tr("admin.task_duration") }}">&mdash;</span>
+                    {% endmatch %}
+                </div>
+                {# A fixed action column, so the times line up across the whole
+                   list: a row with nothing to trigger would otherwise pull its
+                   columns right up to the row's edge. #}
+                <div class="nf-prow-act min-w-[6.5rem] justify-end">
                     {% if row.triggerable %}
                     <form action="/sysadmin/tasks/{{ row.slug }}/trigger/" method="POST" class="trigger-form"
                           data-confirm="{{ t.tr("admin.task_run_confirm") }}" data-confirm-variant="solid"

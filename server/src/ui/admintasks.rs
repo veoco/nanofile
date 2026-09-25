@@ -166,21 +166,6 @@ pub struct StateBadge {
     pub label: String,
 }
 
-/// One labelled number on a row.
-///
-/// A raw number with no label was the old page's habit — `8 · Never` and
-/// `0 / 0 / 0` where the reader had to hover to find out what they counted.
-/// The label is the point.
-pub struct FactRow {
-    /// Stable hook, so a test can find one number without depending on prose.
-    pub key: &'static str,
-    pub label: String,
-    /// The rendered value, unless `ts` is set — a time is rendered by the
-    /// browser from a raw stamp, never formatted here.
-    pub value: String,
-    pub ts: Option<i64>,
-}
-
 /// One labelled policy of a job, shown in the row's disclosure.
 ///
 /// These are the decisions an operator otherwise has to read the catalog to
@@ -219,11 +204,14 @@ pub struct RegisteredRow {
     /// The verdict of the most recent run. `None` for a job that has never run
     /// and for every service.
     pub state: Option<StateBadge>,
-    /// Lifetime counters. Empty for a service, and for a job that has never
-    /// run: zero and "no such number" must not look the same.
-    pub facts: Vec<FactRow>,
-    /// Whether the row has no counters because it has never run.
+    /// Whether the row is a job that has never run, which says so instead of
+    /// showing zeroes.
     pub never_run: bool,
+    /// When the job last ran, as a raw stamp the browser renders. `None` for a
+    /// service and for a job that has never run.
+    pub last_run_ts: Option<i64>,
+    /// How long the last run took, when it reported a duration.
+    pub last_duration: Option<String>,
     /// Lifetime counters, shown inside the row's disclosure. Empty for a
     /// service and for a job that has never run: zero and "no such number" must
     /// not look the same.
@@ -603,27 +591,13 @@ fn job_counters(stats: &JobStats, t: &I18n) -> Vec<DetailRow> {
     counters
 }
 
-/// What the row itself reports about the last run: when it was, and how long it
-/// took. Empty for a job that has never run.
-fn job_facts(stats: &JobStats, t: &I18n) -> Vec<FactRow> {
-    if stats.run_count == 0 {
-        return Vec::new();
-    }
-    let mut facts = vec![FactRow {
-        key: "last_run",
-        label: t.tr("admin.task_last_run").to_string(),
-        value: String::new(),
-        ts: stats.last_run_at,
-    }];
-    if stats.last_duration_ms > 0 {
-        facts.push(FactRow {
-            key: "duration",
-            label: t.tr("admin.task_duration").to_string(),
-            value: format!("{}ms", stats.last_duration_ms),
-            ts: None,
-        });
-    }
-    facts
+/// How long the last run took, when the job reported one.
+///
+/// Zero is the absence of a duration rather than a duration of zero: a job that
+/// has run but reported no time has nothing to say, which the row shows as a
+/// dash so the column keeps its width.
+fn last_duration(stats: &JobStats) -> Option<String> {
+    (stats.last_duration_ms > 0).then(|| format!("{}ms", stats.last_duration_ms))
 }
 
 /// Row for a registered job.
@@ -642,8 +616,9 @@ fn job_row(job: &RegisteredJob, stats: &JobStats, t: &I18n) -> RegisteredRow {
             .last_state
             .as_ref()
             .map(|state| state_badge(t, state.as_str())),
-        facts: job_facts(stats, t),
         never_run: stats.run_count == 0,
+        last_run_ts: stats.last_run_at,
+        last_duration: last_duration(stats),
         counters: job_counters(stats, t),
         details: job_details(spec, t),
         last_message: job_message(stats),
@@ -672,8 +647,9 @@ fn service_row(key: ServiceKey, t: &I18n) -> RegisteredRow {
         kind: "service",
         schedule: t.tr("admin.schedule_service").to_string(),
         state: None,
-        facts: Vec::new(),
         never_run: false,
+        last_run_ts: None,
+        last_duration: None,
         counters: Vec::new(),
         details: Vec::new(),
         last_message: None,
@@ -1241,7 +1217,8 @@ mod tests {
             let row = service_row(*key, t);
             assert_eq!(row.kind, "service");
             assert!(row.state.is_none(), "{key:?} claimed a last run");
-            assert!(row.facts.is_empty(), "{key:?} carried a last run");
+            assert!(row.last_run_ts.is_none(), "{key:?} carried a last run");
+            assert!(row.last_duration.is_none(), "{key:?} carried a duration");
             assert!(row.counters.is_empty(), "{key:?} carried counters");
             assert!(!row.never_run, "{key:?} is not a job");
             assert!(!row.triggerable, "{key:?} has nothing to trigger");
@@ -1260,7 +1237,8 @@ mod tests {
         );
         assert!(row.never_run);
         assert!(row.counters.is_empty());
-        assert!(row.facts.is_empty(), "it has no last run to report");
+        assert!(row.last_run_ts.is_none(), "it has no last run to report");
+        assert!(row.last_duration.is_none(), "it has no duration to report");
         assert!(row.state.is_none());
     }
 
@@ -1300,20 +1278,9 @@ mod tests {
             ]
         );
 
-        let keys: Vec<&str> = row.facts.iter().map(|fact| fact.key).collect();
-        assert_eq!(keys, vec!["last_run", "duration"]);
-        let last_run = row
-            .facts
-            .iter()
-            .find(|fact| fact.key == "last_run")
-            .expect("the last run is one of the facts");
-        assert_eq!(last_run.ts, Some(1_700_000_000));
-        assert!(
-            last_run.value.is_empty(),
-            "a time is rendered by the browser, not here"
-        );
+        assert_eq!(row.last_run_ts, Some(1_700_000_000));
+        assert_eq!(row.last_duration.as_deref(), Some("250ms"));
     }
-
     /// The schedule group reads shortest interval first, because that is the
     /// order a reader looks for a job in.
     #[test]
