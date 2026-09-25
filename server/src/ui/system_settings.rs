@@ -150,7 +150,7 @@ pub struct SystemSettingsTemplate {
     pub drift_keys: Vec<String>,
     pub pending_restart: Vec<String>,
     /// Keys only a full process restart applies, shown apart from the ones the
-    /// restart button below does cover.
+    /// header's restart button does cover.
     pub pending_process_restart: Vec<String>,
     pub policy: PolicyView,
     pub error: Option<String>,

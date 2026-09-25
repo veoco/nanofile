@@ -143,7 +143,9 @@
         <p class="mono text-[12px] text-ink-3">{{ settings_origin_detail }}</p>
         {% endif %}
         {% if restart_pending %}
-        <p class="text-[12px] text-warn-text">{{ t.tr("setting.restart_banner") }}</p>
+        {# This page has no restart button of its own, so it says what is true
+           here: the value is saved and still waiting for a restart. #}
+        <p class="text-[12px] text-warn-text">{{ t.tr("admin.email_restart_pending") }}</p>
         {% endif %}
         <a href="/sysadmin/settings/email/" class="btn btn-line btn-sm self-start mt-1">
             {{ t.tr("admin.email_open_settings") }}

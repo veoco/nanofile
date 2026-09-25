@@ -41,8 +41,24 @@
 </div>
 {% else %}
 <div>
-    <h1 class="page-title">{{ t.tr(section_title_key) }}</h1>
-    <p class="page-subtitle">{{ t.tr(section_subtitle_key) }}</p>
+    {# The page head, with the one action that is not a save. Restarting has its
+       own form so it cannot submit the settings form below, and it sits beside
+       the title the way the other admin pages keep their header actions. #}
+    <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+            <h1 class="page-title">{{ t.tr(section_title_key) }}</h1>
+            <p class="page-subtitle">{{ t.tr(section_subtitle_key) }}</p>
+        </div>
+        <form action="/sysadmin/settings/restart/" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            {# Which page to come back to once the server is up again. #}
+            <input type="hidden" name="section" value="{{ section }}">
+            <button type="submit" class="btn btn-line"
+                    data-restart-button data-confirm="{{ t.tr("setting.restart_confirm") }}">
+                {{ t.tr("setting.restart_button") }}
+            </button>
+        </form>
+    </div>
 
     {% call settings_nav::nav(sections, t) %}{% endcall %}
 
@@ -101,11 +117,13 @@
         <p class="text-[12px] text-ink-3" data-settings-empty hidden>{{ t.tr("setting.filter_empty") }}</p>
     </div>
 
-    <form action="/sysadmin/settings/{{ section }}/save/" method="POST" class="nf-form mt-5">
+    <form action="/sysadmin/settings/{{ section }}/save/" method="POST" class="nf-form is-flush mt-5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="section" value="{{ section }}">
 
-        <div class="body">
+        {# `.nf-form` normally pads its body; the page-level form is flush with
+           the title and the filter above it, so this wrapper carries no class. #}
+        <div>
             {% for group in groups %}
             {# One `<section>` per group, so a filter can hide a heading together
                with the rows it belongs to instead of leaving it behind. #}
@@ -122,9 +140,12 @@
                    one row without depending on the markup around it; it is also
                    the key the label repeats as a tooltip, so an operator naming
                    the setting in a bug report can find it without the page
-                   printing it once per row. #}
+                   printing it once per row.
+
+                   The group heading already draws the rule that closes it, so
+                   the first row under it carries no border of its own. #}
                 <div data-setting="{{ row.key }}" data-setting-search="{{ row.search_text }}"
-                     class="grid grid-cols-1 gap-3 border-t border-line py-3.5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6">
+                     class="grid grid-cols-1 gap-3 py-3.5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6{% if !loop.first %} border-t border-line{% endif %}">
                     <div class="min-w-0">
                         <label class="text-[13px] font-medium text-ink" title="{{ row.key }}"
                                {% if !row.locked && !row.read_only %}for="field-{{ row.key }}"{% endif %}>
@@ -263,19 +284,15 @@
             {% endfor %}
         </div>
 
+        {# Saving and re-reading the table stay with the form they act on; the
+           restart button is in the page header, because restarting is not a
+           save and a silent one would be the wrong side effect for it.
+           `pages/sysadmin-settings.js` asks for confirmation first. #}
         <div class="body mt-2 flex flex-wrap gap-2 border-t border-line pt-4">
             <button type="submit" class="btn btn-solid">{{ t.tr("common.save") }}</button>
             <button type="submit" class="btn btn-line"
                     formaction="/sysadmin/settings/refresh/">
                 {{ t.tr("setting.refresh") }}
-            </button>
-            {# Applies the restart-only settings that are already saved. Deliberately
-               not a save: the form's values are ignored, and `pages/sysadmin-settings.js`
-               asks for confirmation first. #}
-            <button type="submit" class="btn btn-line"
-                    formaction="/sysadmin/settings/restart/"
-                    data-restart-button data-confirm="{{ t.tr("setting.restart_confirm") }}">
-                {{ t.tr("setting.restart_button") }}
             </button>
         </div>
     </form>
@@ -284,7 +301,7 @@
        the config file wins. It has no controls, so it sits below the rows rather
        than inside the form. #}
     {% if section == "advanced" %}
-    <section class="nf-form mt-5">
+    <section class="nf-form is-flush mt-5">
         <h2>{{ t.tr("setting.policy_title") }}</h2>
         <p class="desc">{{ t.tr("setting.policy_desc") }}</p>
         <div class="body flex flex-col gap-2 text-[13px]">

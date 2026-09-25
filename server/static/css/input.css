@@ -978,6 +978,11 @@ html:not([data-view]) .seg .js-view-list {
   .nf-form .desc { @apply mt-0.5 text-[12px] text-ink-3; }
   .nf-form .body { @apply mt-3; }
 
+  /* The system-settings form is the page rather than a panel inside one: its
+     rows line up with the title, the section bar and the filter above them, so
+     it drops the padding and the trailing hairline a panel form carries. */
+  .nf-form.is-flush { @apply px-0 py-0 border-b-0; }
+
   /* A settings page's sections, as panels in a grid: one column until the window
      is wide enough for two, and a section that is a list of rows (which cannot
      be halved) spans both. In the grid a section is its own panel, so the

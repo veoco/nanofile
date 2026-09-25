@@ -143,9 +143,9 @@ export function startRestartWatch(deps) {
 /**
  * Ask before restarting.
  *
- * A `formaction` submit button keeps the restart inside the settings form (a
- * nested form would be invalid HTML), so the interception is on the click: the
- * confirmation runs first, and only then is the button's own action submitted.
+ * The restart button has a form of its own in the page header — restarting is
+ * not a save, so it must not submit the settings form — and the confirmation
+ * runs on the click: only a confirmed restart submits that form.
  */
 export function initRestartConfirm(doc) {
   const document_ = doc || document;

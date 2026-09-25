@@ -1185,7 +1185,7 @@ setting.apply_read_only = "只读"
 setting.pending_restart = "等待重启"
 setting.config_superseded = "配置文件中的值："
 setting.drift_banner = "以下设置已保存，配置文件中的值不再生效："
-setting.restart_banner = "已保存，点下方「重启服务」后生效："
+setting.restart_banner = "已保存，点页头「重启服务」后生效："
 setting.process_restart_banner = "已保存，仅完全重启进程（停止并重新启动 Nanofile）后生效："
 setting.restart_button = "重启服务"
 setting.restart_confirm = "服务将停止后重新启动：正在进行的传输会中断，客户端会自动重连；本表单中未保存的修改不会被保存。是否继续？"
@@ -1438,9 +1438,11 @@ setting.sync_max_tree_depth_help = "同步遍历可以进入的最大目录深�
 setting.sync_max_tree_visits = "单次遍历节点上限"
 setting.sync_max_tree_visits_help = "单次同步遍历最多访问的条目数，超过即报错停止。"
 
-# The mail page no longer owns the SMTP form; it links to the settings page.
-admin.email_smtp_moved = "SMTP 设置已移到「系统管理」，与其他设置放在一起，只保留一份。"
+# The mail page no longer owns the SMTP form; it links to the settings page and
+# says when a value saved there is still waiting for a restart.
+admin.email_smtp_moved = "SMTP 设置已移到「系统设置」，与其他设置放在一起，只保留一份。"
+admin.email_restart_pending = "有已保存的邮件设置，需重启服务后生效。"
 admin.email_open_settings = "打开邮件设置"
 
 # Admin dropdown (frontend/core/nav.js)
-ui.system_settings = "系统管理"
+ui.system_settings = "系统设置"

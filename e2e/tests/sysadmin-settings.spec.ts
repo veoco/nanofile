@@ -32,6 +32,47 @@ test("the admin menu reaches system management", async ({ page }) => {
   await expect(page).toHaveURL(/\/sysadmin\/settings\/$/);
 });
 
+/**
+ * The settings area is the page rather than a card inside it: the group
+ * headings and the rows start at the same left edge as the title and the filter
+ * above them, instead of being inset by a panel form's padding.
+ */
+test("the rows line up with the page header and the filter", async ({ page }) => {
+  await page.goto("/sysadmin/settings/server/");
+  const title = (await page.locator("main .page-title").boundingBox())!;
+  const filter = (await page.locator("[data-settings-filter]").boundingBox())!;
+  const heading = (
+    await page.locator('[data-setting-group="server_addresses"] .nf-sec h2').boundingBox()
+  )!;
+  const row = (await page.locator('[data-setting="server.addr"]').boundingBox())!;
+  for (const box of [filter, heading, row]) {
+    expect(Math.abs(box.x - title.x)).toBeLessThan(1);
+  }
+});
+
+/**
+ * A group heading draws the rule that closes it, so the first row under one
+ * must not draw a second hairline right below it.
+ */
+test("a group heading is not doubled by its first row's border", async ({ page }) => {
+  await page.goto("/sysadmin/settings/server/");
+  const rows = page.locator('[data-setting-group="server_addresses"] [data-setting]');
+  await expect(rows.first()).toHaveCSS("border-top-width", "0px");
+  await expect(rows.nth(1)).toHaveCSS("border-top-width", "1px");
+});
+
+/**
+ * Restarting is not a save, so its button is a page-header action: on the
+ * title's line and right of it, the way the user and email pages keep theirs.
+ */
+test("the restart button sits with the page title", async ({ page }) => {
+  await page.goto("/sysadmin/settings/server/");
+  const title = (await page.locator("main .page-title").boundingBox())!;
+  const button = (await page.locator("[data-restart-button]").boundingBox())!;
+  expect(button.y).toBeLessThan(title.y + title.height);
+  expect(button.x).toBeGreaterThan(title.x);
+});
+
 test("every area renders its rows and its section bar", async ({ page }) => {
   for (const area of AREAS) {
     await page.goto(`/sysadmin/settings/${area}`);

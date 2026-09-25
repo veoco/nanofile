@@ -1189,7 +1189,7 @@ setting.apply_read_only = "Read-only"
 setting.pending_restart = "Waiting for a restart"
 setting.config_superseded = "The config file says"
 setting.drift_banner = "A saved value is superseding the config file for:"
-setting.restart_banner = "Saved, and applied by the Restart server button below:"
+setting.restart_banner = "Saved, and applied by the Restart server button in the page header:"
 setting.process_restart_banner = "Saved, and applied only after a full process restart (stop and start Nanofile):"
 setting.restart_button = "Restart server"
 setting.restart_confirm = "The server stops and starts again: active transfers are interrupted and clients reconnect. Unsaved changes on this form are not saved. Continue?"
@@ -1442,9 +1442,11 @@ setting.sync_max_tree_depth_help = "Deepest directory tree a sync walk descends;
 setting.sync_max_tree_visits = "Max tree nodes per walk"
 setting.sync_max_tree_visits_help = "Most entries one sync walk may visit before it stops with an error."
 
-# The mail page no longer owns the SMTP form; it links to the settings page.
-admin.email_smtp_moved = "The SMTP settings now live in system management, next to every other setting, so there is only one copy of them."
+# The mail page no longer owns the SMTP form; it links to the settings page and
+# says when a value saved there is still waiting for a restart.
+admin.email_smtp_moved = "The SMTP settings now live in system settings, next to every other setting, so there is only one copy of them."
+admin.email_restart_pending = "A saved email setting is waiting for a restart of the server."
 admin.email_open_settings = "Open the email settings"
 
 # Admin dropdown (frontend/core/nav.js)
-ui.system_settings = "System Management"
+ui.system_settings = "System Settings"

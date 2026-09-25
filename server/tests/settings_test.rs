@@ -926,7 +926,9 @@ async fn a_secret_that_cannot_be_decrypted_falls_back_instead_of_being_used() {
 }
 
 /// The restart button lives on the settings page and nowhere else, so the page
-/// has to be reachable and rendered before it can be clicked.
+/// has to be reachable and rendered before it can be clicked. It sits in the
+/// page header with a form of its own: restarting is not a save, so the button
+/// must not be part of the settings form.
 #[tokio::test]
 async fn the_settings_page_offers_a_restart_button() {
     let server = TestServer::start().await;
@@ -935,13 +937,55 @@ async fn the_settings_page_offers_a_restart_button() {
 
     let (status, html) = page(&server, &admin, "/sysadmin/settings/").await;
     assert_eq!(status, 200);
+    // Everything before the first row is the page head, the section bar, the
+    // banners and the filter.
+    let rows_at = html.find(r#"data-setting=""#).expect("the page has rows");
+    let head = &html[..rows_at];
     assert!(
-        html.contains(r#"formaction="/sysadmin/settings/restart/""#),
-        "the footer must carry the restart button"
+        head.contains(r#"action="/sysadmin/settings/restart/""#),
+        "the page header must carry the restart form"
     );
     assert!(
-        html.contains("data-restart-button"),
+        head.contains("data-restart-button"),
         "the button needs the hook the confirmation script binds to"
+    );
+}
+
+/// The settings form is the page, not a panel inside one: it must not re-add
+/// the padding that would push its rows out of line with the title and the
+/// filter above them. And the group heading already draws the rule that closes
+/// it, so the first row under it draws no second hairline.
+#[tokio::test]
+async fn the_settings_form_is_flush_with_the_page() {
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    let (_, html) = page(&server, &admin, "/sysadmin/settings/").await;
+    let form_at = html
+        .find(r#"action="/sysadmin/settings/server/save/""#)
+        .expect("the save form is on the page");
+    let tag_start = html[..form_at].rfind('<').expect("the form is an element");
+    let tag_end = form_at + html[form_at..].find('>').expect("the tag closes");
+    assert!(
+        html[tag_start..tag_end].contains("is-flush"),
+        "the settings form must opt out of the panel padding: {}",
+        &html[tag_start..tag_end]
+    );
+
+    // `server.addr` is the first key of the Server page's first group; the row
+    // after it is a normal one.
+    let first = row_of(&html, "server.addr");
+    let first_tag = &first[..first.find('>').expect("the row's tag closes")];
+    assert!(
+        !first_tag.contains("border-t"),
+        "a group's first row must not draw a top border: {first_tag}"
+    );
+    let second = row_of(&html, "server.port");
+    let second_tag = &second[..second.find('>').expect("the row's tag closes")];
+    assert!(
+        second_tag.contains("border-t"),
+        "every other row keeps its separator: {second_tag}"
     );
 }
 
