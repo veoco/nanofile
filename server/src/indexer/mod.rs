@@ -1834,6 +1834,56 @@ mod document_state_tests {
         assert!(hits.is_empty(), "a skipped document is not a hit: {hits:?}");
     }
 
+    /// The extractor version is what makes the backfill re-read a file the
+    /// pipeline had already examined. A document written by an *earlier*
+    /// version is stale whatever status it recorded, which is how files skipped
+    /// before a format became supported are picked up without a manual rebuild.
+    #[tokio::test]
+    async fn a_document_from_an_older_extractor_is_stale() {
+        let (_dir, indexer) = temp_index();
+        let previous = DocMeta {
+            fs_id: "fsid-1".to_string(),
+            extractor_version: extract::EXTRACTOR_VERSION - 1,
+            status: DocStatus::Skipped,
+            attempted_at: 0,
+        };
+        indexer
+            .mark_file("repo-1", "/old.pdf", "old.pdf", &previous)
+            .unwrap();
+        indexer.commit().unwrap();
+
+        let states = indexer
+            .doc_states("repo-1", &["/old.pdf".to_string()])
+            .unwrap();
+        let state = states.get("/old.pdf").expect("state recorded");
+        assert_eq!(state.extractor_version, extract::EXTRACTOR_VERSION - 1);
+        assert!(
+            !state.is_current("fsid-1", 0),
+            "the same content at an older extractor version needs re-reading"
+        );
+
+        // Text a client pinned by hand is exempt: an automatic pass must not
+        // overwrite what somebody supplied deliberately.
+        let pinned = DocMeta {
+            fs_id: "fsid-1".to_string(),
+            extractor_version: DocMeta::MANUAL_VERSION,
+            status: DocStatus::Indexed,
+            attempted_at: 0,
+        };
+        indexer
+            .mark_file("repo-1", "/manual.txt", "manual.txt", &pinned)
+            .unwrap();
+        indexer.commit().unwrap();
+
+        let states = indexer
+            .doc_states("repo-1", &["/manual.txt".to_string()])
+            .unwrap();
+        assert!(
+            states.get("/manual.txt").unwrap().is_current("fsid-1", 0),
+            "a pinned document is never stale"
+        );
+    }
+
     /// Text a client supplied by hand is pinned: no automatic pass may replace
     /// it, whatever content the file has.
     #[tokio::test]

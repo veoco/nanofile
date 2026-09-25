@@ -1362,3 +1362,280 @@ async fn a_backfill_pass_indexes_a_file_the_index_never_saw() {
         "nothing is left to index: {report:?}"
     );
 }
+
+/// Ask the server to index one path synchronously and report whether it
+/// became searchable.
+async fn reindex_path(f: &common::TestFixture, token: &str, path: &str) -> bool {
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/repos/{}/file/reindex/", f.repo_id),
+            Some(token),
+            &serde_json::json!({ "p": path }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "reindex {path} should succeed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    body["indexed"].as_bool().expect("indexed flag")
+}
+
+/// Every document format the extractor claims is parsed and becomes
+/// searchable — the PDF from its text object, the Office files from their
+/// package parts.
+#[tokio::test]
+async fn document_formats_are_searchable() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    let documents: [(&str, Vec<u8>, &str); 4] = [
+        (
+            "report.pdf",
+            common::minimal_pdf("zebraquartz"),
+            "zebraquartz",
+        ),
+        (
+            "notes.docx",
+            common::minimal_docx("wombatpuzzle"),
+            "wombatpuzzle",
+        ),
+        (
+            "book.xlsx",
+            common::minimal_xlsx("xylophonebudget"),
+            "xylophonebudget",
+        ),
+        (
+            "talk.pptx",
+            common::minimal_pptx("narwhaloverview"),
+            "narwhaloverview",
+        ),
+    ];
+
+    for (name, data, _) in &documents {
+        let resp = f
+            .client
+            .upload_file(token, &f.repo_id, "/", name, data)
+            .await;
+        assert_eq!(resp.status(), 200, "upload {name} should succeed");
+    }
+
+    for (name, _, keyword) in &documents {
+        assert!(
+            wait_for(std::time::Duration::from_secs(60), || async {
+                !search_results(&f, token, keyword).await.is_empty()
+            })
+            .await,
+            "{name} content should be searchable"
+        );
+    }
+}
+
+/// Files the PDF parser cannot handle are recorded as skipped, and neither the
+/// request nor the batch that carried them fails.
+///
+/// Two shapes: one the parser rejects outright, and one that makes it *panic*.
+/// The second is the one the panic boundary exists for, so it is exercised
+/// through the whole pipeline rather than only in a unit test.
+#[tokio::test]
+async fn an_unreadable_document_is_skipped_without_breaking_the_batch() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    let unreadable: [(&str, &[u8]); 2] = [
+        ("corrupt.pdf", include_bytes!("fixtures/corrupt.pdf")),
+        ("panics.pdf", include_bytes!("fixtures/panics.pdf")),
+    ];
+
+    for (name, data) in unreadable {
+        let resp = f
+            .client
+            .upload_file(token, &f.repo_id, "/", name, data)
+            .await;
+        assert_eq!(resp.status(), 200, "upload {name} should succeed");
+    }
+
+    for (name, _) in unreadable {
+        let path = format!("/{name}");
+        assert!(
+            !reindex_path(&f, token, &path).await,
+            "{name} must not report as indexed"
+        );
+    }
+
+    // The server is still working: a file uploaded afterwards still reaches
+    // the index.
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "after.txt", b"aftermath signal")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert!(
+        wait_for(std::time::Duration::from_secs(30), || async {
+            !search_results(&f, token, "aftermath").await.is_empty()
+        })
+        .await,
+        "an unreadable document must not stop later files from being indexed"
+    );
+}
+
+/// A PDF with no text layer parses fine and yields nothing. That is a skip,
+/// not an indexed document with empty content — the file stays findable by
+/// name, which is all it has.
+#[tokio::test]
+async fn a_document_without_a_text_layer_is_not_indexed() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    let resp = f
+        .client
+        .upload_file(
+            token,
+            &f.repo_id,
+            "/",
+            "blank.pdf",
+            &common::minimal_pdf(""),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    assert!(
+        !reindex_path(&f, token, "/blank.pdf").await,
+        "a document with no extractable text must not report as indexed"
+    );
+
+    // Still reachable by filename, so the skip costs the file nothing but its
+    // (nonexistent) content.
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            let results = search_results(&f, token, "blank").await;
+            results
+                .iter()
+                .any(|r| r["name"].as_str().is_some_and(|n| n == "blank.pdf"))
+        })
+        .await,
+        "an unindexed document should still be findable by filename"
+    );
+}
+
+/// A document larger than the cap is skipped rather than read: the pipeline
+/// must not spend a block read on a file it cannot parse from a prefix.
+#[tokio::test]
+async fn an_oversized_document_is_skipped() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    // A valid PDF header followed by filler, larger than the structured cap.
+    let mut oversized = common::minimal_pdf("zebraquartz");
+    oversized.resize(server::indexer::extract::MAX_STRUCTURED_BYTES + 1, 0x20);
+
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "huge.pdf", &oversized)
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed");
+
+    assert!(
+        !reindex_path(&f, token, "/huge.pdf").await,
+        "an oversized document must not report as indexed"
+    );
+}
+
+/// The headline of the upgrade: a file the *previous* extractor examined and
+/// skipped becomes searchable on the next quiet pass, with no manual rebuild.
+///
+/// The file content is unchanged and the recorded `fs_id` still matches, so the
+/// only thing marking it stale is the extractor version — which is exactly the
+/// mechanism that picks up libraries indexed before PDF support existed.
+#[tokio::test]
+async fn a_backfill_pass_picks_up_what_an_older_extractor_skipped() {
+    use server::indexer::extract::EXTRACTOR_VERSION;
+    use server::indexer::{DocMeta, DocStatus};
+    use server::service::index::IndexService;
+    use server::tasks::spec::JobKey;
+    use std::sync::{Arc, Mutex};
+
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+    let path = "/handbook.pdf";
+
+    let resp = f
+        .client
+        .upload_file(
+            token,
+            &f.repo_id,
+            "/",
+            "handbook.pdf",
+            &common::minimal_pdf("upgradeneedle"),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed");
+
+    assert!(
+        wait_for(std::time::Duration::from_secs(30), || async {
+            !search_results(&f, token, "upgradeneedle").await.is_empty()
+                && f.server
+                    .state
+                    .tasks
+                    .store()
+                    .count_active(JobKey::IndexFiles, None)
+                    == 0
+        })
+        .await,
+        "the document should be indexed to begin with"
+    );
+
+    let indexer = f.server.state.indexer.clone().expect("indexer is enabled");
+
+    // Keep the content identity, so only the version can make this stale.
+    let fs_id = indexer
+        .doc_states(&f.repo_id, &[path.to_string()])
+        .expect("read document states")
+        .get(path)
+        .expect("the document was just indexed")
+        .fs_id
+        .clone();
+    assert!(!fs_id.is_empty(), "the document records its content id");
+
+    indexer
+        .mark_file_async(
+            &f.repo_id,
+            path,
+            "handbook.pdf",
+            DocMeta {
+                fs_id: fs_id.clone(),
+                extractor_version: EXTRACTOR_VERSION - 1,
+                status: DocStatus::Skipped,
+                attempted_at: 0,
+            },
+        )
+        .await
+        .expect("rewrite the document as the older extractor left it");
+    indexer.commit().expect("commit");
+
+    let svc = IndexService::new(
+        f.server.state.repos.clone(),
+        f.server.state.block_store.clone(),
+        indexer.clone(),
+    );
+    let cursor = Arc::new(Mutex::new(0));
+    let report = svc.backfill_pass(None, &cursor).await.expect("pass runs");
+    assert!(
+        report.counts.indexed >= 1,
+        "the version bump should make the pass re-read the file: {report:?}"
+    );
+    indexer.commit().expect("commit");
+
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            !search_results(&f, token, "upgradeneedle").await.is_empty()
+        })
+        .await,
+        "the document should be searchable again after the pass"
+    );
+
+    // Now that it is current, a second pass leaves it alone.
+    let report = svc.backfill_pass(None, &cursor).await.expect("pass runs");
+    assert_eq!(
+        report.counts.indexed, 0,
+        "the file is current again: {report:?}"
+    );
+}

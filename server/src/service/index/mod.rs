@@ -20,13 +20,13 @@
 //! path changed", so a stale-by-content document is redone even if a client
 //! once pinned it.
 
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
+use tokio::sync::Semaphore;
 
-use crate::indexer::extract::MAX_INDEXED_BYTES;
+use crate::indexer::extract::{self, Plan};
 use crate::indexer::{DocMeta, TextIndexer, collect_file_entries_under};
 use crate::repository::Repositories;
 use crate::tasks::context::JobContext;
@@ -53,6 +53,22 @@ pub const BATCH_FILES: usize = 256;
 /// The job body maps it back onto a cancellation, which is a terminal state
 /// distinct from a failure — the same arrangement the repository reindex uses.
 pub const ABORTED: &str = "indexing stopped at a checkpoint";
+
+/// How many documents may be parsed at once, process-wide.
+///
+/// Parsing is CPU- and memory-heavy, and one file can hold the whole document
+/// in memory on top of its own caches, while a batch keeps [`CONCURRENCY`]
+/// files in flight. Without this gate a mass upload of documents could put
+/// several large parses in memory at the same time. Callers queue on the
+/// semaphore rather than being turned away, and a document waits only once the
+/// read has already shown it is a document — plain text never touches it.
+const STRUCTURED_CONCURRENCY: usize = 2;
+
+static STRUCTURED_GATE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn structured_gate() -> &'static Arc<Semaphore> {
+    STRUCTURED_GATE.get_or_init(|| Arc::new(Semaphore::new(STRUCTURED_CONCURRENCY)))
+}
 
 /// One file the pipeline should look at.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -372,8 +388,8 @@ impl IndexService {
         Ok(report)
     }
 
-    /// Index one file: resolve its identity, read its prefix, extract and
-    /// record the result.
+    /// Index one file: resolve its identity, read what its format needs,
+    /// extract and record the result.
     async fn index_one(
         &self,
         ctx: Option<&JobContext>,
@@ -419,16 +435,33 @@ impl IndexService {
             }
         };
 
-        // Read the file's prefix. A failure here is recorded as a failed
-        // document so the backfill retries it after a cooldown instead of
-        // re-reading it on every pass.
+        // Decide from the name how much of the file is needed. A document
+        // above the cap is skipped *without* being read: a container cannot be
+        // indexed from a prefix, so reading one would cost a block read only to
+        // produce nothing.
+        let size = file_data.size.max(0) as u64;
+        let plan = extract::plan(filename);
+        let budget = match extract::budget(plan, size) {
+            Ok(budget) => budget,
+            Err(reason) => {
+                tracing::debug!("indexing {path}: not indexable: {reason}");
+                self.indexer
+                    .mark_file_async(repo_id, path, filename, DocMeta::skipped(fs_id.as_str()))
+                    .await?;
+                return Ok(OneOutcome::Skipped);
+            }
+        };
+
+        // Read the file. A failure here is recorded as a failed document so the
+        // backfill retries it after a cooldown instead of re-reading it on
+        // every pass.
         let data = match crate::fs::core::download::Downloader::read_file_limited_from_blocks(
             repo_id,
             &self.block_store,
             &file_data.block_ids,
             file_data.size,
             None,
-            MAX_INDEXED_BYTES,
+            budget,
         )
         .await
         {
@@ -442,8 +475,34 @@ impl IndexService {
             }
         };
 
-        match crate::indexer::extract::extract(filename, &data) {
-            Ok(crate::indexer::extract::Extracted::Text(content)) => {
+        // A document is read whole, so a short read means the block store did
+        // not hand over everything: that is a transient failure, not a partial
+        // document worth indexing.
+        if matches!(plan, Plan::Document(_)) && (data.len() as u64) < size {
+            tracing::warn!("indexing {path}: read {} of {size} bytes", data.len());
+            self.indexer
+                .mark_file_async(repo_id, path, filename, DocMeta::failed(fs_id.as_str()))
+                .await?;
+            return Ok(OneOutcome::Failed);
+        }
+
+        let extracted = if matches!(plan, Plan::Document(_)) {
+            // Parsing a document is synchronous and CPU-heavy, and can take
+            // seconds on a large file: run it on the blocking pool, and hold a
+            // gate permit so a batch cannot put several parses in flight at
+            // once. The permit is released when this branch ends.
+            let _permit = structured_gate()
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| AppError::internal(format!("document gate closed: {e}")))?;
+            offload_extract(ctx, move || extract::extract(plan, data)).await?
+        } else {
+            extract::extract(plan, data)
+        };
+
+        match extracted {
+            extract::Extracted::Text(content) => {
                 self.indexer
                     .index_file_with_meta_async(
                         repo_id,
@@ -455,19 +514,12 @@ impl IndexService {
                     .await?;
                 Ok(OneOutcome::Indexed)
             }
-            Ok(crate::indexer::extract::Extracted::Unsupported(reason)) => {
+            extract::Extracted::Unsupported(reason) => {
                 tracing::debug!("indexing {path}: not indexable: {reason}");
                 self.indexer
                     .mark_file_async(repo_id, path, filename, DocMeta::skipped(fs_id.as_str()))
                     .await?;
                 Ok(OneOutcome::Skipped)
-            }
-            Err(e) => {
-                tracing::warn!("indexing {path}: extraction failed: {e}");
-                self.indexer
-                    .mark_file_async(repo_id, path, filename, DocMeta::failed(fs_id.as_str()))
-                    .await?;
-                Ok(OneOutcome::Failed)
             }
         }
     }
@@ -501,10 +553,40 @@ pub(crate) async fn checkpoint(ctx: Option<&JobContext>) -> Result<(), AppError>
     let Some(ctx) = ctx else {
         return Ok(());
     };
-    ctx.checkpoint().await.map_err(|failure| match failure {
+    ctx.checkpoint().await.map_err(map_failure)
+}
+
+/// Map a job failure onto the error this pipeline returns.
+///
+/// A cancellation and a timeout are terminal but not failures, so they surface
+/// as [`ABORTED`] for the job body to recognise.
+fn map_failure(failure: JobFailure) -> AppError {
+    match failure {
         JobFailure::Cancelled | JobFailure::TimedOut => AppError::OperationFailed(ABORTED.into()),
         JobFailure::App(e) => e,
-    })
+    }
+}
+
+/// Run document extraction on the blocking pool.
+///
+/// `JobContext::run_blocking` checkpoints *before* taking a blocking thread, so
+/// a job that has parked under load stops replenishing the pool instead of
+/// queueing ahead of interactive work. The manual single-file endpoint has no
+/// context to check in with, and gets a plain blocking task.
+///
+/// The closure runs inside the extractor's panic boundary: one unreadable file
+/// is never a reason to fail the run that carried it.
+async fn offload_extract<F>(ctx: Option<&JobContext>, f: F) -> Result<extract::Extracted, AppError>
+where
+    F: FnOnce() -> extract::Extracted + Send + 'static,
+{
+    let run = move || extract::guard("index", f);
+    match ctx {
+        Some(ctx) => ctx.run_blocking(run).await.map_err(map_failure),
+        None => tokio::task::spawn_blocking(run)
+            .await
+            .map_err(|e| AppError::internal(format!("extraction task failed: {e}"))),
+    }
 }
 
 /// Schedules index work on the task system.

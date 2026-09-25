@@ -122,6 +122,15 @@ multer = "3.1"
 tantivy = "0.26.1"
 tantivy-jieba = "0.20.0"
 
+# Document text extraction for the full-text index. Both are pure Rust (no
+# pdfium, no C/C++), so the "no system library" property holds. Neither drags
+# in a layout engine or a font stack: PDF text comes from `pdf-extract`, a thin
+# text layer over `lopdf`, and Office text from `office_oxide`.
+# `indexer::extract` holds the format table and the limits that keep these
+# crates safe on untrusted content.
+pdf-extract = "0.12"
+office_oxide = "0.1.12"
+
 # ── Optional system tray dependencies (enabled by the `tray` feature) ───────
 # NOTE: keep these target-specific tables LAST — everything after a
 # `[target.*.dependencies]` header belongs to that target only.

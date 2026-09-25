@@ -1310,3 +1310,182 @@ impl SharedFixture {
         }
     }
 }
+
+// ── Document fixtures ────────────────────────────────────────────────
+//
+// The index tests upload real container formats, so these build the smallest
+// file each parser accepts: a one-page PDF with a single text object, and an
+// OOXML package holding one paragraph, one cell or one slide. `text` is
+// inserted verbatim, so it must be plain XML-safe text with no `&`, `<` or `>`.
+
+const XML_DECL: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#;
+
+const OFFICE_DOC_REL: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
+
+/// Build a one-page PDF whose content stream draws `text`.
+///
+/// Written out by hand so the cross-reference table is genuinely valid: the
+/// parser must accept it for the round-trip to mean anything.
+pub fn minimal_pdf(text: &str) -> Vec<u8> {
+    let stream = format!("BT /F1 24 Tf 72 720 Td ({text}) Tj ET");
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+         /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+            .to_string(),
+        format!(
+            "<< /Length {} >>\nstream\n{stream}\nendstream",
+            stream.len()
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+
+    let mut out = String::from("%PDF-1.4\n");
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (index, body) in objects.iter().enumerate() {
+        // Offsets are byte offsets; every byte written so far is ASCII.
+        offsets.push(out.len());
+        out.push_str(&format!("{} 0 obj\n{body}\nendobj\n", index + 1));
+    }
+
+    let xref = out.len();
+    out.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+    out.push_str("0000000000 65535 f \n");
+    for offset in &offsets {
+        out.push_str(&format!("{offset:010} 00000 n \n"));
+    }
+    out.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+        objects.len() + 1
+    ));
+    out.into_bytes()
+}
+
+/// Build a `.docx` holding `text` as a single paragraph.
+pub fn minimal_docx(text: &str) -> Vec<u8> {
+    const CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
+    let document = format!(
+        "{XML_DECL}<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\
+         <w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>"
+    );
+    zip_parts(&[
+        ("_rels/.rels", office_rels("word/document.xml")),
+        (
+            "[Content_Types].xml",
+            content_types("/word/document.xml", CONTENT_TYPE),
+        ),
+        ("word/document.xml", document),
+    ])
+}
+
+/// Build a `.xlsx` holding `text` in cell `A1`.
+pub fn minimal_xlsx(text: &str) -> Vec<u8> {
+    const CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+    let workbook = format!(
+        "{XML_DECL}<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" \
+         xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\
+         <sheets><sheet name=\"Sheet1\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>"
+    );
+    let sheet = format!(
+        "{XML_DECL}<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\
+         <sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>{text}</t></is></c>\
+         </row></sheetData></worksheet>"
+    );
+    zip_parts(&[
+        ("_rels/.rels", office_rels("xl/workbook.xml")),
+        (
+            "[Content_Types].xml",
+            content_types("/xl/workbook.xml", CONTENT_TYPE),
+        ),
+        ("xl/workbook.xml", workbook),
+        ("xl/worksheets/sheet1.xml", sheet),
+        (
+            "xl/_rels/workbook.xml.rels",
+            part_rels(
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet",
+                "worksheets/sheet1.xml",
+            ),
+        ),
+    ])
+}
+
+/// Build a `.pptx` holding `text` on slide 1.
+pub fn minimal_pptx(text: &str) -> Vec<u8> {
+    const CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml";
+    let presentation = format!(
+        "{XML_DECL}<p:presentation xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" \
+         xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\
+         <p:sldIdLst><p:sldId id=\"256\" r:id=\"rId1\"/></p:sldIdLst></p:presentation>"
+    );
+    let slide = format!(
+        "{XML_DECL}<p:sld xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" \
+         xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><p:cSld><p:spTree><p:sp>\
+         <p:txBody><a:bodyPr/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody>\
+         </p:sp></p:spTree></p:cSld></p:sld>"
+    );
+    zip_parts(&[
+        ("_rels/.rels", office_rels("ppt/presentation.xml")),
+        (
+            "[Content_Types].xml",
+            content_types("/ppt/presentation.xml", CONTENT_TYPE),
+        ),
+        ("ppt/presentation.xml", presentation),
+        ("ppt/slides/slide1.xml", slide),
+        (
+            "ppt/_rels/presentation.xml.rels",
+            part_rels(
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide",
+                "slides/slide1.xml",
+            ),
+        ),
+    ])
+}
+
+/// The package-level relationship that names the main document part.
+fn office_rels(target: &str) -> String {
+    format!(
+        "{XML_DECL}<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
+         <Relationship Id=\"rId1\" Type=\"{OFFICE_DOC_REL}\" Target=\"{target}\"/></Relationships>"
+    )
+}
+
+/// A part-to-part relationship list.
+fn part_rels(relationship_type: &str, target: &str) -> String {
+    format!(
+        "{XML_DECL}<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
+         <Relationship Id=\"rId1\" Type=\"{relationship_type}\" Target=\"{target}\"/></Relationships>"
+    )
+}
+
+/// The content-type map every OOXML package carries.
+fn content_types(part: &str, content_type: &str) -> String {
+    format!(
+        "{XML_DECL}<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
+         <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
+         <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
+         <Override PartName=\"{part}\" ContentType=\"{content_type}\"/></Types>"
+    )
+}
+
+/// Zip the given `(path, body)` parts into an OOXML package.
+fn zip_parts(parts: &[(&str, String)]) -> Vec<u8> {
+    use std::io::Write;
+
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for (name, body) in parts {
+        writer
+            .start_file(*name, options)
+            .expect("start archive part");
+        writer
+            .write_all(body.as_bytes())
+            .expect("write archive part");
+    }
+    writer.finish().expect("finish archive").into_inner()
+}
