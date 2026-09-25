@@ -120,6 +120,37 @@ enum Start {
     Plain,
 }
 
+impl Start {
+    /// How a rung is named when the chain reports which ones failed.
+    fn label(self) -> &'static str {
+        match self {
+            Start::Confined => "with every layer",
+            #[cfg(windows)]
+            Start::TokenOnly => "with a token and no container",
+            #[cfg(windows)]
+            Start::Plain => "without a token or a container",
+        }
+    }
+}
+
+/// The rungs this platform can start a child on, strongest first.
+///
+/// One rung everywhere but Windows: the macOS runner and the unix layers are
+/// applied by the child or by the parent without an alternative, so there is
+/// nothing below them to fall back to — and that is the point of the chain, not
+/// a gap in it. Windows has two weaker ones, and the container is the part of
+/// that launch a host can lose on its own.
+fn rungs() -> &'static [Start] {
+    #[cfg(windows)]
+    {
+        &[Start::Confined, Start::TokenOnly, Start::Plain]
+    }
+    #[cfg(not(windows))]
+    {
+        &[Start::Confined]
+    }
+}
+
 /// What the child was asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Job {
@@ -323,7 +354,10 @@ pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
         return Outcome::Unavailable("cannot resolve the extraction worker".to_string());
     };
 
-    let run = match run_child(&invocation, Some((plan, data)), TIMEOUT, Start::Confined) {
+    // The rung the probe settled on: a document's child is started the way the
+    // one that reported was, and the probe ran before any document could.
+    let start = RUNG.get().copied().unwrap_or(Start::Confined);
+    let run = match run_child(&invocation, Some((plan, data)), TIMEOUT, start) {
         Ok(run) => run,
         Err(e) => return Outcome::Unavailable(format!("cannot start the extraction worker: {e}")),
     };
@@ -426,6 +460,8 @@ struct Cache {
 static STATUS: OnceLock<Mutex<Cache>> = OnceLock::new();
 static EXECUTABLE: OnceLock<PathBuf> = OnceLock::new();
 static POLICY: OnceLock<Policy> = OnceLock::new();
+/// The rung the probe last got a report from, for the documents that follow.
+static RUNG: OnceLock<Start> = OnceLock::new();
 
 /// Run the child once with `--selftest` and read its report.
 fn probe() -> Status {
@@ -433,14 +469,35 @@ fn probe() -> Status {
         return Status::Unavailable("cannot resolve the extraction worker".to_string());
     };
 
-    let run = match run_child(&invocation, None, PROBE_TIMEOUT, Start::Confined) {
-        Ok(run) => run,
-        Err(e) => return Status::Unavailable(format!("cannot start the extraction worker: {e}")),
-    };
-
-    if let Outcome::Unavailable(reason) = classify(&run) {
-        return Status::Unavailable(reason);
+    // The chain, strongest first, and the *child's own report* is what accepts a
+    // rung: a host whose container will not start still gets a confined child
+    // under the token, and the report it prints says which of the two it is
+    // (the child reads its own token rather than taking the parent's word). What
+    // the parent must not do is decide from the launch having succeeded — the
+    // failure this walks past is a child that is created and then dies in its
+    // loader, which no creation error reports.
+    let mut failures: Vec<String> = Vec::new();
+    for &start in rungs() {
+        match probe_on(&invocation, start) {
+            Ok(report) => {
+                let _ = RUNG.set(start);
+                return accept(report);
+            }
+            Err(reason) => failures.push(format!("{}: {reason}", start.label())),
+        }
     }
+
+    Status::Unavailable(failures.join("; "))
+}
+
+/// One rung's answer, or why it did not give one.
+fn probe_on(invocation: &Invocation, start: Start) -> Result<Report, String> {
+    let run = run_child(invocation, None, PROBE_TIMEOUT, start)
+        .map_err(|error| format!("cannot start the extraction worker: {error}"))?;
+    if let Outcome::Unavailable(reason) = classify(&run) {
+        return Err(reason);
+    }
+
     let line = String::from_utf8_lossy(
         run.stdout
             .split(|byte| *byte == b'\n')
@@ -448,35 +505,32 @@ fn probe() -> Status {
             .unwrap_or_default(),
     );
     let line = line.trim();
-    match Report::parse(line) {
-        Some(report) => {
-            // The policy is decided here, once, and not left to each child. A
-            // host that cannot give what the setting asks for is an environment
-            // problem the operator has to see once at startup — with the reason
-            // — rather than one spawn per document that ends in exit 125 and a
-            // warning nothing aggregates. The child keeps the same check before
-            // it reads a request; this is the half that makes the shortfall
-            // visible and stops the spawns.
-            let policy = configured_policy();
-            if policy.accepts(&report) {
-                Status::Ready(report)
-            } else {
-                Status::Unavailable(format!(
-                    "`index.sandbox` is `{}` and this host gives `{}` confinement: {}",
-                    policy.as_str(),
-                    report.level().as_str(),
-                    report.detail
-                ))
-            }
-        }
-        // A child that never printed its report says why on stderr, and the
-        // probe is the only place that can be read: `tracing` has no subscriber
-        // on this path, so the summary is the whole diagnosis.
-        None => Status::Unavailable(format!(
-            "unreadable self-test line {line:?}: {}{}",
-            run.summary(),
-            token_diagnosis(&invocation)
-        )),
+    // A child that never printed its report says why on stderr, and the probe is
+    // the only place that can be read: `tracing` has no subscriber on this path,
+    // so the summary is the whole diagnosis.
+    Report::parse(line)
+        .ok_or_else(|| format!("unreadable self-test line {line:?}: {}", run.summary()))
+}
+
+/// Whether the report the probe got is one the policy accepts.
+///
+/// Decided once, here, rather than left to each child: a host that cannot give
+/// what the setting asks for is an environment problem the operator has to see
+/// once at startup — with the reason — rather than one spawn per document that
+/// ends in exit 125 and a warning nothing aggregates. The child keeps the same
+/// check before it reads a request; this is the half that makes the shortfall
+/// visible and stops the spawns.
+fn accept(report: Report) -> Status {
+    let policy = configured_policy();
+    if policy.accepts(&report) {
+        Status::Ready(report)
+    } else {
+        Status::Unavailable(format!(
+            "`index.sandbox` is `{}` and this host gives `{}` confinement: {}",
+            policy.as_str(),
+            report.level().as_str(),
+            report.detail
+        ))
     }
 }
 
@@ -695,51 +749,6 @@ fn spawn_child(invocation: &Invocation, selftest: bool, start: Start) -> std::io
         Start::Plain => sandbox::spawn_unrestricted(&invocation.program, &args),
     }
     .map(Child::Windows)
-}
-
-/// What each weaker rung of the launch does, when the confined one said nothing.
-///
-/// Empty on every platform that does not start the child differently, which is
-/// every platform but Windows. The result is a diagnosis, never a fallback: a
-/// child that only runs on a weaker rung is a child that does not run. Which
-/// rung still reports is the whole answer — a token that cannot start names the
-/// token, a container that cannot start names the container, and neither leaves
-/// the rest of the launch (`sandbox::windows` records what the container was
-/// refused for).
-fn token_diagnosis(invocation: &Invocation) -> String {
-    #[cfg(windows)]
-    {
-        let mut rungs = Vec::new();
-        for (label, start) in [
-            ("with a token and no container", Start::TokenOnly),
-            ("without a token or a container", Start::Plain),
-        ] {
-            let verdict = match run_child(invocation, None, PROBE_TIMEOUT, start) {
-                Ok(run) => {
-                    let line = String::from_utf8_lossy(
-                        run.stdout
-                            .split(|byte| *byte == b'\n')
-                            .next()
-                            .unwrap_or_default(),
-                    );
-                    let reported = Report::parse(line.trim()).is_some();
-                    format!(
-                        "{}: {}",
-                        if reported { "reported" } else { "still silent" },
-                        run.summary()
-                    )
-                }
-                Err(error) => format!("cannot start ({error})"),
-            };
-            rungs.push(format!("{label}: {verdict}"));
-        }
-        format!("; {}", rungs.join("; "))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = invocation;
-        String::new()
-    }
 }
 
 /// Everything one child run produced.
