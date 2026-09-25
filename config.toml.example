@@ -494,8 +494,15 @@ backfill_enabled = true
 # limit, a wall-clock timeout, and this platform's file, network and process
 # confinement. "require" (the default) refuses to index a document when this
 # host cannot confine that process at all, and leaves it to be retried once it
-# can; "prefer" indexes it with whatever layers the host does have. A container
-# may need the Landlock syscalls allowed (`landlock_create_ruleset`,
+# can. "strict" refuses anything short of every layer this host can provide — on
+# Windows that includes the AppContainer, which a host can otherwise fail to
+# give without the document being refused. "sealed" also refuses a confinement
+# that still has a residual this platform allows: the Windows container's
+# readable system tree and its writable profile store, macOS's process-fork, and
+# a Linux whose seccomp filter did not install. None of those can be closed
+# everywhere, so "sealed" is expected to index nothing on Windows and macOS.
+# "prefer" indexes it with whatever layers the host does have. A container may
+# need the Landlock syscalls allowed (`landlock_create_ruleset`,
 # `landlock_add_rule`, `landlock_restrict_self`) for "require" to hold.
 sandbox = "require"
 

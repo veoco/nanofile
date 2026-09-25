@@ -1425,9 +1425,14 @@ pub struct IndexConfig {
     /// can confine it. `strict` refuses anything short of every layer the host
     /// can provide — on Windows, the AppContainer included — which is what
     /// makes the difference between reading a document with fewer layers and
-    /// not reading it. `prefer` indexes it anyway, which is the escape hatch
-    /// for a kernel or container that blocks the sandbox: the worker still
-    /// applies every layer it can.
+    /// not reading it. `sealed` refuses a confinement that has a residual the
+    /// platform allows but this configuration does not: the Windows container's
+    /// readable system tree and its own writable profile store, macOS's
+    /// `process-fork`, and a Linux whose seccomp filter did not install. Those
+    /// residuals cannot be closed everywhere, so `sealed` is expected to index
+    /// nothing on Windows and macOS. `prefer` indexes it anyway, which is the
+    /// escape hatch for a kernel or container that blocks the sandbox: the
+    /// worker still applies every layer it can.
     ///
     /// Env: NANOFILE_INDEX_SANDBOX
     #[serde(default = "default_index_sandbox")]

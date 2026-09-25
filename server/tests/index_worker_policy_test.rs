@@ -30,7 +30,7 @@ fn short_worker(directory: &Path) -> (PathBuf, PathBuf) {
             r#"#!/bin/sh
 case "$*" in
   *--selftest*)
-    printf '%s\n' "NFX1-sandbox level=partial limits=on files=denied network=open process=open detail=fake"
+    printf '%s\n' "NFX1-sandbox level=partial limits=on files=denied network=open process=open closure=bounded detail=fake"
     exit 0
     ;;
 esac

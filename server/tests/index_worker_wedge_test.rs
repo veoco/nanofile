@@ -33,7 +33,7 @@ fn wedge_worker(directory: &std::path::Path) -> PathBuf {
         r#"#!/bin/sh
 case "$*" in
   *--selftest*)
-    printf '%s\n' "NFX1-sandbox level=full limits=on files=denied network=denied process=denied detail=fake text_chars=8388608"
+    printf '%s\n' "NFX1-sandbox level=full limits=on files=denied network=denied process=denied closure=full detail=fake text_chars=8388608"
     exit 0
     ;;
 esac

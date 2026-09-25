@@ -356,7 +356,8 @@ pub fn status() -> Status {
                 "the document extraction sandbox is not available; documents will not be \
                  indexed. Check the log line above, and see `index.sandbox`: `require` \
                  accepts any confinement, `strict` requires every layer this host can \
-                 give, and a container may need the Landlock syscalls allowed."
+                 give, `sealed` also requires that none of the platform's residuals is \
+                 open, and a container may need the Landlock syscalls allowed."
             );
             cache.retry_at = Some(Instant::now() + UNAVAILABLE_RETRY);
         }

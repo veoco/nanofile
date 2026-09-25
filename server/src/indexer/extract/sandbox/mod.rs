@@ -9,7 +9,7 @@
 //! | limits | memory, CPU seconds, descriptors, file size | `RLIMIT_AS` | `setrlimit` (mapped space plus the cap), footprint watchdog as fallback | Job Object memory cap |
 //! | files | reading or writing any path | Landlock, zero grants | Seatbelt profile | — |
 //! | network | creating a socket | seccomp denylist | Seatbelt profile | — |
-//! | process | `exec`, `fork`, extra processes | seccomp denylist | Seatbelt profile | Job active-process limit |
+//! | process | `exec`, `fork`, extra processes | seccomp denylist | Seatbelt profile, `exec` only (`process-fork` is allowed) | Job active-process limit, plus the kernel's child-process policy |
 //!
 //! Memory is the one limit each platform has to be told about differently. Linux
 //! takes the cap as an address-space limit outright; Windows caps committed
@@ -27,9 +27,30 @@
 //! a document that would run with nothing but resource limits, which is the
 //! `None` level; `strict` refuses anything short of [`Level::Full`], which is
 //! what makes a layer the platform can only sometimes provide — the Windows
-//! AppContainer is the one — a condition rather than a hope; `prefer` extracts
-//! anyway and logs the shortfall. All three run the child — there is no
-//! in-process path to fall back to.
+//! AppContainer is the one — a condition rather than a hope; `sealed` refuses a
+//! confinement that is full but not [`Closure::Full`], which is the one thing
+//! the level cannot say; `prefer` extracts anyway and logs the shortfall. All
+//! four run the child — there is no in-process path to fall back to.
+//!
+//! # What a level does not say
+//!
+//! [`Level::Full`] means "every layer this platform can provide", and the three
+//! platforms provide materially different things under that name: Linux denies
+//! every path and every socket through Landlock and seccomp, the Windows
+//! container denies the user's own files and the network but reads the system
+//! tree it loads from, and macOS's profile is a deny-by-default text with
+//! `process-fork` allowed because the parsers' thread needs it. `strict` is a
+//! statement about the *deployment* — this host gave what it has — and an
+//! operator who needs the stronger claim wants `sealed`, which reads
+//! [`Closure`]: the layer set plus the absence of the residuals each platform
+//! documents (`system=`, `writes=`, `fork=`, `ll_gaps=`).
+//!
+//! One consequence is worth stating where the setting is: the residuals those
+//! tokens name cannot be closed on Windows without a less privileged container
+//! (LPAC) and cannot be closed on macOS without bounding `fork`, so `sealed`
+//! is expected to refuse every document there. It is not a stronger version of
+//! the same promise; it is the promise that the sandbox has no known way out,
+//! which on those two platforms is not true.
 //!
 //! # Claims are measured
 //!
@@ -232,16 +253,42 @@ impl Report {
         self.layers.level()
     }
 
+    /// What the layers add up to, and whether anything closable is still open.
+    ///
+    /// Derived from the detail rather than carried as a claim of its own: every
+    /// input is a fact this process (or the parent) measured, so the answer is
+    /// one rule over those facts instead of a second thing to keep in step. The
+    /// line carries the conclusion for a reader, and [`Report::parse`] checks it
+    /// against the facts the way it checks the level against the layers.
+    pub fn closure(&self) -> Closure {
+        let open = |token: &str| self.detail.split(',').any(|fact| fact == token);
+
+        if !(self.layers.limits && self.layers.files && self.layers.network && self.layers.process)
+        {
+            return Closure::Bounded;
+        }
+        // Facts, not layers: each is something the platform grants that a layer
+        // above cannot take back.
+        if open("system=readable") || open("fork=open") || open("ll_gaps=open") {
+            return Closure::Bounded;
+        }
+        if open("writes=own-store") || open("writes=user") {
+            return Closure::Bounded;
+        }
+        Closure::Full
+    }
+
     /// The one-line report the self-test prints and the parent parses.
     pub fn line(&self) -> String {
         let yes = |on: bool| if on { "denied" } else { "open" };
         format!(
-            "NFX1-sandbox level={} limits={} files={} network={} process={} detail={}",
+            "NFX1-sandbox level={} limits={} files={} network={} process={} closure={} detail={}",
             self.level().as_str(),
             if self.layers.limits { "on" } else { "off" },
             yes(self.layers.files),
             yes(self.layers.network),
             yes(self.layers.process),
+            self.closure().as_str(),
             self.detail
         )
     }
@@ -255,6 +302,7 @@ impl Report {
         let mut fields = line.strip_prefix("NFX1-sandbox ")?.split(' ');
         let mut layers = Layers::default();
         let mut level = None;
+        let mut closure = None;
         let mut detail = String::new();
 
         for field in fields.by_ref() {
@@ -265,6 +313,7 @@ impl Report {
                 "files" => layers.files = parse_denial(value)?,
                 "network" => layers.network = parse_denial(value)?,
                 "process" => layers.process = parse_denial(value)?,
+                "closure" => closure = Closure::parse(value),
                 "detail" => {
                     detail = value.to_string();
                 }
@@ -275,10 +324,10 @@ impl Report {
             }
         }
 
-        // The level is redundant with the layers, so a line whose two halves
-        // disagree is not one of ours.
+        // The level and the closure are both redundant with the facts, so a
+        // line whose halves disagree is not one of ours.
         let report = Report { layers, detail };
-        (level == Some(report.level())).then_some(report)
+        (level == Some(report.level()) && closure == Some(report.closure())).then_some(report)
     }
 }
 
@@ -295,6 +344,40 @@ fn parse_denial(value: &str) -> Option<bool> {
         "denied" => Some(true),
         "open" => Some(false),
         _ => None,
+    }
+}
+
+/// What the confinement adds up to, and whether anything it should close is
+/// still open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Closure {
+    /// Every layer is there *and* nothing this platform could close is open.
+    Full,
+    /// Every layer is there, and at least one residual is not.
+    ///
+    /// The residual is in the report's detail, next to the layer it belongs to:
+    /// `system=readable` (a Windows container reads the system tree),
+    /// `writes=own-store` (it writes its own profile store),
+    /// `fork=open` (macOS has to allow `process-fork` for the parsers' thread),
+    /// `ll_gaps=open` (a Linux without seccomp, where Landlock's blind spots
+    /// are unguarded).
+    Bounded,
+}
+
+impl Closure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Closure::Full => "full",
+            Closure::Bounded => "bounded",
+        }
+    }
+
+    pub fn parse(token: &str) -> Option<Self> {
+        match token {
+            "full" => Some(Closure::Full),
+            "bounded" => Some(Closure::Bounded),
+            _ => None,
+        }
     }
 }
 
@@ -316,6 +399,18 @@ pub enum Policy {
     /// that are left, `strict` reads nothing and leaves the documents for a host
     /// that can.
     Strict,
+    /// Refuse to extract without a confinement that is also [`Closure::Full`].
+    ///
+    /// `strict` says every layer this platform can give is there, which is not
+    /// the same claim on every platform: the Windows container reads the system
+    /// tree, macOS has to allow `process-fork`, and a Linux without seccomp has
+    /// Landlock's blind spots. Those are the residuals `closure` names. `sealed`
+    /// is for the operator who wants the sandbox the platform can *seal* and
+    /// would rather index nothing than index under a residual — which on
+    /// Windows and macOS means indexing nothing, because those residuals cannot
+    /// be closed without a lower-privileged container (LPAC) and a way to bound
+    /// process creation.
+    Sealed,
     /// Extract at any level, reporting the shortfall.
     Prefer,
 }
@@ -326,6 +421,7 @@ impl Policy {
         match value.trim().to_ascii_lowercase().as_str() {
             "require" => Some(Policy::Require),
             "strict" => Some(Policy::Strict),
+            "sealed" => Some(Policy::Sealed),
             "prefer" => Some(Policy::Prefer),
             _ => None,
         }
@@ -335,6 +431,7 @@ impl Policy {
         match self {
             Policy::Require => "require",
             Policy::Strict => "strict",
+            Policy::Sealed => "sealed",
             Policy::Prefer => "prefer",
         }
     }
@@ -346,10 +443,10 @@ impl Policy {
     /// parent asks it once at startup, and the child asks it again before it
     /// reads a request.
     pub fn accepts(self, report: &Report) -> bool {
-        let level = report.level();
         match self {
-            Policy::Require => level >= Level::Partial,
-            Policy::Strict => level == Level::Full,
+            Policy::Require => report.level() >= Level::Partial,
+            Policy::Strict => report.level() == Level::Full,
+            Policy::Sealed => report.level() == Level::Full && report.closure() == Closure::Full,
             Policy::Prefer => true,
         }
     }
@@ -1119,8 +1216,21 @@ mod tests {
         }
         assert_eq!(Policy::parse(" require "), Some(Policy::Require));
         assert_eq!(Policy::parse("strict"), Some(Policy::Strict));
+        assert_eq!(Policy::parse("sealed"), Some(Policy::Sealed));
         assert_eq!(Policy::parse("PREFER"), Some(Policy::Prefer));
         assert_eq!(Policy::parse("off"), None);
+
+        // `sealed` is `strict` plus the closure, so it is the one policy that
+        // cares whether a residual is open.
+        let mut report = report_at(Level::Full);
+        assert!(Policy::Strict.accepts(&report));
+        assert!(Policy::Sealed.accepts(&report));
+        report.detail = "system=readable".to_string();
+        assert!(Policy::Strict.accepts(&report), "the layers are unchanged");
+        assert!(
+            !Policy::Sealed.accepts(&report),
+            "a residual is what sealed refuses"
+        );
     }
 
     #[test]
@@ -1159,5 +1269,61 @@ mod tests {
             )
             .is_none()
         );
+        // A line missing the closure, or claiming one the facts do not support,
+        // is a line this process did not write.
+        let closed = "NFX1-sandbox level=full limits=on files=denied network=denied \
+                      process=denied closure={closure} detail=x";
+        assert!(Report::parse(&closed.replace("{closure}", "full")).is_some());
+        assert!(Report::parse(&closed.replace("{closure}", "bounded")).is_none());
+        assert!(
+            Report::parse(
+                "NFX1-sandbox level=full limits=on files=denied network=denied process=denied \
+                 detail=x"
+            )
+            .is_none(),
+            "a line from before the closure existed is not a report"
+        );
+    }
+
+    /// The residuals are what `sealed` is about: a layer being there is not the
+    /// same as nothing being open, and the difference is a fact in the detail.
+    #[test]
+    fn a_residual_bounds_an_otherwise_full_report() {
+        let report = |detail: &str| Report {
+            layers: Layers {
+                limits: true,
+                files: true,
+                network: true,
+                process: true,
+            },
+            detail: detail.to_string(),
+        };
+        assert_eq!(report("seccomp=1").closure(), Closure::Full);
+        for residual in [
+            "system=readable",
+            "writes=own-store",
+            "writes=user",
+            "fork=open",
+            "ll_gaps=open",
+        ] {
+            assert_eq!(
+                report(&format!("ll_scoped=on,{residual}")).closure(),
+                Closure::Bounded,
+                "{residual} is a residual"
+            );
+        }
+        // `system=denied` is a host stricter than the platform, not a residual.
+        assert_eq!(report("system=denied").closure(), Closure::Full);
+
+        // A missing layer is bounded whatever the facts say.
+        let partial = Report {
+            layers: Layers {
+                limits: true,
+                files: true,
+                ..Layers::default()
+            },
+            detail: "seccomp=1".to_string(),
+        };
+        assert_eq!(partial.closure(), Closure::Bounded);
     }
 }

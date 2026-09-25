@@ -209,8 +209,17 @@ pub(super) fn confine() -> (Layers, Vec<String>) {
             layers.network = true;
             layers.process = true;
             detail.push(format!("seccomp={denied}"));
+            // Landlock sees opens and creations; it does not see a metadata
+            // change, a truncation before ABI 3, or who a signal is for. Those
+            // are this filter's job (see `denied_syscalls`), so a host where it
+            // did not install has a filesystem layer with holes in it rather
+            // than a missing one — which is what this says.
+            detail.push("ll_gaps=closed".to_string());
         }
-        None => detail.push("seccomp=off".to_string()),
+        None => {
+            detail.push("seccomp=off".to_string());
+            detail.push("ll_gaps=open".to_string());
+        }
     }
 
     (layers, detail)

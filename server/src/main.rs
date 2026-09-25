@@ -123,7 +123,11 @@ enum Command {
         #[arg(long, default_value_t = false)]
         restricted: bool,
         /// What to do when the confinement is below what the server requires.
-        #[arg(long, value_name = "require|strict|prefer", default_value = "require")]
+        #[arg(
+            long,
+            value_name = "require|strict|sealed|prefer",
+            default_value = "require"
+        )]
         policy: String,
     },
 }
