@@ -74,7 +74,9 @@ use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT,
     SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
 };
-use windows_sys::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
+use windows_sys::Win32::Security::Isolation::{
+    CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
+};
 use windows_sys::Win32::Security::{
     ACL, CopySid, CreateRestrictedToken, CreateWellKnownSid, DACL_SECURITY_INFORMATION,
     DISABLE_MAX_PRIVILEGE, GetLengthSid, GetTokenInformation, IsValidSid, LUA_TOKEN,
@@ -281,34 +283,60 @@ impl Drop for Child {
 /// at all.
 pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child> {
     let container = app_container(program);
-    if let Some(token) = restricted_token() {
-        let mut with_token = args.to_vec();
+    let attempts: &[bool] = if container.is_some() {
+        &[true, false]
+    } else {
+        &[false]
+    };
+    let mut refused: Vec<String> = Vec::new();
+
+    for &with_container in attempts {
+        let Some(token) = restricted_token() else {
+            // No token at all leaves the ordinary child, which still bounds
+            // itself with a Job Object.
+            break;
+        };
+        let mut attempt = args.to_vec();
         // The child cannot see the token it was created with, and whether
         // writes are restricted is worth saying out loud.
-        with_token.push(OsString::from("--restricted"));
-        match start(program, &with_token, Some(token), container.as_ref()) {
+        attempt.push(OsString::from("--restricted"));
+        let held = if with_container {
+            container.as_ref()
+        } else {
+            None
+        };
+        match start(program, &attempt, Some(token), held) {
             Ok(child) => return Ok(child),
-            Err(restricted) => {
-                if container.is_some() {
-                    note_shortfall("launch-refused");
+            Err(error) => {
+                if with_container {
+                    note_shortfall("launch-refused", Some(&error));
                 }
-                tracing::warn!(
-                    "extract-worker: the restricted token was refused ({restricted}); \
-                     starting the child with the default token"
-                );
-                // Both failures are carried, not just the last one: the first
-                // says whether the token or the launch was refused, and the
-                // probe path has no subscriber for the warning above to reach.
-                return start(program, args, None, None).map_err(|default| {
-                    std::io::Error::new(
-                        default.kind(),
-                        format!("with a restricted token: {restricted}; without one: {default}"),
-                    )
-                });
+                refused.push(format!(
+                    "with {}: {error}",
+                    if with_container {
+                        "a container"
+                    } else {
+                        "a restricted token"
+                    }
+                ));
             }
         }
     }
-    start(program, args, None, None)
+
+    if let Some(error) = refused.first() {
+        tracing::warn!(
+            "extract-worker: the child was refused {error}; starting it with the default token"
+        );
+    }
+    // Every failure is carried, not just the last one: the first says whether the
+    // container or the token was refused, and the probe path has no subscriber
+    // for the warning above to reach.
+    start(program, args, None, None).map_err(|default| {
+        std::io::Error::new(
+            default.kind(),
+            format!("{}; with the default token: {default}", refused.join("; ")),
+        )
+    })
 }
 
 /// Start the child with this process's own token and no container.
@@ -619,26 +647,40 @@ impl Drop for AttributeList {
 
 /// Why the child is not in an AppContainer, when the parent asked for one.
 ///
-/// The probe prints it. Without it, losing the container would show up only as a
-/// child that reports `files=open`, with the reason on a `tracing` warning the
-/// probe path has no subscriber for.
-static SHORTFALL: OnceLock<&'static str> = OnceLock::new();
+/// The probe prints it, as one whitespace-free token. Without it, losing the
+/// container would show up only as a child that reports `files=open`, with the
+/// reason on a `tracing` warning the probe path has no subscriber for.
+static SHORTFALL: OnceLock<String> = OnceLock::new();
 
 /// The reason the container was asked for and not applied, if there is one.
 pub(crate) fn shortfall() -> Option<&'static str> {
-    SHORTFALL.get().copied()
+    SHORTFALL.get().map(String::as_str)
 }
 
-fn note_shortfall(reason: &'static str) {
-    let _ = SHORTFALL.set(reason);
+/// Record the first reason, which is the strongest attempt's: later rungs fail
+/// for their own reasons, and the one that matters is why the container is not
+/// there.
+fn note_shortfall(reason: &str, error: Option<&std::io::Error>) {
+    let mut token = reason.to_string();
+    if let Some(error) = error {
+        // The report's fields are whitespace-separated, and an OS error message
+        // is not.
+        token.push('(');
+        token.push_str(&error.to_string().replace(' ', "_"));
+        token.push(')');
+    }
+    let _ = SHORTFALL.set(token);
 }
 
-/// The name the worker's AppContainer SID is derived from.
+/// The name the worker's AppContainer is known by.
 ///
-/// The SID is a hash of it rather than a registered package, which is all a
-/// process that never writes to its own storage needs: the same name gives the
-/// same SID on every run, and nothing has to be installed for it to exist.
+/// The SID is a hash of it, so the same name gives the same SID on every run and
+/// on every machine, and one container's profile is not another's.
 const APP_CONTAINER_NAME: &str = "Nanofile.Extraction.Worker";
+
+/// `HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)`, which the profile call returns
+/// when the profile is already there — the common case after the first run.
+const PROFILE_EXISTS: i32 = 0x8007_00B7u32 as i32;
 
 /// The AppContainer the child is created in.
 struct AppContainer {
@@ -652,19 +694,20 @@ struct AppContainer {
 /// The AppContainer to start `program` in, or `None` when this host will not
 /// give one.
 ///
-/// Derived rather than created: `CreateAppContainerProfile` would write a package
-/// profile into the user's AppData for a process that has no storage of its own,
-/// and this needs the SID alone.
+/// The container is its SID plus the image grant, and both have to be in place
+/// before the launch: a name no profile has established and an image the
+/// container cannot read are each a launch that fails rather than a child that
+/// runs confined.
 fn app_container(program: &OsStr) -> Option<AppContainer> {
     let Some(sid) = app_container_sid() else {
-        note_shortfall("sid-refused");
+        note_shortfall("sid-refused", None);
         return None;
     };
     // The image is the one file the child cannot run without, and it is the
     // parent's job to make it readable: inside the container the check that
     // matters is the package SID's, and a per-user install has no ACE for it.
     if !grant_image_access(program, sid) {
-        note_shortfall("image-grant-refused");
+        // The grant records why it could not be made.
         return None;
     }
     Some(AppContainer {
@@ -680,9 +723,17 @@ fn app_container(program: &OsStr) -> Option<AppContainer> {
     })
 }
 
-/// This process's own SID for the worker container.
+/// This process's own SID for the worker container, creating its profile if it
+/// does not have one yet.
 ///
-/// Derived once and kept: the SID is a constant of the name, the grant recorded
+/// The profile is what makes the name a container the system knows: it is
+/// `%LOCALAPPDATA%\Packages\<name>` plus a per-app registry store, which is the
+/// shape Microsoft's own launch sample and the two sandboxes this follows all
+/// establish before they start a process in one. It also gives the container a
+/// private directory of its own to write in, which is the only place in the
+/// user's profile it can.
+///
+/// Made once and kept: the SID is a constant of the name, the grant recorded
 /// against it is a property of the image, and freeing it would only mean
 /// deriving the same value again. The allocation is one SID, for the life of the
 /// process.
@@ -694,8 +745,29 @@ fn app_container_sid() -> Option<PSID> {
             .chain(std::iter::once(0))
             .collect();
         let mut sid: PSID = null_mut();
-        let derived = unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
-        if derived < 0 || sid.is_null() {
+        let created = unsafe {
+            CreateAppContainerProfile(
+                name.as_ptr(),
+                name.as_ptr(),
+                name.as_ptr(),
+                null(),
+                0,
+                &mut sid,
+            )
+        };
+        if created == PROFILE_EXISTS {
+            // Already made — by an earlier run, or by another copy of this
+            // binary — and the call does not hand back the SID it did not make.
+            // The name is the same, so the derived SID is the same value.
+            let derived =
+                unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
+            if derived < 0 {
+                return 0;
+            }
+        } else if created < 0 {
+            return 0;
+        }
+        if sid.is_null() {
             return 0;
         }
         sid as usize
@@ -717,13 +789,20 @@ fn app_container_sid() -> Option<PSID> {
 /// token did not hand over.
 fn grant_image_access(program: &OsStr, sid: PSID) -> bool {
     static GRANTED: OnceLock<(OsString, bool)> = OnceLock::new();
-    let (image, granted) = GRANTED.get_or_init(|| {
-        (
-            program.to_os_string(),
-            add_read_execute(program, sid).is_ok(),
-        )
-    });
-    *granted && image == program
+    if let Some((image, granted)) = GRANTED.get() {
+        return *granted && image == program;
+    }
+    match add_read_execute(program, sid) {
+        Ok(()) => {
+            let _ = GRANTED.set((program.to_os_string(), true));
+            true
+        }
+        Err(error) => {
+            note_shortfall("image-grant-refused", Some(&error));
+            let _ = GRANTED.set((program.to_os_string(), false));
+            false
+        }
+    }
 }
 
 /// Add read and execute for `sid` to `program`'s DACL, keeping every ACE it has.
