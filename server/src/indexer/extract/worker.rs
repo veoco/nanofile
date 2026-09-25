@@ -226,7 +226,7 @@ pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
         return Outcome::Unavailable("cannot resolve the extraction worker".to_string());
     };
 
-    let run = match run_child(&invocation, Some((plan, data)), TIMEOUT) {
+    let run = match run_child(&invocation, Some((plan, data)), TIMEOUT, true) {
         Ok(run) => run,
         Err(e) => return Outcome::Unavailable(format!("cannot start the extraction worker: {e}")),
     };
@@ -322,7 +322,7 @@ fn probe() -> Status {
         return Status::Unavailable("cannot resolve the extraction worker".to_string());
     };
 
-    let run = match run_child(&invocation, None, PROBE_TIMEOUT) {
+    let run = match run_child(&invocation, None, PROBE_TIMEOUT, true) {
         Ok(run) => run,
         Err(e) => return Status::Unavailable(format!("cannot start the extraction worker: {e}")),
     };
@@ -343,8 +343,9 @@ fn probe() -> Status {
         // probe is the only place that can be read: `tracing` has no subscriber
         // on this path, so the summary is the whole diagnosis.
         None => Status::Unavailable(format!(
-            "unreadable self-test line {line:?}: {}",
-            run.summary()
+            "unreadable self-test line {line:?}: {}{}",
+            run.summary(),
+            token_diagnosis(&invocation)
         )),
     }
 }
@@ -498,7 +499,11 @@ struct Pipes {
 
 /// Start the child, with `--selftest` when the parent wants a report.
 #[cfg(not(windows))]
-fn spawn_child(invocation: &Invocation, selftest: bool) -> std::io::Result<Child> {
+fn spawn_child(
+    invocation: &Invocation,
+    selftest: bool,
+    _restricted: bool,
+) -> std::io::Result<Child> {
     let mut command = Command::new(&invocation.program);
     command.args(&invocation.args);
     if selftest {
@@ -524,12 +529,54 @@ fn spawn_child(invocation: &Invocation, selftest: bool) -> std::io::Result<Child
 /// The environment, the working directory and the handle inheritance are all
 /// part of the creation call on Windows, so they are set inside `sandbox`.
 #[cfg(windows)]
-fn spawn_child(invocation: &Invocation, selftest: bool) -> std::io::Result<Child> {
+fn spawn_child(
+    invocation: &Invocation,
+    selftest: bool,
+    restricted: bool,
+) -> std::io::Result<Child> {
     let mut args = invocation.args.clone();
     if selftest {
         args.push(OsString::from("--selftest"));
     }
-    sandbox::spawn(&invocation.program, &args).map(Child::Windows)
+    if restricted {
+        sandbox::spawn(&invocation.program, &args)
+    } else {
+        sandbox::spawn_unrestricted(&invocation.program, &args)
+    }
+    .map(Child::Windows)
+}
+
+/// A second run without the restricted token, when the first one said nothing.
+///
+/// Empty on every platform that does not start the child differently without a
+/// token, which is every platform but Windows. The result is a diagnosis, never
+/// a fallback: a child that only runs unrestricted is a child that does not run.
+fn token_diagnosis(invocation: &Invocation) -> String {
+    #[cfg(windows)]
+    {
+        match run_child(invocation, None, PROBE_TIMEOUT, false) {
+            Ok(run) => {
+                let line = String::from_utf8_lossy(
+                    run.stdout
+                        .split(|byte| *byte == b'\n')
+                        .next()
+                        .unwrap_or_default(),
+                );
+                let reported = Report::parse(line.trim()).is_some();
+                format!(
+                    "; without a restricted token: {}: {}",
+                    if reported { "reported" } else { "still silent" },
+                    run.summary()
+                )
+            }
+            Err(error) => format!("; without a restricted token: cannot start ({error})"),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = invocation;
+        String::new()
+    }
 }
 
 /// Everything one child run produced.
@@ -601,8 +648,9 @@ fn run_child(
     invocation: &Invocation,
     request: Option<(Plan, Vec<u8>)>,
     timeout: Duration,
+    restricted: bool,
 ) -> std::io::Result<Run> {
-    let mut child = spawn_child(invocation, request.is_none())?;
+    let mut child = spawn_child(invocation, request.is_none(), restricted)?;
     let pipes = child.pipes();
 
     let writer = match (request, pipes.stdin) {

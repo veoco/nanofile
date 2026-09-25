@@ -15,14 +15,20 @@
 //!   Privileges are gone, the administrative SIDs are deny-only, and write
 //!   access is checked against the restricting SIDs alone.
 //!
-//! The restricting SIDs are the logon SID, `INTERACTIVE` and `Everyone`, for
-//! three different reasons: the session's own objects are granted to the logon
-//! SID, the rights a process needs to attach to the window station it inherits
-//! are granted to `INTERACTIVE` — without it the child is created and then dies
-//! inside the loader with `STATUS_DLL_INIT_FAILED`, before any of our code runs
-//! — and `Everyone` is the world SID a logon-session restricted token is built
-//! with. None of the three has write access to the user's own profile, so a
-//! parser that tries to leave a mark there has nowhere to write.
+//! The restricting SIDs are this process's own identity: the logon session, the
+//! user, and the groups Windows grants the objects a process needs to attach to
+//! (`INTERACTIVE`, `Authenticated Users`, `Users`, `Everyone`). They cannot be
+//! dropped, because a restricted token is checked twice on every access and a
+//! restricting list that does not cover the window station and desktop the child
+//! inherits leaves it created and then dead inside the loader with
+//! `STATUS_DLL_INIT_FAILED` (`0xC0000142`).
+//!
+//! Because the user's own SID is in that list, `WRITE_RESTRICTED` narrows writes
+//! to what this user may write rather than to nothing: what it takes away is
+//! access to objects the user cannot write at all, and administrative access is
+//! what `LUA_TOKEN` takes away. Bounding writes to the user's *own* space is a
+//! low integrity token's job — Chromium's sandbox is that token plus a desktop
+//! of its own — and this is not that.
 //!
 //! This is what both of the sandboxes this follows report as *partial*: reads
 //! are only partly confined (`Everyone` cannot be dropped, and NTFS hard links
@@ -45,8 +51,9 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Security::{
     CopySid, CreateRestrictedToken, CreateWellKnownSid, DISABLE_MAX_PRIVILEGE, GetLengthSid,
     GetTokenInformation, IsValidSid, LUA_TOKEN, PSID, SECURITY_ATTRIBUTES, SID_AND_ATTRIBUTES,
-    TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY, TokenGroups,
-    WELL_KNOWN_SID_TYPE, WRITE_RESTRICTED, WinInteractiveSid, WinWorldSid,
+    TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY, TOKEN_USER, TokenGroups,
+    TokenUser, WELL_KNOWN_SID_TYPE, WRITE_RESTRICTED, WinAuthenticatedUserSid, WinBuiltinUsersSid,
+    WinInteractiveSid, WinWorldSid,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -252,6 +259,16 @@ pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child
             }
         }
     }
+    start(program, args, None)
+}
+
+/// Start the child with this process's own token.
+///
+/// Only the probe uses this. A child that was created and then died before it
+/// reported can be failing because of its token or because of everything else
+/// about how it was started, and the two are told apart the only way that
+/// cannot be argued with: start it again without the token and see.
+pub(crate) fn spawn_unrestricted(program: &OsStr, args: &[OsString]) -> std::io::Result<Child> {
     start(program, args, None)
 }
 
@@ -489,7 +506,10 @@ fn restricted_token() -> Option<HANDLE> {
 
     let mut sids = RestrictingSids::new();
     if !sids.push_logon_sid(own)
+        || !sids.push_user(own)
         || !sids.push_well_known(WinInteractiveSid)
+        || !sids.push_well_known(WinAuthenticatedUserSid)
+        || !sids.push_well_known(WinBuiltinUsersSid)
         || !sids.push_well_known(WinWorldSid)
     {
         unsafe { CloseHandle(own) };
@@ -519,8 +539,8 @@ fn restricted_token() -> Option<HANDLE> {
 /// `SID_AND_ATTRIBUTES` points at a SID rather than holding it, so the token
 /// call must be given memory that outlives the call.
 struct RestrictingSids {
-    storage: [u64; 32],
-    entries: [SID_AND_ATTRIBUTES; 3],
+    storage: [u64; 64],
+    entries: [SID_AND_ATTRIBUTES; 6],
     used: usize,
     count: usize,
 }
@@ -528,11 +548,11 @@ struct RestrictingSids {
 impl RestrictingSids {
     fn new() -> Self {
         Self {
-            storage: [0; 32],
+            storage: [0; 64],
             entries: [SID_AND_ATTRIBUTES {
                 Sid: null_mut(),
                 Attributes: 0,
-            }; 3],
+            }; 6],
             used: 0,
             count: 0,
         }
@@ -620,23 +640,60 @@ impl RestrictingSids {
         false
     }
 
+    /// This user's own SID, which is the one the objects a process needs to
+    /// attach to are granted to.
+    ///
+    /// A restricted token is checked twice on every access: once with its own
+    /// SIDs and once with the restricting ones, and there the *restricting*
+    /// check is the one that decides write access. The window station and the
+    /// desktop a process inherits are granted to the user — that is how the
+    /// parent is using them — so a restricting list without this SID leaves the
+    /// child created and then dead inside the loader with
+    /// `STATUS_DLL_INIT_FAILED` (`0xC0000142`), which is what Microsoft's
+    /// KB 184802 attributes to a process that "does not have correct security
+    /// access to the window station and desktop". Chromium's restricted tokens
+    /// carry the current user for the same reason.
+    fn push_user(&mut self, token: HANDLE) -> bool {
+        let mut needed = 0u32;
+        unsafe { GetTokenInformation(token, TokenUser, null_mut(), 0, &mut needed) };
+        if needed == 0 {
+            return false;
+        }
+
+        // `TOKEN_USER` holds one `SID_AND_ATTRIBUTES`, which points at a SID
+        // inside the buffer, and the buffer is word-aligned because it holds a
+        // pointer.
+        let mut buffer: Vec<u64> = vec![0; (needed as usize).div_ceil(8)];
+        let read = unsafe {
+            GetTokenInformation(
+                token,
+                TokenUser,
+                buffer.as_mut_ptr().cast::<c_void>(),
+                needed,
+                &mut needed,
+            )
+        };
+        if read == 0 {
+            return false;
+        }
+
+        let user = unsafe {
+            buffer
+                .as_ptr()
+                .cast::<u8>()
+                .add(offset_of!(TOKEN_USER, User))
+                .cast::<SID_AND_ATTRIBUTES>()
+        };
+        self.push(unsafe { (*user).Sid })
+    }
+
     /// A well-known SID, by the identifier Windows gives it.
     ///
-    /// The two the token needs are:
-    ///
-    /// * `INTERACTIVE` (`S-1-5-4`), because a restricted token is checked for
-    ///   *write* access against its restricting SIDs alone, and the rights a
-    ///   process needs to attach to the window station it inherits are the ones
-    ///   the default descriptor grants `INTERACTIVE` rather than `Everyone`.
-    ///   Without it the child is created and then dies inside the loader with
-    ///   `STATUS_DLL_INIT_FAILED` (`0xC0000142`), which is the failure
-    ///   Microsoft's KB 184802 attributes to a process that "does not have
-    ///   correct security access to the window station and desktop". Chromium's
-    ///   restricted tokens carry `INTERACTIVE` for the same reason, and the
-    ///   rights it brings — the window station, its desktop, the public
-    ///   directories — do not include the user's own profile.
-    /// * `Everyone` (`S-1-5-1`), the world SID a logon-session restricted token
-    ///   is built with.
+    /// The list is the one a process's own identity is made of — the session,
+    /// the user, and the groups Windows grants the objects a process needs to
+    /// attach to. Chromium's restricted tokens carry the same set, and for the
+    /// same reason: the restricting check has to be able to satisfy the window
+    /// station and desktop the child inherits.
     fn push_well_known(&mut self, kind: WELL_KNOWN_SID_TYPE) -> bool {
         let mut sid = [0u64; MAX_SID_BYTES / 8];
         let mut length = size_of_val(&sid) as u32;

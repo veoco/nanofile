@@ -71,9 +71,11 @@ mod seatbelt;
 #[cfg(target_os = "windows")]
 mod windows;
 /// Start the child the way Windows has to: a restricted token cannot be applied
-/// to a running process, so it is part of creation.
+/// to a running process, so it is part of creation. `spawn_unrestricted` is the
+/// same start without the token, which is how the probe tells a child its token
+/// killed from a child that never started.
 #[cfg(target_os = "windows")]
-pub(super) use windows::{Child as WindowsChild, spawn};
+pub(super) use windows::{Child as WindowsChild, spawn, spawn_unrestricted};
 
 /// Most address space a child may use.
 ///
