@@ -13,6 +13,22 @@
 //! What is *not* here is as deliberate: a long-lived event listener has no
 //! owner, no progress and no terminal state, so it is a service rather than a
 //! job and does not belong in the run table.
+//!
+//! # Two kinds of work, two kinds of history
+//!
+//! A copy, a move and a reindex are events: somebody asked for them, a run
+//! happened, and its record is the account of what it did. A cleanup pass on a
+//! timer is a heartbeat, and it fires far more often than it has work — so the
+//! system keeps two histories rather than one. A job declares which it is with
+//! [`History`](spec::History): an `EveryRun` job is written down when it starts
+//! and again when it ends, while a `Notable` one leaves nothing at all for a
+//! tick that found nothing to do. Both are still counted in the job's lifetime
+//! totals, which is what says the job is ticking.
+//!
+//! [`Origin`] is the other half of that rule. An idle run of a timer is not an
+//! event; an idle run somebody asked for by hand is the answer to the press, so
+//! it is recorded whatever the policy says. And a failure is always recorded —
+//! quiet is for ticks, not for bad news.
 
 pub mod admission;
 pub mod catalog;

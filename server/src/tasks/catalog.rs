@@ -9,6 +9,16 @@
 //! The bodies live in `tasks::setup`, paired with these policies at startup.
 //! The split is deliberate: a policy is process-lifetime and static, while a
 //! body captures the current server generation's resources.
+//!
+//! Two questions decide what belongs here. **How often**: an interval is a
+//! reaction time, not a schedule — how long the server may take to notice
+//! something — and a job that fires more often than it has work should be asking
+//! whether something else can tell it when to run instead. The index committer
+//! is the worked example: the indexer commits a debounced write within 100ms on
+//! its own, so the timer is a backstop for a failed commit, and it fires every
+//! two minutes rather than every thirty seconds. **What is worth remembering**:
+//! a pass that usually finds nothing is declared with [`notable`], which keeps
+//! its idle ticks out of the run list — see [`History`] for the rule.
 
 use super::spec::{
     ChunkPolicy, Dedup, Durability, History, JobKey, JobSpec, OverlapPolicy, Priority, QuietPolicy,
