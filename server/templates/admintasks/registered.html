@@ -47,7 +47,6 @@
         <div class="nf-sec">
             <h2>{{ t.tr(group.title_key) }}</h2>
             <span class="n num">{{ group.rows.len() }}</span>
-            <span class="rule" aria-hidden="true"></span>
         </div>
         {% for row in group.rows %}
         <div class="nf-xrow" data-task="{{ row.slug }}" data-task-kind="{{ row.kind }}">
@@ -172,7 +171,6 @@
     <div class="nf-sec">
         <h2>{{ t.tr("admin.not_registered_title") }}</h2>
         <span class="n num">{{ skipped.len() }}</span>
-        <span class="rule" aria-hidden="true"></span>
     </div>
     <p class="px-3.5 pb-2 text-[11px] text-ink-3">{{ t.tr("admin.not_registered_desc") }}</p>
     {% for row in skipped %}

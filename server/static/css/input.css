@@ -826,9 +826,16 @@ html:not([data-view]) .seg .js-view-list {
 
   .nf-list { @apply rounded-box border border-line bg-panel overflow-hidden; }
   .nf-list > :last-child { border-bottom: 0; }
-  /* A group sits between the panel and its rows, so the rule above does not
-     reach the last row of the last group. */
-  .nf-list > section:last-child > :last-child { border-bottom: 0; }
+  /* A heading owns the hairline above its group, so the row that closes a group
+     draws none of its own: two hairlines against each other read as one thick
+     line. A heading sits either directly in the panel (the activity feed, the
+     starred lists, the task list) or in a `<section>` per group (the registry). */
+  .nf-list > .nf-prow:has(+ .nf-sec),
+  .nf-list > section:has(> .nf-sec) > :last-child { border-bottom: 0; }
+  /* The panel's own border already closes the top of the first group; the band
+     keeps its lower hairline. */
+  .nf-list > .nf-sec:first-child,
+  .nf-list > section:first-child > .nf-sec:first-child { border-top: 0; }
   .nf-prow {
     @apply flex items-center gap-3 px-3.5 py-2 min-h-12 border-b border-line transition-colors;
   }
@@ -866,11 +873,16 @@ html:not([data-view]) .seg .js-view-list {
   .nf-prow-meta { @apply shrink-0 text-[12px] tabular-nums text-ink-3 whitespace-nowrap; }
   .nf-prow-act { @apply shrink-0 flex items-center gap-1; }
 
-  /* Section header inside a panel: label, count, then a rule to the edge. */
-  .nf-sec { @apply flex items-center gap-2.5 px-3.5 pt-3.5 pb-2; }
+  /* Section header inside a panel: one band, whose own two hairlines close the
+     group above it and open the one below, with the label and count inside. The
+     band is what separates the groups — not a rule beside the label, which
+     stacked against the previous row's border and read as two lines. */
+  .nf-sec {
+    @apply flex items-center gap-2.5 px-3.5 pt-3.5 pb-2.5
+           border-t border-b border-line bg-raised;
+  }
   .nf-sec h2 { @apply text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3; }
   .nf-sec .n { @apply text-[11px] tabular-nums text-ink-3; }
-  .nf-sec .rule { @apply flex-1 h-px bg-line; }
 
   .nf-empty { @apply px-4 py-14 text-center; }
   .nf-empty h3 { @apply mt-3 text-[13px] font-medium text-ink-2; }

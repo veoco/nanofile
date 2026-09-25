@@ -953,8 +953,8 @@ async fn the_settings_page_offers_a_restart_button() {
 
 /// The settings form is the page, not a panel inside one: it must not re-add
 /// the padding that would push its rows out of line with the title and the
-/// filter above them. And the group heading already draws the rule that closes
-/// it, so the first row under it draws no second hairline.
+/// filter above them. And the group heading's own hairline closes the group it
+/// belongs to, so the first row under it draws no second hairline.
 #[tokio::test]
 async fn the_settings_form_is_flush_with_the_page() {
     let server = TestServer::start().await;

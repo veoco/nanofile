@@ -78,7 +78,6 @@
     <div class="nf-sec">
         <h2>{{ t.tr("admin.active_title") }}</h2>
         <span class="n num">{{ active.len() }}</span>
-        <span class="rule" aria-hidden="true"></span>
     </div>
     {% if active.is_empty() %}
     <p class="px-3.5 py-3 text-[12px] text-ink-3">{{ t.tr("admin.active_none") }}</p>
@@ -118,7 +117,6 @@
     <div class="nf-sec">
         <h2>{{ t.tr("admin.runs_title") }}</h2>
         <span class="n num">{{ runs.len() }}</span>
-        <span class="rule" aria-hidden="true"></span>
     </div>
     <p class="px-3.5 pb-2 text-[12px] text-ink-3">{{ t.tr("admin.runs_hint") }}</p>
     {% if runs.is_empty() %}

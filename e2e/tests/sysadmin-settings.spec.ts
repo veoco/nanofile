@@ -51,8 +51,8 @@ test("the rows line up with the page header and the filter", async ({ page }) =>
 });
 
 /**
- * A group heading draws the rule that closes it, so the first row under one
- * must not draw a second hairline right below it.
+ * A group heading's lower hairline closes the heading, so the first row under
+ * it must not draw a second hairline right below it.
  */
 test("a group heading is not doubled by its first row's border", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");

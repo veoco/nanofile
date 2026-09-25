@@ -24,7 +24,6 @@
     <div class="nf-sec">
         <h2>{{ t.tr("starred.section_libraries") }}</h2>
         <span class="n num">{{ starred_repos.len() }}</span>
-        <span class="rule" aria-hidden="true"></span>
     </div>
     {% for item in starred_repos %}
     {# A deleted library has no name left to show (the row is looked up by id
@@ -59,7 +58,6 @@
     <div class="nf-sec">
         <h2>{{ t.tr("starred.section_folders") }}</h2>
         <span class="n num">{{ starred_folders.len() }}</span>
-        <span class="rule" aria-hidden="true"></span>
     </div>
     {% for item in starred_folders %}
     <div class="nf-prow{% if item.deleted %} is-dead{% endif %}">
@@ -99,7 +97,6 @@
     <div class="nf-sec">
         <h2>{{ t.tr("starred.section_files") }}</h2>
         <span class="n num">{{ starred_files.len() }}</span>
-        <span class="rule" aria-hidden="true"></span>
     </div>
     {% for item in starred_files %}
     <div class="nf-prow{% if item.deleted %} is-dead{% endif %}">

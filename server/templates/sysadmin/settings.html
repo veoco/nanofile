@@ -133,7 +133,6 @@
                     {# The count is what the group holds now, so the filter updates
                        it as it hides rows rather than leaving a stale number. #}
                     <span class="n num" data-setting-group-count>{{ group.rows.len() }}</span>
-                    <span class="rule" aria-hidden="true"></span>
                 </div>
                 {% for row in group.rows %}
                 {# `data-setting` is the hook a test (or a future script) uses to find
@@ -142,8 +141,8 @@
                    the setting in a bug report can find it without the page
                    printing it once per row.
 
-                   The group heading already draws the rule that closes it, so
-                   the first row under it carries no border of its own. #}
+                   The group heading's own hairline closes the group it belongs
+                   to, so the first row under it carries no border of its own. #}
                 <div data-setting="{{ row.key }}" data-setting-search="{{ row.search_text }}"
                      class="grid grid-cols-1 gap-3 py-3.5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6{% if !loop.first %} border-t border-line{% endif %}">
                     <div class="min-w-0">

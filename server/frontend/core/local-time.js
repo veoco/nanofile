@@ -137,10 +137,6 @@ function renderDayBoundary(el) {
   var heading = document.createElement("h2");
   heading.textContent = text;
   section.appendChild(heading);
-  var rule = document.createElement("span");
-  rule.className = "rule";
-  rule.setAttribute("aria-hidden", "true");
-  section.appendChild(rule);
   el.parentNode.insertBefore(section, el);
 }
 
