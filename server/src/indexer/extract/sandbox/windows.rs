@@ -1,19 +1,29 @@
 //! Windows confinement: a Job Object around the child, a restricted token for it
-//! to run under, and an AppContainer around that.
+//! to run under, an AppContainer around that, and the process mitigations the
+//! kernel will take for it.
 //!
 //! Windows has no `RLIMIT_AS` and no unprivileged equivalent of Landlock, so the
-//! layers are these three, and they are applied in two processes:
+//! layers are these three, and the parent applies all of them at creation — a
+//! token, a job and a container are each a property of the process rather than
+//! something a running one can adopt:
 //!
-//! * **The Job Object** (this child, at startup) caps the process's committed
-//!   memory, its CPU time and how many processes it may hold, and restricts the
-//!   window station, the clipboard and handles to other processes. The child
-//!   creates it and assigns itself, so the layer is one it can verify.
+//! * **The Job Object** (the parent, named as a creation attribute) caps the
+//!   process's committed memory, its CPU time and how many processes it may
+//!   hold, restricts the window station, the clipboard and handles to other
+//!   processes, and — because `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` is set and
+//!   the handle stays here — takes whatever it started with it. The child reads
+//!   the limits back rather than trusting that they were set. A child that held
+//!   its own job handle, which is what this used to be, could have raised the
+//!   limit it was bounded by.
 //! * **The restricted token** (the parent, at creation) cannot be applied to a
 //!   running process, so it is the parent that starts the child with one:
 //!   `CreateProcessAsUser` with a restricted version of the parent's own token,
 //!   which is the one case Windows allows without `SeAssignPrimaryToken`.
 //!   Privileges are gone, the administrative SIDs are deny-only, and write
-//!   access is checked against the restricting SIDs alone.
+//!   access is checked against the restricting SIDs alone. The token is also put
+//!   at **low integrity**, which is the one mechanism that bounds a write by
+//!   itself: the mandatory check is a second, independent half of every access
+//!   check, and it is why Chromium runs its renderers below medium.
 //! * **The AppContainer** (the parent, at creation) is a process-creation
 //!   attribute rather than a token: `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`
 //!   with an AppContainer SID and *no capabilities* is what turns the child into
@@ -22,6 +32,14 @@
 //!   cannot open a socket to anything and cannot read a file whose ACL names only
 //!   its user. This is the configuration Chromium's own zero-capability sandbox
 //!   uses, and the one the reference below documents.
+//!
+//! On top of those, the creation attributes also carry the kernel's own refusal
+//! to let the child create processes, and the child asks for the process
+//! mitigations it can live with: win32k lockdown, arbitrary code guard, no
+//! extension points, no fonts, no remote or low-integrity images, the ASLR
+//! family and strict handle checks. Each is read back with
+//! `GetProcessMitigationPolicy` — including the child-process policy the parent
+//! named — and the report counts what is there rather than what was asked for.
 //!
 //! The restricting SIDs are this process's own identity: the logon session, the
 //! user, and the groups Windows grants the objects a process needs to attach to
@@ -49,7 +67,10 @@
 //! reads the system tree it loads from (`Windows`, `Program Files` — the paths
 //! `ALL APPLICATION PACKAGES` covers), which is the over-grant this
 //! configuration has, and the reason the child reports `system=readable` beside
-//! the per-user paths it was refused. Everything else is that same
+//! the per-user paths it was refused. It also writes inside its own profile
+//! store, which is what `writes=own-store` says: bounded by the store rather
+//! than denied, and the one resource this platform has no bound for at all (the
+//! unix file-size limit has no equivalent here). Everything else is that same
 //! dual-principal check rather than an open door: the registry it reads is the
 //! keys carrying the same grant — system ones, not the user's — while its writes
 //! are redirected to its own per-app store, and the IPC it reaches is over the
@@ -60,10 +81,14 @@
 //!
 //! * Microsoft, *Launch an AppContainer*: the attribute, the empty capability
 //!   list, and the requirement that the image be readable by the container.
+//! * Microsoft, *Process Mitigation Policies* and *Job Objects*: the two APIs
+//!   the layers here are built from, including `PROC_THREAD_ATTRIBUTE_JOB_LIST`
+//!   and the child-process policy that is only accepted for a process in a job.
 //! * Chromium's `sandbox/win/src/`: the same launch (`CreateProcessAsUser` with a
-//!   plain restricted token plus `SECURITY_CAPABILITIES`), and the check that
-//!   refuses to start when the image is not accessible to the container.
-
+//!   plain restricted token plus `SECURITY_CAPABILITIES`), the same
+//!   one-active-process job with the UI restrictions, and the note that the
+//!   creation-time child-process policy exists *because* a job can be escaped.
+//!
 use std::ffi::{OsStr, OsString, c_void};
 use std::fs::File;
 use std::mem::{offset_of, size_of, size_of_val};
@@ -86,29 +111,40 @@ use windows_sys::Win32::Security::{
     ACL, CopySid, CreateRestrictedToken, CreateWellKnownSid, DACL_SECURITY_INFORMATION,
     DISABLE_MAX_PRIVILEGE, GetLengthSid, GetTokenInformation, IsValidSid, LUA_TOKEN,
     NO_INHERITANCE, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
-    SID_AND_ATTRIBUTES, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_QUERY,
-    TOKEN_USER, TokenGroups, TokenIsAppContainer, TokenUser, WELL_KNOWN_SID_TYPE, WRITE_RESTRICTED,
-    WinAuthenticatedUserSid, WinBuiltinUsersSid, WinInteractiveSid, WinWorldSid,
+    SID_AND_ATTRIBUTES, SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY,
+    TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER, TokenGroups,
+    TokenIntegrityLevel, TokenIsAppContainer, TokenUser, WELL_KNOWN_SID_TYPE, WRITE_RESTRICTED,
+    WinAuthenticatedUserSid, WinBuiltinUsersSid, WinInteractiveSid, WinLowLabelSid, WinWorldSid,
 };
 use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
-    JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_LIMIT_PROCESS_TIME, JOB_OBJECT_UILIMIT_DESKTOP,
-    JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
-    JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES, JOB_OBJECT_UILIMIT_READCLIPBOARD,
-    JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
-    JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation, SetInformationJobObject,
+    CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+    JOB_OBJECT_LIMIT_PROCESS_TIME, JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_DISPLAYSETTINGS,
+    JOB_OBJECT_UILIMIT_EXITWINDOWS, JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
+    JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS,
+    JOB_OBJECT_UILIMIT_WRITECLIPBOARD, JOBOBJECT_BASIC_UI_RESTRICTIONS,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicUIRestrictions,
+    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, CreateProcessW,
-    EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, INFINITE,
-    InitializeProcThreadAttributeList, OpenProcessToken, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
-    STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+    EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess,
+    GetProcessMitigationPolicy, INFINITE, InitializeProcThreadAttributeList, OpenProcessToken,
+    PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+    PROCESS_INFORMATION, ProcessChildProcessPolicy, ProcessDynamicCodePolicy,
+    ProcessExtensionPointDisablePolicy, ProcessFontDisablePolicy, ProcessImageLoadPolicy,
+    ProcessStrictHandleCheckPolicy, ProcessSystemCallDisablePolicy, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, SetProcessMitigationPolicy, TerminateProcess, UpdateProcThreadAttribute,
+    WaitForSingleObject,
 };
+use windows_sys::Win32::System::WindowsProgramming::PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
+
+/// `SE_GROUP_INTEGRITY`, from `winnt.h`: the attribute that marks the one entry
+/// of a mandatory label as the integrity level itself.
+const SE_GROUP_INTEGRITY: u32 = 0x20;
 
 use super::Layers;
 
@@ -148,15 +184,15 @@ pub(super) fn confine() -> (Layers, Vec<String>) {
     let mut layers = Layers::default();
     let mut detail = Vec::new();
 
-    match job_object() {
-        Ok(job) => {
+    // The job is the parent's, so this process can only read it back: what the
+    // limits *are* is a fact about the job, and a job nobody set limits on is
+    // not a layer. That is the one difference from the arrangement this
+    // replaced, where the process held its own limits and could raise them.
+    match job_limits() {
+        Ok((memory, cpu)) => {
             layers.limits = true;
             layers.process = true;
-            detail.push(format!("job=memory{MEMORY_LIMIT},cpu{CPU_LIMIT_SECONDS}s"));
-            // The handle stays open on purpose: `KILL_ON_JOB_CLOSE` fires when
-            // it is the last one, and this process is the only thing that
-            // should end here.
-            let _ = job;
+            detail.push(format!("job=memory{memory},cpu{cpu}s,parent"));
         }
         Err(reason) => detail.push(format!("job={reason}")),
     }
@@ -167,74 +203,232 @@ pub(super) fn confine() -> (Layers, Vec<String>) {
         detail.push("container=appcontainer".to_string());
     }
 
+    detail.push(format!("il={}", integrity_level()));
+    detail.push(format!("mitigations={}", harden_process()));
+
+    // What a write reaches, which is the near edge of the files layer: inside
+    // the container writes are redirected to its own store, outside it they are
+    // the user's own access. Reported rather than assumed, because it is the
+    // difference between a document filling its sandbox and a document filling
+    // the disk the server runs on.
+    if layers.files {
+        detail.push(format!("writes={}", write_scope()));
+    }
+
     (layers, detail)
 }
 
-/// Create the job, set its limits and put this process in it.
-fn job_object() -> Result<HANDLE, &'static str> {
-    let job = unsafe { CreateJobObjectW(null(), null()) };
-    if job.is_null() {
-        return Err("create-failed");
-    }
-
-    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_MEMORY
-        | JOB_OBJECT_LIMIT_PROCESS_TIME
-        | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
-        | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
-    limits.BasicLimitInformation.PerProcessUserTimeLimit = CPU_LIMIT_SECONDS * HUNDRED_NANOSECONDS;
-    // One process: this one. A parser has no child to run, and a fork bomb has
-    // nowhere to go.
-    limits.BasicLimitInformation.ActiveProcessLimit = 1;
-    limits.ProcessMemoryLimit = MEMORY_LIMIT as usize;
-
+/// The limits the parent's job puts on this process, read back from the job.
+///
+/// `QueryInformationJobObject` with a null job asks about the job this process
+/// belongs to, which is the one the parent named at creation. A host that runs
+/// this under a job of its own (a CI runner does) nests rather than replaces
+/// it, so the immediate job is still the right one to ask.
+fn job_limits() -> Result<(u64, i64), &'static str> {
+    let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
     let sized = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
-    let set_limits = unsafe {
-        SetInformationJobObject(
-            job,
+    let read = unsafe {
+        QueryInformationJobObject(
+            null_mut(),
             JobObjectExtendedLimitInformation,
-            std::ptr::addr_of!(limits).cast(),
+            std::ptr::addr_of_mut!(info).cast(),
             sized,
+            null_mut(),
         )
     };
-    if set_limits == 0 {
-        unsafe { CloseHandle(job) };
-        return Err("limits-failed");
+    if read == 0 {
+        return Err("unverified");
     }
 
-    // The window station, the clipboard, the desktop and handles to other
-    // processes: none of it belongs to a document parser.
-    let ui = JOBOBJECT_BASIC_UI_RESTRICTIONS {
-        UIRestrictionsClass: JOB_OBJECT_UILIMIT_HANDLES
-            | JOB_OBJECT_UILIMIT_READCLIPBOARD
-            | JOB_OBJECT_UILIMIT_WRITECLIPBOARD
-            | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
-            | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
-            | JOB_OBJECT_UILIMIT_GLOBALATOMS
-            | JOB_OBJECT_UILIMIT_DESKTOP
-            | JOB_OBJECT_UILIMIT_EXITWINDOWS,
-    };
-    let sized = size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32;
-    unsafe {
-        SetInformationJobObject(
-            job,
-            JobObjectBasicUIRestrictions,
-            std::ptr::addr_of!(ui).cast(),
-            sized,
+    let limits = info.BasicLimitInformation.LimitFlags;
+    let memory = limits & JOB_OBJECT_LIMIT_PROCESS_MEMORY != 0;
+    let cpu = limits & JOB_OBJECT_LIMIT_PROCESS_TIME != 0;
+    let processes = limits & JOB_OBJECT_LIMIT_ACTIVE_PROCESS != 0
+        && info.BasicLimitInformation.ActiveProcessLimit == 1;
+    if !(memory && cpu && processes) {
+        return Err("limits-missing");
+    }
+    Ok((
+        info.ProcessMemoryLimit as u64,
+        info.BasicLimitInformation.PerProcessUserTimeLimit / HUNDRED_NANOSECONDS,
+    ))
+}
+
+/// The integrity level this process's token carries, read back.
+///
+/// Read rather than assumed: the container path runs at low integrity by
+/// construction, and the token-only path does not — which is exactly the
+/// difference worth reporting, because integrity is the one mechanism that
+/// bounds a *write* on its own.
+fn integrity_level() -> &'static str {
+    let mut token: HANDLE = null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return "unknown";
+    }
+    // The label is a SID inside the buffer this call fills, and the buffer is
+    // word-aligned because it holds a pointer.
+    let mut buffer: Vec<u64> = vec![0; 16];
+    let mut needed = 0u32;
+    let read = unsafe {
+        GetTokenInformation(
+            token,
+            TokenIntegrityLevel,
+            buffer.as_mut_ptr().cast::<c_void>(),
+            size_of_val(&buffer[..]) as u32,
+            &mut needed,
         )
     };
-
-    if unsafe { AssignProcessToJobObject(job, GetCurrentProcess()) } == 0 {
-        unsafe { CloseHandle(job) };
-        return Err("assign-failed");
+    unsafe { CloseHandle(token) };
+    if read == 0 {
+        return "unknown";
     }
-    Ok(job)
+
+    let label = unsafe { &*buffer.as_ptr().cast::<TOKEN_MANDATORY_LABEL>() };
+    let sid = label.Label.Sid.cast::<u8>();
+    if sid.is_null() {
+        return "unknown";
+    }
+    // A SID is revision, subauthority count, a six-byte authority, then the
+    // subauthorities; the integrity level is the last of them.
+    let (revision, count) = unsafe { (*sid, *sid.add(1)) };
+    if revision != 1 || count == 0 {
+        return "unknown";
+    }
+    let offset = 8 + 4 * (count as usize - 1);
+    let value = unsafe { std::ptr::read_unaligned(sid.add(offset).cast::<u32>()) };
+    match value {
+        0 => "untrusted",
+        0x1000 => "low",
+        0x2000 => "medium",
+        0x3000 => "high",
+        0x4000 => "system",
+        _ => "unknown",
+    }
+}
+
+/// What a write from this process reaches.
+///
+/// A write the container redirects into its own store is bounded by the store;
+/// a write that reaches the user's temporary directory is the user's own
+/// access, and is the case the container exists to prevent. Measured by making
+/// one and taking it back.
+fn write_scope() -> &'static str {
+    let probe = std::env::temp_dir().join("nanofile-extraction-write-probe");
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            "own-store"
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => "denied",
+        Err(_) => "unmeasured",
+    }
+}
+
+/// Ask the kernel for the process mitigations a document parser can live with.
+///
+/// Each is set and then *read back*, and the count in the report is the number
+/// that took: a policy this Windows does not know fails the call, and one that
+/// took is one an exploit has to get past. `SetProcessMitigationPolicy` is the
+/// interface Chromium uses for the same set.
+///
+/// What is deliberately not here is code-integrity policy (CIG): it refuses
+/// images that are not Microsoft-signed, and this worker is not signed.
+fn harden_process() -> usize {
+    // Every one of these is a DWORD whose first bit is the mitigation and whose
+    // second, where it exists, asks for audit-only; the values are the fields
+    // of the corresponding `PROCESS_MITIGATION_*_POLICY` in `winnt.h`.
+    const ENABLE: u32 = 0x1;
+    const IMAGE_LOAD_NO_REMOTE: u32 = 0x1;
+    const IMAGE_LOAD_NO_LOW_LABEL: u32 = 0x2;
+    /// Bottom-up randomization, forced relocation, and the larger range.
+    const ASLR: u32 = 0x1 | 0x2 | 0x8;
+
+    let policies: [(
+        windows_sys::Win32::System::Threading::PROCESS_MITIGATION_POLICY,
+        u32,
+    ); 7] = [
+        // No calls serviced by `win32k.sys` at all: the kernel surface a
+        // document parser has no business reaching, and the one an exploit
+        // would use to find a kernel bug to climb out through.
+        (ProcessSystemCallDisablePolicy, ENABLE),
+        // Arbitrary Code Guard: no new executable pages, so injected code has
+        // nowhere to run. Nothing here generates code at runtime.
+        (ProcessDynamicCodePolicy, ENABLE),
+        // No AppInit DLLs, winsock providers, global hooks or legacy IMEs.
+        (ProcessExtensionPointDisablePolicy, ENABLE),
+        // No fonts: a parser that renders nothing has no use for the font
+        // parser, which is a large attack surface of its own.
+        (ProcessFontDisablePolicy, ENABLE),
+        // Images from a network share, and images marked low integrity.
+        (
+            ProcessImageLoadPolicy,
+            IMAGE_LOAD_NO_REMOTE | IMAGE_LOAD_NO_LOW_LABEL,
+        ),
+        (
+            windows_sys::Win32::System::Threading::ProcessASLRPolicy,
+            ASLR,
+        ),
+        // A bad handle reference raises instead of being ignored, which turns
+        // some exploits into crashes.
+        (ProcessStrictHandleCheckPolicy, ENABLE),
+    ];
+
+    let mut taken = 0;
+    for (policy, flags) in policies {
+        let applied = unsafe {
+            SetProcessMitigationPolicy(
+                policy,
+                std::ptr::from_ref(&flags).cast::<c_void>(),
+                size_of_val(&flags),
+            )
+        } != 0;
+        if !applied {
+            continue;
+        }
+        // Read back rather than trust the call: a policy the kernel accepted and
+        // did not apply is not a mitigation, and the report counts what is.
+        let mut observed = 0u32;
+        let read = unsafe {
+            GetProcessMitigationPolicy(
+                GetCurrentProcess(),
+                policy,
+                std::ptr::addr_of_mut!(observed).cast::<c_void>(),
+                size_of_val(&observed),
+            )
+        } != 0;
+        if read && observed & flags == flags {
+            taken += 1;
+        }
+    }
+
+    // The one mitigation the parent had to name at creation, because the
+    // kernel only takes it for a process that is being created: read back here
+    // rather than taken on the parent's word, like the rest.
+    let mut child_policy = 0u32;
+    let read = unsafe {
+        GetProcessMitigationPolicy(
+            GetCurrentProcess(),
+            ProcessChildProcessPolicy,
+            std::ptr::addr_of_mut!(child_policy).cast::<c_void>(),
+            size_of_val(&child_policy),
+        )
+    } != 0;
+    if read && child_policy & ENABLE != 0 {
+        taken += 1;
+    }
+    taken
 }
 
 /// A child started by the parent, with pipes for the protocol.
 pub(crate) struct Child {
     process: HANDLE,
+    /// The job the child runs in, held here rather than by the child.
+    ///
+    /// `KILL_ON_JOB_CLOSE` fires when the last handle closes, so the parent
+    /// holding it is what makes the bound outlive the child — and, because the
+    /// child never gets a handle of its own, nothing running inside can raise a
+    /// limit the way a process that created its own job could.
+    job: HANDLE,
     stdin: Option<File>,
     stdout: Option<File>,
     stderr: Option<File>,
@@ -274,7 +468,76 @@ impl Child {
 impl Drop for Child {
     fn drop(&mut self) {
         unsafe { CloseHandle(self.process) };
+        // Last handle to the job: if the child somehow outlived this, the job
+        // takes it (and anything it started) with it.
+        if !self.job.is_null() {
+            unsafe { CloseHandle(self.job) };
+        }
     }
+}
+
+/// The job the child is created in, with the limits it runs under.
+///
+/// The parent's rather than the child's, and named as a creation attribute so
+/// there is no window in which the child runs without it. `None` when this host
+/// will not make one: the child then reports no job and the limits layer is
+/// absent, which is a level the policy decides about rather than something to
+/// paper over.
+fn parent_job() -> Option<HANDLE> {
+    let job = unsafe { CreateJobObjectW(null(), null()) };
+    if job.is_null() {
+        return None;
+    }
+
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        | JOB_OBJECT_LIMIT_PROCESS_TIME
+        | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+        | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+    limits.BasicLimitInformation.PerProcessUserTimeLimit = CPU_LIMIT_SECONDS * HUNDRED_NANOSECONDS;
+    // One process: this one. A parser has no child to run, and a fork bomb has
+    // nowhere to go.
+    limits.BasicLimitInformation.ActiveProcessLimit = 1;
+    limits.ProcessMemoryLimit = MEMORY_LIMIT as usize;
+
+    let sized = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+    let set_limits = unsafe {
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            std::ptr::addr_of!(limits).cast(),
+            sized,
+        )
+    };
+
+    // The window station, the clipboard, the desktop and handles to other
+    // processes: none of it belongs to a document parser.
+    let ui = JOBOBJECT_BASIC_UI_RESTRICTIONS {
+        UIRestrictionsClass: JOB_OBJECT_UILIMIT_HANDLES
+            | JOB_OBJECT_UILIMIT_READCLIPBOARD
+            | JOB_OBJECT_UILIMIT_WRITECLIPBOARD
+            | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
+            | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
+            | JOB_OBJECT_UILIMIT_GLOBALATOMS
+            | JOB_OBJECT_UILIMIT_DESKTOP
+            | JOB_OBJECT_UILIMIT_EXITWINDOWS,
+    };
+    let sized = size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32;
+    let set_ui = unsafe {
+        SetInformationJobObject(
+            job,
+            JobObjectBasicUIRestrictions,
+            std::ptr::addr_of!(ui).cast(),
+            sized,
+        )
+    };
+
+    if set_limits == 0 || set_ui == 0 {
+        unsafe { CloseHandle(job) };
+        return None;
+    }
+    Some(job)
 }
 
 /// Start the child, in an AppContainer with a restricted token when the system
@@ -392,19 +655,30 @@ fn start_with(
     startup.StartupInfo.hStdInput = child_stdin;
     startup.StartupInfo.hStdOutput = child_stdout;
     startup.StartupInfo.hStdError = child_stderr;
-    // Only these three handles are inherited, and the container is named in the
-    // same list. Without the list, `bInheritHandles` would hand the child
-    // everything inheritable this process holds — the server's own standard
-    // streams among it.
-    let mut attributes =
-        match AttributeList::new(&inherited, container.map(|held| &held.capabilities)) {
-            Ok(attributes) => attributes,
-            Err(error) => {
-                close_all(&inherited);
-                close_all(&[parent_stdin, parent_stdout, parent_stderr]);
-                return Err(error);
+    // The job has to be named at creation rather than assigned afterwards:
+    // between the two the child is running with nothing bounding it, and the
+    // assignment itself is a call this process would have to make on a process
+    // it may already have lost control of.
+    let job = parent_job();
+    // Only these three handles are inherited, the container is named in the same
+    // list, and the job and the child-process policy travel with it. Without the
+    // list, `bInheritHandles` would hand the child everything inheritable this
+    // process holds — the server's own standard streams among it.
+    let mut attributes = match AttributeList::new(
+        &inherited,
+        container.map(|held| &held.capabilities),
+        job.as_ref(),
+    ) {
+        Ok(attributes) => attributes,
+        Err(error) => {
+            close_all(&inherited);
+            close_all(&[parent_stdin, parent_stdout, parent_stderr]);
+            if let Some(job) = job {
+                unsafe { CloseHandle(job) };
             }
-        };
+            return Err(error);
+        }
+    };
     startup.lpAttributeList = attributes.as_mut_ptr();
 
     let application: Vec<u16> = program.encode_wide().chain(std::iter::once(0)).collect();
@@ -459,12 +733,18 @@ fn start_with(
     if created == 0 {
         let error = std::io::Error::last_os_error();
         close_all(&[parent_stdin, parent_stdout, parent_stderr]);
+        if let Some(job) = job {
+            unsafe { CloseHandle(job) };
+        }
         return Err(error);
     }
 
     unsafe { CloseHandle(info.hThread) };
     Ok(Child {
         process: info.hProcess,
+        // The child is in the job from its first instruction; this end of it
+        // lives as long as the child does.
+        job: job.unwrap_or(null_mut()),
         stdin: Some(unsafe { File::from_raw_handle(parent_stdin as RawHandle) }),
         stdout: Some(unsafe { File::from_raw_handle(parent_stdout as RawHandle) }),
         stderr: Some(unsafe { File::from_raw_handle(parent_stderr as RawHandle) }),
@@ -562,7 +842,8 @@ fn open_pipe(child_reads: bool) -> std::io::Result<(HANDLE, HANDLE)> {
 }
 
 /// The process attributes the child is created with: the handles it may inherit,
-/// and the AppContainer it runs in.
+/// the AppContainer it runs in, the job it runs under, and the kernel's own
+/// refusal to let it create processes.
 struct AttributeList {
     buffer: Vec<u8>,
 }
@@ -571,8 +852,13 @@ impl AttributeList {
     fn new(
         handles: &[HANDLE; 3],
         capabilities: Option<&SECURITY_CAPABILITIES>,
+        job: Option<&HANDLE>,
     ) -> std::io::Result<Self> {
-        let count = 1 + u32::from(capabilities.is_some()) as usize;
+        // The job brings a second attribute with it: the child-process policy
+        // is only accepted for a process that is in a job, which is also what
+        // makes "no child processes" enforceable rather than advisory.
+        let count =
+            1 + usize::from(capabilities.is_some()) + 2 * usize::from(job.is_some()) as usize;
         let mut size = 0usize;
         unsafe { InitializeProcThreadAttributeList(null_mut(), count as u32, 0, &mut size) };
         let mut buffer = vec![0u8; size];
@@ -582,24 +868,33 @@ impl AttributeList {
         }
 
         let mut attributes = Self { buffer };
+        // The buffer is a live attribute list from here on, so every failing
+        // path leaves through the same cleanup a successful one does.
         let filled = unsafe {
-            match attributes.handles(handles) {
-                Ok(()) => match capabilities {
+            attributes
+                .handles(handles)
+                .and_then(|()| match capabilities {
                     Some(capabilities) => attributes.container(capabilities),
                     None => Ok(()),
-                },
-                Err(error) => Err(error),
-            }
+                })
+                .and_then(|()| match job {
+                    Some(job) => attributes.job(job),
+                    None => Ok(()),
+                })
         };
-        match filled {
-            Ok(()) => Ok(attributes),
-            Err(error) => {
-                // The buffer is a live attribute list, so the failing path drops
-                // it through the same cleanup a successful one does.
-                drop(attributes);
-                Err(error)
-            }
+        if let Err(error) = filled {
+            drop(attributes);
+            return Err(error);
         }
+
+        // Best effort: the child is already bounded by the job, the token and
+        // the container, and a kernel that will not take this one attribute is
+        // not a reason to fail the launch. Whether it took is in the report,
+        // because the child reads it back ([`harden_process`]).
+        if job.is_some() {
+            let _ = unsafe { attributes.no_child_processes() };
+        }
+        Ok(attributes)
     }
 
     /// The handles the child may inherit, and nothing else.
@@ -630,6 +925,43 @@ impl AttributeList {
                 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
                 std::ptr::from_ref(capabilities).cast::<c_void>(),
                 size_of::<SECURITY_CAPABILITIES>(),
+            )
+        }
+    }
+
+    /// The job the child is created in.
+    ///
+    /// # Safety
+    ///
+    /// `job` must outlive the process creation: the attribute names an array of
+    /// handles, of which it is the only entry.
+    unsafe fn job(&mut self, job: &HANDLE) -> std::io::Result<()> {
+        unsafe {
+            self.set(
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                std::ptr::from_ref(job).cast::<c_void>(),
+                size_of::<HANDLE>(),
+            )
+        }
+    }
+
+    /// Forbid the child from creating processes at all.
+    ///
+    /// This is on the process rather than on the job, which is what
+    /// distinguishes it from the job's active-process limit: Chromium carries
+    /// both, and says why — a job can be escaped by a process that knows how,
+    /// and this is the kernel refusing the creation itself.
+    ///
+    /// # Safety
+    ///
+    /// Requires an attribute list that names a job for this child.
+    unsafe fn no_child_processes(&mut self) -> std::io::Result<()> {
+        let policy: u32 = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED;
+        unsafe {
+            self.set(
+                PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY as usize,
+                std::ptr::from_ref(&policy).cast::<c_void>(),
+                size_of::<u32>(),
             )
         }
     }
@@ -953,10 +1285,13 @@ fn is_app_container() -> bool {
 /// ordinary child rather than not starting one at all.
 fn restricted_token() -> Option<HANDLE> {
     let mut own: HANDLE = null_mut();
+    // `TOKEN_ADJUST_DEFAULT` is for the integrity label set below: the token
+    // this process creates is its own, and lowering its integrity is the one
+    // change to it that is allowed without a privilege.
     let opened = unsafe {
         OpenProcessToken(
             GetCurrentProcess(),
-            TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_QUERY,
+            TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT,
             &mut own,
         )
     };
@@ -991,7 +1326,58 @@ fn restricted_token() -> Option<HANDLE> {
         )
     };
     unsafe { CloseHandle(own) };
-    (created != 0 && !restricted.is_null()).then_some(restricted)
+    if created == 0 || restricted.is_null() {
+        return None;
+    }
+
+    // Integrity is the one mechanism that bounds a *write* on its own: a
+    // low-integrity token cannot write an object at medium integrity whatever
+    // its ACL says, because the mandatory check is the second half of the
+    // access check. The container path already runs low; this is what gives
+    // the token-only path — the one a host falls back to when it will not
+    // start a container — a write bound of its own, and it is why Chromium
+    // runs its renderers below medium for the same reason.
+    set_low_integrity(restricted);
+    Some(restricted)
+}
+
+/// Put `token` at low integrity, ignoring a host that will not.
+///
+/// The report says which level the child actually got ([`integrity_level`]),
+/// so a refusal here is a fact the report carries rather than a failure to
+/// start: a host without integrity levels still runs the child, with fewer
+/// mechanisms.
+fn set_low_integrity(token: HANDLE) {
+    let mut sid = [0u64; MAX_SID_BYTES / 8];
+    let mut length = size_of_val(&sid) as u32;
+    let created = unsafe {
+        CreateWellKnownSid(
+            WinLowLabelSid,
+            null_mut(),
+            sid.as_mut_ptr().cast::<c_void>(),
+            &mut length,
+        )
+    };
+    if created == 0 {
+        return;
+    }
+
+    let label = TOKEN_MANDATORY_LABEL {
+        Label: SID_AND_ATTRIBUTES {
+            Sid: sid.as_mut_ptr().cast::<c_void>(),
+            Attributes: SE_GROUP_INTEGRITY,
+        },
+    };
+    // `TOKEN_ADJUST_DEFAULT` is what this class needs, and a token this process
+    // just created carries every right to itself.
+    unsafe {
+        SetTokenInformation(
+            token,
+            TokenIntegrityLevel,
+            std::ptr::from_ref(&label).cast::<c_void>(),
+            size_of::<TOKEN_MANDATORY_LABEL>() as u32,
+        )
+    };
 }
 
 /// The restricting SIDs of a restricted token, and the storage they live in.
