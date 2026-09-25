@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { bannerGap, subtitleGap } from "../helpers/layout";
+import { bannerGap, tabsGap } from "../helpers/layout";
 
 // Asserts the default English UI (default_language=en; the admin has no
 // language override), which renders the Periodic/Service labels and the job
@@ -154,11 +154,30 @@ test("a finished run is named and labelled on the run list", async ({ page }) =>
   await expect(run.locator("details.nf-xrow-more")).toContainText("Run id");
 });
 
-// The subtitle has no bottom margin of its own, so the run panel must keep its
-// own top margin or the two touch.
-test("the description sits clear of the run panel", async ({ page }) => {
+// The tab bar carries a bottom margin of its own, and the load card is now the
+// first block under it: the two must not touch, or the card reads as part of
+// the tab bar.
+test("the first block sits clear of the tab bar", async ({ page }) => {
   await page.goto("/sysadmin/tasks/");
-  expect(await subtitleGap(page)).toBeGreaterThanOrEqual(16);
+  expect(await tabsGap(page)).toBeGreaterThanOrEqual(16);
+});
+
+// The load measurements are what explain a run that is waiting, so they come
+// first: a run that is holding back the server is read against them rather
+// than scrolled past.
+test("the server load sits above the run lists", async ({ page }) => {
+  await page.goto("/sysadmin/tasks/");
+  const at = async (panel: string) =>
+    (await page.locator(`main [data-panel="${panel}"]`).boundingBox())?.y;
+
+  const load = await at("load");
+  const active = await at("active");
+  const recent = await at("recent");
+  expect(load).toBeDefined();
+  expect(active).toBeDefined();
+  expect(recent).toBeDefined();
+  expect(load!).toBeLessThan(active!);
+  expect(load!).toBeLessThan(recent!);
 });
 
 test("trigger a periodic task manually", async ({ page }) => {

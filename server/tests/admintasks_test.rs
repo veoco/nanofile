@@ -131,6 +131,31 @@ async fn both_task_pages_render_for_an_admin() {
     }
 }
 
+/// The load measurements explain a run that is waiting, so they come first:
+/// below the tab bar, and above both lists.
+#[tokio::test]
+async fn the_load_panel_sits_above_the_run_list() {
+    let (server, admin) = admin_server().await;
+    let (_, html) = page(&server, &admin, RUNS).await;
+    let body = page_content(&html);
+
+    let at = |needle: &str| {
+        body.find(needle)
+            .unwrap_or_else(|| panic!("the run page has no {needle}"))
+    };
+    assert!(
+        at("data-panel=\"load\"") < at("data-panel=\"active\"")
+            && at("data-panel=\"active\"") < at("data-panel=\"recent\""),
+        "the run page's blocks are out of order"
+    );
+    // The rendered headings, not the keys: `page_content` cuts the dictionary
+    // off, so a heading found here is the one a reader sees.
+    assert!(
+        at("Server load") < at("Recent runs"),
+        "the load panel is not above the run list"
+    );
+}
+
 /// Neither page is reachable by an account that is not an administrator.
 #[tokio::test]
 async fn a_non_admin_is_sent_away_from_both_pages() {

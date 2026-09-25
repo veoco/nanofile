@@ -28,9 +28,53 @@
 <div class="mt-5">{% include "includes/alert_success.html" %}</div>
 {% endif %}
 
+{# The load panel comes first. These measurements are what explain a run that is
+   waiting, and a run that is holding back the server is read against them
+   rather than scrolled past. A card rather than a panel of rows, because the
+   six numbers are one reading rather than a list. #}
+<div class="nf-cards mt-5">
+    <section class="nf-form is-wide" data-panel="load">
+        <h2>{{ t.tr("admin.load_title") }}</h2>
+        <p class="desc">
+            {% if load.load_aware %}{{ t.tr("admin.load_aware_on") }}{% else %}{{ t.tr("admin.load_aware_off") }}{% endif %}
+        </p>
+        <div class="body grid gap-x-8 gap-y-2 text-[13px] sm:grid-cols-2 xl:grid-cols-3">
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.load_requests") }}</span>
+                <span class="tabular-nums text-ink">{{ load.inflight_requests }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.load_background") }}</span>
+                <span class="tabular-nums text-ink">{{ load.background_active }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.load_queue") }}</span>
+                <span class="tabular-nums text-ink">{{ load.queue_depth }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.load_db") }}</span>
+                <span class="tabular-nums text-ink">{{ load.db_in_use }} / {{ load.db_max }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.load_workers") }}</span>
+                <span class="tabular-nums text-ink">{{ load.worker_busy_pct }}%</span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("admin.load_tasks") }}</span>
+                <span class="tabular-nums text-ink">{{ load.alive_tasks }}</span>
+            </div>
+        </div>
+        {# A stopped sampler must never read as a quiet server, so it says so on
+           its own line rather than trailing the sentence above. #}
+        {% if !load.fresh %}
+        <p class="mt-3 text-[12px] text-warn-text">{{ t.tr("admin.load_stale") }}</p>
+        {% endif %}
+    </section>
+</div>
+
 {# What is happening now. Rendered even when it is empty, so the page always has
    the same shape and says "nothing" rather than showing nothing. #}
-<div class="nf-list mt-5">
+<div class="nf-list mt-5" data-panel="active">
     <div class="nf-sec">
         <h2>{{ t.tr("admin.active_title") }}</h2>
         <span class="n num">{{ active.len() }}</span>
@@ -70,13 +114,13 @@
 
 {# What finished, from the durable journal: the runs whose jobs asked to be
    remembered, which is every one but the request-scoped copies and moves. #}
-<div class="nf-list mt-5">
+<div class="nf-list mt-5" data-panel="recent">
     <div class="nf-sec">
         <h2>{{ t.tr("admin.runs_title") }}</h2>
         <span class="n num">{{ runs.len() }}</span>
         <span class="rule" aria-hidden="true"></span>
     </div>
-    <p class="px-3.5 pb-2 text-[11px] text-ink-3">{{ t.tr("admin.runs_hint") }}</p>
+    <p class="px-3.5 pb-2 text-[12px] text-ink-3">{{ t.tr("admin.runs_hint") }}</p>
     {% if runs.is_empty() %}
     <p class="px-3.5 py-3 text-[12px] text-ink-3">{{ t.tr("admin.runs_none") }}</p>
     {% else %}
@@ -133,26 +177,5 @@
     </div>
     {% endfor %}
     {% endif %}
-</div>
-
-{# The load panel sits below the runs on purpose: the runs are what the page is
-   for, and these measurements are what explain a run that is waiting. #}
-<div class="nf-list mt-5">
-    <div class="nf-sec">
-        <h2>{{ t.tr("admin.load_title") }}</h2>
-        <span class="rule" aria-hidden="true"></span>
-    </div>
-    <p class="px-3.5 pb-2 text-[12px] text-ink-3">
-        {% if load.load_aware %}{{ t.tr("admin.load_aware_on") }}{% else %}{{ t.tr("admin.load_aware_off") }}{% endif %}
-        {% if !load.fresh %}&middot; {{ t.tr("admin.load_stale") }}{% endif %}
-    </p>
-    <div class="grid gap-2 px-3.5 pb-4 sm:grid-cols-2">
-        <div class="nf-kv"><span class="k">{{ t.tr("admin.load_requests") }}</span><span class="v tabular-nums">{{ load.inflight_requests }}</span></div>
-        <div class="nf-kv"><span class="k">{{ t.tr("admin.load_background") }}</span><span class="v tabular-nums">{{ load.background_active }}</span></div>
-        <div class="nf-kv"><span class="k">{{ t.tr("admin.load_db") }}</span><span class="v tabular-nums">{{ load.db_in_use }} / {{ load.db_max }}</span></div>
-        <div class="nf-kv"><span class="k">{{ t.tr("admin.load_workers") }}</span><span class="v tabular-nums">{{ load.worker_busy_pct }}%</span></div>
-        <div class="nf-kv"><span class="k">{{ t.tr("admin.load_queue") }}</span><span class="v tabular-nums">{{ load.queue_depth }}</span></div>
-        <div class="nf-kv"><span class="k">{{ t.tr("admin.load_tasks") }}</span><span class="v tabular-nums">{{ load.alive_tasks }}</span></div>
-    </div>
 </div>
 {% endblock %}

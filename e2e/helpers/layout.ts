@@ -31,3 +31,14 @@ export function subtitleGap(page: Page): Promise<number> {
 export function bannerGap(page: Page): Promise<number> {
   return gapBetween(page, "main .page-subtitle", "main .nf-banner");
 }
+
+/**
+ * Gap between the tab bar and the first block below it.
+ *
+ * A page with tabs does not put its first panel straight under the description,
+ * so `subtitleGap` measures across the tabs and says nothing about whether the
+ * two touch.
+ */
+export function tabsGap(page: Page): Promise<number> {
+  return gapBetween(page, "main .nf-tabs", "main [data-panel]");
+}
