@@ -44,6 +44,19 @@ test("the page reports delivery as ready and points at the settings", async ({
   await expect(page.locator("main")).not.toContainText("admin.");
 });
 
+// The test form is the body of its block: the description above it and the
+// field below it are separate things, so they must not touch.
+test("the test-mail form stands clear of its description", async ({ page }) => {
+  await page.goto("/sysadmin/email/");
+  const gap = await page
+    .locator('form[action="/sysadmin/email/test/"]')
+    .evaluate((form) => {
+      const above = form.previousElementSibling as HTMLElement;
+      return form.getBoundingClientRect().top - above.getBoundingClientRect().bottom;
+    });
+  expect(gap).toBeGreaterThanOrEqual(8);
+});
+
 test("a test message is delivered to the given address", async ({ page }) => {
   const to = `probe-${Date.now()}@test.local`;
   await page.goto("/sysadmin/email/");

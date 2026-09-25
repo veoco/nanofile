@@ -75,7 +75,7 @@
         <div class="body mt-4 pt-4 border-t border-line">
             <h3 class="text-[13px] font-semibold text-ink mb-2">{{ t.tr("admin.email_test_title") }}</h3>
             <p class="desc">{{ t.tr("admin.email_test_desc") }}</p>
-            <form action="/sysadmin/email/test/" method="POST" class="flex flex-col gap-2 sm:flex-row">
+            <form action="/sysadmin/email/test/" method="POST" class="mt-3 flex flex-col gap-2 sm:flex-row">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="status" value="{{ status_filter }}">
                 <input type="hidden" name="page" value="{{ page }}">
