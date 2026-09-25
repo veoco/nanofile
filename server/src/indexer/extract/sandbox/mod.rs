@@ -405,6 +405,10 @@ fn network_is_denied() -> bool {
 ///
 /// Only used to check a claim made by an external runner. A missing helper is
 /// not a denial: only a permission failure counts.
+///
+/// The standard streams are inherited rather than set to null: a null stream
+/// opens `/dev/null` for writing, which the macOS profile denies, and the probe
+/// would then measure that open instead of the `exec` it is about.
 #[cfg(unix)]
 fn process_is_denied() -> bool {
     let helper = if cfg!(target_os = "macos") {
@@ -413,9 +417,9 @@ fn process_is_denied() -> bool {
         "/bin/true"
     };
     match std::process::Command::new(helper)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
         .status()
     {
         Ok(_) => false,

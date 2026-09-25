@@ -28,29 +28,44 @@ pub(super) fn args(exe: &Path) -> Vec<String> {
 ///
 /// Allowed, and why:
 ///
-/// * `process-fork` — the parsers run their work on a thread, which Seatbelt
-///   charges to `process-fork`. `process-exec` is deliberately *not* allowed,
-///   so no other program can be started.
+/// * `process-exec` for this binary and nothing else. The `exec` the runner
+///   performs to start the child is itself checked, so `(deny default)` refuses
+///   to start anything without this grant — `sandbox-exec: execvp() of …
+///   failed: Operation not permitted` is what its absence looks like. A
+///   `(literal …)` here is narrower than a bare `(allow process-exec)`: no
+///   second program can be started, and re-running this binary cannot escape
+///   the profile, because a sandboxed process passes its own on to its
+///   children.
+/// * `process-fork` — the parsers run their work on a thread, and Seatbelt
+///   charges that to `process-fork`, so denying it would break them. A fork
+///   only duplicates this process: the copy inherits the profile, so it can
+///   still `exec` nothing but this binary.
 /// * `signal (target self)` — the runtime's own bookkeeping.
 /// * `sysctl-read` — the allocator and the runtime read a few sysctl values
 ///   while starting up.
-/// * `file-read*` under the system library paths and for this binary: macOS
-///   binds symbols lazily, so the first call into a symbol that is not resolved
-///   yet sends dyld back to the library it lives in. Without this the child
-///   dies on its first allocation, which reads as "the sandbox broke parsing"
-///   rather than "the profile is too tight".
+/// * `file-read*` under the system library paths and for this binary, and
+///   `file-map-executable` for the same paths: macOS binds symbols lazily and
+///   maps an executable image with a permission of its own, so the first call
+///   into an unresolved symbol, and the mapping of the binary itself, both send
+///   the loader back to a file. Without them the child dies before it reads a
+///   byte of its request.
 /// * `/dev/null` and `/dev/urandom`: the runtime keeps the first for the
 ///   standard streams the parent set up, and `getentropy` may fall back to the
 ///   second.
 ///
 /// Everything else — every write, every socket, every other path — is denied.
 pub(super) fn profile(exe: &Path) -> String {
+    let exe = escape(&exe.to_string_lossy());
+    // The dyld shared cache lives in the cryptex on Apple Silicon; on Intel
+    // that path does not exist and the rule grants nothing.
     format!(
-        "(version 1) (deny default) (allow process-fork) (allow signal (target self)) \
-         (allow sysctl-read) (allow file-read* (subpath \"/usr/lib\") \
-         (subpath \"/System/Library\") (literal \"/dev/null\") (literal \"/dev/urandom\") \
-         (literal \"{}\"))",
-        escape(&exe.to_string_lossy())
+        "(version 1) (deny default) (allow process-exec (literal \"{exe}\")) \
+         (allow process-fork) (allow signal (target self)) (allow sysctl-read) \
+         (allow file-read* (subpath \"/usr/lib\") (subpath \"/System/Library\") \
+         (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") (literal \"/dev/null\") \
+         (literal \"/dev/urandom\") (literal \"{exe}\")) \
+         (allow file-map-executable (subpath \"/usr/lib\") (subpath \"/System/Library\") \
+         (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") (literal \"{exe}\"))"
     )
 }
 
@@ -95,32 +110,44 @@ mod tests {
         assert!(profile.contains("(allow process-fork)"));
         assert!(profile.contains("(allow file-read* (subpath \"/usr/lib\")"));
         assert!(profile.contains("(literal \"/opt/nanofile/nanofile\")"));
-        // Nothing may grant a write, a socket, or another program.
-        for forbidden in [
-            "file-write",
-            "network",
-            "process-exec",
-            "mach-lookup",
-            "iokit",
-        ] {
+        // Nothing may grant a write, a socket, or a mach service.
+        for forbidden in ["file-write", "network", "mach-lookup", "iokit"] {
             assert!(
                 !profile.contains(forbidden),
                 "the profile must not mention {forbidden}: {profile}"
             );
         }
+        // Starting a program is granted for this binary alone: the runner's own
+        // `exec` needs it, and a bare `(allow process-exec)` would let a
+        // document parser start anything it can read.
+        assert!(profile.contains("(allow process-exec (literal \"/opt/nanofile/nanofile\"))"));
+        assert!(!profile.contains("(allow process-exec)"));
+        // Reading and mapping executable are granted for the same paths, so the
+        // loader can map what it is allowed to read and nothing else.
+        assert!(profile.contains(
+            "(allow file-map-executable (subpath \"/usr/lib\") (subpath \"/System/Library\") \
+             (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") \
+             (literal \"/opt/nanofile/nanofile\"))"
+        ));
     }
 
     /// A path is data, never policy text: every quote it brings is escaped, so
     /// it stays inside the literal it was written into.
     #[test]
     fn a_path_cannot_rewrite_the_profile() {
-        let profile = profile(Path::new("/tmp/\") (allow file-write*) \"/"));
-        let escaped = profile.matches("\\\"").count();
-        assert_eq!(escaped, 2, "the path's quotes are escaped: {profile}");
+        let unescaped =
+            |profile: &str| profile.matches('"').count() - profile.matches(r#"\""#).count();
+        let clean = profile(Path::new("/opt/nanofile/nanofile"));
+        let injected = profile(Path::new("/tmp/\") (allow file-write*) \"/"));
+
+        // The path's own quotes are escaped wherever the path is written (it
+        // appears once per grant), so it cannot close a literal early and turn
+        // what follows into a form of its own.
+        assert!(injected.matches(r#"\""#).count() >= 2);
         assert_eq!(
-            profile.matches('"').count() - escaped,
-            10,
-            "only the profile's own delimiters are unescaped: {profile}"
+            unescaped(&injected),
+            unescaped(&clean),
+            "the path adds no unescaped quote to the profile: {injected}"
         );
     }
 

@@ -353,6 +353,14 @@ fn invocation(policy: Policy) -> Option<Invocation> {
         .get()
         .cloned()
         .or_else(|| std::env::current_exe().ok())?;
+    // The macOS profile names this path in a `(literal …)`, and Seatbelt matches
+    // the path the filesystem resolved rather than the one that was typed, so a
+    // binary reached through a symlinked directory has to be resolved before it
+    // is written down — and before it is started, so the two agree. Windows is
+    // left alone: `canonicalize` there returns a `\\?\` path, which is not what
+    // this binary was invoked as.
+    #[cfg(target_os = "macos")]
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
 
     let mut args: Vec<OsString> = vec![
         OsString::from(SUBCOMMAND),
