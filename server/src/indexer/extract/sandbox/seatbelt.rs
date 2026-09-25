@@ -43,6 +43,16 @@ pub(super) fn args(exe: &Path) -> Vec<String> {
 /// * `signal (target self)` — the runtime's own bookkeeping.
 /// * `sysctl-read` — the allocator and the runtime read a few sysctl values
 ///   while starting up.
+/// * `file-read*` of the root directory itself, which is what a process does
+///   about a directory it is sitting in: the child's working directory is `/`
+///   (`super::super::worker` sets it so nothing is relative), and the runtime
+///   reads it on the way up. Denying it is fatal rather than inconvenient —
+///   Seatbelt aborts the process with `SIGABRT` before it can say anything, so
+///   the failure reads as a silent child. Codex carries the same grant with the
+///   same reason ("Allow processes to get their current working directory"),
+///   and it was isolated on macOS 26 by toggling one rule at a time: with only
+///   this grant added to an otherwise identical deny-default profile, the
+///   process starts.
 /// * `file-read*` under the system library paths and for this binary, and
 ///   `file-map-executable` for the same paths: macOS binds symbols lazily and
 ///   maps an executable image with a permission of its own, so the first call
@@ -54,6 +64,9 @@ pub(super) fn args(exe: &Path) -> Vec<String> {
 ///   second.
 ///
 /// Everything else — every write, every socket, every other path — is denied.
+/// Reading the root directory lists it and grants nothing beneath it: `/etc`,
+/// `/Users` and every other path stay denied, which is what the child's own
+/// measurement of the files layer checks.
 pub(super) fn profile(exe: &Path) -> String {
     let exe = escape(&exe.to_string_lossy());
     // The dyld shared cache lives in the cryptex on Apple Silicon; on Intel
@@ -61,9 +74,9 @@ pub(super) fn profile(exe: &Path) -> String {
     format!(
         "(version 1) (deny default) (allow process-exec (literal \"{exe}\")) \
          (allow process-fork) (allow signal (target self)) (allow sysctl-read) \
-         (allow file-read* (subpath \"/usr/lib\") (subpath \"/System/Library\") \
-         (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") (literal \"/dev/null\") \
-         (literal \"/dev/urandom\") (literal \"{exe}\")) \
+         (allow file-read* file-test-existence (literal \"/\") (subpath \"/usr/lib\") \
+         (subpath \"/System/Library\") (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") \
+         (literal \"/dev/null\") (literal \"/dev/urandom\") (literal \"{exe}\")) \
          (allow file-map-executable (subpath \"/usr/lib\") (subpath \"/System/Library\") \
          (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") (literal \"{exe}\"))"
     )
@@ -108,7 +121,22 @@ mod tests {
         let profile = profile(Path::new("/opt/nanofile/nanofile"));
         assert!(profile.starts_with("(version 1) (deny default)"));
         assert!(profile.contains("(allow process-fork)"));
-        assert!(profile.contains("(allow file-read* (subpath \"/usr/lib\")"));
+        // The child's working directory is `/`: a process that cannot read the
+        // directory it sits in is aborted, not refused, so this grant is
+        // load-bearing rather than cosmetic.
+        assert!(profile.contains("(allow file-read* file-test-existence (literal \"/\")"));
+        // The loader gets the same paths to read and to map executable, and
+        // nothing else.
+        for path in [
+            "/usr/lib",
+            "/System/Library",
+            "/System/Volumes/Preboot/Cryptexes/OS",
+        ] {
+            assert!(
+                profile.contains(&format!("(subpath \"{path}\")")),
+                "{path} is granted: {profile}"
+            );
+        }
         assert!(profile.contains("(literal \"/opt/nanofile/nanofile\")"));
         // Nothing may grant a write, a socket, or a mach service.
         for forbidden in ["file-write", "network", "mach-lookup", "iokit"] {

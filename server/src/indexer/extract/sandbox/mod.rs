@@ -371,8 +371,11 @@ pub fn confine(external_confinement: bool) -> Report {
 
 /// Whether reading a path outside the document is refused, measured.
 ///
-/// `/` always exists, so a permission failure on it can only come from the
-/// sandbox that was just installed.
+/// Any one of these failing to open is the denial: `/` always exists, and the
+/// other three are readable by every process that is not confined. The macOS
+/// profile grants `/` on purpose — the child's working directory is there, and
+/// a process that cannot read it is aborted rather than refused — so the
+/// measurement rests on the paths beneath it, which no profile of ours grants.
 #[cfg(unix)]
 fn files_are_denied() -> bool {
     ["/", "/etc/hostname", "/etc/passwd", "/usr/lib"]
