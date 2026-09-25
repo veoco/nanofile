@@ -104,10 +104,11 @@
                     {% endif %}
                 </div>
             </div>
-            {# The policies, and what the job reported last. Behind a disclosure
-               because none of it changes what the list is for, and because a
-               job's own report is diagnostic prose rather than a row anyone
-               scans. A service has neither. #}
+            {# The lifetime counters, the policies, and what the job reported
+               last. Behind a disclosure because none of it changes what the
+               list is for: the row says what the job is, when it runs and how
+               the last run went, and a job's own report is diagnostic prose
+               rather than a row anyone scans. A service has none of it. #}
             {% if row.kind == "job" %}
             <details class="nf-xrow-more">
                 <summary class="nf-toggle">
@@ -115,14 +116,25 @@
                     {{ t.tr("admin.detail_title") }}
                 </summary>
                 <div class="nf-expand flex flex-col gap-2">
+                    {% if !row.counters.is_empty() %}
+                    <p class="text-[10.5px] font-medium uppercase tracking-[0.07em] text-ink-3">
+                        {{ t.tr("admin.detail_counters") }}
+                    </p>
+                    {% for counter in row.counters %}
+                    <div class="nf-kv is-detail" data-counter>
+                        <span class="k">{{ counter.label }}</span>
+                        <span class="v tabular-nums">{{ counter.value }}</span>
+                    </div>
+                    {% endfor %}
+                    {% endif %}
                     {% for detail in row.details %}
-                    <div class="nf-kv">
+                    <div class="nf-kv is-detail">
                         <span class="k">{{ detail.label }}</span>
                         <span class="v">{{ detail.value }}</span>
                     </div>
                     {% endfor %}
                     {% if let Some(message) = row.last_message %}
-                    <div class="nf-kv">
+                    <div class="nf-kv is-detail">
                         <span class="k">{{ t.tr("admin.detail_last_message") }}</span>
                         <span class="v {% if message.failed %}text-err-text{% endif %}"
                               title="{{ message.text }}">{{ message.text }}</span>

@@ -224,6 +224,10 @@ pub struct RegisteredRow {
     pub facts: Vec<FactRow>,
     /// Whether the row has no counters because it has never run.
     pub never_run: bool,
+    /// Lifetime counters, shown inside the row's disclosure. Empty for a
+    /// service and for a job that has never run: zero and "no such number" must
+    /// not look the same.
+    pub counters: Vec<DetailRow>,
     /// The policies the job runs under, shown when the row is opened.
     pub details: Vec<DetailRow>,
     /// What the job reported last, if it has ever run.
@@ -575,34 +579,42 @@ fn job_details(spec: &JobSpec, t: &I18n) -> Vec<DetailRow> {
 }
 
 /// The lifetime counters of a job that has run at least once.
+///
+/// Shown inside the row's disclosure rather than on the row: they are reference
+/// data, while the row is scanned for identity, schedule and the last verdict.
+/// A job that has never run has no counters to show, which is not the same as
+/// showing zeroes.
+fn job_counters(stats: &JobStats, t: &I18n) -> Vec<DetailRow> {
+    if stats.run_count == 0 {
+        return Vec::new();
+    }
+    let count = |label_key: &str, value: u64| DetailRow {
+        label: t.tr(label_key).to_string(),
+        value: value.to_string(),
+    };
+    let mut counters = vec![
+        count("admin.fact_runs", stats.run_count),
+        count("admin.fact_success", stats.success_count),
+        count("admin.fact_error", stats.error_count),
+    ];
+    if stats.total_processed > 0 {
+        counters.push(count("admin.fact_processed", stats.total_processed));
+    }
+    counters
+}
+
+/// What the row itself reports about the last run: when it was, and how long it
+/// took. Empty for a job that has never run.
 fn job_facts(stats: &JobStats, t: &I18n) -> Vec<FactRow> {
     if stats.run_count == 0 {
         return Vec::new();
     }
-    let count = |key: &'static str, label_key: &str, value: u64| FactRow {
-        key,
-        label: t.tr(label_key).to_string(),
-        value: value.to_string(),
-        ts: None,
-    };
-    let mut facts = vec![
-        count("runs", "admin.fact_runs", stats.run_count),
-        count("success", "admin.fact_success", stats.success_count),
-        count("error", "admin.fact_error", stats.error_count),
-    ];
-    if stats.total_processed > 0 {
-        facts.push(count(
-            "processed",
-            "admin.fact_processed",
-            stats.total_processed,
-        ));
-    }
-    facts.push(FactRow {
+    let mut facts = vec![FactRow {
         key: "last_run",
         label: t.tr("admin.task_last_run").to_string(),
         value: String::new(),
         ts: stats.last_run_at,
-    });
+    }];
     if stats.last_duration_ms > 0 {
         facts.push(FactRow {
             key: "duration",
@@ -632,6 +644,7 @@ fn job_row(job: &RegisteredJob, stats: &JobStats, t: &I18n) -> RegisteredRow {
             .map(|state| state_badge(t, state.as_str())),
         facts: job_facts(stats, t),
         never_run: stats.run_count == 0,
+        counters: job_counters(stats, t),
         details: job_details(spec, t),
         last_message: job_message(stats),
         group_index: trigger_group_index(spec.trigger),
@@ -661,6 +674,7 @@ fn service_row(key: ServiceKey, t: &I18n) -> RegisteredRow {
         state: None,
         facts: Vec::new(),
         never_run: false,
+        counters: Vec::new(),
         details: Vec::new(),
         last_message: None,
         group_index: SERVICE_GROUP_INDEX,
@@ -1227,7 +1241,8 @@ mod tests {
             let row = service_row(*key, t);
             assert_eq!(row.kind, "service");
             assert!(row.state.is_none(), "{key:?} claimed a last run");
-            assert!(row.facts.is_empty(), "{key:?} carried counters");
+            assert!(row.facts.is_empty(), "{key:?} carried a last run");
+            assert!(row.counters.is_empty(), "{key:?} carried counters");
             assert!(!row.never_run, "{key:?} is not a job");
             assert!(!row.triggerable, "{key:?} has nothing to trigger");
             assert_eq!(row.group_index, SERVICE_GROUP_INDEX);
@@ -1244,11 +1259,13 @@ mod tests {
             I18n::get(None),
         );
         assert!(row.never_run);
-        assert!(row.facts.is_empty());
+        assert!(row.counters.is_empty());
+        assert!(row.facts.is_empty(), "it has no last run to report");
         assert!(row.state.is_none());
     }
 
-    /// A job that has run reports labelled numbers, never a bare triple.
+    /// A job that has run reports labelled numbers in its disclosure, never a
+    /// bare triple — and the row itself carries only the last run.
     #[test]
     fn a_job_that_has_run_reports_labelled_counters() {
         let stats = JobStats {
@@ -1267,18 +1284,24 @@ mod tests {
         );
         assert!(!row.never_run);
         assert!(row.state.is_none(), "the default state is no state");
-        let keys: Vec<&str> = row.facts.iter().map(|fact| fact.key).collect();
+
+        let counters: Vec<(&str, &str)> = row
+            .counters
+            .iter()
+            .map(|counter| (counter.label.as_str(), counter.value.as_str()))
+            .collect();
         assert_eq!(
-            keys,
+            counters,
             vec![
-                "runs",
-                "success",
-                "error",
-                "processed",
-                "last_run",
-                "duration"
+                ("Runs", "12"),
+                ("Succeeded", "11"),
+                ("Failed", "1"),
+                ("Processed", "37"),
             ]
         );
+
+        let keys: Vec<&str> = row.facts.iter().map(|fact| fact.key).collect();
+        assert_eq!(keys, vec!["last_run", "duration"]);
         let last_run = row
             .facts
             .iter()
@@ -1399,15 +1422,27 @@ mod tests {
         }
     }
 
-    /// A job's policies are written in the reader's language, never left as
-    /// the locale keys they were looked up by — `tr` falls back to the key, so
-    /// a missing string would otherwise be printed verbatim.
+    /// A job's counters and policies are written in the reader's language,
+    /// never left as the locale keys they were looked up by — `tr` falls back
+    /// to the key, so a missing string would otherwise be printed verbatim.
     #[test]
     fn every_detail_is_written_in_the_reader_language() {
+        // A run of everything, so the counters are not the empty case.
+        let stats = JobStats {
+            run_count: 12,
+            success_count: 11,
+            error_count: 1,
+            last_run_at: Some(1_700_000_000),
+            last_duration_ms: 250,
+            total_processed: 37,
+            ..JobStats::default()
+        };
         for t in languages() {
             for key in JobKey::ALL {
                 let spec = crate::tasks::catalog::policy(*key);
-                for detail in job_details(&spec, t) {
+                let counters = job_counters(&stats, t);
+                assert_eq!(counters.len(), 4, "{key:?} has no labelled counters");
+                for detail in job_details(&spec, t).iter().chain(counters.iter()) {
                     assert!(
                         !detail.label.starts_with("admin."),
                         "{key:?} leaked a label key: {}",
@@ -1435,6 +1470,7 @@ mod tests {
         let t = I18n::get(None);
         let service = service_row(ServiceKey::EventListener, t);
         assert!(service.details.is_empty());
+        assert!(service.counters.is_empty());
         assert!(service.last_message.is_none());
 
         let job = job_row(

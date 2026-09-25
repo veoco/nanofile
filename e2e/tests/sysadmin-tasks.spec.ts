@@ -47,7 +47,7 @@ test("the registry groups jobs by how they run", async ({ page }) => {
   // finishes, so it has no run count to show.
   const services = page.locator('main [data-task-group="service"] [data-task-kind="service"]');
   if ((await services.count()) > 0) {
-    await expect(services.first().locator("[data-fact]")).toHaveCount(0);
+    await expect(services.first().locator("[data-counter]")).toHaveCount(0);
     await expect(services.first().locator("form.trigger-form")).toHaveCount(0);
   }
 });
@@ -60,7 +60,33 @@ test("a job that has never run shows no counters", async ({ page }) => {
     .locator('main [data-task-kind="job"]')
     .filter({ hasText: "Has not run yet" });
   test.skip((await never.count()) === 0, "every job has already run on this server");
-  await expect(never.first().locator("[data-fact]")).toHaveCount(0);
+  await expect(never.first().locator("[data-counter]")).toHaveCount(0);
+});
+
+// The lifetime counters are reference data rather than something the list is
+// scanned for, so they are one disclosure away — and labelled when they open,
+// never a bare triple.
+test("a job's counters are labelled behind its disclosure", async ({ page }) => {
+  await page.goto(REGISTRY);
+  await taskRow(page, "share-link-cleanup")
+    .locator('form.trigger-form button[type="submit"]')
+    .click();
+  await page.locator(".js-confirm-ok").click();
+  await page.waitForURL(/\/sysadmin\/tasks\/registered\/\?action=triggered$/);
+
+  // A run has to be recorded before the job reports a counter.
+  await expect
+    .poll(async () => {
+      await page.goto(REGISTRY);
+      return taskRow(page, "share-link-cleanup").locator("[data-counter]").count();
+    })
+    .toBeGreaterThan(0);
+
+  const detail = taskRow(page, "share-link-cleanup").locator("details.nf-xrow-more");
+  await expect(detail.locator("[data-counter]").first()).toBeHidden();
+  await detail.locator("summary").click();
+  await expect(detail).toContainText("Totals");
+  await expect(detail.locator("[data-counter]").first()).toContainText("Runs");
 });
 
 // The policies are a disclosure rather than another line on every row: none of
@@ -69,7 +95,7 @@ test("a job's scheduling policy is one disclosure away", async ({ page }) => {
   await page.goto(REGISTRY);
   const row = taskRow(page, "share-link-cleanup");
   const detail = row.locator("details.nf-xrow-more");
-  await expect(detail.locator("summary")).toContainText("Scheduling and policy");
+  await expect(detail.locator("summary")).toContainText("Stats and policy");
   await expect(detail.locator(".nf-kv").first()).toBeHidden();
 
   await detail.locator("summary").click();
@@ -223,9 +249,21 @@ test("trigger a periodic task manually", async ({ page }) => {
   await expect(row).toBeVisible();
   // A periodic job exposes a trigger button; a service has nothing to run.
   await expect(row.locator("form.trigger-form")).toBeVisible();
-  // A job that has never run says so instead of showing zeroes, so the row's
-  // own text is the only thing that is always there to compare against.
-  const before = (await row.innerText()).trim();
+
+  // What the trigger has to change is the run the job reports, one disclosure
+  // away: the row's visible text is a name, a schedule and a last-run time,
+  // which a fast job can leave reading the same as before.
+  const runs = async () => {
+    await page.goto(REGISTRY);
+    const counter = taskRow(page, "share-link-cleanup")
+      .locator("details.nf-xrow-more")
+      .locator("[data-counter]")
+      .first();
+    if ((await counter.count()) === 0) return 0;
+    await taskRow(page, "share-link-cleanup").locator("details.nf-xrow-more summary").click();
+    return Number((await counter.innerText()).replace(/\D+/g, ""));
+  };
+  const before = await runs();
 
   await row.locator('form.trigger-form button[type="submit"]').click();
   await page.locator(".js-confirm-ok").click();
@@ -237,10 +275,7 @@ test("trigger a periodic task manually", async ({ page }) => {
   // margin, so the banner has to keep its distance.
   expect(await bannerGap(page)).toBeGreaterThanOrEqual(16);
 
-  // The row stops saying "has not run yet" and starts reporting the run.
-  await expect
-    .poll(async () => (await taskRow(page, "share-link-cleanup").innerText()).trim())
-    .not.toBe(before);
+  await expect.poll(runs).toBeGreaterThan(before);
 });
 
 // A browser form must get a page back whatever happens: an unknown task slug
