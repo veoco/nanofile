@@ -330,13 +330,22 @@ fn probe() -> Status {
     if let Outcome::Unavailable(reason) = classify(&run) {
         return Status::Unavailable(reason);
     }
-    let Some(line) = run.stdout.split(|byte| *byte == b'\n').next() else {
-        return Status::Unavailable("the extraction worker said nothing".to_string());
-    };
-    let line = String::from_utf8_lossy(line);
-    match Report::parse(&line) {
+    let line = String::from_utf8_lossy(
+        run.stdout
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap_or_default(),
+    );
+    let line = line.trim();
+    match Report::parse(line) {
         Some(report) => Status::Ready(report),
-        None => Status::Unavailable(format!("unreadable self-test line: {line}")),
+        // A child that never printed its report says why on stderr, and the
+        // probe is the only place that can be read: `tracing` has no subscriber
+        // on this path, so the summary is the whole diagnosis.
+        None => Status::Unavailable(format!(
+            "unreadable self-test line {line:?}: {}",
+            run.summary()
+        )),
     }
 }
 
@@ -406,13 +415,21 @@ enum Child {
 impl Child {
     /// The child's exit code, or `None` while it is still running.
     ///
-    /// A death by signal has no code; `-1` stands in for it, and is not a code
-    /// the child itself produces.
+    /// A death by signal has no code; the negative signal number stands in for
+    /// it, which no exit code can be confused with.
     fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
         match self {
             #[cfg(not(windows))]
             Child::Standard(child) => {
-                Ok(child.try_wait()?.map(|status| status.code().unwrap_or(-1)))
+                use std::os::unix::process::ExitStatusExt;
+                Ok(child.try_wait()?.map(|status| match status.code() {
+                    Some(code) => code,
+                    // A death by signal has no code, so it is reported as the
+                    // negative signal number: `-9` says the kernel killed it,
+                    // `-6` says it aborted, and neither is a code the child
+                    // itself produces.
+                    None => -status.signal().unwrap_or(0),
+                }))
             }
             #[cfg(windows)]
             Child::Windows(child) => child.try_wait(),
@@ -521,6 +538,46 @@ struct Run {
     stdout: Vec<u8>,
     stderr: String,
     timed_out: bool,
+}
+
+impl Run {
+    /// One line saying why a run that should have reported did not.
+    ///
+    /// A loader that cannot map a library, a panic and the kernel each explain
+    /// themselves on the child's stderr, which nothing else prints: the parent
+    /// logs it at `debug`, and the paths that start a child to diagnose it —
+    /// the probe, a CI step — have no subscriber for that to reach.
+    fn summary(&self) -> String {
+        let mut parts = Vec::new();
+        if self.timed_out {
+            parts.push("timed out".to_string());
+        }
+        match self.exit_code {
+            Some(code) if code < 0 => parts.push(format!("killed by signal {}", -code)),
+            Some(code) => parts.push(format!("exit={code}")),
+            None => parts.push("no exit status".to_string()),
+        }
+        parts.push(format!("stdout={} bytes", self.stdout.len()));
+        let stderr = self.stderr.trim();
+        parts.push(if stderr.is_empty() {
+            "stderr=empty".to_string()
+        } else {
+            format!("stderr={}", clipped(stderr, 400))
+        });
+        parts.join(", ")
+    }
+}
+
+/// Cap a diagnostic at a length a log line can carry, on a character boundary.
+fn clipped(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
 }
 
 /// Start the child, hand it the request and collect what it says.
@@ -752,6 +809,37 @@ mod tests {
             office_oxide::limits::max_text_chars(),
             MAX_INDEXED_CONTENT_BYTES
         );
+    }
+
+    /// A child that dies without reporting has to say so in one line: the load
+    /// error, the panic or the signal is the whole diagnosis.
+    #[test]
+    fn a_silent_run_summarises_how_it_died() {
+        let run = |exit_code, stderr: &str, timed_out| Run {
+            exit_code,
+            stdout: Vec::new(),
+            stderr: stderr.to_string(),
+            timed_out,
+        };
+        let killed = run(Some(-9), "  ", false).summary();
+        assert!(killed.contains("killed by signal 9"), "{killed}");
+        assert!(killed.contains("stderr=empty"), "{killed}");
+        assert!(killed.contains("stdout=0 bytes"), "{killed}");
+        let aborted = run(Some(-6), "dyld: Library not loaded: /usr/lib/x", false).summary();
+        assert!(aborted.contains("killed by signal 6"), "{aborted}");
+        assert!(aborted.contains("dyld: Library not loaded"), "{aborted}");
+        assert!(run(Some(125), "", false).summary().contains("exit=125"));
+        assert!(run(None, "", true).summary().contains("timed out"));
+        assert!(run(None, "", false).summary().contains("no exit status"));
+    }
+
+    /// The child may print a page of parser noise; a log line carries a line.
+    #[test]
+    fn a_long_diagnostic_is_clipped_on_a_character_boundary() {
+        assert_eq!(clipped("short", 10), "short");
+        assert_eq!(clipped("abcdef", 3), "abc…");
+        let wide = "é".repeat(4);
+        assert_eq!(clipped(&wide, 5), "éé…", "no half character");
     }
 
     #[test]
