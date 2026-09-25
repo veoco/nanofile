@@ -136,12 +136,11 @@ pub(super) fn confine() -> (Layers, Vec<String>) {
 
     close_extra_descriptors();
 
-    if super::clamp_resources() {
+    let (limits, limits_detail) = super::clamp_resources();
+    if limits {
         layers.limits = true;
-        detail.push(super::limits_detail());
-    } else {
-        detail.push("limits=failed".to_string());
     }
+    detail.push(format!("limits={limits_detail}"));
 
     detail.push(
         if set_no_new_privs() {

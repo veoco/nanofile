@@ -11,6 +11,12 @@
 //! | network | creating a socket | seccomp denylist | Seatbelt profile | — |
 //! | process | `exec`, `fork`, extra processes | seccomp denylist | Seatbelt profile | Job active-process limit |
 //!
+//! macOS is the one platform without an address-space cap: `setrlimit` refuses
+//! to lower `RLIMIT_AS` below what the process already has mapped, and Darwin
+//! does not enforce the limit it does accept. Memory there is bounded by the
+//! parsers' own budgets, and the report says which limits took rather than
+//! which were attempted.
+//!
 //! # Levels and policy
 //!
 //! [`Level`] is what the layers add up to, and the `index.sandbox` setting says
@@ -433,10 +439,19 @@ fn process_is_denied() -> bool {
 /// Clamp the limits that bound what a parser can cost.
 ///
 /// Both the soft and the hard value are set: a soft-only clamp can be raised by
-/// the very process it is meant to bound.
+/// the very process it is meant to bound. The returned detail lists every limit
+/// that took and every one the kernel refused, so a report whose layer is
+/// missing says which limit to look at.
+///
+/// The address-space cap is the one limit that is not required on every
+/// platform. Darwin refuses to lower `RLIMIT_AS` below the space a process
+/// already has mapped — the dyld shared cache alone is larger than the cap —
+/// and does not enforce the limit it does accept, so on macOS the memory bound
+/// is the parsers' own budgets (the PDF stream limit, the office budget and the
+/// 8 MiB text cap) and the cap is reported as refused rather than counted on.
 #[cfg(unix)]
-fn clamp_resources() -> bool {
-    macro_rules! limit {
+fn clamp_resources() -> (bool, String) {
+    macro_rules! clamp {
         ($resource:expr, $soft:expr, $hard:expr) => {{
             let limit = libc::rlimit {
                 rlim_cur: $soft as libc::rlim_t,
@@ -446,24 +461,43 @@ fn clamp_resources() -> bool {
         }};
     }
 
-    let mut ok = true;
-    ok &= limit!(libc::RLIMIT_AS, ADDRESS_SPACE_LIMIT, ADDRESS_SPACE_LIMIT);
-    ok &= limit!(libc::RLIMIT_CPU, CPU_SOFT_SECONDS, CPU_HARD_SECONDS);
-    ok &= limit!(libc::RLIMIT_NOFILE, NOFILE_LIMIT, NOFILE_LIMIT);
+    let address_space = clamp!(libc::RLIMIT_AS, ADDRESS_SPACE_LIMIT, ADDRESS_SPACE_LIMIT);
+    let cpu = clamp!(libc::RLIMIT_CPU, CPU_SOFT_SECONDS, CPU_HARD_SECONDS);
+    let descriptors = clamp!(libc::RLIMIT_NOFILE, NOFILE_LIMIT, NOFILE_LIMIT);
+    let file_size = clamp!(libc::RLIMIT_FSIZE, FILE_SIZE_LIMIT, FILE_SIZE_LIMIT);
     // A crash must not write a core file, and the child has no business writing
     // a file at all: this is the belt to the filesystem layer's braces.
-    ok &= limit!(libc::RLIMIT_FSIZE, FILE_SIZE_LIMIT, FILE_SIZE_LIMIT);
-    ok &= limit!(libc::RLIMIT_CORE, 0, 0);
-    ok
+    let core = clamp!(libc::RLIMIT_CORE, 0, 0);
+
+    let mut detail = Vec::new();
+    detail.push(took(address_space, "as", &ADDRESS_SPACE_LIMIT.to_string()));
+    detail.push(took(
+        cpu,
+        "cpu",
+        &format!("{CPU_SOFT_SECONDS}/{CPU_HARD_SECONDS}"),
+    ));
+    detail.push(took(descriptors, "nofile", &NOFILE_LIMIT.to_string()));
+    detail.push(took(
+        file_size,
+        "fsize",
+        &format!("{}m", FILE_SIZE_LIMIT / (1024 * 1024)),
+    ));
+    detail.push(took(core, "core", "0"));
+
+    let enforced =
+        cpu && descriptors && file_size && core && (address_space || cfg!(target_os = "macos"));
+    (enforced, detail.join(","))
 }
 
-/// The one-line detail a platform reports for its resource limits.
+/// One limit, as the report spells it: `nofile32` when it took, `nofile=refused`
+/// when the kernel said no.
 #[cfg(unix)]
-fn limits_detail() -> String {
-    format!(
-        "limits=as{},cpu{}/{},nofile{}",
-        ADDRESS_SPACE_LIMIT, CPU_SOFT_SECONDS, CPU_HARD_SECONDS, NOFILE_LIMIT
-    )
+fn took(set: bool, name: &str, value: &str) -> String {
+    if set {
+        format!("{name}{value}")
+    } else {
+        format!("{name}=refused")
+    }
 }
 
 /// Whether this process can still spawn a thread.
@@ -505,6 +539,16 @@ fn platform_confine() -> (Layers, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The report names every limit that took and every one the kernel refused,
+    /// so a missing limits layer says which limit to look at.
+    #[cfg(unix)]
+    #[test]
+    fn a_limit_is_reported_by_whether_it_took() {
+        assert_eq!(took(true, "nofile", "32"), "nofile32");
+        assert_eq!(took(true, "cpu", "15/18"), "cpu15/18");
+        assert_eq!(took(false, "as", "1073741824"), "as=refused");
+    }
 
     #[test]
     fn a_level_needs_limits_and_something_else() {

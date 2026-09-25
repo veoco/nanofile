@@ -92,16 +92,20 @@ fn escape(path: &str) -> String {
 
 /// Clamp the child's own resources. The rest of the confinement comes from the
 /// runner.
+///
+/// The address-space cap is expected to be refused here — Darwin will not lower
+/// it below what the process already has mapped — so the report carries it as
+/// `as…=refused` rather than failing the layer for it. Memory is bounded by the
+/// parsers' budgets on this platform.
 #[cfg(target_os = "macos")]
 pub(super) fn confine() -> (Layers, Vec<String>) {
     let mut layers = Layers::default();
     let mut detail = Vec::new();
-    if super::clamp_resources() {
+    let (limits, limits_detail) = super::clamp_resources();
+    if limits {
         layers.limits = true;
-        detail.push(super::limits_detail());
-    } else {
-        detail.push("limits=failed".to_string());
     }
+    detail.push(format!("limits={limits_detail}"));
     (layers, detail)
 }
 
