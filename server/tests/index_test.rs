@@ -1467,6 +1467,13 @@ fn the_extraction_worker_reports_its_confinement() {
         line.contains("text_chars=8388608"),
         "the child must set the parser limits: {line}"
     );
+    // The other half of the answer: the confinement the line above describes is
+    // one the parsers can still work under. A profile or filter that denies a
+    // syscall a reader needs fails here rather than in a release.
+    assert!(
+        line.contains("parse=pdf-ok,docx-ok"),
+        "the confined worker must still read documents: {line}"
+    );
 }
 
 /// Files the extractor cannot turn into text are recorded as skipped, and

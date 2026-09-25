@@ -158,6 +158,9 @@ pub fn run(job: Job, external: External, policy: Policy) -> anyhow::Result<()> {
     }
 
     if job == Job::Selftest {
+        // Parsing is the other half of the answer: the report says what was
+        // installed, this says the installed thing can still read a document.
+        report.detail.push_str(&format!(",parse={}", probe_parse()));
         println!("{}", selftest_line(&report));
         return Ok(());
     }
@@ -212,6 +215,29 @@ fn selftest_line(report: &Report) -> String {
     )
     .trim_end()
     .to_string()
+}
+
+/// Parse the probe documents here, under the confinement just installed.
+///
+/// One whitespace-free verdict per document, so the report stays a line the
+/// parent can parse and a probe step can `grep`. Every way a parser can decline
+/// reads as `unsupported`: a panic caught by [`super::guard`], a document the
+/// reader will not open, a plan that stopped being supported. What a caller can
+/// act on is "this confined worker cannot read documents", and *why* belongs to
+/// the parser's own tests, which can say more than a token can.
+fn probe_parse() -> String {
+    super::PROBE_DOCUMENTS
+        .iter()
+        .map(|document| {
+            let verdict = match super::extract(document.plan, document.bytes.to_vec()) {
+                super::Extracted::Text(text) if text.contains(document.word) => "ok",
+                super::Extracted::Text(_) => "no-text",
+                super::Extracted::Unsupported(_) => "unsupported",
+            };
+            format!("{}-{verdict}", document.name)
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Read one request: magic, plan byte, then the file to end of input.
@@ -1117,6 +1143,15 @@ mod tests {
             interpret(Some(134), b"", "fatal runtime error: stack overflow"),
             Outcome::Failed(reason::FAILED)
         ));
+    }
+
+    /// The self-test's parse step agrees with the parsers on this host. The
+    /// confinement around it is what the probe reports; this is the half that
+    /// says the packaged fixtures still yield the word they are looked for.
+    #[test]
+    fn the_self_test_parses_the_packaged_documents() {
+        configure_parser_limits();
+        assert_eq!(probe_parse(), "pdf-ok,docx-ok");
     }
 
     #[test]

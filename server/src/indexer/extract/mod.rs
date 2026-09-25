@@ -232,6 +232,41 @@ pub fn plan(filename: &str) -> Plan {
     Plan::Sniff
 }
 
+/// One document the worker's self-test parses, in the confined process.
+pub(crate) struct ProbeDocument {
+    /// The name its verdict is reported under.
+    pub(crate) name: &'static str,
+    pub(crate) plan: Plan,
+    /// A word the extracted text must contain.
+    pub(crate) word: &'static str,
+    pub(crate) bytes: &'static [u8],
+}
+
+/// What the self-test parses, and why it is part of the self-test.
+///
+/// The report says the confinement was installed; this says the confined
+/// process can still do the work it exists for. The two are different failures:
+/// a profile or filter that denies a syscall a parser needs shows up here as
+/// `parse=pdf-unsupported`, instead of as a deployment where every document
+/// quietly becomes a skipped file.
+///
+/// The bytes are the fixtures the test suite parses, carried into the binary
+/// because the child is denied every path — it has nothing to open them from.
+pub(crate) const PROBE_DOCUMENTS: &[ProbeDocument] = &[
+    ProbeDocument {
+        name: "pdf",
+        plan: Plan::Document(Document::Pdf),
+        word: "nanofile",
+        bytes: include_bytes!("../../../tests/fixtures/probe.pdf"),
+    },
+    ProbeDocument {
+        name: "docx",
+        plan: Plan::Document(Document::Office(office_oxide::DocumentFormat::Docx)),
+        word: "nanofile",
+        bytes: include_bytes!("../../../tests/fixtures/probe.docx"),
+    },
+];
+
 /// How many bytes of a file the plan needs, or why it cannot be indexed.
 ///
 /// The caller reads at most this much; for a document the value is the whole
