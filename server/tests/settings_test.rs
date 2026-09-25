@@ -975,19 +975,23 @@ async fn the_settings_form_is_flush_with_the_page() {
     );
 
     // `server.addr` is the first key of the Server page's first group; the row
-    // after it is a normal one.
-    let first = row_of(&html, "server.addr");
-    let first_tag = &first[..first.find('>').expect("the row's tag closes")];
-    assert!(
-        !first_tag.contains("border-t"),
-        "a group's first row must not draw a top border: {first_tag}"
-    );
-    let second = row_of(&html, "server.port");
-    let second_tag = &second[..second.find('>').expect("the row's tag closes")];
-    assert!(
-        second_tag.contains("border-t"),
-        "every other row keeps its separator: {second_tag}"
-    );
+    // after it is a normal one. The separator between rows is a stylesheet rule
+    // rather than a per-row class — the filter hides rows, and a hidden row must
+    // not leave the row under it drawing a hairline for a row nobody sees — so
+    // the markup only has to keep the hook that rule counts on, and to stay out
+    // of the way of it.
+    for key in ["server.addr", "server.port"] {
+        let row = row_of(&html, key);
+        let tag = &row[..row.find('>').expect("the row's tag closes")];
+        assert!(
+            tag.contains(&format!(r#"data-setting="{key}""#)),
+            "the row keeps the hook its separator is keyed on: {tag}"
+        );
+        assert!(
+            !tag.contains("border-t"),
+            "the separator is the hidden-aware rule's job, not the row's: {tag}"
+        );
+    }
 }
 
 #[tokio::test]

@@ -1012,10 +1012,24 @@ html:not([data-view]) .seg .js-view-list {
   .nf-cards > .nf-form { @apply rounded-box border border-line bg-panel; }
   .nf-cards > .is-wide { @apply xl:col-span-2; }
 
-  /* A settings page groups its rows under `.nf-sec` headings too, but there the
-     form already pads them, so the heading drops the horizontal padding a
-     `.nf-list` section needs. */
-  .nf-form .nf-sec { padding-left: 0; padding-right: 0; }
+  /* A settings page groups its rows under `.nf-sec` headings too, and there the
+     form is not a panel: nothing else draws the band's sides, so a heading whose
+     text sat flush with its edge and whose left and right were open read as a
+     stripe the page cut off rather than as a heading. The band keeps its own
+     inset (14px, 12px under 640px) and draws its own sides; the rows below stay
+     flush with the title, which is the one place on this page that is inset. */
+  .nf-form .nf-sec {
+    border-left: 1px solid var(--color-line);
+    border-right: 1px solid var(--color-line);
+  }
+
+  /* The rows are separated by the hairline each one carries, so a hidden row
+     would leave the row under it drawing the line that belonged above the hidden
+     one. Counting the visible neighbours instead keeps the filtered page from
+     growing a stray rule under the heading. */
+  .nf-form [data-setting]:not([hidden]) ~ [data-setting]:not([hidden]) {
+    border-top: 1px solid var(--color-line);
+  }
 
   /* A control stops growing with its card: past this a text field is a long
      empty box. `:where()` keeps the specificity at one class so a deliberate

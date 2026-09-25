@@ -33,32 +33,59 @@ test("the admin menu reaches system management", async ({ page }) => {
 });
 
 /**
- * The settings area is the page rather than a card inside it: the group
- * headings and the rows start at the same left edge as the title and the filter
- * above them, instead of being inset by a panel form's padding.
+ * The settings area is the page rather than a card inside it: the rows start at
+ * the same left edge as the title and the filter above them, instead of being
+ * inset by a panel form's padding.
  */
 test("the rows line up with the page header and the filter", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");
   const title = (await page.locator("main .page-title").boundingBox())!;
   const filter = (await page.locator("[data-settings-filter]").boundingBox())!;
-  const heading = (
-    await page.locator('[data-setting-group="server_addresses"] .nf-sec h2').boundingBox()
-  )!;
   const row = (await page.locator('[data-setting="server.addr"]').boundingBox())!;
-  for (const box of [filter, heading, row]) {
+  for (const box of [filter, row]) {
     expect(Math.abs(box.x - title.x)).toBeLessThan(1);
   }
 });
 
 /**
+ * The group heading is the one thing on the page that is inset: the band is
+ * full width and carries its own sides, because nothing else draws them — a
+ * background whose text sits flush with its edge and whose left and right are
+ * open reads as a stripe the page cut off.
+ */
+test("a group heading carries its own sides and inset", async ({ page }) => {
+  await page.goto("/sysadmin/settings/server/");
+  const band = page.locator('[data-setting-group="server_addresses"] .nf-sec');
+  const box = (await band.boundingBox())!;
+  const title = (await page.locator("main .page-title").boundingBox())!;
+  // The band spans the page rather than floating inside it...
+  expect(Math.abs(box.x - title.x)).toBeLessThan(1);
+  // ...and draws the sides the form does not.
+  await expect(band).toHaveCSS("border-left-width", "1px");
+  await expect(band).toHaveCSS("border-right-width", "1px");
+
+  // The label is inset inside the band, so it is no longer against the edge.
+  const heading = (await band.locator("h2").boundingBox())!;
+  expect(heading.x).toBeGreaterThan(box.x + 10);
+});
+
+/**
  * A group heading's lower hairline closes the heading, so the first row under
- * it must not draw a second hairline right below it.
+ * it must not draw a second hairline right below it — including when the
+ * filter has hidden rows, where the visible row is not the first child.
  */
 test("a group heading is not doubled by its first row's border", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");
   const rows = page.locator('[data-setting-group="server_addresses"] [data-setting]');
   await expect(rows.first()).toHaveCSS("border-top-width", "0px");
   await expect(rows.nth(1)).toHaveCSS("border-top-width", "1px");
+
+  // Hide the first row: the row that moves up must not inherit its hairline.
+  await page.locator("[data-settings-filter]").fill("bind port");
+  await expect(rows.first()).toBeHidden();
+  const moved = page.locator('[data-setting="server.port"]');
+  await expect(moved).toBeVisible();
+  await expect(moved).toHaveCSS("border-top-width", "0px");
 });
 
 /**

@@ -141,10 +141,13 @@
                    the setting in a bug report can find it without the page
                    printing it once per row.
 
-                   The group heading's own hairline closes the group it belongs
-                   to, so the first row under it carries no border of its own. #}
+                   Rows are separated by a hairline drawn above every row but the
+                   first, and that is a stylesheet rule rather than a per-row
+                   class: the filter hides rows, and a hidden row must not leave
+                   the row beneath it carrying a hairline for a row nobody
+                   sees. #}
                 <div data-setting="{{ row.key }}" data-setting-search="{{ row.search_text }}"
-                     class="grid grid-cols-1 gap-3 py-3.5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6{% if !loop.first %} border-t border-line{% endif %}">
+                     class="grid grid-cols-1 gap-3 py-3.5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6">
                     <div class="min-w-0">
                         <label class="text-[13px] font-medium text-ink" title="{{ row.key }}"
                                {% if !row.locked && !row.read_only %}for="field-{{ row.key }}"{% endif %}>
