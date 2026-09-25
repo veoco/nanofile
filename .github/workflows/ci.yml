@@ -156,10 +156,21 @@ jobs:
           cargo build --bin nanofile
           ./target/debug/nanofile.exe extract-worker --probe | tee sandbox.txt
           grep -q 'token=restricted' sandbox.txt
+          # The job is the parent's, named at creation, and the child reads its
+          # limits back from it: `,parent` is the mark of that arrangement, and
+          # `limits-missing` is what a job without them would report instead.
           grep -q 'job=memory' sandbox.txt
+          grep -q ',parent' sandbox.txt
           grep -q 'container=appcontainer' sandbox.txt
           grep -q 'files=denied' sandbox.txt
           grep -q 'network=denied' sandbox.txt
+          # The token carries a low integrity label, which is the one bound on
+          # writing that does not depend on an ACL.
+          grep -q 'il=low' sandbox.txt
+          # How many process mitigations the kernel took and the child read
+          # back. The count moves with the Windows build; zero would mean the
+          # API is not working at all.
+          grep -qE 'mitigations=[1-9]' sandbox.txt
           # The far edge of the files layer: the container refuses the user's own
           # paths (above) and reads the system tree, which is the over-grant this
           # configuration has. Asserted rather than left in a comment, so a host
@@ -170,6 +181,32 @@ jobs:
           # Every layer, not `partial|full`: the container is the one this host
           # can lose on its own, and losing it now fails here.
           grep -q 'level=full' sandbox.txt
+          # ... and the confined child can still read a document, which is the
+          # half a layer count cannot say.
+          grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
+          # `bounded`, not `full`: the container reads the system tree it loads
+          # from and writes its own profile store. Asserted so that closing
+          # either — LPAC, or denying the store — is a deliberate change.
+          grep -q 'closure=bounded' sandbox.txt
+
+      # The policy that has to refuse here: `sealed` asks for a confinement with
+      # no residual, and the residuals above cannot be closed on Windows.
+      - name: The sealed policy refuses this host
+        shell: bash
+        run: |
+          if ./target/debug/nanofile.exe extract-worker --probe --policy sealed 2> sealed.txt; then
+            echo "sealed must refuse a confinement with a residual"
+            cat sealed.txt
+            exit 1
+          fi
+          grep -q 'sealed' sealed.txt
+
+      # Parsing *under* the container, which the probe's self-test does but the
+      # whole pipeline does not: a container that denies something a reader
+      # needs, or a mitigation that breaks it, shows up as a document that
+      # cannot be read rather than as a missing layer.
+      - name: Extract documents in the container
+        run: cargo test -p server --test index_test -- document
 
   # ── macOS-only code: the tray back-end, and the Seatbelt profile the
   #    extraction worker runs under. Every other job runs on Linux, where
@@ -205,6 +242,24 @@ jobs:
           grep -q 'network=denied' sandbox.txt
           grep -q 'threads=ok' sandbox.txt
           grep -q 'level=full' sandbox.txt
+          # Starting a program is refused, and the fork the profile has to allow
+          # (the parsers' thread is charged to it) is reported as the residual it
+          # is rather than counted as a process bound.
+          grep -q 'exec=denied' sandbox.txt
+          grep -q 'fork=open' sandbox.txt
+          grep -q 'closure=bounded' sandbox.txt
+          grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
+
+      # `sealed` asks for a confinement with no residual, and `fork=open` is
+      # one this platform cannot close.
+      - name: The sealed policy refuses this host
+        run: |
+          if ./target/debug/nanofile extract-worker --probe --policy sealed 2> sealed.txt; then
+            echo "sealed must refuse a confinement with a residual"
+            cat sealed.txt
+            exit 1
+          fi
+          grep -q 'sealed' sealed.txt
       # Parsing *under* the profile, which the probe above does not do: a
       # profile that denies something the parsers need shows up as a document
       # that cannot be read, not as a missing layer. The fixture also insists
@@ -309,6 +364,45 @@ jobs:
           ./target/debug/nanofile extract-worker --selftest |
             tee /tmp/sandbox.txt
           grep -qE 'level=(full|partial)' /tmp/sandbox.txt
+          grep -qE 'closure=(full|bounded)' /tmp/sandbox.txt
+          grep -q 'parse=pdf-ok,docx-ok' /tmp/sandbox.txt
+          # The calls Landlock cannot govern are this filter's job, and a kernel
+          # without seccomp is the one case where they are not covered.
+          grep -q 'll_gaps=closed' /tmp/sandbox.txt
+          grep -q 'dumpable=off' /tmp/sandbox.txt
+          grep -qE 'seccomp=[0-9]+' /tmp/sandbox.txt
+
+      # The arm64 syscall table is not the x86_64 one: several of the calls the
+      # filter names (the bare path-taking forms) do not exist there, and every
+      # other job here builds x86_64. A tiny crate holding the real module is
+      # enough to type-check the numbers the running kernel would be given.
+      - name: Check the Linux sandbox for aarch64
+        run: |
+          rustup target add aarch64-unknown-linux-gnu
+          mkdir -p /tmp/acheck/src/sandbox
+          cp server/src/indexer/extract/sandbox/mod.rs \
+             server/src/indexer/extract/sandbox/linux.rs \
+             /tmp/acheck/src/sandbox/
+          cat > /tmp/acheck/Cargo.toml <<'EOF'
+          [package]
+          name = "acheck"
+          version = "0.0.0"
+          edition = "2024"
+
+          [dependencies]
+          libc = "0.2"
+
+          [workspace]
+          EOF
+          cat > /tmp/acheck/src/lib.rs <<'EOF'
+          pub mod sandbox;
+
+          pub fn exercise() {
+              let _ = sandbox::confine(sandbox::External::default(), sandbox::Measure::Cheap);
+          }
+          EOF
+          cd /tmp/acheck && CARGO_TARGET_DIR=/tmp/acheck/target \
+            cargo check --target aarch64-unknown-linux-gnu
 
       - name: Run tests
         run: cargo test --workspace -- --nocapture
