@@ -148,6 +148,10 @@ jobs:
       # found, so a Job Object that could not be created or a token the system
       # refused shows up here rather than in a release.
       - name: Run the extraction sandbox probe
+        # `bash`, not the runner's default `pwsh`: this step asserts with `grep`,
+        # and PowerShell fails on neither a native command's non-zero exit code
+        # nor a missing tool the way `bash -eo pipefail` does.
+        shell: bash
         run: |
           cargo build --bin nanofile
           ./target/debug/nanofile.exe extract-worker --probe | tee sandbox.txt
