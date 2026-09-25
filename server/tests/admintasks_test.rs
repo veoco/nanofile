@@ -221,13 +221,16 @@ async fn the_registry_names_the_jobs_it_did_not_register() {
 
     let (_, html) = page(&server, &admin, REGISTRY).await;
     let body = page_content(&html);
-    for (key, _) in &skipped {
-        let marker = format!("data-task-skipped=\"{}\"", key.as_str());
-        assert!(body.contains(&marker), "{key:?} is not reported as missing");
+    for task in &skipped {
+        let marker = format!("data-task-skipped=\"{}\"", task.slug);
+        assert!(
+            body.contains(&marker),
+            "{task:?} is not reported as missing"
+        );
         let row = row_of(body, &marker, "data-task-skipped=\"");
         assert!(
             !row.contains("admin."),
-            "{key:?} reports its reason by locale key"
+            "{task:?} reports its reason by locale key"
         );
     }
     assert!(body.contains("Not registered on this server"));

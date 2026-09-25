@@ -33,7 +33,6 @@ pub enum JobKey {
     GarbageCollection,
     BlockEncryptionConvert,
     IndexCommit,
-    MailDelivery,
     ZipTaskCleanup,
 }
 
@@ -49,13 +48,27 @@ impl JobKey {
         Self::GarbageCollection,
         Self::BlockEncryptionConvert,
         Self::IndexCommit,
-        Self::MailDelivery,
         Self::ZipTaskCleanup,
     ];
 
     /// Look a key up by its stored slug, for recovery from the run table.
     pub fn from_slug(slug: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|key| key.as_str() == slug)
+    }
+
+    /// Locale key of this job's display name.
+    ///
+    /// Derived from the slug rather than tabulated, as the settings catalog
+    /// derives `setting.<key>`: one place decides how a name is spelled, and the
+    /// translation-coverage test walks the declared keys, so a job cannot be
+    /// added without a name in every language.
+    pub fn name_key(self) -> String {
+        format!("admin.job_{}", self.as_str().replace('-', "_"))
+    }
+
+    /// Locale key of the one line saying what this job does.
+    pub fn desc_key(self) -> String {
+        format!("{}_desc", self.name_key())
     }
 
     /// Stable slug used in URLs, logs and stored history.
@@ -70,7 +83,6 @@ impl JobKey {
             Self::GarbageCollection => "gc",
             Self::BlockEncryptionConvert => "block-encryption-convert",
             Self::IndexCommit => "index-commit",
-            Self::MailDelivery => "mail-delivery",
             Self::ZipTaskCleanup => "zip-task-cleanup",
         }
     }
@@ -110,18 +122,36 @@ pub fn retired_job_name_key(slug: &str) -> Option<&'static str> {
 pub enum ServiceKey {
     /// Watches for the events that send mail.
     EventListener,
+    /// Delivers the outbox, and retries what could not be delivered.
+    ///
+    /// A service rather than a job because that is what it is: a loop with no
+    /// owner, no progress and no terminal state. As a job it was a 30-second
+    /// poller that mostly found nothing to do and queued mail waited out its
+    /// tick; now a queue insertion wakes it and the timer only paces retries.
+    MailOutbox,
 }
 
 impl ServiceKey {
     /// Every key, so the admin listing's translation coverage is a test rather
     /// than a hope.
-    pub const ALL: &'static [ServiceKey] = &[Self::EventListener];
+    pub const ALL: &'static [ServiceKey] = &[Self::EventListener, Self::MailOutbox];
 
     /// Stable slug, used in logs and the listing's DOM handle.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::EventListener => "event-listener",
+            Self::MailOutbox => "mail-outbox",
         }
+    }
+
+    /// Locale key of this service's display name.
+    pub fn name_key(self) -> String {
+        format!("admin.service_{}", self.as_str().replace('-', "_"))
+    }
+
+    /// Locale key of the one line saying what this service does.
+    pub fn desc_key(self) -> String {
+        format!("{}_desc", self.name_key())
     }
 }
 
@@ -155,6 +185,40 @@ impl SkipReason {
         Self::IndexOff,
         Self::MailOff,
     ];
+}
+
+/// A job or service the catalog declares that this generation did not register.
+///
+/// Carries the locale key of its name rather than a job key, because the thing
+/// that is missing may be a service: the mail outbox is not a job, and a panel
+/// that could only name missing jobs would have to stay silent about it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkippedTask {
+    /// Stable slug, so the row has a handle that is not its label.
+    pub slug: &'static str,
+    /// Locale key of the name it is known by.
+    pub name_key: String,
+    pub reason: SkipReason,
+}
+
+impl SkippedTask {
+    /// A job this server did not register.
+    pub fn job(key: JobKey, reason: SkipReason) -> Self {
+        Self {
+            slug: key.as_str(),
+            name_key: key.name_key(),
+            reason,
+        }
+    }
+
+    /// A service this server did not start.
+    pub fn service(key: ServiceKey, reason: SkipReason) -> Self {
+        Self {
+            slug: key.as_str(),
+            name_key: key.name_key(),
+            reason,
+        }
+    }
 }
 
 /// How a job comes to run.

@@ -19,11 +19,17 @@ use crate::service::mail::Mailer;
 use crate::tasks::TaskSystem;
 use crate::tasks::registry::RegisteredJob;
 use crate::tasks::run::{JobFailure, Outcome};
-use crate::tasks::spec::{JobKey, JobSpec, ServiceKey, SkipReason, Trigger};
+use crate::tasks::spec::{JobKey, JobSpec, ServiceKey, SkipReason, SkippedTask, Trigger};
 use infra::config::GcConfig;
 use infra::crypto::password_manager::PasswordManager;
 use infra::storage::DynBlockStorage;
 use infra::storage::encrypting_block_store::BlockEncryptionMode;
+
+/// How long the outbox waits before looking for retries.
+///
+/// A queued message is delivered when it is queued — the worker is woken — so
+/// this only paces the messages that failed and are waiting out their backoff.
+const MAIL_RETRY_TICK: Duration = Duration::from_secs(30);
 
 /// Build and install every job this server generation runs.
 ///
@@ -69,7 +75,7 @@ pub fn install_default_jobs(
     // The jobs the catalog declares that this generation does not register, with
     // the reason. Recorded on the task system *after* installing, because
     // installing is what clears the record.
-    let mut skipped: Vec<(JobKey, SkipReason)> = Vec::new();
+    let mut skipped: Vec<SkippedTask> = Vec::new();
 
     // ── Jobs a request submits ───────────────────────────────────────────
     //
@@ -443,31 +449,6 @@ pub fn install_default_jobs(
         }));
     }
 
-    // The outbox drainer is registered unconditionally and checks the live
-    // switch itself, so turning mail on needs no restart.
-    if let Some(mail) = mail {
-        jobs.push(job(JobKey::MailDelivery, {
-            let mail = mail.clone();
-            move |_ctx, _params| {
-                let mail = mail.clone();
-                async move {
-                    if !mail.config_enabled() {
-                        return Ok(Outcome::success("outbound mail is switched off", None));
-                    }
-                    match mail.drain_once().await {
-                        Ok(report) if report.attempted() == 0 && report.pruned == 0 => {
-                            Ok(Outcome::success("no queued mail", None))
-                        }
-                        Ok(report) => {
-                            Ok(Outcome::success(report.summary(), Some(report.delivered)))
-                        }
-                        Err(e) => Err(JobFailure::App(e)),
-                    }
-                }
-            }
-        }));
-    }
-
     jobs.push(job(JobKey::ZipTaskCleanup, |_ctx, _params| async move {
         let dropped =
             crate::handler::web::zip_download::cleanup_expired(chrono::Utc::now().timestamp());
@@ -486,30 +467,41 @@ pub fn install_default_jobs(
     // lets the admin listing say "this server does not run it" instead of
     // showing nothing at all.
     if notification_manager.is_none() {
-        skipped.push((JobKey::TokenExpiryCheck, SkipReason::NotificationsOff));
+        skipped.push(SkippedTask::job(
+            JobKey::TokenExpiryCheck,
+            SkipReason::NotificationsOff,
+        ));
     }
     if !gc_config.enabled {
-        skipped.push((JobKey::GarbageCollection, SkipReason::GcDisabled));
+        skipped.push(SkippedTask::job(
+            JobKey::GarbageCollection,
+            SkipReason::GcDisabled,
+        ));
     }
     if enc_mode != BlockEncryptionMode::Lazy {
-        skipped.push((
+        skipped.push(SkippedTask::job(
             JobKey::BlockEncryptionConvert,
             SkipReason::EncryptionNotLazy,
         ));
     }
     if indexer.is_none() {
-        skipped.push((JobKey::IndexCommit, SkipReason::IndexOff));
+        skipped.push(SkippedTask::job(JobKey::IndexCommit, SkipReason::IndexOff));
     }
     if mail.is_none() {
-        skipped.push((JobKey::MailDelivery, SkipReason::MailOff));
+        // Not a job any more, which is exactly why it has to be reported: the
+        // registry's service group would otherwise just not mention the outbox.
+        skipped.push(SkippedTask::service(
+            ServiceKey::MailOutbox,
+            SkipReason::MailOff,
+        ));
     }
 
     // Install first: it replaces the generation's job set *and* clears the
     // service listing, so anything registered before it would be forgotten.
     tasks.install(jobs, shutdown)?;
 
-    for (key, reason) in skipped {
-        tasks.record_skipped(key, reason);
+    for task in skipped {
+        tasks.record_skipped(task);
     }
 
     // Then resume whatever the previous process left unfinished. Spawned
@@ -518,6 +510,43 @@ pub fn install_default_jobs(
     {
         let tasks = tasks.clone();
         tokio::spawn(async move { tasks.recover().await });
+    }
+
+    // The outbox worker is a service, not a job: a loop with no owner, no
+    // progress and no terminal state. A queued message wakes it immediately, so
+    // mail is not held behind a timer; the tick is what paces retries, which is
+    // the only thing left for a timer to do here.
+    if let Some(mail) = mail {
+        let mail = mail.clone();
+        tasks.spawn_service(ServiceKey::MailOutbox, move |token| async move {
+            loop {
+                if !mail.config_enabled() {
+                    // Nothing can be sent, so there is nothing to pace: wait for
+                    // the setting to change (which nudges) or for the tick.
+                    tokio::select! {
+                        _ = token.cancelled() => break,
+                        _ = mail.wait_for_nudge() => continue,
+                        _ = tokio::time::sleep(MAIL_RETRY_TICK) => continue,
+                    }
+                }
+                match mail.drain_once().await {
+                    Ok(report) => tracing::debug!(
+                        attempted = report.attempted(),
+                        delivered = report.delivered,
+                        "drained the outbox"
+                    ),
+                    // A database failure is worth a line and a retry, not a
+                    // dead worker.
+                    Err(e) => tracing::warn!("could not drain the outbox: {e}"),
+                }
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    _ = mail.wait_for_nudge() => {}
+                    _ = tokio::time::sleep(MAIL_RETRY_TICK) => {}
+                }
+            }
+            tracing::info!(service = ServiceKey::MailOutbox.as_str(), "service stopped");
+        });
     }
 
     // The event listener is a service, not a job: it has no owner, no progress

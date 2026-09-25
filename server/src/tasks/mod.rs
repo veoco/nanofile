@@ -38,7 +38,7 @@ use self::admission::{LoadGauge, LoadSnapshot};
 use self::context::JobContext;
 use self::registry::{JobRegistry, RegisteredJob, RegistryError};
 use self::run::{JobRun, JobState, Params, RunId, Viewer};
-use self::spec::{Dedup, JobKey, OverlapPolicy, Priority, SkipReason};
+use self::spec::{Dedup, JobKey, OverlapPolicy, Priority, SkippedTask};
 use self::store::{RunFilter, RunLimits, RunStore};
 
 pub use self::run::{JobFailure, Origin, Outcome, Progress};
@@ -125,7 +125,7 @@ struct Inner {
     services: RwLock<Vec<ServiceKey>>,
     /// Jobs the catalog declares that this server did not register, with the
     /// reason, so the admin listing can say why rather than showing nothing.
-    skipped: RwLock<Vec<(JobKey, SkipReason)>>,
+    skipped: RwLock<Vec<SkippedTask>>,
     /// Lifetime counters per job.
     stats: RwLock<HashMap<JobKey, JobStats>>,
     /// How busy the server is, for the administrator's view and — once load
@@ -1345,16 +1345,17 @@ impl TaskSystem {
     ///
     /// Called by the setup pass after [`TaskSystem::install`], which clears the
     /// record along with the service listing.
-    pub fn record_skipped(&self, key: JobKey, reason: SkipReason) {
+    pub fn record_skipped(&self, task: SkippedTask) {
         self.inner
             .skipped
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .push((key, reason));
+            .push(task);
     }
 
-    /// Jobs this generation did not register, oldest decision first.
-    pub fn skipped(&self) -> Vec<(JobKey, SkipReason)> {
+    /// Jobs and services this generation did not register, oldest decision
+    /// first.
+    pub fn skipped(&self) -> Vec<SkippedTask> {
         self.inner
             .skipped
             .read()

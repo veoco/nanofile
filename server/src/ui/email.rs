@@ -343,25 +343,19 @@ pub async fn send_test(
     }
 }
 
-/// POST /sysadmin/email/drain/ — run the delivery task immediately.
+/// POST /sysadmin/email/drain/ — ask the outbox worker to deliver now.
+///
+/// A nudge rather than a job: delivery is a long-lived worker, so "deliver now"
+/// is the same thing the queue insertion does. Nothing is run inside this
+/// request, and nothing is recorded as a run — what the button controls is a
+/// worker that is always running, not a task that starts.
 pub async fn drain_now(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     require_admin_csrf(&state, &user, &form).await?;
-    // Queued rather than run here: the old scheduler ran the whole drain inside
-    // this request.
-    state
-        .tasks
-        .submit(
-            crate::tasks::spec::JobKey::MailDelivery,
-            None,
-            serde_json::Value::Null,
-            "mail delivery",
-            None,
-        )
-        .await?;
+    state.mail.nudge();
     Ok((
         StatusCode::FOUND,
         [("Location", "/sysadmin/email/?action=drained")],

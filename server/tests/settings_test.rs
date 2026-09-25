@@ -457,19 +457,20 @@ async fn a_setting_captured_at_startup_reports_the_hook_that_applies_it() {
 }
 
 #[tokio::test]
-async fn the_outbox_drainer_stays_registered_while_mail_is_off() {
+async fn the_outbox_drainer_checks_the_switch_itself() {
     let server = TestServer::start().await;
-    // `TestServer::start` leaves `[email] enabled` false. The job still has to
-    // exist, or turning mail on from the page would need the restart this
-    // release removes.
+    // `TestServer::start` leaves `[email] enabled` false. The worker still has
+    // to be running, or turning mail on from the page would need the restart
+    // this release removes: it reads the switch on every pass.
     assert!(!server.state.config().email.enabled);
+    server.state.mail.nudge();
     assert!(
         server
             .state
             .tasks
-            .job(server::tasks::spec::JobKey::MailDelivery)
-            .is_some(),
-        "the mail drainer must be registered regardless of the switch"
+            .services()
+            .contains(&server::tasks::spec::ServiceKey::MailOutbox),
+        "the outbox worker must run regardless of the switch"
     );
 }
 

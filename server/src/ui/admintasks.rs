@@ -289,28 +289,20 @@ const SERVICE_GROUP_INDEX: usize = 4;
 /// settings catalog derives `setting.<key>`: one place decides how a name is
 /// spelled, and the coverage test walks the declared keys, so a job cannot be
 /// added without a name in every language.
-fn job_key(key: JobKey, suffix: &str) -> String {
-    format!("admin.job_{}{suffix}", key.as_str().replace('-', "_"))
-}
-
-fn service_key(key: ServiceKey, suffix: &str) -> String {
-    format!("admin.service_{}{suffix}", key.as_str().replace('-', "_"))
-}
-
 fn job_name_key(key: JobKey) -> String {
-    job_key(key, "")
+    key.name_key()
 }
 
 fn job_desc_key(key: JobKey) -> String {
-    job_key(key, "_desc")
+    key.desc_key()
 }
 
 fn service_name_key(key: ServiceKey) -> String {
-    service_key(key, "")
+    key.name_key()
 }
 
 fn service_desc_key(key: ServiceKey) -> String {
-    service_key(key, "_desc")
+    key.desc_key()
 }
 
 /// The compact form of an interval: `1h`, `5m`, `30s`.
@@ -939,16 +931,18 @@ async fn render_registered(
     );
     let groups = build_groups(rows);
 
-    // A job this server does not run is the absence an operator notices first,
-    // so say which ones and why rather than leaving them out silently.
+    // A job or service this server does not run is the absence an operator
+    // notices first, so say which ones and why rather than leaving them out
+    // silently. The record carries the locale key of the name, so a missing
+    // service reads as a name like a missing job does.
     let skipped = state
         .tasks
         .skipped()
         .into_iter()
-        .map(|(key, reason)| SkippedRow {
-            slug: key.as_str(),
-            name: t.tr(&job_name_key(key)).to_string(),
-            reason: t.tr(skip_reason_key(reason)).to_string(),
+        .map(|task| SkippedRow {
+            slug: task.slug,
+            name: t.tr(&task.name_key).to_string(),
+            reason: t.tr(skip_reason_key(task.reason)).to_string(),
         })
         .collect();
 

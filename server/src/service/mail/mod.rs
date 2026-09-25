@@ -146,6 +146,14 @@ pub struct Mailer {
     repos: Arc<Repositories>,
     cipher: Arc<TokenCipher>,
     config: crate::settings::RuntimeConfig,
+    /// Wakes the outbox worker the moment a message is queued, so a
+    /// notification does not wait out the retry tick.
+    ///
+    /// A permit, not a queue: `notify_one` stores one if nobody is waiting, and
+    /// a drain that finds the outbox empty is harmless, so no signal needs to
+    /// survive two drains. That is what makes it safe to call from the queueing
+    /// path, which must not block or fail because delivery is busy.
+    wake: Arc<tokio::sync::Notify>,
 }
 
 impl Mailer {
@@ -158,7 +166,23 @@ impl Mailer {
             repos,
             cipher,
             config,
+            wake: Arc::new(tokio::sync::Notify::new()),
         }
+    }
+
+    /// Ask the outbox worker to drain now.
+    ///
+    /// Called when a message is queued and by the administrator's "deliver
+    /// queued mail" button. Cheap and infallible: a signal that arrives while
+    /// the worker is draining is remembered, so a message queued during a drain
+    /// is not left for the retry tick.
+    pub fn nudge(&self) {
+        self.wake.notify_one();
+    }
+
+    /// Wait until somebody asks for a drain.
+    pub async fn wait_for_nudge(&self) {
+        self.wake.notified().await;
     }
 
     /// Whether `[email] enabled` is set. Says nothing about whether the SMTP
@@ -309,10 +333,13 @@ impl Mailer {
         }
 
         let now = chrono::Utc::now().timestamp();
-        let row = self
-            .queue(&settings, kind, to, user_id, language, &params, now)
+        self.queue(&settings, kind, to, user_id, language, &params, now)
             .await?;
-        self.spawn_delivery(settings, row);
+        // One delivery path: the outbox worker takes the row from here, so
+        // there is no second attempt racing this one for the same message. The
+        // report compiles and the message is on its way before the caller's
+        // request finishes, because the worker is already waiting.
+        self.nudge();
         Ok(())
     }
 
@@ -555,24 +582,6 @@ impl Mailer {
         )
         .await
     }
-
-    /// Deliver a queued message without making the caller wait for it.
-    fn spawn_delivery(&self, settings: EmailSettings, row: email_message::Model) {
-        let repos = self.repos.clone();
-        let cipher = self.cipher.clone();
-        let hello_name = self.hello_name();
-        tokio::spawn(async move {
-            let now = chrono::Utc::now().timestamp();
-            if let Err(e) = queue::attempt(&repos, &cipher, &settings, &hello_name, &row, now).await
-            {
-                tracing::warn!(
-                    "the queued {} message (id {}) could not be attempted: {e}",
-                    row.kind,
-                    row.id
-                );
-            }
-        });
-    }
 }
 
 #[cfg(test)]
@@ -717,6 +726,40 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// Queueing a message wakes the outbox worker. This is what replaced the
+    /// 30-second poll: a notification is delivered when it is queued, not at the
+    /// next tick.
+    #[tokio::test]
+    async fn queueing_a_message_wakes_the_outbox_worker() {
+        let (_repos, mailer) = mailer_with(ready_config()).await;
+        let mailer = Arc::new(mailer);
+
+        mailer
+            .notify(
+                MailKind::NewLogin,
+                "user@example.com",
+                Some(1),
+                Some("en"),
+                MailParams::default(),
+            )
+            .await;
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), mailer.wait_for_nudge())
+            .await
+            .expect("queueing a message wakes the worker");
+    }
+
+    /// A nudge that arrives while nobody is waiting is remembered, so a message
+    /// queued while the worker is mid-drain is not left for the retry tick.
+    #[tokio::test]
+    async fn a_nudge_is_not_lost_while_the_worker_is_busy() {
+        let (_repos, mailer) = mailer_with(ready_config()).await;
+        mailer.nudge();
+        tokio::time::timeout(std::time::Duration::from_secs(1), mailer.wait_for_nudge())
+            .await
+            .expect("a nudge taken before the wait still wakes it");
     }
 
     #[tokio::test]

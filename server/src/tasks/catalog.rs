@@ -89,7 +89,6 @@ pub fn policy(key: JobKey) -> JobSpec {
         // failure cannot leave much uncommitted, and long enough that the pass
         // stops being most of what the run list holds.
         JobKey::IndexCommit => notable(housekeeping(key, "index commit", fixed_timer(120))),
-        JobKey::MailDelivery => housekeeping(key, "mail delivery", fixed_timer(30)),
         JobKey::ZipTaskCleanup => notable(housekeeping(key, "zip task cleanup", fixed_timer(600))),
 
         JobKey::GarbageCollection => JobSpec {
@@ -299,15 +298,16 @@ mod tests {
         }
     }
 
-    /// Jobs whose lateness has a cost must never be gated on idle.
+    /// A job whose lateness has a cost must never be gated on idle. The index
+    /// commit is the one left: the outbox is a service now, and it decides for
+    /// itself when to look at the queue.
     #[test]
     fn latency_sensitive_jobs_are_never_deferred() {
-        for key in [JobKey::IndexCommit, JobKey::MailDelivery] {
-            assert!(
-                policy(key).quiet.is_none(),
-                "{key:?} is latency sensitive and must run on time"
-            );
-        }
+        let key = JobKey::IndexCommit;
+        assert!(
+            policy(key).quiet.is_none(),
+            "{key:?} is latency sensitive and must run on time"
+        );
     }
 
     /// A deferral cap of zero means "may never run", which is only honest for
