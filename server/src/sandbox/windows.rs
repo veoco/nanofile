@@ -102,17 +102,23 @@
 //! decided by ACEs that name its own package SID, so a helper somewhere the user
 //! installed it needs an explicit grant — and not only on the file: the walk to
 //! it needs traverse on every directory on the way, which is what
-//! [`add_path_access`] adds. That is enough to *read* a per-user helper, and it
-//! is measured: the child opens the file it was granted and reports
+//! [`add_path_access`] adds. That is enough to *read* a per-user helper, and it is
+//! measured: the child opens the file it was granted and reports
 //! `helper=allowed`.
 //!
-//! It is not enough to *start* one. A CI host reports
-//! `helper=allowed,…,parse=media-unavailable(Access is denied)`: the container
-//! opened the helper and `CreateProcess` refused it, while the same probe's
-//! token-only rung — no container — ran it. A helper in the system tree or under
-//! `Program Files` does start, which is what the CI probe uses. So on Windows the
-//! helper has to be installed where the container already reaches programs, and
-//! the settings page reports the other case rather than hiding it.
+//! It is not enough to *start* one, and the location is not the reason. A CI host
+//! reports `helper=allowed,…,parse=media-unavailable(Access is denied)` for a
+//! helper under the workspace *and* for a copy under `Program Files`, while the
+//! same probe's token-only rung — no container — runs it. So inside this
+//! container the worker can open the program it was granted and `CreateProcess`
+//! refuses it, wherever the program is. What is left to try is on the container
+//! side rather than the ACL: whether the less privileged container is what
+//! refuses a grandchild (the plain container is the same token without the
+//! `ALL APPLICATION PACKAGES` opt-out), or whether creating an AppContainer
+//! process needs something the container's own token does not have. Until that is
+//! settled, media thumbnails on Windows are off and the settings page says so —
+//! the report carries both facts (`helper=allowed`, `parse=media-unavailable`)
+//! rather than a claim that the helper ran.
 //!
 //! # References
 //!

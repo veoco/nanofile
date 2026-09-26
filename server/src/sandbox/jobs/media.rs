@@ -232,16 +232,16 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
     Err(last)
 }
 
-/// The command that starts the helper.
+/// The command that starts the helper, with the path macOS needs.
 ///
-/// macOS is the one platform where the standard library starts a program with
-/// `posix_spawn`, and a Seatbelt profile that grants `process-exec` as a literal
-/// refuses that path: the fileport machinery it goes through is not the
-/// operation the profile allows, so the spawn comes back `EPERM` while the same
-/// profile lets the child read the very binary it may not start. Setting a
-/// `pre_exec` hook — empty, because the hook is only what makes the library take
-/// the other path — turns it into the `fork` and `exec` the grant is written
-/// for. The closure must be async-signal-safe, and doing nothing is.
+/// The standard library starts a program with `posix_spawn` there, and fork+exec
+/// is the path a literal `process-exec` grant is written for: an empty
+/// `pre_exec` hook is what selects it. The hook itself must be
+/// async-signal-safe, and doing nothing is.
+///
+/// Both paths report the same refusal on macOS today — see the module docs on
+/// what this profile does not yet do on that platform — so this is not what
+/// stands between the media worker and a helper there.
 fn helper_command(helper: &Path) -> Command {
     #[allow(unused_mut)]
     let mut command = Command::new(helper);

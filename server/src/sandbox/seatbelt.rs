@@ -20,6 +20,20 @@
 //! confined, but nothing bounds how many there are. The child says so (`fork=`
 //! in its report), which is the note the settings page puts beside the process
 //! item rather than a second, stronger grade.
+//!
+//! # The media profile's helper
+//!
+//! The one profile that starts a program has a grant for it — `process-exec` as a
+//! `(literal …)` for the helper and for the interpreter a script helper names, and
+//! `file-read*`/`file-map-executable` for the helper, its directory and the trees
+//! a packaged one loads from. What CI measures today is that the child can *read*
+//! the program (`helper=allowed`) and that the exec comes back `Operation not
+//! permitted`, for a system binary and for a packaged ffmpeg alike, and with
+//! either the library's `posix_spawn` path or `fork`+`exec`. The grant is written
+//! as narrowly as it can be, so what is left is not the grant: it is what a
+//! Seatbelt profile applied to *this* process allows a second generation to do.
+//! Until that is settled, media thumbnails on macOS are off, and the report and
+//! the settings page say so rather than claiming a helper that never ran.
 
 #[cfg(target_os = "macos")]
 use super::Protections;
