@@ -599,20 +599,19 @@ jobs:
       - name: Check for known vulnerabilities
         run: cargo audit --ignore RUSTSEC-2023-0071
 
-  # ── Tests (linux only, fastest) ─────────────────────────────────────
-  test:
-    name: Tests
+  # ── The Linux sandbox's own report ──────────────────────────────────
+  # Its own job rather than the head of the `test` job, where it was: the
+  # ffmpeg install and the three reports below are 146s of the 449s that job
+  # spent, and none of them depends on the suite. As a sibling they run beside
+  # it instead of in front of it.
+  sandbox:
+    name: Linux sandbox
     runs-on: ubuntu-latest
     needs: [changes, lint]
     if: needs.changes.outputs.rust == 'true'
-    # Debug info is most of what `rustc` writes and `ld` has to move: this job
-    # links 74 integration-test binaries against the whole server crate, and
-    # nothing here reads a symbol. A failing test still reports its own
-    # `file:line`, because that comes from `panic!`'s location rather than from
-    # debug info — only a `RUST_BACKTRACE` would be poorer. Note this is the
-    # `debug` key, not `debug-assertions`: the suite still runs with
-    # `debug_assert!` enabled. Set per job, so local profiles and the nightly
-    # release build are untouched.
+    # Same `debug` reduction as `test`, and deliberately identical values:
+    # rust-cache keys on `CARGO*`, so matching them keeps this job and `test`
+    # on one Linux cache entry rather than two.
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -628,16 +627,20 @@ jobs:
         run: npm ci
 
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        # `--no-install-recommends`: without it apt pulls 99 packages and
+        # 12.4 MB, most of them video drivers (`i965-va-driver`,
+        # `libnvidia-encode1`) and subtitle libraries no assertion here can
+        # reach. The encoder is a dependency, not a recommendation.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
-      # The sandbox's own report, before the suite: it says which layers this
-      # kernel gave the worker and why, which is the first thing to look at when
-      # a document test fails. `full` is asserted rather than `full|partial`
-      # because `partial` now means "resource limits and no file access, with
-      # something else missing": a runner whose kernel lost Landlock would grade
-      # `none`, and by default that host does not parse documents at all. A CI
-      # runner silently dropping to a weaker grade is the thing this step exists
-      # to catch, so it must not be accepted by the assertion.
+      # This report says which layers the kernel gave the worker and why, which
+      # is the first thing to look at when a document test fails. `full` is
+      # asserted rather than `full|partial` because `partial` now means
+      # "resource limits and no file access, with something else missing": a
+      # runner whose kernel lost Landlock would grade `none`, and by default
+      # that host does not parse documents at all. A CI runner silently
+      # dropping to a weaker grade is the thing this step exists to catch, so
+      # it must not be accepted by the assertion.
       - name: Report the document extraction sandbox
         run: |
           cargo build --bin nanofile
@@ -773,6 +776,46 @@ jobs:
           EOF
           cd /tmp/acheck && CARGO_TARGET_DIR=/tmp/acheck/target \
             cargo check --target aarch64-unknown-linux-gnu
+
+  # ── Tests (linux only, fastest) ─────────────────────────────────────
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: [changes, lint]
+    if: needs.changes.outputs.rust == 'true'
+    # Debug info is most of what `rustc` writes and the linker has to move: this
+    # job builds 74 integration-test binaries against the whole server crate,
+    # and nothing here reads a symbol. A failing test still reports its own
+    # `file:line`, because that comes from `panic!`'s location rather than from
+    # debug info — only a `RUST_BACKTRACE` would be poorer. Note this is the
+    # `debug` key, not `debug-assertions`: the suite still runs with
+    # `debug_assert!` enabled. Set per job, so local profiles and the nightly
+    # release build are untouched.
+    #
+    # What `Run tests` spends its 272s on, measured rather than assumed: ~110s
+    # building those 74 binaries (~1.5s each, and `lld` does not shorten it),
+    # ~25s the server crate and its dependencies, ~130s the 1916 tests. The
+    # second and third are what splitting the targets across runners would cut;
+    # this repository is public, so the minutes cost nothing.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          shared-key: "nanofile"
+
+      - name: Install Tailwind CSS
+        run: npm ci
+
+      # `thumbnail_sandbox_test` starts ffmpeg and skips itself when the host
+      # has none, so keeping this installed is what keeps that coverage real
+      # rather than merely green.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Run tests
         run: cargo test --workspace -- --nocapture
