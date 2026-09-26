@@ -162,6 +162,37 @@ impl Start {
     }
 }
 
+/// The rungs the ladder tried and got no report from, appended to the report.
+///
+/// A fallback that leaves no trace is the thing this is for: the strongest
+/// creation is attempted, its child is created and says nothing, the next rung is
+/// tried and answers — and without this the only surviving fact is that a weaker
+/// creation was used, with no way to tell a container the loader refused from a
+/// child that never came back inside its timeout. Only the summary of each
+/// attempt is kept, whitespace-free and clipped, because this travels in the same
+/// line as the measurement it explains.
+fn with_skipped_rungs(mut report: Report, skipped: &[String]) -> Report {
+    /// Enough to name the failure, not enough for a stderr dump: the line also
+    /// carries the measurement, and the full text is on the warning beside it.
+    const MAX: usize = 240;
+
+    for (index, why) in skipped.iter().enumerate() {
+        let token: String = why
+            .chars()
+            .map(|character| {
+                if character.is_whitespace() || character == ',' {
+                    '_'
+                } else {
+                    character
+                }
+            })
+            .take(MAX)
+            .collect();
+        report.detail.push_str(&format!(",skipped{index}={token}"));
+    }
+    report
+}
+
 /// The facts about one launch that only the parent can see, appended to its report.
 ///
 /// A child measures its own token, its own limits and its own refusals. What it
@@ -877,8 +908,27 @@ fn probe(profile: Profile) -> (Start, Status) {
     let mut failures: Vec<String> = Vec::new();
     for &start in rungs() {
         match probe_on(&invocation, profile, grants, start) {
-            Ok(report) => return (start, accept(with_parent_facts(report, start))),
-            Err(why) => failures.push(format!("{}: {why}", start.label())),
+            Ok(report) => {
+                return (
+                    start,
+                    accept(with_skipped_rungs(
+                        with_parent_facts(report, start),
+                        &failures,
+                    )),
+                );
+            }
+            Err(why) => {
+                // Said out loud as well as carried in the report: an operator
+                // reading the log at startup wants the reason the strongest
+                // creation was passed over, not only the grade it left behind.
+                tracing::warn!(
+                    profile = profile.as_str(),
+                    rung = start.label(),
+                    reason = why.as_str(),
+                    "the sandbox worker did not report on this creation; trying the next"
+                );
+                failures.push(format!("{}: {why}", start.label()));
+            }
         }
     }
 
