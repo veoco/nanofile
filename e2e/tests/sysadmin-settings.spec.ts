@@ -130,6 +130,10 @@ test("the sandbox page shows the measured grade and items", async ({ page }) => 
       page.locator(`[data-sandbox-item="sandbox.item_${item}"]`),
     ).toBeVisible();
   }
+  // The media worker is its own child with its own grade: the profile that
+  // cannot have the process item says so on its own line.
+  await expect(page.locator("[data-sandbox-media]")).toBeVisible();
+  await expect(page.locator("[data-sandbox-media-state]")).toBeVisible();
   // The panel names a grade and an item state rather than a locale key.
   const body = (await page.locator("[data-sandbox-status]").innerText()).trim();
   expect(body).not.toContain("sandbox.grade_");

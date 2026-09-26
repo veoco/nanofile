@@ -84,20 +84,49 @@ pub(super) fn args(exe: &Path, profile: Profile, grants: Grants<'_>) -> Vec<Stri
 /// measurement of the files item checks.
 ///
 /// The media profile is the one addition: it may execute the configured helper
-/// and read the helper's image and the scratch source the parent wrote. Both are
-/// literals, so the grant reaches exactly those two files and no directory
-/// beneath them.
+/// and read the helper's image and the scratch source the parent wrote. The
+/// `process-exec` grant is a literal, so it reaches exactly that one file.
+///
+/// What a helper needs *beyond* its own image is read and map, never execute: a
+/// packaged ffmpeg links against its own tree and dyld will not start it without
+/// those paths, so the helper's own directory and the trees the package managers
+/// install into are granted `file-read*` and `file-map-executable`. That is the
+/// same shape as the Linux grant — libraries are readable, and the only program
+/// that may be started is still the helper the parent named.
 pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> String {
     let exe = escape(&exe.to_string_lossy());
     let mut extra = String::new();
     if profile.runs_helper() {
-        if let Some(helper) = grants.helper {
-            let helper = escape(&helper.to_string_lossy());
+        if let Some(path) = grants.helper {
+            let helper = escape(&path.to_string_lossy());
             extra.push_str(&format!(
                 " (allow process-exec (literal \"{helper}\")) \
                  (allow file-read* (literal \"{helper}\")) \
                  (allow file-map-executable (literal \"{helper}\"))"
             ));
+            if let Some(directory) = path.parent() {
+                let directory = escape(&directory.to_string_lossy());
+                extra.push_str(&format!(
+                    " (allow file-read* file-map-executable (subpath \"{directory}\"))"
+                ));
+            }
+            for tree in HELPER_LIBRARY_TREES {
+                extra.push_str(&format!(
+                    " (allow file-read* file-map-executable (subpath \"{tree}\"))"
+                ));
+            }
+            // A helper that is a script needs its own interpreter started before
+            // its code runs. That path is a literal too, so the grant is the
+            // helper, its interpreter and the trees a helper loads from — no
+            // directory anywhere is executable.
+            if let Some(interpreter) = super::shebang_interpreter(path) {
+                let interpreter = escape(&interpreter.to_string_lossy());
+                extra.push_str(&format!(
+                    " (allow process-exec (literal \"{interpreter}\")) \
+                     (allow file-read* (literal \"{interpreter}\")) \
+                     (allow file-map-executable (literal \"{interpreter}\"))"
+                ));
+            }
         }
         if let Some(source) = grants.source {
             let source = escape(&source.to_string_lossy());
@@ -124,6 +153,14 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
 fn escape(path: &str) -> String {
     path.replace('\\', "\\\\").replace('"', "\\\"")
 }
+
+/// The trees a helper installed by a package manager keeps its libraries in.
+///
+/// Homebrew on both architectures and MacPorts. Granted `file-read*` and
+/// `file-map-executable` and never `process-exec`: dyld has to map a library to
+/// start the helper at all, and starting a *program* out of one of these trees
+/// is still refused, which is what keeps the process grant a literal.
+const HELPER_LIBRARY_TREES: &[&str] = &["/opt/homebrew", "/usr/local", "/opt/local"];
 
 /// Clamp the child's own resources. The rest of the confinement comes from the
 /// runner.
@@ -233,8 +270,9 @@ mod tests {
     }
 
     /// The media profile is the one that may execute the configured helper, and
-    /// it may read exactly the helper and the scratch source it was handed —
-    /// never a directory beneath them, and still never a write.
+    /// it may read the helper, the scratch source it was handed and the trees a
+    /// packaged helper keeps its libraries in — but `process-exec` stays a
+    /// literal, so starting a *program* reaches the one file the parent named.
     #[test]
     fn only_the_media_profile_may_execute_the_helper() {
         let helper = Path::new("/usr/bin/ffmpeg");
@@ -263,11 +301,67 @@ mod tests {
             media.contains("(allow file-map-executable (literal \"/usr/bin/ffmpeg\"))"),
             "{media}"
         );
-        // Literals, not subpaths: the grant reaches the two files and nothing
-        // else, and it is still no write.
-        assert!(!media.contains("(subpath \"/usr/bin\")"));
+        // The helper's own directory and the package-manager trees are readable
+        // and mappable — a dynamically linked helper cannot start without them —
+        // and never executable: `process-exec` has no `subpath` anywhere.
+        assert!(
+            media.contains("(allow file-read* file-map-executable (subpath \"/usr/bin\"))"),
+            "{media}"
+        );
+        for tree in HELPER_LIBRARY_TREES {
+            assert!(
+                media.contains(&format!(
+                    "(allow file-read* file-map-executable (subpath \"{tree}\"))"
+                )),
+                "{tree} is granted for the loader: {media}"
+            );
+        }
+        assert!(
+            !media.contains("process-exec (subpath"),
+            "no directory may be executable: {media}"
+        );
         assert!(!media.contains("file-write"));
         assert!(!media.contains("network"));
+    }
+
+    /// A helper that is a script names its interpreter on its `#!` line, and that
+    /// interpreter is the only other program the media profile may start. The
+    /// documents profile names neither.
+    #[test]
+    fn a_script_helper_names_the_one_other_program_that_may_run() {
+        let path = std::env::temp_dir().join(format!(
+            "nanofile-seatbelt-{}-{:?}.sh",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, b"#!/bin/sh\nexit 0\n").expect("write");
+        let grants = Grants {
+            helper: Some(path.as_path()),
+            source: None,
+        };
+
+        let media = profile_text(Path::new("/opt/nanofile/nanofile"), Profile::Media, grants);
+        assert!(
+            media.contains("(allow process-exec (literal \"/bin/sh\"))"),
+            "{media}"
+        );
+        assert!(media.contains("(allow file-read* (literal \"/bin/sh\"))"));
+        assert!(
+            !media.contains("process-exec (subpath"),
+            "the interpreter is a literal, not a tree: {media}"
+        );
+
+        let document = profile_text(
+            Path::new("/opt/nanofile/nanofile"),
+            Profile::Documents,
+            grants,
+        );
+        assert!(
+            !document.contains("/bin/sh"),
+            "a documents profile starts nothing: {document}"
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 
     /// The runner is what confines files, the network and process creation, so

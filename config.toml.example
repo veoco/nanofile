@@ -217,6 +217,9 @@ avatar_dir = "data/avatars"
 max_storage_bytes = 0
 # ffmpeg binary used to generate video thumbnails. Video files keep showing a
 # play-icon placeholder when this binary isn't installed. Playback works without it.
+# The sandbox worker is what executes it: the media profile may run this file and
+# the loader the kernel starts it with, and nothing else. Saving a new value from
+# the admin UI re-resolves that grant, so the next request uses the new binary.
 ffmpeg_path = "ffmpeg"
 # Max concurrent in-flight resumable (Content-Range) uploads tracked by the temp
 # manager (0 = unlimited). Prevents abandoned chunked uploads from exhausting memory.

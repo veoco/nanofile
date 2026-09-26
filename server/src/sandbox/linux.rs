@@ -21,9 +21,9 @@
 //! 6. seccomp last, because Landlock's own syscalls must happen first.
 
 use std::mem::size_of;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use super::{Grants, Profile, Protections};
+use super::{Grants, Profile, Protections, shebang_interpreter};
 
 // ── prctl ───────────────────────────────────────────────────────────────────
 const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
@@ -500,31 +500,37 @@ struct LandlockPathBeneath {
 
 /// Add the media profile's read and execute rules.
 ///
-/// The helper file gets `execute` and `read`; the fixed system library trees get
-/// `read` and `execute` — the kernel executes the dynamic linker itself out of
-/// one of them before the helper's own code runs, so `read` alone is not enough
-/// — and the scratch source gets `read` alone. A path that is not there is
-/// skipped — a 32-bit library directory on a 64-bit host, an Intel cryptex path
-/// — rather than failing the ruleset over a rule that grants nothing.
+/// `execute` is granted to exactly two things: the helper the parent named, and
+/// the interpreter the kernel runs before the helper's own code (an ELF
+/// interpreter, or the interpreter a script helper's `#!` line names). The
+/// directories around them get `read` alone, because Landlock grants are
+/// hierarchical: `execute` on the helper's directory is `execute` on every
+/// program in it, which is the whole userland when the helper is `/usr/bin/ffmpeg`
+/// and `/usr/lib/git-core` when it is not. The library trees are a `read` grant
+/// for the same reason — the helper's libraries live there, and nothing in them
+/// is this profile's to run.
+///
+/// The scratch source gets `read` alone. A path that is not there is skipped —
+/// a 32-bit library directory on a 64-bit host, an interpreter for another
+/// architecture — rather than failing the ruleset over a rule that grants
+/// nothing.
 fn add_helper_rules(ruleset: i64, grants: Grants<'_>) -> usize {
     let mut added = 0;
     if let Some(helper) = grants.helper {
-        added += add_path_rule(ruleset, helper, LL_EXECUTE | LL_READ_FILE) as usize;
-        // The helper may sit beside its own libraries.
+        added += add_path_rule(ruleset, helper, helper_file_access()) as usize;
+        for interpreter in helper_interpreters(helper) {
+            added += add_path_rule(ruleset, &interpreter, helper_interpreter_access()) as usize;
+        }
+        // The helper may sit beside its own libraries, which is a read.
         if let Some(directory) = helper.parent() {
-            added +=
-                add_path_rule(ruleset, directory, LL_EXECUTE | LL_READ_FILE | LL_READ_DIR) as usize;
+            added += add_path_rule(ruleset, directory, helper_directory_access()) as usize;
         }
     }
     if let Some(source) = grants.source {
         added += add_path_rule(ruleset, source, LL_READ_FILE) as usize;
     }
     for directory in HELPER_LIBRARY_DIRS {
-        added += add_path_rule(
-            ruleset,
-            Path::new(directory),
-            LL_EXECUTE | LL_READ_FILE | LL_READ_DIR,
-        ) as usize;
+        added += add_path_rule(ruleset, Path::new(directory), helper_library_access()) as usize;
     }
     for file in HELPER_LIBRARY_FILES {
         added += add_path_rule(ruleset, Path::new(file), LL_READ_FILE) as usize;
@@ -535,6 +541,57 @@ fn add_helper_rules(ruleset: i64, grants: Grants<'_>) -> usize {
         added += add_path_rule(ruleset, Path::new(path), *access) as usize;
     }
     added
+}
+
+/// What the helper's own file is granted: run it, and read the image the kernel
+/// is about to execute.
+const fn helper_file_access() -> u64 {
+    LL_EXECUTE | LL_READ_FILE
+}
+
+/// What the interpreter the kernel runs before the helper gets.
+///
+/// A file, never a directory: this is the one program that has to be executable
+/// so that the helper can be.
+const fn helper_interpreter_access() -> u64 {
+    LL_EXECUTE | LL_READ_FILE
+}
+
+/// What the directory the helper sits in gets: the libraries beside it, and no
+/// program in it.
+const fn helper_directory_access() -> u64 {
+    LL_READ_FILE | LL_READ_DIR
+}
+
+/// What a system library tree gets.
+///
+/// Deliberately without `execute`. Where it was granted, an exploited helper
+/// could start any program in `/usr/lib`, and no library is something this
+/// profile runs.
+const fn helper_library_access() -> u64 {
+    LL_READ_FILE | LL_READ_DIR
+}
+
+/// The programs the kernel runs before the helper's own code, which have to be
+/// executable for the helper to be.
+///
+/// The static tree covers the glibc and musl interpreters of the architectures
+/// this file pins; a helper that is a script names its own interpreter on its
+/// `#!` line, and that path is added on top. A path that is not there grants
+/// nothing, so listing an interpreter for a distribution this host is not costs
+/// one skipped rule.
+fn helper_interpreters(helper: &Path) -> Vec<PathBuf> {
+    let mut interpreters: Vec<PathBuf> = Vec::new();
+    if let Some(named) = shebang_interpreter(helper) {
+        interpreters.push(named);
+    }
+    for path in HELPER_INTERPRETERS {
+        let path = PathBuf::from(path);
+        if !interpreters.contains(&path) {
+            interpreters.push(path);
+        }
+    }
+    interpreters
 }
 
 /// The device files the media helper may open, and with what rights.
@@ -555,6 +612,25 @@ const HELPER_LIBRARY_DIRS: &[&str] = &[
 
 /// The loader's own cache, which is a file rather than a directory.
 const HELPER_LIBRARY_FILES: &[&str] = &["/etc/ld.so.cache"];
+
+/// The ELF interpreters, which the kernel executes out of the library trees.
+///
+/// This is where the `execute` right the library directories used to carry
+/// belongs: the trees are for reading libraries, and one interpreter file is
+/// what a dynamically linked helper cannot start without.
+const HELPER_INTERPRETERS: &[&str] = &[
+    // glibc
+    "/lib64/ld-linux-x86-64.so.2",
+    "/lib/ld-linux.so.2",
+    "/lib/ld-linux-aarch64.so.1",
+    "/lib/ld-linux-armhf.so.3",
+    "/lib/ld-linux-loongarch-lp64d.so.1",
+    "/lib/ld-linux-riscv64-lp64d.so.1",
+    // musl, which names its interpreter after the architecture
+    "/lib/ld-musl-x86_64.so.1",
+    "/lib/ld-musl-aarch64.so.1",
+    "/lib/ld-musl-riscv64.so.1",
+];
 
 /// One `landlock_add_rule` for a path, or nothing when the path is absent.
 fn add_path_rule(ruleset: i64, path: &Path, access: u64) -> bool {
@@ -943,6 +1019,95 @@ const MEDIA_ALLOWED: &[libc::c_long] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `execute` reaches the helper and the interpreter the kernel runs before
+    /// it, and no directory. A grant on a directory is a grant on every program
+    /// beneath it, which for `/usr/bin/ffmpeg` is the whole userland.
+    #[test]
+    fn only_the_helper_and_its_interpreter_may_be_executed() {
+        assert_eq!(helper_file_access() & LL_EXECUTE, LL_EXECUTE);
+        assert_eq!(helper_file_access() & LL_READ_FILE, LL_READ_FILE);
+        assert_eq!(helper_interpreter_access() & LL_EXECUTE, LL_EXECUTE);
+        for (name, access) in [
+            ("the helper's directory", helper_directory_access()),
+            ("a system library tree", helper_library_access()),
+        ] {
+            assert_eq!(access & LL_EXECUTE, 0, "{name} must not be executable");
+            assert_eq!(
+                access & LL_READ_FILE,
+                LL_READ_FILE,
+                "{name} must stay readable"
+            );
+            assert_eq!(access & LL_READ_DIR, LL_READ_DIR, "{name} must be listable");
+        }
+    }
+
+    /// A script helper's interpreter is read from its own `#!` line, and only an
+    /// absolute path counts.
+    #[test]
+    fn a_script_helper_names_its_own_interpreter() {
+        let path = std::env::temp_dir().join(format!(
+            "nanofile-shebang-{}-{:?}.sh",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+
+        std::fs::write(&path, b"#!/bin/dash\nexit 0\n").expect("write");
+        assert_eq!(shebang_interpreter(&path), Some(PathBuf::from("/bin/dash")));
+
+        // A bare name is not a path, and the kernel does not search `PATH` for
+        // one either.
+        std::fs::write(&path, b"#!dash\nexit 0\n").expect("write");
+        assert_eq!(shebang_interpreter(&path), None);
+
+        // Nor is an ELF helper a script.
+        std::fs::write(&path, b"\x7fELF\x02\x01\x01").expect("write");
+        assert_eq!(shebang_interpreter(&path), None);
+
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(shebang_interpreter(Path::new("/nonexistent-helper")), None);
+    }
+
+    /// The interpreter list is the helper's own first, then the static tree,
+    /// without repeating a path the helper already named.
+    #[test]
+    fn the_interpreter_list_carries_the_helper_s_own_first() {
+        let path = std::env::temp_dir().join(format!(
+            "nanofile-interp-{}-{:?}.sh",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, b"#! /lib64/ld-linux-x86-64.so.2\n").expect("write");
+
+        let interpreters = helper_interpreters(&path);
+        assert_eq!(
+            interpreters.first(),
+            Some(&PathBuf::from("/lib64/ld-linux-x86-64.so.2"))
+        );
+        assert_eq!(
+            interpreters
+                .iter()
+                .filter(|path| *path == &PathBuf::from("/lib64/ld-linux-x86-64.so.2"))
+                .count(),
+            1,
+            "a path the helper named is not listed twice"
+        );
+        assert!(
+            interpreters
+                .iter()
+                .any(|path| path == &PathBuf::from("/lib/ld-linux-aarch64.so.1")),
+            "the static tree is still there for a helper that names nothing"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            helper_interpreters(Path::new("/nonexistent-helper")),
+            HELPER_INTERPRETERS
+                .iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn the_landlock_mask_grows_with_the_abi() {

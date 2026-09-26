@@ -135,14 +135,24 @@ allow `fork` for the parser's thread, the Windows container reads the system
 tree it loads from, and the media worker may execute the configured `ffmpeg`
 and read only the scratch file it was handed.
 
+The media worker is graded on its own line, and it is **Partial** on every
+platform by design: it exists to start a program, and every way of starting one
+copies the process first, so it cannot carry the process item the document and
+image profiles carry. What bounds it instead is the file layer — only the helper
+and the interpreter the kernel runs before it may be executed, never a directory
+— and the time limits, which bound the copies. Raising `sandbox.min_level` to
+`full` therefore disables media thumbnails, and the page says so.
+
 Two settings govern it. `sandbox.enabled` is the master switch: with it off,
 none of those features run, and nothing falls back to parsing inside the server
 process. `sandbox.min_level` is the grade the host must reach — `full`,
 `partial` (the default) or `none`; below it the features are disabled and the
 page says why. A host that is not Full still runs them, with a warning.
 
-`storage.ffmpeg_path` names the helper the media profile may execute. A
-container may need the Landlock syscalls allowed for the grade to be Full.
+`storage.ffmpeg_path` names the helper the media profile may execute. Saving it
+re-resolves the grant through the same hook as the two settings above, so the
+next media request runs the binary that was just configured. A container may
+need the Landlock syscalls allowed for the grade to be Full.
 
 ## Security
 

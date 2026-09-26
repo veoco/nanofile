@@ -129,10 +129,25 @@
                 <span class="text-ink-2">{{ t.tr("sandbox.status_min") }}</span>
                 <span>{{ sandbox.min_level }}</span>
             </div>
-            <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center justify-between gap-2" data-sandbox-media>
                 <span class="text-ink-2">{{ t.tr("sandbox.status_media") }}</span>
-                <span class="badge {{ sandbox.media.class }}">{{ sandbox.media.label }}</span>
+                <span class="flex items-center gap-2">
+                    {# Its own grade: the media profile cannot have the process
+                       item, so it grades below the profile above on every
+                       platform, and hiding that would undo the point of the
+                       row. #}
+                    {% if let Some(grade) = sandbox.media.grade %}
+                    <span class="badge {{ sandbox.media.grade_class }}" data-sandbox-media-grade>{{ grade }}</span>
+                    {% endif %}
+                    <span class="badge {{ sandbox.media.class }}" data-sandbox-media-state>{{ sandbox.media.label }}</span>
+                </span>
             </div>
+            {% for note in sandbox.media.notes %}
+            <p class="desc" data-sandbox-media-note>{{ note }}</p>
+            {% endfor %}
+            {% if let Some(reason) = sandbox.media.reason %}
+            <p class="desc" data-sandbox-media-reason>{{ reason }}</p>
+            {% endif %}
         </div>
 
         {# The one warning: off, unavailable, below the minimum, or merely not

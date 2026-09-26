@@ -434,6 +434,14 @@ async fn a_setting_captured_at_startup_reports_the_hook_that_applies_it() {
             "true",
             infra::settings::Hook::MailDrain,
         ),
+        // The media helper is a grant, not a command line: the sandbox has to
+        // re-resolve it, which is the same hook the sandbox's own settings use.
+        (
+            Section::Storage,
+            "storage.ffmpeg_path",
+            "ffmpeg-on-the-path",
+            infra::settings::Hook::Sandbox,
+        ),
     ] {
         let outcome = settings
             .save(section, &form(&[(key, value)]), None)
@@ -449,6 +457,18 @@ async fn a_setting_captured_at_startup_reports_the_hook_that_applies_it() {
             "{key} is not restart-only"
         );
     }
+
+    // Leave the process-global helper where the fixture put it: what this test
+    // is about is the hook, and a helper that does not exist would follow the
+    // rest of this binary's tests around.
+    settings
+        .save(
+            Section::Storage,
+            &form(&[("storage.ffmpeg_path", "ffmpeg")]),
+            None,
+        )
+        .await
+        .expect("restore the configured helper");
 
     // Running every hook must be idempotent and must not panic.
     server
@@ -1194,6 +1214,30 @@ async fn the_sandbox_page_shows_the_measured_grade_and_items() {
             html.contains(&format!("data-sandbox-item=\"sandbox.item_{item}\"")),
             "the {item} protection is not shown"
         );
+    }
+    // The media worker is its own child with its own grade: the profile that
+    // cannot have the process item has to say so rather than borrow the grade
+    // above it, and the facts that explain it are notes, not prose in a log.
+    assert!(html.contains("data-sandbox-media"), "no media row");
+    assert!(
+        html.contains("data-sandbox-media-state"),
+        "the media row shows no state"
+    );
+    // A profile that answered shows its own grade, and — when the helper it may
+    // start actually ran — the note that says which program that is. A probe
+    // that could not run says why instead, which is the other half of the same
+    // contract; a host with no helper reaches this row with neither.
+    if !html.contains("data-sandbox-media-reason") {
+        assert!(
+            html.contains("data-sandbox-media-grade"),
+            "the media row shows no grade of its own"
+        );
+        if html.contains("parse=media-ok") {
+            assert!(
+                html.contains("data-sandbox-media-note"),
+                "the media row carries no note for the helper it may start"
+            );
+        }
     }
     // The panel names a grade and labels each item, rather than rendering the
     // locale key it came from. The grade key is never an attribute value, so

@@ -49,6 +49,25 @@ async fn the_media_profile_confines_itself() {
                 "the confined worker must still run the helper: {}",
                 report.detail
             );
+            // The process item is the one this profile cannot have: it starts a
+            // program by definition. The report says so instead of claiming a
+            // bound the profile does not have, and the helper it *may* start is
+            // a fact beside it.
+            assert!(
+                !report.protections.process,
+                "the media profile must not claim the process item: {}",
+                report.detail
+            );
+            assert!(
+                report.detail.contains("helper=allowed"),
+                "the helper grant must be reported: {}",
+                report.detail
+            );
+            assert!(
+                report.detail.contains("fork=open"),
+                "the fork the media profile needs must be measured and said: {}",
+                report.detail
+            );
         }
         server::sandbox::worker::Status::Unavailable(why) => {
             panic!("the media sandbox is unavailable: {why}")

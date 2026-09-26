@@ -196,6 +196,12 @@ jobs:
       # with the helper it will actually be given. Skipped when the runner has no
       # ffmpeg: the profile is otherwise reported as having no helper, which is a
       # fact about the host rather than a broken build.
+      #
+      # `level=partial` and `process=open` are the point of the row: this profile
+      # starts a program by definition — that is what a helper is — so it cannot
+      # carry the process item and must not pretend to. `helper=allowed` is the
+      # fact beside it, and `parse=media-ok` is the effect that proves the grant
+      # reaches the binary.
       - name: Probe the media sandbox profile
         shell: bash
         run: |
@@ -207,9 +213,10 @@ jobs:
           ./target/debug/nanofile.exe extract-worker --probe --profile media --ffmpeg "$FFMPEG" \
             | tee media.txt
           grep -q 'profile=media' media.txt
-          grep -q 'level=full' media.txt
+          grep -q 'level=partial' media.txt
+          grep -q 'process=open' media.txt
+          grep -q 'helper=allowed' media.txt
           grep -q 'parse=media-ok' media.txt
-          grep -q 'helper_grants=' media.txt
 
       # Parsing *under* the container, which the probe's self-test does but the
       # whole pipeline does not: a container that denies something a reader
@@ -266,6 +273,32 @@ jobs:
       # insists the worker confines itself before the tests run.
       - name: Extract documents under the profile
         run: cargo test -p server --test index_test -- document
+
+      # The media profile is the one that may execute a helper, and until this
+      # step existed nothing ran it on this platform: its Seatbelt text was
+      # unit-tested and never applied. The probe runs the profile's own
+      # self-test, so a helper whose libraries are not inside the granted trees
+      # shows up here as `media-unavailable` rather than as a thumbnail that
+      # quietly never appears. Skipped when the runner has no ffmpeg.
+      - name: Report the media sandbox profile
+        run: |
+          FFMPEG="$(command -v ffmpeg || true)"
+          if [ -z "$FFMPEG" ]; then
+            echo "no ffmpeg on this runner; skipping the media profile probe"
+            exit 0
+          fi
+          ./target/debug/nanofile extract-worker \
+            --probe --profile media --ffmpeg "$FFMPEG" | tee /tmp/media.txt
+          grep -q 'profile=media' /tmp/media.txt
+          # The profile cannot have the process item, and says so.
+          grep -q 'level=partial' /tmp/media.txt
+          grep -q 'process=open' /tmp/media.txt
+          grep -q 'helper=allowed' /tmp/media.txt
+          # Starting a program other than the helper stays refused. Seatbelt
+          # refuses it with EPERM, which is the denial this reads.
+          grep -q 'exec=denied' /tmp/media.txt
+          # ... and the confined helper still starts.
+          grep -q 'parse=media-ok' /tmp/media.txt
 
   # ── Frontend tests (pure JS, no npm deps) ──────────────────────────
   frontend-test:
@@ -379,15 +412,25 @@ jobs:
       # ffmpeg installed (the step above the suite), so the probe runs it under
       # the profile, prints what the grants installed, and reads a document's
       # worth of proof that the confined helper still starts.
+      #
+      # The last two assertions are the narrowing this profile needed: `exec` is
+      # granted to the helper and its interpreter, never to a directory, so the
+      # child's own attempt to start `/bin/true` is refused by the files layer
+      # (`exec=denied`) even though ffmpeg runs. `process=open` is the item that
+      # follows from the profile's job: it starts a program, so it cannot claim
+      # the process protection the document profile claims.
       - name: Report the media sandbox profile
         run: |
           ./target/debug/nanofile extract-worker \
             --selftest --profile media --ffmpeg "$(command -v ffmpeg)" |
             tee /tmp/media.txt
           grep -q 'profile=media' /tmp/media.txt
-          grep -qE 'level=(full|partial)' /tmp/media.txt
+          grep -q 'level=partial' /tmp/media.txt
+          grep -q 'process=open' /tmp/media.txt
+          grep -q 'helper=allowed' /tmp/media.txt
           grep -q 'parse=media-ok' /tmp/media.txt
           grep -qE 'helper_grants=[1-9]' /tmp/media.txt
+          grep -q 'exec=denied' /tmp/media.txt
 
       # The arm64 syscall table is not the x86_64 one: several of the calls the
       # filter names (the bare path-taking forms) do not exist there, and every

@@ -204,8 +204,23 @@ pub struct SandboxItemView {
 
 /// The media profile's line: it is a second child with its own report.
 pub struct SandboxMediaView {
+    /// What the media worker is doing, already translated.
     pub label: String,
     pub class: &'static str,
+    /// The media profile's own grade, when it reported one.
+    ///
+    /// Its own because it is its own child: this is the profile that starts a
+    /// program by definition, so it grades below the document profile on every
+    /// platform, and saying so is the point of the row.
+    pub grade: Option<String>,
+    /// `badge-*` for [`SandboxMediaView::grade`].
+    pub grade_class: &'static str,
+    /// The notes on the media report, already translated.
+    pub notes: Vec<String>,
+    /// Why the media profile is not available, when it is not. Shown beside the
+    /// row rather than only inside the raw report: a min-level that the media
+    /// profile can never reach is the common cause, and it is not a fault.
+    pub reason: Option<String>,
     pub detail: String,
 }
 
@@ -434,29 +449,57 @@ fn sandbox_view(t: &I18n, service: &crate::settings::SettingsService) -> Sandbox
     };
 
     // The media profile is a second child with its own report: it may execute
-    // the helper where nothing else may, so it is shown on its own line.
-    let media = match worker::capability(Profile::Media) {
-        Ok(report) if report.detail.contains("media-ok") => SandboxMediaView {
-            label: t.tr("sandbox.media_ok").to_string(),
-            class: "badge-green",
-            detail: report.detail,
-        },
-        Ok(report) if report.detail.contains("media-no-helper") => SandboxMediaView {
-            label: t.tr("sandbox.media_no_helper").to_string(),
-            class: "badge-gray",
-            detail: report.detail,
-        },
-        Ok(report) => SandboxMediaView {
-            label: t.tr("sandbox.media_failed").to_string(),
-            class: "badge-red",
-            detail: report.detail,
-        },
+    // the helper where nothing else may, so it is shown on its own line — with
+    // its own grade, because it is the profile that cannot have the process item
+    // and therefore grades below the one above it on every platform.
+    let mut media_level = None;
+    let mut media = match worker::capability(Profile::Media) {
+        Ok(report) => {
+            media_level = Some(report.level());
+            let (label, class) = if report.detail.contains("media-ok") {
+                (t.tr("sandbox.media_ok"), "badge-green")
+            } else if report.detail.contains("media-no-helper") {
+                (t.tr("sandbox.media_no_helper"), "badge-gray")
+            } else {
+                (t.tr("sandbox.media_failed"), "badge-red")
+            };
+            SandboxMediaView {
+                label: label.to_string(),
+                class,
+                grade: Some(t.tr(level_label(report.level())).to_string()),
+                grade_class: level_class(report.level()),
+                notes: report
+                    .notes()
+                    .into_iter()
+                    .map(|note| t.tr(media_note_label(note)).to_string())
+                    .collect(),
+                reason: None,
+                detail: report.detail,
+            }
+        }
         Err(why) => SandboxMediaView {
             label: t.tr("sandbox.media_unavailable").to_string(),
             class: "badge-red",
+            grade: None,
+            grade_class: "badge-red",
+            notes: Vec::new(),
+            reason: Some(why.clone()),
             detail: why,
         },
     };
+    // A minimum the media profile can never reach is not a fault to hunt: the
+    // profile starts a program by definition, so with `sandbox.min_level` above
+    // what it grades, every media request is refused. Saying so here is the
+    // difference between "media thumbnails are off" and "media thumbnails are
+    // off and here is the setting that did it".
+    if enabled
+        && let Some(level) = media_level
+        && level < min_level
+    {
+        media.label = t.tr("sandbox.media_below_min").to_string();
+        media.class = "badge-red";
+        media.reason = Some(t.tr("sandbox.media_below_min_reason").to_string());
+    }
 
     SandboxView {
         enabled,
@@ -512,6 +555,19 @@ fn note_label(note: &str) -> &'static str {
         "writes" => "sandbox.note_writes",
         "metadata" => "sandbox.note_metadata",
         _ => "sandbox.note_ll_gaps",
+    }
+}
+
+/// The note key for the media row, where `fork` means something else.
+///
+/// On the document profile it is a platform concession that still leaves the
+/// bound on starting programs; on the media profile the fork *is* how the helper
+/// is started, so its note says what actually bounds the copies instead of
+/// claiming a bound that is not there.
+fn media_note_label(note: &str) -> &'static str {
+    match note {
+        "fork" => "sandbox.note_media_fork",
+        other => note_label(other),
     }
 }
 
@@ -963,6 +1019,36 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    /// The media row reads `fork` differently from the document profile's
+    /// process item: there the fork is how the helper is started, so it gets
+    /// its own sentence, and every other note keeps the shared one.
+    #[test]
+    fn the_media_row_has_its_own_sentence_for_fork() {
+        assert_eq!(media_note_label("fork"), "sandbox.note_media_fork");
+        assert_eq!(media_note_label("helper"), note_label("helper"));
+        assert_eq!(media_note_label("ll_gaps"), note_label("ll_gaps"));
+        assert_eq!(
+            media_note_label("something_else"),
+            note_label("something_else")
+        );
+        assert_eq!(note_label("fork"), "sandbox.note_fork");
+    }
+
+    /// The notes belong to the item they weaken, so the page shows each one
+    /// exactly once and under the right protection.
+    #[test]
+    fn a_note_is_shown_under_the_item_it_weakens() {
+        assert!(note_belongs("fork", "process"));
+        assert!(note_belongs("helper", "process"));
+        assert!(note_belongs("system_tree", "files"));
+        assert!(note_belongs("writes", "files"));
+        assert!(note_belongs("metadata", "files"));
+        assert!(note_belongs("ll_gaps", "files"));
+        assert!(!note_belongs("helper", "files"));
+        assert!(!note_belongs("system_tree", "process"));
+        assert!(!note_belongs("unknown", "process"));
     }
 
     #[test]

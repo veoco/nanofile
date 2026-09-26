@@ -7,9 +7,19 @@
 //! | Item | What it bounds | Linux | macOS | Windows |
 //! |---|---|---|---|---|
 //! | limits | memory, CPU seconds, descriptors, file size | `RLIMIT_AS` | `setrlimit` (mapped space plus the cap) | Job Object memory cap |
-//! | files | reading or writing any path | Landlock, zero grants (scoped grants for media) | Seatbelt profile | AppContainer |
+//! | files | reading or writing any path | Landlock, zero grants (the helper, its interpreter and the source for media) | Seatbelt profile | AppContainer |
 //! | network | creating a socket | seccomp denylist, Landlock TCP rights | Seatbelt profile | AppContainer with no capabilities |
-//! | process | `exec`, `fork`, extra processes | seccomp denylist (`exec` allowed only for the media helper) | Seatbelt profile, `exec` only (`process-fork` is allowed) | Job active-process limit, plus the kernel's child-process policy |
+//! | process | `exec`, `fork`, extra processes | seccomp denylist (`exec` allowed only for the media helper and its loader) | Seatbelt profile, `exec` only (`process-fork` is allowed) | Job active-process limit, plus the kernel's child-process policy |
+//!
+//! The process item is the one the media profile cannot have. That profile
+//! exists to start a program — that is what the helper is — and every platform
+//! starts one the same way, by copying the process first, so a media child that
+//! denied both would deny its own job. Its report therefore says the item is
+//! *not* in place, and the grade is `partial`: what bounds the helper is the
+//! files layer (only the helper and the interpreter the kernel runs before it
+//! may be executed) and what bounds the copies is the CPU and wall-clock limit
+//! the parent enforces, which is a note and not a fourth protection. The
+//! document and image profiles deny both outright and do grade `full`.
 //!
 //! Memory is the one limit each platform has to be told about differently. Linux
 //! takes the cap as an address-space limit outright; Windows caps committed
@@ -44,10 +54,10 @@
 //! container denies the user's own files and the network but reads the system
 //! tree it loads from, and macOS's profile is a deny-by-default text with
 //! `process-fork` allowed because the parsers' thread needs it. Those are the
-//! residuals [`Facts`] carries — `fork=`, `system=`, `writes=`, `metadata=`,
-//! `ll_gaps=` — and they are *notes on the item they weaken*, not a fourth
-//! grade: an operator reads "进程创建: 有（注：macOS 允许 fork）" rather than
-//! having to understand a second, stronger scale.
+//! residuals [`Report::notes`] carries — `fork=`, `helper=`, `system=`,
+//! `writes=`, `metadata=`, `ll_gaps=` — and they are *notes on the item they
+//! weaken*, not a fourth grade: an operator reads "进程创建: 有（注：macOS 允许
+//! fork）" rather than having to understand a second, stronger scale.
 //!
 //! # Claims are measured
 //!
@@ -253,6 +263,10 @@ pub struct Protections {
     /// Sockets cannot be created.
     pub network: bool,
     /// Programs cannot be started and processes cannot be multiplied.
+    ///
+    /// Never set for [`Profile::Media`], which starts the helper and the copy
+    /// that leads to it by definition: the page then says the item is missing
+    /// for that profile rather than claiming a bound the profile cannot have.
     pub process: bool,
 }
 
@@ -640,6 +654,33 @@ impl Grants<'_> {
     }
 }
 
+/// The interpreter a script helper's `#!` line names, when it has one.
+///
+/// A helper can be a script, and every platform that runs one has to allow the
+/// program the kernel starts before the script's own code: the `#!` line is where
+/// that path is written down, so it is read here rather than guessed at in a
+/// list.
+///
+/// Only an absolute path counts, and a bare name is not how the kernel resolves a
+/// shebang either — it does not search `PATH`. `#!/usr/bin/env ffmpeg` therefore
+/// names `env` and not `ffmpeg`: the second program is one the grant does not
+/// reach, which is the caller's to configure away rather than a reason to widen
+/// the grant.
+pub(crate) fn shebang_interpreter(helper: &Path) -> Option<std::path::PathBuf> {
+    use std::io::Read as _;
+
+    let mut head = [0u8; 256];
+    let mut file = std::fs::File::open(helper).ok()?;
+    let read = file.read(&mut head).ok()?;
+    let line = std::str::from_utf8(&head[..read]).ok()?;
+    let rest = line.strip_prefix("#!")?;
+    let program = rest
+        .split(['\n', ' ', '\t'])
+        .find(|token| !token.is_empty())?;
+    let path = Path::new(program);
+    path.is_absolute().then(|| path.to_path_buf())
+}
+
 /// Apply every protection this platform offers to the current process.
 ///
 /// Must be called on the child's only thread and before the request is read:
@@ -722,6 +763,29 @@ pub fn confine(external: External, profile: Profile, grants: Grants, measure: Me
                 // a measurement that did not happen.
                 None => detail.push("process=unmeasured".to_string()),
             }
+        }
+    }
+
+    // The media profile's process item, and the helper it exists to start.
+    //
+    // The item is cleared whatever the platform installed. This profile starts
+    // a program by definition, and every way of starting one copies the process
+    // first, so it cannot claim what the document and image profiles claim; the
+    // grade that follows is `partial`, and the settings page says which item is
+    // missing rather than implying a bound the profile cannot have. The `fork`
+    // fact the tier above measured is the note that goes with it.
+    //
+    // The helper is a *fact* rather than a protection: the grant took unless a
+    // platform said it did not, and the effect — the helper actually running —
+    // is what the probe reports as `parse=`.
+    if profile.runs_helper() {
+        protections.process = false;
+        if grants.helper.is_some()
+            && !detail
+                .iter()
+                .any(|fact| fact == "helper_grants=0" || fact.starts_with("helper-grant-refused"))
+        {
+            detail.push("helper=allowed".to_string());
         }
     }
 
@@ -962,6 +1026,15 @@ fn process_facts() -> ProcessFacts {
     /// The copy's code for "`execve` failed for some other reason": the syscall
     /// itself was allowed, so this says nothing about the sandbox.
     const OTHER: libc::c_int = 3;
+    /// The errors a confinement layer refuses an `exec` with.
+    ///
+    /// `EPERM` is what a seccomp filter returns and what a Seatbelt denial looks
+    /// like, and `EACCES` is what Landlock returns — Landlock is the files layer,
+    /// so on Linux a refused `exec` is a permission error on the path and not the
+    /// filter's. Both are the sandbox saying no; treating only one of them as a
+    /// denial reported the other as "could not be measured", which is what the
+    /// Linux reports used to say about an `exec` that never happened.
+    const DENIALS: [Option<libc::c_int>; 2] = [Some(libc::EPERM), Some(libc::EACCES)];
 
     let helper = if cfg!(target_os = "macos") {
         "/usr/bin/true"
@@ -994,7 +1067,7 @@ fn process_facts() -> ProcessFacts {
     if pid == 0 {
         let code = unsafe {
             libc::execve(program.as_ptr(), argv.as_ptr(), envp.as_ptr());
-            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) {
+            if DENIALS.contains(&std::io::Error::last_os_error().raw_os_error()) {
                 DENIED
             } else {
                 OTHER
@@ -1401,25 +1474,50 @@ mod tests {
     #[test]
     fn a_report_round_trips_through_its_line() {
         let report = Report {
-            profile: Profile::Media,
+            profile: Profile::Documents,
             protections: Protections {
                 limits: true,
                 files: true,
                 network: true,
                 process: true,
             },
-            detail: "landlock_abi=6,seccomp=on,helper=allowed".to_string(),
+            detail: "landlock_abi=6,seccomp=on".to_string(),
         };
         let line = report.line();
         assert!(
-            line.starts_with("NFS2-sandbox profile=media level=full "),
+            line.starts_with("NFS2-sandbox profile=documents level=full "),
             "{line}"
         );
         let parsed = Report::parse(&line).expect("parses");
-        assert_eq!(parsed.profile, Profile::Media);
+        assert_eq!(parsed.profile, Profile::Documents);
         assert_eq!(parsed.protections, report.protections);
         assert_eq!(parsed.level(), Level::Full);
         assert_eq!(parsed.detail, report.detail);
+
+        // The media profile's shape: the process item is the one it cannot have,
+        // so its line says `open` and grades `partial`, and it still round-trips.
+        let media = Report {
+            profile: Profile::Media,
+            protections: Protections {
+                limits: true,
+                files: true,
+                network: true,
+                process: false,
+            },
+            detail: "fork=open,helper=allowed".to_string(),
+        };
+        let line = media.line();
+        assert!(
+            line.starts_with(
+                "NFS2-sandbox profile=media level=partial limits=on files=denied \
+                 network=denied process=open detail="
+            ),
+            "{line}"
+        );
+        let parsed = Report::parse(&line).expect("parses");
+        assert_eq!(parsed.protections, media.protections);
+        assert_eq!(parsed.level(), Level::Partial);
+        assert_eq!(parsed.notes(), ["fork", "helper"]);
     }
 
     #[test]

@@ -794,7 +794,11 @@ pub static CATALOG: &[SettingDef] = &[
         Storage,
         "NANOFILE_STORAGE_FFMPEG_PATH",
         Kind::Text,
-        Apply::Live,
+        // A helper is a grant: the media worker may execute the file this names
+        // and no other, so a saved path has to be re-resolved — and the answers
+        // measured against the old one dropped — through the same hook the
+        // sandbox's own settings use.
+        Apply::LiveWithHook(Hook::Sandbox),
         |c| c.storage.ffmpeg_path.clone(),
         |c, v| {
             c.storage.ffmpeg_path = v.trim().to_string();

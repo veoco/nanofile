@@ -562,25 +562,47 @@ const PROBE_PENDING: &str = "the extraction sandbox is unavailable (a probe is p
 /// that is what decides whether switching it back on, or lowering the minimum,
 /// changes anything. The answer is measured once and cached: it is a property of
 /// the host, not of a request.
+///
+/// A *failure* is cached only for [`UNAVAILABLE_RETRY`], the same window the
+/// request path uses. A probe that could not run — a child that lost a race with
+/// the machine's load, a timeout — says nothing about the host, and caching it
+/// for the process's lifetime would leave the page reporting a host it never
+/// managed to ask.
 pub fn capability(profile: Profile) -> Result<Report, String> {
     let cache = CAPABILITY.get_or_init(|| Mutex::new(HashMap::new()));
     {
         let cache = cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(cached) = cache.get(&profile) {
-            return cached.clone();
+        match cache.get(&profile) {
+            Some(Measured::Report(report)) => return Ok(report.clone()),
+            Some(Measured::Failed(why, retry_at)) if Instant::now() < *retry_at => {
+                return Err(why.clone());
+            }
+            _ => {}
         }
     }
 
     // `enabled: true, none` asks the child for its report without refusing it
     // over a grade: this call is a measurement, not a decision.
     let measured = measure_capability(profile);
-    let mut cache = cache
+    let cached = match &measured {
+        Ok(report) => Measured::Report(report.clone()),
+        Err(why) => Measured::Failed(why.clone(), Instant::now() + UNAVAILABLE_RETRY),
+    };
+    cache
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    cache.insert(profile, measured.clone());
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(profile, cached);
     measured
+}
+
+/// One profile's cached answer for the settings page.
+enum Measured {
+    /// The host answered, and this is what it said.
+    Report(Report),
+    /// The probe did not produce an answer, and when to ask again.
+    Failed(String, Instant),
 }
 
 fn measure_capability(profile: Profile) -> Result<Report, String> {
@@ -621,7 +643,24 @@ pub fn configure_requirement(requirement: Requirement) {
     *requirement_slot()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = requirement;
+    invalidate();
+}
+
+/// Drop the cached answers about this host.
+///
+/// Both are answers to questions whose inputs can change: the requirement (the
+/// switch and the minimum grade) and the helper a media grant names. A caller
+/// that changes either calls this, so the next request and the next visit to the
+/// Sandbox page see a fresh measurement rather than the previous setting's
+/// conclusion.
+pub fn invalidate() {
     if let Some(cache) = STATUS.get() {
+        cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+    if let Some(cache) = CAPABILITY.get() {
         cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -651,23 +690,36 @@ struct Cache {
 
 static STATUS: OnceLock<Mutex<HashMap<Profile, Cache>>> = OnceLock::new();
 /// What each profile measured on this host, whatever the settings say.
-static CAPABILITY: OnceLock<Mutex<HashMap<Profile, Result<Report, String>>>> = OnceLock::new();
+static CAPABILITY: OnceLock<Mutex<HashMap<Profile, Measured>>> = OnceLock::new();
 static EXECUTABLE: OnceLock<PathBuf> = OnceLock::new();
 static REQUIREMENT: OnceLock<Mutex<Requirement>> = OnceLock::new();
 /// The configured media helper, which the media profile may execute.
-static HELPER: OnceLock<PathBuf> = OnceLock::new();
+///
+/// Set through [`configure_helper`] and re-set whenever the setting is saved,
+/// so a `Mutex` rather than a first-wins `OnceLock`.
+static HELPER: OnceLock<Mutex<Option<&'static Path>>> = OnceLock::new();
 
 /// Set the media helper the media profile may execute.
 ///
-/// Process-global because every request for that profile has to be granted the
-/// same binary, and the value comes from `storage.ffmpeg_path` at startup.
+/// Mutable because the setting is: saving a new `storage.ffmpeg_path` re-points
+/// every later media grant at the new binary, and the cached answers that were
+/// measured against the old one are dropped with it ([`invalidate`]).
+///
+/// The path is leaked into the process's own lifetime: a child's command line
+/// and a Landlock rule are both built from a `&'static Path`, and the value has
+/// to outlive the child that is using it. One leaked path per change of the
+/// setting is the price of a grant that names a file.
 pub fn configure_helper(path: PathBuf) {
-    let _ = HELPER.set(path);
+    let leaked: &'static Path = Box::leak(path.into_boxed_path());
+    let slot = HELPER.get_or_init(|| Mutex::new(None));
+    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(leaked);
+    invalidate();
 }
 
 /// The resolved media helper, when one was configured and found.
-pub fn helper() -> Option<PathBuf> {
-    HELPER.get().cloned()
+pub fn helper() -> Option<&'static Path> {
+    let slot = HELPER.get_or_init(|| Mutex::new(None));
+    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Resolve a configured helper to an absolute path.
@@ -698,12 +750,12 @@ pub fn resolve_helper(configured: &str) -> PathBuf {
 /// The media probe gets the helper and no source: a probe has no request, and
 /// what it checks is that the helper can be executed at all under the profile.
 fn probe_grants(profile: Profile) -> crate::sandbox::Grants<'static> {
-    let helper = profile
-        .runs_helper()
-        .then(|| HELPER.get().map(|path| path.as_path()))
-        .flatten();
     crate::sandbox::Grants {
-        helper,
+        helper: if profile.runs_helper() {
+            helper()
+        } else {
+            None
+        },
         source: None,
     }
 }
@@ -1620,6 +1672,57 @@ mod tests {
         assert_eq!(
             join_bounded(done, Instant::now() + Duration::from_secs(5)),
             Some(7)
+        );
+    }
+
+    /// A saved helper replaces the startup one, and the answers measured against
+    /// the old one are dropped with it.
+    #[test]
+    fn the_helper_and_the_cached_answers_move_together() {
+        configure_helper(PathBuf::from("/nonexistent/first-ffmpeg"));
+        assert_eq!(helper(), Some(Path::new("/nonexistent/first-ffmpeg")));
+
+        configure_helper(PathBuf::from("/nonexistent/second-ffmpeg"));
+        assert_eq!(
+            helper(),
+            Some(Path::new("/nonexistent/second-ffmpeg")),
+            "a saved path must replace the one the process started with"
+        );
+
+        // Seed both caches, then drop them the way a settings change does.
+        let status = STATUS.get_or_init(|| Mutex::new(HashMap::new()));
+        status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(Profile::Images)
+            .or_default()
+            .retry_at = Some(Instant::now() + Duration::from_secs(60));
+        let capability = CAPABILITY.get_or_init(|| Mutex::new(HashMap::new()));
+        capability
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                Profile::Images,
+                Measured::Failed(
+                    "seeded".to_string(),
+                    Instant::now() + Duration::from_secs(60),
+                ),
+            );
+
+        invalidate();
+        assert!(
+            status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty(),
+            "a probe measured against the old helper must not stand"
+        );
+        assert!(
+            capability
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty(),
+            "the Sandbox page must re-measure after the helper changes"
         );
     }
 }

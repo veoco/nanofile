@@ -486,6 +486,13 @@ impl AppState {
                             &config.sandbox.min_level,
                         ),
                     );
+                    // The media profile's grant names a file, and this hook also
+                    // fires when `storage.ffmpeg_path` is saved: re-resolve it so
+                    // the next media request runs the helper the admin just
+                    // configured rather than the one the process started with.
+                    crate::sandbox::worker::configure_helper(
+                        crate::sandbox::worker::resolve_helper(&config.storage.ffmpeg_path),
+                    );
                 }
             }
         }
