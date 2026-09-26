@@ -11,13 +11,22 @@ on:
     branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
-  # The Windows and macOS jobs are manual-only. They are the two slow ones — 12m
-  # and 5m against a 3m Linux path — and most pushes cannot change what they
-  # measure, so they run when this input asks for them (`gh workflow run ci.yml`
-  # or the Run workflow button) and at no other time. Asking for them from a
-  # commit is deliberately not possible: a marker in a commit subject would have
-  # to be threaded through the shell, and a label would make the same request
-  # behave differently on a push than on a pull request.
+  # The Windows and macOS jobs are not run by a push. They are the two slow ones
+  # — 12m and 5m against a 3m Linux path — and most pushes cannot change what
+  # they measure, so they run in the two cases below and at no other time.
+  # Asking for them from a commit is deliberately not possible: a marker in a
+  # commit subject would have to be threaded through the shell, and a label would
+  # make the same request behave differently on a push than on a pull request.
+  #
+  # A full run once a day, Windows and macOS included. What it catches is not the
+  # last commit — the nightly build already compiles every platform — but the
+  # environment moving underneath: a runner image whose kernel lost Landlock or
+  # whose `/etc/hostname` moved, a macOS update that starts refusing a Seatbelt
+  # profile, a Windows image that changed what an AppContainer may open. None of
+  # those waits for a commit to land, so this runs whether or not one has. 04:00
+  # UTC keeps it clear of the nightly build at 10:00.
+  schedule:
+    - cron: "0 4 * * *"
   workflow_dispatch:
     inputs:
       platform:
@@ -25,10 +34,14 @@ on:
         type: boolean
         default: true
 
-# One run per ref, newest wins. The head commit's tree is what a run verifies,
-# so a superseded run cannot have found anything the newer one will not.
+# One run per ref per event, newest wins. The head commit's tree is what a run
+# verifies, so a superseded push cannot have found anything the newer one will
+# not. The event is part of the group so the daily run neither cancels a push's
+# verification nor is cancelled by one: two minutes into a 13-minute daily run a
+# push would otherwise end it, and the daily run is the only one that reaches
+# Windows and macOS without being asked.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 # Least privilege: the workflow only reads the repository. Paired with the
@@ -52,6 +65,12 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
+        # Only a push or a pull request has a range to diff. On the other two
+        # events this action has no `before` and falls back to reporting every
+        # file as added — which happens to be what is wanted, but it is another
+        # action's undocumented fallback, and the daily run must not depend on
+        # it. `plan` below decides those two events instead.
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
         with:
           filters: |
             rust:
@@ -76,23 +95,20 @@ jobs:
               - 'server/templates/**'
               - 'package.json'
               - 'package-lock.json'
-      # A manual run is a full run. `paths-filter` has no `before` to compare
-      # against on a `workflow_dispatch`, so it warns and falls back to
-      # reporting every file as added — which is the behaviour wanted here, but
-      # leaving it implicit would make the Run workflow button, now the only way
-      # to reach the Windows and macOS jobs, depend on another action's
-      # fallback. The outputs stay the strings 'true'/'false' that the job
-      # conditions below compare against.
-      - name: Treat a manual run as a full run
+      # A scheduled or manual run is a full run. The filter above is skipped for
+      # both, so this is where those two events get their answer; the outputs
+      # stay the strings 'true'/'false' that the job conditions below compare
+      # against.
+      - name: Treat a scheduled or manual run as a full run
         id: plan
         env:
           EVENT: ${{ github.event_name }}
           RUST_CHANGED: ${{ steps.filter.outputs.rust }}
           FRONTEND_CHANGED: ${{ steps.filter.outputs.frontend }}
         run: |
-          if [ "$EVENT" = workflow_dispatch ]; then
-            RUST_CHANGED=true; FRONTEND_CHANGED=true
-          fi
+          case "$EVENT" in
+            schedule|workflow_dispatch) RUST_CHANGED=true; FRONTEND_CHANGED=true ;;
+          esac
           echo "rust=$RUST_CHANGED" >> "$GITHUB_OUTPUT"
           echo "frontend=$FRONTEND_CHANGED" >> "$GITHUB_OUTPUT"
 
@@ -169,9 +185,11 @@ jobs:
     name: Windows check
     runs-on: windows-latest
     needs: [changes, lint]
-    # Manual only: `gh workflow run ci.yml -f platform=true`, or the Run
-    # workflow button. There is deliberately no way to ask for it from a commit.
-    if: github.event_name == 'workflow_dispatch' && inputs.platform
+    # Taken by the daily run, and by a manual one unless its input says
+    # otherwise. There is deliberately no way to ask for them from a commit.
+    if: >-
+      github.event_name == 'schedule'
+      || (github.event_name == 'workflow_dispatch' && inputs.platform)
     # A deadline for a hang, not for a slow run: the steps below have their own.
     #
     # Deliberately no `CARGO_PROFILE_*_DEBUG=0` here, unlike the Linux jobs.
@@ -372,9 +390,11 @@ jobs:
     name: macOS check
     runs-on: macos-latest
     needs: [changes, lint]
-    # Manual only: `gh workflow run ci.yml -f platform=true`, or the Run
-    # workflow button. There is deliberately no way to ask for it from a commit.
-    if: github.event_name == 'workflow_dispatch' && inputs.platform
+    # Taken by the daily run, and by a manual one unless its input says
+    # otherwise. There is deliberately no way to ask for them from a commit.
+    if: >-
+      github.event_name == 'schedule'
+      || (github.event_name == 'workflow_dispatch' && inputs.platform)
     # Same deadline, and the same decision on debug info: `dsymutil` is what
     # makes a macOS link slow, but re-keying this job's cache costs it more than
     # the symbols do — the check step went 57s to 100s against a warm cache.
