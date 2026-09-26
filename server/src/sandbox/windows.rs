@@ -96,6 +96,24 @@
 //! handles this process handed it. Those are the platform's own limits, and they
 //! are the same shape as the macOS profile's grants.
 //!
+//! # Where the media profile's helper may live
+//!
+//! The media profile starts a second program, and a container's file access is
+//! decided by ACEs that name its own package SID, so a helper somewhere the user
+//! installed it needs an explicit grant — and not only on the file: the walk to
+//! it needs traverse on every directory on the way, which is what
+//! [`add_path_access`] adds. That is enough to *read* a per-user helper, and it
+//! is measured: the child opens the file it was granted and reports
+//! `helper=allowed`.
+//!
+//! It is not enough to *start* one. A CI host reports
+//! `helper=allowed,…,parse=media-unavailable(Access is denied)`: the container
+//! opened the helper and `CreateProcess` refused it, while the same probe's
+//! token-only rung — no container — ran it. A helper in the system tree or under
+//! `Program Files` does start, which is what the CI probe uses. So on Windows the
+//! helper has to be installed where the container already reaches programs, and
+//! the settings page reports the other case rather than hiding it.
+//!
 //! # References
 //!
 //! * Microsoft, *Launch an AppContainer*: the attribute, the empty capability

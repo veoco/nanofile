@@ -209,16 +209,20 @@ jobs:
           HELPER="$(command -v ffmpeg || true)"
           EXPECT='parse=media-ok'
           if [ -z "$HELPER" ]; then
-            # No ffmpeg on the runner: use the worker's own image. It starts and
-            # exits non-zero — `-version` is not one of its flags — and that is
-            # `media-failed`, the proof this profile can start a program at all.
-            # `media-unavailable` would mean the grant did not reach the binary.
-            # The image is used in place on purpose: it is the one file this
-            # container is already known to be able to run from, so the check
-            # stays about the grant rather than about the directory it sits in.
-            HELPER="$(cygpath -w "$(pwd)/target/debug/nanofile.exe")"
+            # No ffmpeg on the runner: use the worker's own image as the helper,
+            # copied into Program Files. The container reaches the system tree and
+            # Program Files through the user's own SID — which is what makes
+            # `system=readable` — so a copy there is one the container can start.
+            # It exits non-zero (`-version` is not one of its flags) and that is
+            # `media-failed`: the proof the container can start a granted program
+            # at all. A per-user helper is a different story: the traverse grant
+            # makes it readable, and the container still cannot start it, which is
+            # the residual the module docs record.
+            mkdir -p "$PROGRAMFILES/nanofile-media-helper"
+            cp target/debug/nanofile.exe "$PROGRAMFILES/nanofile-media-helper/nanofile.exe"
+            HELPER="$(cygpath -w "$PROGRAMFILES/nanofile-media-helper/nanofile.exe")"
             EXPECT='parse=media-failed'
-            echo "no ffmpeg on this runner; probing with the worker's own image as the helper"
+            echo "no ffmpeg on this runner; probing with a copy of the worker in Program Files"
           fi
           ./target/debug/nanofile.exe extract-worker --probe --profile media --ffmpeg "$HELPER" \
             | tee media.txt
@@ -295,8 +299,12 @@ jobs:
           FFMPEG="$(command -v ffmpeg || true)"
           if [ -z "$FFMPEG" ]; then
             # The image has no ffmpeg. A packaged one is exactly the case this
-            # profile's library grants exist for, so try to install it.
-            brew install ffmpeg >/dev/null 2>&1 || true
+            # profile's library grants exist for, so try to install it — and say
+            # why if that fails, rather than silently measuring something else.
+            if ! brew install ffmpeg >/tmp/brew.log 2>&1; then
+              echo "brew could not install ffmpeg; falling back to /bin/echo"
+              tail -5 /tmp/brew.log
+            fi
             FFMPEG="$(command -v ffmpeg || true)"
           fi
           EXPECT='parse=media-ok'

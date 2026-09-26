@@ -151,7 +151,10 @@ page says why. A host that is not Full still runs them, with a warning.
 
 `storage.ffmpeg_path` names the helper the media profile may execute. Saving it
 re-resolves the grant through the same hook as the two settings above, so the
-next media request runs the binary that was just configured. A container may
+next media request runs the binary that was just configured. On Windows the
+helper has to be somewhere the container can run programs — the system tree or
+`Program Files`; a per-user install is readable but cannot be started, and the
+page reports that instead of a thumbnail that never appears. A container may
 need the Landlock syscalls allowed for the grade to be Full.
 
 ## Security

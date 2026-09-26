@@ -168,7 +168,7 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
 
     let mut last = String::from("ffmpeg produced no frame");
     for seek in attempts {
-        let mut command = Command::new(helper);
+        let mut command = helper_command(helper);
         command
             .arg("-y")
             .arg("-loglevel")
@@ -232,6 +232,27 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
     Err(last)
 }
 
+/// The command that starts the helper.
+///
+/// macOS is the one platform where the standard library starts a program with
+/// `posix_spawn`, and a Seatbelt profile that grants `process-exec` as a literal
+/// refuses that path: the fileport machinery it goes through is not the
+/// operation the profile allows, so the spawn comes back `EPERM` while the same
+/// profile lets the child read the very binary it may not start. Setting a
+/// `pre_exec` hook — empty, because the hook is only what makes the library take
+/// the other path — turns it into the `fork` and `exec` the grant is written
+/// for. The closure must be async-signal-safe, and doing nothing is.
+fn helper_command(helper: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(helper);
+    #[cfg(target_os = "macos")]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| Ok(()));
+    }
+    command
+}
+
 /// The self-test: run the helper under the profile.
 ///
 /// `-version` proves the grant reaches the binary and its libraries. It does not
@@ -240,7 +261,7 @@ pub fn probe(grants: Grants<'_>) -> String {
     let Some(helper) = grants.helper else {
         return "media-no-helper".to_string();
     };
-    match Command::new(helper)
+    match helper_command(helper)
         .arg("-version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
