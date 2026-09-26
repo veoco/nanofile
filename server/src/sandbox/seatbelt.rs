@@ -28,17 +28,27 @@
 //! `file-read*`/`file-map-executable` for the helper, its directory and the trees
 //! a packaged one loads from — plus `file-write-data` on `/dev/null`, because the
 //! helper's standard streams are set to it and an open for write is not the read
-//! grant the base profile carries. What CI measured without that write was
-//! `helper=allowed,…,parse=media-unavailable(EPERM)`: the child could read the
-//! program it was granted and the spawn died in its own stdio setup, before the
-//! exec the profile allows. A synthetic profile — the same grants, `/bin/bash`
-//! starting `/bin/echo` — starts the second generation, so the grant itself was
-//! never the problem.
+//! grant the base profile carries.
+//!
+//! Two things had to be right for the helper to start, and each looked like the
+//! other from the outside: the spawn was refused with the same
+//! `media-unavailable(Operation not permitted)` for both. The streams first —
+//! `/dev/null` for write, which the profile did not grant, so the spawn died in
+//! its own stdio setup before the exec. Then the path: Seatbelt matches the path
+//! the filesystem *resolved*, and a Homebrew helper is reached through
+//! `/opt/homebrew/bin/ffmpeg` while it is checked as
+//! `/opt/homebrew/Cellar/ffmpeg/<version>/bin/ffmpeg`, so a literal written from
+//! the typed path granted nothing — measured in the sandbox's own log as
+//! `deny(1) process-exec* /opt/homebrew/Cellar/ffmpeg/9.0.1_1/bin/ffmpeg` for a
+//! profile whose literal was the short path. [`resolved`] is what writes the
+//! literals now, and the child's own image has been resolved by its caller for
+//! the same reason all along. A synthetic profile with the same grants was what
+//! ruled out the grant itself in between.
 
 #[cfg(target_os = "macos")]
 use super::Protections;
 use super::{Grants, Profile};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Hardcoded path to the Seatbelt runner.
 pub(super) const PROGRAM: &str = "/usr/bin/sandbox-exec";
@@ -99,7 +109,8 @@ pub(super) fn args(exe: &Path, profile: Profile, grants: Grants<'_>) -> Vec<Stri
 ///
 /// The media profile is the one addition: it may execute the configured helper
 /// and read the helper's image and the scratch source the parent wrote. The
-/// `process-exec` grant is a literal, so it reaches exactly that one file.
+/// `process-exec` grant is a literal, so it reaches exactly that one file — of
+/// the path the kernel resolves, which is what [`resolved`] is for.
 ///
 /// What a helper needs *beyond* its own image is read and map, never execute: a
 /// packaged ffmpeg links against its own tree and dyld will not start it without
@@ -112,13 +123,14 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
     let mut extra = String::new();
     if profile.runs_helper() {
         if let Some(path) = grants.helper {
-            let helper = escape(&path.to_string_lossy());
+            let helper_path = resolved(path);
+            let helper = escape(&helper_path.to_string_lossy());
             extra.push_str(&format!(
                 " (allow process-exec (literal \"{helper}\")) \
                  (allow file-read* (literal \"{helper}\")) \
                  (allow file-map-executable (literal \"{helper}\"))"
             ));
-            if let Some(directory) = path.parent() {
+            if let Some(directory) = helper_path.parent() {
                 let directory = escape(&directory.to_string_lossy());
                 extra.push_str(&format!(
                     " (allow file-read* file-map-executable (subpath \"{directory}\"))"
@@ -139,11 +151,10 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
             // comes from.
             extra.push_str(" (allow file-write-data (literal \"/dev/null\"))");
             // A helper that is a script needs its own interpreter started before
-            // its code runs. That path is a literal too, so the grant is the
-            // helper, its interpreter and the trees a helper loads from — no
-            // directory anywhere is executable.
+            // its code runs. That path is a literal too — and the resolved one:
+            // `/bin/sh` is a shim on this platform that re-execs `/bin/bash`.
             if let Some(interpreter) = super::shebang_interpreter(path) {
-                let interpreter = escape(&interpreter.to_string_lossy());
+                let interpreter = escape(&resolved(&interpreter).to_string_lossy());
                 extra.push_str(&format!(
                     " (allow process-exec (literal \"{interpreter}\")) \
                      (allow file-read* (literal \"{interpreter}\")) \
@@ -152,7 +163,7 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
             }
         }
         if let Some(source) = grants.source {
-            let source = escape(&source.to_string_lossy());
+            let source = escape(&resolved(source).to_string_lossy());
             extra.push_str(&format!(" (allow file-read* (literal \"{source}\"))"));
         }
     }
@@ -167,6 +178,21 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
          (allow file-map-executable (subpath \"/usr/lib\") (subpath \"/System/Library\") \
          (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") (literal \"{exe}\"))"
     )
+}
+
+/// The path as the kernel resolves it, for a `(literal …)` form.
+///
+/// Seatbelt matches the path the filesystem resolved, not the one that was typed:
+/// a Homebrew helper is reached through `/opt/homebrew/bin/ffmpeg` and checked as
+/// `/opt/homebrew/Cellar/ffmpeg/<version>/bin/ffmpeg`, so a literal written from
+/// the typed path grants nothing at all — measured as
+/// `deny(1) process-exec* /opt/homebrew/Cellar/ffmpeg/9.0.1_1/bin/ffmpeg` for a
+/// profile whose literal was the short path. The child's own image is resolved by
+/// its caller for the same reason. A path that cannot be resolved is left as it
+/// was: the grant then fails the way the exec does, with the same path in the
+/// report.
+fn resolved(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Escape a path for a `(literal "…")` form.
@@ -358,6 +384,10 @@ mod tests {
     /// A helper that is a script names its interpreter on its `#!` line, and that
     /// interpreter is the only other program the media profile may start. The
     /// documents profile names neither.
+    ///
+    /// The literal is the *resolved* interpreter: a script that names `/bin/sh`
+    /// is started through whatever that resolves to here, and the sandbox checks
+    /// the resolved path.
     #[test]
     fn a_script_helper_names_the_one_other_program_that_may_run() {
         let path = std::env::temp_dir().join(format!(
@@ -371,12 +401,14 @@ mod tests {
             source: None,
         };
 
+        let interpreter = resolved(Path::new("/bin/sh"));
+        let interpreter = escape(&interpreter.to_string_lossy());
         let media = profile_text(Path::new("/opt/nanofile/nanofile"), Profile::Media, grants);
         assert!(
-            media.contains("(allow process-exec (literal \"/bin/sh\"))"),
+            media.contains(&format!("(allow process-exec (literal \"{interpreter}\"))")),
             "{media}"
         );
-        assert!(media.contains("(allow file-read* (literal \"/bin/sh\"))"));
+        assert!(media.contains(&format!("(allow file-read* (literal \"{interpreter}\"))")));
         assert!(
             !media.contains("process-exec (subpath"),
             "the interpreter is a literal, not a tree: {media}"
@@ -388,11 +420,61 @@ mod tests {
             grants,
         );
         assert!(
-            !document.contains("/bin/sh"),
+            !document.contains(&interpreter),
             "a documents profile starts nothing: {document}"
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A helper reached through a symlink is granted under the path the kernel
+    /// resolves, not the one that was typed.
+    ///
+    /// A packaged helper is reached that way (`/opt/homebrew/bin/ffmpeg` →
+    /// `…/Cellar/ffmpeg/<version>/bin/ffmpeg`) and Seatbelt checks the resolved
+    /// path, so a literal written from the typed one grants nothing: the exec is
+    /// refused while the same binary is readable, which is what CI measured as
+    /// `helper=allowed,…,parse=media-unavailable(EPERM)`.
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_is_granted_under_the_path_the_kernel_resolves() {
+        let dir = std::env::temp_dir().join(format!(
+            "nanofile-resolve-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let real = dir.join("real-helper");
+        std::fs::write(&real, b"#!/bin/sh\nexit 0\n").expect("write");
+        let link = dir.join("helper-link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+        let media = profile_text(
+            Path::new("/opt/nanofile/nanofile"),
+            Profile::Media,
+            Grants {
+                helper: Some(link.as_path()),
+                source: None,
+            },
+        );
+        let real = escape(
+            &std::fs::canonicalize(&real)
+                .expect("canonical")
+                .to_string_lossy(),
+        );
+        assert!(
+            media.contains(&format!("(allow process-exec (literal \"{real}\"))")),
+            "{media}"
+        );
+        assert!(
+            !media.contains(&format!(
+                "process-exec (literal \"{}\")",
+                escape(&link.to_string_lossy())
+            )),
+            "the typed path grants nothing: {media}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The runner is what confines files, the network and process creation, so

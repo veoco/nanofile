@@ -327,12 +327,13 @@ jobs:
           # Starting a program other than the helper stays refused. Seatbelt
           # refuses it with EPERM, which is the denial this reads.
           grep -q 'exec=denied' /tmp/media.txt
-          # The helper's start is the open item on this platform: the grant is
-          # proven good (the synthetic profile below starts a second generation
-          # with the same text), and what the child reports is the effect. The
-          # `hand=` token is the same exec attempted by hand in that child.
-          grep -qE 'parse=media-(ok|failed|unavailable)' /tmp/media.txt
-          grep -o 'parse=media-[^ ]*' /tmp/media.txt
+          # The helper starts: the literals are written as the kernel resolves
+          # them (a Homebrew helper is reached through `/opt/homebrew/bin` and
+          # checked in the Cellar), and its streams are pipes with `/dev/null`
+          # granted for the write the helper itself may want. `hand=` is the same
+          # exec attempted by hand in that child.
+          grep -q 'parse=media-ok' /tmp/media.txt
+          grep -q 'hand=ok' /tmp/media.txt
 
       # Diagnostics for what a probe cannot say: whether a Seatbelt profile can
       # start a second generation of program at all, and which operation the
