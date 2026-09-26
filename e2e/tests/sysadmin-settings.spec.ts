@@ -115,6 +115,27 @@ test("every area renders its rows and its section bar", async ({ page }) => {
   }
 });
 
+/**
+ * The Sandbox page is the one page whose subject is a measurement rather than a
+ * setting: it says what this host actually gives, one protection at a time, and
+ * warns when that is not the whole set.
+ */
+test("the sandbox page shows the measured grade and items", async ({ page }) => {
+  await page.goto("/sysadmin/settings/sandbox/");
+  await expect(page.locator("[data-sandbox-status]")).toBeVisible();
+  await expect(page.locator("[data-sandbox-grade]")).toBeVisible();
+  // One row per protection, in the order the report carries them.
+  for (const item of ["limits", "files", "network", "process"]) {
+    await expect(
+      page.locator(`[data-sandbox-item="sandbox.item_${item}"]`),
+    ).toBeVisible();
+  }
+  // The panel names a grade and an item state rather than a locale key.
+  const body = (await page.locator("[data-sandbox-status]").innerText()).trim();
+  expect(body).not.toContain("sandbox.grade_");
+  expect(body).not.toContain("sandbox.item_");
+});
+
 test("a live setting takes effect immediately and says where it came from", async ({
   page,
 }) => {

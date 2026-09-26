@@ -29,6 +29,9 @@ use super::{Grants, Profile, Protections};
 const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
 const PR_CAP_AMBIENT: libc::c_int = 47;
 const PR_CAP_AMBIENT_CLEAR_ALL: libc::c_ulong = 4;
+/// `PR_SET_MDWE` and its one flag, from `linux/prctl.h` (Linux 6.3).
+const PR_SET_MDWE: libc::c_int = 65;
+const PR_MDWE_REFUSE_EXEC_GAIN: libc::c_ulong = 1 << 0;
 
 // ── capabilities (linux/capability.h) ───────────────────────────────────────
 const CAP_VERSION_3: u32 = 0x2008_0522;
@@ -173,6 +176,8 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
         .to_string(),
     );
 
+    detail.push(if set_mdwe() { "mdwe=on" } else { "mdwe=off" }.to_string());
+
     detail.push(drop_capabilities().to_string());
     // Both are free and both close a way for a process of the same user to
     // reach this one: `PR_SET_DUMPABLE` takes away `/proc/<pid>/mem` and the
@@ -310,6 +315,30 @@ fn set_no_new_privs() -> bool {
             libc::SYS_prctl,
             PR_SET_NO_NEW_PRIVS,
             1 as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+        ) == 0
+    }
+}
+
+/// Ask the kernel to refuse a mapping that is both writable and executable.
+///
+/// This is the one hardening that costs nothing and closes the classic
+/// exploitation step — write shellcode into a buffer, mark it executable, jump
+/// to it — at the kernel rather than in the parser. It is inherited by a helper
+/// the media profile starts, which still maps its own libraries: those come from
+/// files and are never made writable first.
+///
+/// A kernel older than 6.3 does not know the call and answers `EINVAL`, which is
+/// reported as `mdwe=off` rather than treated as a failure: the protection is
+/// additive, and the confinement is decided from the items a probe measures.
+fn set_mdwe() -> bool {
+    unsafe {
+        libc::syscall(
+            libc::SYS_prctl,
+            PR_SET_MDWE,
+            PR_MDWE_REFUSE_EXEC_GAIN,
             0 as libc::c_ulong,
             0 as libc::c_ulong,
             0 as libc::c_ulong,

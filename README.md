@@ -110,7 +110,39 @@ The **Restart server** button in the settings page's header restarts the server 
 
 On upgrade, a changed config format is migrated in place with comments preserved, and the previous file is kept as `config.toml.bak`.
 
-Sections: `[server]` networking and feature switches; `[database]` connection; `[storage]` directories and quotas; `[auth]` login, password and rate limits; `[ui]` language; `[email]` mail; `[admin_init]` first-start admin; `[logging]` logs; `[gc]` garbage collection; `[index]` search; `[notification]` notifications; `[tasks]` background tasks. Exact keys are listed in `config.toml.example`.
+Sections: `[server]` networking and feature switches; `[database]` connection; `[storage]` directories and quotas; `[auth]` login, password and rate limits; `[ui]` language; `[email]` mail; `[admin_init]` first-start admin; `[logging]` logs; `[gc]` garbage collection; `[index]` search; `[sandbox]` the confinement over untrusted parsing; `[notification]` notifications; `[tasks]` background tasks. Exact keys are listed in `config.toml.example`.
+
+## Sandbox
+
+Everything that parses content a user supplied runs in a separate, confined
+process, never inside the server: document text extraction for the search
+index, image thumbnails, media thumbnails (through `ffmpeg`), EXIF and avatar
+processing. The child confines itself before it reads a request and prints what
+it established; the server decides from that report rather than from what it
+asked for.
+
+The admin's **Sandbox** page shows the grade this host actually gives:
+
+- **Full** — every protection the platform can provide: resource limits (memory,
+  CPU, descriptors, file size), no file access, no network, and no way to start
+  another program.
+- **Partial** — resource limits plus at least one of the other three, with the
+  missing item named.
+- **None** — resource limits alone.
+
+Each item is listed with the platform's own residuals beside it: macOS has to
+allow `fork` for the parser's thread, the Windows container reads the system
+tree it loads from, and the media worker may execute the configured `ffmpeg`
+and read only the scratch file it was handed.
+
+Two settings govern it. `sandbox.enabled` is the master switch: with it off,
+none of those features run, and nothing falls back to parsing inside the server
+process. `sandbox.min_level` is the grade the host must reach — `full`,
+`partial` (the default) or `none`; below it the features are disabled and the
+page says why. A host that is not Full still runs them, with a warning.
+
+`storage.ffmpeg_path` names the helper the media profile may execute. A
+container may need the Landlock syscalls allowed for the grade to be Full.
 
 ## Security
 

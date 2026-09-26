@@ -1131,8 +1131,8 @@ fn platform_confine(profile: Profile, grants: Grants) -> (Protections, Vec<Strin
 
 #[cfg(target_os = "windows")]
 fn platform_confine(profile: Profile, grants: Grants) -> (Protections, Vec<String>) {
-    let _ = (profile, grants);
-    windows::confine()
+    let _ = grants;
+    windows::confine(profile)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -1340,7 +1340,7 @@ mod tests {
         full.detail = "system=readable,fork=open".to_string();
         assert!(Requirement::default().accepts(&full).is_ok());
 
-        assert_eq!(Requirement::default().enabled, true);
+        assert!(Requirement::default().enabled);
         assert_eq!(Requirement::default().min_level, Level::Partial);
         assert_eq!(
             Requirement::from_config(true, "typo").min_level,

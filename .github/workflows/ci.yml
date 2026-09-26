@@ -155,6 +155,9 @@ jobs:
         run: |
           cargo build --bin nanofile
           ./target/debug/nanofile.exe extract-worker --probe | tee sandbox.txt
+          grep -q 'profile=documents' sandbox.txt
+          # The token is read back from the process rather than believed from
+          # the command line the parent wrote.
           grep -q 'token=restricted' sandbox.txt
           # The job is the parent's, named at creation, and the child reads its
           # limits back from it: `,parent` is the mark of that arrangement, and
@@ -172,40 +175,43 @@ jobs:
           # back. The count moves with the Windows build; zero would mean the
           # API is not working at all.
           grep -qE 'mitigations=[1-9]' sandbox.txt
-          # The far edge of the files layer: the container refuses the user's own
-          # paths (above) and reads the system tree, which is the over-grant this
-          # configuration has. Asserted rather than left in a comment, so a host
-          # where `ALL APPLICATION PACKAGES` stops covering the system tree says
-          # so in the log.
+          # The far edge of the files protection: the container refuses the
+          # user's own paths (above) and reads the system tree, which is the
+          # over-grant this configuration has. Asserted rather than left in a
+          # comment, so a host where `ALL APPLICATION PACKAGES` stops covering
+          # the system tree says so in the log.
           grep -q 'system=readable' sandbox.txt
           grep -q 'threads=ok' sandbox.txt
-          # Every layer, not `partial|full`: the container is the one this host
-          # can lose on its own, and losing it now fails here.
+          # Every protection, not `partial|full`: the container is the one this
+          # host can lose on its own, and losing it now fails here.
           grep -q 'level=full' sandbox.txt
-          # ... and the confined child can still read a document, which is the
-          # half a layer count cannot say.
+          # ... and the confined child can still read a document, which the item
+          # count cannot say.
           grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
-          # `bounded`, not `full`: the container reads the system tree it loads
-          # from and writes its own profile store. Asserted so that closing
-          # either — LPAC, or denying the store — is a deliberate change.
-          grep -q 'closure=bounded' sandbox.txt
 
-      # The policy that has to refuse here: `sealed` asks for a confinement with
-      # no residual, and the residuals above cannot be closed on Windows.
-      - name: The sealed policy refuses this host
+      # The media profile is the one that may execute a helper, so it is probed
+      # with the helper it will actually be given. Skipped when the runner has no
+      # ffmpeg: the profile is otherwise reported as having no helper, which is a
+      # fact about the host rather than a broken build.
+      - name: Probe the media sandbox profile
         shell: bash
         run: |
-          if ./target/debug/nanofile.exe extract-worker --probe --policy sealed 2> sealed.txt; then
-            echo "sealed must refuse a confinement with a residual"
-            cat sealed.txt
-            exit 1
+          FFMPEG="$(command -v ffmpeg || true)"
+          if [ -z "$FFMPEG" ]; then
+            echo "no ffmpeg on this runner; skipping the media profile probe"
+            exit 0
           fi
-          grep -q 'sealed' sealed.txt
+          ./target/debug/nanofile.exe extract-worker --probe --profile media --ffmpeg "$FFMPEG" \
+            | tee media.txt
+          grep -q 'profile=media' media.txt
+          grep -q 'level=full' media.txt
+          grep -q 'parse=media-ok' media.txt
+          grep -q 'helper_grants=' media.txt
 
       # Parsing *under* the container, which the probe's self-test does but the
       # whole pipeline does not: a container that denies something a reader
       # needs, or a mitigation that breaks it, shows up as a document that
-      # cannot be read rather than as a missing layer.
+      # cannot be read rather than as a missing protection.
       - name: Extract documents in the container
         run: cargo test -p server --test index_test -- document
 
@@ -239,32 +245,22 @@ jobs:
         run: |
           cargo build --bin nanofile
           ./target/debug/nanofile extract-worker --probe | tee sandbox.txt
+          grep -q 'profile=documents' sandbox.txt
           grep -q 'files=denied' sandbox.txt
           grep -q 'network=denied' sandbox.txt
           grep -q 'threads=ok' sandbox.txt
           grep -q 'level=full' sandbox.txt
           # Starting a program is refused, and the fork the profile has to allow
-          # (the parsers' thread is charged to it) is reported as the residual it
-          # is rather than counted as a process bound.
+          # (the parsers' thread is charged to it) is reported as the note it is
+          # rather than counted as a process bound.
           grep -q 'exec=denied' sandbox.txt
           grep -q 'fork=open' sandbox.txt
-          grep -q 'closure=bounded' sandbox.txt
           grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
 
-      # `sealed` asks for a confinement with no residual, and `fork=open` is
-      # one this platform cannot close.
-      - name: The sealed policy refuses this host
-        run: |
-          if ./target/debug/nanofile extract-worker --probe --policy sealed 2> sealed.txt; then
-            echo "sealed must refuse a confinement with a residual"
-            cat sealed.txt
-            exit 1
-          fi
-          grep -q 'sealed' sealed.txt
       # Parsing *under* the profile, which the probe above does not do: a
       # profile that denies something the parsers need shows up as a document
-      # that cannot be read, not as a missing layer. The fixture also insists
-      # the worker confines itself before the tests run.
+      # that cannot be read, not as a missing protection. The fixture also
+      # insists the worker confines itself before the tests run.
       - name: Extract documents under the profile
         run: cargo test -p server --test index_test -- document
 
@@ -364,14 +360,31 @@ jobs:
           cargo build --bin nanofile
           ./target/debug/nanofile extract-worker --selftest |
             tee /tmp/sandbox.txt
+          grep -q 'profile=documents' /tmp/sandbox.txt
           grep -qE 'level=(full|partial)' /tmp/sandbox.txt
-          grep -qE 'closure=(full|bounded)' /tmp/sandbox.txt
           grep -q 'parse=pdf-ok,docx-ok' /tmp/sandbox.txt
           # The calls Landlock cannot govern are this filter's job, and a kernel
           # without seccomp is the one case where they are not covered.
           grep -q 'll_gaps=closed' /tmp/sandbox.txt
           grep -q 'dumpable=off' /tmp/sandbox.txt
+          # Memory that is writable is not executable. `off` is what a kernel
+          # older than 6.3 answers, which is a fact about the runner.
+          grep -qE 'mdwe=(on|off)' /tmp/sandbox.txt
           grep -qE 'seccomp=[0-9]+' /tmp/sandbox.txt
+
+      # The media profile is the one that may execute a helper. This runner has
+      # ffmpeg installed (the step above the suite), so the probe runs it under
+      # the profile, prints what the grants installed, and reads a document's
+      # worth of proof that the confined helper still starts.
+      - name: Report the media sandbox profile
+        run: |
+          ./target/debug/nanofile extract-worker \
+            --selftest --profile media --ffmpeg "$(command -v ffmpeg)" |
+            tee /tmp/media.txt
+          grep -q 'profile=media' /tmp/media.txt
+          grep -qE 'level=(full|partial)' /tmp/media.txt
+          grep -q 'parse=media-ok' /tmp/media.txt
+          grep -qE 'helper_grants=[1-9]' /tmp/media.txt
 
       # The arm64 syscall table is not the x86_64 one: several of the calls the
       # filter names (the bare path-taking forms) do not exist there, and every
@@ -381,9 +394,7 @@ jobs:
         run: |
           rustup target add aarch64-unknown-linux-gnu
           mkdir -p /tmp/acheck/src/sandbox
-          cp server/src/indexer/extract/sandbox/mod.rs \
-             server/src/indexer/extract/sandbox/linux.rs \
-             /tmp/acheck/src/sandbox/
+          cp server/src/sandbox/linux.rs /tmp/acheck/src/sandbox/
           cat > /tmp/acheck/Cargo.toml <<'EOF'
           [package]
           name = "acheck"
@@ -395,12 +406,66 @@ jobs:
 
           [workspace]
           EOF
-          cat > /tmp/acheck/src/lib.rs <<'EOF'
-          pub mod sandbox;
+          # A stand-in for the parent module: this check is about the syscall
+          # numbers linux.rs names on arm64, so only what it reaches for is
+          # stubbed, and the real linux.rs is what is compiled.
+          cat > /tmp/acheck/src/sandbox/mod.rs <<'EOF'
+          pub mod linux;
+
+          use std::path::Path;
+
+          #[derive(Default, Clone, Copy)]
+          pub struct Protections {
+              pub limits: bool,
+              pub files: bool,
+              pub network: bool,
+              pub process: bool,
+          }
+
+          #[derive(Clone, Copy, PartialEq, Eq)]
+          pub enum Profile {
+              Documents,
+              Images,
+              Media,
+          }
+
+          impl Profile {
+              pub fn runs_helper(self) -> bool {
+                  matches!(self, Profile::Media)
+              }
+          }
+
+          #[derive(Default, Clone, Copy)]
+          pub struct Grants<'a> {
+              pub helper: Option<&'a Path>,
+              pub source: Option<&'a Path>,
+          }
+
+          pub struct Clamped {
+              pub address_space: bool,
+              pub detail: String,
+          }
+
+          impl Clamped {
+              pub fn enforced(&self, memory: bool) -> bool {
+                  memory || self.address_space
+              }
+          }
+
+          pub fn clamp_resources() -> Clamped {
+              Clamped {
+                  address_space: true,
+                  detail: String::new(),
+              }
+          }
 
           pub fn exercise() {
-              let _ = sandbox::confine(sandbox::External::default(), sandbox::Measure::Cheap);
+              let _ = linux::confine(Profile::Documents, Grants::default());
+              let _ = linux::confine(Profile::Media, Grants::default());
           }
+          EOF
+          cat > /tmp/acheck/src/lib.rs <<'EOF'
+          pub mod sandbox;
           EOF
           cd /tmp/acheck && CARGO_TARGET_DIR=/tmp/acheck/target \
             cargo check --target aarch64-unknown-linux-gnu

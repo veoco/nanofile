@@ -1168,3 +1168,47 @@ async fn the_page_separates_in_place_from_process_restarts() {
     );
     assert!(body.contains("ui.tray_language"));
 }
+
+/// The Sandbox page is the one page whose subject is not a setting: it says
+/// what this host actually gives, item by item, and warns when that is not the
+/// whole set. The values come from a confined child's own report, so the page
+/// cannot advertise protection this host does not have.
+#[tokio::test]
+async fn the_sandbox_page_shows_the_measured_grade_and_items() {
+    // The page probes the worker, which is this package's binary re-executed;
+    // an integration test has to point the worker at it before the first probe.
+    let _ = server::sandbox::worker::configure_executable(std::path::PathBuf::from(env!(
+        "CARGO_BIN_EXE_nanofile"
+    )));
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    let (status, html) = page(&server, &admin, "/sysadmin/settings/sandbox/").await;
+    assert_eq!(status, 200);
+    assert!(html.contains("data-sandbox-status"), "no status panel");
+    assert!(html.contains("data-sandbox-grade"), "no grade");
+    // One row per protection, in the order the report carries them.
+    for item in ["limits", "files", "network", "process"] {
+        assert!(
+            html.contains(&format!("data-sandbox-item=\"sandbox.item_{item}\"")),
+            "the {item} protection is not shown"
+        );
+    }
+    // The panel names a grade and labels each item, rather than rendering the
+    // locale key it came from. The grade key is never an attribute value, so
+    // its raw form can only mean a fallback.
+    let body = page_content(&html);
+    assert!(
+        !body.contains("sandbox.grade_"),
+        "the panel rendered a raw locale key"
+    );
+    for label in [
+        "Resource limits",
+        "File access",
+        "Network access",
+        "Starting programs",
+    ] {
+        assert!(html.contains(label), "the panel is missing {label:?}");
+    }
+}

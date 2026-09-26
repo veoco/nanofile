@@ -113,8 +113,8 @@ use windows_sys::Win32::Security::{
     GetLengthSid, GetTokenInformation, IsValidSid, LUA_TOKEN, NO_INHERITANCE, PSECURITY_DESCRIPTOR,
     PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES, TOKEN_ASSIGN_PRIMARY,
     TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER, TokenGroups,
-    TokenIntegrityLevel, TokenIsAppContainer, TokenUser, WELL_KNOWN_SID_TYPE, WRITE_RESTRICTED,
-    WinAuthenticatedUserSid, WinBuiltinUsersSid, WinInteractiveSid, WinWorldSid,
+    TokenIntegrityLevel, TokenIsAppContainer, TokenIsRestricted, TokenUser, WELL_KNOWN_SID_TYPE,
+    WRITE_RESTRICTED, WinAuthenticatedUserSid, WinBuiltinUsersSid, WinInteractiveSid, WinWorldSid,
 };
 use windows_sys::Win32::Security::{EqualSid, GetAce, GetAclInformation};
 use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
@@ -137,7 +137,7 @@ use windows_sys::Win32::System::Threading::{
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
-use super::Protections;
+use super::{Grants, Profile, Protections};
 
 /// Most committed memory the child may use, in bytes.
 ///
@@ -182,7 +182,7 @@ const MAX_SID_BYTES: usize = 68;
 /// token, read here rather than taken from the parent's word. A token that is not
 /// one claims neither layer, and the measurement below clears a claim the token
 /// does not back up.
-pub(super) fn confine() -> (Protections, Vec<String>) {
+pub(super) fn confine(profile: Profile) -> (Protections, Vec<String>) {
     let mut layers = Protections::default();
     let mut detail = Vec::new();
 
@@ -190,11 +190,16 @@ pub(super) fn confine() -> (Protections, Vec<String>) {
     // limits *are* is a fact about the job, and a job nobody set limits on is
     // not a layer. That is the one difference from the arrangement this
     // replaced, where the process held its own limits and could raise them.
-    match job_limits() {
+    // The process count the job must show is the profile's own: a worker that
+    // starts a helper has two slots, and one that does not has one.
+    let expected_processes = if profile.runs_helper() { 2 } else { 1 };
+    match job_limits(expected_processes) {
         Ok((memory, cpu)) => {
             layers.limits = true;
             layers.process = true;
-            detail.push(format!("job=memory{memory},cpu{cpu}s,parent"));
+            detail.push(format!(
+                "job=memory{memory},cpu{cpu}s,processes{expected_processes},parent"
+            ));
         }
         Err(reason) => detail.push(format!("job={reason}")),
     }
@@ -206,7 +211,15 @@ pub(super) fn confine() -> (Protections, Vec<String>) {
     }
 
     detail.push(format!("il={}", integrity_level()));
-    detail.push(format!("mitigations={}", harden_process()));
+    detail.push(format!(
+        "token={}",
+        if is_restricted_token() {
+            "restricted"
+        } else {
+            "unrestricted"
+        }
+    ));
+    detail.push(format!("mitigations={}", harden_process(profile)));
 
     // What a write reaches, which is the near edge of the files layer: inside
     // the container writes are redirected to its own store, outside it they are
@@ -226,7 +239,7 @@ pub(super) fn confine() -> (Protections, Vec<String>) {
 /// belongs to, which is the one the parent named at creation. A host that runs
 /// this under a job of its own (a CI runner does) nests rather than replaces
 /// it, so the immediate job is still the right one to ask.
-fn job_limits() -> Result<(u64, i64), &'static str> {
+fn job_limits(expected_processes: u32) -> Result<(u64, i64), &'static str> {
     let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
     let sized = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
     let read = unsafe {
@@ -252,7 +265,7 @@ fn job_limits() -> Result<(u64, i64), &'static str> {
         && limits & JOB_OBJECT_LIMIT_PROCESS_TIME != 0
         && limits & JOB_OBJECT_LIMIT_ACTIVE_PROCESS != 0
         && limits & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0
-        && info.BasicLimitInformation.ActiveProcessLimit == 1
+        && info.BasicLimitInformation.ActiveProcessLimit == expected_processes
         && info.ProcessMemoryLimit as u64 == MEMORY_LIMIT
         && info.BasicLimitInformation.PerProcessUserTimeLimit
             == CPU_LIMIT_SECONDS * HUNDRED_NANOSECONDS;
@@ -345,7 +358,7 @@ fn write_scope() -> &'static str {
 ///
 /// What is deliberately not here is code-integrity policy (CIG): it refuses
 /// images that are not Microsoft-signed, and this worker is not signed.
-fn harden_process() -> usize {
+fn harden_process(profile: Profile) -> usize {
     // Every one of these is a DWORD whose first bit is the mitigation and whose
     // second, where it exists, asks for audit-only; the values are the fields
     // of the corresponding `PROCESS_MITIGATION_*_POLICY` in `winnt.h`.
@@ -353,7 +366,12 @@ fn harden_process() -> usize {
     const IMAGE_LOAD_NO_REMOTE: u32 = 0x1;
     const IMAGE_LOAD_NO_LOW_LABEL: u32 = 0x2;
     /// Bottom-up randomization, forced relocation, and the larger range.
-    const ASLR: u32 = 0x1 | 0x2 | 0x8;
+    ///
+    /// The four bits of `PROCESS_MITIGATION_ASLR_POLICY` are, in order,
+    /// bottom-up randomization (`0x1`), forced relocation (`0x2`), high-entropy
+    /// (`0x4`) and disallow-stripped-images (`0x8`); the comment above the
+    /// constant is what these three are meant to be.
+    const ASLR: u32 = 0x1 | 0x2 | 0x4;
 
     let policies: [(
         windows_sys::Win32::System::Threading::PROCESS_MITIGATION_POLICY,
@@ -393,6 +411,13 @@ fn harden_process() -> usize {
 
     let mut taken = 0;
     for (policy, flags) in policies {
+        // The media profile is the one that starts a second process — the
+        // configured helper — so the policy that forbids child creation is not
+        // installed for it. What still bounds it is the job's process limit and
+        // the container's file access.
+        if policy == ProcessChildProcessPolicy && profile.runs_helper() {
+            continue;
+        }
         let applied = unsafe {
             SetProcessMitigationPolicy(
                 policy,
@@ -486,7 +511,7 @@ impl Drop for Child {
 /// will not make one: the child then reports no job and the limits layer is
 /// absent, which is a level the policy decides about rather than something to
 /// paper over.
-fn parent_job() -> Option<HANDLE> {
+fn parent_job(active_process_limit: u32) -> Option<HANDLE> {
     let job = unsafe { CreateJobObjectW(null(), null()) };
     if job.is_null() {
         return None;
@@ -499,9 +524,10 @@ fn parent_job() -> Option<HANDLE> {
         | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
     limits.BasicLimitInformation.PerProcessUserTimeLimit = CPU_LIMIT_SECONDS * HUNDRED_NANOSECONDS;
-    // One process: this one. A parser has no child to run, and a fork bomb has
-    // nowhere to go.
-    limits.BasicLimitInformation.ActiveProcessLimit = 1;
+    // The worker, and for the media profile the helper it starts: a document
+    // parser has no child, so it gets one slot, and the one profile that does
+    // gets exactly two. A fork bomb has nowhere to go either way.
+    limits.BasicLimitInformation.ActiveProcessLimit = active_process_limit;
     limits.ProcessMemoryLimit = MEMORY_LIMIT as usize;
 
     let sized = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
@@ -530,8 +556,21 @@ fn parent_job() -> Option<HANDLE> {
 /// user's. A host that will not give one still gets the token, and a host that
 /// will not give that either still gets a job-limited child rather than no child
 /// at all.
-pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child> {
+pub(crate) fn spawn(
+    program: &OsStr,
+    args: &[OsString],
+    profile: Profile,
+    grants: Grants<'_>,
+) -> std::io::Result<Child> {
     let container = app_container(program);
+    // A worker that starts a helper gets two slots in its job and a container
+    // that can read the helper and the one source file the parent wrote. A
+    // worker that starts nothing keeps a single slot, which is the tighter
+    // bound and the one every other profile runs under.
+    let active_process_limit = if profile.runs_helper() { 2 } else { 1 };
+    if profile.runs_helper() {
+        grant_helper_access(grants);
+    }
     let attempts: &[bool] = if container.is_some() {
         &[true, false]
     } else {
@@ -541,6 +580,10 @@ pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child
 
     for &with_container in attempts {
         let Some(token) = restricted_token() else {
+            // Recorded, not swallowed: a child that runs without the token has
+            // less confinement than this host asked for, and the reason has to
+            // reach the log next to that fact.
+            note_shortfall("token-refused", None);
             // No token at all leaves the ordinary child, which still bounds
             // itself with a Job Object.
             break;
@@ -554,7 +597,7 @@ pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child
         } else {
             None
         };
-        match start(program, &attempt, Some(token), held) {
+        match start(program, &attempt, Some(token), held, active_process_limit) {
             Ok(child) => return Ok(child),
             Err(error) => {
                 if with_container {
@@ -580,7 +623,7 @@ pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child
     // Every failure is carried, not just the last one: the first says whether the
     // container or the token was refused, and the probe path has no subscriber
     // for the warning above to reach.
-    start(program, args, None, None).map_err(|default| {
+    start(program, args, None, None, active_process_limit).map_err(|default| {
         std::io::Error::new(
             default.kind(),
             format!("{}; with the default token: {default}", refused.join("; ")),
@@ -596,7 +639,7 @@ pub(crate) fn spawn(program: &OsStr, args: &[OsString]) -> std::io::Result<Child
 /// apart the only way that cannot be argued with: start it again without them
 /// and see.
 pub(crate) fn spawn_unrestricted(program: &OsStr, args: &[OsString]) -> std::io::Result<Child> {
-    start(program, args, None, None)
+    start(program, args, None, None, 1)
 }
 
 /// Start the child with the restricted token and no container.
@@ -609,7 +652,7 @@ pub(crate) fn spawn_token_only(program: &OsStr, args: &[OsString]) -> std::io::R
         Some(token) => {
             let mut attempt = args.to_vec();
             attempt.push(OsString::from("--restricted"));
-            start(program, &attempt, Some(token), None)
+            start(program, &attempt, Some(token), None, 1)
         }
         None => Err(std::io::Error::other(
             "the system refused a restricted token",
@@ -628,8 +671,9 @@ fn start(
     args: &[OsString],
     token: Option<HANDLE>,
     container: Option<&AppContainer>,
+    active_process_limit: u32,
 ) -> std::io::Result<Child> {
-    let started = start_with(program, args, token, container);
+    let started = start_with(program, args, token, container, active_process_limit);
     if let Some(token) = token {
         unsafe { CloseHandle(token) };
     }
@@ -641,6 +685,7 @@ fn start_with(
     args: &[OsString],
     token: Option<HANDLE>,
     container: Option<&AppContainer>,
+    active_process_limit: u32,
 ) -> std::io::Result<Child> {
     let [
         (child_stdin, parent_stdin),
@@ -659,7 +704,7 @@ fn start_with(
     // between the two the child is running with nothing bounding it, and the
     // assignment itself is a call this process would have to make on a process
     // it may already have lost control of.
-    let job = parent_job();
+    let job = parent_job(active_process_limit);
     // Only these three handles are inherited, the container is named in the same
     // list, and the job and the child-process policy travel with it. Without the
     // list, `bInheritHandles` would hand the child everything inheritable this
@@ -1112,6 +1157,59 @@ fn app_container_sid() -> Option<PSID> {
     (stored != 0).then(|| stored as PSID)
 }
 
+/// Give the container the read access the media profile's grants need.
+///
+/// The worker itself is granted read and execute by [`grant_image_access`], and
+/// it is the container's own image. The media profile starts a *second* program
+/// and reads one file the parent wrote, and neither carries an ACE for the
+/// package SID: the configured helper lives wherever it was installed, and the
+/// scratch source is in the server's temporary directory, which only the user's
+/// own SIDs may open. Both are granted here, and the grant is a read (plus
+/// execute for the helper), never a write.
+///
+/// A grant that cannot be made is recorded as a shortfall and left to fail
+/// loudly: a helper the container may not read means the media profile cannot
+/// run, which the child's own report then says.
+fn grant_helper_access(grants: Grants<'_>) {
+    let Some(sid) = app_container_sid() else {
+        return;
+    };
+    if let Some(helper) = grants.helper {
+        if let Err(error) = add_access(
+            helper.as_os_str(),
+            sid,
+            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        ) {
+            note_shortfall("helper-grant-refused", Some(&error));
+        }
+        // A helper that is dynamically linked loads libraries from beside its
+        // own image, and each one needs the same grant.
+        if let Some(directory) = helper.parent() {
+            let Ok(entries) = std::fs::read_dir(directory) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let is_library = path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("dll"));
+                if is_library {
+                    let _ = add_access(
+                        path.as_os_str(),
+                        sid,
+                        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                    );
+                }
+            }
+        }
+    }
+    if let Some(source) = grants.source {
+        if let Err(error) = add_access(source.as_os_str(), sid, FILE_GENERIC_READ) {
+            note_shortfall("source-grant-refused", Some(&error));
+        }
+    }
+}
+
 /// Whether `program` has been given to the container, granting it if not.
 ///
 /// Once per process and per image: a grant is a change to the file's own ACL, and
@@ -1149,7 +1247,12 @@ fn grant_image_access(program: &OsStr, sid: PSID) -> bool {
 /// because executing an image and traversing into a directory are the same bit,
 /// and the loader needs both to map the file it was started from.
 fn add_read_execute(program: &OsStr, sid: PSID) -> std::io::Result<()> {
-    let path: Vec<u16> = program.encode_wide().chain(std::iter::once(0)).collect();
+    add_access(program, sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE)
+}
+
+/// Add `mask` for `sid` to `path`'s DACL, keeping every ACE it already has.
+fn add_access(path: &OsStr, sid: PSID, mask: u32) -> std::io::Result<()> {
+    let path: Vec<u16> = path.encode_wide().chain(std::iter::once(0)).collect();
 
     let mut dacl: *mut ACL = null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
@@ -1188,7 +1291,7 @@ fn add_read_execute(program: &OsStr, sid: PSID) -> std::io::Result<()> {
     }
 
     let entry = EXPLICIT_ACCESS_W {
-        grfAccessPermissions: FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        grfAccessPermissions: mask,
         grfAccessMode: GRANT_ACCESS,
         grfInheritance: NO_INHERITANCE,
         Trustee: TRUSTEE_W {
@@ -1297,6 +1400,31 @@ fn is_app_container() -> bool {
     };
     unsafe { CloseHandle(token) };
     read != 0 && inside != 0
+}
+
+/// Whether this process's token is a restricted one.
+///
+/// Read back rather than taken from the command line: the parent *asked* for a
+/// restricted token, and what the process actually carries is the fact the
+/// report is about.
+fn is_restricted_token() -> bool {
+    let mut token: HANDLE = null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return false;
+    }
+    let mut restricted = 0i32;
+    let mut length = 0u32;
+    let read = unsafe {
+        GetTokenInformation(
+            token,
+            TokenIsRestricted,
+            std::ptr::addr_of_mut!(restricted).cast::<c_void>(),
+            size_of::<i32>() as u32,
+            &mut length,
+        )
+    };
+    unsafe { CloseHandle(token) };
+    read != 0 && restricted != 0
 }
 
 /// A restricted version of this process's own token.
@@ -1521,7 +1649,9 @@ impl RestrictingSids {
     /// same reason: the restricting check has to be able to satisfy the window
     /// station and desktop the child inherits.
     fn push_well_known(&mut self, kind: WELL_KNOWN_SID_TYPE) -> bool {
-        let mut sid = [0u64; MAX_SID_BYTES / 8];
+        // Bytes, not words: `MAX_SID_BYTES` is a byte count, and a `[u64; n]`
+        // would round it down to a buffer shorter than the constant promises.
+        let mut sid = [0u8; MAX_SID_BYTES];
         let mut length = size_of_val(&sid) as u32;
         let created = unsafe {
             CreateWellKnownSid(

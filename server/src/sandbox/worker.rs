@@ -239,11 +239,9 @@ pub fn run(
         grants,
         measure,
     );
-    if external.restricted_token {
-        // A restricted token is a property of the process, not a protection this
-        // process installed, so it is reported rather than claimed as one.
-        report.detail.push_str(",token=restricted");
-    }
+    // The token claim is not repeated here: on Windows the child reads its own
+    // token back (see `windows::confine`), and no other platform starts a child
+    // with one.
 
     if job == Job::Selftest {
         // Parsing is the other half of the answer: the report says what was
@@ -424,7 +422,7 @@ pub fn run_request(
     // The rung the probe settled on: a request's child is started the way the
     // one that reported was, and the probe ran before any request could.
     let start = rung(profile);
-    let run = match run_child(&invocation, Some(request), timeout, start) {
+    let run = match run_child(&invocation, Some(request), timeout, start, profile, grants) {
         Ok(run) => run,
         Err(error) => {
             return RunOutcome::Unavailable(format!("cannot start the sandbox worker: {error}"));
@@ -547,6 +545,50 @@ pub fn status(profile: Profile) -> Status {
 /// Detail for a probe that is waiting out [`UNAVAILABLE_RETRY`].
 const PROBE_PENDING: &str = "the extraction sandbox is unavailable (a probe is pending)";
 
+/// The report a profile can produce on this host, whatever the settings say.
+///
+/// For the settings page: an admin who has switched the sandbox off, or set a
+/// minimum this host misses, still needs to see what the host *would* give —
+/// that is what decides whether switching it back on, or lowering the minimum,
+/// changes anything. The answer is measured once and cached: it is a property of
+/// the host, not of a request.
+pub fn capability(profile: Profile) -> Result<Report, String> {
+    let cache = CAPABILITY.get_or_init(|| Mutex::new(HashMap::new()));
+    {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = cache.get(&profile) {
+            return cached.clone();
+        }
+    }
+
+    // `enabled: true, none` asks the child for its report without refusing it
+    // over a grade: this call is a measurement, not a decision.
+    let measured = measure_capability(profile);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.insert(profile, measured.clone());
+    measured
+}
+
+fn measure_capability(profile: Profile) -> Result<Report, String> {
+    let grants = probe_grants(profile);
+    let Some(invocation) = invocation(Requirement::new(true, Level::None), profile, grants) else {
+        return Err("cannot resolve the sandbox worker".to_string());
+    };
+
+    let mut failures: Vec<String> = Vec::new();
+    for &start in rungs() {
+        match probe_on(&invocation, profile, grants, start) {
+            Ok(report) => return Ok(report),
+            Err(why) => failures.push(format!("{}: {why}", start.label())),
+        }
+    }
+    Err(failures.join("; "))
+}
+
 /// Point the worker at a specific binary instead of this process's own.
 ///
 /// Only tests need it: Cargo builds the binary and the integration test in
@@ -559,12 +601,33 @@ pub fn configure_executable(path: PathBuf) -> bool {
 }
 
 /// Set the sandbox requirement the server resolved from `[sandbox]`.
+///
+/// Called at startup and again whenever an admin saves a change on the Sandbox
+/// page (the `Hook::Sandbox` hook), so the value is mutable rather than set
+/// once. A change to the switch or the minimum changes what a probe *means*, so
+/// the cached answers are dropped with it: the next request re-probes instead of
+/// being told what the previous setting decided.
 pub fn configure_requirement(requirement: Requirement) {
-    let _ = REQUIREMENT.set(requirement);
+    *requirement_slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = requirement;
+    if let Some(cache) = STATUS.get() {
+        cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+}
+
+/// The process-global requirement, created on first use.
+fn requirement_slot() -> &'static Mutex<Requirement> {
+    REQUIREMENT.get_or_init(|| Mutex::new(Requirement::default()))
 }
 
 fn configured_requirement() -> Requirement {
-    REQUIREMENT.get().copied().unwrap_or_default()
+    *requirement_slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[derive(Default)]
@@ -576,8 +639,10 @@ struct Cache {
 }
 
 static STATUS: OnceLock<Mutex<HashMap<Profile, Cache>>> = OnceLock::new();
+/// What each profile measured on this host, whatever the settings say.
+static CAPABILITY: OnceLock<Mutex<HashMap<Profile, Result<Report, String>>>> = OnceLock::new();
 static EXECUTABLE: OnceLock<PathBuf> = OnceLock::new();
-static REQUIREMENT: OnceLock<Requirement> = OnceLock::new();
+static REQUIREMENT: OnceLock<Mutex<Requirement>> = OnceLock::new();
 /// The configured media helper, which the media profile may execute.
 static HELPER: OnceLock<PathBuf> = OnceLock::new();
 
@@ -652,8 +717,8 @@ fn rung(profile: Profile) -> Start {
 /// The answer is returned rather than recorded here: the caller holds the status
 /// cache's lock, and a helper that took it again would deadlock.
 fn probe(profile: Profile) -> (Start, Status) {
-    let Some(invocation) = invocation(configured_requirement(), profile, probe_grants(profile))
-    else {
+    let grants = probe_grants(profile);
+    let Some(invocation) = invocation(configured_requirement(), profile, grants) else {
         return (
             Start::Confined,
             Status::Unavailable("cannot resolve the sandbox worker".to_string()),
@@ -669,7 +734,7 @@ fn probe(profile: Profile) -> (Start, Status) {
     // loader, which no creation error reports.
     let mut failures: Vec<String> = Vec::new();
     for &start in rungs() {
-        match probe_on(&invocation, profile, start) {
+        match probe_on(&invocation, profile, grants, start) {
             Ok(report) => return (start, accept(report)),
             Err(why) => failures.push(format!("{}: {why}", start.label())),
         }
@@ -679,8 +744,13 @@ fn probe(profile: Profile) -> (Start, Status) {
 }
 
 /// One rung's answer, or why it did not give one.
-fn probe_on(invocation: &Invocation, profile: Profile, start: Start) -> Result<Report, String> {
-    let run = run_child(invocation, None, PROBE_TIMEOUT, start)
+fn probe_on(
+    invocation: &Invocation,
+    profile: Profile,
+    grants: crate::sandbox::Grants<'_>,
+    start: Start,
+) -> Result<Report, String> {
+    let run = run_child(invocation, None, PROBE_TIMEOUT, start, profile, grants)
         .map_err(|error| format!("cannot start the sandbox worker: {error}"))?;
     if let Verdict::Unavailable(why) = verdict(run.exit_code, &run.stdout, &run.stderr) {
         return Err(why);
@@ -921,7 +991,13 @@ struct Pipes {
 
 /// Start the child, with `--selftest` when the parent wants a report.
 #[cfg(not(windows))]
-fn spawn_child(invocation: &Invocation, selftest: bool, _start: Start) -> std::io::Result<Child> {
+fn spawn_child(
+    invocation: &Invocation,
+    selftest: bool,
+    _start: Start,
+    _profile: Profile,
+    _grants: crate::sandbox::Grants<'_>,
+) -> std::io::Result<Child> {
     let mut command = Command::new(&invocation.program);
     command.args(&invocation.args);
     if selftest {
@@ -955,13 +1031,19 @@ fn spawn_child(invocation: &Invocation, selftest: bool, _start: Start) -> std::i
 /// The environment, the working directory and the handle inheritance are all
 /// part of the creation call on Windows, so they are set inside `sandbox`.
 #[cfg(windows)]
-fn spawn_child(invocation: &Invocation, selftest: bool, start: Start) -> std::io::Result<Child> {
+fn spawn_child(
+    invocation: &Invocation,
+    selftest: bool,
+    start: Start,
+    profile: Profile,
+    grants: crate::sandbox::Grants<'_>,
+) -> std::io::Result<Child> {
     let mut args = invocation.args.clone();
     if selftest {
         args.push(OsString::from("--selftest"));
     }
     match start {
-        Start::Confined => sandbox::spawn(&invocation.program, &args),
+        Start::Confined => sandbox::spawn(&invocation.program, &args, profile, grants),
         Start::TokenOnly => sandbox::spawn_token_only(&invocation.program, &args),
         Start::Plain => sandbox::spawn_unrestricted(&invocation.program, &args),
     }
@@ -1038,8 +1120,10 @@ fn run_child(
     request: Option<Vec<u8>>,
     timeout: Duration,
     start: Start,
+    profile: Profile,
+    grants: crate::sandbox::Grants<'_>,
 ) -> std::io::Result<Run> {
-    let mut child = spawn_child(invocation, request.is_none(), start)?;
+    let mut child = spawn_child(invocation, request.is_none(), start, profile, grants)?;
     let pipes = child.pipes();
 
     let writer = match (request, pipes.stdin) {

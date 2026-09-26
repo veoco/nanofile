@@ -165,6 +165,48 @@ pub struct SystemSettingsTemplate {
     pub restart_generation: u64,
     /// Why the last in-place restart kept the previous listener, if it did.
     pub restart_error: Option<String>,
+    /// The measured sandbox, on the Sandbox page only.
+    pub sandbox: Option<SandboxView>,
+}
+
+/// What this host actually gives, for the Sandbox page.
+///
+/// The grade is the one number an admin acts on; the items say which protection
+/// is missing, and the notes say what the platform still leaves open. None of
+/// it is a claim: every value comes from the report a confined child printed.
+pub struct SandboxView {
+    /// The effective value of `sandbox.enabled`.
+    pub enabled: bool,
+    /// The effective `sandbox.min_level`, already translated.
+    pub min_level: String,
+    /// The grade label, already translated.
+    pub grade: String,
+    /// `badge-green` when every protection is there, `badge-red` when nothing
+    /// beyond resource limits is, `badge-gray` otherwise.
+    pub grade_class: &'static str,
+    /// The four items, in the order the page lists them.
+    pub items: Vec<SandboxItemView>,
+    /// The media profile's own line.
+    pub media: SandboxMediaView,
+    /// The one warning the page shows, when there is one.
+    pub warning: Option<String>,
+    /// The raw detail a probe printed, for the disclosure.
+    pub detail: String,
+}
+
+/// One protection, present or not, with the platform's notes beside it.
+pub struct SandboxItemView {
+    pub label_key: &'static str,
+    pub present: bool,
+    /// The residuals that weaken this item, already translated.
+    pub notes: Vec<String>,
+}
+
+/// The media profile's line: it is a second child with its own report.
+pub struct SandboxMediaView {
+    pub label: String,
+    pub class: &'static str,
+    pub detail: String,
 }
 
 /// Query parameters of a settings page.
@@ -300,6 +342,7 @@ async fn render(
         restart_return: settings_url(section, "restarted"),
         restart_generation: crate::restart::generation(),
         restart_error: crate::restart::failure(),
+        sandbox: (section == Section::Sandbox).then(|| sandbox_view(t, service)),
     };
 
     let html = tpl
@@ -313,6 +356,170 @@ fn settings_url(section: Section, action: &str) -> String {
     match section {
         Section::Server => format!("/sysadmin/settings/?action={action}"),
         other => format!("/sysadmin/settings/{}/?action={action}", other.id()),
+    }
+}
+
+/// What this host actually gives, for the Sandbox page.
+///
+/// The grade is measured, not asserted: it comes from a child that confined
+/// itself and printed what took. The items say which protection is missing and
+/// the notes say what the platform still leaves open, so an admin can tell "this
+/// host cannot do better" from "something here is broken".
+fn sandbox_view(t: &I18n, service: &crate::settings::SettingsService) -> SandboxView {
+    use crate::sandbox::{Level, Profile, worker};
+
+    let enabled = service
+        .resolved_one("sandbox.enabled")
+        .map(|entry| entry.value == "true")
+        .unwrap_or(true);
+    let min_level = service
+        .resolved_one("sandbox.min_level")
+        .map(|entry| entry.value)
+        .unwrap_or_else(|| "partial".to_string());
+    let min_level = Level::parse(&min_level).unwrap_or(Level::Partial);
+
+    let capability = worker::capability(Profile::Documents);
+    let (grade, grade_class, items, detail, host_level) = match &capability {
+        Ok(report) => {
+            let level = report.level();
+            (
+                t.tr(level_label(level)).to_string(),
+                level_class(level),
+                report
+                    .protections
+                    .items()
+                    .into_iter()
+                    .map(|(item, present)| SandboxItemView {
+                        label_key: item_label(item),
+                        present,
+                        notes: report
+                            .notes()
+                            .into_iter()
+                            .filter(|note| note_belongs(note, item))
+                            .map(|note| t.tr(note_label(note)).to_string())
+                            .collect(),
+                    })
+                    .collect(),
+                report.detail.clone(),
+                Some(level),
+            )
+        }
+        Err(why) => (
+            t.tr("sandbox.grade_unavailable").to_string(),
+            "badge-red",
+            Vec::new(),
+            why.clone(),
+            None,
+        ),
+    };
+
+    // One warning, in the order that decides what the admin should do first:
+    // the switch is off, then this host cannot run the features at all, then it
+    // is below the minimum that was asked for, then it is merely not complete.
+    let warning = if !enabled {
+        Some(t.tr("sandbox.warning_disabled").to_string())
+    } else {
+        match host_level {
+            None => Some(format!(
+                "{} {}",
+                t.tr("sandbox.warning_unavailable"),
+                detail
+            )),
+            Some(level) if level < min_level => Some(t.tr("sandbox.warning_below_min").to_string()),
+            Some(level) if level < Level::Full => {
+                Some(t.tr("sandbox.warning_incomplete").to_string())
+            }
+            _ => None,
+        }
+    };
+
+    // The media profile is a second child with its own report: it may execute
+    // the helper where nothing else may, so it is shown on its own line.
+    let media = match worker::capability(Profile::Media) {
+        Ok(report) if report.detail.contains("media-ok") => SandboxMediaView {
+            label: t.tr("sandbox.media_ok").to_string(),
+            class: "badge-green",
+            detail: report.detail,
+        },
+        Ok(report) if report.detail.contains("media-no-helper") => SandboxMediaView {
+            label: t.tr("sandbox.media_no_helper").to_string(),
+            class: "badge-gray",
+            detail: report.detail,
+        },
+        Ok(report) => SandboxMediaView {
+            label: t.tr("sandbox.media_failed").to_string(),
+            class: "badge-red",
+            detail: report.detail,
+        },
+        Err(why) => SandboxMediaView {
+            label: t.tr("sandbox.media_unavailable").to_string(),
+            class: "badge-red",
+            detail: why,
+        },
+    };
+
+    SandboxView {
+        enabled,
+        min_level: t.tr(min_level_label(min_level)).to_string(),
+        grade,
+        grade_class,
+        items,
+        media,
+        warning,
+        detail,
+    }
+}
+
+fn level_label(level: crate::sandbox::Level) -> &'static str {
+    match level {
+        crate::sandbox::Level::Full => "sandbox.grade_full",
+        crate::sandbox::Level::Partial => "sandbox.grade_partial",
+        crate::sandbox::Level::None => "sandbox.grade_none",
+    }
+}
+
+fn level_class(level: crate::sandbox::Level) -> &'static str {
+    match level {
+        crate::sandbox::Level::Full => "badge-green",
+        crate::sandbox::Level::Partial => "badge-gray",
+        crate::sandbox::Level::None => "badge-red",
+    }
+}
+
+fn item_label(item: &str) -> &'static str {
+    match item {
+        "limits" => "sandbox.item_limits",
+        "files" => "sandbox.item_files",
+        "network" => "sandbox.item_network",
+        _ => "sandbox.item_process",
+    }
+}
+
+/// Which item a residual note belongs beside.
+fn note_belongs(note: &str, item: &str) -> bool {
+    match note {
+        "fork" | "helper" => item == "process",
+        "system_tree" | "writes" | "metadata" | "ll_gaps" => item == "files",
+        _ => false,
+    }
+}
+
+fn note_label(note: &str) -> &'static str {
+    match note {
+        "fork" => "sandbox.note_fork",
+        "helper" => "sandbox.note_helper",
+        "system_tree" => "sandbox.note_system_tree",
+        "writes" => "sandbox.note_writes",
+        "metadata" => "sandbox.note_metadata",
+        _ => "sandbox.note_ll_gaps",
+    }
+}
+
+fn min_level_label(level: crate::sandbox::Level) -> &'static str {
+    match level {
+        crate::sandbox::Level::Full => "setting.sandbox_min_level_option_full",
+        crate::sandbox::Level::Partial => "setting.sandbox_min_level_option_partial",
+        crate::sandbox::Level::None => "setting.sandbox_min_level_option_none",
     }
 }
 

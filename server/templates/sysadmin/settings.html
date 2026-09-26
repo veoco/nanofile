@@ -107,6 +107,72 @@
     </div>
     {% endif %}
 
+    {# The measured sandbox, on its own page: what this host actually gives,
+       which of the four protections is missing, and what the platform still
+       leaves open. Every value comes from a child that confined itself and
+       printed what took, so the page cannot claim protection the host does not
+       provide. #}
+    {% if let Some(sandbox) = sandbox %}
+    <section class="nf-form is-flush mt-5" data-sandbox-status>
+        <div class="nf-sec">
+            <h2>{{ t.tr("sandbox.status_title") }}</h2>
+            <span class="badge {{ sandbox.grade_class }}" data-sandbox-grade>{{ sandbox.grade }}</span>
+        </div>
+        <div class="body flex flex-col gap-2 text-[13px]">
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("sandbox.status_switch") }}</span>
+                <span class="badge {% if sandbox.enabled %}badge-green{% else %}badge-red{% endif %}">
+                    {% if sandbox.enabled %}{{ t.tr("sandbox.status_on") }}{% else %}{{ t.tr("sandbox.status_off") }}{% endif %}
+                </span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("sandbox.status_min") }}</span>
+                <span>{{ sandbox.min_level }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+                <span class="text-ink-2">{{ t.tr("sandbox.status_media") }}</span>
+                <span class="badge {{ sandbox.media.class }}">{{ sandbox.media.label }}</span>
+            </div>
+        </div>
+
+        {# The one warning: off, unavailable, below the minimum, or merely not
+           complete. A warning rather than an error because the admin chose the
+           first and the third; the second and fourth are what to fix. #}
+        {% if let Some(warning) = sandbox.warning %}
+        <div class="nf-banner is-warn mt-3" data-sandbox-warning>
+            <p>{{ warning }}</p>
+        </div>
+        {% endif %}
+
+        <div class="mt-4">
+            <h3>{{ t.tr("sandbox.items_title") }}</h3>
+            <div class="mt-2 flex flex-col gap-2 text-[13px]" data-sandbox-items>
+                {% for item in sandbox.items %}
+                <div data-sandbox-item="{{ item.label_key }}">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="text-ink-2">{{ t.tr(item.label_key) }}</span>
+                        <span class="badge {% if item.present %}badge-green{% else %}badge-red{% endif %}">
+                            {% if item.present %}{{ t.tr("sandbox.item_present") }}{% else %}{{ t.tr("sandbox.item_missing") }}{% endif %}
+                        </span>
+                    </div>
+                    {% for note in item.notes %}
+                    <p class="desc">{{ note }}</p>
+                    {% endfor %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        {# The raw report, one disclosure away: an operator filing a bug has the
+           whole measurement without the page shouting it at every reader. #}
+        <details class="mt-4">
+            <summary class="text-[12px] text-ink-3">{{ t.tr("sandbox.detail_title") }}</summary>
+            <p class="mono text-[11px] break-all mt-2">{{ sandbox.detail }}</p>
+            <p class="mono text-[11px] break-all mt-1">{{ sandbox.media.detail }}</p>
+        </details>
+    </section>
+    {% endif %}
+
     {# The catalog is over a hundred settings across ten pages, so the page can
        be filtered. Without scripting the box is inert and the page is what it
        always was. #}
