@@ -111,6 +111,56 @@ const EXIT_SANDBOX_UNAVAILABLE: i32 = 125;
 /// exit code alone is not enough (a runner in between may rewrite it).
 const SANDBOX_REFUSAL: &str = "extract-worker: sandbox unavailable";
 
+/// Which creation a child is started with.
+///
+/// Windows is the only platform with more than one, and the chain is not a
+/// convenience: a container whose child is *created* and then dies in its loader
+/// reports nothing, so the only way to tell it from a host that cannot confine
+/// the worker at all is to start the next creation and see whether it answers.
+/// The rung that answered is the one requests use; each refusal is recorded, and
+/// the child's own report says what it actually got, which the requirement then
+/// judges. There is no rung below `Plain`, and `Plain` still carries the job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Start {
+    /// Whatever this host can give: the runner on macOS, the container and the
+    /// restricted token on Windows.
+    Confined,
+    /// The restricted token without the container, on Windows.
+    #[cfg(windows)]
+    TokenOnly,
+    /// Neither: this process's own token, ideally nothing else.
+    #[cfg(windows)]
+    Plain,
+}
+
+impl Start {
+    /// How a rung is named when the chain reports which ones failed.
+    fn label(self) -> &'static str {
+        match self {
+            Start::Confined => "with every protection",
+            #[cfg(windows)]
+            Start::TokenOnly => "with a token and no container",
+            #[cfg(windows)]
+            Start::Plain => "without a token or a container",
+        }
+    }
+}
+
+/// The creations this platform can start a child with, strongest first.
+///
+/// One everywhere but Windows: the macOS runner and the unix protections are
+/// applied by the child or by the parent without an alternative.
+fn rungs() -> &'static [Start] {
+    #[cfg(windows)]
+    {
+        &[Start::Confined, Start::TokenOnly, Start::Plain]
+    }
+    #[cfg(not(windows))]
+    {
+        &[Start::Confined]
+    }
+}
+
 /// What the child was asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Job {
@@ -234,7 +284,9 @@ pub fn probe_report(profile: Profile) -> anyhow::Result<()> {
             let mut line = report.line();
             // The parent's half of the answer: the child can say whether its
             // token is an AppContainer's, and only the parent knows what it asked
-            // for and what came back.
+            // for and what came back. The two are independent — a host can have
+            // no container at all and still report which flavour was asked for —
+            // so neither is nested under the other.
             if let Some(reason) = sandbox::container_shortfall() {
                 line.push_str(&format!(",container={reason}"));
             }
@@ -377,10 +429,10 @@ pub fn run_request(
         return RunOutcome::Unavailable("cannot resolve the sandbox worker".to_string());
     };
 
-    // One launch, the same one the probe measured: there is no weaker rung to
-    // fall back to, because a child that only runs unconfined is a child whose
-    // request must not be run at all.
-    let run = match run_child(&invocation, Some(request), timeout, profile, grants) {
+    // The rung the probe settled on: a request's child is started the way the
+    // one that reported was, and the probe ran before any request could.
+    let start = rung(profile);
+    let run = match run_child(&invocation, Some(request), timeout, start, profile, grants) {
         Ok(run) => run,
         Err(error) => {
             return RunOutcome::Unavailable(format!("cannot start the sandbox worker: {error}"));
@@ -455,7 +507,7 @@ pub fn status(profile: Profile) -> Status {
     }
 
     let status = probe(profile);
-    match &status {
+    match &status.1 {
         Status::Ready(report) => {
             tracing::info!(
                 profile = profile.as_str(),
@@ -482,7 +534,8 @@ pub fn status(profile: Profile) -> Status {
                     ),
                 }
             }
-            entry.status = Some(status.clone());
+            entry.rung = Some(status.0);
+            entry.status = Some(status.1.clone());
         }
         Status::Unavailable(reason) => {
             tracing::error!(
@@ -496,7 +549,7 @@ pub fn status(profile: Profile) -> Status {
             entry.retry_at = Some(Instant::now() + UNAVAILABLE_RETRY);
         }
     }
-    status
+    status.1
 }
 
 /// Detail for a probe that is waiting out [`UNAVAILABLE_RETRY`].
@@ -535,7 +588,15 @@ fn measure_capability(profile: Profile) -> Result<Report, String> {
     let Some(invocation) = invocation(Requirement::new(true, Level::None), profile, grants) else {
         return Err("cannot resolve the sandbox worker".to_string());
     };
-    probe_on(&invocation, profile, grants)
+
+    let mut failures: Vec<String> = Vec::new();
+    for &start in rungs() {
+        match probe_on(&invocation, profile, grants, start) {
+            Ok(report) => return Ok(report),
+            Err(why) => failures.push(format!("{}: {why}", start.label())),
+        }
+    }
+    Err(failures.join("; "))
 }
 
 /// Point the worker at a specific binary instead of this process's own.
@@ -583,6 +644,9 @@ fn configured_requirement() -> Requirement {
 struct Cache {
     status: Option<Status>,
     retry_at: Option<Instant>,
+    /// The creation the probe last got a report from, for the requests that
+    /// follow.
+    rung: Option<Start>,
 }
 
 static STATUS: OnceLock<Mutex<HashMap<Profile, Cache>>> = OnceLock::new();
@@ -644,22 +708,46 @@ fn probe_grants(profile: Profile) -> crate::sandbox::Grants<'static> {
     }
 }
 
-/// Run the child once with `--selftest` and read its report.
+/// The creation the probe settled on for `profile`, for the requests that
+/// follow.
+fn rung(profile: Profile) -> Start {
+    let Some(cache) = STATUS.get() else {
+        return Start::Confined;
+    };
+    let cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .get(&profile)
+        .and_then(|entry| entry.rung)
+        .unwrap_or(Start::Confined)
+}
+
+/// Run the child once per creation, strongest first, and read the first report.
 ///
-/// One launch, the same one a request gets: what the probe measures is exactly
-/// what the next request will run under. A host that refused the container says
-/// so through [`crate::sandbox::container_shortfall`] and through the child's own
-/// report, and the requirement decides whether that is enough — there is no
-/// weaker rung to fall back to.
-fn probe(profile: Profile) -> Status {
+/// The answer is returned rather than recorded here: the caller holds the status
+/// cache's lock, and a helper that took it again would deadlock.
+fn probe(profile: Profile) -> (Start, Status) {
     let grants = probe_grants(profile);
     let Some(invocation) = invocation(configured_requirement(), profile, grants) else {
-        return Status::Unavailable("cannot resolve the sandbox worker".to_string());
+        return (
+            Start::Confined,
+            Status::Unavailable("cannot resolve the sandbox worker".to_string()),
+        );
     };
-    match probe_on(&invocation, profile, grants) {
-        Ok(report) => accept(report),
-        Err(why) => Status::Unavailable(why),
+
+    // A rung is accepted by the *child's own report*, never by the launch having
+    // succeeded: the failure this walks past is a child that is created and then
+    // dies in its loader, which no creation error reports.
+    let mut failures: Vec<String> = Vec::new();
+    for &start in rungs() {
+        match probe_on(&invocation, profile, grants, start) {
+            Ok(report) => return (start, accept(report)),
+            Err(why) => failures.push(format!("{}: {why}", start.label())),
+        }
     }
+
+    (Start::Confined, Status::Unavailable(failures.join("; ")))
 }
 
 /// The one launch's answer, or why it did not give one.
@@ -674,14 +762,15 @@ fn probe_on(
     invocation: &Invocation,
     profile: Profile,
     grants: crate::sandbox::Grants<'_>,
+    start: Start,
 ) -> Result<Report, String> {
     #[cfg(not(target_os = "windows"))]
     {
-        probe_once(invocation, profile, grants)
+        probe_once(invocation, profile, grants, start)
     }
     #[cfg(target_os = "windows")]
     {
-        match probe_once(invocation, profile, grants) {
+        match probe_once(invocation, profile, grants, start) {
             Ok(report) => Ok(report),
             Err(why) => {
                 if !crate::sandbox::lpac_attempted() {
@@ -692,19 +781,20 @@ fn probe_on(
                      container ({why}); starting it in the plain one"
                 );
                 crate::sandbox::disable_lpac();
-                probe_once(invocation, profile, grants)
+                probe_once(invocation, profile, grants, start)
             }
         }
     }
 }
 
-/// One launch and one report.
+/// One creation and one report.
 fn probe_once(
     invocation: &Invocation,
     profile: Profile,
     grants: crate::sandbox::Grants<'_>,
+    start: Start,
 ) -> Result<Report, String> {
-    let run = run_child(invocation, None, PROBE_TIMEOUT, profile, grants)
+    let run = run_child(invocation, None, PROBE_TIMEOUT, start, profile, grants)
         .map_err(|error| format!("cannot start the sandbox worker: {error}"))?;
     if let Verdict::Unavailable(why) = verdict(run.exit_code, &run.stdout, &run.stderr) {
         return Err(why);
@@ -948,6 +1038,7 @@ struct Pipes {
 fn spawn_child(
     invocation: &Invocation,
     selftest: bool,
+    _start: Start,
     _profile: Profile,
     _grants: crate::sandbox::Grants<'_>,
 ) -> std::io::Result<Child> {
@@ -982,13 +1073,12 @@ fn spawn_child(
 /// Start the child in its container, its job and its restricted token.
 ///
 /// The environment, the working directory and the handle inheritance are all
-/// part of the creation call on Windows, so they are set inside `sandbox`. One
-/// launch: a container or token the system refuses is recorded as a shortfall
-/// and shows up in the child's own report, which the requirement then judges.
+/// part of the creation call on Windows, so they are set inside `sandbox`.
 #[cfg(windows)]
 fn spawn_child(
     invocation: &Invocation,
     selftest: bool,
+    start: Start,
     profile: Profile,
     grants: crate::sandbox::Grants<'_>,
 ) -> std::io::Result<Child> {
@@ -996,7 +1086,12 @@ fn spawn_child(
     if selftest {
         args.push(OsString::from("--selftest"));
     }
-    sandbox::spawn(&invocation.program, &args, profile, grants).map(Child::Windows)
+    match start {
+        Start::Confined => sandbox::spawn(&invocation.program, &args, profile, grants),
+        Start::TokenOnly => sandbox::spawn_token_only(&invocation.program, &args, profile, grants),
+        Start::Plain => sandbox::spawn_unrestricted(&invocation.program, &args, profile, grants),
+    }
+    .map(Child::Windows)
 }
 
 /// Everything one child run produced.
@@ -1068,10 +1163,11 @@ fn run_child(
     invocation: &Invocation,
     request: Option<Vec<u8>>,
     timeout: Duration,
+    start: Start,
     profile: Profile,
     grants: crate::sandbox::Grants<'_>,
 ) -> std::io::Result<Run> {
-    let mut child = spawn_child(invocation, request.is_none(), profile, grants)?;
+    let mut child = spawn_child(invocation, request.is_none(), start, profile, grants)?;
     let pipes = child.pipes();
 
     let writer = match (request, pipes.stdin) {

@@ -116,9 +116,11 @@ mod seatbelt;
 #[cfg(target_os = "windows")]
 mod windows;
 /// Start the child the way Windows has to: a restricted token and an AppContainer
-/// cannot be applied to a running process, so they are part of creation.
+/// cannot be applied to a running process, so they are part of creation. The
+/// token-only and unrestricted starts are the weaker creations the probe walks
+/// down to when a stronger one reports nothing.
 #[cfg(target_os = "windows")]
-pub(super) use windows::{Child as WindowsChild, spawn};
+pub(super) use windows::{Child as WindowsChild, spawn, spawn_token_only, spawn_unrestricted};
 
 /// Whether the child runs in a less privileged container, where the platform
 /// has one.

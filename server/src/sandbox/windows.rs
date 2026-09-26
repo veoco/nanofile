@@ -605,12 +605,11 @@ fn parent_job(active_process_limit: u32) -> Option<HANDLE> {
 /// the container makes every access check require the package SID as well as the
 /// user's.
 ///
-/// There is one launch. A container or a token the system refuses is recorded as
-/// a shortfall and the child is started without it — it still gets the job — and
-/// the report it prints then says what it actually has. What must not happen is
-/// a *launch* failure being walked down to a weaker start until something
-/// succeeds: a child that only runs unconfined is a child whose request must not
-/// run at all, which is the requirement's decision and not this function's.
+/// This is the strongest creation, and the one a request uses unless the probe
+/// found that this host cannot start a child in it. A token the system refuses
+/// is recorded and the child still starts — it has the container and the job —
+/// and the report it prints says what it actually has, which is the
+/// requirement's decision and not this function's.
 pub(crate) fn spawn(
     program: &OsStr,
     args: &[OsString],
@@ -622,7 +621,7 @@ pub(crate) fn spawn(
     // that can read the helper and the one source file the parent wrote. A
     // worker that starts nothing keeps a single slot, which is the tighter
     // bound and the one every other profile runs under.
-    let active_process_limit = if profile.runs_helper() { 2 } else { 1 };
+    let active_process_limit = process_slots(profile);
     if profile.runs_helper() {
         grant_helper_access(grants);
     }
@@ -649,6 +648,57 @@ pub(crate) fn spawn(
         active_process_limit,
         LPAC_WANTED.load(Ordering::Relaxed),
     )
+}
+
+/// Start the child with this process's own token and no container.
+///
+/// The last creation the probe tries, and still confined by the job: a host
+/// where neither the container nor the token works runs the worker under a
+/// process limit rather than not at all, and the report says so.
+pub(crate) fn spawn_unrestricted(
+    program: &OsStr,
+    args: &[OsString],
+    profile: Profile,
+    grants: Grants<'_>,
+) -> std::io::Result<Child> {
+    if profile.runs_helper() {
+        grant_helper_access(grants);
+    }
+    start(program, args, None, None, process_slots(profile), false)
+}
+
+/// Start the child with the restricted token and no container.
+pub(crate) fn spawn_token_only(
+    program: &OsStr,
+    args: &[OsString],
+    profile: Profile,
+    grants: Grants<'_>,
+) -> std::io::Result<Child> {
+    if profile.runs_helper() {
+        grant_helper_access(grants);
+    }
+    let token = restricted_token();
+    if token.is_none() {
+        note_shortfall("token-refused", None);
+    }
+    let mut attempt = args.to_vec();
+    if token.is_some() {
+        attempt.push(OsString::from("--restricted"));
+    }
+    start(
+        program,
+        &attempt,
+        token,
+        None,
+        process_slots(profile),
+        false,
+    )
+}
+
+/// How many processes the job must allow: the worker, plus the helper the media
+/// profile starts.
+fn process_slots(profile: Profile) -> u32 {
+    if profile.runs_helper() { 2 } else { 1 }
 }
 
 /// Create the process, its pipes and the handle list that keeps inheritance to
