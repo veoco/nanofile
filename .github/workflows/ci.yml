@@ -131,16 +131,17 @@ jobs:
         run: npm ci
       - name: Check the Windows-only code
         run: cargo check -p server --features tray --bin nanofile
-      # The tray is a feature, not a platform: a Windows build without it still
-      # carries the service CLI and the login entry it retires, so both
-      # configurations have to compile.
-      - name: Check the Windows code without the tray
-        run: cargo check -p server --bin nanofile
-      # The extraction worker confines *itself* on Windows with a Job Object,
-      # and the platform-specific module is only type-checked when its target's
-      # test code is built too.
-      - name: Check the Windows test code
-        run: cargo check -p server --tests --bin nanofile
+      # The tray is a feature, not a platform, so the shipping configuration is
+      # checked too — and `--all-targets` is what reaches the test code: the
+      # extraction worker confines *itself* on Windows with a Job Object, and
+      # that module is only type-checked where its target's tests are built.
+      # This one step replaces two that were here: a `--bin nanofile` check
+      # (the `cargo build` below is a superset of it, and each separate
+      # selection recompiles the whole graph for its own feature set) and a
+      # `--tests --bin nanofile` check, which cargo *unions* into every test
+      # target anyway.
+      - name: Check the Windows code and its tests
+        run: cargo check -p server --all-targets
       # ... and the Job Object, the restricted token and the pipes the protocol
       # runs over only exist at runtime, which no other job can reach: everything
       # else runs on Linux, where none of this code is compiled. The probe
@@ -193,39 +194,79 @@ jobs:
           grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
 
       # The media profile is the one that may execute a helper, so it is probed
-      # with the helper it will actually be given.
+      # with the helper it will actually be given: a packaged ffmpeg.
       #
+      # Chocolatey, not `winget`: the runner images ship Chocolatey and no
+      # winget, because winget belongs to the Microsoft Store's App Installer and
+      # the image build cannot provision a Store app. The check below keeps that
+      # honest — on an image that does ship it, this installs with it.
+      #
+      # The package's `PATH` entry is deliberately not used. It is a Chocolatey
+      # shim: an executable that starts the real ffmpeg. The media grant reaches
+      # the one helper the parent named and nothing else, so a probe handed the
+      # shim would measure the shim's second generation being refused — a fact
+      # about the launcher, not about the sandbox.
+      - name: Install ffmpeg
+        shell: bash
+        run: |
+          FFMPEG=""
+          if command -v winget >/dev/null 2>&1; then
+            echo "winget is present; installing ffmpeg with it"
+            winget install --id Gyan.FFmpeg -e --silent \
+              --accept-package-agreements --accept-source-agreements || true
+            FFMPEG="$(find "$(cygpath -u "$LOCALAPPDATA")/Microsoft/WinGet/Packages" \
+              -name ffmpeg.exe 2>/dev/null | head -1)"
+          fi
+          if [ -z "$FFMPEG" ]; then
+            echo "no winget on this image; installing ffmpeg with Chocolatey"
+            choco install ffmpeg -y --no-progress
+            FFMPEG="$(find /c/ProgramData/chocolatey/lib/ffmpeg/tools -name ffmpeg.exe \
+              -type f 2>/dev/null | head -1)"
+          fi
+          if [ -z "$FFMPEG" ]; then
+            echo "ffmpeg could not be installed; the media probe falls back to the worker's own image"
+            exit 0
+          fi
+          echo "ffmpeg=$FFMPEG"
+          # Timed, and paid outside the sandbox: the first execution of a freshly
+          # written file is one of the two candidates for the minutes the probe
+          # below used to spend, and this is the line that tells the two apart.
+          time "$FFMPEG" -version >/dev/null
+          echo "FFMPEG_WIN=$(cygpath -w "$FFMPEG")" >> "$GITHUB_ENV"
+
       # `level=partial` and `process=open` are the point of the row: this profile
       # starts a program by definition — that is what a helper is — so it cannot
       # carry the process item and must not pretend to. `helper=allowed` is the
       # fact beside it (the container could open the helper the parent granted),
-      # and the `parse=` line is the effect, printed rather than asserted: on this
-      # platform the container refuses to *create* that process, which is the
-      # open item the module docs record.
+      # and `parse=` is the effect: the helper starts and answers.
+      #
+      # Without an ffmpeg the only helper left is this worker's own image, and it
+      # is started where it lies. It used to be copied into Program Files first,
+      # and the container's first start of that fresh copy took between seven and
+      # ten minutes, where the image already on disk — the one every step of this
+      # job runs — starts at once: eight minutes spent on something the probe was
+      # not measuring.
+      #
+      # The helper starting is what the null device used to prevent: `NUL` is a
+      # device a container may refuse to open, and that refusal arrives from the
+      # same call as the process creation — which read as "the container cannot
+      # start a helper" until the streams became pipes.
       - name: Probe the media sandbox profile
         shell: bash
         run: |
-          HELPER="$(command -v ffmpeg || true)"
-          if [ -z "$HELPER" ]; then
-            # No ffmpeg on the runner: use the worker's own image as the helper,
-            # copied into Program Files — a location the container can read
-            # through the user's own SID, which is what makes `system=readable`.
-            mkdir -p "$PROGRAMFILES/nanofile-media-helper"
-            cp target/debug/nanofile.exe "$PROGRAMFILES/nanofile-media-helper/nanofile.exe"
-            HELPER="$(cygpath -w "$PROGRAMFILES/nanofile-media-helper/nanofile.exe")"
-            echo "no ffmpeg on this runner; probing with a copy of the worker in Program Files"
-          fi
-          ./target/debug/nanofile.exe extract-worker --probe --profile media --ffmpeg "$HELPER" \
-            | tee media.txt
+          HELPER="${FFMPEG_WIN:-$(cygpath -w "$PWD/target/debug/nanofile.exe")}"
+          echo "probing the media profile with helper=$HELPER"
+          # Timed, for the reason the install above is: the two numbers together
+          # say whether the cost is this machine starting a new file or the
+          # profile starting one.
+          time ./target/debug/nanofile.exe extract-worker --probe --profile media \
+            --ffmpeg "$HELPER" | tee media.txt
           grep -q 'profile=media' media.txt
           grep -q 'level=partial' media.txt
           grep -q 'process=open' media.txt
           grep -q 'helper=allowed' media.txt
-          # The helper starts. It did not until the null device left its stdio:
-          # `NUL` is a device a container may refuse to open, and that refusal
-          # arrives from the same call as the process creation — which read as
-          # "the container cannot start a helper" until the streams became pipes.
-          if [ -n "$(echo "$HELPER" | grep -i ffmpeg)" ]; then
+          if [ -n "${FFMPEG_WIN:-}" ]; then
+            # ffmpeg answers `-version` and exits 0.
             grep -q 'parse=media-ok' media.txt
           else
             # The worker's own image: it starts and exits non-zero, because
