@@ -335,14 +335,15 @@ jobs:
           grep -q 'parse=media-ok' /tmp/media.txt
           grep -q 'hand=ok' /tmp/media.txt
 
-      # Diagnostics for what a probe cannot say: whether a Seatbelt profile can
-      # start a second generation of program at all, and which operation the
-      # sandbox refuses when it cannot. Synthetic profiles against system
-      # binaries answer the first in one run — `bash` is the child, `echo` the
-      # program it starts — and the sandbox's own log answers the second. It was
-      # this step that showed the grant was never the problem; nothing here
-      # asserts, and the step above is what gates the build.
-      - name: Bisect the media profile
+      # What a probe cannot say: whether a Seatbelt profile can start a second
+      # generation of program at all, and which operation the sandbox refuses when
+      # it cannot. Synthetic profiles against system binaries answer the first —
+      # `bash` is the child, `echo` the program it starts — and the sandbox's own
+      # log answers the second. This is the step that ruled the grant out as the
+      # cause of the media probe's `EPERM`, so it asserts both edges of the
+      # grant: one that was given starts a second generation, one that was not
+      # does not.
+      - name: Check the Seatbelt grant's shape
         if: always()
         run: |
           # The child is `/bin/bash` and the helper it starts is `/bin/echo`, so
@@ -352,6 +353,7 @@ jobs:
           # first generation then never runs — which is what the first version of
           # this step measured. One line per profile: a backslash continuation
           # inside single quotes is a literal backslash, not a continuation.
+          rm -f /tmp/bisect.txt
           BASE='(version 1) (deny default) (allow process-exec (literal "/bin/bash")) (allow file-read* (literal "/bin/bash")) (allow file-map-executable (literal "/bin/bash"))'
           LIBS='(allow file-read* file-test-existence (literal "/") (subpath "/usr/lib") (subpath "/System/Library") (subpath "/System/Volumes/Preboot/Cryptexes/OS") (literal "/dev/null") (literal "/dev/urandom")) (allow file-map-executable (subpath "/usr/lib") (subpath "/System/Library") (subpath "/System/Volumes/Preboot/Cryptexes/OS")) (allow sysctl-read)'
           ECHO='(allow process-exec (literal "/bin/echo")) (allow file-read* (literal "/bin/echo")) (allow file-map-executable (literal "/bin/echo"))'
@@ -360,7 +362,11 @@ jobs:
           FORK='(allow process-fork) (allow signal (target self))'
           run() {
             echo "--- $1"
-            sandbox-exec -p "$2" -- /bin/bash -c "$3" && echo "OK $1" || echo "DENIED $1"
+            if sandbox-exec -p "$2" -- /bin/bash -c "$3" >/dev/null 2>&1; then
+              echo "OK $1" | tee -a /tmp/bisect.txt
+            else
+              echo "DENIED $1" | tee -a /tmp/bisect.txt
+            fi
           }
           # Generations: the first is the sandboxed child itself, the second is
           # the helper that child starts — which is what the media profile is for.
@@ -369,6 +375,13 @@ jobs:
           run "second generation, helper granted" "$BASE $ECHO $LIBS" '/bin/echo second'
           run "second generation, helper granted, /bin readable" "$BASE $ECHO $BIN $LIBS" '/bin/echo second-dir'
           run "our media profile, child starts the helper" "$BASE $ECHO $BIN $HOMEBREW $FORK $LIBS" 'exec /bin/echo helper'
+          # The two properties this profile rests on, asserted rather than
+          # printed: a granted second generation starts, and one that was not
+          # granted does not. (The first version of this step only printed, and
+          # measured a `/bin/sh` shim for a while before that was noticed.)
+          grep -q '^OK second generation, helper granted$' /tmp/bisect.txt
+          grep -qx 'OK our media profile, child starts the helper' /tmp/bisect.txt
+          grep -qx 'DENIED second generation, helper not granted (control)' /tmp/bisect.txt
           sleep 3
           echo "--- sandbox denials"
           log show --last 1m --info \
