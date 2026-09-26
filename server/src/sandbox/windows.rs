@@ -100,10 +100,25 @@
 //!
 //! The media profile starts a second program, and a container's file access is
 //! decided by ACEs that name its own package SID, so a helper somewhere the user
-//! installed it needs an explicit grant — and not only on the file: the walk to
-//! it needs traverse on every directory on the way, which is what
-//! [`add_path_access`] adds. The child opens the file it was granted and reports
-//! `helper=allowed` either way.
+//! installed it needs an explicit grant — on the helper's own file and on the
+//! libraries beside it, and on nothing else. The child opens the file it was
+//! granted and reports `helper=allowed` either way.
+//!
+//! Granting only files is deliberate, on two counts. Walking *up* to the helper
+//! and granting every directory on the way looks like the thorough thing to do,
+//! and this did it: it is unnecessary, because [`restricted_token`] keeps
+//! `SeChangeNotifyPrivilege` — `DISABLE_MAX_PRIVILEGE` disables every privilege
+//! *except* that one — and a caller that holds it is not checked for traverse at
+//! all, which a CI host demonstrated by opening a helper several levels down
+//! inside `target/debug` with no directory ACE anywhere above it. It is also
+//! ruinous: `SetNamedSecurityInfo` and `SetSecurityInfo` "impose the current
+//! inheritance model on the ACLs of all objects in the hierarchy below the
+//! target object" (Microsoft, *Automatic Propagation of Inheritable ACEs*), so
+//! one ACE written on `C:\Users\<user>` — or on `C:\Program Files` — rewrites
+//! the inheritance of every object beneath it. The media probe spent 4m39s there
+//! while using 0.4s of CPU, and the same call on a host's first media request
+//! would have held the server for those minutes only to time out at the media
+//! request's own deadline.
 //!
 //! Starting it was the part that read wrong. A CI host reported
 //! `helper=allowed,…,parse=media-unavailable(Access is denied)` for a helper under
@@ -113,10 +128,12 @@
 //! the helper's stdio: its streams were set to the null device, and `NUL` is a
 //! device a container may refuse to open. That refusal arrives from the same call
 //! as the process creation, so it reads as "the container cannot start a
-//! program". The streams are pipes now — stdin closed by this side, stdout and
-//! stderr drained — and the same launch reports `parse=media-failed(exit code: 2)`
-//! for the worker's own image: the helper starts. Seatbelt refuses the write to
-//! `/dev/null` in exactly the same way, which is how this was found.
+//! program" — and the traverse grants were added on that reading, which is what
+//! made them ruinous rather than merely redundant. The streams are pipes now —
+//! stdin closed by this side, stdout and stderr drained — and the same launch
+//! reports `parse=media-failed(exit code: 2)` for the worker's own image and
+//! `parse=media-ok` for a packaged ffmpeg: the helper starts. Seatbelt refuses the
+//! write to `/dev/null` in exactly the same way, which is how this was found.
 //!
 //! # References
 //!
@@ -135,7 +152,6 @@ use std::fs::File;
 use std::mem::{offset_of, size_of, size_of_val};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
-use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1298,6 +1314,12 @@ fn app_container_sid() -> Option<PSID> {
 /// own SIDs may open. Both are granted here, and the grant is a read (plus
 /// execute for the helper), never a write.
 ///
+/// Every grant is written on the object itself and never on a directory above
+/// it, however many levels down the object sits: the module docs have the two
+/// reasons, and the second one — a DACL write on a directory re-imposes
+/// inheritance on everything under it — is what turned this call into minutes of
+/// I/O on a host whose helper lives under `C:\Program Files` or a user profile.
+///
 /// A grant that cannot be made is recorded as a shortfall and left to fail
 /// loudly: a helper the container may not read means the media profile cannot
 /// run, which the child's own report then says.
@@ -1306,7 +1328,7 @@ fn grant_helper_access(grants: Grants<'_>) {
         return;
     };
     if let Some(helper) = grants.helper {
-        if let Err(error) = add_path_access(
+        if let Err(error) = add_access(
             helper.as_os_str(),
             sid,
             FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
@@ -1335,36 +1357,10 @@ fn grant_helper_access(grants: Grants<'_>) {
         }
     }
     if let Some(source) = grants.source {
-        if let Err(error) = add_path_access(source.as_os_str(), sid, FILE_GENERIC_READ) {
+        if let Err(error) = add_access(source.as_os_str(), sid, FILE_GENERIC_READ) {
             note_shortfall("source-grant-refused", Some(&error));
         }
     }
-}
-
-/// Add `mask` for `sid` to `path`, and the traverse it takes to reach it.
-///
-/// An AppContainer's access is decided by ACEs that name its own SID, so a file
-/// under the user's profile is unreachable however the user's own ACLs read:
-/// every directory on the way has to grant the container the right to walk
-/// through it. Without this a helper and a scratch source were granted read and
-/// execute on the file itself and still failed to open — `Access is denied`, once
-/// per media request, which is what the media probe in CI measures.
-///
-/// `FILE_GENERIC_EXECUTE` on a directory is traverse, read attributes and
-/// synchronize: walking through it, not listing it and not reading what else is
-/// in it.
-fn add_path_access(path: &OsStr, sid: PSID, mask: u32) -> std::io::Result<()> {
-    add_access(path, sid, mask)?;
-    let mut ancestor = PathBuf::from(path);
-    while ancestor.pop() {
-        add_access(ancestor.as_os_str(), sid, FILE_GENERIC_EXECUTE)?;
-    }
-    // `pop` stops at the root and leaves it in place: the drive the file is on
-    // is the first step of the walk, so it is granted too.
-    if !ancestor.as_os_str().is_empty() {
-        add_access(ancestor.as_os_str(), sid, FILE_GENERIC_EXECUTE)?;
-    }
-    Ok(())
 }
 
 /// Whether `program` has been given to the container, granting it if not.

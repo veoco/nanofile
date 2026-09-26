@@ -196,23 +196,25 @@ jobs:
       # The media profile is the one that may execute a helper, so it is probed
       # with the helper it will actually be given: a packaged ffmpeg.
       #
-      # Chocolatey, not `winget`: the runner images ship Chocolatey and no
-      # winget, because winget belongs to the Microsoft Store's App Installer and
-      # the image build cannot provision a Store app. The check below keeps that
-      # honest — on an image that does ship it, this installs with it.
+      # winget, and Chocolatey only as the fallback: the Windows Server 2025
+      # images carry winget even though the image's own software list does not
+      # mention it, while the older ones carry Chocolatey and no winget — the
+      # maintainers turned winget down for those as incompatible with Server.
+      # Which one ran is printed below.
       #
-      # The package's `PATH` entry is deliberately not used. It is a Chocolatey
-      # shim: an executable that starts the real ffmpeg. The media grant reaches
-      # the one helper the parent named and nothing else, so a probe handed the
-      # shim would measure the shim's second generation being refused — a fact
-      # about the launcher, not about the sandbox.
+      # The package's `PATH` entry is deliberately not used. It is a shim: an
+      # executable that starts the real ffmpeg (Chocolatey writes one, and a
+      # portable winget package gets a link). The media grant reaches the one
+      # helper the parent named and nothing else, so a probe handed the shim
+      # would measure the shim's second generation being refused — a fact about
+      # the launcher, not about the sandbox.
       - name: Install ffmpeg
         shell: bash
         run: |
           FFMPEG=""
           if command -v winget >/dev/null 2>&1; then
-            echo "winget is present; installing ffmpeg with it"
-            winget install --id Gyan.FFmpeg -e --silent \
+            echo "installing ffmpeg with winget"
+            winget install --id Gyan.FFmpeg -e --silent --disable-interactivity \
               --accept-package-agreements --accept-source-agreements || true
             FFMPEG="$(find "$(cygpath -u "$LOCALAPPDATA")/Microsoft/WinGet/Packages" \
               -name ffmpeg.exe 2>/dev/null | head -1)"
@@ -228,9 +230,9 @@ jobs:
             exit 0
           fi
           echo "ffmpeg=$FFMPEG"
-          # Timed, and paid outside the sandbox: the first execution of a freshly
-          # written file is one of the two candidates for the minutes the probe
-          # below used to spend, and this is the line that tells the two apart.
+          # Timed: this is the install's own first execution of the binary, and it
+          # is paid here rather than inside the probe below, which measures the
+          # sandbox rather than this machine.
           time "$FFMPEG" -version >/dev/null
           echo "FFMPEG_WIN=$(cygpath -w "$FFMPEG")" >> "$GITHUB_ENV"
 
@@ -240,12 +242,17 @@ jobs:
       # fact beside it (the container could open the helper the parent granted),
       # and `parse=` is the effect: the helper starts and answers.
       #
-      # Without an ffmpeg the only helper left is this worker's own image, and it
-      # is started where it lies. It used to be copied into Program Files first,
-      # and the container's first start of that fresh copy took between seven and
-      # ten minutes, where the image already on disk — the one every step of this
-      # job runs — starts at once: eight minutes spent on something the probe was
-      # not measuring.
+      # The helper is where winget put it, several levels down inside the user
+      # profile, which is what makes this step the one that measures the grant's
+      # cost. It did not always: an earlier version copied the worker's own image
+      # into `Program Files` when no ffmpeg was installed, and granted the
+      # container the traverse to reach the helper by writing a DACL on every
+      # ancestor. `SetNamedSecurityInfo` re-imposes inheritance on everything
+      # below the object it writes, so that walk rewrote the ACLs of the whole
+      # tree under `C:\Program Files` — or `C:\Users\<user>` — which took 7 to 10
+      # minutes of I/O, and 4m39s using 0.4s of CPU on the run that timed itself.
+      # The grant is written on the files alone now, and how long this step takes
+      # is asserted rather than described.
       #
       # The helper starting is what the null device used to prevent: `NUL` is a
       # device a container may refuse to open, and that refusal arrives from the
@@ -256,11 +263,19 @@ jobs:
         run: |
           HELPER="${FFMPEG_WIN:-$(cygpath -w "$PWD/target/debug/nanofile.exe")}"
           echo "probing the media profile with helper=$HELPER"
-          # Timed, for the reason the install above is: the two numbers together
-          # say whether the cost is this machine starting a new file or the
-          # profile starting one.
-          time ./target/debug/nanofile.exe extract-worker --probe --profile media \
+          start=$(date +%s)
+          ./target/debug/nanofile.exe extract-worker --probe --profile media \
             --ffmpeg "$HELPER" | tee media.txt
+          elapsed=$(( $(date +%s) - start ))
+          echo "the media probe took ${elapsed}s"
+          # A grant that walks the ancestors again would show up here as minutes
+          # rather than seconds. The deadline is not a performance target, it is
+          # the shape of that error: a directory DACL write re-imposes inheritance
+          # on everything under it, so this cannot be a slow step.
+          if [ "$elapsed" -gt 60 ]; then
+            echo "::error::the media probe took ${elapsed}s; a grant on a directory propagates inheritance through its whole tree"
+            exit 1
+          fi
           grep -q 'profile=media' media.txt
           grep -q 'level=partial' media.txt
           grep -q 'process=open' media.txt
