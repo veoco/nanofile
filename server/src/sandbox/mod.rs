@@ -125,10 +125,12 @@ pub(super) use windows::{Child as WindowsChild, spawn, spawn_token_only, spawn_u
 /// Whether the child runs in a less privileged container, where the platform
 /// has one.
 ///
-/// Windows 11 can opt a container out of `ALL APPLICATION PACKAGES`, which is
-/// what closes the residual note that the container reads the system tree it
-/// loads from. A Windows 10 host keeps that note; the answer here is what the
-/// last launch actually asked for, not what the platform could give.
+/// Windows 11 can opt a container out of `ALL APPLICATION PACKAGES`, and the
+/// answer here is what the last launch actually got — `false` on Windows 10,
+/// where the attribute does not exist. It is a fact about the launch, not a
+/// grade: the system tree stays readable either way, because the child's token
+/// also carries the user's own SID, which is what the child's `system=`
+/// measurement reports.
 pub fn lpac() -> bool {
     #[cfg(target_os = "windows")]
     {

@@ -66,30 +66,35 @@
 //!
 //! # The less privileged container
 //!
-//! Windows 11 lets a container opt out of `ALL APPLICATION PACKAGES`, which is
-//! what closes the residual note below: `PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_
-//! PACKAGES_POLICY` with `…_OPT_OUT` is asked for whenever a container is used,
-//! and the child's `system=` measurement then reports `denied` instead of
-//! `readable`. Windows 10 answers the attribute with an error, so it is dropped
-//! from the list and the host keeps the note. The attribute is accepted at
-//! creation, so a container the loader cannot start inside fails *after*
-//! `CreateProcess` returns success; when that happens the parent stops asking and
-//! starts over in the plain container, keeping every protection and giving up
-//! only the opt-out.
+//! Windows 11 lets a container opt out of `ALL APPLICATION PACKAGES`:
+//! `PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY` with `…_OPT_OUT` is
+//! asked for whenever a container is used, and `lpac=` says whether the list
+//! took it. Windows 10 answers the attribute with an error, so it is dropped and
+//! the host keeps the plain container. The attribute is accepted at creation, so
+//! a container the loader cannot start inside fails *after* `CreateProcess`
+//! returns success; when that happens the parent stops asking and starts over in
+//! the plain container.
 //!
-//! What no protection here bounds is the shape of the boundary itself. A plain
+//! What the opt-out does **not** do is close the note below. The child is still
+//! created from this process's own token, so it carries the user's SID as well
+//! as the package SID, and the system tree grants that SID read. The measurement
+//! says so — a CI host with the opt-out applied still reports
+//! `lpac=on,system=readable` — which is why the note is decided by `system=`
+//! rather than by which container was asked for.
+//!
+//! What no protection here bounds is the shape of the boundary itself. The
 //! container reads the system tree it loads from (`Windows`, `Program Files` —
-//! the paths `ALL APPLICATION PACKAGES` covers), which is the over-grant the
-//! child reports as `system=readable` beside the per-user paths it was refused.
-//! It also writes inside its own profile store, which is what `writes=own-store`
-//! says: bounded by the store rather than denied, and the one resource this
-//! platform has no bound for at all (the unix file-size limit has no equivalent
-//! here). Everything else is that same dual-principal check rather than an open
-//! door: the registry it reads is the keys carrying the same grant — system
-//! ones, not the user's — while its writes are redirected to its own per-app
-//! store, and the IPC it reaches is over the handles this process handed it.
-//! Those are the platform's own limits, and they are the same shape as the macOS
-//! profile's grants.
+//! the paths `ALL APPLICATION PACKAGES` covers, and the user's own SID with
+//! them), which is the over-grant the child reports as `system=readable` beside
+//! the per-user paths it was refused. It also writes inside its own profile
+//! store, which is what `writes=own-store` says: bounded by the store rather
+//! than denied, and the one resource this platform has no bound for at all (the
+//! unix file-size limit has no equivalent here). Everything else is that same
+//! dual-principal check rather than an open door: the registry it reads is the
+//! keys carrying the same grant — system ones, not the user's — while its writes
+//! are redirected to its own per-app store, and the IPC it reaches is over the
+//! handles this process handed it. Those are the platform's own limits, and they
+//! are the same shape as the macOS profile's grants.
 //!
 //! # References
 //!
@@ -166,9 +171,11 @@ static LPAC_APPLIED: AtomicBool = AtomicBool::new(false);
 /// Whether the child runs in a less privileged AppContainer.
 ///
 /// Only the parent knows: the policy is a creation attribute, and the child's
-/// own token looks the same either way. `true` means the residual this
-/// configuration used to have — read access to the system tree that
-/// `ALL APPLICATION PACKAGES` covers — is closed.
+/// own token looks the same either way. It is reported because it is a fact
+/// about the launch, not because it settles the files item — the child's own
+/// `system=` measurement is what says whether the system tree is reachable, and
+/// on a host with the opt-out applied it still is, through the user's SID the
+/// token also carries.
 pub(super) fn lpac() -> bool {
     LPAC_APPLIED.load(Ordering::Relaxed)
 }
