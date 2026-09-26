@@ -153,6 +153,18 @@ const AUDIT_ARCH: Option<u32> = Some(0xC000_00F3);
 )))]
 const AUDIT_ARCH: Option<u32> = None;
 
+/// `newfstatat`'s number, which `libc` has no constant for on `loongarch64`.
+///
+/// That target's module lists 301 syscalls and is missing this one (libc
+/// 0.2.189), while `aarch64` and `riscv64` both give it as 79. All three read
+/// the same `asm-generic` table, and the entries either side of it agree across
+/// them — `faccessat` is 48 and `statx` is 291 — so 79 is this target's number
+/// too. The four `libc::SYS_newfstatat` uses in this file go through here.
+#[cfg(target_arch = "loongarch64")]
+const SYS_NEWFSTATAT: libc::c_long = 79;
+#[cfg(not(target_arch = "loongarch64"))]
+const SYS_NEWFSTATAT: libc::c_long = libc::SYS_newfstatat;
+
 /// Apply every layer this platform offers.
 pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec<String>) {
     let mut layers = Protections::default();
@@ -999,7 +1011,7 @@ fn denied_syscalls(profile: Profile) -> Vec<libc::c_long> {
         // an exploited parser could otherwise map the machine it is confined to.
         // `*at` forms only where the architecture has no bare one, which is
         // what the second block below is for.
-        libc::SYS_newfstatat,
+        SYS_NEWFSTATAT,
         libc::SYS_statx,
         libc::SYS_faccessat,
         libc::SYS_faccessat2,
@@ -1087,7 +1099,7 @@ const MEDIA_ALLOWED: &[libc::c_long] = &[
     // What the dynamic loader does before `main`: stat, readlink and access on
     // the search path, and the cache it reads. Landlock does not govern these,
     // so allowing them makes paths visible but not readable.
-    libc::SYS_newfstatat,
+    SYS_NEWFSTATAT,
     libc::SYS_statx,
     libc::SYS_readlinkat,
     libc::SYS_faccessat,
@@ -1376,7 +1388,7 @@ mod tests {
             ("fchownat", libc::SYS_fchownat),
             ("fsetxattr", libc::SYS_fsetxattr),
             ("utimensat", libc::SYS_utimensat),
-            ("newfstatat", libc::SYS_newfstatat),
+            ("newfstatat", SYS_NEWFSTATAT),
             ("readlinkat", libc::SYS_readlinkat),
             ("getdents64", libc::SYS_getdents64),
             ("faccessat2", libc::SYS_faccessat2),
@@ -1501,7 +1513,7 @@ mod tests {
     fn the_media_profile_allows_the_helper_calls_and_nothing_more() {
         for (name, nr) in [
             ("execve", libc::SYS_execve),
-            ("newfstatat", libc::SYS_newfstatat),
+            ("newfstatat", SYS_NEWFSTATAT),
             ("statx", libc::SYS_statx),
             ("readlinkat", libc::SYS_readlinkat),
             ("faccessat2", libc::SYS_faccessat2),
