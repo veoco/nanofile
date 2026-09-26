@@ -195,6 +195,30 @@ pub fn disable_lpac() {
     }
 }
 
+/// Forget the reasons the last launch recorded, before the next sequence begins.
+///
+/// A "sequence" is the ladder the probe walks or the single creation a request
+/// makes — not one rung of it. The caller is the only side that knows where a
+/// sequence starts, which is why this is here and not in the spawn functions.
+pub(super) fn clear_container_shortfall() {
+    #[cfg(target_os = "windows")]
+    {
+        windows::clear_shortfall();
+    }
+}
+
+/// The parent's reason for not applying the container, out of a report's detail.
+///
+/// The token is the parent's own — a child cannot see why it was not created in a
+/// container — so it is read back out of the report rather than kept beside it.
+/// That is what lets a cached report keep saying it after the launch record it
+/// came from has moved on to a later request.
+pub(super) fn container_refusal(detail: &str) -> Option<&str> {
+    detail
+        .split(',')
+        .find_map(|fact| fact.strip_prefix("container_refused="))
+}
+
 /// Why the child was not started in an AppContainer, where the platform has one.
 ///
 /// `None` when the container was applied, was never asked for, or cannot exist on
@@ -448,11 +472,7 @@ impl Report {
         if has("rung=token") || has("rung=plain") {
             notes.push("container_plain");
         }
-        if self
-            .detail
-            .split(',')
-            .any(|fact| fact.starts_with("container_refused="))
-        {
+        if container_refusal(&self.detail).is_some() {
             notes.push("container_refused");
         }
         if has("lpac=off") {

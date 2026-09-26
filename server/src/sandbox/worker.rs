@@ -460,7 +460,10 @@ pub fn run_request(
     };
 
     // The rung the probe settled on: a request's child is started the way the
-    // one that reported was, and the probe ran before any request could.
+    // one that reported was, and the probe ran before any request could. The
+    // reason record starts here, because a request's creation is a sequence of
+    // its own — one rung, and the grants this request made.
+    crate::sandbox::clear_container_shortfall();
     let start = rung(profile);
     let run = match run_child(&invocation, Some(request), timeout, start, profile, grants) {
         Ok(run) => run,
@@ -549,8 +552,11 @@ pub fn status(profile: Profile) -> Status {
                 // Why the protection is missing, where the parent is the only
                 // one that can say: a child whose token is not an AppContainer's
                 // reports `files=open`, and the reason the launch produced no
-                // container exists nowhere but here.
-                match sandbox::container_shortfall() {
+                // container is a fact only this side saw. Read from the report
+                // rather than from the record it was built from: the report is
+                // the cached, immutable copy, while the record belongs to the
+                // last launch of any kind and a request may have started since.
+                match sandbox::container_refusal(&report.detail) {
                     Some(reason) => tracing::warn!(
                         profile = profile.as_str(),
                         detail = report.detail.as_str(),
@@ -864,7 +870,10 @@ fn probe(profile: Profile) -> (Start, Status) {
 
     // A rung is accepted by the *child's own report*, never by the launch having
     // succeeded: the failure this walks past is a child that is created and then
-    // dies in its loader, which no creation error reports.
+    // dies in its loader, which no creation error reports. The reasons the
+    // strongest creations gave are collected across the whole walk, so the
+    // record is cleared once here rather than at each rung.
+    crate::sandbox::clear_container_shortfall();
     let mut failures: Vec<String> = Vec::new();
     for &start in rungs() {
         match probe_on(&invocation, profile, grants, start) {

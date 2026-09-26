@@ -732,7 +732,6 @@ pub(crate) fn spawn(
     profile: Profile,
     grants: Grants<'_>,
 ) -> std::io::Result<Child> {
-    clear_shortfall();
     let container = app_container(program);
     // A worker that starts a helper gets two slots in its job and a container
     // that can read the helper and the one source file the parent wrote. A
@@ -776,7 +775,6 @@ pub(crate) fn spawn_unrestricted(
     profile: Profile,
     grants: Grants<'_>,
 ) -> std::io::Result<Child> {
-    clear_shortfall();
     if profile.runs_helper() {
         grant_helper_access(grants);
     }
@@ -790,7 +788,6 @@ pub(crate) fn spawn_token_only(
     profile: Profile,
     grants: Grants<'_>,
 ) -> std::io::Result<Child> {
-    clear_shortfall();
     if profile.runs_helper() {
         grant_helper_access(grants);
     }
@@ -1271,9 +1268,12 @@ pub(crate) fn shortfall() -> Option<String> {
 
 /// Forget the previous launch's reasons, so the next one reports its own.
 ///
-/// Called at the top of every creation: a host that failed a launch once and
-/// succeeds later has no shortfall, and the report must not keep saying it does.
-fn clear_shortfall() {
+/// Called once per *launch sequence* — the ladder the probe walks, or the single
+/// creation a request makes — and not once per rung. The rungs are not
+/// interchangeable attempts: the strongest creation's reason is the one an
+/// operator needs, and clearing between them loses it, leaving the report naming
+/// the weakest rung's failure or, when a weak rung records nothing at all, none.
+pub(super) fn clear_shortfall() {
     let slot = SHORTFALL.get_or_init(|| Mutex::new(Vec::new()));
     slot.lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
