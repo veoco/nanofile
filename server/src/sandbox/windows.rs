@@ -106,19 +106,20 @@
 //! measured: the child opens the file it was granted and reports
 //! `helper=allowed`.
 //!
-//! It is not enough to *start* one, and the location is not the reason. A CI host
-//! reports `helper=allowed,…,parse=media-unavailable(Access is denied)` for a
-//! helper under the workspace *and* for a copy under `Program Files`, while the
-//! same probe's token-only rung — no container — runs it. So inside this
-//! container the worker can open the program it was granted and `CreateProcess`
-//! refuses it, wherever the program is. What is left to try is on the container
-//! side rather than the ACL: whether the less privileged container is what
-//! refuses a grandchild (the plain container is the same token without the
-//! `ALL APPLICATION PACKAGES` opt-out), or whether creating an AppContainer
-//! process needs something the container's own token does not have. Until that is
-//! settled, media thumbnails on Windows are off and the settings page says so —
-//! the report carries both facts (`helper=allowed`, `parse=media-unavailable`)
-//! rather than a claim that the helper ran.
+//! It is not enough to *start* one, and neither the location nor the container
+//! flavour is the reason. A CI host reports
+//! `helper=allowed,…,parse=media-unavailable(Access is denied)` for a helper under
+//! the workspace *and* for a copy under `Program Files`, with the less privileged
+//! container (`lpac=off` was measured too) and without it, while the same probe's
+//! token-only rung — no container — runs it. So inside this container the worker
+//! can open the program it was granted and `CreateProcess` refuses it, wherever
+//! the program is and whichever container it is. What is left is the shape of the
+//! launch itself: creating an AppContainer process *from* an AppContainer process
+//! is what fails, and the way around it is to have the parent create the helper,
+//! as it already does for the worker, instead of asking the container to make a
+//! grandchild. Until that is settled, media thumbnails on Windows are off and the
+//! settings page says so — the report carries both facts (`helper=allowed`,
+//! `parse=media-unavailable`) rather than a claim that the helper ran.
 //!
 //! # References
 //!
@@ -672,19 +673,18 @@ pub(crate) fn spawn(
         // carries is read back by the child (`windows::confine`).
         attempt.push(OsString::from("--restricted"));
     }
-    // The media profile asks for the plain container. The less privileged one is
-    // measured to refuse the helper's `CreateProcess` (`Access is denied`), and
-    // what this asks is whether the plain one runs it — the report's `lpac=` says
-    // which container this launch got, and the media probe in CI is what answers
-    // it. The files item is the container's either way.
-    let lpac = LPAC_WANTED.load(Ordering::Relaxed) && !profile.runs_helper();
+    // The media profile asks for the same container every other profile gets.
+    // The less privileged one was tried for it — the media probe measured the
+    // plain container refusing the helper's `CreateProcess` too (`lpac=off`,
+    // `Access is denied`) — so there is nothing to gain by asking for the weaker
+    // one, and the files item stays the strongest this host can give.
     start(
         program,
         &attempt,
         token,
         container.as_ref(),
         active_process_limit,
-        lpac,
+        LPAC_WANTED.load(Ordering::Relaxed),
     )
 }
 
