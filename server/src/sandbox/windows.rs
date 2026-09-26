@@ -102,32 +102,21 @@
 //! decided by ACEs that name its own package SID, so a helper somewhere the user
 //! installed it needs an explicit grant — and not only on the file: the walk to
 //! it needs traverse on every directory on the way, which is what
-//! [`add_path_access`] adds. That is enough to *read* a per-user helper, and it is
-//! measured: the child opens the file it was granted and reports
-//! `helper=allowed`.
+//! [`add_path_access`] adds. The child opens the file it was granted and reports
+//! `helper=allowed` either way.
 //!
-//! It is not enough to *start* one, and neither the location nor the container
-//! flavour is the reason. A CI host reports
+//! Starting it was the part that read wrong. A CI host reported
 //! `helper=allowed,…,parse=media-unavailable(Access is denied)` for a helper under
-//! the workspace *and* for a copy under `Program Files`, with the less privileged
+//! the workspace and for a copy under `Program Files`, with the less privileged
 //! container (`lpac=off` was measured too) and without it, while the same probe's
-//! token-only rung — no container — runs it. So inside this container the worker
-//! can open the program it was granted and creating the process is refused,
-//! wherever the program is and whichever container it is.
-//!
-//! Two things can look like that, and the media probe's `parse=` line says which.
-//! One is the null *device*: the helper's standard streams used to be set to
-//! `NUL`, which a container may refuse to open, and that refusal arrives from the
-//! same call as the process creation — which is exactly how it read on macOS
-//! (`/dev/null` for write, refused by the profile). The helper's streams are pipes
-//! now, with the stdin end closed by this side, so nothing needs that device. If
-//! the refusal survives that, what is left is the shape of the launch itself:
-//! creating an AppContainer process *from* an AppContainer process is what fails,
-//! and the way around it is to have the parent create the helper, as it already
-//! does for the worker, instead of asking the container to make a grandchild.
-//! Until that is settled, media thumbnails on Windows are off and the settings
-//! page says so — the report carries both facts (`helper=allowed`,
-//! `parse=media-unavailable`) rather than a claim that the helper ran.
+//! token-only rung — no container — ran it. What all of those had in common was
+//! the helper's stdio: its streams were set to the null device, and `NUL` is a
+//! device a container may refuse to open. That refusal arrives from the same call
+//! as the process creation, so it reads as "the container cannot start a
+//! program". The streams are pipes now — stdin closed by this side, stdout and
+//! stderr drained — and the same launch reports `parse=media-failed(exit code: 2)`
+//! for the worker's own image: the helper starts. Seatbelt refuses the write to
+//! `/dev/null` in exactly the same way, which is how this was found.
 //!
 //! # References
 //!

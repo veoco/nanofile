@@ -168,7 +168,7 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
 
     let mut last = String::from("ffmpeg produced no frame");
     for seek in attempts {
-        let mut command = Command::new(helper);
+        let mut command = helper_command(helper);
         command
             .arg("-y")
             .arg("-loglevel")
@@ -237,6 +237,32 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
     Err(last)
 }
 
+/// The command that starts the helper.
+///
+/// Two things about the *spawn* are macOS's own, and CI measures both. The
+/// standard library starts a program with `posix_spawn` there, and a Seatbelt
+/// profile that grants `process-exec` as a literal refuses that path — its
+/// fileport machinery is not the operation the profile allows — so an empty
+/// `pre_exec` hook is what makes the library fork and exec instead, which is the
+/// operation the grant is written for. The hook must be async-signal-safe, and
+/// doing nothing is.
+///
+/// What was *not* the problem is the grant: a synthetic profile carrying the same
+/// text starts `/bin/echo` from `/bin/bash` on that platform. The two refusals
+/// looked identical from here — `media-unavailable(Operation not permitted)` —
+/// and each had to be removed on its own: the null device first (an open for
+/// write, which the profile did not grant), then `posix_spawn`.
+fn helper_command(helper: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(helper);
+    #[cfg(target_os = "macos")]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| Ok(()));
+    }
+    command
+}
+
 /// Run the helper with its three streams on pipes, stdin closed.
 ///
 /// `Command::output` would set stdin to the null device for us, which is the one
@@ -258,7 +284,7 @@ pub fn probe(grants: Grants<'_>) -> String {
     let Some(helper) = grants.helper else {
         return "media-no-helper".to_string();
     };
-    let mut command = Command::new(helper);
+    let mut command = helper_command(helper);
     command
         .arg("-version")
         .stdin(Stdio::piped())

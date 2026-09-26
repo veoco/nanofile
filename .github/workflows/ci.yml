@@ -221,16 +221,17 @@ jobs:
           grep -q 'level=partial' media.txt
           grep -q 'process=open' media.txt
           grep -q 'helper=allowed' media.txt
-          # The helper's *start* is the one thing this platform does not give yet:
-          # the container opens the program it was granted and refuses to create
-          # the process (`Access is denied`), for a per-user helper and for a copy
-          # under Program Files alike, while the probe's token-only rung runs it.
-          # The report carries both facts and the module docs record what was
-          # measured; what is asserted here is the shape, and that the probe
-          # reported at all.
-          grep -qE 'parse=media-(ok|failed|unavailable)' media.txt
-          grep -q 'parse=media-ok' media.txt ||
-            echo "media helper did not run: $(grep -o 'parse=media-[^ ]*' media.txt)"
+          # The helper starts. It did not until the null device left its stdio:
+          # `NUL` is a device a container may refuse to open, and that refusal
+          # arrives from the same call as the process creation — which read as
+          # "the container cannot start a helper" until the streams became pipes.
+          if [ -n "$(echo "$HELPER" | grep -i ffmpeg)" ]; then
+            grep -q 'parse=media-ok' media.txt
+          else
+            # The worker's own image: it starts and exits non-zero, because
+            # `-version` is not one of its flags.
+            grep -q 'parse=media-failed' media.txt
+          fi
 
       # Parsing *under* the container, which the probe's self-test does but the
       # whole pipeline does not: a container that denies something a reader

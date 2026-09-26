@@ -151,12 +151,12 @@ page says why. A host that is not Full still runs them, with a warning.
 
 `storage.ffmpeg_path` names the helper the media profile may execute. Saving it
 re-resolves the grant through the same hook as the two settings above, so the
-next media request runs the binary that was just configured. A container may
-need the Landlock syscalls allowed for the grade to be Full. On Windows the
-container can read the helper but not start it yet — a copy under `Program Files`
-is refused the same way a per-user install is — so media thumbnails are off there
-and the page reports `media-unavailable` rather than a thumbnail that never
-appears; the module documentation records what was measured.
+next media request runs the binary that was just configured. On Windows the
+container is granted the helper *and the traverse to reach it*, which is what a
+per-user install needs; the helper's standard streams are pipes rather than the
+null device, because a container may refuse to open that device and the refusal
+would read as "the helper cannot run". A container may need the Landlock
+syscalls allowed for the grade to be Full.
 
 ## Security
 
