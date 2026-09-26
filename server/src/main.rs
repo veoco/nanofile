@@ -137,6 +137,12 @@ enum Command {
         /// `sandbox.enabled` is false: refuse before reading a request.
         #[arg(long, default_value_t = false)]
         sandbox_off: bool,
+        /// The configured media helper the media profile may execute.
+        #[arg(long, value_name = "PATH")]
+        ffmpeg: Option<String>,
+        /// The one scratch source the media profile may read.
+        #[arg(long, value_name = "PATH")]
+        src: Option<String>,
     },
 }
 
@@ -219,6 +225,8 @@ fn main() -> anyhow::Result<()> {
         profile,
         min_level,
         sandbox_off,
+        ffmpeg,
+        src,
     } = &command
     {
         let profile =
@@ -226,13 +234,24 @@ fn main() -> anyhow::Result<()> {
         let min_level =
             server::sandbox::Level::parse(min_level).unwrap_or(server::sandbox::Level::Partial);
         let requirement = server::sandbox::Requirement::new(!sandbox_off, min_level);
+        // What the media profile may reach. The paths come from the parent on
+        // this command line because the rules they become have to be installed
+        // before the request is read; the request only names the source so the
+        // two sides agree on which file that is.
+        let grants = server::sandbox::Grants {
+            helper: ffmpeg.as_deref().map(std::path::Path::new),
+            source: src.as_deref().map(std::path::Path::new),
+        };
         // `--probe` runs the parent's half of the startup check, and that half
         // applies the requirement to the report it gets back — so the pair has
         // to be known here and not only passed to the child. The server takes
         // the same path through `lib.rs`, before any request is handed over.
         server::sandbox::worker::configure_requirement(requirement);
+        if let Some(helper) = &grants.helper {
+            server::sandbox::worker::configure_helper(helper.to_path_buf());
+        }
         if *probe {
-            return server::sandbox::worker::probe_report();
+            return server::sandbox::worker::probe_report(profile);
         }
         let job = if *selftest {
             server::sandbox::worker::Job::Selftest
@@ -243,7 +262,7 @@ fn main() -> anyhow::Result<()> {
             runner: *seatbelt,
             restricted_token: *restricted,
         };
-        return server::sandbox::worker::run(job, external, profile, requirement);
+        return server::sandbox::worker::run(job, external, profile, requirement, grants);
     }
     // A service is the server without a desktop: it has no console a person can
     // read, no session to show a dialog in, and it must never try to put an icon

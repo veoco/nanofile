@@ -57,7 +57,7 @@ fn a_minimum_the_host_cannot_meet_is_decided_before_any_child() {
     );
     worker::configure_requirement(Requirement::new(true, Level::Full));
 
-    let status = worker::status();
+    let status = worker::status(server::sandbox::Profile::Documents);
     let Status::Unavailable(reason) = &status else {
         panic!("a `full` minimum must not accept partial confinement: {status:?}");
     };

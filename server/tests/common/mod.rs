@@ -400,7 +400,7 @@ impl TestServer {
         if server::sandbox::worker::configure_executable(std::path::PathBuf::from(env!(
             "CARGO_BIN_EXE_nanofile"
         ))) {
-            match server::sandbox::worker::status() {
+            match server::sandbox::worker::status(server::sandbox::Profile::Documents) {
                 server::sandbox::worker::Status::Ready(report) => assert!(
                     report.level() >= server::sandbox::Level::Partial,
                     "the extraction sandbox must confine the worker: {}",

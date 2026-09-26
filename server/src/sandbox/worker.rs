@@ -24,6 +24,7 @@
 //! panics only; this
 //! covers everything a panic cannot.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -44,7 +45,7 @@ use crate::sandbox::{self, Level, Profile, Report, Requirement};
 pub const SUBCOMMAND: &str = "extract-worker";
 
 /// Magic that opens a request and the self-test report.
-const MAGIC: &[u8; 4] = b"NFX1";
+pub(crate) const MAGIC: &[u8; 4] = b"NFX1";
 
 /// Wall-clock ceiling for one document.
 ///
@@ -55,6 +56,14 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Wall-clock ceiling for the startup self-test.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Wall-clock ceiling for one image request: decode, resize, encode.
+pub const IMAGE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Wall-clock ceiling for one media request: ffmpeg plus the resize of the
+/// frame it produced. Longer than the others because ffmpeg has to open and
+/// seek a whole container before it can hand over one frame.
+pub const MEDIA_TIMEOUT: Duration = Duration::from_secs(35);
 
 /// Most bytes of a reply the parent will read.
 const MAX_REPLY_BYTES: u64 = (MAX_INDEXED_CONTENT_BYTES + (1 << 20)) as u64;
@@ -210,6 +219,7 @@ pub fn run(
     external: External,
     profile: Profile,
     requirement: Requirement,
+    grants: crate::sandbox::Grants<'_>,
 ) -> anyhow::Result<()> {
     // The parser limits are process-global and this process never runs the
     // server, so they are set here and nowhere else.
@@ -226,18 +236,21 @@ pub fn run(
             runner: external.runner,
         },
         profile,
+        grants,
         measure,
     );
     if external.restricted_token {
-        // A restricted token is a property of the process, not a layer this
+        // A restricted token is a property of the process, not a protection this
         // process installed, so it is reported rather than claimed as one.
         report.detail.push_str(",token=restricted");
     }
 
     if job == Job::Selftest {
         // Parsing is the other half of the answer: the report says what was
-        // installed, this says the installed thing can still read a document.
-        report.detail.push_str(&format!(",parse={}", probe_parse()));
+        // installed, this says the installed thing can still do its work.
+        report
+            .detail
+            .push_str(&format!(",parse={}", probe_parse(profile, grants)));
         println!("{}", selftest_line(&report));
         return Ok(());
     }
@@ -251,8 +264,14 @@ pub fn run(
         std::process::exit(EXIT_SANDBOX_UNAVAILABLE);
     }
 
-    let (plan, data) = read_request()?;
-    write_reply(crate::indexer::extract::extract(plan, data))
+    match profile {
+        Profile::Documents => {
+            let (plan, data) = read_request()?;
+            write_reply(crate::indexer::extract::extract(plan, data))
+        }
+        Profile::Images => crate::sandbox::jobs::images::serve(),
+        Profile::Media => crate::sandbox::jobs::media::serve(grants),
+    }
 }
 
 /// Print what the probe a serving process runs at startup found, and exit.
@@ -261,8 +280,8 @@ pub fn run(
 /// server does — the platform runner around it included — which makes it the
 /// only way to observe the macOS profile's effect from outside, and what CI
 /// asserts on.
-pub fn probe_report() -> anyhow::Result<()> {
-    match status() {
+pub fn probe_report(profile: Profile) -> anyhow::Result<()> {
+    match status(profile) {
         Status::Ready(report) => {
             let mut line = report.line();
             // The parent's half of the answer: the child can say whether its
@@ -298,16 +317,26 @@ fn selftest_line(report: &Report) -> String {
     .to_string()
 }
 
-/// Parse the probe documents here, under the confinement just installed.
+/// Do the profile's own work here, under the confinement just installed.
 ///
-/// One whitespace-free verdict per document, so the report stays a line the
-/// parent can parse and a probe step can `grep`. Every way a parser can decline
-/// reads as `unsupported`: a panic caught by
-/// [`crate::indexer::extract::guard`], a document the
-/// reader will not open, a plan that stopped being supported. What a caller can
-/// act on is "this confined worker cannot read documents", and *why* belongs to
-/// the parser's own tests, which can say more than a token can.
-fn probe_parse() -> String {
+/// One whitespace-free verdict per item, so the report stays a line the parent
+/// can parse and a probe step can `grep`. What a caller can act on is "this
+/// confined worker cannot do its job", and *why* belongs to the job's own tests,
+/// which can say more than a token can.
+fn probe_parse(profile: Profile, grants: crate::sandbox::Grants<'_>) -> String {
+    match profile {
+        Profile::Documents => document_verdicts(),
+        Profile::Images => crate::sandbox::jobs::images::probe(),
+        Profile::Media => crate::sandbox::jobs::media::probe(grants),
+    }
+}
+
+/// Parse the probe documents, in the confined child.
+///
+/// Every way a parser can decline reads as `unsupported`: a panic caught by
+/// [`crate::indexer::extract::guard`], a document the reader will not open, a
+/// plan that stopped being supported.
+fn document_verdicts() -> String {
     crate::indexer::extract::PROBE_DOCUMENTS
         .iter()
         .map(|document| {
@@ -343,18 +372,73 @@ fn read_request() -> anyhow::Result<(Plan, Vec<u8>)> {
     Ok((plan, data))
 }
 
-/// Write one reply: tag, length, body.
+/// Write one reply frame: tag, little-endian `u32` length, body.
+pub(crate) fn write_frame(tag: u8, body: &[u8]) -> anyhow::Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(&[tag])?;
+    stdout.write_all(&(body.len() as u32).to_le_bytes())?;
+    stdout.write_all(body)?;
+    stdout.flush()?;
+    Ok(())
+}
+
+/// Write the reply to a document extraction.
 fn write_reply(extracted: Extracted) -> anyhow::Result<()> {
     let (tag, body) = match extracted {
         Extracted::Text(text) => (b'T', text.into_bytes()),
         Extracted::Unsupported(reason) => (b'U', reason.as_bytes().to_vec()),
     };
-    let mut stdout = std::io::stdout().lock();
-    stdout.write_all(&[tag])?;
-    stdout.write_all(&(body.len() as u32).to_le_bytes())?;
-    stdout.write_all(&body)?;
-    stdout.flush()?;
-    Ok(())
+    write_frame(tag, &body)
+}
+
+/// What a confined job produced.
+#[derive(Debug)]
+pub enum RunOutcome {
+    /// The child answered: the reply's tag and its body, already framed and
+    /// checked.
+    Reply { tag: u8, body: Vec<u8> },
+    /// The environment: the sandbox or the child's loader refused.
+    Unavailable(String),
+    /// The request itself: a crash, a kill, a timeout or a bad reply.
+    Failed(&'static str),
+}
+
+/// Run one confined request for `profile` and collect its reply.
+///
+/// The request is written verbatim, so each job owns its own framing; the reply
+/// comes back as its tag and body, which is what lets one transport carry text,
+/// an encoded image and JSON.
+pub fn run_request(
+    profile: Profile,
+    timeout: Duration,
+    request: Vec<u8>,
+    grants: crate::sandbox::Grants<'_>,
+) -> RunOutcome {
+    if let Status::Unavailable(why) = status(profile) {
+        return RunOutcome::Unavailable(why);
+    }
+    let Some(invocation) = invocation(configured_requirement(), profile, grants) else {
+        return RunOutcome::Unavailable("cannot resolve the sandbox worker".to_string());
+    };
+
+    // The rung the probe settled on: a request's child is started the way the
+    // one that reported was, and the probe ran before any request could.
+    let start = rung(profile);
+    let run = match run_child(&invocation, Some(request), timeout, start) {
+        Ok(run) => run,
+        Err(error) => {
+            return RunOutcome::Unavailable(format!("cannot start the sandbox worker: {error}"));
+        }
+    };
+    if run.timed_out {
+        tracing::warn!("extract-worker: no answer within {timeout:?}; killing it");
+        return RunOutcome::Failed(reason::TIMED_OUT);
+    }
+    match verdict(run.exit_code, &run.stdout, &run.stderr) {
+        Verdict::Reply { tag, body } => RunOutcome::Reply { tag, body },
+        Verdict::Unavailable(why) => RunOutcome::Unavailable(why),
+        Verdict::Failed(why) => RunOutcome::Failed(why),
+    }
 }
 
 /// Extract one document in the child, or explain why that did not happen.
@@ -362,87 +446,102 @@ fn write_reply(extracted: Extracted) -> anyhow::Result<()> {
 /// The caller decides what a failure means: an [`Outcome::Unavailable`] is the
 /// environment, an [`Outcome::Failed`] is the document.
 pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
-    let requirement = configured_requirement();
-
-    if let Status::Unavailable(reason) = status() {
-        return Outcome::Unavailable(reason);
+    // The switch is the admin's own choice, not an environment problem: the
+    // document is skipped (and not retried forever) rather than failed.
+    if !configured_requirement().enabled {
+        return Outcome::Extracted(Extracted::Unsupported(reason::SANDBOX_OFF));
     }
-    let Some(invocation) = invocation(requirement) else {
-        return Outcome::Unavailable("cannot resolve the extraction worker".to_string());
-    };
 
-    // The rung the probe settled on: a document's child is started the way the
-    // one that reported was, and the probe ran before any document could.
-    let start = RUNG.get().copied().unwrap_or(Start::Confined);
-    let run = match run_child(&invocation, Some((plan, data)), TIMEOUT, start) {
-        Ok(run) => run,
-        Err(e) => return Outcome::Unavailable(format!("cannot start the extraction worker: {e}")),
-    };
-    if run.timed_out {
-        tracing::warn!("extract-worker: no answer within {:?}; killing it", TIMEOUT);
-        return Outcome::Failed(reason::TIMED_OUT);
+    let mut request = Vec::with_capacity(MAGIC.len() + 1 + data.len());
+    request.extend_from_slice(MAGIC);
+    request.push(plan.tag());
+    request.extend_from_slice(&data);
+
+    match run_request(
+        Profile::Documents,
+        TIMEOUT,
+        request,
+        crate::sandbox::Grants::default(),
+    ) {
+        RunOutcome::Reply { tag: b'T', body } => match String::from_utf8(body) {
+            Ok(text) => Outcome::Extracted(Extracted::Text(text)),
+            Err(_) => Outcome::Failed(reason::FAILED),
+        },
+        RunOutcome::Reply { tag: b'U', body } => match std::str::from_utf8(&body) {
+            Ok(text) => Outcome::Extracted(Extracted::Unsupported(reason::intern(text))),
+            Err(_) => Outcome::Failed(reason::FAILED),
+        },
+        RunOutcome::Reply { .. } => Outcome::Failed(reason::FAILED),
+        RunOutcome::Unavailable(why) => Outcome::Unavailable(why),
+        RunOutcome::Failed(why) => Outcome::Failed(why),
     }
-    interpret(run.exit_code, &run.stdout, &run.stderr)
 }
 
-/// The confinement status of this process's worker, probed once and cached.
-pub fn status() -> Status {
-    let cache = STATUS.get_or_init(|| Mutex::new(Cache::default()));
+/// The confinement status of one profile, probed once and cached.
+///
+/// Per profile rather than per process: the media profile may execute ffmpeg
+/// where the others may not, so the two reports answer different questions and
+/// one must never stand in for the other.
+pub fn status(profile: Profile) -> Status {
+    let cache = STATUS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let entry = cache.entry(profile).or_default();
 
-    if let Some(status) = &cache.status {
+    if let Some(status) = &entry.status {
         return status.clone();
     }
-    if let Some(retry_at) = cache.retry_at
+    if let Some(retry_at) = entry.retry_at
         && Instant::now() < retry_at
     {
         return Status::Unavailable(PROBE_PENDING.to_string());
     }
 
-    let status = probe();
-    match &status {
+    let status = probe(profile);
+    match &status.1 {
         Status::Ready(report) => {
             tracing::info!(
+                profile = profile.as_str(),
                 level = report.level().as_str(),
                 detail = report.detail.as_str(),
-                "document extraction sandbox"
+                "sandbox confinement"
             );
             if report.level() < Level::Full {
-                // Why the layer is missing, where the parent is the only one
-                // that can say: a child whose token is not an AppContainer's
+                // Why the protection is missing, where the parent is the only
+                // one that can say: a child whose token is not an AppContainer's
                 // reports `files=open`, and the reason the launch produced no
-                // container exists nowhere but here. Without this the log says
-                // what is missing and leaves the operator to run the probe to
-                // find out which step refused.
+                // container exists nowhere but here.
                 match sandbox::container_shortfall() {
                     Some(reason) => tracing::warn!(
+                        profile = profile.as_str(),
                         detail = report.detail.as_str(),
                         container = reason,
-                        "document extraction runs with less confinement than this host can give"
+                        "the sandbox runs with less confinement than this host can give"
                     ),
                     None => tracing::warn!(
+                        profile = profile.as_str(),
                         detail = report.detail.as_str(),
-                        "document extraction runs with less confinement than this host can give"
+                        "the sandbox runs with less confinement than this host can give"
                     ),
                 }
             }
-            cache.status = Some(status.clone());
+            entry.rung = Some(status.0);
+            entry.status = Some(status.1.clone());
         }
         Status::Unavailable(reason) => {
             tracing::error!(
+                profile = profile.as_str(),
                 reason = reason.as_str(),
-                "the sandbox is not available; documents will not be indexed and image/media \
-                 thumbnails will not be generated. Check the log line above, and see the \
-                 Sandbox settings page: `sandbox.enabled` is the switch over these features, \
-                 `sandbox.min_level` is the grade this host must reach, and a container may \
-                 need the Landlock syscalls allowed."
+                "the sandbox is not available; this feature will not run. Check the log line \
+                 above, and see the Sandbox settings page: `sandbox.enabled` is the switch over \
+                 these features, `sandbox.min_level` is the grade this host must reach, and a \
+                 container may need the Landlock syscalls allowed."
             );
-            cache.retry_at = Some(Instant::now() + UNAVAILABLE_RETRY);
+            entry.retry_at = Some(Instant::now() + UNAVAILABLE_RETRY);
         }
     }
-    status
+    status.1
 }
 
 /// Detail for a probe that is waiting out [`UNAVAILABLE_RETRY`].
@@ -472,18 +571,93 @@ fn configured_requirement() -> Requirement {
 struct Cache {
     status: Option<Status>,
     retry_at: Option<Instant>,
+    /// The rung the probe last got a report from, for the requests that follow.
+    rung: Option<Start>,
 }
 
-static STATUS: OnceLock<Mutex<Cache>> = OnceLock::new();
+static STATUS: OnceLock<Mutex<HashMap<Profile, Cache>>> = OnceLock::new();
 static EXECUTABLE: OnceLock<PathBuf> = OnceLock::new();
 static REQUIREMENT: OnceLock<Requirement> = OnceLock::new();
-/// The rung the probe last got a report from, for the requests that follow.
-static RUNG: OnceLock<Start> = OnceLock::new();
+/// The configured media helper, which the media profile may execute.
+static HELPER: OnceLock<PathBuf> = OnceLock::new();
+
+/// Set the media helper the media profile may execute.
+///
+/// Process-global because every request for that profile has to be granted the
+/// same binary, and the value comes from `storage.ffmpeg_path` at startup.
+pub fn configure_helper(path: PathBuf) {
+    let _ = HELPER.set(path);
+}
+
+/// The resolved media helper, when one was configured and found.
+pub fn helper() -> Option<PathBuf> {
+    HELPER.get().cloned()
+}
+
+/// Resolve a configured helper to an absolute path.
+///
+/// A grant is a rule about one file, so it cannot be written for the name
+/// `ffmpeg`: the child's environment is cleared, and its working directory is
+/// `/`, so a name would resolve nowhere. A configured command name is therefore
+/// looked up on this process's own `PATH` once, at startup, and the absolute
+/// path is what every later request names.
+pub fn resolve_helper(configured: &str) -> PathBuf {
+    let path = Path::new(configured);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path_var) {
+            let candidate = directory.join(path);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
+/// The grants a probe of `profile` runs under.
+///
+/// The media probe gets the helper and no source: a probe has no request, and
+/// what it checks is that the helper can be executed at all under the profile.
+fn probe_grants(profile: Profile) -> crate::sandbox::Grants<'static> {
+    let helper = profile
+        .runs_helper()
+        .then(|| HELPER.get().map(|path| path.as_path()))
+        .flatten();
+    crate::sandbox::Grants {
+        helper,
+        source: None,
+    }
+}
+
+/// The rung the probe settled on for `profile`, for the requests that follow.
+fn rung(profile: Profile) -> Start {
+    let Some(cache) = STATUS.get() else {
+        return Start::Confined;
+    };
+    let cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .get(&profile)
+        .and_then(|entry| entry.rung)
+        .unwrap_or(Start::Confined)
+}
 
 /// Run the child once with `--selftest` and read its report.
-fn probe() -> Status {
-    let Some(invocation) = invocation(configured_requirement()) else {
-        return Status::Unavailable("cannot resolve the extraction worker".to_string());
+///
+/// Also answers which rung produced it, so a request is started the same way.
+/// The answer is returned rather than recorded here: the caller holds the status
+/// cache's lock, and a helper that took it again would deadlock.
+fn probe(profile: Profile) -> (Start, Status) {
+    let Some(invocation) = invocation(configured_requirement(), profile, probe_grants(profile))
+    else {
+        return (
+            Start::Confined,
+            Status::Unavailable("cannot resolve the sandbox worker".to_string()),
+        );
     };
 
     // The chain, strongest first, and the *child's own report* is what accepts a
@@ -495,24 +669,21 @@ fn probe() -> Status {
     // loader, which no creation error reports.
     let mut failures: Vec<String> = Vec::new();
     for &start in rungs() {
-        match probe_on(&invocation, start) {
-            Ok(report) => {
-                let _ = RUNG.set(start);
-                return accept(report);
-            }
-            Err(reason) => failures.push(format!("{}: {reason}", start.label())),
+        match probe_on(&invocation, profile, start) {
+            Ok(report) => return (start, accept(report)),
+            Err(why) => failures.push(format!("{}: {why}", start.label())),
         }
     }
 
-    Status::Unavailable(failures.join("; "))
+    (Start::Confined, Status::Unavailable(failures.join("; ")))
 }
 
 /// One rung's answer, or why it did not give one.
-fn probe_on(invocation: &Invocation, start: Start) -> Result<Report, String> {
+fn probe_on(invocation: &Invocation, profile: Profile, start: Start) -> Result<Report, String> {
     let run = run_child(invocation, None, PROBE_TIMEOUT, start)
-        .map_err(|error| format!("cannot start the extraction worker: {error}"))?;
-    if let Outcome::Unavailable(reason) = classify(&run) {
-        return Err(reason);
+        .map_err(|error| format!("cannot start the sandbox worker: {error}"))?;
+    if let Verdict::Unavailable(why) = verdict(run.exit_code, &run.stdout, &run.stderr) {
+        return Err(why);
     }
 
     let line = String::from_utf8_lossy(
@@ -525,8 +696,19 @@ fn probe_on(invocation: &Invocation, start: Start) -> Result<Report, String> {
     // A child that never printed its report says why on stderr, and the probe is
     // the only place that can be read: `tracing` has no subscriber on this path,
     // so the summary is the whole diagnosis.
-    Report::parse(line)
-        .ok_or_else(|| format!("unreadable self-test line {line:?}: {}", run.summary()))
+    let report = Report::parse(line)
+        .ok_or_else(|| format!("unreadable self-test line {line:?}: {}", run.summary()))?;
+    // A report for another profile is not this profile's answer: the two may
+    // hold different powers (only media may execute a helper), so accepting one
+    // for the other would be a decision made on the wrong facts.
+    if report.profile != profile {
+        return Err(format!(
+            "the child reported profile={} for a profile={} probe",
+            report.profile.as_str(),
+            profile.as_str()
+        ));
+    }
+    Ok(report)
 }
 
 /// Whether the report the probe got is one the requirement accepts.
@@ -557,7 +739,11 @@ struct Invocation {
 
 /// Build the argv for one child, wrapping it in the platform's runner if it has
 /// one (macOS, where only `sandbox-exec` can apply a Seatbelt profile).
-fn invocation(requirement: Requirement) -> Option<Invocation> {
+fn invocation(
+    requirement: Requirement,
+    profile: Profile,
+    grants: crate::sandbox::Grants<'_>,
+) -> Option<Invocation> {
     let exe = EXECUTABLE
         .get()
         .cloned()
@@ -575,15 +761,28 @@ fn invocation(requirement: Requirement) -> Option<Invocation> {
         OsString::from(SUBCOMMAND),
         OsString::from("--min-level"),
         OsString::from(requirement.min_level.as_str()),
+        OsString::from("--profile"),
+        OsString::from(profile.as_str()),
     ];
     if !requirement.enabled {
         args.push(OsString::from("--sandbox-off"));
     }
+    // The child needs the granted paths on its own command line: Landlock and
+    // Seatbelt rules have to be installed before the request is read, so they
+    // cannot travel inside it.
+    if let Some(helper) = grants.helper {
+        args.push(OsString::from("--ffmpeg"));
+        args.push(helper.as_os_str().to_os_string());
+    }
+    if let Some(source) = grants.source {
+        args.push(OsString::from("--src"));
+        args.push(source.as_os_str().to_os_string());
+    }
 
-    match sandbox::runner(&exe) {
+    match sandbox::runner(&exe, profile, grants) {
         Some(runner) => {
             // The child has to know its files, network and process confinement
-            // come from the wrapper rather than from its own layers.
+            // come from the wrapper rather than from its own protections.
             args.push(OsString::from("--seatbelt"));
             let mut wrapped: Vec<OsString> = std::iter::once(OsString::from(runner.program))
                 .chain(runner.args.into_iter().map(OsString::from))
@@ -836,7 +1035,7 @@ fn clipped(text: &str, limit: usize) -> String {
 /// deadlock both sides.
 fn run_child(
     invocation: &Invocation,
-    request: Option<(Plan, Vec<u8>)>,
+    request: Option<Vec<u8>>,
     timeout: Duration,
     start: Start,
 ) -> std::io::Result<Run> {
@@ -844,12 +1043,8 @@ fn run_child(
     let pipes = child.pipes();
 
     let writer = match (request, pipes.stdin) {
-        (Some((plan, data)), Some(mut stdin)) => Some(std::thread::spawn(move || {
-            let mut prologue = Vec::with_capacity(5);
-            prologue.extend_from_slice(MAGIC);
-            prologue.push(plan.tag());
-            let _ = stdin.write_all(&prologue);
-            let _ = stdin.write_all(&data);
+        (Some(request), Some(mut stdin)) => Some(std::thread::spawn(move || {
+            let _ = stdin.write_all(&request);
             // Dropping the handle closes the child's stdin, which is how it
             // knows the request is complete.
         })),
@@ -952,12 +1147,15 @@ fn read_diagnostics(reader: &mut impl Read) -> String {
     String::from_utf8_lossy(&kept).into_owned()
 }
 
-/// Turn one run into an outcome.
-fn classify(run: &Run) -> Outcome {
-    if run.timed_out {
-        return Outcome::Failed(reason::TIMED_OUT);
-    }
-    interpret(run.exit_code, &run.stdout, &run.stderr)
+/// What a finished child means, before a job interprets its reply tag.
+#[derive(Debug)]
+enum Verdict {
+    /// The child answered: the reply's tag and body.
+    Reply { tag: u8, body: Vec<u8> },
+    /// The environment: the child would not run confined, or its loader failed.
+    Unavailable(String),
+    /// The request: a crash, a kill, a bad reply.
+    Failed(&'static str),
 }
 
 /// Decide what a finished child means.
@@ -965,27 +1163,22 @@ fn classify(run: &Run) -> Outcome {
 /// The order matters: a refusal or a runner failure is the *environment*, and
 /// both are checked before the reply, because a child that never ran cannot
 /// have written one.
-fn interpret(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Outcome {
+fn verdict(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Verdict {
     if exit_code == Some(EXIT_SANDBOX_UNAVAILABLE) || stderr.contains(SANDBOX_REFUSAL) {
-        return Outcome::Unavailable(detail_or(stderr, "the sandbox refused to run"));
+        return Verdict::Unavailable(detail_or(stderr, "the sandbox refused to run"));
     }
     #[cfg(windows)]
     if exit_code == Some(STATUS_DLL_INIT_FAILED) {
-        return Outcome::Unavailable(detail_or(
-            stderr,
-            "the extraction worker could not initialize",
-        ));
+        return Verdict::Unavailable(detail_or(stderr, "the sandbox worker could not initialize"));
     }
-    // A process that stopped itself at its memory bound has no reply to write,
-    // and what it ran into is the same thing a parser that expands past its
-    // budget runs into: a document that costs more than it may.
-    if exit_code == Some(sandbox::EXIT_MEMORY_LIMIT) {
-        tracing::warn!("extract-worker: the child stopped at its memory bound");
-        return Outcome::Failed(reason::BUDGET);
-    }
+    // A process that stopped itself at its memory bound would have no reply to
+    // write, but no platform does that any more: the kernel stops the child on
+    // Linux (RLIMIT_AS) and Windows (the job's committed-memory cap), and macOS
+    // takes the address-space limit. A memory kill therefore arrives as an exit
+    // code the platform chose, and the request is retried as a failed one.
     for signature in runner_failure_signatures() {
         if stderr.to_ascii_lowercase().contains(signature) {
-            return Outcome::Unavailable(detail_or(stderr, "the sandbox runner failed"));
+            return Verdict::Unavailable(detail_or(stderr, "the sandbox runner failed"));
         }
     }
     if !stderr.trim().is_empty() {
@@ -995,9 +1188,9 @@ fn interpret(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Outcome {
         tracing::debug!("extract-worker: {}", clipped(stderr.trim(), 400));
     }
 
-    match (exit_code, parse_reply(stdout)) {
-        (Some(0), Some(extracted)) => Outcome::Extracted(extracted),
-        _ => Outcome::Failed(reason::FAILED),
+    match (exit_code, parse_frame(stdout)) {
+        (Some(0), Some((tag, body))) => Verdict::Reply { tag, body },
+        _ => Verdict::Failed(reason::FAILED),
     }
 }
 
@@ -1031,8 +1224,12 @@ fn detail_or(stderr: &str, fallback: &str) -> String {
     }
 }
 
-/// Read one reply frame.
-fn parse_reply(reply: &[u8]) -> Option<Extracted> {
+/// Read one reply frame into its tag and body.
+///
+/// The framing is the same for every job — tag, little-endian `u32` length,
+/// body — so a reply from one profile can never be read as another's: the tag
+/// says which job wrote it, and the caller checks that.
+fn parse_frame(reply: &[u8]) -> Option<(u8, Vec<u8>)> {
     let (&tag, rest) = reply.split_first()?;
     if rest.len() < 4 {
         return None;
@@ -1042,15 +1239,7 @@ fn parse_reply(reply: &[u8]) -> Option<Extracted> {
     if rest.len() != 4 + length {
         return None;
     }
-    let body = &rest[4..];
-
-    match tag {
-        b'T' => String::from_utf8(body.to_vec()).ok().map(Extracted::Text),
-        b'U' => std::str::from_utf8(body)
-            .ok()
-            .map(|reason| Extracted::Unsupported(reason::intern(reason))),
-        _ => None,
-    }
+    Some((tag, rest[4..].to_vec()))
 }
 
 #[cfg(test)]
@@ -1091,10 +1280,7 @@ mod tests {
             serve(&mut input, &mut out).expect("serve");
             out
         };
-        assert_eq!(
-            parse_reply(&reply),
-            Some(Extracted::Text("zebraquartz".to_string()))
-        );
+        assert_eq!(parse_frame(&reply), Some((b'T', b"zebraquartz".to_vec())));
     }
 
     /// A document goes through the same protocol, and its verdict comes back as
@@ -1111,8 +1297,8 @@ mod tests {
             out
         };
         assert_eq!(
-            parse_reply(&reply),
-            Some(Extracted::Unsupported(reason::PARSE))
+            parse_frame(&reply),
+            Some((b'U', reason::PARSE.as_bytes().to_vec()))
         );
     }
 
@@ -1184,28 +1370,36 @@ mod tests {
         );
     }
 
+    /// The framing is checked before any tag is believed: a truncated frame or
+    /// one with trailing bytes is no reply at all, whatever it claims to be.
     #[test]
     fn a_truncated_or_foreign_reply_is_no_reply() {
-        assert_eq!(parse_reply(&[]), None);
-        assert_eq!(parse_reply(b"T"), None);
-        assert_eq!(parse_reply(b"T\x05\x00\x00\x00ab"), None, "short body");
+        assert_eq!(parse_frame(&[]), None);
+        assert_eq!(parse_frame(b"T"), None);
+        assert_eq!(parse_frame(b"T\x05\x00\x00\x00ab"), None, "short body");
         assert_eq!(
-            parse_reply(b"T\x01\x00\x00\x00ab"),
+            parse_frame(b"T\x01\x00\x00\x00ab"),
             None,
             "trailing bytes are a framing disagreement"
         );
-        assert_eq!(parse_reply(b"?\x00\x00\x00\x00"), None, "unknown tag");
-        assert_eq!(parse_reply(b"T\x02\x00\x00\x00\xff\xfe"), None, "not UTF-8");
+        // The framing accepts any tag; which tags a job accepts is the job's
+        // own decision, and the tests beside each job pin that.
+        assert_eq!(parse_frame(b"?\x00\x00\x00\x00"), Some((b'?', Vec::new())));
+        assert_eq!(
+            parse_frame(b"T\x02\x00\x00\x00\xff\xfe"),
+            Some((b'T', vec![0xff, 0xfe])),
+            "the framing carries bytes, not text"
+        );
     }
 
     #[test]
     fn a_refusal_is_an_environment_problem() {
-        let outcome = interpret(
+        let outcome = verdict(
             Some(EXIT_SANDBOX_UNAVAILABLE),
             b"",
-            "extract-worker: sandbox unavailable: require (limits=off)",
+            "extract-worker: sandbox unavailable: partial (limits=off)",
         );
-        assert!(matches!(outcome, Outcome::Unavailable(_)));
+        assert!(matches!(outcome, Verdict::Unavailable(_)));
     }
 
     #[test]
@@ -1217,25 +1411,25 @@ mod tests {
             out
         };
         assert!(matches!(
-            interpret(Some(0), &reply, ""),
-            Outcome::Extracted(Extracted::Text(_))
+            verdict(Some(0), &reply, ""),
+            Verdict::Reply { tag: b'T', .. }
         ));
         // Killed after writing: the bytes are there but the run did not finish.
         assert!(matches!(
-            interpret(None, &reply, ""),
-            Outcome::Failed(reason::FAILED)
+            verdict(None, &reply, ""),
+            Verdict::Failed(reason::FAILED)
         ));
         assert!(matches!(
-            interpret(Some(101), &reply, "thread panicked"),
-            Outcome::Failed(reason::FAILED)
+            verdict(Some(101), &reply, "thread panicked"),
+            Verdict::Failed(reason::FAILED)
         ));
     }
 
     #[test]
     fn a_silent_child_is_a_failed_document() {
         assert!(matches!(
-            interpret(Some(134), b"", "fatal runtime error: stack overflow"),
-            Outcome::Failed(reason::FAILED)
+            verdict(Some(134), b"", "fatal runtime error: stack overflow"),
+            Verdict::Failed(reason::FAILED)
         ));
     }
 
@@ -1245,7 +1439,10 @@ mod tests {
     #[test]
     fn the_self_test_parses_the_packaged_documents() {
         configure_parser_limits();
-        assert_eq!(probe_parse(), "pdf-ok,docx-ok");
+        assert_eq!(
+            probe_parse(Profile::Documents, crate::sandbox::Grants::default()),
+            "pdf-ok,docx-ok"
+        );
     }
 
     #[test]

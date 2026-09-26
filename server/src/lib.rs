@@ -303,20 +303,26 @@ impl AppState {
         // Upload-route body limit; the JSON default is applied in main.rs.
         crate::body_limit::configure(config.server.max_upload_size_mb);
 
+        // The sandbox requirement and the media helper are process-global:
+        // resolve them once, before any request is handed to a child. The parser
+        // limits themselves are set inside the child, which is the only process
+        // that parses anything. The settings hook re-applies the requirement
+        // when an admin saves a change on the Sandbox page. Both are set here
+        // rather than inside the indexer branch: thumbnails are generated
+        // whether or not the index is enabled.
+        crate::sandbox::worker::configure_requirement(crate::sandbox::Requirement::from_config(
+            config.sandbox.enabled,
+            &config.sandbox.min_level,
+        ));
+        if !config.storage.ffmpeg_path.trim().is_empty() {
+            crate::sandbox::worker::configure_helper(crate::sandbox::worker::resolve_helper(
+                &config.storage.ffmpeg_path,
+            ));
+        }
+
         // Full-text indexer (its commit task is registered below alongside the
         // other background tasks).
         let indexer = if config.index.enabled {
-            // The sandbox requirement is process-global: resolve it once, before
-            // any request is handed to a child. The parser limits themselves are
-            // set inside the child, which is the only process that parses
-            // anything. The settings hook re-applies it when an admin saves a
-            // change on the Sandbox page.
-            crate::sandbox::worker::configure_requirement(
-                crate::sandbox::Requirement::from_config(
-                    config.sandbox.enabled,
-                    &config.sandbox.min_level,
-                ),
-            );
             match TextIndexer::new(&config.index.index_dir) {
                 Ok(idx) => {
                     tracing::info!(

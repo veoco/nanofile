@@ -33,15 +33,26 @@ impl ExifService {
         .await
         .map_err(|_| AppError::NotFound("file not found".into()))?;
 
-        let exif_data = tokio::task::spawn_blocking(move || Self::extract_exif(&content))
-            .await
-            .map_err(|e| AppError::Internal(format!("EXIF parsing panicked: {e}")))??;
+        let exif_data =
+            tokio::task::spawn_blocking(move || crate::sandbox::jobs::images::exif(&content))
+                .await
+                .map_err(|e| AppError::Internal(format!("EXIF worker panicked: {e}")))?;
 
-        Ok(exif_data)
+        // The parse runs in the sandbox worker, and a refusal there — the
+        // switch off, a host below the minimum, an image it will not open — is
+        // answered as "no EXIF": that is what a file without any returns, and
+        // the page does not have to explain an environment problem it cannot
+        // fix.
+        match exif_data {
+            Ok(json) => Ok(serde_json::from_str(&json).unwrap_or(serde_json::Value::Null)),
+            Err(_) => Ok(serde_json::Value::Null),
+        }
     }
 
     /// Parse EXIF bytes and return a JSON object with known tags.
-    fn extract_exif(content: &[u8]) -> Result<serde_json::Value, AppError> {
+    ///
+    /// Runs inside the sandbox child, which is why it is reachable from there.
+    pub(crate) fn extract_exif(content: &[u8]) -> Result<serde_json::Value, AppError> {
         let mut cursor = Cursor::new(content);
         let exif = match exif::Reader::new().read_from_container(&mut cursor) {
             Ok(e) => e,

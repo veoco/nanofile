@@ -102,17 +102,17 @@
 
 use std::path::Path;
 
+pub mod jobs;
 #[cfg(target_os = "linux")]
 mod linux;
 pub mod worker;
 // The Seatbelt profile is built on every platform so its tests can check the
 // text, but only macOS ever runs under it.
+/// How macOS states the memory bound: the space already mapped plus the cap.
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(any(target_os = "macos", test))]
 mod seatbelt;
-/// How macOS states an address-space limit, and the watchdog it falls back to
-/// where the kernel will not take one.
-#[cfg(target_os = "macos")]
-mod watchdog;
 #[cfg(target_os = "windows")]
 mod windows;
 /// Start the child the way Windows has to: a restricted token cannot be applied
@@ -137,14 +137,6 @@ pub fn container_shortfall() -> Option<&'static str> {
         None
     }
 }
-
-/// Exit code the child uses when it stops itself at its memory bound.
-///
-/// Nothing else the child does produces it, and the parent reads it as a
-/// document that expanded past the extraction budget rather than as a crash:
-/// only the macOS watchdog exits this way, because the other two platforms have
-/// the kernel stop the process instead.
-pub const EXIT_MEMORY_LIMIT: i32 = 124;
 
 /// Most address space a child may use.
 ///
@@ -255,7 +247,7 @@ impl Protections {
 /// The profile is what the child is told on its command line *before* it reads
 /// a request, because a grant Landlock or a Seatbelt profile can only express
 /// has to be installed before the bytes it applies to are read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Profile {
     /// Document text extraction: no file, no socket, no program.
     Documents,
@@ -504,6 +496,19 @@ impl Refusal {
     }
 }
 
+/// Whether a profile's features may run at all on this host.
+///
+/// `Ok` only when the switch is on, the host grades at or above the minimum,
+/// and the child has been probed ready. A caller that has no unconfined path to
+/// fall back to asks this before it does anything, and reports the reason when
+/// the answer is no.
+pub fn available(profile: Profile) -> Result<(), String> {
+    match worker::status(profile) {
+        worker::Status::Ready(_) => Ok(()),
+        worker::Status::Unavailable(why) => Err(why),
+    }
+}
+
 /// How much of the report is measured by effect.
 ///
 /// Both tiers are honest about what they did — the report says which one
@@ -553,19 +558,40 @@ pub struct External {
 /// Only macOS needs one: a Seatbelt profile can only be applied by
 /// `/usr/bin/sandbox-exec`, and the path is hardcoded so a `PATH` entry cannot
 /// substitute a different program.
-pub fn runner(exe: &Path) -> Option<Runner> {
+pub fn runner(exe: &Path, profile: Profile, grants: Grants) -> Option<Runner> {
     #[cfg(target_os = "macos")]
     {
         Some(Runner {
             program: seatbelt::PROGRAM,
-            args: seatbelt::args(exe),
+            args: seatbelt::args(exe, profile, grants),
             external_confinement: true,
         })
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = exe;
+        let _ = (exe, profile, grants);
         None
+    }
+}
+
+/// Paths a profile may reach beyond the deny-all default.
+///
+/// Only the media profile has any: ffmpeg is an external program and needs its
+/// own image and its libraries readable, and the file it decodes is a scratch
+/// copy the parent wrote. Every other profile gets the empty set, which is the
+/// deny-all grant the document and image jobs rely on.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Grants<'a> {
+    /// The configured helper binary the media profile may execute and load.
+    pub helper: Option<&'a Path>,
+    /// The scratch source the media profile may read.
+    pub source: Option<&'a Path>,
+}
+
+impl Grants<'_> {
+    /// Whether this profile reaches nothing beyond the default.
+    pub fn is_empty(&self) -> bool {
+        self.helper.is_none() && self.source.is_none()
     }
 }
 
@@ -575,9 +601,10 @@ pub fn runner(exe: &Path) -> Option<Runner> {
 /// Landlock and seccomp are inherited by threads created afterwards, and the
 /// parsers create one. `profile` says what the child is allowed to reach, and is
 /// carried into the report so a probe of one profile can never be read as the
-/// answer for another.
-pub fn confine(external: External, profile: Profile, measure: Measure) -> Report {
-    let (mut protections, mut detail) = platform_confine(profile);
+/// answer for another. `grants` is what that profile may reach, and is empty for
+/// every profile that may reach nothing.
+pub fn confine(external: External, profile: Profile, grants: Grants, measure: Measure) -> Report {
+    let (mut protections, mut detail) = platform_confine(profile, grants);
 
     if external.runner {
         // The parent asserts it wrapped this process in a runner whose profile
@@ -993,14 +1020,14 @@ impl Clamped {
 /// already has mapped, so there the limit is the mapped size plus the cap, and
 /// the token says `+<cap>`: what is bounded is the growth, which is the same
 /// thing the absolute cap bounds on a platform that can state it from zero. The
-/// watchdog's `mapped_address_space` is where the base comes from, and a host
+/// The watchdog's `mapped_address_space` is where the base comes from, and a host
 /// that will not report it leaves the limit below what is mapped — a refusal the
 /// report shows and the fallback covers.
 #[cfg(unix)]
 fn address_space_limit() -> (u64, String) {
     #[cfg(target_os = "macos")]
     {
-        let mapped = watchdog::mapped_address_space().unwrap_or(0);
+        let mapped = macos::mapped_address_space().unwrap_or(0);
         (
             mapped.saturating_add(ADDRESS_SPACE_LIMIT),
             format!("+{ADDRESS_SPACE_LIMIT}"),
@@ -1092,26 +1119,25 @@ fn threads_work() -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn platform_confine(profile: Profile) -> (Protections, Vec<String>) {
-    let _ = profile;
-    linux::confine()
+fn platform_confine(profile: Profile, grants: Grants) -> (Protections, Vec<String>) {
+    linux::confine(profile, grants)
 }
 
 #[cfg(target_os = "macos")]
-fn platform_confine(profile: Profile) -> (Protections, Vec<String>) {
-    let _ = profile;
+fn platform_confine(profile: Profile, grants: Grants) -> (Protections, Vec<String>) {
+    let _ = (profile, grants);
     seatbelt::confine()
 }
 
 #[cfg(target_os = "windows")]
-fn platform_confine(profile: Profile) -> (Protections, Vec<String>) {
-    let _ = profile;
+fn platform_confine(profile: Profile, grants: Grants) -> (Protections, Vec<String>) {
+    let _ = (profile, grants);
     windows::confine()
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn platform_confine(profile: Profile) -> (Protections, Vec<String>) {
-    let _ = profile;
+fn platform_confine(profile: Profile, grants: Grants) -> (Protections, Vec<String>) {
+    let _ = (profile, grants);
     (
         Protections::default(),
         vec![format!("backend=none,os={}", std::env::consts::OS)],

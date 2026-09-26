@@ -152,10 +152,20 @@ pub mod reason {
     pub const PARTS: &str = "document has too many parts";
     pub const FAILED: &str = "extractor failed";
     pub const TIMED_OUT: &str = "extractor timed out";
+    pub const SANDBOX_OFF: &str = "the sandbox is switched off";
 
     /// Every reason the extractor can produce.
     pub const ALL: &[&str] = &[
-        PARSE, ENCRYPTED, NO_TEXT, PANIC, NOT_TEXT, BUDGET, PARTS, FAILED, TIMED_OUT,
+        PARSE,
+        ENCRYPTED,
+        NO_TEXT,
+        PANIC,
+        NOT_TEXT,
+        BUDGET,
+        PARTS,
+        FAILED,
+        TIMED_OUT,
+        SANDBOX_OFF,
     ];
 
     /// Map a reason that crossed the process boundary back onto a constant.

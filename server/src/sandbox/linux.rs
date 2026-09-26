@@ -21,8 +21,9 @@
 //! 6. seccomp last, because Landlock's own syscalls must happen first.
 
 use std::mem::size_of;
+use std::path::Path;
 
-use super::Protections;
+use super::{Grants, Profile, Protections};
 
 // ── prctl ───────────────────────────────────────────────────────────────────
 const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
@@ -150,7 +151,7 @@ const AUDIT_ARCH: Option<u32> = Some(0xC000_00F3);
 const AUDIT_ARCH: Option<u32> = None;
 
 /// Apply every layer this platform offers.
-pub(super) fn confine() -> (Protections, Vec<String>) {
+pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec<String>) {
     let mut layers = Protections::default();
     let mut detail = Vec::new();
 
@@ -194,17 +195,20 @@ pub(super) fn confine() -> (Protections, Vec<String>) {
         .to_string(),
     );
 
-    match install_landlock() {
+    match install_landlock(profile, grants) {
         Ok(landlock) => {
             layers.files = true;
             detail.push(format!("landlock_abi={}", landlock.abi));
             detail.push(format!("landlock_net={}", on_off(landlock.network)));
             detail.push(format!("landlock_scoped={}", on_off(landlock.scoped)));
+            if profile.runs_helper() {
+                detail.push(format!("helper_grants={}", landlock.helper_grants));
+            }
         }
         Err(reason) => detail.push(format!("landlock={reason}")),
     }
 
-    match install_seccomp() {
+    match install_seccomp(profile) {
         Some(denied) => {
             layers.network = true;
             layers.process = true;
@@ -383,15 +387,25 @@ struct Landlock {
     /// leave this domain, which is the one thing seccomp's denylist cannot say
     /// about a call it must allow.
     scoped: bool,
+    /// How many path rules the media profile's grants installed.
+    helper_grants: usize,
 }
 
-/// Install a Landlock ruleset that grants nothing.
+/// Install a Landlock ruleset that grants nothing — except the paths the media
+/// profile was handed.
 ///
 /// Every access the running kernel's ABI can govern is handled, and no
-/// path-beneath rule is added: on Linux an unhandled access is simply allowed,
-/// so handling the full mask *is* the denial. This is stricter than the launcher
-/// this mirrors, which grants read access to `/` because it wraps commands that
-/// need a filesystem; this process gets its document on stdin.
+/// path-beneath rule is added for the profiles that read nothing: on Linux an
+/// unhandled access is simply allowed, so handling the full mask *is* the
+/// denial. This is stricter than the launcher this mirrors, which grants read
+/// access to `/` because it wraps commands that need a filesystem; the document
+/// and image children get their bytes on stdin.
+///
+/// The media profile is the exception: it executes a helper, so the helper and
+/// the libraries it maps have to be readable and executable, and the scratch
+/// source it decodes has to be readable. Those grants are `path-beneath` rules
+/// on exact paths (never a directory the parent chose), so the reachable set is
+/// the helper, the fixed system library trees and one scratch file.
 ///
 /// Three groups of rights, added as the ABI that has them (the kernel rejects a
 /// struct with fields it does not know, so the size passed is the one this ABI
@@ -399,10 +413,10 @@ struct Landlock {
 /// scopes from ABI 6.
 ///
 /// A ruleset the kernel refuses is retried with the filesystem mask alone. The
-/// alternative — reporting `landlock=ruleset` and losing the filesystem layer
-/// because a bit this file guessed was wrong — would be a sandbox that gives up
-/// its strongest layer over its weakest claim.
-fn install_landlock() -> Result<Landlock, &'static str> {
+/// alternative — reporting `landlock=ruleset` and losing the filesystem
+/// protection because a bit this file guessed was wrong — would be a sandbox
+/// that gives up its strongest protection over its weakest claim.
+fn install_landlock(profile: Profile, grants: Grants<'_>) -> Result<Landlock, &'static str> {
     let abi = unsafe {
         libc::syscall(
             libc::SYS_landlock_create_ruleset,
@@ -425,6 +439,11 @@ fn install_landlock() -> Result<Landlock, &'static str> {
         return Err("ruleset");
     }
 
+    let mut helper_grants = 0;
+    if profile.runs_helper() {
+        helper_grants = add_helper_rules(ruleset, grants);
+    }
+
     let restricted =
         unsafe { libc::syscall(libc::SYS_landlock_restrict_self, ruleset, 0 as libc::c_uint) };
     unsafe { libc::close(ruleset as libc::c_int) };
@@ -436,7 +455,97 @@ fn install_landlock() -> Result<Landlock, &'static str> {
         abi: abi.min(LANDLOCK_MAX_ABI),
         network: size >= 2 * size_of::<u64>() && attr.handled_access_net != 0,
         scoped: size >= 3 * size_of::<u64>() && attr.scoped != 0,
+        helper_grants,
     })
+}
+
+/// `LANDLOCK_RULE_PATH_BENEATH`.
+const LANDLOCK_RULE_PATH_BENEATH: libc::c_uint = 1;
+
+/// One `landlock_path_beneath_attr`, packed the way the UAPI declares it.
+#[repr(C, packed)]
+struct LandlockPathBeneath {
+    allowed_access: u64,
+    parent_fd: i32,
+}
+
+/// Add the media profile's read and execute rules.
+///
+/// The helper file gets `execute` and `read`; the fixed system library trees get
+/// `read` and `execute` — the kernel executes the dynamic linker itself out of
+/// one of them before the helper's own code runs, so `read` alone is not enough
+/// — and the scratch source gets `read` alone. A path that is not there is
+/// skipped — a 32-bit library directory on a 64-bit host, an Intel cryptex path
+/// — rather than failing the ruleset over a rule that grants nothing.
+fn add_helper_rules(ruleset: i64, grants: Grants<'_>) -> usize {
+    let mut added = 0;
+    if let Some(helper) = grants.helper {
+        added += add_path_rule(ruleset, helper, LL_EXECUTE | LL_READ_FILE) as usize;
+        // The helper may sit beside its own libraries.
+        if let Some(directory) = helper.parent() {
+            added +=
+                add_path_rule(ruleset, directory, LL_EXECUTE | LL_READ_FILE | LL_READ_DIR) as usize;
+        }
+    }
+    if let Some(source) = grants.source {
+        added += add_path_rule(ruleset, source, LL_READ_FILE) as usize;
+    }
+    for directory in HELPER_LIBRARY_DIRS {
+        added += add_path_rule(
+            ruleset,
+            Path::new(directory),
+            LL_EXECUTE | LL_READ_FILE | LL_READ_DIR,
+        ) as usize;
+    }
+    for file in HELPER_LIBRARY_FILES {
+        added += add_path_rule(ruleset, Path::new(file), LL_READ_FILE) as usize;
+    }
+    // The devices a spawned program opens for itself: `/dev/null` for the
+    // standard streams it is not given, and the entropy the runtime may want.
+    for (path, access) in HELPER_DEVICES {
+        added += add_path_rule(ruleset, Path::new(path), *access) as usize;
+    }
+    added
+}
+
+/// The device files the media helper may open, and with what rights.
+const HELPER_DEVICES: &[(&str, u64)] = &[
+    ("/dev/null", LL_READ_FILE | LL_WRITE_FILE),
+    ("/dev/urandom", LL_READ_FILE),
+];
+
+/// Where a dynamically linked helper's libraries live.
+const HELPER_LIBRARY_DIRS: &[&str] = &[
+    "/usr/lib",
+    "/usr/lib64",
+    "/usr/local/lib",
+    "/usr/local/lib64",
+    "/lib",
+    "/lib64",
+];
+
+/// The loader's own cache, which is a file rather than a directory.
+const HELPER_LIBRARY_FILES: &[&str] = &["/etc/ld.so.cache"];
+
+/// One `landlock_add_rule` for a path, or nothing when the path is absent.
+fn add_path_rule(ruleset: i64, path: &Path, access: u64) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    use std::os::fd::AsRawFd;
+    let attr = LandlockPathBeneath {
+        allowed_access: access,
+        parent_fd: file.as_raw_fd(),
+    };
+    unsafe {
+        libc::syscall(
+            libc::SYS_landlock_add_rule,
+            ruleset,
+            LANDLOCK_RULE_PATH_BENEATH as libc::c_long,
+            &attr as *const LandlockPathBeneath,
+            0 as libc::c_uint,
+        ) == 0
+    }
 }
 
 /// The ruleset to ask a kernel of `abi` for, and the size to pass with it.
@@ -506,8 +615,8 @@ fn fs_mask_for_abi(abi: i64) -> u64 {
 ///
 /// The count is in the report because the list is what the layer is: a run
 /// where the list silently stopped covering a call is a report that says so.
-fn install_seccomp() -> Option<usize> {
-    let (program, denied) = filter_program()?;
+fn install_seccomp(profile: Profile) -> Option<usize> {
+    let (program, denied) = filter_program(profile)?;
     let fprog = SockFprog {
         length: program.len() as u16,
         filter: program.as_ptr(),
@@ -540,9 +649,9 @@ fn install_seccomp() -> Option<usize> {
 /// about the path.
 ///
 /// Returns `None` on an architecture whose audit code this file does not carry.
-fn filter_program() -> Option<(Vec<SockFilter>, usize)> {
+fn filter_program(profile: Profile) -> Option<(Vec<SockFilter>, usize)> {
     let arch = AUDIT_ARCH?;
-    let denied = denied_syscalls();
+    let denied = denied_syscalls(profile);
     let mut program = Vec::with_capacity(8 + 2 * denied.len());
 
     let stmt = |code: u16, k: u32| SockFilter {
@@ -582,8 +691,13 @@ fn filter_program() -> Option<(Vec<SockFilter>, usize)> {
     // whole block), because `args[0]` means something else everywhere else: a
     // check applied to every syscall would read the file descriptor a `write`
     // was given and refuse it for not carrying a thread flag.
+    //
+    // The media profile is the one exception: it has to make a process to run
+    // the helper, so the argument check is not installed for it. What still
+    // bounds it is the files grant — `exec` reaches the one helper binary — and
+    // the parent's timeout and process-group kill.
     #[cfg(target_endian = "little")]
-    {
+    if !profile.runs_helper() {
         program.push(jump(BPF_JEQ_K, libc::SYS_clone as u32, 0, 3));
         program.push(stmt(BPF_LD_W_ABS, SECCOMP_DATA_ARGS0_LOW));
         program.push(jump(BPF_JSET_K, CLONE_THREAD, 1, 0));
@@ -622,7 +736,7 @@ fn filter_program() -> Option<(Vec<SockFilter>, usize)> {
 ///   parsers never call and this list does not name is a candidate, and anything
 ///   the parsers *do* call that is named here is a report of `parse=` turning
 ///   into `unsupported` in the worker's own self-test.
-fn denied_syscalls() -> Vec<libc::c_long> {
+fn denied_syscalls(profile: Profile) -> Vec<libc::c_long> {
     let mut denied = vec![
         // Sockets of every kind: the child talks to its parent over pipes.
         libc::SYS_socket,
@@ -756,8 +870,46 @@ fn denied_syscalls() -> Vec<libc::c_long> {
         denied.push(libc::SYS_vfork);
     }
 
+    // The media profile adds back what a second, dynamically linked program
+    // needs and a parser never does: the fork/exec pair, the calls the loader
+    // makes while it maps the helper's libraries, and the pipe/dup that connect
+    // it. Every one of them is either bounded by the files grant (`exec` and
+    // `open` are decided by Landlock) or leaks only metadata. Dropping the
+    // metadata calls is the one visible weakening: they are not governed by
+    // Landlock, so allowing them lets a compromised helper see which paths
+    // exist — never read one.
+    if profile.runs_helper() {
+        denied.retain(|number| !MEDIA_ALLOWED.contains(number));
+        // The bare `fork`/`vfork` pair, where the architecture has them: the
+        // runtime's own spawn uses one of them, and the media profile is the one
+        // that spawns. `clone` is already allowed for this profile (the argument
+        // check is not installed).
+        #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+        denied.retain(|number| *number != libc::SYS_fork && *number != libc::SYS_vfork);
+    }
+
     denied
 }
+
+/// The calls the media profile adds back to the denylist.
+///
+/// Each is here because a helper that is a separate program needs it; the list
+/// is deliberately short, and Landlock still decides what any `open` or `exec`
+/// may reach.
+const MEDIA_ALLOWED: &[libc::c_long] = &[
+    // Starting the helper.
+    libc::SYS_execve,
+    libc::SYS_execveat,
+    // What the dynamic loader does before `main`: stat, readlink and access on
+    // the search path, and the cache it reads. Landlock does not govern these,
+    // so allowing them makes paths visible but not readable.
+    libc::SYS_newfstatat,
+    libc::SYS_statx,
+    libc::SYS_readlinkat,
+    libc::SYS_faccessat,
+    libc::SYS_faccessat2,
+    libc::SYS_getdents64,
+];
 
 #[cfg(test)]
 mod tests {
@@ -783,7 +935,7 @@ mod tests {
     /// `EPERM`, and ends by allowing everything it did not name.
     #[test]
     fn the_filter_refuses_the_denylist_and_allows_the_rest() {
-        let Some((program, _)) = filter_program() else {
+        let Some((program, _)) = filter_program(Profile::Documents) else {
             return; // an architecture this file does not carry
         };
 
@@ -794,7 +946,7 @@ mod tests {
         assert_eq!(program[2].k, SECCOMP_RET_KILL_PROCESS);
         assert_eq!(program.last().expect("non-empty").k, SECCOMP_RET_ALLOW);
 
-        for number in denied_syscalls() {
+        for number in denied_syscalls(Profile::Documents) {
             let matches_rule = program.windows(2).any(|pair| {
                 pair[0].code == BPF_JEQ_K
                     && pair[0].k == number as u32
@@ -806,7 +958,7 @@ mod tests {
 
     #[test]
     fn the_denylist_covers_the_layers_it_claims() {
-        let denied = denied_syscalls();
+        let denied = denied_syscalls(Profile::Documents);
         for (name, number) in [
             ("socket", libc::SYS_socket),
             ("connect", libc::SYS_connect),
@@ -876,7 +1028,17 @@ mod tests {
     }
 
     fn run_filter(nr: libc::c_long, args0: u32) -> u32 {
-        let (program, _) = filter_program().expect("a program for this architecture");
+        run_filter_for(Profile::Documents, nr, args0)
+    }
+
+    /// Evaluate the media profile's filter, which is the same list with the
+    /// helper's calls added back.
+    fn run_media_filter(nr: libc::c_long, args0: u32) -> u32 {
+        run_filter_for(Profile::Media, nr, args0)
+    }
+
+    fn run_filter_for(profile: Profile, nr: libc::c_long, args0: u32) -> u32 {
+        let (program, _) = filter_program(profile).expect("a program for this architecture");
         evaluate(
             &program,
             AUDIT_ARCH.expect("an architecture with a filter"),
@@ -1048,12 +1210,67 @@ mod tests {
     /// numbers that mean something else there.
     #[test]
     fn the_filter_kills_a_foreign_architecture() {
-        let Some((program, _)) = filter_program() else {
+        let Some((program, _)) = filter_program(Profile::Documents) else {
             return;
         };
         assert_eq!(
             evaluate(&program, 0x4000_0003, libc::SYS_read as u32, 0),
             SECCOMP_RET_KILL_PROCESS
+        );
+    }
+
+    /// The media profile adds back exactly what a second, dynamically linked
+    /// program needs — and keeps every refusal that is not about being that
+    /// program.
+    #[test]
+    fn the_media_profile_allows_the_helper_calls_and_nothing_more() {
+        for (name, nr) in [
+            ("execve", libc::SYS_execve),
+            ("newfstatat", libc::SYS_newfstatat),
+            ("statx", libc::SYS_statx),
+            ("readlinkat", libc::SYS_readlinkat),
+            ("faccessat2", libc::SYS_faccessat2),
+        ] {
+            assert_eq!(
+                run_media_filter(nr, 0),
+                SECCOMP_RET_ALLOW,
+                "{name} must pass for the helper"
+            );
+            assert_eq!(
+                run_filter(nr, 0),
+                SECCOMP_RET_ERRNO | EPERM,
+                "{name} must stay refused for a parser"
+            );
+        }
+
+        // The helper may make a process; a parser may not. The files grant is
+        // still what decides which program an `exec` can reach.
+        #[cfg(target_endian = "little")]
+        assert_eq!(
+            run_media_filter(libc::SYS_clone, 0),
+            SECCOMP_RET_ALLOW,
+            "the helper is a second process"
+        );
+
+        // Everything that reaches off this machine or at another process stays
+        // refused, for the helper as much as for a parser.
+        for (name, nr) in [
+            ("socket", libc::SYS_socket),
+            ("connect", libc::SYS_connect),
+            ("ptrace", libc::SYS_ptrace),
+            ("mount", libc::SYS_mount),
+            ("kill", libc::SYS_kill),
+        ] {
+            assert_eq!(
+                run_media_filter(nr, 0),
+                SECCOMP_RET_ERRNO | EPERM,
+                "{name} must stay refused for the helper"
+            );
+        }
+
+        assert!(
+            denied_syscalls(Profile::Media).len() < denied_syscalls(Profile::Documents).len(),
+            "the media list is the document list with calls removed"
         );
     }
 }

@@ -100,6 +100,16 @@ impl AvatarService {
             .await
             .map_err(|e| AppError::Internal(format!("failed to create avatar dir: {e}")))?;
 
+        // An avatar is a file the account chose, so it is decoded by the sandbox
+        // worker. With the sandbox off — or a host below the minimum — there is
+        // no other path, and the upload is refused rather than stored for the
+        // server to decode later.
+        if let Err(why) = crate::sandbox::available(crate::sandbox::Profile::Images) {
+            return Err(AppError::BadRequest(format!(
+                "avatar processing is unavailable: {why}"
+            )));
+        }
+
         // Save the original file
         let original_path = storage_dir.join(format!("original.{}", ext));
         tokio::fs::write(&original_path, &data)
@@ -107,14 +117,14 @@ impl AvatarService {
             .map_err(|e| AppError::Internal(format!("failed to save avatar: {e}")))?;
 
         // Generate and save the default-size thumbnail (256x256)
-        match crate::thumbnail_util::generate_square_thumbnail(&data, 256) {
+        match crate::sandbox::jobs::images::square(&data, 256) {
             Ok(thumbnail_data) => {
                 let thumbnail_path = storage_dir.join("256.png");
                 let _ = tokio::fs::write(&thumbnail_path, &thumbnail_data).await;
             }
             Err(_) => {
-                // Non-fatal: thumbnail generation may fail for corrupt images,
-                // but the original was already saved
+                // Non-fatal: the worker may decline a corrupt image, and the
+                // original is already saved.
             }
         }
 
@@ -146,11 +156,20 @@ impl AvatarService {
                 .map(|data| (data, "image/png"));
         }
 
-        // Thumbnail miss — load the original and generate one
+        // Thumbnail miss — load the original and have the sandbox worker
+        // generate one. The decode is the same hostile-image path as a file
+        // thumbnail, so it runs in the same confined child.
         let original_path = find_original_path(&storage_dir)?;
         let content = std::fs::read(original_path).ok()?;
 
-        match crate::thumbnail_util::generate_square_thumbnail(&content, size) {
+        let worker_input = content.clone();
+        let squared = tokio::task::spawn_blocking(move || {
+            crate::sandbox::jobs::images::square(&worker_input, size)
+        })
+        .await
+        .ok()?;
+
+        match squared {
             Ok(thumbnail_data) => {
                 // Persist for future requests (non-fatal if it fails)
                 let _ = tokio::fs::create_dir_all(&storage_dir).await;

@@ -16,29 +16,27 @@
 //! `process-fork` is allowed because Seatbelt charges the parsers' thread to it,
 //! so the process layer here is an *exec* bound: a document that got code running
 //! could still make copies of this process. Each copy inherits the profile and
-//! the resource limits — the address-space limit with them on a kernel that took
-//! it — so the copies are confined, but nothing bounds how many there are. The
-//! child says so (`fork=` in its report), which is what keeps `level=full` from
-//! reading as a process bound this platform does not provide, and what makes
-//! `sealed` refuse on macOS.
-//!
-//! The one mechanism that could have softened the ≤ macOS 11 fallback — a
-//! `pthread_atfork` handler that re-arms the footprint watchdog in the copy —
-//! is deliberately not used: a post-`fork` child may be inside a threaded
-//! process, and starting a thread there (which allocates) can deadlock where the
-//! alternative is only that the copy is unbounded for the rest of its life.
+//! the resource limits — the address-space limit with them — so the copies are
+//! confined, but nothing bounds how many there are. The child says so (`fork=`
+//! in its report), which is the note the settings page puts beside the process
+//! item rather than a second, stronger grade.
 
 #[cfg(target_os = "macos")]
 use super::Protections;
+use super::{Grants, Profile};
 use std::path::Path;
 
 /// Hardcoded path to the Seatbelt runner.
 pub(super) const PROGRAM: &str = "/usr/bin/sandbox-exec";
 
-/// Arguments that wrap `exe` in [`profile`], with `--` separating them from the
-/// command.
-pub(super) fn args(exe: &Path) -> Vec<String> {
-    vec!["-p".to_string(), profile(exe), "--".to_string()]
+/// Arguments that wrap `exe` in [`profile_text`], with `--` separating them from
+/// the command.
+pub(super) fn args(exe: &Path, profile: Profile, grants: Grants<'_>) -> Vec<String> {
+    vec![
+        "-p".to_string(),
+        profile_text(exe, profile, grants),
+        "--".to_string(),
+    ]
 }
 
 /// The profile the child runs under.
@@ -83,13 +81,33 @@ pub(super) fn args(exe: &Path) -> Vec<String> {
 /// Everything else — every write, every socket, every other path — is denied.
 /// Reading the root directory lists it and grants nothing beneath it: `/etc`,
 /// `/Users` and every other path stay denied, which is what the child's own
-/// measurement of the files layer checks.
-pub(super) fn profile(exe: &Path) -> String {
+/// measurement of the files item checks.
+///
+/// The media profile is the one addition: it may execute the configured helper
+/// and read the helper's image and the scratch source the parent wrote. Both are
+/// literals, so the grant reaches exactly those two files and no directory
+/// beneath them.
+pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> String {
     let exe = escape(&exe.to_string_lossy());
+    let mut extra = String::new();
+    if profile.runs_helper() {
+        if let Some(helper) = grants.helper {
+            let helper = escape(&helper.to_string_lossy());
+            extra.push_str(&format!(
+                " (allow process-exec (literal \"{helper}\")) \
+                 (allow file-read* (literal \"{helper}\")) \
+                 (allow file-map-executable (literal \"{helper}\"))"
+            ));
+        }
+        if let Some(source) = grants.source {
+            let source = escape(&source.to_string_lossy());
+            extra.push_str(&format!(" (allow file-read* (literal \"{source}\"))"));
+        }
+    }
     // The dyld shared cache lives in the cryptex on Apple Silicon; on Intel
     // that path does not exist and the rule grants nothing.
     format!(
-        "(version 1) (deny default) (allow process-exec (literal \"{exe}\")) \
+        "(version 1) (deny default) (allow process-exec (literal \"{exe}\")){extra} \
          (allow process-fork) (allow signal (target self)) (allow sysctl-read) \
          (allow file-read* file-test-existence (literal \"/\") (subpath \"/usr/lib\") \
          (subpath \"/System/Library\") (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") \
@@ -107,37 +125,25 @@ fn escape(path: &str) -> String {
     path.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Clamp the child's own resources, and watch the footprint where the kernel
-/// will not take an address-space limit. The rest of the confinement comes from
-/// the runner.
+/// Clamp the child's own resources. The rest of the confinement comes from the
+/// runner.
 ///
-/// The address-space limit is set against the space this process already has
-/// mapped, which is what makes Darwin accept it at all (see `super::watchdog`).
-/// A host whose kernel refuses even that — macOS 11 and older — gets the
-/// footprint watchdog instead, and the report says which of the two is in force:
-/// `as+…` inside the limits, or `as=refused` next to `memwatch…`.
+/// The address-space limit is stated against the space this process already has
+/// mapped, which is what makes Darwin accept it at all (see
+/// `super::macos::mapped_address_space`). There is no fallback: the oldest
+/// macOS this build supports takes the limit, and a host that refused it would
+/// report the limits item as missing rather than pretend a weaker bound is one.
 #[cfg(target_os = "macos")]
 pub(super) fn confine() -> (Protections, Vec<String>) {
-    let mut layers = Protections::default();
+    let mut protections = Protections::default();
     let mut detail = Vec::new();
 
     let limits = super::clamp_resources();
-    let mut memory = limits.address_space;
-    if !memory {
-        match super::watchdog::arm(super::ADDRESS_SPACE_LIMIT) {
-            Ok(()) => {
-                detail.push(format!("memwatch{}", super::ADDRESS_SPACE_LIMIT));
-                memory = true;
-            }
-            Err(reason) => detail.push(format!("memwatch={reason}")),
-        }
-    }
-
-    if limits.enforced(memory) {
-        layers.limits = true;
+    if limits.enforced(false) {
+        protections.limits = true;
     }
     detail.push(format!("limits={}", limits.detail));
-    (layers, detail)
+    (protections, detail)
 }
 
 #[cfg(test)]
@@ -153,7 +159,11 @@ mod tests {
 
     #[test]
     fn the_profile_denies_by_default_and_grants_no_write_or_network() {
-        let profile = profile(Path::new("/opt/nanofile/nanofile"));
+        let profile = profile_text(
+            Path::new("/opt/nanofile/nanofile"),
+            Profile::Documents,
+            Grants::default(),
+        );
         assert!(profile.starts_with("(version 1) (deny default)"));
         assert!(profile.contains("(allow process-fork)"));
         // The child's working directory is `/`: a process that cannot read the
@@ -200,8 +210,16 @@ mod tests {
     fn a_path_cannot_rewrite_the_profile() {
         let unescaped =
             |profile: &str| profile.matches('"').count() - profile.matches(r#"\""#).count();
-        let clean = profile(Path::new("/opt/nanofile/nanofile"));
-        let injected = profile(Path::new("/tmp/\") (allow file-write*) \"/"));
+        let clean = profile_text(
+            Path::new("/opt/nanofile/nanofile"),
+            Profile::Documents,
+            Grants::default(),
+        );
+        let injected = profile_text(
+            Path::new("/tmp/\") (allow file-write*) \"/"),
+            Profile::Documents,
+            Grants::default(),
+        );
 
         // The path's own quotes are escaped wherever the path is written (it
         // appears once per grant), so it cannot close a literal early and turn
@@ -214,11 +232,54 @@ mod tests {
         );
     }
 
+    /// The media profile is the one that may execute the configured helper, and
+    /// it may read exactly the helper and the scratch source it was handed —
+    /// never a directory beneath them, and still never a write.
+    #[test]
+    fn only_the_media_profile_may_execute_the_helper() {
+        let helper = Path::new("/usr/bin/ffmpeg");
+        let source = Path::new("/data/tmp/media_thumbs/x.bin");
+        let grants = Grants {
+            helper: Some(helper),
+            source: Some(source),
+        };
+
+        let document = profile_text(
+            Path::new("/opt/nanofile/nanofile"),
+            Profile::Documents,
+            grants,
+        );
+        assert!(
+            !document.contains("ffmpeg") && !document.contains("media_thumbs"),
+            "a documents profile must not reach the helper or the source: {document}"
+        );
+        assert!(!document.contains("file-write"));
+
+        let media = profile_text(Path::new("/opt/nanofile/nanofile"), Profile::Media, grants);
+        assert!(media.contains("(allow process-exec (literal \"/usr/bin/ffmpeg\"))"));
+        assert!(media.contains("(allow file-read* (literal \"/usr/bin/ffmpeg\"))"));
+        assert!(media.contains("(allow file-read* (literal \"/data/tmp/media_thumbs/x.bin\"))"));
+        assert!(
+            media.contains("(allow file-map-executable (literal \"/usr/bin/ffmpeg\"))"),
+            "{media}"
+        );
+        // Literals, not subpaths: the grant reaches the two files and nothing
+        // else, and it is still no write.
+        assert!(!media.contains("(subpath \"/usr/bin\")"));
+        assert!(!media.contains("file-write"));
+        assert!(!media.contains("network"));
+    }
+
     /// The runner is what confines files, the network and process creation, so
-    /// the child must be told that those layers are not its own to establish.
+    /// the child must be told that those protections are not its own to
+    /// establish.
     #[test]
     fn the_arguments_wrap_the_child_in_the_profile() {
-        let args = args(Path::new("/opt/nanofile/nanofile"));
+        let args = args(
+            Path::new("/opt/nanofile/nanofile"),
+            Profile::Documents,
+            Grants::default(),
+        );
         assert_eq!(args[0], "-p");
         assert_eq!(args[2], "--");
         assert!(args[1].starts_with("(version 1)"));
