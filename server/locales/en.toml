@@ -1425,6 +1425,7 @@ sandbox.note_writes_user = "Note: a write from the container lands in the server
 sandbox.note_helper_libs = "Note: the media worker may read its helper, the loader that starts it, the libraries beside the helper and the system library directories. Nothing else is readable."
 sandbox.note_helper_trees = "Note: the media worker may read its helper and, beyond the system libraries, the package-manager trees (/opt/homebrew, /usr/local, /opt/local) a packaged build links against."
 sandbox.note_container_plain = "Note: this child was started with a weaker creation than this host can give — a restricted token without an AppContainer, or the server's own token. Nothing about file access is confined."
+sandbox.note_container_no_token = "Note: this child runs in the container but without the restricted token: file access and the network are still confined, while the token's privileges were left in place."
 sandbox.note_container_refused = "Note: the container the host would normally give was not applied. The parent's reason is in the raw report below as container_refused=."
 sandbox.note_media_process = "Note: nothing on this platform bounds how many processes the media worker may create — the CPU limit is per process, and RLIMIT_NPROC counts per user. What bounds them is the parent's timeout and the process group it kills."
 sandbox.note_lpac_off = "Note: the container could not opt out of ALL APPLICATION PACKAGES, so it inherits that package's grants on the system tree and on some per-user locations."

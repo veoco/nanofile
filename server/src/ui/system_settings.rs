@@ -745,7 +745,8 @@ fn note_belongs(note: &str, item: &str) -> bool {
     match note {
         "fork" | "helper" | "media_process" => item == "process",
         "system_tree" | "writes" | "writes_user" | "metadata" | "ll_gaps" | "helper_libs"
-        | "helper_trees" | "container_plain" | "container_refused" | "lpac_off" => item == "files",
+        | "helper_trees" | "container_plain" | "container_no_token" | "container_refused"
+        | "lpac_off" => item == "files",
         _ => false,
     }
 }
@@ -762,6 +763,7 @@ fn note_label(note: &str) -> &'static str {
         "helper_libs" => "sandbox.note_helper_libs",
         "helper_trees" => "sandbox.note_helper_trees",
         "container_plain" => "sandbox.note_container_plain",
+        "container_no_token" => "sandbox.note_container_no_token",
         "container_refused" => "sandbox.note_container_refused",
         "lpac_off" => "sandbox.note_lpac_off",
         _ => "sandbox.note_ll_gaps",
@@ -1259,6 +1261,7 @@ mod tests {
         assert!(note_belongs("helper_libs", "files"));
         assert!(note_belongs("helper_trees", "files"));
         assert!(note_belongs("container_plain", "files"));
+        assert!(note_belongs("container_no_token", "files"));
         assert!(note_belongs("container_refused", "files"));
         assert!(note_belongs("lpac_off", "files"));
         assert!(note_belongs("metadata", "files"));
@@ -1283,6 +1286,7 @@ mod tests {
             "helper_libs",
             "helper_trees",
             "container_plain",
+            "container_no_token",
             "container_refused",
             "lpac_off",
             "ll_gaps",

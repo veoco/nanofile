@@ -190,7 +190,7 @@ jobs:
           # lands. `store` means the file resolved into the container's own
           # redirected store; `user` means it did not, which is a fact the report
           # states rather than labels benign.
-          grep -qE 'rung=(container|token|plain)' sandbox.txt
+          grep -qE 'rung=(container|container-only|token|plain)' sandbox.txt
           grep -qE 'writes=(store|user|denied|unmeasured)' sandbox.txt
           grep -q 'threads=ok' sandbox.txt
           # Every protection, not `partial|full`: the container is the one this

@@ -781,6 +781,35 @@ pub(crate) fn spawn_unrestricted(
     start(program, args, None, None, process_slots(profile), false)
 }
 
+/// Start the child with its own token and no container.
+///
+/// The rung below [`spawn`] and above [`spawn_token_only`]: the container is what
+/// bounds files and the network, and the restricted token only takes privileges
+/// away, so a host that will not start a child under the token still has
+/// something worth giving. Which of the two a host refuses is not something the
+/// parent can ask in advance — a token the loader cannot initialize is accepted
+/// by `CreateRestrictedToken` and then kills the child with
+/// `STATUS_DLL_INIT_FAILED`, before it can report — so the ladder has to try.
+pub(crate) fn spawn_container_only(
+    program: &OsStr,
+    args: &[OsString],
+    profile: Profile,
+    grants: Grants<'_>,
+) -> std::io::Result<Child> {
+    let container = app_container(program);
+    if profile.runs_helper() {
+        grant_helper_access(grants);
+    }
+    start(
+        program,
+        args,
+        None,
+        container.as_ref(),
+        process_slots(profile),
+        LPAC_WANTED.load(Ordering::Relaxed),
+    )
+}
+
 /// Start the child with the restricted token and no container.
 pub(crate) fn spawn_token_only(
     program: &OsStr,

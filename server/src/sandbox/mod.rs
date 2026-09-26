@@ -146,7 +146,9 @@ mod windows;
 /// token-only and unrestricted starts are the weaker creations the probe walks
 /// down to when a stronger one reports nothing.
 #[cfg(target_os = "windows")]
-pub(super) use windows::{Child as WindowsChild, spawn, spawn_token_only, spawn_unrestricted};
+pub(super) use windows::{
+    Child as WindowsChild, spawn, spawn_container_only, spawn_token_only, spawn_unrestricted,
+};
 
 /// Whether the child runs in a less privileged container, where the platform
 /// has one.
@@ -471,6 +473,9 @@ impl Report {
         // this host can give, and why the strongest one did not work.
         if has("rung=token") || has("rung=plain") {
             notes.push("container_plain");
+        }
+        if has("rung=container-only") {
+            notes.push("container_no_token");
         }
         if container_refusal(&self.detail).is_some() {
             notes.push("container_refused");
@@ -1810,6 +1815,10 @@ mod tests {
         assert_eq!(
             report("rung=container,container=appcontainer").notes(),
             Vec::<&str>::new()
+        );
+        assert_eq!(
+            report("rung=container-only").notes(),
+            ["container_no_token"]
         );
         assert_eq!(report("rung=token").notes(), ["container_plain"]);
         assert_eq!(report("rung=plain").notes(), ["container_plain"]);

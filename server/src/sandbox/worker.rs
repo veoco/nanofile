@@ -125,6 +125,14 @@ enum Start {
     /// Whatever this host can give: the runner on macOS, the container and the
     /// restricted token on Windows.
     Confined,
+    /// The container without the restricted token, on Windows. A host can give
+    /// one and not the other — the two are separate calls, and a child created
+    /// with a token its loader cannot initialize dies with `STATUS_DLL_INIT_FAILED`
+    /// and reports nothing — and this rung is worth having between the two
+    /// because the container is what bounds files and the network, while the
+    /// token only takes privileges away.
+    #[cfg(windows)]
+    ContainerOnly,
     /// The restricted token without the container, on Windows.
     #[cfg(windows)]
     TokenOnly,
@@ -138,6 +146,8 @@ impl Start {
     fn label(self) -> &'static str {
         match self {
             Start::Confined => "with every protection",
+            #[cfg(windows)]
+            Start::ContainerOnly => "with a container and no restricted token",
             #[cfg(windows)]
             Start::TokenOnly => "with a token and no container",
             #[cfg(windows)]
@@ -156,6 +166,7 @@ impl Start {
     fn token(self) -> &'static str {
         match self {
             Start::Confined => "container",
+            Start::ContainerOnly => "container-only",
             Start::TokenOnly => "token",
             Start::Plain => "plain",
         }
@@ -230,7 +241,12 @@ fn with_parent_facts(mut report: Report, start: Start) -> Report {
 fn rungs() -> &'static [Start] {
     #[cfg(windows)]
     {
-        &[Start::Confined, Start::TokenOnly, Start::Plain]
+        &[
+            Start::Confined,
+            Start::ContainerOnly,
+            Start::TokenOnly,
+            Start::Plain,
+        ]
     }
     #[cfg(not(windows))]
     {
@@ -1277,6 +1293,9 @@ fn spawn_child(
     }
     match start {
         Start::Confined => sandbox::spawn(&invocation.program, &args, profile, grants),
+        Start::ContainerOnly => {
+            sandbox::spawn_container_only(&invocation.program, &args, profile, grants)
+        }
         Start::TokenOnly => sandbox::spawn_token_only(&invocation.program, &args, profile, grants),
         Start::Plain => sandbox::spawn_unrestricted(&invocation.program, &args, profile, grants),
     }

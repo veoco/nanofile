@@ -1419,6 +1419,7 @@ sandbox.note_writes_user = "注：来自容器的写入落到服务器用户自�
 sandbox.note_helper_libs = "注：媒体 worker 可以读取它的 helper、启动它的加载器、helper 旁边的库文件以及系统库目录。除此之外的路径不可读。"
 sandbox.note_helper_trees = "注：媒体 worker 除了系统库之外，还可以读取它链接的打包管理器目录（/opt/homebrew、/usr/local、/opt/local）。"
 sandbox.note_container_plain = "注：该子进程使用了比本机能提供的更弱的创建方式——没有 AppContainer 的受限令牌，或服务器自身的令牌。文件访问完全没有被约束。"
+sandbox.note_container_no_token = "注：该子进程运行在容器中，但没有使用受限令牌：文件访问与网络仍被约束，只是令牌的特权被保留了下来。"
 sandbox.note_container_refused = "注：本机通常会提供的容器没有被应用。父进程给出的原因见下方原始报告中的 container_refused=。"
 sandbox.note_lpac_off = "注：容器没能退出 ALL APPLICATION PACKAGES，因此继承了该包在系统目录及部分用户目录上的授权。"
 sandbox.note_media_process = "注：本平台上没有任何机制限制媒体 worker 能创建多少进程——CPU 限制是按进程计的，而 RLIMIT_NPROC 是按用户计的。约束它们的是父进程的超时与它杀掉的进程组。"
