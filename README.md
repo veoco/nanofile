@@ -134,10 +134,10 @@ The admin's **Sandbox** page shows the grade this host actually gives:
   without Landlock and a Windows launch that could not produce a container.
 
 Each item is listed with how much it matters and what its absence opens, beside
-the platform's own residuals: macOS has to allow `fork` for the parser's thread,
-so documents and images grade **Partial** there (the same profiles grade Full on
-Linux); the Windows container reads the system tree it loads from; and the media
-worker is granted the libraries it needs as well as the helper itself.
+the platform's own residuals: macOS's parser profiles deny both the fork and the
+exec, so documents and images grade Full there as they do on Linux; the Windows
+container reads the system tree it loads from; and the media worker is granted
+the libraries it needs as well as the helper itself.
 
 The media worker is graded on its own line, and it is **Partial** on every
 platform by design: it exists to start a program, and every way of starting one
@@ -166,9 +166,7 @@ re-indexes it. `sandbox.min_level` is the grade the host must reach — `full`,
 page says why, naming the item and what its absence means. A host that reaches
 Partial but not Full still runs them, with a warning; a host that does not reach
 Partial runs them only if an admin sets `min_level = "none"`, which the page
-marks as unsafe and explains. On macOS, `min_level = "full"` disables document
-and image parsing, because no process bound is available for the parsers'
-thread there.
+marks as unsafe and explains.
 
 `storage.ffmpeg_path` names the helper the media profile may execute. Saving it
 re-resolves the grant through the same hook as the two settings above, so the

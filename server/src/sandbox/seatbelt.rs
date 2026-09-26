@@ -13,16 +13,20 @@
 //!
 //! # What this cannot close
 //!
-//! `process-fork` is allowed because Seatbelt charges the parsers' thread to it,
-//! so the process layer here is an *exec* bound: a document that got code running
-//! could still make copies of this process. Each copy inherits the profile and
-//! the resource limits — the address-space limit with them — so the copies are
-//! confined, but nothing bounds how many there are. The child says so (`fork=`
-//! in its report), and the grade follows it: a profile whose `fork` is open does
-//! not claim the process item, so documents and images grade `partial` here
-//! while the same profiles grade `full` on Linux, where the fork is refused. The
-//! settings page puts the `fork` note beside the missing item, which is the
-//! reason rather than a second, stronger grade.
+//! The media profile must fork — it exists to start the helper — so its process
+//! layer is an *exec* bound: a helper that got code running could still make
+//! copies of this process. Each copy inherits the profile and the resource
+//! limits — the address-space limit with them — so the copies are confined, but
+//! nothing bounds how many there are. The child says so (`fork=` in its report),
+//! and the grade follows it: this is why media is `partial` on every platform.
+//!
+//! The documents and images profiles deny the fork outright: nothing they do
+//! needs to copy the process, so their process item is real and they grade
+//! `full` here as they do on Linux. The parsers' own thread is the thing that
+//! was once thought to need it — Seatbelt charges a thread to `process-fork` —
+//! so that is a measured claim rather than an assumed one: the probe reports
+//! `threads=` beside `parse=`, and a profile that broke thread creation shows up
+//! as an unreadable document rather than as a missing protection.
 //!
 //! # The media profile's helper
 //!
@@ -79,10 +83,11 @@ pub(super) fn args(exe: &Path, profile: Profile, grants: Grants<'_>) -> Vec<Stri
 ///   second program can be started, and re-running this binary cannot escape
 ///   the profile, because a sandboxed process passes its own on to its
 ///   children.
-/// * `process-fork` — the parsers run their work on a thread, and Seatbelt
-///   charges that to `process-fork`, so denying it would break them. A fork
-///   only duplicates this process: the copy inherits the profile, so it can
-///   still `exec` nothing but this binary.
+/// * `process-fork` — media only. It starts the helper, so it copies the process
+///   to do it; the documents and images profiles deny the fork, because nothing
+///   a parser does needs one. Seatbelt is said to charge a parser's thread to
+///   `process-fork`; that claim is what the probe's `threads=` and `parse=`
+///   measure, and the profiles deny it only while those stay green.
 /// * `signal (target self)` — the runtime's own bookkeeping.
 /// * `sysctl-read` of a pinned list of names — the allocator and the runtime
 ///   read a few values while starting up. The list is not optional: an
@@ -195,11 +200,22 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
             extra.push_str(&format!(" (allow file-read* (literal \"{source}\"))"));
         }
     }
+    // The fork is the one process operation the documents and images profiles
+    // now deny. Whether they can is a measured question, not an assumed one:
+    // the parsers run their work on a thread, and the probe reports `threads=`
+    // beside `parse=`, so a profile that broke thread creation would say so
+    // rather than silently make every document unreadable. The media profile is
+    // the exception — it exists to start the helper, so it needs the fork.
+    let fork = if profile.runs_helper() {
+        " (allow process-fork)"
+    } else {
+        ""
+    };
     // The dyld shared cache lives in the cryptex on Apple Silicon; on Intel
     // that path does not exist and the rule grants nothing.
     format!(
-        "(version 1) (deny default) (allow process-exec (literal \"{exe}\")){extra} \
-         (allow process-fork) (allow signal (target self)) {sysctl} \
+        "(version 1) (deny default) (allow process-exec (literal \"{exe}\")){extra}{fork} \
+         (allow signal (target self)) {sysctl} \
          (allow file-read* file-test-existence (literal \"/\") (subpath \"/usr/lib\") \
          (subpath \"/System/Library\") (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") \
          (literal \"/dev/null\") (literal \"/dev/urandom\") (literal \"{exe}\")) \
@@ -416,13 +432,13 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
             };
             detail.push(format!("helper_scope={scope}"));
         }
-        // `(allow process-fork)` is in every profile — the parsers' thread needs
-        // it — and the media profile additionally starts the helper by copying
-        // this process. Nothing on this platform bounds how many such copies
-        // there may be: the CPU limit is per process, so it bounds each copy and
-        // not their number. The parent's wall-clock timeout and the process group
-        // it kills are the bound, and the report says so instead of letting the
-        // absence of a kernel one be inferred from a note about `fork`.
+        // The media profile is the one that keeps `(allow process-fork)`: it
+        // starts the helper by copying this process. Nothing on this platform
+        // bounds how many such copies there may be: the CPU limit is per
+        // process, so it bounds each copy and not their number. The parent's
+        // wall-clock timeout and the process group it kills are the bound, and
+        // the report says so instead of letting the absence of a kernel one be
+        // inferred from a note about `fork`.
         detail.push("media_process=unbounded".to_string());
     }
     (protections, detail)
@@ -447,7 +463,22 @@ mod tests {
             Grants::default(),
         );
         assert!(profile.starts_with("(version 1) (deny default)"));
-        assert!(profile.contains("(allow process-fork)"));
+        // A parser may not copy the process: the documents profile denies the
+        // fork, and the probe's `threads=`/`parse=` are what say whether the
+        // parsers survive without it. Media is the profile that keeps it.
+        assert!(!profile.contains("(allow process-fork)"));
+        let media = profile_text(
+            Path::new("/opt/nanofile/nanofile"),
+            Profile::Media,
+            Grants {
+                helper: Some(Path::new("/usr/bin/ffmpeg")),
+                source: None,
+            },
+        );
+        assert!(
+            media.contains("(allow process-fork)"),
+            "the media profile starts the helper by copying: {media}"
+        );
         // The child's working directory is `/`: a process that cannot read the
         // directory it sits in is aborted, not refused, so this grant is
         // load-bearing rather than cosmetic.

@@ -1383,11 +1383,11 @@ fn spawn_child(
         // child's business.
         .current_dir(Path::new("/"));
     // The child leads a process group of its own, so a timeout can end what it
-    // started and not only the child itself. macOS is where this matters: the
-    // Seatbelt profile has to allow `process-fork` for the parsers' thread, so
-    // a document that got code running can leave copies behind, and a copy that
-    // holds the protocol pipes would keep this call waiting on a pipe that
-    // never closes.
+    // started and not only the child itself. macOS's media profile is where this
+    // matters: it starts the helper by forking, so a helper that got code
+    // running can leave copies behind, and a copy that holds the protocol pipes
+    // would keep this call waiting on a pipe that never closes. The parser
+    // profiles deny the fork, so they have no copies to leave.
     #[cfg(unix)]
     command.process_group(0);
     command.spawn().map(Child::Standard)

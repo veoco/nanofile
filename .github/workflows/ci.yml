@@ -426,15 +426,20 @@ jobs:
           grep -q 'profile=documents' sandbox.txt
           grep -q 'files=denied' sandbox.txt
           grep -q 'network=denied' sandbox.txt
+          # Thread creation is the thing that was said to need the fork, so this
+          # is the assertion that decides it: a parser whose profile broke
+          # `pthread_create` reports `threads=failed`, and one whose profile
+          # broke the parsers reports `parse=` without the words below.
           grep -q 'threads=ok' sandbox.txt
-          # The fork the parser thread needs is open, so the process item is
-          # missing and the grade is `partial`, not `full`: the item means
-          # "processes cannot be multiplied" and here they can. A host that
-          # silently started claiming the item would fail here.
-          grep -q 'level=partial' sandbox.txt
-          grep -q 'process=open' sandbox.txt
-          grep -q 'exec=denied' sandbox.txt
-          grep -q 'fork=open' sandbox.txt
+          # The fork is denied, so the process item is real and the grade is
+          # `full`, as it is on Linux for the same profile.
+          grep -q 'level=full' sandbox.txt
+          grep -q 'process=denied' sandbox.txt
+          grep -q 'fork=denied' sandbox.txt
+          # The exec probe needs a fork to try `execve` in, so a profile that
+          # denies the fork reports `exec=unmeasured` — the same shape Linux
+          # has. A fork that came back fresh would report `denied` here.
+          grep -qE 'exec=(denied|unmeasured)' sandbox.txt
           grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
 
       # Parsing *under* the profile, which the probe above does not do: a

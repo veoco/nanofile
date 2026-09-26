@@ -9,7 +9,7 @@
 //! | limits | memory, CPU seconds, descriptors, file size | `RLIMIT_AS` | `setrlimit` (mapped space plus the cap) | Job Object memory cap |
 //! | files | reading or writing any path | Landlock, zero grants (the helper, its interpreter and the source for media) | Seatbelt profile | AppContainer |
 //! | network | creating a socket | seccomp denylist, Landlock TCP rights | Seatbelt profile | AppContainer with no capabilities |
-//! | process | `exec`, `fork`, extra processes | seccomp denylist (`exec` allowed only for the media helper and its loader) | Seatbelt profile, `exec` only (`process-fork` is allowed) | Job active-process limit, plus the kernel's child-process policy |
+//! | process | `exec`, `fork`, extra processes | seccomp denylist (`exec` allowed only for the media helper and its loader) | Seatbelt profile: `exec` only for the media profile, `fork` and `exec` denied for a parser | Job active-process limit, plus the kernel's child-process policy |
 //!
 //! The process item is the one the media profile cannot have. That profile
 //! exists to start a program — that is what the helper is — and every platform
@@ -60,16 +60,15 @@
 //! three platforms provide materially different things under that name: Linux
 //! denies every path and every socket through Landlock and seccomp, the Windows
 //! container denies the user's own files and the network but reads the system
-//! tree it loads from, and macOS's profile is a deny-by-default text with
-//! `process-fork` allowed because the parsers' thread needs it. The fork is not
-//! left as a note under a `full` grade: a profile whose `fork` is open cannot
-//! claim the process item — the item's definition is that processes cannot be
-//! multiplied — so documents and images grade `partial` on macOS and `full` on
-//! Linux, where the fork is refused. The remaining residuals [`Report::notes`]
-//! carries — `fork=`, `helper=`, `system=`, `writes=`, `metadata=`, `ll_gaps=`,
-//! `token_unrestricted` — are *notes on the item they weaken*, not a fourth
-//! grade: an operator reads "进程创建: 缺失（注：macOS 允许 fork）" rather than
-//! having to understand a second, stronger scale.
+//! tree it loads from, and macOS's profile is a deny-by-default text whose
+//! parser profiles deny both the fork and the exec. The remaining residuals
+//! [`Report::notes`] carries — `fork=`, `helper=`, `system=`, `writes=`,
+//! `metadata=`, `ll_gaps=`, `token_unrestricted` — are *notes on the item they
+//! weaken*, not a fourth grade. A profile whose `fork` is open cannot claim the
+//! process item at all — the item's definition is that processes cannot be
+//! multiplied — and that is why the media profile is `partial` everywhere: it
+//! starts the helper by copying the process, so it is the one profile that
+//! cannot make the claim.
 //!
 //! # Claims are measured
 //!
@@ -867,11 +866,13 @@ pub fn confine(
             // A profile that may copy itself has not bounded process creation,
             // whatever it denies about starting programs: the item's own
             // definition is that processes cannot be multiplied, and `fork=open`
-            // says they can. That is the macOS parsers' shape — Seatbelt charges
-            // their thread to `process-fork` — so their grade is `partial`
-            // rather than `full`, and the `fork` note beside the missing item is
-            // the reason. A profile that *does* deny the fork is measured by the
-            // exec it can then try.
+            // says they can. The media profile is the one that keeps the fork —
+            // it starts the helper — so its grade stays `partial` and the `fork`
+            // note beside the missing item is the reason. A profile that *does*
+            // deny the fork is measured by the exec it can then try; when the
+            // fork itself is refused there is no copy to try `execve` in, and
+            // the claim stands unmeasured rather than being cleared by a
+            // measurement that did not happen — the shape Linux already has.
             if facts.fork_denied == Some(false) {
                 protections.process = false;
                 detail.push("process=measured-open".to_string());
@@ -882,9 +883,6 @@ pub fn confine(
                         protections.process = false;
                         detail.push("process=measured-open".to_string());
                     }
-                    // The fork itself was refused, so the exec probe never ran:
-                    // the runner's claim stands unmeasured rather than being
-                    // cleared by a measurement that did not happen.
                     None => detail.push("process=unmeasured".to_string()),
                 }
             }
