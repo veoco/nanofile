@@ -11,11 +11,13 @@ on:
     branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
-  # The Windows and macOS jobs are opt-in (see `platform_run` in the `changes`
-  # job) because they are the two slow ones — 12m and 5m against a 3m Linux path
-  # — and most pushes cannot change what they measure. This input is the switch
-  # that works from the web UI or `gh workflow run`; `[platform]` in a commit
-  # subject is the one that works from a push.
+  # The Windows and macOS jobs are manual-only. They are the two slow ones — 12m
+  # and 5m against a 3m Linux path — and most pushes cannot change what they
+  # measure, so they run when this input asks for them (`gh workflow run ci.yml`
+  # or the Run workflow button) and at no other time. Asking for them from a
+  # commit is deliberately not possible: a marker in a commit subject would have
+  # to be threaded through the shell, and a label would make the same request
+  # behave differently on a push than on a pull request.
   workflow_dispatch:
     inputs:
       platform:
@@ -44,28 +46,14 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-      frontend: ${{ steps.filter.outputs.frontend }}
-      platform: ${{ steps.filter.outputs.platform }}
-      platform_run: ${{ steps.decide.outputs.run }}
+      rust: ${{ steps.plan.outputs.rust }}
+      frontend: ${{ steps.plan.outputs.frontend }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
         with:
           filters: |
-            # What the Windows and macOS jobs need: Rust that those targets
-            # compile through different `cfg` blocks. `server/templates/**`,
-            # `server/static/**`, `server/frontend/**` and `package.json` are
-            # compiled by `build.rs` on every platform, so a change to one that
-            # broke a platform would break Linux first — and `lint` says so in a
-            # minute instead of on two slow runners.
-            platform:
-              - '**/*.rs'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'server/build.rs'
-              - '.github/workflows/**'
             rust:
               - '**/*.rs'
               - 'Cargo.toml'
@@ -88,25 +76,25 @@ jobs:
               - 'server/templates/**'
               - 'package.json'
               - 'package-lock.json'
-      # A push cannot be labelled, so its opt-in is a trailer in the commit
-      # subject. Everything that reaches the shell arrives through `env` rather
-      # than through `${{ }}` inside `run:`: a commit message is text an author
-      # controls, and interpolating it into a script would execute it.
-      - name: Decide whether the platform jobs run
-        id: decide
+      # A manual run is a full run. `paths-filter` has no `before` to compare
+      # against on a `workflow_dispatch`, so it warns and falls back to
+      # reporting every file as added — which is the behaviour wanted here, but
+      # leaving it implicit would make the Run workflow button, now the only way
+      # to reach the Windows and macOS jobs, depend on another action's
+      # fallback. The outputs stay the strings 'true'/'false' that the job
+      # conditions below compare against.
+      - name: Treat a manual run as a full run
+        id: plan
         env:
           EVENT: ${{ github.event_name }}
-          DISPATCH: ${{ inputs.platform }}
-          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-          MESSAGE: ${{ github.event.head_commit.message }}
+          RUST_CHANGED: ${{ steps.filter.outputs.rust }}
+          FRONTEND_CHANGED: ${{ steps.filter.outputs.frontend }}
         run: |
-          run=false
-          case "$EVENT" in
-            workflow_dispatch) run="${DISPATCH:-true}" ;;
-            pull_request) case ",$LABELS," in *,ci:platform,*) run=true ;; esac ;;
-            push) case "$MESSAGE" in *"[platform]"*) run=true ;; esac ;;
-          esac
-          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT" = workflow_dispatch ]; then
+            RUST_CHANGED=true; FRONTEND_CHANGED=true
+          fi
+          echo "rust=$RUST_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "frontend=$FRONTEND_CHANGED" >> "$GITHUB_OUTPUT"
 
   # ── Formatting + linting (single job to reuse checkout/toolchain) ────
   lint:
@@ -170,17 +158,20 @@ jobs:
   #    tray back-end. Every other job runs on Linux, where
   #    `#[cfg(target_os = "windows")]` blocks are not compiled at all, so
   #    without this job a Windows build break would only surface in the
-  #    nightly/release builds. Scope: the binary that ships, with the tray
-  #    feature the Windows artifacts are built with.
+  #    nightly/release builds.
+  #
+  #    Scope: the type check of the whole test suite, plus the runtime the probes
+  #    below reach — neither of which any other job can do. The `tray` feature
+  #    the Windows artifacts also ship is not checked here: the nightly builds
+  #    `windows-amd64-tray` natively, and a second `cargo check` for that feature
+  #    cost 90s of its own.
   windows-check:
     name: Windows check
     runs-on: windows-latest
     needs: [changes, lint]
-    # Opt-in, and only when Rust changed: see `platform_run` in the `changes`
-    # job. `[platform]` in a commit subject is how a push asks for it.
-    if: >-
-      needs.changes.outputs.platform == 'true'
-      && needs.changes.outputs.platform_run == 'true'
+    # Manual only: `gh workflow run ci.yml -f platform=true`, or the Run
+    # workflow button. There is deliberately no way to ask for it from a commit.
+    if: github.event_name == 'workflow_dispatch' && inputs.platform
     # A deadline for a hang, not for a slow run: the steps below have their own.
     #
     # Deliberately no `CARGO_PROFILE_*_DEBUG=0` here, unlike the Linux jobs.
@@ -381,11 +372,9 @@ jobs:
     name: macOS check
     runs-on: macos-latest
     needs: [changes, lint]
-    # Opt-in, and only when Rust changed: see `platform_run` in the `changes`
-    # job. `[platform]` in a commit subject is how a push asks for it.
-    if: >-
-      needs.changes.outputs.platform == 'true'
-      && needs.changes.outputs.platform_run == 'true'
+    # Manual only: `gh workflow run ci.yml -f platform=true`, or the Run
+    # workflow button. There is deliberately no way to ask for it from a commit.
+    if: github.event_name == 'workflow_dispatch' && inputs.platform
     # Same deadline, and the same decision on debug info: `dsymutil` is what
     # makes a macOS link slow, but re-keying this job's cache costs it more than
     # the symbols do — the check step went 57s to 100s against a warm cache.
