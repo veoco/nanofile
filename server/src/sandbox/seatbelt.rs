@@ -26,14 +26,14 @@
 //! The one profile that starts a program has a grant for it — `process-exec` as a
 //! `(literal …)` for the helper and for the interpreter a script helper names, and
 //! `file-read*`/`file-map-executable` for the helper, its directory and the trees
-//! a packaged one loads from. What CI measures today is that the child can *read*
-//! the program (`helper=allowed`) and that the exec comes back `Operation not
-//! permitted`, for a system binary and for a packaged ffmpeg alike, and with
-//! either the library's `posix_spawn` path or `fork`+`exec`. The grant is written
-//! as narrowly as it can be, so what is left is not the grant: it is what a
-//! Seatbelt profile applied to *this* process allows a second generation to do.
-//! Until that is settled, media thumbnails on macOS are off, and the report and
-//! the settings page say so rather than claiming a helper that never ran.
+//! a packaged one loads from — plus `file-write-data` on `/dev/null`, because the
+//! helper's standard streams are set to it and an open for write is not the read
+//! grant the base profile carries. What CI measured without that write was
+//! `helper=allowed,…,parse=media-unavailable(EPERM)`: the child could read the
+//! program it was granted and the spawn died in its own stdio setup, before the
+//! exec the profile allows. A synthetic profile — the same grants, `/bin/bash`
+//! starting `/bin/echo` — starts the second generation, so the grant itself was
+//! never the problem.
 
 #[cfg(target_os = "macos")]
 use super::Protections;
@@ -129,6 +129,15 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
                     " (allow file-read* file-map-executable (subpath \"{tree}\"))"
                 ));
             }
+            // The helper's streams are set to `/dev/null`, and that is an open
+            // for *write*: the read grant the base profile carries is not enough,
+            // and without this the spawn fails with `Operation not permitted`
+            // before the helper's own code ever runs — which is what it was
+            // doing, measured as `parse=media-unavailable(EPERM)` while the same
+            // program was readable (`helper=allowed`). Linux grants this device
+            // read *and* write to the same profile, which is where the shape
+            // comes from.
+            extra.push_str(" (allow file-write-data (literal \"/dev/null\"))");
             // A helper that is a script needs its own interpreter started before
             // its code runs. That path is a literal too, so the grant is the
             // helper, its interpreter and the trees a helper loads from — no
@@ -334,7 +343,15 @@ mod tests {
             !media.contains("process-exec (subpath"),
             "no directory may be executable: {media}"
         );
-        assert!(!media.contains("file-write"));
+        // The one write this profile has is the helper's standard streams, which
+        // are set to `/dev/null`: an open for write is not the read the base
+        // profile grants, and a spawn without it dies before the exec.
+        assert!(media.contains("(allow file-write-data (literal \"/dev/null\"))"));
+        assert_eq!(
+            media.matches("file-write").count(),
+            1,
+            "the only write is /dev/null: {media}"
+        );
         assert!(!media.contains("network"));
     }
 

@@ -168,7 +168,7 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
 
     let mut last = String::from("ffmpeg produced no frame");
     for seek in attempts {
-        let mut command = helper_command(helper);
+        let mut command = Command::new(helper);
         command
             .arg("-y")
             .arg("-loglevel")
@@ -232,36 +232,20 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
     Err(last)
 }
 
-/// The command that starts the helper, with the path macOS needs.
-///
-/// The standard library starts a program with `posix_spawn` there, and fork+exec
-/// is the path a literal `process-exec` grant is written for: an empty
-/// `pre_exec` hook is what selects it. The hook itself must be
-/// async-signal-safe, and doing nothing is.
-///
-/// Both paths report the same refusal on macOS today — see the module docs on
-/// what this profile does not yet do on that platform — so this is not what
-/// stands between the media worker and a helper there.
-fn helper_command(helper: &Path) -> Command {
-    #[allow(unused_mut)]
-    let mut command = Command::new(helper);
-    #[cfg(target_os = "macos")]
-    unsafe {
-        use std::os::unix::process::CommandExt;
-        command.pre_exec(|| Ok(()));
-    }
-    command
-}
-
 /// The self-test: run the helper under the profile.
 ///
 /// `-version` proves the grant reaches the binary and its libraries. It does not
 /// decode anything, which is what the first real request is for.
+///
+/// The three standard streams are set to `/dev/null`, so the profile has to allow
+/// opening that device for writing: without it the spawn fails with
+/// `Operation not permitted` before the helper runs, which is what the media
+/// probe measured on macOS until the grant was added.
 pub fn probe(grants: Grants<'_>) -> String {
     let Some(helper) = grants.helper else {
         return "media-no-helper".to_string();
     };
-    match helper_command(helper)
+    match Command::new(helper)
         .arg("-version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())

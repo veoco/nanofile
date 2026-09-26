@@ -290,12 +290,11 @@ jobs:
 
       # The media profile is the one that may execute a helper, and until this
       # step existed nothing ran it on this platform: its Seatbelt text was
-      # unit-tested and never applied. The probe reports the profile's shape and
-      # whether the helper started, which is the open item on macOS: the child can
-      # read the program the profile granted it (`helper=allowed`) and the exec
-      # comes back `Operation not permitted`, for a system binary and for a
-      # packaged ffmpeg alike. The module docs record it; what is asserted here is
-      # the shape, and that the probe reported at all.
+      # unit-tested and never applied. It reports the profile's shape and that
+      # the helper starts — which is what it found missing: the profile granted
+      # the helper's image and its interpreter but not the `/dev/null` its
+      # standard streams are set to, so the spawn died in its own stdio setup and
+      # reported `media-unavailable(EPERM)` next to `helper=allowed`.
       - name: Report the media sandbox profile
         run: |
           FFMPEG="$(command -v ffmpeg || true)"
@@ -327,17 +326,17 @@ jobs:
           # Starting a program other than the helper stays refused. Seatbelt
           # refuses it with EPERM, which is the denial this reads.
           grep -q 'exec=denied' /tmp/media.txt
-          grep -qE 'parse=media-(ok|failed|unavailable)' /tmp/media.txt
-          grep -q 'parse=media-ok' /tmp/media.txt ||
-            echo "media helper did not run: $(grep -o 'parse=media-[^ ]*' /tmp/media.txt)"
+          # The helper starts: the grant is the image, the interpreter, the
+          # library trees and the `/dev/null` its standard streams are set to.
+          grep -q 'parse=media-ok' /tmp/media.txt
 
-      # Diagnostics for the one thing the media probe cannot say: *why* the exec
-      # is refused, and whether a Seatbelt profile can start a second generation
-      # of program at all. Synthetic profiles against system binaries answer the
-      # second in one run — `sh` is the child, `echo` the program it starts — and
-      # the sandbox's own log answers the first with the operation it denied.
-      # Nothing here asserts: it prints, and the step above is what gates the
-      # build.
+      # Diagnostics for what a probe cannot say: whether a Seatbelt profile can
+      # start a second generation of program at all, and which operation the
+      # sandbox refuses when it cannot. Synthetic profiles against system
+      # binaries answer the first in one run — `bash` is the child, `echo` the
+      # program it starts — and the sandbox's own log answers the second. It was
+      # this step that showed the grant was never the problem; nothing here
+      # asserts, and the step above is what gates the build.
       - name: Bisect the media profile
         if: always()
         run: |
