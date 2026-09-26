@@ -603,7 +603,10 @@ jobs:
   # Its own job rather than the head of the `test` job, where it was: the
   # ffmpeg install and the three reports below are 146s of the 449s that job
   # spent, and none of them depends on the suite. As a sibling they run beside
-  # it instead of in front of it.
+  # it instead of in front of it. The sweep is 550s to 485s rather than the
+  # 146s the subtraction suggests, because `cargo build --bin nanofile` here
+  # was also warming the dev-profile dependency graph that `Run tests` now
+  # has to compile itself.
   sandbox:
     name: Linux sandbox
     runs-on: ubuntu-latest
@@ -792,11 +795,14 @@ jobs:
     # `debug_assert!` enabled. Set per job, so local profiles and the nightly
     # release build are untouched.
     #
-    # What `Run tests` spends its 272s on, measured rather than assumed: ~110s
-    # building those 74 binaries (~1.5s each, and `lld` does not shorten it),
-    # ~25s the server crate and its dependencies, ~130s the 1916 tests. The
-    # second and third are what splitting the targets across runners would cut;
-    # this repository is public, so the minutes cost nothing.
+    # What `Run tests` spends its 362s on, read off the job's own log rather
+    # than assumed: 200s in cargo's build phase — ~110s of it the 74
+    # integration-test binaries at ~1.5s each, which is a link, and `lld` was
+    # measured here and does not shorten it, plus ~90s the server crate and its
+    # dependencies — and 156s running the 1916 tests across 87 binaries, which
+    # cargo starts one after another. Splitting the 74 targets across runners
+    # is what would cut both halves; this repository is public, so the minutes
+    # cost nothing.
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
