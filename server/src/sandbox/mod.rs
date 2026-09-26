@@ -78,13 +78,15 @@
 //! profile is applied by a wrapper this process cannot inspect.
 //!
 //! The Windows files layer is the one whose boundary is not a rule this process
-//! writes for itself: an AppContainer denies what the user's own ACLs grant and
-//! permits what `ALL APPLICATION PACKAGES` grants, which is the system tree it
-//! loads from. So the child measures both edges of that window and reports the
-//! far one as `system=`, without letting it clear the layer — a parser that gets
-//! loose in the child reads `Windows` whether or not that is recorded, and what
-//! the report can do is say so next to the fact that the user's own files are
-//! refused.
+//! writes for itself: a low-box access check needs an ACE for the package the
+//! process is checked against, over and above whatever the user's own ACLs
+//! grant, so what the child can still reach is the system tree it loads from.
+//! Which principals supply that access depends on the container — with the
+//! Windows 11 opt-out it is not `ALL APPLICATION PACKAGES` — so the child
+//! measures both edges of the window and reports the far one as `system=`,
+//! without letting it clear the layer: a parser that gets loose in the child
+//! reads `Windows` whether or not that is recorded, and what the report can do is
+//! say so next to the fact that the user's own files are refused.
 //!
 //! Memory is measured the same way. The limit counts only if the kernel took it
 //! — on macOS that means a limit stated from the space the process has already
@@ -785,9 +787,11 @@ pub fn confine(external: External, profile: Profile, grants: Grants, measure: Me
         }
     }
     // The far edge of the Windows files protection, reported beside the near
-    // one: an AppContainer denies what the user's own ACLs grant and permits
-    // what `ALL APPLICATION PACKAGES` grants, which is the system tree the child
-    // loads from. Which of the two it found is as much of the answer as the item.
+    // one: a low-box check needs the package the process is checked against, over
+    // and above the user's own ACLs, so the system tree the child loads from
+    // stays readable. Which of the two it found is as much of the answer as the
+    // item, and the mechanism behind the grant is left to the platform docs
+    // rather than asserted here — it differs with the container.
     #[cfg(windows)]
     if protections.files {
         detail.push(format!("system={}", system_tree()));
@@ -1041,11 +1045,15 @@ fn network_is_denied() -> bool {
 /// Whether the system tree is still readable, which under an AppContainer it is.
 ///
 /// The far edge of the Windows files layer, and a residual rather than a claim:
-/// `ALL APPLICATION PACKAGES` is granted across the system tree because that is
-/// how a packaged app loads the system it runs on, so a parser that gets loose
-/// in the child reads `Windows` even though the user's own files are refused.
-/// Reported as a fact and never as a contradiction — a host where this answered
-/// `denied` would be stricter than the platform, not broken.
+/// the packages a low-box process is checked against are granted across the
+/// system tree, because that is how a packaged app loads the system it runs on,
+/// so a parser that gets loose in the child reads `Windows` even though the
+/// user's own files are refused. Which package supplies the grant is left to the
+/// platform: the Windows 11 opt-out makes the check ignore
+/// `ALL APPLICATION PACKAGES`, and the readable set then comes from the ACEs a
+/// different principal carries. Reported as a fact and never as a contradiction —
+/// a host where this answered `denied` would be stricter than the platform, not
+/// broken.
 ///
 /// The candidates are tried in order and the first one that exists decides. The
 /// first two are files nothing maps — the legacy `win.ini` and the hosts file —

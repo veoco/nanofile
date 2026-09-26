@@ -133,10 +133,10 @@ The admin's **Sandbox** page shows the grade this host actually gives:
 - **None** — anything less than limits plus the files layer, including a kernel
   without Landlock and a Windows launch that could not produce a container.
 
-Each item is listed with the platform's own residuals beside it: macOS has to
-allow `fork` for the parser's thread, the Windows container reads the system
-tree it loads from, and the media worker may execute the configured `ffmpeg`
-and read only the scratch file it was handed.
+Each item is listed with how much it matters and what its absence opens, beside
+the platform's own residuals: macOS has to allow `fork` for the parser's thread,
+the Windows container reads the system tree it loads from, and the media worker
+is granted the libraries it needs as well as the helper itself.
 
 The media worker is graded on its own line, and it is **Partial** on every
 platform by design: it exists to start a program, and every way of starting one
@@ -145,6 +145,14 @@ image profiles carry. What bounds it instead is the file layer — only the help
 and the interpreter the kernel runs before it may be executed, never a directory
 — and the time limits, which bound the copies. Raising `sandbox.min_level` to
 `full` therefore disables media thumbnails, and the page says so.
+
+Its file item carries its own notes, because a helper is a program with
+libraries: it may read the libraries beside it, the system library directories,
+and — on macOS — the package-manager trees (`/opt/homebrew`, `/usr/local`,
+`/opt/local`) a packaged build links against. On Linux and macOS nothing bounds
+how many processes the helper may create; the parent's timeout and the process
+group it kills are what stop it, and the page says that too rather than leaving
+it to be inferred.
 
 Two settings govern it. `sandbox.enabled` is the master switch: with it off,
 none of those features run, and nothing falls back to parsing inside the server
