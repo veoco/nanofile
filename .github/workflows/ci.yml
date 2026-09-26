@@ -385,6 +385,12 @@ jobs:
           grep -q 'profile=media' /tmp/media.txt
           # The profile cannot have the process item, and says so.
           grep -q 'level=partial' /tmp/media.txt
+          # The files item is in place — media is `partial` rather than `none`
+          # only because this one is — and the row says how wide it is: the helper
+          # and, on this platform, the package-manager trees a packaged build
+          # links against.
+          grep -q 'files=denied' /tmp/media.txt
+          grep -q 'helper_scope=trees' /tmp/media.txt
           grep -q 'process=open' /tmp/media.txt
           grep -q 'helper=allowed' /tmp/media.txt
           # Starting a program other than the helper stays refused. Seatbelt
