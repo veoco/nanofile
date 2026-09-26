@@ -402,8 +402,17 @@ impl Report {
     }
 
     /// The one-line report the self-test prints and the parent parses.
+    ///
+    /// Every field of the line is whitespace-separated, so the detail is made
+    /// whitespace-free here rather than trusted to be: a token that carries an
+    /// error string — an OS error is `Permission denied (os error 13)` — would
+    /// otherwise split the detail across fields and make the whole line
+    /// unreadable, which the parent treats as a probe that never reported. That
+    /// is the difference between "no ffmpeg on this host" and "the media profile
+    /// is not available at all", and only one of them is true.
     pub fn line(&self) -> String {
         let yes = |on: bool| if on { "denied" } else { "open" };
+        let detail = self.detail.replace([' ', '\t', '\n'], "_");
         format!(
             "NFS2-sandbox profile={} level={} limits={} files={} network={} process={} detail={}",
             self.profile.as_str(),
@@ -412,7 +421,7 @@ impl Report {
             yes(self.protections.files),
             yes(self.protections.network),
             yes(self.protections.process),
-            self.detail
+            detail
         )
     }
 
@@ -745,6 +754,19 @@ pub fn confine(external: External, profile: Profile, grants: Grants, measure: Me
         }
     }
 
+    // The helper is a grant the parent made before this process existed, and on
+    // the platforms that apply one as creation rather than as a rule this side
+    // cannot inspect, the only way to check it is to try: opening the file is
+    // what a profile or an ACL that does not reach it looks like from in here.
+    // The effect is `parse=`; this is the grant that leads to it.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if profile.runs_helper()
+        && let Some(helper) = grants.helper
+        && let Err(error) = std::fs::File::open(helper)
+    {
+        detail.push(format!("helper-grant-refused({error})"));
+    }
+
     // The media profile's process item, and the helper it exists to start.
     //
     // The item is cleared whatever the platform installed. This profile starts
@@ -759,11 +781,7 @@ pub fn confine(external: External, profile: Profile, grants: Grants, measure: Me
     // is what the probe reports as `parse=`.
     if profile.runs_helper() {
         protections.process = false;
-        if grants.helper.is_some()
-            && !detail
-                .iter()
-                .any(|fact| fact == "helper_grants=0" || fact.starts_with("helper-grant-refused"))
-        {
+        if helper_is_granted(grants.helper.is_some(), &detail) {
             detail.push("helper=allowed".to_string());
         }
     }
@@ -786,6 +804,22 @@ pub fn confine(external: External, profile: Profile, grants: Grants, measure: Me
         protections,
         detail: detail.join(","),
     }
+}
+
+/// Whether the platform said the helper's grant took.
+///
+/// Three tokens can say it did not, and they are the platforms' own words: a
+/// ruleset that counted rules but not the helper's (`helper-rule-refused`), a
+/// Linux grant with nothing in it (`helper_grants=0`), and a Windows ACL that
+/// could not be written (`helper-grant-refused…`). Without a complaint, the
+/// grant is what the profile was built with.
+fn helper_is_granted(helper: bool, detail: &[String]) -> bool {
+    helper
+        && !detail.iter().any(|fact| {
+            fact == "helper_grants=0"
+                || fact == "helper-rule-refused"
+                || fact.starts_with("helper-grant-refused")
+        })
 }
 
 /// How a three-valued denial is spelled in the report.
@@ -1497,6 +1531,57 @@ mod tests {
         assert_eq!(parsed.protections, media.protections);
         assert_eq!(parsed.level(), Level::Partial);
         assert_eq!(parsed.notes(), ["fork", "helper"]);
+    }
+
+    /// A detail token that carries an error string still produces a line the
+    /// parent can read: the fields are whitespace-separated, and an OS error is
+    /// not whitespace-free.
+    #[test]
+    fn a_detail_with_an_error_string_is_still_one_field() {
+        let report = Report {
+            profile: Profile::Media,
+            protections: Protections {
+                limits: true,
+                files: true,
+                network: true,
+                process: false,
+            },
+            detail: "parse=media-unavailable(Permission denied (os error 13))".to_string(),
+        };
+        let line = report.line();
+        assert!(!line.contains("Permission denied"), "{line}");
+        assert!(line.contains("Permission_denied_(os_error_13)"), "{line}");
+        let parsed = Report::parse(&line).expect("the parent must be able to read it");
+        assert!(parsed.detail.contains("media-unavailable"));
+        assert_eq!(parsed.protections, report.protections);
+    }
+
+    /// The helper note is a fact only when the platform did not say the grant
+    /// failed. Each platform has its own word for that.
+    #[test]
+    fn the_helper_note_needs_the_grant_to_have_taken() {
+        let detail = |facts: &[&str]| facts.iter().map(|f| f.to_string()).collect::<Vec<_>>();
+
+        assert!(helper_is_granted(true, &detail(&["seccomp=97"])));
+        assert!(
+            !helper_is_granted(false, &detail(&[])),
+            "a profile with no helper grant has nothing to report"
+        );
+        for refusal in [
+            "helper_grants=0",
+            "helper-rule-refused",
+            "helper-grant-refused(Permission_denied)",
+        ] {
+            assert!(
+                !helper_is_granted(true, &detail(&[refusal])),
+                "{refusal} must suppress the note"
+            );
+        }
+        // A refusal that is not about the helper leaves it alone.
+        assert!(helper_is_granted(
+            true,
+            &detail(&["source-grant-refused(Access_is_denied)", "helper_grants=12"])
+        ));
     }
 
     #[test]

@@ -113,6 +113,7 @@ use std::fs::File;
 use std::mem::{offset_of, size_of, size_of_val};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
+use std::path::PathBuf;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1278,7 +1279,7 @@ fn grant_helper_access(grants: Grants<'_>) {
         return;
     };
     if let Some(helper) = grants.helper {
-        if let Err(error) = add_access(
+        if let Err(error) = add_path_access(
             helper.as_os_str(),
             sid,
             FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
@@ -1286,11 +1287,11 @@ fn grant_helper_access(grants: Grants<'_>) {
             note_shortfall("helper-grant-refused", Some(&error));
         }
         // A helper that is dynamically linked loads libraries from beside its
-        // own image, and each one needs the same grant.
-        if let Some(directory) = helper.parent() {
-            let Ok(entries) = std::fs::read_dir(directory) else {
-                return;
-            };
+        // own image, and each one needs the same grant. A directory that cannot
+        // be listed is not a reason to skip the source below.
+        if let Some(directory) = helper.parent()
+            && let Ok(entries) = std::fs::read_dir(directory)
+        {
             for entry in entries.flatten() {
                 let path = entry.path();
                 let is_library = path
@@ -1307,10 +1308,36 @@ fn grant_helper_access(grants: Grants<'_>) {
         }
     }
     if let Some(source) = grants.source {
-        if let Err(error) = add_access(source.as_os_str(), sid, FILE_GENERIC_READ) {
+        if let Err(error) = add_path_access(source.as_os_str(), sid, FILE_GENERIC_READ) {
             note_shortfall("source-grant-refused", Some(&error));
         }
     }
+}
+
+/// Add `mask` for `sid` to `path`, and the traverse it takes to reach it.
+///
+/// An AppContainer's access is decided by ACEs that name its own SID, so a file
+/// under the user's profile is unreachable however the user's own ACLs read:
+/// every directory on the way has to grant the container the right to walk
+/// through it. Without this a helper and a scratch source were granted read and
+/// execute on the file itself and still failed to open — `Access is denied`, once
+/// per media request, which is what the media probe in CI measures.
+///
+/// `FILE_GENERIC_EXECUTE` on a directory is traverse, read attributes and
+/// synchronize: walking through it, not listing it and not reading what else is
+/// in it.
+fn add_path_access(path: &OsStr, sid: PSID, mask: u32) -> std::io::Result<()> {
+    add_access(path, sid, mask)?;
+    let mut ancestor = PathBuf::from(path);
+    while ancestor.pop() {
+        add_access(ancestor.as_os_str(), sid, FILE_GENERIC_EXECUTE)?;
+    }
+    // `pop` stops at the root and leaves it in place: the drive the file is on
+    // is the first step of the walk, so it is granted too.
+    if !ancestor.as_os_str().is_empty() {
+        add_access(ancestor.as_os_str(), sid, FILE_GENERIC_EXECUTE)?;
+    }
+    Ok(())
 }
 
 /// Whether `program` has been given to the container, granting it if not.

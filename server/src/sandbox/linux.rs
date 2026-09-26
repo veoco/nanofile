@@ -208,6 +208,11 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
             detail.push(format!("landlock_scoped={}", on_off(landlock.scoped)));
             if profile.runs_helper() {
                 detail.push(format!("helper_grants={}", landlock.helper_grants));
+                if !landlock.helper {
+                    // The one program this profile exists to run is not
+                    // granted, whatever else the ruleset took.
+                    detail.push("helper-rule-refused".to_string());
+                }
             }
         }
         Err(reason) => detail.push(format!("landlock={reason}")),
@@ -418,6 +423,12 @@ struct Landlock {
     scoped: bool,
     /// How many path rules the media profile's grants installed.
     helper_grants: usize,
+    /// Whether the rule for the helper file itself was added.
+    ///
+    /// The count alone cannot say: a helper that cannot be opened leaves the
+    /// library and interpreter rules in place, so `helper_grants` is non-zero
+    /// while the one program this profile exists to run is not granted at all.
+    helper: bool,
 }
 
 /// Install a Landlock ruleset that grants nothing — except the paths the media
@@ -469,8 +480,11 @@ fn install_landlock(profile: Profile, grants: Grants<'_>) -> Result<Landlock, &'
     }
 
     let mut helper_grants = 0;
+    let mut helper = false;
     if profile.runs_helper() {
-        helper_grants = add_helper_rules(ruleset, grants);
+        let rules = add_helper_rules(ruleset, grants);
+        helper_grants = rules.added;
+        helper = rules.helper;
     }
 
     let restricted =
@@ -485,6 +499,7 @@ fn install_landlock(profile: Profile, grants: Grants<'_>) -> Result<Landlock, &'
         network: size >= 2 * size_of::<u64>() && attr.handled_access_net != 0,
         scoped: size >= 3 * size_of::<u64>() && attr.scoped != 0,
         helper_grants,
+        helper,
     })
 }
 
@@ -496,6 +511,14 @@ const LANDLOCK_RULE_PATH_BENEATH: libc::c_uint = 1;
 struct LandlockPathBeneath {
     allowed_access: u64,
     parent_fd: i32,
+}
+
+/// The media profile's rules, and whether the helper itself got one.
+struct HelperRules {
+    /// How many path rules the ruleset took.
+    added: usize,
+    /// Whether the rule for the helper file was one of them.
+    helper: bool,
 }
 
 /// Add the media profile's read and execute rules.
@@ -514,15 +537,17 @@ struct LandlockPathBeneath {
 /// a 32-bit library directory on a 64-bit host, an interpreter for another
 /// architecture — rather than failing the ruleset over a rule that grants
 /// nothing.
-fn add_helper_rules(ruleset: i64, grants: Grants<'_>) -> usize {
+fn add_helper_rules(ruleset: i64, grants: Grants<'_>) -> HelperRules {
     let mut added = 0;
-    if let Some(helper) = grants.helper {
-        added += add_path_rule(ruleset, helper, helper_file_access()) as usize;
-        for interpreter in helper_interpreters(helper) {
+    let mut helper = false;
+    if let Some(path) = grants.helper {
+        helper = add_path_rule(ruleset, path, helper_file_access());
+        added += helper as usize;
+        for interpreter in helper_interpreters(path) {
             added += add_path_rule(ruleset, &interpreter, helper_interpreter_access()) as usize;
         }
         // The helper may sit beside its own libraries, which is a read.
-        if let Some(directory) = helper.parent() {
+        if let Some(directory) = path.parent() {
             added += add_path_rule(ruleset, directory, helper_directory_access()) as usize;
         }
     }
@@ -540,7 +565,7 @@ fn add_helper_rules(ruleset: i64, grants: Grants<'_>) -> usize {
     for (path, access) in HELPER_DEVICES {
         added += add_path_rule(ruleset, Path::new(path), *access) as usize;
     }
-    added
+    HelperRules { added, helper }
 }
 
 /// What the helper's own file is granted: run it, and read the image the kernel

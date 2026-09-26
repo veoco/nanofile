@@ -1256,3 +1256,52 @@ async fn the_sandbox_page_shows_the_measured_grade_and_items() {
         assert!(html.contains(label), "the panel is missing {label:?}");
     }
 }
+
+/// The media profile grades below the document profile on every platform, so a
+/// minimum of `full` refuses it — and the page has to say that, rather than
+/// showing a row that looks fine next to a setting that stopped it.
+#[tokio::test]
+async fn a_full_minimum_disables_the_media_worker_and_says_so() {
+    let _ = server::sandbox::worker::configure_executable(std::path::PathBuf::from(env!(
+        "CARGO_BIN_EXE_nanofile"
+    )));
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    server
+        .state
+        .settings
+        .save(
+            Section::Sandbox,
+            &form(&[("sandbox.min_level", "full")]),
+            None,
+        )
+        .await
+        .expect("raise the minimum");
+
+    let (status, html) = page(&server, &admin, "/sysadmin/settings/sandbox/").await;
+    assert_eq!(status, 200);
+    assert!(
+        html.contains("Disabled by the minimum grade"),
+        "the media row does not say why it is off: {html}"
+    );
+    assert!(
+        html.contains("data-sandbox-media-reason"),
+        "the media row carries no reason"
+    );
+
+    // Leave the process-global requirement where the fixture put it: this test
+    // is about the page, and a minimum of `full` would follow the rest of this
+    // binary's tests around.
+    server
+        .state
+        .settings
+        .save(
+            Section::Sandbox,
+            &form(&[("sandbox.min_level", "partial")]),
+            None,
+        )
+        .await
+        .expect("restore the minimum");
+}

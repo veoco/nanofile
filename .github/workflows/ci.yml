@@ -301,14 +301,14 @@ jobs:
           fi
           EXPECT='parse=media-ok'
           if [ -z "$FFMPEG" ]; then
-            # Still nothing: run the worker's own image as the helper, in place.
-            # It starts and exits non-zero — it is not a helper — and that is
-            # `media-failed`, which is the proof this profile can start one. A
-            # grant that did not reach the binary would be `media-unavailable`
-            # instead.
-            FFMPEG="$(pwd)/target/debug/nanofile"
-            EXPECT='parse=media-failed'
-            echo "no ffmpeg on this runner; probing with the worker's own image as the helper"
+            # Still nothing. The media profile can start a program; the cheapest
+            # one every macOS host has is `/bin/echo`, which prints the flag it
+            # was given and exits zero. That is the mechanism this profile is
+            # made of, and `exec=denied` below still measures the other side:
+            # `/usr/bin/true`, the program the probe tries to start, is not the
+            # helper and not granted.
+            FFMPEG=/bin/echo
+            echo "no ffmpeg on this runner; probing with /bin/echo as the helper"
           fi
           ./target/debug/nanofile extract-worker \
             --probe --profile media --ffmpeg "$FFMPEG" | tee /tmp/media.txt
