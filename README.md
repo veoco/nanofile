@@ -126,9 +126,12 @@ The admin's **Sandbox** page shows the grade this host actually gives:
 - **Full** — every protection the platform can provide: resource limits (memory,
   CPU, descriptors, file size), no file access, no network, and no way to start
   another program.
-- **Partial** — resource limits plus at least one of the other three, with the
-  missing item named.
-- **None** — resource limits alone.
+- **Partial** — resource limits **and** no file access, with the network or the
+  process bound missing; the missing item is named. The files layer is what makes
+  this grade worth having: a host that denies the network and the processes but
+  lets the parser read every path is not Partial, it is None.
+- **None** — anything less than limits plus the files layer, including a kernel
+  without Landlock and a Windows launch that could not produce a container.
 
 Each item is listed with the platform's own residuals beside it: macOS has to
 allow `fork` for the parser's thread, the Windows container reads the system
@@ -147,7 +150,10 @@ Two settings govern it. `sandbox.enabled` is the master switch: with it off,
 none of those features run, and nothing falls back to parsing inside the server
 process. `sandbox.min_level` is the grade the host must reach — `full`,
 `partial` (the default) or `none`; below it the features are disabled and the
-page says why. A host that is not Full still runs them, with a warning.
+page says why, naming the item and what its absence means. A host that reaches
+Partial but not Full still runs them, with a warning; a host that does not reach
+Partial runs them only if an admin sets `min_level = "none"`, which the page
+marks as unsafe and explains.
 
 `storage.ffmpeg_path` names the helper the media profile may execute. Saving it
 re-resolves the grant through the same hook as the two settings above, so the

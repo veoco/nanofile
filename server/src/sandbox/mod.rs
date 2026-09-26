@@ -34,9 +34,16 @@
 //!
 //! * [`Level::Full`] (完整) — every protection this platform can provide is in
 //!   place: resource limits, files, network and process.
-//! * [`Level::Partial`] (部分) — resource limits plus at least one of the other
-//!   three; the settings page names which item is missing.
-//! * [`Level::None`] (无) — nothing beyond resource limits.
+//! * [`Level::Partial`] (部分) — resource limits *and* the files layer, with at
+//!   least one of network and process missing; the settings page names which.
+//! * [`Level::None`] (无) — anything less, including a host that denies the
+//!   network and the processes but lets the parser read every path.
+//!
+//! The files layer is a necessary condition of `partial`, not one of three ways
+//! to reach it: a parser that can read the host's files is the exposure this
+//! module exists to close, and the hosts that end up there — a kernel without
+//! Landlock, a Windows launch that fell back to a token with no container — are
+//! exactly the ones a grade must not call adequate.
 //!
 //! Two settings govern the sandbox, and both live on the admin's "Sandbox" page:
 //! `sandbox.enabled` is the master switch over every feature that parses
@@ -44,7 +51,8 @@
 //! before those features run at all. When the switch is off, or the host grades
 //! below the minimum, the features are *disabled* — there is no in-process path
 //! to fall back to. [`Requirement`] is the pair, and [`Refusal`] says which of
-//! the two refused.
+//! the two refused. `sandbox.min_level = "none"` is the one value that accepts a
+//! host without the files layer; the page says so in those words.
 //!
 //! # What a grade does not say
 //!
@@ -141,12 +149,14 @@ pub(super) use windows::{Child as WindowsChild, spawn, spawn_token_only, spawn_u
 /// Whether the child runs in a less privileged container, where the platform
 /// has one.
 ///
-/// Windows 11 can opt a container out of `ALL APPLICATION PACKAGES`, and the
-/// answer here is what the last launch actually got — `false` on Windows 10,
-/// where the attribute does not exist. It is a fact about the launch, not a
-/// grade: the system tree stays readable either way, because the child's token
-/// also carries the user's own SID, which is what the child's `system=`
-/// measurement reports.
+/// Windows 11 can opt a container out of `ALL APPLICATION PACKAGES` with the
+/// `WIN://NOALLAPPPKG` security attribute, and the answer here is what the last
+/// launch actually got — `false` on Windows 10, where the attribute does not
+/// exist. It is a fact about the launch, not a grade: the system tree stays
+/// readable either way, because the files a low-box process loads carry ACEs for
+/// `ALL RESTRICTED APPLICATION PACKAGES` as well. That is a property of the
+/// Windows build rather than a documented invariant, which is why the note is
+/// decided by the child's own `system=` measurement instead of by this.
 pub fn lpac() -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -187,8 +197,10 @@ pub fn disable_lpac() {
 ///
 /// `None` when the container was applied, was never asked for, or cannot exist on
 /// this platform. The probe prints what this says, because the child can only
-/// report that its token is not one, not why.
-pub fn container_shortfall() -> Option<&'static str> {
+/// report that its token is not one, not why. Owned rather than `'static`: it is
+/// the reasons the *last* launch recorded, joined, and a launch that succeeds
+/// after an earlier one failed clears them.
+pub fn container_shortfall() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
         windows::shortfall()
@@ -234,7 +246,7 @@ const FILE_SIZE_LIMIT: u64 = 16 * 1024 * 1024;
 pub enum Level {
     /// Resource limits only, or nothing at all.
     None,
-    /// Resource limits plus at least one real confinement layer.
+    /// Resource limits plus the files layer, and not everything else.
     Partial,
     /// Every layer this platform can provide.
     Full,
@@ -279,14 +291,27 @@ pub struct Protections {
 impl Protections {
     /// What these items add up to.
     ///
-    /// [`Level::Full`] needs all four. [`Level::Partial`] is any protection
-    /// beyond resource limits — a host without Landlock still confines the
-    /// network, and Windows' Job Object confines processes — while a process
-    /// held only by `RLIMIT_*` is [`Level::None`].
+    /// [`Level::Full`] needs all four. [`Level::Partial`] needs resource limits
+    /// *and* the files layer. Anything else is [`Level::None`].
+    ///
+    /// The files layer is what makes `partial` a grade worth having rather than
+    /// the weaker of two grades. What a document parser can do to the host is
+    /// bounded by what it can read: a host that confines the network and the
+    /// processes but not the paths has a parser that can still read every file
+    /// the server's user can, and that is the exposure this whole module exists
+    /// to close. The two ways a host lands there are both real and both silent —
+    /// a kernel without Landlock (or a container runtime that does not allow the
+    /// syscalls), and a Windows launch that could not produce an AppContainer and
+    /// fell back to a token that bounds nothing about files. So `network` and
+    /// `process` are refinements on top of a files-confined host, never
+    /// substitutes for one, and a host without the files layer grades `none`
+    /// whatever else it denies. `sandbox.min_level` then refuses it by default,
+    /// and `none` is the one setting that accepts it — which is the explicit
+    /// choice, not an accident.
     pub fn level(self) -> Level {
         if self.limits && self.files && self.network && self.process {
             Level::Full
-        } else if self.limits && (self.files || self.network || self.process) {
+        } else if self.limits && self.files {
             Level::Partial
         } else {
             Level::None
@@ -377,6 +402,13 @@ impl Report {
     /// backend emits simply produces no note. They are *notes* — the grade is
     /// decided from [`Protections`] alone, so a wording change here can never
     /// weaken a decision.
+    ///
+    /// The list is what the page has to say beyond "which item is missing". An
+    /// item can be in place and still be narrower than its name suggests — the
+    /// Windows container reads the system tree, the media worker may read the
+    /// libraries beside its helper — and a fact only the parent saw (which
+    /// creation was used, why the container was not) reaches here the same way,
+    /// because the parent appends it to the report before the page reads it.
     pub fn notes(&self) -> Vec<&'static str> {
         let has = |token: &str| self.detail.split(',').any(|fact| fact == token);
         let mut notes = Vec::new();
@@ -386,8 +418,11 @@ impl Report {
         if has("system=readable") {
             notes.push("system_tree");
         }
-        if has("writes=own-store") || has("writes=user") {
+        if has("writes=store") {
             notes.push("writes");
+        }
+        if has("writes=user") {
+            notes.push("writes_user");
         }
         if has("metadata=open") {
             notes.push("metadata");
@@ -397,6 +432,36 @@ impl Report {
         }
         if has("helper=allowed") {
             notes.push("helper");
+        }
+        // How much the media helper may read, which is wider than "the helper and
+        // its loader": the libraries beside it in every case, and on macOS the
+        // package-manager trees a packaged build links against.
+        if has("helper_scope=trees") {
+            notes.push("helper_trees");
+        } else if has("helper_scope=libs") {
+            notes.push("helper_libs");
+        }
+        // The creation the parent settled for, when it is weaker than the one
+        // this host can give, and why the strongest one did not work.
+        if has("rung=token") || has("rung=plain") {
+            notes.push("container_plain");
+        }
+        if self
+            .detail
+            .split(',')
+            .any(|fact| fact.starts_with("container_refused="))
+        {
+            notes.push("container_refused");
+        }
+        if has("lpac=off") {
+            notes.push("lpac_off");
+        }
+        // The media profile starts its helper by copying the process, and on the
+        // two platforms without a Job Object nothing bounds how many copies there
+        // may be. The item is already reported as missing for this profile; this
+        // is the note that says what does bound them instead.
+        if has("media_process=unbounded") {
+            notes.push("media_process");
         }
         notes
     }
@@ -499,9 +564,9 @@ pub struct Requirement {
 }
 
 impl Default for Requirement {
-    /// The shipped default: sandbox on, and a host that gives at least resource
-    /// limits plus one real protection. A host below that has the features
-    /// disabled rather than parsed unconfined.
+    /// The shipped default: sandbox on, and a host that gives resource limits
+    /// plus the files layer. A host below that has the features disabled rather
+    /// than parsed with the server user's own read access to every path.
     fn default() -> Self {
         Self {
             enabled: true,
@@ -860,21 +925,22 @@ fn network_is_measured(measure: Measure) -> bool {
 /// The temporary directory is the one place a process may write without asking
 /// anyone, so a refusal there is the sandbox and nothing else.
 ///
-/// Any one of the read paths failing to open is the denial: `/` always exists,
-/// and the other three are readable by every process that is not confined. The
-/// macOS profile grants `/` on purpose — the child's working directory is there,
-/// and a process that cannot read it is aborted rather than refused — so the
-/// measurement rests on the paths beneath it, which no profile of ours grants.
+/// Any one of the read paths failing to open is the denial. The candidates are
+/// only paths no profile of ours grants, which is why `/` is not among them: the
+/// macOS profile grants it on purpose — the child's working directory is there,
+/// and a process that cannot read it is aborted rather than refused — so a
+/// candidate that is granted could never produce the denial this is looking for
+/// and would only make the read half look measured when it was not. `/usr/lib`
+/// is granted by that profile for the same reason. What is left is two files
+/// every unconfined process can read and no profile grants.
 #[cfg(unix)]
 fn files_are_denied() -> bool {
-    let reads = ["/", "/etc/hostname", "/etc/passwd", "/usr/lib"]
-        .iter()
-        .any(|path| {
-            matches!(
-                std::fs::File::open(path),
-                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied
-            )
-        });
+    let reads = ["/etc/hostname", "/etc/passwd"].iter().any(|path| {
+        matches!(
+            std::fs::File::open(path),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied
+        )
+    });
 
     let probe = std::env::temp_dir().join("nanofile-extraction-write-probe");
     let writes = match std::fs::File::create(&probe) {
@@ -985,16 +1051,27 @@ fn network_is_denied() -> bool {
 /// first two are files nothing maps — the legacy `win.ini` and the hosts file —
 /// and the last is `ntdll.dll`, which this process has already mapped, so the
 /// answer cannot be `absent` on a host where the child runs at all.
+///
+/// `SystemRoot` is where they are read from rather than a hard-coded `C:`, which
+/// is only the usual install: a host whose Windows lives on another volume would
+/// otherwise answer `absent` for every candidate and report a residual it never
+/// measured.
 #[cfg(windows)]
 fn system_tree() -> &'static str {
-    const CANDIDATES: [&str; 3] = [
-        r"C:\Windows\win.ini",
-        r"C:\Windows\System32\drivers\etc\hosts",
-        r"C:\Windows\System32\ntdll.dll",
+    let root = std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
+    let candidates: [std::path::PathBuf; 3] = [
+        root.join("win.ini"),
+        root.join("System32")
+            .join("drivers")
+            .join("etc")
+            .join("hosts"),
+        root.join("System32").join("ntdll.dll"),
     ];
 
     let mut refused = false;
-    for candidate in CANDIDATES {
+    for candidate in &candidates {
         match std::fs::File::open(candidate) {
             Ok(_) => return "readable",
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => refused = true,
@@ -1256,8 +1333,7 @@ fn platform_confine(profile: Profile, grants: Grants) -> (Protections, Vec<Strin
 
 #[cfg(target_os = "macos")]
 fn platform_confine(profile: Profile, grants: Grants) -> (Protections, Vec<String>) {
-    let _ = (profile, grants);
-    seatbelt::confine()
+    seatbelt::confine(profile, grants)
 }
 
 #[cfg(target_os = "windows")]
@@ -1343,7 +1419,7 @@ mod tests {
     }
 
     #[test]
-    fn a_level_needs_limits_and_something_else() {
+    fn a_level_needs_limits_and_the_files_layer() {
         assert_eq!(Protections::default().level(), Level::None);
         assert_eq!(
             Protections {
@@ -1354,18 +1430,57 @@ mod tests {
             Level::None,
             "resource limits alone are not confinement"
         );
-        for other in ["files", "network", "process"] {
-            let mut items = Protections {
+        assert_eq!(
+            Protections {
                 limits: true,
+                files: true,
                 ..Protections::default()
-            };
-            match other {
-                "files" => items.files = true,
-                "network" => items.network = true,
-                _ => items.process = true,
             }
-            assert_eq!(items.level(), Level::Partial, "{other}");
+            .level(),
+            Level::Partial,
+            "the files layer is enough for partial on its own"
+        );
+        // The two hosts that reach the network and process items without the
+        // files layer: a kernel without Landlock, and a Windows launch that fell
+        // back to a token with no container. Neither may be called partial —
+        // each has a parser that can read every path the server user can.
+        for missing_files in [
+            Protections {
+                limits: true,
+                files: false,
+                network: true,
+                process: true,
+            },
+            Protections {
+                limits: true,
+                files: false,
+                network: true,
+                process: false,
+            },
+            Protections {
+                limits: true,
+                files: false,
+                network: false,
+                process: true,
+            },
+        ] {
+            assert_eq!(
+                missing_files.level(),
+                Level::None,
+                "no files layer is no grade: {missing_files:?}"
+            );
         }
+        // Everything but the process item, which is the media profile's shape.
+        assert_eq!(
+            Protections {
+                limits: true,
+                files: true,
+                network: true,
+                process: false,
+            }
+            .level(),
+            Level::Partial
+        );
         assert_eq!(
             Protections {
                 limits: true,
@@ -1647,10 +1762,34 @@ mod tests {
         assert!(report("seccomp=1").notes().is_empty());
         assert_eq!(report("fork=open").notes(), ["fork"]);
         assert_eq!(report("system=readable").notes(), ["system_tree"]);
-        assert_eq!(report("writes=own-store").notes(), ["writes"]);
+        assert_eq!(report("writes=store").notes(), ["writes"]);
+        // A write the container did not redirect is its own note: the benign word
+        // must not stand for the measurement that cannot tell the two apart.
+        assert_eq!(report("writes=user").notes(), ["writes_user"]);
+        assert_eq!(report("writes=denied").notes(), Vec::<&str>::new());
         assert_eq!(report("metadata=open").notes(), ["metadata"]);
         assert_eq!(report("ll_gaps=open").notes(), ["ll_gaps"]);
         assert_eq!(report("helper=allowed").notes(), ["helper"]);
+        // How much of the filesystem the helper may read, which is wider than the
+        // process note beside it says; the wider macOS shape wins when both are
+        // somehow present.
+        assert_eq!(report("helper_scope=libs").notes(), ["helper_libs"]);
+        assert_eq!(
+            report("helper_scope=libs,helper_scope=trees").notes(),
+            ["helper_trees"]
+        );
+        // The creation the parent settled for, and why the strongest one failed.
+        assert_eq!(
+            report("rung=container,container=appcontainer").notes(),
+            Vec::<&str>::new()
+        );
+        assert_eq!(report("rung=token").notes(), ["container_plain"]);
+        assert_eq!(report("rung=plain").notes(), ["container_plain"]);
+        assert_eq!(
+            report("container_refused=sid-refused").notes(),
+            ["container_refused"]
+        );
+        assert_eq!(report("lpac=off").notes(), ["lpac_off"]);
         // The notes never touch the grade.
         assert_eq!(report("system=readable,fork=open").level(), Level::Full);
         // A token this build does not know is not a note.

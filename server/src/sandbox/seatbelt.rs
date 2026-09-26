@@ -122,7 +122,14 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
     let exe = escape(&exe.to_string_lossy());
     let mut extra = String::new();
     if profile.runs_helper() {
-        if let Some(path) = grants.helper {
+        // A grant is written for one path, so a path that cannot be stated as
+        // one is not granted at all: a relative helper (the shipped default is
+        // the bare name `ffmpeg`, and a `PATH` lookup that failed leaves it
+        // relative) resolves against the child's directory, which is not where
+        // it was configured, and the profile matches the path the kernel
+        // resolved. Refusing the grant is the same outcome as today's useless
+        // literal, without the rule that followed it — see `granted_directory`.
+        if let Some(path) = grants.helper.filter(|path| is_grantable(path)) {
             let helper_path = resolved(path);
             let helper = escape(&helper_path.to_string_lossy());
             extra.push_str(&format!(
@@ -130,7 +137,7 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
                  (allow file-read* (literal \"{helper}\")) \
                  (allow file-map-executable (literal \"{helper}\"))"
             ));
-            if let Some(directory) = helper_path.parent() {
+            if let Some(directory) = granted_directory(&helper_path) {
                 let directory = escape(&directory.to_string_lossy());
                 extra.push_str(&format!(
                     " (allow file-read* file-map-executable (subpath \"{directory}\"))"
@@ -153,7 +160,9 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
             // A helper that is a script needs its own interpreter started before
             // its code runs. That path is a literal too — and the resolved one:
             // `/bin/sh` is a shim on this platform that re-execs `/bin/bash`.
-            if let Some(interpreter) = super::shebang_interpreter(path) {
+            if let Some(interpreter) = super::shebang_interpreter(path)
+                && is_grantable(&interpreter)
+            {
                 let interpreter = escape(&resolved(&interpreter).to_string_lossy());
                 extra.push_str(&format!(
                     " (allow process-exec (literal \"{interpreter}\")) \
@@ -162,7 +171,7 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
                 ));
             }
         }
-        if let Some(source) = grants.source {
+        if let Some(source) = grants.source.filter(|path| is_grantable(path)) {
             let source = escape(&resolved(source).to_string_lossy());
             extra.push_str(&format!(" (allow file-read* (literal \"{source}\"))"));
         }
@@ -199,8 +208,57 @@ fn resolved(path: &Path) -> PathBuf {
 ///
 /// Paths are data here, never policy text: a directory named `") (allow` must
 /// not be able to rewrite the profile.
+///
+/// `\` and `"` are the *complete* set of characters that can end a Scheme string
+/// literal early — a raw newline or tab inside `"…"` is an ordinary character —
+/// and both are escaped here, with the backslash first so that a path ending in
+/// one cannot escape the quote that closes it. Escaping the whitespace controls
+/// as `\n`/`\t` would not be a safety improvement but a correctness bug: R5RS
+/// does not define those escapes, so the grant would name a path containing a
+/// backslash and match nothing. Paths that carry a control character are refused
+/// outright instead, by [`is_grantable`].
 fn escape(path: &str) -> String {
     path.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Whether a configured path can be written into the profile as a rule.
+///
+/// Three ways it cannot, and each would produce a rule that does not mean what it
+/// says rather than no rule at all:
+///
+/// * it is not absolute, so the profile's own path matching (which is against
+///   what the kernel resolved) cannot agree with it;
+/// * it carries a control character, which the profile text would pass through
+///   into a string literal whose reader this side cannot verify;
+/// * it is empty, which is a prefix of every path.
+///
+/// Refusing the grant is fail-closed: the helper does not start, `parse=` says
+/// so, and the media profile reports itself unavailable rather than confined by
+/// a rule nobody meant.
+fn is_grantable(path: &Path) -> bool {
+    path.is_absolute()
+        && !path.as_os_str().is_empty()
+        && !path
+            .to_string_lossy()
+            .chars()
+            .any(|character| character.is_control())
+}
+
+/// The directory a media grant may name, when naming one is what was meant.
+///
+/// The grant is a `(subpath …)`, which is a prefix match, so the paths that
+/// prefix everything are the ones that must never be written: `""` — which is
+/// what `Path::parent` gives for a bare command name, the shipped
+/// `storage.ffmpeg_path` default when its `PATH` lookup failed — and `/`, which
+/// is what it gives for a helper at the root. Either would hand the media child
+/// the whole filesystem to read and map; measured as `(subpath "")` for a
+/// helper configured as `ffmpeg` on a host whose `PATH` did not resolve it.
+fn granted_directory(helper: &Path) -> Option<&Path> {
+    let directory = helper.parent()?;
+    if directory.as_os_str().is_empty() || directory == Path::new("/") {
+        return None;
+    }
+    Some(directory)
 }
 
 /// The trees a helper installed by a package manager keeps its libraries in.
@@ -220,7 +278,7 @@ const HELPER_LIBRARY_TREES: &[&str] = &["/opt/homebrew", "/usr/local", "/opt/loc
 /// macOS this build supports takes the limit, and a host that refused it would
 /// report the limits item as missing rather than pretend a weaker bound is one.
 #[cfg(target_os = "macos")]
-pub(super) fn confine() -> (Protections, Vec<String>) {
+pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec<String>) {
     let mut protections = Protections::default();
     let mut detail = Vec::new();
 
@@ -229,6 +287,24 @@ pub(super) fn confine() -> (Protections, Vec<String>) {
         protections.limits = true;
     }
     detail.push(format!("limits={}", limits.detail));
+    if profile.runs_helper() {
+        // The widest this platform's media grants get, and wider than "the
+        // helper and its loader": a packaged build links against its own tree, so
+        // the package-manager trees are readable and mappable by the helper. Said
+        // out loud because the profile text is the only other place it appears,
+        // and an admin does not read the profile text.
+        if grants.helper.is_some_and(|path| is_grantable(path)) {
+            detail.push("helper_scope=trees".to_string());
+        }
+        // `(allow process-fork)` is in every profile — the parsers' thread needs
+        // it — and the media profile additionally starts the helper by copying
+        // this process. Nothing on this platform bounds how many such copies
+        // there may be: the CPU limit is per process, so it bounds each copy and
+        // not their number. The parent's wall-clock timeout and the process group
+        // it kills are the bound, and the report says so instead of letting the
+        // absence of a kernel one be inferred from a note about `fork`.
+        detail.push("media_process=unbounded".to_string());
+    }
     (protections, detail)
 }
 
@@ -288,6 +364,48 @@ mod tests {
              (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") \
              (literal \"/opt/nanofile/nanofile\"))"
         ));
+    }
+
+    /// A degenerate helper path must not become a grant that covers everything.
+    ///
+    /// `(subpath …)` is a prefix match, so `""` — what `Path::parent` gives for
+    /// the shipped `ffmpeg` default when its `PATH` lookup failed — and `/` are
+    /// the whole filesystem. Neither may reach the profile text, and a relative
+    /// helper may not reach it at all: the profile matches what the kernel
+    /// resolved, so a rule written from a relative path grants nothing while
+    /// looking like it grants something.
+    #[test]
+    fn a_degenerate_helper_path_grants_nothing() {
+        let text = |helper: &str| {
+            profile_text(
+                Path::new("/opt/nanofile/nanofile"),
+                Profile::Media,
+                Grants {
+                    helper: Some(Path::new(helper)),
+                    source: None,
+                },
+            )
+        };
+
+        assert!(text("/opt/homebrew/bin/ffmpeg").contains("(subpath \"/opt/homebrew/bin\")"));
+        // The two prefixes of everything.
+        for degenerate in ["ffmpeg", "/ffmpeg", ""] {
+            let profile = text(degenerate);
+            assert!(
+                !profile.contains("(subpath \"\")") && !profile.contains("(subpath \"/\")"),
+                "{degenerate} must not widen the profile: {profile}"
+            );
+        }
+        assert_eq!(granted_directory(Path::new("ffmpeg")), None);
+        assert_eq!(granted_directory(Path::new("/ffmpeg")), None);
+        assert_eq!(granted_directory(Path::new("")), None);
+        assert_eq!(
+            granted_directory(Path::new("/opt/homebrew/bin/ffmpeg")),
+            Some(Path::new("/opt/homebrew/bin"))
+        );
+        assert!(!is_grantable(Path::new("ffmpeg")));
+        assert!(!is_grantable(Path::new("/tmp/with\nnewline")));
+        assert!(is_grantable(Path::new("/usr/bin/ffmpeg")));
     }
 
     /// A path is data, never policy text: every quote it brings is escaped, so

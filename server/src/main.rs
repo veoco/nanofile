@@ -121,9 +121,6 @@ enum Command {
         /// when the worker is unavailable.
         #[arg(long, default_value_t = false)]
         probe: bool,
-        /// The parent created this process with a restricted token (Windows).
-        #[arg(long, default_value_t = false)]
-        restricted: bool,
         /// Which pipeline this child confines itself for.
         #[arg(
             long,
@@ -221,7 +218,6 @@ fn main() -> anyhow::Result<()> {
         seatbelt,
         selftest,
         probe,
-        restricted,
         profile,
         min_level,
         sandbox_off,
@@ -258,10 +254,7 @@ fn main() -> anyhow::Result<()> {
         } else {
             server::sandbox::worker::Job::Extract
         };
-        let external = server::sandbox::worker::External {
-            runner: *seatbelt,
-            restricted_token: *restricted,
-        };
+        let external = server::sandbox::worker::External { runner: *seatbelt };
         return server::sandbox::worker::run(job, external, profile, requirement, grants);
     }
     // A service is the server without a desktop: it has no console a person can

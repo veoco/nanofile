@@ -208,11 +208,21 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
             detail.push(format!("landlock_scoped={}", on_off(landlock.scoped)));
             if profile.runs_helper() {
                 detail.push(format!("helper_grants={}", landlock.helper_grants));
+                detail.push(format!("helper_scope={}", landlock.helper_scope));
                 if !landlock.helper {
                     // The one program this profile exists to run is not
                     // granted, whatever else the ruleset took.
                     detail.push("helper-rule-refused".to_string());
                 }
+                // The helper is started by copying this process, so the filter
+                // that denies `clone` without `CLONE_THREAD` cannot be installed
+                // for this profile, and nothing else on this platform bounds how
+                // many copies there may be: `RLIMIT_NPROC` counts per real user
+                // id, so setting it here would throttle the server's own
+                // spawns. It is the parent's wall-clock timeout and the process
+                // group it kills that bound them, and the report says so rather
+                // than leaving the absence of a kernel bound to be discovered.
+                detail.push("media_process=unbounded".to_string());
             }
         }
         Err(reason) => detail.push(format!("landlock={reason}")),
@@ -423,6 +433,13 @@ struct Landlock {
     scoped: bool,
     /// How many path rules the media profile's grants installed.
     helper_grants: usize,
+    /// The shape the media profile's read grants took, as the report spells it.
+    ///
+    /// A count says how many rules the ruleset took and nothing about their
+    /// breadth; this is what the settings page turns into a note. `libs` is the
+    /// helper, its interpreter, the libraries beside it and the system library
+    /// trees — never a directory of the helper's own.
+    helper_scope: &'static str,
     /// Whether the rule for the helper file itself was added.
     ///
     /// The count alone cannot say: a helper that cannot be opened leaves the
@@ -499,6 +516,10 @@ fn install_landlock(profile: Profile, grants: Grants<'_>) -> Result<Landlock, &'
         network: size >= 2 * size_of::<u64>() && attr.handled_access_net != 0,
         scoped: size >= 3 * size_of::<u64>() && attr.scoped != 0,
         helper_grants,
+        // The one shape this platform's media grants take: libraries, listed one
+        // file at a time. There is no package-manager tree to add here, which is
+        // what separates it from the macOS profile's wording.
+        helper_scope: "libs",
         helper,
     })
 }
@@ -533,6 +554,14 @@ struct HelperRules {
 /// for the same reason — the helper's libraries live there, and nothing in them
 /// is this profile's to run.
 ///
+/// The libraries *beside* the helper are granted one file at a time, the way the
+/// Windows profile grants the DLLs beside its helper, and for the same reason a
+/// whole directory is the wrong shape here: a packaged build's libraries are
+/// what the helper needs, and nothing else in that directory is. `read` on the
+/// directory itself would be `read` on every file in it — measured on this host
+/// as everything in `/usr/bin` when the helper is the distribution's ffmpeg,
+/// whose libraries are in the system trees that are granted separately anyway.
+///
 /// The scratch source gets `read` alone. A path that is not there is skipped —
 /// a 32-bit library directory on a 64-bit host, an interpreter for another
 /// architecture — rather than failing the ruleset over a rule that grants
@@ -546,9 +575,9 @@ fn add_helper_rules(ruleset: i64, grants: Grants<'_>) -> HelperRules {
         for interpreter in helper_interpreters(path) {
             added += add_path_rule(ruleset, &interpreter, helper_interpreter_access()) as usize;
         }
-        // The helper may sit beside its own libraries, which is a read.
-        if let Some(directory) = path.parent() {
-            added += add_path_rule(ruleset, directory, helper_directory_access()) as usize;
+        // The helper may sit beside its own libraries, and each one is a read.
+        for library in helper_libraries(path) {
+            added += add_path_rule(ruleset, &library, LL_READ_FILE) as usize;
         }
     }
     if let Some(source) = grants.source {
@@ -568,6 +597,37 @@ fn add_helper_rules(ruleset: i64, grants: Grants<'_>) -> HelperRules {
     HelperRules { added, helper }
 }
 
+/// The shared libraries sitting beside the helper, which a packaged build links
+/// against by an `$ORIGIN`-relative path.
+///
+/// Named `*.so*` because that is what a shared object is called on this platform,
+/// including the versioned form (`libavcodec.so.61`) and the development symlink
+/// (`libavcodec.so`). A directory that cannot be listed yields nothing: the
+/// caller grants what it can find and reports how many rules the ruleset took,
+/// so a helper that needed something else says so through `parse=` rather than
+/// through a silent widening.
+fn helper_libraries(helper: &Path) -> Vec<PathBuf> {
+    let Some(directory) = helper.parent() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    let mut libraries: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains(".so"))
+        })
+        .collect();
+    libraries.sort();
+    libraries
+}
+
 /// What the helper's own file is granted: run it, and read the image the kernel
 /// is about to execute.
 const fn helper_file_access() -> u64 {
@@ -580,12 +640,6 @@ const fn helper_file_access() -> u64 {
 /// so that the helper can be.
 const fn helper_interpreter_access() -> u64 {
     LL_EXECUTE | LL_READ_FILE
-}
-
-/// What the directory the helper sits in gets: the libraries beside it, and no
-/// program in it.
-const fn helper_directory_access() -> u64 {
-    LL_READ_FILE | LL_READ_DIR
 }
 
 /// What a system library tree gets.
@@ -1053,18 +1107,46 @@ mod tests {
         assert_eq!(helper_file_access() & LL_EXECUTE, LL_EXECUTE);
         assert_eq!(helper_file_access() & LL_READ_FILE, LL_READ_FILE);
         assert_eq!(helper_interpreter_access() & LL_EXECUTE, LL_EXECUTE);
-        for (name, access) in [
-            ("the helper's directory", helper_directory_access()),
-            ("a system library tree", helper_library_access()),
-        ] {
-            assert_eq!(access & LL_EXECUTE, 0, "{name} must not be executable");
-            assert_eq!(
-                access & LL_READ_FILE,
-                LL_READ_FILE,
-                "{name} must stay readable"
-            );
-            assert_eq!(access & LL_READ_DIR, LL_READ_DIR, "{name} must be listable");
-        }
+        let access = helper_library_access();
+        assert_eq!(
+            access & LL_EXECUTE,
+            0,
+            "a library tree must not be executable"
+        );
+        assert_eq!(access & LL_READ_FILE, LL_READ_FILE, "it must stay readable");
+        assert_eq!(access & LL_READ_DIR, LL_READ_DIR, "and listable");
+    }
+
+    /// The libraries beside the helper are granted one file at a time, and only
+    /// the ones that are libraries. A `read` grant on the directory itself would
+    /// be a read grant on every file in it — which is what this replaced.
+    #[test]
+    fn the_libraries_beside_the_helper_are_named_one_by_one() {
+        let directory = std::env::temp_dir().join(format!(
+            "nanofile-libs-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).expect("create");
+        let helper = directory.join("ffmpeg");
+        std::fs::write(&helper, b"#!/bin/sh\n").expect("write helper");
+        std::fs::write(directory.join("libavcodec.so.61"), b"x").expect("write library");
+        std::fs::write(directory.join("libavcodec.so"), b"x").expect("write link");
+        // Not a library, and the thing the directory grant used to hand over.
+        std::fs::write(directory.join("secret.txt"), b"secret").expect("write secret");
+        std::fs::create_dir_all(directory.join("subdir")).expect("create subdir");
+
+        let found = helper_libraries(&helper);
+        let names: Vec<String> = found
+            .iter()
+            .filter_map(|path| path.file_name()?.to_str().map(str::to_string))
+            .collect();
+        assert!(names.contains(&"libavcodec.so.61".to_string()), "{names:?}");
+        assert!(names.contains(&"libavcodec.so".to_string()), "{names:?}");
+        assert!(!names.contains(&"secret.txt".to_string()), "{names:?}");
+        assert!(!names.contains(&"subdir".to_string()), "{names:?}");
+        assert!(!names.contains(&"ffmpeg".to_string()), "{names:?}");
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     /// The interpreter list is the helper's own first, then the static tree,

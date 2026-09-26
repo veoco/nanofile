@@ -1450,8 +1450,12 @@ pub struct SandboxConfig {
     /// The grade this host must reach before those features run: `full`,
     /// `partial` or `none`.
     ///
-    /// Below it the features are disabled and the settings page says which
-    /// protection this host is missing.
+    /// `full` is every protection the platform can give; `partial` is resource
+    /// limits *and* no file access, which is the grade that keeps a parser from
+    /// reading the server user's files. A host below it — a kernel without
+    /// Landlock, a Windows launch with no container — grades `none`, and only
+    /// `none` accepts it. Below the minimum the features are disabled and the
+    /// settings page says which item is missing and what that means.
     ///
     /// Env: NANOFILE_SANDBOX_MIN_LEVEL
     #[serde(default = "default_sandbox_min_level")]

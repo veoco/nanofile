@@ -129,6 +129,17 @@
                 <span class="text-ink-2">{{ t.tr("sandbox.status_min") }}</span>
                 <span>{{ sandbox.min_level }}</span>
             </div>
+            {# Whether the features actually run under the policy the admin set.
+               Distinct from the grade above, which says what the host could give:
+               a red item with a green decision is a host that is safe enough for
+               the settings, and a green item with a red decision is not. #}
+            <div class="flex items-center justify-between gap-2" data-sandbox-decision>
+                <span class="text-ink-2">{{ t.tr("sandbox.status_running") }}</span>
+                <span class="badge {{ sandbox.decision.class }}" data-sandbox-decision-state>{{ sandbox.decision.label }}</span>
+            </div>
+            {% if let Some(reason) = sandbox.decision.reason %}
+            <p class="desc" data-sandbox-decision-reason>{{ reason }}</p>
+            {% endif %}
             <div class="flex items-center justify-between gap-2" data-sandbox-media>
                 <span class="text-ink-2">{{ t.tr("sandbox.status_media") }}</span>
                 <span class="flex items-center gap-2">
@@ -142,6 +153,7 @@
                     <span class="badge {{ sandbox.media.class }}" data-sandbox-media-state>{{ sandbox.media.label }}</span>
                 </span>
             </div>
+            <p class="desc" data-sandbox-media-process>{{ sandbox.media.process_note }}</p>
             {% for note in sandbox.media.notes %}
             <p class="desc" data-sandbox-media-note>{{ note }}</p>
             {% endfor %}
@@ -150,26 +162,36 @@
             {% endif %}
         </div>
 
-        {# The one warning: off, unavailable, below the minimum, or merely not
-           complete. A warning rather than an error because the admin chose the
-           first and the third; the second and fourth are what to fix. #}
-        {% if let Some(warning) = sandbox.warning %}
-        <div class="nf-banner is-warn mt-3" data-sandbox-warning>
-            <p>{{ warning }}</p>
+        {# The verdict: the one line the page leads with, because "this host is
+           weaker than it could be" and "the policy you chose accepts a host that
+           lets a parser read your files" are different sentences and only the
+           second is a decision the admin made. #}
+        <div class="nf-banner {{ sandbox.verdict.banner }} mt-3" data-sandbox-verdict="{{ sandbox.verdict.class }}">
+            <p class="font-semibold" data-sandbox-verdict-label>{{ sandbox.verdict.label }}</p>
+            {% if let Some(detail) = sandbox.verdict.detail %}
+            <p class="desc">{{ detail }}</p>
+            {% endif %}
         </div>
-        {% endif %}
 
         <div class="mt-4">
             <h3>{{ t.tr("sandbox.items_title") }}</h3>
             <div class="mt-2 flex flex-col gap-2 text-[13px]" data-sandbox-items>
                 {% for item in sandbox.items %}
-                <div data-sandbox-item="{{ item.label_key }}">
+                <div data-sandbox-item="{{ item.label_key }}" data-sandbox-severity="{{ item.severity }}">
                     <div class="flex items-center justify-between gap-2">
                         <span class="text-ink-2">{{ t.tr(item.label_key) }}</span>
-                        <span class="badge {% if item.present %}badge-green{% else %}badge-red{% endif %}">
-                            {% if item.present %}{{ t.tr("sandbox.item_present") }}{% else %}{{ t.tr("sandbox.item_missing") }}{% endif %}
+                        <span class="flex items-center gap-2">
+                            <span class="badge badge-gray">{{ item.severity }}</span>
+                            <span class="badge {{ item.class }}">
+                                {% if item.present %}{{ t.tr("sandbox.item_present") }}{% else %}{{ t.tr("sandbox.item_missing") }}{% endif %}
+                            </span>
                         </span>
                     </div>
+                    {# What its absence opens, in the operator's terms, rather
+                       than a restatement of the item's name. #}
+                    {% if let Some(impact) = item.impact %}
+                    <p class="desc" data-sandbox-impact>{{ impact }}</p>
+                    {% endif %}
                     {% for note in item.notes %}
                     <p class="desc">{{ note }}</p>
                     {% endfor %}

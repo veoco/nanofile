@@ -33,13 +33,18 @@
 //!   its user. This is the configuration Chromium's own zero-capability sandbox
 //!   uses, and the one the reference below documents.
 //!
-//! On top of those, the creation attributes also carry the kernel's own refusal
-//! to let the child create processes, and the child asks for the process
-//! mitigations it can live with: win32k lockdown, arbitrary code guard, no
-//! extension points, no fonts, no remote or low-integrity images, the ASLR
-//! family and strict handle checks. Each is read back with
-//! `GetProcessMitigationPolicy` — including the child-process policy the parent
-//! named — and the report counts what is there rather than what was asked for.
+//! On top of those, the child asks for the process mitigations it can live with:
+//! win32k lockdown, arbitrary code guard, no extension points, no fonts, no
+//! remote or low-integrity images, the ASLR family and strict handle checks, and
+//! — for every profile but media — the child-process policy. Each is read back
+//! with `GetProcessMitigationPolicy`, and the report counts what is there rather
+//! than what was asked for. They are *runtime* policies set by
+//! `SetProcessMitigationPolicy` after the process exists, not creation
+//! attributes: the creation attribute list carries the handles, the container
+//! and the job, and the child-process policy is deliberately not among them
+//! because the media profile must be able to start its helper. Between creation
+//! and `confine` the job's active-process limit is the only bound on child
+//! creation, and nothing untrusted runs in that window.
 //!
 //! The restricting SIDs are this process's own identity: the logon session, the
 //! user, and the groups Windows grants the objects a process needs to attach to
@@ -50,10 +55,13 @@
 //! `STATUS_DLL_INIT_FAILED` (`0xC0000142`).
 //!
 //! Because the user's own SID is in that list, `WRITE_RESTRICTED` narrows writes
-//! to what this user may write rather than to nothing. What closes that gap is
-//! the container: an AppContainer access check requires an ACE for the package
-//! SID — or for `ALL APPLICATION PACKAGES` — *in addition* to whatever the user
-//! and group SIDs grant, so a file that only names the user stops being readable.
+//! to what this user may write rather than to nothing — the restricting list
+//! *is* the user's identity, so it is close to a no-op on its own and must not be
+//! read as a write bound. What bounds writes is the container and the integrity
+//! level; what closes the gap the restricting list leaves is the container: an
+//! AppContainer access check requires an ACE for the package SID — or for
+//! `ALL APPLICATION PACKAGES` — *in addition* to whatever the user and group SIDs
+//! grant, so a file that only names the user stops being readable.
 //! The one file that has to keep being readable is the worker's own image, which
 //! a per-user install does not carry that ACE on, so the parent grants it to the
 //! container's SID before the first launch (see [`grant_image_access`]).
@@ -75,26 +83,37 @@
 //! returns success; when that happens the parent stops asking and starts over in
 //! the plain container.
 //!
-//! What the opt-out does **not** do is close the note below. The child is still
-//! created from this process's own token, so it carries the user's SID as well
-//! as the package SID, and the system tree grants that SID read. The measurement
-//! says so — a CI host with the opt-out applied still reports
-//! `lpac=on,system=readable` — which is why the note is decided by `system=`
-//! rather than by which container was asked for.
+//! What the opt-out does **not** do is close the note below.
+//!
+//! The opt-out is the security attribute `WIN://NOALLAPPPKG`, which makes the
+//! low-box access check *ignore* `ALL APPLICATION PACKAGES` — it does not remove
+//! that package from the token's groups, and the process is still an AppContainer
+//! by every other measure. What keeps the system tree readable under it is a
+//! different principal: `ALL RESTRICTED APPLICATION PACKAGES`
+//! (`S-1-15-2-2`), whose ACEs ship on the system files a packaged process loads.
+//! That is a property of the Windows build rather than a documented invariant —
+//! which is precisely why the note is decided by the measured `system=` token and
+//! not by which container was asked for, and why a host that answered
+//! `system=denied` would be reported as stricter rather than as broken.
+//!
+//! The opt-out also does not cover the registry: an LPAC needs the
+//! `registryRead` capability to read the keys a parser would want, so unlike the
+//! files case there is no equivalent granted set to point at.
 //!
 //! What no protection here bounds is the shape of the boundary itself. The
 //! container reads the system tree it loads from (`Windows`, `Program Files` —
-//! the paths `ALL APPLICATION PACKAGES` covers, and the user's own SID with
-//! them), which is the over-grant the child reports as `system=readable` beside
-//! the per-user paths it was refused. It also writes inside its own profile
-//! store, which is what `writes=own-store` says: bounded by the store rather
-//! than denied, and the one resource this platform has no bound for at all (the
-//! unix file-size limit has no equivalent here). Everything else is that same
-//! dual-principal check rather than an open door: the registry it reads is the
-//! keys carrying the same grant — system ones, not the user's — while its writes
-//! are redirected to its own per-app store, and the IPC it reaches is over the
-//! handles this process handed it. Those are the platform's own limits, and they
-//! are the same shape as the macOS profile's grants.
+//! the trees whose ACLs carry the packages a low-box process is checked against),
+//! which is the over-grant the child reports as `system=readable` beside the
+//! per-user paths it was refused. A write from it is reported as what it measured
+//! — `writes=store` when the path resolves into the container's own redirected
+//! store, `writes=user` when it does not — and writes are the one resource this
+//! platform has no size bound for at all (the unix file-size limit has no
+//! equivalent here). Everything else is that same dual-principal check rather
+//! than an open door: the registry it reads is the keys carrying the same grant —
+//! system ones, not the user's, and only for a container with the capability for
+//! it — while its writes are redirected to its own per-app store, and the IPC it
+//! reaches is over the handles this process handed it. Those are the platform's
+//! own limits, and they are the same shape as the macOS profile's grants.
 //!
 //! # Where the media profile's helper may live
 //!
@@ -152,7 +171,9 @@ use std::fs::File;
 use std::mem::{offset_of, size_of, size_of_val};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
+use std::path::Path;
 use std::ptr::{null, null_mut};
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -190,7 +211,7 @@ use windows_sys::Win32::System::Threading::{
     GetProcessMitigationPolicy, INFINITE, InitializeProcThreadAttributeList, OpenProcessToken,
     PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
     PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-    PROCESS_INFORMATION, ProcessChildProcessPolicy, ProcessDynamicCodePolicy,
+    PROCESS_INFORMATION, ProcessASLRPolicy, ProcessChildProcessPolicy, ProcessDynamicCodePolicy,
     ProcessExtensionPointDisablePolicy, ProcessFontDisablePolicy, ProcessImageLoadPolicy,
     ProcessStrictHandleCheckPolicy, ProcessSystemCallDisablePolicy, STARTF_USESTDHANDLES,
     STARTUPINFOEXW, SetProcessMitigationPolicy, TerminateProcess, UpdateProcThreadAttribute,
@@ -249,9 +270,14 @@ const HUNDRED_NANOSECONDS: i64 = 10_000_000;
 
 /// Flags that strip a token down to what a parser needs and nothing more.
 ///
-/// `DISABLE_MAX_PRIVILEGE` removes every privilege, `LUA_TOKEN` makes the
-/// administrative SIDs deny-only, and `WRITE_RESTRICTED` checks write access
-/// against the restricting SIDs below rather than the token's groups.
+/// `DISABLE_MAX_PRIVILEGE` removes every privilege except `SeChangeNotifyPrivilege`
+/// (which is what lets the walk to a file happen without a traverse check —
+/// see [`grant_helper_access`]), and `LUA_TOKEN` makes the administrative SIDs
+/// deny-only. `WRITE_RESTRICTED` checks write access against the restricting SIDs
+/// as well as the token's groups; since the restricting list *is* this user's
+/// identity (the logon session, the user, `INTERACTIVE`, `Authenticated Users`,
+/// `Users`, `Everyone`), that is close to a no-op and is not a bound on its own.
+/// The write bound is the container and the integrity level.
 const RESTRICTED_FLAGS: u32 = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
 
 /// `SE_GROUP_LOGON_ID` from `winnt.h`.
@@ -325,6 +351,13 @@ pub(super) fn confine(profile: Profile) -> (Protections, Vec<String>) {
     if layers.files {
         detail.push(format!("writes={}", write_scope()));
     }
+    // What the media profile's helper may read beyond its own image: the DLLs
+    // beside it, one file at a time, because a dynamically linked helper loads
+    // them from there. The same shape as the other two platforms grant, and said
+    // out loud because a `helper_grants` count would not say it.
+    if profile.runs_helper() && layers.files {
+        detail.push("helper_scope=libs".to_string());
+    }
 
     (layers, detail)
 }
@@ -361,6 +394,13 @@ fn job_limits(expected_processes: u32) -> Result<(u64, i64), &'static str> {
         && limits & JOB_OBJECT_LIMIT_PROCESS_TIME != 0
         && limits & JOB_OBJECT_LIMIT_ACTIVE_PROCESS != 0
         && limits & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0
+        // The crash policy is a bound like the others and is reported beside
+        // them: a worker that dies on an unhandled exception takes the job with
+        // it rather than leaving it, which is what makes the exit code the
+        // parent reads meaningful. Read back rather than assumed for the same
+        // reason as the rest — this is a query of the job the child is actually
+        // in, and a job somebody else nested it under would not have it.
+        && limits & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION != 0
         && info.BasicLimitInformation.ActiveProcessLimit == expected_processes
         && info.ProcessMemoryLimit as u64 == MEMORY_LIMIT
         && info.BasicLimitInformation.PerProcessUserTimeLimit
@@ -429,20 +469,46 @@ fn integrity_level() -> &'static str {
 
 /// What a write from this process reaches.
 ///
-/// A write the container redirects into its own store is bounded by the store;
-/// a write that reaches the user's temporary directory is the user's own
-/// access, and is the case the container exists to prevent. Measured by making
-/// one and taking it back.
+/// A write the container redirects into its own store is bounded by the store; a
+/// write that reaches the user's temporary directory is the user's own access,
+/// and is the case the container exists to prevent. Both are measured by making
+/// a file and taking it back.
+///
+/// What the answer may *not* be is an inference from the attempt having
+/// succeeded. A successful create says only that the write was allowed; whether
+/// it landed in the container's store or in the user's directory is a fact about
+/// the path, so the path is what decides — the redirected store lives under
+/// `%LOCALAPPDATA%\Packages\<package SID>\`, and a file created anywhere else
+/// was created with the user's own authority. This token used to read
+/// `own-store` for every success, which named the benign case for the one
+/// measurement that cannot tell the two apart.
 fn write_scope() -> &'static str {
     let probe = std::env::temp_dir().join("nanofile-extraction-write-probe");
     match std::fs::File::create(&probe) {
         Ok(_) => {
             let _ = std::fs::remove_file(&probe);
-            "own-store"
+            if is_container_store(&probe) {
+                "store"
+            } else {
+                "user"
+            }
         }
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => "denied",
         Err(_) => "unmeasured",
     }
+}
+
+/// Whether a path is inside the AppContainer's own redirected store.
+///
+/// `%LOCALAPPDATA%\Packages` is the directory a packaged process's per-app state
+/// lives under, and the shape the OS creates for a container and nothing else.
+/// A path that does not resolve there was not redirected, so the write is
+/// reported as the user's own rather than assumed to be bounded by the store.
+fn is_container_store(path: &Path) -> bool {
+    let Some(local) = std::env::var_os("LOCALAPPDATA") else {
+        return false;
+    };
+    path.starts_with(Path::new(&local).join("Packages"))
 }
 
 /// Ask the kernel for the process mitigations a document parser can live with.
@@ -461,18 +527,23 @@ fn harden_process(profile: Profile) -> usize {
     const ENABLE: u32 = 0x1;
     const IMAGE_LOAD_NO_REMOTE: u32 = 0x1;
     const IMAGE_LOAD_NO_LOW_LABEL: u32 = 0x2;
-    /// Bottom-up randomization, forced relocation, and the larger range.
+    /// The four bits of `PROCESS_MITIGATION_ASLR_POLICY`: bottom-up
+    /// randomization, forced relocation, high entropy, and disallow-stripped.
     ///
-    /// The four bits of `PROCESS_MITIGATION_ASLR_POLICY` are, in order,
-    /// bottom-up randomization (`0x1`), forced relocation (`0x2`), high-entropy
-    /// (`0x4`) and disallow-stripped-images (`0x8`); the comment above the
-    /// constant is what these three are meant to be.
-    const ASLR: u32 = 0x1 | 0x2 | 0x4;
+    /// Each is asked for on its own rather than as one mask. They are separate
+    /// bits of one policy word, and `SetProcessMitigationPolicy` refuses the
+    /// whole word when any bit in it cannot be honoured: a build that does not
+    /// implement forced relocation would then take bottom-up randomization and
+    /// high entropy down with it, and the report would count one mitigation
+    /// fewer for a reason that has nothing to do with the two it lost.
+    const ASLR_BOTTOM_UP: u32 = 0x1;
+    const ASLR_FORCE_RELOCATE: u32 = 0x2;
+    const ASLR_HIGH_ENTROPY: u32 = 0x4;
 
     let policies: [(
         windows_sys::Win32::System::Threading::PROCESS_MITIGATION_POLICY,
         u32,
-    ); 8] = [
+    ); 10] = [
         // No calls serviced by `win32k.sys` at all: the kernel surface a
         // document parser has no business reaching, and the one an exploit
         // would use to find a kernel bug to climb out through.
@@ -490,10 +561,9 @@ fn harden_process(profile: Profile) -> usize {
             ProcessImageLoadPolicy,
             IMAGE_LOAD_NO_REMOTE | IMAGE_LOAD_NO_LOW_LABEL,
         ),
-        (
-            windows_sys::Win32::System::Threading::ProcessASLRPolicy,
-            ASLR,
-        ),
+        (ProcessASLRPolicy, ASLR_BOTTOM_UP),
+        (ProcessASLRPolicy, ASLR_FORCE_RELOCATE),
+        (ProcessASLRPolicy, ASLR_HIGH_ENTROPY),
         // A bad handle reference raises instead of being ignored, which turns
         // some exploits into crashes.
         (ProcessStrictHandleCheckPolicy, ENABLE),
@@ -662,6 +732,7 @@ pub(crate) fn spawn(
     profile: Profile,
     grants: Grants<'_>,
 ) -> std::io::Result<Child> {
+    clear_shortfall();
     let container = app_container(program);
     // A worker that starts a helper gets two slots in its job and a container
     // that can read the helper and the one source file the parent wrote. A
@@ -679,13 +750,6 @@ pub(crate) fn spawn(
         // log next to that fact.
         note_shortfall("token-refused", None);
     }
-    let mut attempt = args.to_vec();
-    if token.is_some() {
-        // The child cannot see the token it was created with, and whether writes
-        // are restricted is worth saying out loud. Which token it *actually*
-        // carries is read back by the child (`windows::confine`).
-        attempt.push(OsString::from("--restricted"));
-    }
     // The media profile asks for the same container every other profile gets.
     // The less privileged one was tried for it — the media probe measured the
     // plain container refusing the helper's `CreateProcess` too (`lpac=off`,
@@ -693,7 +757,7 @@ pub(crate) fn spawn(
     // one, and the files item stays the strongest this host can give.
     start(
         program,
-        &attempt,
+        args,
         token,
         container.as_ref(),
         active_process_limit,
@@ -712,6 +776,7 @@ pub(crate) fn spawn_unrestricted(
     profile: Profile,
     grants: Grants<'_>,
 ) -> std::io::Result<Child> {
+    clear_shortfall();
     if profile.runs_helper() {
         grant_helper_access(grants);
     }
@@ -725,6 +790,7 @@ pub(crate) fn spawn_token_only(
     profile: Profile,
     grants: Grants<'_>,
 ) -> std::io::Result<Child> {
+    clear_shortfall();
     if profile.runs_helper() {
         grant_helper_access(grants);
     }
@@ -732,18 +798,7 @@ pub(crate) fn spawn_token_only(
     if token.is_none() {
         note_shortfall("token-refused", None);
     }
-    let mut attempt = args.to_vec();
-    if token.is_some() {
-        attempt.push(OsString::from("--restricted"));
-    }
-    start(
-        program,
-        &attempt,
-        token,
-        None,
-        process_slots(profile),
-        false,
-    )
+    start(program, args, token, None, process_slots(profile), false)
 }
 
 /// How many processes the job must allow: the worker, plus the helper the media
@@ -1011,10 +1066,22 @@ fn open_pipe(child_reads: bool) -> std::io::Result<(HANDLE, HANDLE)> {
 }
 
 /// The process attributes the child is created with: the handles it may inherit,
-/// the AppContainer it runs in, the job it runs under, and the kernel's own
-/// refusal to let it create processes.
+/// the AppContainer it runs in, the job it runs under, and — for a host that has
+/// one — the opt-out from `ALL APPLICATION PACKAGES`.
+///
+/// The child-process policy is not here: it is set at runtime by
+/// `SetProcessMitigationPolicy` (see [`harden_process`]), because the media
+/// profile has to be able to start its helper and the same list is built for
+/// every profile.
+///
+/// The buffer is held as words rather than as bytes because it is a
+/// `PROC_THREAD_ATTRIBUTE_LIST`: the kernel stores pointers in it, and asks for
+/// the alignment that goes with them. `Vec<u8>` requests alignment 1, so the
+/// list would be correctly aligned only when the allocator happened to hand back
+/// an aligned block — true in practice and a guarantee nowhere. `Vec<u64>` is
+/// the alignment the structure needs on every architecture this ships to.
 struct AttributeList {
-    buffer: Vec<u8>,
+    buffer: Vec<u64>,
 }
 
 impl AttributeList {
@@ -1030,7 +1097,7 @@ impl AttributeList {
             + usize::from(container_policy.is_some());
         let mut size = 0usize;
         unsafe { InitializeProcThreadAttributeList(null_mut(), count as u32, 0, &mut size) };
-        let mut buffer = vec![0u8; size];
+        let mut buffer = vec![0u64; size.div_ceil(size_of::<u64>())];
         let list = buffer.as_mut_ptr().cast();
         if unsafe { InitializeProcThreadAttributeList(list, count as u32, 0, &mut size) } == 0 {
             return Err(std::io::Error::last_os_error());
@@ -1179,16 +1246,45 @@ impl Drop for AttributeList {
 /// The probe prints it, as one whitespace-free token. Without it, losing the
 /// container would show up only as a child that reports `files=open`, with the
 /// reason on a `tracing` warning the probe path has no subscriber for.
-static SHORTFALL: OnceLock<String> = OnceLock::new();
+///
+/// Every reason one launch recorded, in the order it recorded them, rather than
+/// the first one ever: the failures are not interchangeable — a missing profile
+/// store, an image whose ACL was replaced by an in-place upgrade, a token the
+/// kernel refused — and a record that keeps only the first would leave the
+/// operator reading a reason from a launch that is no longer the one failing.
+/// [`clear_shortfall`] scopes it to a single launch, so what the report carries
+/// is always about the creation that just happened.
+static SHORTFALL: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 
-/// The reason the container was asked for and not applied, if there is one.
-pub(crate) fn shortfall() -> Option<&'static str> {
-    SHORTFALL.get().map(String::as_str)
+/// The reasons the last launch recorded, joined into one whitespace-free token.
+pub(crate) fn shortfall() -> Option<String> {
+    let reasons = SHORTFALL
+        .get()
+        .map(|slot| {
+            slot.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        })
+        .unwrap_or_default();
+    (!reasons.is_empty()).then(|| reasons.join(";"))
 }
 
-/// Record the first reason, which is the strongest attempt's: later rungs fail
-/// for their own reasons, and the one that matters is why the container is not
-/// there.
+/// Forget the previous launch's reasons, so the next one reports its own.
+///
+/// Called at the top of every creation: a host that failed a launch once and
+/// succeeds later has no shortfall, and the report must not keep saying it does.
+fn clear_shortfall() {
+    let slot = SHORTFALL.get_or_init(|| Mutex::new(Vec::new()));
+    slot.lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
+}
+
+/// Record one reason this launch gave for not applying the container.
+///
+/// Deduplicated: the helper's grant and the image's are asked for once per
+/// attempt, and the rung loop may make several attempts, so the same reason can
+/// legitimately arrive more than once.
 fn note_shortfall(reason: &str, error: Option<&std::io::Error>) {
     let mut token = reason.to_string();
     if let Some(error) = error {
@@ -1198,7 +1294,11 @@ fn note_shortfall(reason: &str, error: Option<&std::io::Error>) {
         token.push_str(&error.to_string().replace(' ', "_"));
         token.push(')');
     }
-    let _ = SHORTFALL.set(token);
+    let slot = SHORTFALL.get_or_init(|| Mutex::new(Vec::new()));
+    let mut reasons = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !reasons.contains(&token) {
+        reasons.push(token);
+    }
 }
 
 /// The name the worker's AppContainer is known by.
@@ -1365,10 +1465,18 @@ fn grant_helper_access(grants: Grants<'_>) {
 
 /// Whether `program` has been given to the container, granting it if not.
 ///
-/// Once per process and per image: a grant is a change to the file's own ACL, and
-/// doing it again for every document would add a second identical ACE each time.
-/// A call for a *different* image is refused rather than silently reported as
-/// granted, which leaves it to run under the restricted token alone.
+/// Asked on every launch rather than remembered once. A grant is a change to the
+/// file's own ACL, and the question is whether that ACL still carries it — which
+/// a cached answer cannot know. An in-place upgrade replaces the image at the
+/// same path with a fresh ACL, and a cache keyed by path would keep saying yes:
+/// `app_container` would hand back a container the kernel then refuses to create,
+/// the probe would fall to the token-only rung, and the operator would read
+/// `files=open` with no reason recorded anywhere, because the failure that caused
+/// it never happened.
+///
+/// Asking again costs a metadata read, not a write: [`add_access`] reads the ACL
+/// first and returns without touching it when the ACE is already there, so the
+/// only launch that rewrites a DACL is the one that has to.
 ///
 /// A grant that cannot be made — an image under `Program Files`, where the user
 /// may not rewrite the DACL, or one whose ACL cannot be read — leaves the child
@@ -1376,18 +1484,10 @@ fn grant_helper_access(grants: Grants<'_>) {
 /// the child's own measurement is what says so: nothing here claims a layer the
 /// token did not hand over.
 fn grant_image_access(program: &OsStr, sid: PSID) -> bool {
-    static GRANTED: OnceLock<(OsString, bool)> = OnceLock::new();
-    if let Some((image, granted)) = GRANTED.get() {
-        return *granted && image == program;
-    }
     match add_read_execute(program, sid) {
-        Ok(()) => {
-            let _ = GRANTED.set((program.to_os_string(), true));
-            true
-        }
+        Ok(()) => true,
         Err(error) => {
             note_shortfall("image-grant-refused", Some(&error));
-            let _ = GRANTED.set((program.to_os_string(), false));
             false
         }
     }
@@ -1438,7 +1538,7 @@ fn add_access(path: &OsStr, sid: PSID, mask: u32) -> std::io::Result<()> {
     // below is a write to a file another process may be running from, and the
     // question the caller asks is whether the container can read the image, not
     // whether this call changed anything.
-    if dacl_already_grants(dacl, sid) {
+    if dacl_already_grants(dacl, sid, mask) {
         unsafe { LocalFree(descriptor) };
         return Ok(());
     }
@@ -1486,16 +1586,23 @@ fn add_access(path: &OsStr, sid: PSID, mask: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Whether `dacl` already gives `sid` the read and execute the container needs.
+/// Whether `dacl` already gives `sid` every bit of `wanted`.
 ///
 /// The second run of this process finds the ACE the first one left, and a plain
 /// merge would depend on how the system treats a duplicate entry. Walking the
 /// ACL answers the question the caller actually has.
-fn dacl_already_grants(dacl: *const ACL, sid: PSID) -> bool {
+///
+/// `wanted` is the caller's own mask rather than a fixed one, because the
+/// answer is only yes for the access that was asked for. Hardcoding read *and*
+/// execute here made every call for a read-only grant answer no, which sent the
+/// caller down the merge path again: a duplicate ACE and another
+/// `SetNamedSecurityInfoW` on an object that already had the grant — the
+/// inheritance-re-imposing write this file exists to avoid — and, in the other
+/// direction, an `Ok` for a caller that wanted more than the ACE carries.
+fn dacl_already_grants(dacl: *const ACL, sid: PSID, wanted: u32) -> bool {
     /// `ACCESS_ALLOWED_ACE_TYPE` from `winnt.h`, which is where this file keeps
     /// the few Windows constants `windows-sys` does not carry behind a feature.
     const ALLOWED: u8 = 0x00;
-    const WANTED: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
 
     let mut info: ACL_SIZE_INFORMATION = unsafe { std::mem::zeroed() };
     let read = unsafe {
@@ -1522,7 +1629,7 @@ fn dacl_already_grants(dacl: *const ACL, sid: PSID) -> bool {
         // `SidStart` is the first four bytes of the SID that follows the header,
         // so its address is the SID's address.
         let entry = std::ptr::addr_of!(allowed.SidStart).cast::<c_void>() as PSID;
-        if unsafe { EqualSid(entry, sid) } != 0 && allowed.Mask & WANTED == WANTED {
+        if unsafe { EqualSid(entry, sid) } != 0 && allowed.Mask & wanted == wanted {
             return true;
         }
     }

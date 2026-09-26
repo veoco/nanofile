@@ -1239,6 +1239,32 @@ async fn the_sandbox_page_shows_the_measured_grade_and_items() {
             );
         }
     }
+    // The verdict is what the page leads with, and whether the features run is
+    // a separate question from what the host could give: an admin has to be able
+    // to tell "this machine is weak" from "the setting you chose disabled it".
+    assert!(html.contains("data-sandbox-verdict"), "no verdict banner");
+    assert!(
+        html.contains("data-sandbox-verdict-label"),
+        "the verdict has no label"
+    );
+    assert!(html.contains("data-sandbox-decision"), "no decision row");
+    assert!(
+        html.contains("data-sandbox-decision-state"),
+        "the decision row shows no state"
+    );
+    // Each item carries how much it is worth, and what its absence opens rather
+    // than a restatement of its name. Either the item is in place — and then
+    // there is nothing to explain — or the impact sentence is there.
+    assert!(
+        html.contains("data-sandbox-severity=\"Critical\""),
+        "no item carries its severity"
+    );
+    // The media profile's process item cannot exist, and the row says so instead
+    // of leaving the reader to infer it from a missing badge.
+    assert!(
+        html.contains("data-sandbox-media-process"),
+        "the media row does not say the process item does not apply"
+    );
     // The panel names a grade and labels each item, rather than rendering the
     // locale key it came from. The grade key is never an attribute value, so
     // its raw form can only mean a fallback.

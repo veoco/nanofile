@@ -175,16 +175,23 @@ jobs:
           # How many process mitigations the kernel took and the child read
           # back. The count moves with the Windows build; zero would mean the
           # API is not working at all.
-          grep -qE 'mitigations=[1-9]' sandbox.txt
+          grep -qE 'mitigations=[1-9][0-9]*' sandbox.txt
           # The far edge of the files protection: the container refuses the
           # user's own paths (above). The system tree stays readable through the
-          # user's own SID, which the container's token also carries — a host
-          # that answered `denied` would be stricter than the platform, so both
-          # are asserted and a change to either is deliberate.
+          # packages a low-box process is checked against — not through the
+          # user's own SID, and not a documented invariant — so a host that
+          # answered `denied` would be stricter than the platform and both are
+          # asserted; a change to either is deliberate.
           grep -qE 'system=(readable|denied|absent)' sandbox.txt
           # Which container the launch asked for and got. `off` is what
           # Windows 10 answers, where the attribute does not exist.
           grep -qE 'lpac=(on|off)' sandbox.txt
+          # Which creation the parent settled on, and where a write from it
+          # lands. `store` means the file resolved into the container's own
+          # redirected store; `user` means it did not, which is a fact the report
+          # states rather than labels benign.
+          grep -qE 'rung=(container|token|plain)' sandbox.txt
+          grep -qE 'writes=(store|user|denied|unmeasured)' sandbox.txt
           grep -q 'threads=ok' sandbox.txt
           # Every protection, not `partial|full`: the container is the one this
           # host can lose on its own, and losing it now fails here.
@@ -532,17 +539,22 @@ jobs:
 
       # The sandbox's own report, before the suite: it says which layers this
       # kernel gave the worker and why, which is the first thing to look at when
-      # a document test fails. Both levels pass here — a runner whose kernel
-      # lacks Landlock is a fact about the runner, not a broken build — while
-      # the integration test that insists the worker confines itself is
-      # conditional on what the kernel supports.
+      # a document test fails. `full` is asserted rather than `full|partial`
+      # because `partial` now means "resource limits and no file access, with
+      # something else missing": a runner whose kernel lost Landlock would grade
+      # `none`, and by default that host does not parse documents at all. A CI
+      # runner silently dropping to a weaker grade is the thing this step exists
+      # to catch, so it must not be accepted by the assertion.
       - name: Report the document extraction sandbox
         run: |
           cargo build --bin nanofile
           ./target/debug/nanofile extract-worker --selftest |
             tee /tmp/sandbox.txt
           grep -q 'profile=documents' /tmp/sandbox.txt
-          grep -qE 'level=(full|partial)' /tmp/sandbox.txt
+          grep -q 'level=full' /tmp/sandbox.txt
+          grep -q 'files=denied' /tmp/sandbox.txt
+          grep -q 'network=denied' /tmp/sandbox.txt
+          grep -q 'process=denied' /tmp/sandbox.txt
           grep -q 'parse=pdf-ok,docx-ok' /tmp/sandbox.txt
           # The calls Landlock cannot govern are this filter's job, and a kernel
           # without seccomp is the one case where they are not covered.
@@ -571,6 +583,7 @@ jobs:
             tee /tmp/media.txt
           grep -q 'profile=media' /tmp/media.txt
           grep -q 'level=partial' /tmp/media.txt
+          grep -q 'files=denied' /tmp/media.txt
           grep -q 'process=open' /tmp/media.txt
           grep -q 'helper=allowed' /tmp/media.txt
           grep -q 'parse=media-ok' /tmp/media.txt

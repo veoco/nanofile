@@ -172,8 +172,11 @@ pub struct SystemSettingsTemplate {
 /// What this host actually gives, for the Sandbox page.
 ///
 /// The grade is the one number an admin acts on; the items say which protection
-/// is missing, and the notes say what the platform still leaves open. None of
-/// it is a claim: every value comes from the report a confined child printed.
+/// is missing and what its absence means, the notes say what the platform still
+/// leaves open, and the decision says whether the features run at all under the
+/// policy the admin set. None of it is a claim: every value comes from the report
+/// a confined child printed, plus the one question only this side can answer —
+/// whether `sandbox.min_level` accepts it.
 pub struct SandboxView {
     /// The effective value of `sandbox.enabled`.
     pub enabled: bool,
@@ -181,23 +184,50 @@ pub struct SandboxView {
     pub min_level: String,
     /// The grade label, already translated.
     pub grade: String,
-    /// `badge-green` when every protection is there, `badge-red` when nothing
-    /// beyond resource limits is, `badge-gray` otherwise.
+    /// `badge-green` when every protection is there, `badge-red` when the files
+    /// layer is missing or nothing beyond resource limits is, `badge-gray`
+    /// otherwise.
     pub grade_class: &'static str,
+    /// Whether the features run, and why not when they do not.
+    pub decision: SandboxDecisionView,
     /// The four items, in the order the page lists them.
     pub items: Vec<SandboxItemView>,
     /// The media profile's own line.
     pub media: SandboxMediaView,
-    /// The one warning the page shows, when there is one.
-    pub warning: Option<String>,
+    /// The one verdict the page leads with.
+    pub verdict: SandboxVerdictView,
     /// The raw detail a probe printed, for the disclosure.
     pub detail: String,
 }
 
-/// One protection, present or not, with the platform's notes beside it.
+/// Whether the policy lets the document and image profiles run.
+///
+/// The grade above says what the host *could* give; this says what the settings
+/// made of it. They differ whenever `sandbox.min_level` refuses a host, and an
+/// admin looking at a red item needs to know which of the two they are reading
+/// before they change either.
+pub struct SandboxDecisionView {
+    /// Whether the features run.
+    pub running: bool,
+    /// `badge-green` when the features run, `badge-red` when they do not.
+    pub class: &'static str,
+    pub label: String,
+    /// Why they do not run, when they do not.
+    pub reason: Option<String>,
+}
+
+/// One protection: whether it is in place, how much it matters, and what its
+/// absence means.
 pub struct SandboxItemView {
     pub label_key: &'static str,
     pub present: bool,
+    /// `badge-red` for a critical item that is missing, `badge-gray` otherwise.
+    pub class: &'static str,
+    /// 关键 / 重要 / 建议 — how much the item is worth, so that a host missing
+    /// the files layer does not read like a host missing the process bound.
+    pub severity: String,
+    /// One sentence on what the absence opens, shown only when it is absent.
+    pub impact: Option<String>,
     /// The residuals that weaken this item, already translated.
     pub notes: Vec<String>,
 }
@@ -221,7 +251,24 @@ pub struct SandboxMediaView {
     /// row rather than only inside the raw report: a min-level that the media
     /// profile can never reach is the common cause, and it is not a fault.
     pub reason: Option<String>,
+    /// That the process item does not apply to this profile, and what bounds the
+    /// copies instead. Always present for media: the item cannot exist here, and
+    /// leaving the row without it would read as an item that was overlooked.
+    pub process_note: String,
     pub detail: String,
+}
+
+/// The one line the page leads with: is this configuration safe?
+pub struct SandboxVerdictView {
+    pub label: String,
+    /// `badge-*` for the tone of the verdict.
+    pub class: &'static str,
+    /// `is-ok` / `is-warn` / `is-err` — the banner behind it. Separate from the
+    /// badge because the page reads them at different sizes: a weak verdict is a
+    /// grey badge in a soft banner, and an unsafe one is red in a loud one.
+    pub banner: &'static str,
+    /// The explanation, when the verdict is not simply "safe".
+    pub detail: Option<String>,
 }
 
 /// Query parameters of a settings page.
@@ -357,7 +404,33 @@ async fn render(
         restart_return: settings_url(section, "restarted"),
         restart_generation: crate::restart::generation(),
         restart_error: crate::restart::failure(),
-        sandbox: (section == Section::Sandbox).then(|| sandbox_view(t, service)),
+        sandbox: match section {
+            Section::Sandbox => {
+                // The two settings the panel needs, resolved here because the
+                // service cannot move into the blocking task.
+                let enabled = service
+                    .resolved_one("sandbox.enabled")
+                    .map(|entry| entry.value == "true")
+                    .unwrap_or(true);
+                let min_level = service
+                    .resolved_one("sandbox.min_level")
+                    .map(|entry| entry.value)
+                    .unwrap_or_else(|| "partial".to_string());
+                let min_level = crate::sandbox::Level::parse(&min_level)
+                    .unwrap_or(crate::sandbox::Level::Partial);
+                // The probe spawns a child per profile, so it belongs on a
+                // blocking thread: the rest of the page must not wait on it, and
+                // an executor thread must not be parked on a process.
+                Some(
+                    tokio::task::spawn_blocking(move || sandbox_view(t, enabled, min_level))
+                        .await
+                        .map_err(|e| {
+                            AppError::internal(format!("the sandbox probe panicked: {e}"))
+                        })?,
+                )
+            }
+            _ => None,
+        },
     };
 
     let html = tpl
@@ -380,23 +453,25 @@ fn settings_url(section: Section, action: &str) -> String {
 /// itself and printed what took. The items say which protection is missing and
 /// the notes say what the platform still leaves open, so an admin can tell "this
 /// host cannot do better" from "something here is broken".
-fn sandbox_view(t: &I18n, service: &crate::settings::SettingsService) -> SandboxView {
-    use crate::sandbox::{Level, Profile, worker};
+/// Build the Sandbox panel from what the host measured.
+///
+/// Synchronous, and it spawns children: every value on the panel comes from a
+/// probe this call runs once per profile, so the caller hands it to
+/// `spawn_blocking` rather than blocking the runtime's thread on a child process.
+/// The two settings it needs are resolved by the caller for the same reason —
+/// the settings service cannot cross into the blocking task.
+fn sandbox_view(t: &'static I18n, enabled: bool, min_level: crate::sandbox::Level) -> SandboxView {
+    use crate::sandbox::{Profile, worker};
 
-    let enabled = service
-        .resolved_one("sandbox.enabled")
-        .map(|entry| entry.value == "true")
-        .unwrap_or(true);
-    let min_level = service
-        .resolved_one("sandbox.min_level")
-        .map(|entry| entry.value)
-        .unwrap_or_else(|| "partial".to_string());
-    let min_level = Level::parse(&min_level).unwrap_or(Level::Partial);
-
-    let capability = worker::capability(Profile::Documents);
-    let (grade, grade_class, items, detail, host_level) = match &capability {
-        Ok(report) => {
+    let answer = worker::page_answer(Profile::Documents);
+    let (grade, grade_class, items, detail, host_level, decision) = match &answer {
+        worker::PageAnswer::Measured {
+            report,
+            running,
+            reason,
+        } => {
             let level = report.level();
+            let notes = report.notes();
             (
                 t.tr(level_label(level)).to_string(),
                 level_class(level),
@@ -407,9 +482,11 @@ fn sandbox_view(t: &I18n, service: &crate::settings::SettingsService) -> Sandbox
                     .map(|(item, present)| SandboxItemView {
                         label_key: item_label(item),
                         present,
-                        notes: report
-                            .notes()
-                            .into_iter()
+                        class: item_class(item, present),
+                        severity: t.tr(item_severity(item)).to_string(),
+                        impact: (!present).then(|| t.tr(item_impact(item)).to_string()),
+                        notes: notes
+                            .iter()
                             .filter(|note| note_belongs(note, item))
                             .map(|note| t.tr(note_label(note)).to_string())
                             .collect(),
@@ -417,44 +494,43 @@ fn sandbox_view(t: &I18n, service: &crate::settings::SettingsService) -> Sandbox
                     .collect(),
                 report.detail.clone(),
                 Some(level),
+                SandboxDecisionView {
+                    running: *running,
+                    class: if *running { "badge-green" } else { "badge-red" },
+                    label: t
+                        .tr(if *running {
+                            "sandbox.decision_running"
+                        } else {
+                            "sandbox.decision_disabled"
+                        })
+                        .to_string(),
+                    reason: reason.clone(),
+                },
             )
         }
-        Err(why) => (
+        worker::PageAnswer::Unavailable(why) => (
             t.tr("sandbox.grade_unavailable").to_string(),
             "badge-red",
             Vec::new(),
             why.clone(),
             None,
+            SandboxDecisionView {
+                running: false,
+                class: "badge-red",
+                label: t.tr("sandbox.decision_disabled").to_string(),
+                reason: Some(why.clone()),
+            },
         ),
-    };
-
-    // One warning, in the order that decides what the admin should do first:
-    // the switch is off, then this host cannot run the features at all, then it
-    // is below the minimum that was asked for, then it is merely not complete.
-    let warning = if !enabled {
-        Some(t.tr("sandbox.warning_disabled").to_string())
-    } else {
-        match host_level {
-            None => Some(format!(
-                "{} {}",
-                t.tr("sandbox.warning_unavailable"),
-                detail
-            )),
-            Some(level) if level < min_level => Some(t.tr("sandbox.warning_below_min").to_string()),
-            Some(level) if level < Level::Full => {
-                Some(t.tr("sandbox.warning_incomplete").to_string())
-            }
-            _ => None,
-        }
     };
 
     // The media profile is a second child with its own report: it may execute
     // the helper where nothing else may, so it is shown on its own line — with
     // its own grade, because it is the profile that cannot have the process item
     // and therefore grades below the one above it on every platform.
+    let media_answer = worker::page_answer(Profile::Media);
     let mut media_level = None;
-    let mut media = match worker::capability(Profile::Media) {
-        Ok(report) => {
+    let mut media = match &media_answer {
+        worker::PageAnswer::Measured { report, .. } => {
             media_level = Some(report.level());
             let (label, class) = if report.detail.contains("media-ok") {
                 (t.tr("sandbox.media_ok"), "badge-green")
@@ -474,17 +550,19 @@ fn sandbox_view(t: &I18n, service: &crate::settings::SettingsService) -> Sandbox
                     .map(|note| t.tr(media_note_label(note)).to_string())
                     .collect(),
                 reason: None,
-                detail: report.detail,
+                process_note: t.tr("sandbox.media_process_na").to_string(),
+                detail: report.detail.clone(),
             }
         }
-        Err(why) => SandboxMediaView {
+        worker::PageAnswer::Unavailable(why) => SandboxMediaView {
             label: t.tr("sandbox.media_unavailable").to_string(),
             class: "badge-red",
             grade: None,
             grade_class: "badge-red",
             notes: Vec::new(),
             reason: Some(why.clone()),
-            detail: why,
+            process_note: t.tr("sandbox.media_process_na").to_string(),
+            detail: why.clone(),
         },
     };
     // A minimum the media profile can never reach is not a fault to hunt: the
@@ -492,24 +570,148 @@ fn sandbox_view(t: &I18n, service: &crate::settings::SettingsService) -> Sandbox
     // what it grades, every media request is refused. Saying so here is the
     // difference between "media thumbnails are off" and "media thumbnails are
     // off and here is the setting that did it".
-    if enabled
-        && let Some(level) = media_level
-        && level < min_level
-    {
+    let media_refused_by_min = enabled && media_level.is_some_and(|level| level < min_level);
+    if media_refused_by_min {
         media.label = t.tr("sandbox.media_below_min").to_string();
         media.class = "badge-red";
         media.reason = Some(t.tr("sandbox.media_below_min_reason").to_string());
     }
+
+    let verdict = sandbox_verdict(t, enabled, &decision, &items, host_level);
 
     SandboxView {
         enabled,
         min_level: t.tr(min_level_label(min_level)).to_string(),
         grade,
         grade_class,
+        decision,
         items,
         media,
-        warning,
+        verdict,
         detail,
+    }
+}
+
+/// The one line the page leads with.
+///
+/// Ordered by what an admin has to do first, and phrased as a verdict rather
+/// than as a warning: "this host is missing a protection" and "the policy you
+/// set accepts a host that lets a parser read your files" are different
+/// sentences, and only the second is a decision the admin made. The files item
+/// is what separates them — it is the one whose absence the shipped default
+/// refuses, so seeing it missing means `sandbox.min_level` was lowered past the
+/// point where the feature is safe.
+fn sandbox_verdict(
+    t: &I18n,
+    enabled: bool,
+    decision: &SandboxDecisionView,
+    items: &[SandboxItemView],
+    host_level: Option<crate::sandbox::Level>,
+) -> SandboxVerdictView {
+    use crate::sandbox::Level;
+
+    /// The three tones the verdict can be read in, which decide both the badge
+    /// beside it and the banner behind it. `Err` is the one that means something
+    /// is wrong now rather than something being weaker than it could be.
+    enum Tone {
+        Ok,
+        Weak,
+        Bad,
+    }
+    let verdict = |label: &str, tone: Tone, detail: Option<String>| SandboxVerdictView {
+        label: label.to_string(),
+        class: match tone {
+            Tone::Ok => "badge-green",
+            Tone::Weak => "badge-gray",
+            Tone::Bad => "badge-red",
+        },
+        banner: match tone {
+            Tone::Ok => "is-ok",
+            Tone::Weak => "is-warn",
+            Tone::Bad => "is-err",
+        },
+        detail,
+    };
+
+    let missing = |name: &str| {
+        items
+            .iter()
+            .find(|item| item.label_key == name)
+            .is_some_and(|item| !item.present)
+    };
+
+    if !enabled {
+        return verdict(
+            t.tr("sandbox.verdict_disabled"),
+            Tone::Weak,
+            Some(t.tr("sandbox.warning_disabled").to_string()),
+        );
+    }
+    if host_level.is_none() {
+        return verdict(
+            t.tr("sandbox.verdict_unavailable"),
+            Tone::Bad,
+            decision.reason.clone(),
+        );
+    }
+    if !decision.running {
+        // The host can confine the worker; the settings refuse what it gives.
+        return verdict(
+            t.tr("sandbox.verdict_refused"),
+            Tone::Bad,
+            Some(t.tr("sandbox.warning_below_min").to_string()),
+        );
+    }
+    if missing("sandbox.item_files") {
+        // Only reachable by lowering `min_level`: the default refuses this host,
+        // so the admin chose to run without the one layer that keeps a parser out
+        // of the server user's files.
+        return verdict(
+            t.tr("sandbox.verdict_unsafe"),
+            Tone::Bad,
+            Some(t.tr("sandbox.verdict_unsafe_detail").to_string()),
+        );
+    }
+    match host_level {
+        Some(Level::Full) => verdict(t.tr("sandbox.verdict_safe"), Tone::Ok, None),
+        _ => verdict(
+            t.tr("sandbox.verdict_degraded"),
+            Tone::Weak,
+            Some(t.tr("sandbox.warning_incomplete").to_string()),
+        ),
+    }
+}
+
+/// `badge-*` for one item: red only when a critical one is missing.
+fn item_class(item: &str, present: bool) -> &'static str {
+    match (item, present) {
+        (_, true) => "badge-green",
+        ("limits" | "files", false) => "badge-red",
+        _ => "badge-gray",
+    }
+}
+
+/// How much one item is worth, which is what tells an admin where to look first.
+///
+/// The files layer is critical because it is the one that keeps a parser out of
+/// the server user's data; the network is important because it is how what a
+/// parser did read would leave; the process bound is advice, because a parser
+/// that cannot read or send anything has little to do with a second process.
+fn item_severity(item: &str) -> &'static str {
+    match item {
+        "limits" | "files" => "sandbox.severity_critical",
+        "network" => "sandbox.severity_important",
+        _ => "sandbox.severity_advisory",
+    }
+}
+
+/// What one item's absence means, in the terms the operator cares about.
+fn item_impact(item: &str) -> &'static str {
+    match item {
+        "limits" => "sandbox.impact_limits",
+        "files" => "sandbox.impact_files",
+        "network" => "sandbox.impact_network",
+        _ => "sandbox.impact_process",
     }
 }
 
@@ -541,8 +743,9 @@ fn item_label(item: &str) -> &'static str {
 /// Which item a residual note belongs beside.
 fn note_belongs(note: &str, item: &str) -> bool {
     match note {
-        "fork" | "helper" => item == "process",
-        "system_tree" | "writes" | "metadata" | "ll_gaps" => item == "files",
+        "fork" | "helper" | "media_process" => item == "process",
+        "system_tree" | "writes" | "writes_user" | "metadata" | "ll_gaps" | "helper_libs"
+        | "helper_trees" | "container_plain" | "container_refused" | "lpac_off" => item == "files",
         _ => false,
     }
 }
@@ -553,7 +756,14 @@ fn note_label(note: &str) -> &'static str {
         "helper" => "sandbox.note_helper",
         "system_tree" => "sandbox.note_system_tree",
         "writes" => "sandbox.note_writes",
+        "writes_user" => "sandbox.note_writes_user",
         "metadata" => "sandbox.note_metadata",
+        "media_process" => "sandbox.note_media_process",
+        "helper_libs" => "sandbox.note_helper_libs",
+        "helper_trees" => "sandbox.note_helper_trees",
+        "container_plain" => "sandbox.note_container_plain",
+        "container_refused" => "sandbox.note_container_refused",
+        "lpac_off" => "sandbox.note_lpac_off",
         _ => "sandbox.note_ll_gaps",
     }
 }
@@ -1042,13 +1252,95 @@ mod tests {
     fn a_note_is_shown_under_the_item_it_weakens() {
         assert!(note_belongs("fork", "process"));
         assert!(note_belongs("helper", "process"));
+        assert!(note_belongs("media_process", "process"));
         assert!(note_belongs("system_tree", "files"));
         assert!(note_belongs("writes", "files"));
+        assert!(note_belongs("writes_user", "files"));
+        assert!(note_belongs("helper_libs", "files"));
+        assert!(note_belongs("helper_trees", "files"));
+        assert!(note_belongs("container_plain", "files"));
+        assert!(note_belongs("container_refused", "files"));
+        assert!(note_belongs("lpac_off", "files"));
         assert!(note_belongs("metadata", "files"));
         assert!(note_belongs("ll_gaps", "files"));
         assert!(!note_belongs("helper", "files"));
         assert!(!note_belongs("system_tree", "process"));
         assert!(!note_belongs("unknown", "process"));
+    }
+
+    /// Every note key the report can produce has a label, so a new token cannot
+    /// reach the page as its own identifier.
+    #[test]
+    fn every_note_has_a_label() {
+        for note in [
+            "fork",
+            "helper",
+            "media_process",
+            "system_tree",
+            "writes",
+            "writes_user",
+            "metadata",
+            "helper_libs",
+            "helper_trees",
+            "container_plain",
+            "container_refused",
+            "lpac_off",
+            "ll_gaps",
+        ] {
+            let label = note_label(note);
+            assert_ne!(label, note, "{note} has no label of its own");
+            assert!(label.starts_with("sandbox.note_"), "{note} -> {label}");
+        }
+    }
+
+    /// The verdict is what tells an admin whether the *policy* they chose is
+    /// safe, which is a different question from how strong the host is. The case
+    /// that matters most is the one the shipped default refuses and a lowered
+    /// minimum accepts: a host whose files layer is missing.
+    #[test]
+    fn the_verdict_separates_an_unsafe_policy_from_a_weak_host() {
+        let t = I18n::get(Some("en"));
+        /// The files item, present or not — the one the verdict turns on.
+        fn files_item(present: bool) -> SandboxItemView {
+            SandboxItemView {
+                label_key: "sandbox.item_files",
+                present,
+                class: if present { "badge-green" } else { "badge-red" },
+                severity: String::new(),
+                impact: None,
+                notes: Vec::new(),
+            }
+        }
+        let decision = |running: bool| SandboxDecisionView {
+            running,
+            class: if running { "badge-green" } else { "badge-red" },
+            label: String::new(),
+            reason: (!running).then(|| "below the minimum".to_string()),
+        };
+        let level = crate::sandbox::Level::None;
+
+        // Running, but without the files layer: only a lowered minimum gets
+        // here, and the verdict says so.
+        let unsafe_verdict =
+            sandbox_verdict(t, true, &decision(true), &[files_item(false)], Some(level));
+        assert_eq!(unsafe_verdict.label, t.tr("sandbox.verdict_unsafe"));
+        assert!(unsafe_verdict.detail.is_some());
+
+        // The same host with the shipped default: the policy refuses it, and
+        // that is a different verdict with a different remedy.
+        let refused = sandbox_verdict(t, true, &decision(false), &[files_item(false)], Some(level));
+        assert_eq!(refused.label, t.tr("sandbox.verdict_refused"));
+
+        // Files in place and everything else too: nothing to explain.
+        let safe = sandbox_verdict(
+            t,
+            true,
+            &decision(true),
+            &[files_item(true)],
+            Some(crate::sandbox::Level::Full),
+        );
+        assert_eq!(safe.label, t.tr("sandbox.verdict_safe"));
+        assert!(safe.detail.is_none());
     }
 
     #[test]

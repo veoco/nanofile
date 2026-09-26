@@ -144,6 +144,52 @@ impl Start {
             Start::Plain => "without a token or a container",
         }
     }
+
+    /// The token the report carries for the creation that answered.
+    ///
+    /// Windows is the only platform with a ladder to name, and the only one where
+    /// the name is not already in the child's report: the child measures the
+    /// container for itself (`container=appcontainer`, or `files=open`), but a
+    /// *weaker* creation than the one this host can give is something only this
+    /// side knows it settled for.
+    #[cfg(windows)]
+    fn token(self) -> &'static str {
+        match self {
+            Start::Confined => "container",
+            Start::TokenOnly => "token",
+            Start::Plain => "plain",
+        }
+    }
+}
+
+/// The facts about one launch that only the parent can see, appended to its report.
+///
+/// A child measures its own token, its own limits and its own refusals. What it
+/// cannot see is which creation this side ended up using, why the strongest one
+/// did not work, and which flavour of container the kernel accepted. Those lived
+/// in the parent's log and on the `--probe` line — which meant the one place an
+/// admin looks, the Sandbox page, could show `files=open` with no reason beside
+/// it. Appending them to the report puts them where the answer is read, and
+/// `Report::notes` turns them into the notes the page renders.
+fn with_parent_facts(mut report: Report, start: Start) -> Report {
+    #[cfg(windows)]
+    {
+        report.detail.push_str(&format!(",rung={}", start.token()));
+        report.detail.push_str(&format!(
+            ",lpac={}",
+            if crate::sandbox::lpac() { "on" } else { "off" }
+        ));
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = start;
+    }
+    if let Some(reason) = crate::sandbox::container_shortfall() {
+        report
+            .detail
+            .push_str(&format!(",container_refused={reason}"));
+    }
+    report
 }
 
 /// The creations this platform can start a child with, strongest first.
@@ -177,8 +223,6 @@ pub struct External {
     /// `sandbox-exec`), so files, the network and process creation are not its
     /// own layers to establish.
     pub runner: bool,
-    /// The parent created this process with a restricted token (Windows).
-    pub restricted_token: bool,
 }
 
 /// What the parent learned from running the child.
@@ -281,24 +325,10 @@ pub fn run(
 pub fn probe_report(profile: Profile) -> anyhow::Result<()> {
     match status(profile) {
         Status::Ready(report) => {
-            let mut line = report.line();
-            // The parent's half of the answer: the child can say whether its
-            // token is an AppContainer's, and only the parent knows what it asked
-            // for and what came back. The two are independent — a host can have
-            // no container at all and still report which flavour was asked for —
-            // so neither is nested under the other.
-            if let Some(reason) = sandbox::container_shortfall() {
-                line.push_str(&format!(",container={reason}"));
-            }
-            // The less privileged container is a creation attribute, so only the
-            // parent can report it. On a platform without one the token is not
-            // printed at all rather than printed as `off`.
-            #[cfg(target_os = "windows")]
-            line.push_str(&format!(
-                ",lpac={}",
-                if sandbox::lpac() { "on" } else { "off" }
-            ));
-            println!("{line} text_chars={MAX_INDEXED_CONTENT_BYTES}");
+            // The parent's half of the answer is already in the report: `probe`
+            // appends it, so the line the operator reads here, the line the log
+            // carries and the report the settings page renders are the same one.
+            println!("{} text_chars={MAX_INDEXED_CONTENT_BYTES}", report.line());
             Ok(())
         }
         Status::Unavailable(reason) => {
@@ -605,6 +635,50 @@ enum Measured {
     Failed(String, Instant),
 }
 
+/// What the settings page shows for one profile: the host's answer, and what the
+/// configured policy makes of it.
+///
+/// The two are different questions and the page needs both. "This host grades
+/// files as missing" is a fact about the machine; "documents are therefore not
+/// parsed" is a fact about the settings, and an admin reading the page has to be
+/// able to tell which of the two they are looking at before they change
+/// anything.
+///
+/// Both come from the one probe [`capability`] already ran — the decision is
+/// [`Requirement::accepts`] applied to that report, which is the same call the
+/// request path makes — so putting them on the page costs no second child.
+pub enum PageAnswer {
+    /// The host answered, and the requirement accepted or refused it.
+    Measured {
+        report: Report,
+        /// Whether the features that use this profile run.
+        running: bool,
+        /// Why they do not, when they do not.
+        reason: Option<String>,
+    },
+    /// The probe could not run at all, so there is nothing to decide on.
+    Unavailable(String),
+}
+
+/// The page's answer for one profile.
+pub fn page_answer(profile: Profile) -> PageAnswer {
+    match capability(profile) {
+        Ok(report) => match configured_requirement().accepts(&report) {
+            Ok(()) => PageAnswer::Measured {
+                report,
+                running: true,
+                reason: None,
+            },
+            Err(refusal) => PageAnswer::Measured {
+                report,
+                running: false,
+                reason: Some(refusal.reason()),
+            },
+        },
+        Err(why) => PageAnswer::Unavailable(why),
+    }
+}
+
 fn measure_capability(profile: Profile) -> Result<Report, String> {
     let grants = probe_grants(profile);
     let Some(invocation) = invocation(Requirement::new(true, Level::None), profile, grants) else {
@@ -614,7 +688,7 @@ fn measure_capability(profile: Profile) -> Result<Report, String> {
     let mut failures: Vec<String> = Vec::new();
     for &start in rungs() {
         match probe_on(&invocation, profile, grants, start) {
-            Ok(report) => return Ok(report),
+            Ok(report) => return Ok(with_parent_facts(report, start)),
             Err(why) => failures.push(format!("{}: {why}", start.label())),
         }
     }
@@ -794,7 +868,7 @@ fn probe(profile: Profile) -> (Start, Status) {
     let mut failures: Vec<String> = Vec::new();
     for &start in rungs() {
         match probe_on(&invocation, profile, grants, start) {
-            Ok(report) => return (start, accept(report)),
+            Ok(report) => return (start, accept(with_parent_facts(report, start))),
             Err(why) => failures.push(format!("{}: {why}", start.label())),
         }
     }
