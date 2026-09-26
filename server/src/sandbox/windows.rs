@@ -112,13 +112,21 @@
 //! the workspace *and* for a copy under `Program Files`, with the less privileged
 //! container (`lpac=off` was measured too) and without it, while the same probe's
 //! token-only rung — no container — runs it. So inside this container the worker
-//! can open the program it was granted and `CreateProcess` refuses it, wherever
-//! the program is and whichever container it is. What is left is the shape of the
-//! launch itself: creating an AppContainer process *from* an AppContainer process
-//! is what fails, and the way around it is to have the parent create the helper,
-//! as it already does for the worker, instead of asking the container to make a
-//! grandchild. Until that is settled, media thumbnails on Windows are off and the
-//! settings page says so — the report carries both facts (`helper=allowed`,
+//! can open the program it was granted and creating the process is refused,
+//! wherever the program is and whichever container it is.
+//!
+//! Two things can look like that, and the media probe's `parse=` line says which.
+//! One is the null *device*: the helper's standard streams used to be set to
+//! `NUL`, which a container may refuse to open, and that refusal arrives from the
+//! same call as the process creation — which is exactly how it read on macOS
+//! (`/dev/null` for write, refused by the profile). The helper's streams are pipes
+//! now, with the stdin end closed by this side, so nothing needs that device. If
+//! the refusal survives that, what is left is the shape of the launch itself:
+//! creating an AppContainer process *from* an AppContainer process is what fails,
+//! and the way around it is to have the parent create the helper, as it already
+//! does for the worker, instead of asking the container to make a grandchild.
+//! Until that is settled, media thumbnails on Windows are off and the settings
+//! page says so — the report carries both facts (`helper=allowed`,
 //! `parse=media-unavailable`) rather than a claim that the helper ran.
 //!
 //! # References

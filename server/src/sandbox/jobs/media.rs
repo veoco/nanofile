@@ -199,8 +199,13 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
             .arg("-c:v")
             .arg("png")
             .arg("pipe:1")
-            // The protocol's own stdin is not the helper's to read.
-            .stdin(Stdio::null())
+            // The protocol's own stdin is not the helper's to read: it is a pipe
+            // this side closes at once, so the helper sees end of input. A *null
+            // device* would be the obvious way to say that and it is the wrong
+            // one: a confinement layer decides whether that device may be opened,
+            // and both Seatbelt (writing it) and the Windows container have
+            // refused, which turns a stdio detail into "the helper cannot run".
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(windows)]
@@ -210,7 +215,7 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
             command.creation_flags(CREATE_NO_WINDOW);
         }
 
-        match command.output() {
+        match run_helper(&mut command) {
             Ok(output) if output.status.success() && !output.stdout.is_empty() => {
                 if output.stdout.len() as u64 > MAX_FRAME_BYTES {
                     last = "the frame ffmpeg produced is over the size cap".to_string();
@@ -232,28 +237,42 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
     Err(last)
 }
 
+/// Run the helper with its three streams on pipes, stdin closed.
+///
+/// `Command::output` would set stdin to the null device for us, which is the one
+/// thing a confinement layer may refuse — see [`grab_frame`]'s note. Closing the
+/// write end of the stdin pipe here is what the helper sees as end of input, and
+/// it needs no device to be granted.
+fn run_helper(command: &mut Command) -> std::io::Result<std::process::Output> {
+    let mut child = command.spawn()?;
+    drop(child.stdin.take());
+    child.wait_with_output()
+}
+
 /// The self-test: run the helper under the profile.
 ///
 /// `-version` proves the grant reaches the binary and its libraries. It does not
-/// decode anything, which is what the first real request is for.
-///
-/// The three standard streams are set to `/dev/null`, so the profile has to allow
-/// opening that device for writing: without it the spawn fails with
-/// `Operation not permitted` before the helper runs, which is what the media
-/// probe measured on macOS until the grant was added.
+/// decode anything, which is what the first real request is for. The streams are
+/// the same pipes the frame extraction uses, for the same reason.
 pub fn probe(grants: Grants<'_>) -> String {
     let Some(helper) = grants.helper else {
         return "media-no-helper".to_string();
     };
-    match Command::new(helper)
+    let mut command = Command::new(helper);
+    command
         .arg("-version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
     {
-        Ok(status) if status.success() => "media-ok".to_string(),
-        Ok(status) => format!("media-failed({status})"),
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    match run_helper(&mut command) {
+        Ok(output) if output.status.success() => "media-ok".to_string(),
+        Ok(output) => format!("media-failed({})", output.status),
         Err(error) => format!("media-unavailable({error})"),
     }
 }
