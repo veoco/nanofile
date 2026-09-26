@@ -209,9 +209,14 @@ jobs:
           HELPER="$(command -v ffmpeg || true)"
           EXPECT='parse=media-ok'
           if [ -z "$HELPER" ]; then
-            mkdir -p /tmp/media-helper
-            cp target/debug/nanofile.exe /tmp/media-helper/nanofile.exe
-            HELPER="$(cygpath -w /tmp/media-helper/nanofile.exe)"
+            # No ffmpeg on the runner: use the worker's own image. It starts and
+            # exits non-zero — `-version` is not one of its flags — and that is
+            # `media-failed`, the proof this profile can start a program at all.
+            # `media-unavailable` would mean the grant did not reach the binary.
+            # The image is used in place on purpose: it is the one file this
+            # container is already known to be able to run from, so the check
+            # stays about the grant rather than about the directory it sits in.
+            HELPER="$(cygpath -w "$(pwd)/target/debug/nanofile.exe")"
             EXPECT='parse=media-failed'
             echo "no ffmpeg on this runner; probing with the worker's own image as the helper"
           fi
@@ -296,13 +301,12 @@ jobs:
           fi
           EXPECT='parse=media-ok'
           if [ -z "$FFMPEG" ]; then
-            # Still nothing: run the worker's own image as the helper. It starts
-            # and exits non-zero — it is not a helper — and that is `media-failed`,
-            # which is the proof this profile can start one. A grant that did not
-            # reach the binary would be `media-unavailable` instead.
-            mkdir -p /tmp/media-helper
-            cp target/debug/nanofile /tmp/media-helper/nanofile
-            FFMPEG=/tmp/media-helper/nanofile
+            # Still nothing: run the worker's own image as the helper, in place.
+            # It starts and exits non-zero — it is not a helper — and that is
+            # `media-failed`, which is the proof this profile can start one. A
+            # grant that did not reach the binary would be `media-unavailable`
+            # instead.
+            FFMPEG="$(pwd)/target/debug/nanofile"
             EXPECT='parse=media-failed'
             echo "no ffmpeg on this runner; probing with the worker's own image as the helper"
           fi
