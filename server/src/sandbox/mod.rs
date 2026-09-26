@@ -123,6 +123,12 @@ pub mod worker;
 mod macos;
 #[cfg(any(target_os = "macos", test))]
 mod seatbelt;
+// Read on the two platforms that run a helper, and compiled for real by the
+// aarch64 syscall check in CI, which copies this file beside the Linux module.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+mod shebang;
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+pub(crate) use shebang::interpreter as shebang_interpreter;
 #[cfg(target_os = "windows")]
 mod windows;
 /// Start the child the way Windows has to: a restricted token and an AppContainer
@@ -652,33 +658,6 @@ impl Grants<'_> {
     pub fn is_empty(&self) -> bool {
         self.helper.is_none() && self.source.is_none()
     }
-}
-
-/// The interpreter a script helper's `#!` line names, when it has one.
-///
-/// A helper can be a script, and every platform that runs one has to allow the
-/// program the kernel starts before the script's own code: the `#!` line is where
-/// that path is written down, so it is read here rather than guessed at in a
-/// list.
-///
-/// Only an absolute path counts, and a bare name is not how the kernel resolves a
-/// shebang either — it does not search `PATH`. `#!/usr/bin/env ffmpeg` therefore
-/// names `env` and not `ffmpeg`: the second program is one the grant does not
-/// reach, which is the caller's to configure away rather than a reason to widen
-/// the grant.
-pub(crate) fn shebang_interpreter(helper: &Path) -> Option<std::path::PathBuf> {
-    use std::io::Read as _;
-
-    let mut head = [0u8; 256];
-    let mut file = std::fs::File::open(helper).ok()?;
-    let read = file.read(&mut head).ok()?;
-    let line = std::str::from_utf8(&head[..read]).ok()?;
-    let rest = line.strip_prefix("#!")?;
-    let program = rest
-        .split(['\n', ' ', '\t'])
-        .find(|token| !token.is_empty())?;
-    let path = Path::new(program);
-    path.is_absolute().then(|| path.to_path_buf())
 }
 
 /// Apply every protection this platform offers to the current process.

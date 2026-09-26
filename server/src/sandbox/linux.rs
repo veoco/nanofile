@@ -1042,32 +1042,6 @@ mod tests {
         }
     }
 
-    /// A script helper's interpreter is read from its own `#!` line, and only an
-    /// absolute path counts.
-    #[test]
-    fn a_script_helper_names_its_own_interpreter() {
-        let path = std::env::temp_dir().join(format!(
-            "nanofile-shebang-{}-{:?}.sh",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-
-        std::fs::write(&path, b"#!/bin/dash\nexit 0\n").expect("write");
-        assert_eq!(shebang_interpreter(&path), Some(PathBuf::from("/bin/dash")));
-
-        // A bare name is not a path, and the kernel does not search `PATH` for
-        // one either.
-        std::fs::write(&path, b"#!dash\nexit 0\n").expect("write");
-        assert_eq!(shebang_interpreter(&path), None);
-
-        // Nor is an ELF helper a script.
-        std::fs::write(&path, b"\x7fELF\x02\x01\x01").expect("write");
-        assert_eq!(shebang_interpreter(&path), None);
-
-        let _ = std::fs::remove_file(&path);
-        assert_eq!(shebang_interpreter(Path::new("/nonexistent-helper")), None);
-    }
-
     /// The interpreter list is the helper's own first, then the static tree,
     /// without repeating a path the helper already named.
     #[test]

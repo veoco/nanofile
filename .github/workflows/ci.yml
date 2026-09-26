@@ -193,30 +193,35 @@ jobs:
           grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
 
       # The media profile is the one that may execute a helper, so it is probed
-      # with the helper it will actually be given. Skipped when the runner has no
-      # ffmpeg: the profile is otherwise reported as having no helper, which is a
-      # fact about the host rather than a broken build.
+      # with the helper it will actually be given.
       #
       # `level=partial` and `process=open` are the point of the row: this profile
       # starts a program by definition — that is what a helper is — so it cannot
       # carry the process item and must not pretend to. `helper=allowed` is the
-      # fact beside it, and `parse=media-ok` is the effect that proves the grant
-      # reaches the binary.
+      # fact beside it, and the `parse=` line is the effect: `media-ok` when a
+      # real ffmpeg ran, `media-failed` when the runner has none and the worker's
+      # own image was used instead (it starts, and exits non-zero because it is
+      # not a helper) — and `media-unavailable` in either case would mean the
+      # grant did not reach the binary.
       - name: Probe the media sandbox profile
         shell: bash
         run: |
-          FFMPEG="$(command -v ffmpeg || true)"
-          if [ -z "$FFMPEG" ]; then
-            echo "no ffmpeg on this runner; skipping the media profile probe"
-            exit 0
+          HELPER="$(command -v ffmpeg || true)"
+          EXPECT='parse=media-ok'
+          if [ -z "$HELPER" ]; then
+            mkdir -p /tmp/media-helper
+            cp target/debug/nanofile.exe /tmp/media-helper/nanofile.exe
+            HELPER="$(cygpath -w /tmp/media-helper/nanofile.exe)"
+            EXPECT='parse=media-failed'
+            echo "no ffmpeg on this runner; probing with the worker's own image as the helper"
           fi
-          ./target/debug/nanofile.exe extract-worker --probe --profile media --ffmpeg "$FFMPEG" \
+          ./target/debug/nanofile.exe extract-worker --probe --profile media --ffmpeg "$HELPER" \
             | tee media.txt
           grep -q 'profile=media' media.txt
           grep -q 'level=partial' media.txt
           grep -q 'process=open' media.txt
           grep -q 'helper=allowed' media.txt
-          grep -q 'parse=media-ok' media.txt
+          grep -q "$EXPECT" media.txt
 
       # Parsing *under* the container, which the probe's self-test does but the
       # whole pipeline does not: a container that denies something a reader
@@ -284,8 +289,22 @@ jobs:
         run: |
           FFMPEG="$(command -v ffmpeg || true)"
           if [ -z "$FFMPEG" ]; then
-            echo "no ffmpeg on this runner; skipping the media profile probe"
-            exit 0
+            # The image has no ffmpeg. A packaged one is exactly the case this
+            # profile's library grants exist for, so try to install it.
+            brew install ffmpeg >/dev/null 2>&1 || true
+            FFMPEG="$(command -v ffmpeg || true)"
+          fi
+          EXPECT='parse=media-ok'
+          if [ -z "$FFMPEG" ]; then
+            # Still nothing: run the worker's own image as the helper. It starts
+            # and exits non-zero — it is not a helper — and that is `media-failed`,
+            # which is the proof this profile can start one. A grant that did not
+            # reach the binary would be `media-unavailable` instead.
+            mkdir -p /tmp/media-helper
+            cp target/debug/nanofile /tmp/media-helper/nanofile
+            FFMPEG=/tmp/media-helper/nanofile
+            EXPECT='parse=media-failed'
+            echo "no ffmpeg on this runner; probing with the worker's own image as the helper"
           fi
           ./target/debug/nanofile extract-worker \
             --probe --profile media --ffmpeg "$FFMPEG" | tee /tmp/media.txt
@@ -298,7 +317,7 @@ jobs:
           # refuses it with EPERM, which is the denial this reads.
           grep -q 'exec=denied' /tmp/media.txt
           # ... and the confined helper still starts.
-          grep -q 'parse=media-ok' /tmp/media.txt
+          grep -q "$EXPECT" /tmp/media.txt
 
   # ── Frontend tests (pure JS, no npm deps) ──────────────────────────
   frontend-test:
@@ -441,6 +460,9 @@ jobs:
           rustup target add aarch64-unknown-linux-gnu
           mkdir -p /tmp/acheck/src/sandbox
           cp server/src/sandbox/linux.rs /tmp/acheck/src/sandbox/
+          # The shebang reader the media grants call: the real file, not a copy
+          # of its body, so the two cannot drift.
+          cp server/src/sandbox/shebang.rs /tmp/acheck/src/sandbox/
           cat > /tmp/acheck/Cargo.toml <<'EOF'
           [package]
           name = "acheck"
@@ -457,6 +479,10 @@ jobs:
           # stubbed, and the real linux.rs is what is compiled.
           cat > /tmp/acheck/src/sandbox/mod.rs <<'EOF'
           pub mod linux;
+
+          #[path = "shebang.rs"]
+          pub mod shebang;
+          pub(crate) use shebang::interpreter as shebang_interpreter;
 
           use std::path::Path;
 
