@@ -1269,41 +1269,27 @@ impl Child {
         }
     }
 
-    fn kill(&mut self) {
-        match self {
-            #[cfg(not(windows))]
-            Child::Standard(child) => {
-                let _ = child.kill();
-            }
-            #[cfg(windows)]
-            Child::Windows(child) => child.kill(),
-        }
-    }
-
     /// Kill the child and whatever it started.
     ///
     /// The child leads its own process group on unix ([`spawn_child`]), so the
     /// group is what gets the signal: killing the leader alone leaves a forked
     /// copy holding the protocol pipes, and the read after this would then wait
     /// on a pipe nobody will close. Windows reaches the whole tree through the
-    /// Job Object the child was created in, which the parent holds.
+    /// Job Object the child was created in, which the parent holds — ending the
+    /// job is what takes the helper a media child started with it.
     fn kill_tree(&mut self) {
-        #[cfg(unix)]
-        {
-            // The only variant on unix; Windows starts a child another way and
-            // reaches its whole tree through the Job Object instead.
-            let Child::Standard(child) = self;
-            // `killpg` on the group the child leads; the child's own pid is the
-            // group id because it was made a group leader at spawn. A copy
-            // cannot leave that group: `setsid`/`setpgid` are refused by the
-            // filter the child installs (`sandbox::linux`).
-            unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
-            self.kill();
-        }
-        #[cfg(windows)]
-        {
-            let Child::Windows(child) = self;
-            child.kill_tree();
+        match self {
+            #[cfg(not(windows))]
+            Child::Standard(child) => {
+                // `killpg` on the group the child leads; the child's own pid is
+                // the group id because it was made a group leader at spawn. A
+                // copy cannot leave that group: `setsid`/`setpgid` are refused
+                // by the filter the child installs (`sandbox::linux`).
+                unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
+                let _ = child.kill();
+            }
+            #[cfg(windows)]
+            Child::Windows(child) => child.kill_tree(),
         }
     }
 
