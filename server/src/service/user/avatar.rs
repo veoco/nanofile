@@ -145,6 +145,10 @@ impl AvatarService {
         avatar: &infra::entity::avatar::Model,
         size: u32,
     ) -> Option<(Vec<u8>, &'static str)> {
+        // Only the configured sizes are materialised: the route is reachable
+        // without authentication, and a distinct cache entry per integer would
+        // let a caller walk the range.
+        let size = crate::thumbnail_util::canonical_avatar_size(size);
         let storage_dir = self.avatar_storage_dir(&avatar.email);
         let thumbnail_path = storage_dir.join(format!("{}.png", size));
 
@@ -156,11 +160,25 @@ impl AvatarService {
                 .map(|data| (data, "image/png"));
         }
 
+        // A miss starts a confined child that may work for the whole image
+        // timeout, so it queues on the same gate the file-thumbnail path uses.
+        let _permit = crate::sandbox::jobs::images::acquire_image_permit()
+            .await
+            .ok()?;
+
+        // Another request may have produced it while this one queued.
+        if thumbnail_path.exists() {
+            return tokio::fs::read(&thumbnail_path)
+                .await
+                .ok()
+                .map(|data| (data, "image/png"));
+        }
+
         // Thumbnail miss — load the original and have the sandbox worker
         // generate one. The decode is the same hostile-image path as a file
         // thumbnail, so it runs in the same confined child.
         let original_path = find_original_path(&storage_dir)?;
-        let content = std::fs::read(original_path).ok()?;
+        let content = tokio::fs::read(original_path).await.ok()?;
 
         let worker_input = content.clone();
         let squared = tokio::task::spawn_blocking(move || {

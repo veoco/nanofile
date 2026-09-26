@@ -743,7 +743,7 @@ fn item_label(item: &str) -> &'static str {
 /// Which item a residual note belongs beside.
 fn note_belongs(note: &str, item: &str) -> bool {
     match note {
-        "fork" | "helper" | "media_process" => item == "process",
+        "fork" | "helper" | "media_process" | "token_unrestricted" => item == "process",
         "system_tree" | "writes" | "writes_user" | "metadata" | "ll_gaps" | "helper_libs"
         | "helper_trees" | "container_plain" | "container_no_token" | "container_refused"
         | "lpac_off" => item == "files",
@@ -766,6 +766,7 @@ fn note_label(note: &str) -> &'static str {
         "container_no_token" => "sandbox.note_container_no_token",
         "container_refused" => "sandbox.note_container_refused",
         "lpac_off" => "sandbox.note_lpac_off",
+        "token_unrestricted" => "sandbox.note_token_unrestricted",
         _ => "sandbox.note_ll_gaps",
     }
 }

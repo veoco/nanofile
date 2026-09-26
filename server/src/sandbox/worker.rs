@@ -311,6 +311,7 @@ pub fn run(
     profile: Profile,
     requirement: Requirement,
     grants: crate::sandbox::Grants<'_>,
+    probe: Option<&Path>,
 ) -> anyhow::Result<()> {
     // The parser limits are process-global and this process never runs the
     // server, so they are set here and nowhere else.
@@ -329,6 +330,7 @@ pub fn run(
         profile,
         grants,
         measure,
+        probe,
     );
     // The token claim is not repeated here: on Windows the child reads its own
     // token back (see `windows::confine`), and no other platform starts a child
@@ -502,7 +504,12 @@ pub fn run_request(
     if let Status::Unavailable(why) = status(profile) {
         return RunOutcome::Unavailable(why);
     }
-    let Some(invocation) = invocation(configured_requirement(), profile, grants) else {
+    // A request's child has no probe file: the files item was measured by the
+    // probe that ran once, and the child claims it from the mechanism it
+    // installed. On Windows that layer is not re-measured per request at all
+    // (`files_are_measured`), so the cost of a private file per request buys
+    // nothing.
+    let Some(invocation) = invocation(configured_requirement(), profile, grants, None) else {
         return RunOutcome::Unavailable("cannot resolve the sandbox worker".to_string());
     };
 
@@ -524,7 +531,14 @@ pub fn run_request(
     }
     match verdict(run.exit_code, &run.stdout, &run.stderr) {
         Verdict::Reply { tag, body } => RunOutcome::Reply { tag, body },
-        Verdict::Unavailable(why) => RunOutcome::Unavailable(why),
+        Verdict::Unavailable(why) => {
+            // The probe said this profile was ready; a request that finds it
+            // otherwise is news about the host. Drop the cached answer so the
+            // next call re-probes rather than spawning a child that would be
+            // refused the same way.
+            mark_unavailable(profile);
+            RunOutcome::Unavailable(why)
+        }
         Verdict::Failed(why) => RunOutcome::Failed(why),
     }
 }
@@ -570,24 +584,38 @@ pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
 /// Per profile rather than per process: the media profile may execute ffmpeg
 /// where the others may not, so the two reports answer different questions and
 /// one must never stand in for the other.
+///
+/// The probe runs **without** the cache lock. It starts children and may walk
+/// the whole Windows ladder, and holding the lock across it would block every
+/// other profile's `status`/`available` call for as long as that takes — a
+/// request path calls this. Two threads that race here both probe and both
+/// store the same answer, which is cheaper than serialising every caller
+/// behind one host's slow launch.
 pub fn status(profile: Profile) -> Status {
     let cache = STATUS.get_or_init(|| Mutex::new(HashMap::new()));
+
+    {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = cache.get(&profile);
+        if let Some(status) = entry.and_then(|entry| entry.status.clone()) {
+            return status;
+        }
+        if let Some(retry_at) = entry.and_then(|entry| entry.retry_at)
+            && Instant::now() < retry_at
+        {
+            return Status::Unavailable(PROBE_PENDING.to_string());
+        }
+    }
+
+    let (start, status) = probe(profile);
+
     let mut cache = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let entry = cache.entry(profile).or_default();
-
-    if let Some(status) = &entry.status {
-        return status.clone();
-    }
-    if let Some(retry_at) = entry.retry_at
-        && Instant::now() < retry_at
-    {
-        return Status::Unavailable(PROBE_PENDING.to_string());
-    }
-
-    let status = probe(profile);
-    match &status.1 {
+    match &status {
         Status::Ready(report) => {
             tracing::info!(
                 profile = profile.as_str(),
@@ -617,8 +645,9 @@ pub fn status(profile: Profile) -> Status {
                     ),
                 }
             }
-            entry.rung = Some(status.0);
-            entry.status = Some(status.1.clone());
+            entry.rung = Some(start);
+            entry.status = Some(status.clone());
+            entry.retry_at = None;
         }
         Status::Unavailable(reason) => {
             tracing::error!(
@@ -632,7 +661,27 @@ pub fn status(profile: Profile) -> Status {
             entry.retry_at = Some(Instant::now() + UNAVAILABLE_RETRY);
         }
     }
-    status.1
+    status
+}
+
+/// Mark one profile's cached answer stale after a request's child refused.
+///
+/// The probe ran before any request could, so a request that finds the child
+/// unavailable is news: the host's confinement changed, or a launch the probe
+/// got is no longer working. Dropping the cached `Ready` and starting the same
+/// retry window an unavailable probe uses means the next call re-probes the
+/// host — and the requests in between are refused without spawning a child that
+/// would be refused the same way.
+fn mark_unavailable(profile: Profile) {
+    let Some(cache) = STATUS.get() else {
+        return;
+    };
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let entry = cache.entry(profile).or_default();
+    entry.status = None;
+    entry.retry_at = Some(Instant::now() + UNAVAILABLE_RETRY);
 }
 
 /// Detail for a probe that is waiting out [`UNAVAILABLE_RETRY`].
@@ -734,7 +783,13 @@ pub fn page_answer(profile: Profile) -> PageAnswer {
 
 fn measure_capability(profile: Profile) -> Result<Report, String> {
     let grants = probe_grants(profile);
-    let Some(invocation) = invocation(Requirement::new(true, Level::None), profile, grants) else {
+    let probe_file = DenyProbe::create();
+    let Some(invocation) = invocation(
+        Requirement::new(true, Level::None),
+        profile,
+        grants,
+        probe_file.as_ref().map(DenyProbe::path),
+    ) else {
         return Err("cannot resolve the sandbox worker".to_string());
     };
 
@@ -902,13 +957,62 @@ fn rung(profile: Profile) -> Start {
         .unwrap_or(Start::Confined)
 }
 
+/// A private file the files layer's measurement must refuse to read.
+///
+/// The parent creates it and names it on the child's command line; the child
+/// opens it after its confinement is installed. It lives in the server user's
+/// own temporary directory, which no profile grants — and, on Windows, which
+/// carries no ACE for the package the container is checked against — so the
+/// refusal is the sandbox and not a missing file. Unlike the write candidate a
+/// container cannot redirect it, so the *read* side of the files layer is what
+/// gets measured. Dropped, and the file deleted, when the probe is over.
+struct DenyProbe {
+    path: PathBuf,
+}
+
+impl DenyProbe {
+    /// Create one, or `None` when the temporary directory will not take it:
+    /// the platform's own candidates answer in that case.
+    fn create() -> Option<Self> {
+        let path =
+            std::env::temp_dir().join(format!("nanofile-sandbox-probe-{}", uuid::Uuid::new_v4()));
+        // `create_new` refuses a path that already exists, so a file another
+        // local user left there (or a symlink) makes this return `None` rather
+        // than letting the probe follow it.
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => Some(Self { path }),
+            Err(_) => None,
+        }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for DenyProbe {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// Run the child once per creation, strongest first, and read the first report.
 ///
 /// The answer is returned rather than recorded here: the caller holds the status
 /// cache's lock, and a helper that took it again would deadlock.
 fn probe(profile: Profile) -> (Start, Status) {
     let grants = probe_grants(profile);
-    let Some(invocation) = invocation(configured_requirement(), profile, grants) else {
+    let probe_file = DenyProbe::create();
+    let Some(invocation) = invocation(
+        configured_requirement(),
+        profile,
+        grants,
+        probe_file.as_ref().map(DenyProbe::path),
+    ) else {
         return (
             Start::Confined,
             Status::Unavailable("cannot resolve the sandbox worker".to_string()),
@@ -1062,6 +1166,7 @@ fn invocation(
     requirement: Requirement,
     profile: Profile,
     grants: crate::sandbox::Grants<'_>,
+    probe: Option<&Path>,
 ) -> Option<Invocation> {
     let exe = EXECUTABLE
         .get()
@@ -1096,6 +1201,13 @@ fn invocation(
     if let Some(source) = grants.source {
         args.push(OsString::from("--src"));
         args.push(source.as_os_str().to_os_string());
+    }
+    // The file the files layer must refuse, created by the parent: the one
+    // candidate that measures the same thing on every platform. Only the probe
+    // that runs once has one.
+    if let Some(probe) = probe {
+        args.push(OsString::from("--probe-path"));
+        args.push(probe.as_os_str().to_os_string());
     }
 
     match sandbox::runner(&exe, profile, grants) {
@@ -1173,9 +1285,8 @@ impl Child {
     /// The child leads its own process group on unix ([`spawn_child`]), so the
     /// group is what gets the signal: killing the leader alone leaves a forked
     /// copy holding the protocol pipes, and the read after this would then wait
-    /// on a pipe nobody will close. Windows needs nothing extra here — the
-    /// active-process limit keeps the child alone, and the Job Object takes the
-    /// rest when it is the parent's (see `sandbox::windows`).
+    /// on a pipe nobody will close. Windows reaches the whole tree through the
+    /// Job Object the child was created in, which the parent holds.
     fn kill_tree(&mut self) {
         #[cfg(unix)]
         {
@@ -1183,10 +1294,17 @@ impl Child {
             // reaches its whole tree through the Job Object instead.
             let Child::Standard(child) = self;
             // `killpg` on the group the child leads; the child's own pid is the
-            // group id because it was made a group leader at spawn.
+            // group id because it was made a group leader at spawn. A copy
+            // cannot leave that group: `setsid`/`setpgid` are refused by the
+            // filter the child installs (`sandbox::linux`).
             unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
+            self.kill();
         }
-        self.kill();
+        #[cfg(windows)]
+        {
+            let Child::Windows(child) = self;
+            child.kill_tree();
+        }
     }
 
     fn wait(&mut self) {
@@ -1421,6 +1539,16 @@ fn run_child(
             }
         }
     };
+
+    // The group is ended whichever way the child stopped, and before the pipes
+    // are drained. A child that exits 0 while a copy it made still holds the
+    // protocol pipes would otherwise leave that copy running: the readers below
+    // wait out `PIPE_DRAIN_TIMEOUT`, abandon their threads, and a detached
+    // process — with the descriptors it holds — outlives the request. The media
+    // profile is where this happens, because it is the one that may copy itself.
+    // An already-empty group answers `ESRCH`, and an already-exited child
+    // answers an error from `kill`, neither of which is a failure here.
+    child.kill_tree();
 
     // Bounded, because the child being gone is not the same as the pipes being
     // closed: see `PIPE_DRAIN_TIMEOUT`. A writer that never finishes is dropped

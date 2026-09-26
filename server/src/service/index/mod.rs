@@ -534,10 +534,24 @@ impl IndexService {
             }
             extract::Extracted::Unsupported(reason) => {
                 tracing::debug!("indexing {path}: not indexable: {reason}");
-                self.indexer
-                    .mark_file_async(repo_id, path, filename, DocMeta::skipped(fs_id.as_str()))
-                    .await?;
-                Ok(OneOutcome::Skipped)
+                // The sandbox being switched off is the admin's choice, but it
+                // is not a verdict on the file: a `Skipped` state is "current"
+                // for this extractor version, so a document skipped while the
+                // switch was off would never be re-extracted when it is turned
+                // back on. It is recorded as a retryable failure instead, and
+                // the retry costs nothing while the sandbox is off — `extract`
+                // returns before it spawns a child.
+                if reason == extract::reason::SANDBOX_OFF {
+                    self.indexer
+                        .mark_file_async(repo_id, path, filename, DocMeta::failed(fs_id.as_str()))
+                        .await?;
+                    Ok(OneOutcome::Failed)
+                } else {
+                    self.indexer
+                        .mark_file_async(repo_id, path, filename, DocMeta::skipped(fs_id.as_str()))
+                        .await?;
+                    Ok(OneOutcome::Skipped)
+                }
             }
         }
     }

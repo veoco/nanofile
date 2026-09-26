@@ -1,9 +1,9 @@
 use futures::StreamExt;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use tokio::io::AsyncWriteExt;
 
 use crate::fs::core::download::Downloader;
@@ -15,31 +15,20 @@ use crate::thumbnail_util::ThumbFormat;
 use base::common::{EMPTY_SHA1, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 
-/// Cap on how many thumbnails are generated concurrently across the server.
+/// Acquire a permit covering one thumbnail generation.
 ///
-/// A cache miss either decodes a large image in-process (up to 32 MiB of source)
-/// or spawns an `ffmpeg` child that may read a 512 MiB media file, so a burst of
-/// requests for distinct files would otherwise start unbounded subprocesses and
-/// saturate CPU, memory and file descriptors. Matches the zip archive cap: a
-/// hardcoded constant rather than a config knob, so it cannot be set to
-/// "unlimited" by accident.
-const MAX_CONCURRENT_THUMBNAILS: usize = 4;
-
-static THUMBNAIL_CONCURRENCY: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
-
-fn thumbnail_semaphore() -> &'static Arc<tokio::sync::Semaphore> {
-    THUMBNAIL_CONCURRENCY
-        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_THUMBNAILS)))
-}
-
-/// Acquire a permit covering one thumbnail generation. Callers queue rather
-/// than fail, preserving the previous behaviour for a normal burst.
+/// The gate itself lives beside the image worker ([`crate::sandbox::jobs::
+/// images::acquire_image_permit`]) so that every path which starts an image
+/// child — a file thumbnail, a media frame and an avatar — is paced by the same
+/// bound. A cache miss either decodes a large image or spawns an `ffmpeg` child
+/// that may read a 512 MiB media file, so a burst of requests for distinct files
+/// would otherwise start unbounded subprocesses and saturate CPU, memory and
+/// file descriptors. Callers queue rather than fail, preserving the behaviour of
+/// a normal burst.
 async fn acquire_thumbnail_permit() -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
-    thumbnail_semaphore()
-        .clone()
-        .acquire_owned()
+    crate::sandbox::jobs::images::acquire_image_permit()
         .await
-        .map_err(|e| AppError::Internal(format!("thumbnail concurrency gate failed: {e}")))
+        .map_err(AppError::Internal)
 }
 
 pub struct ThumbnailService {
@@ -571,41 +560,32 @@ fn max_ffmpeg_source(kind: MediaKind) -> i64 {
     }
 }
 
-/// An ffmpeg child process that never opens a console window.
+/// Whether the configured ffmpeg binary looks runnable.
 ///
-/// The Windows tray build is a GUI-subsystem binary (`windows_subsystem =
-/// "windows"` in main.rs), so it has no console of its own — and a child that
-/// is not flagged `CREATE_NO_WINDOW` gets a fresh one, which Windows shows as a
-/// black window that flashes open and closes.
+/// A filesystem check rather than running `ffmpeg -version` in the server
+/// process: that was an unconfined exec on the request path, and everything a
+/// helper reads belongs behind the sandbox. Whether the binary actually *works*
+/// is what the confined media probe answers (`parse=media-ok`), which is also
+/// what the request path gates on through `sandbox::available`.
 ///
-/// This process only ever runs `-version` on it, to decide whether media
-/// thumbnails are worth attempting at all; the frame extraction itself is the
-/// sandbox worker's, which sets the same flag for its helper.
-fn ffmpeg_command(ffmpeg: &str) -> Command {
-    #[allow(unused_mut)]
-    let mut cmd = Command::new(ffmpeg);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd
-}
-
-/// Whether the configured ffmpeg binary exists and runs. Cached for the
-/// process lifetime (the path comes from config and doesn't change at runtime).
+/// Not cached: saving `storage.ffmpeg_path` re-points the setting, and a
+/// process-lifetime answer would keep reporting the previous path.
 fn ffmpeg_available(ffmpeg: &str) -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        ffmpeg_command(ffmpeg)
-            .arg("-version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
+    let path = crate::sandbox::worker::resolve_helper(ffmpeg);
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(&path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
-    })
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 /// Strong ETag for a thumbnail: SHA-1 of the PNG bytes, so the validator
@@ -855,7 +835,8 @@ mod tests {
 
 #[cfg(test)]
 mod concurrency_tests {
-    use super::{MAX_CONCURRENT_THUMBNAILS, acquire_thumbnail_permit};
+    use super::acquire_thumbnail_permit;
+    use crate::sandbox::jobs::images::MAX_CONCURRENT_IMAGE_WORKERS;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -868,7 +849,7 @@ mod concurrency_tests {
         let peak = Arc::new(AtomicUsize::new(0));
 
         let mut tasks = Vec::new();
-        for _ in 0..(MAX_CONCURRENT_THUMBNAILS * 3) {
+        for _ in 0..(MAX_CONCURRENT_IMAGE_WORKERS * 3) {
             let in_flight = in_flight.clone();
             let peak = peak.clone();
             tasks.push(tokio::spawn(async move {
@@ -885,7 +866,7 @@ mod concurrency_tests {
 
         assert_eq!(
             peak.load(Ordering::SeqCst),
-            MAX_CONCURRENT_THUMBNAILS,
+            MAX_CONCURRENT_IMAGE_WORKERS,
             "the gate should admit exactly the configured number of generators"
         );
     }

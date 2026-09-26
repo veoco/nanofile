@@ -23,6 +23,11 @@ pub struct AvatarResponse {
 
 /// Parse the `{size}` segment and reject absurd sizes (which would otherwise
 /// drive a `size² × 4` allocation in the thumbnail generator → OOM).
+///
+/// The accepted value is then snapped to one of [`crate::thumbnail_util::
+/// AVATAR_SIZES`]: the image route is reachable without authentication, and a
+/// distinct cache entry per integer would let a caller walk the whole range and
+/// make the server generate (and store) a thumbnail for each.
 fn parse_resize_size(size_str: &str) -> Result<u32, AppError> {
     let size = resolve_size(size_str);
     if size > crate::thumbnail_util::MAX_THUMBNAIL_SIZE {
@@ -31,7 +36,7 @@ fn parse_resize_size(size_str: &str) -> Result<u32, AppError> {
             crate::thumbnail_util::MAX_THUMBNAIL_SIZE
         )));
     }
-    Ok(size)
+    Ok(crate::thumbnail_util::canonical_avatar_size(size))
 }
 
 // ─── JSON API endpoint (seafile API2) ───────────────────────────────────────

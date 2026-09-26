@@ -27,8 +27,11 @@ pub(crate) fn interpreter(helper: &Path) -> Option<PathBuf> {
     let read = file.read(&mut head).ok()?;
     let line = std::str::from_utf8(&head[..read]).ok()?;
     let rest = line.strip_prefix("#!")?;
+    // The set the kernel's `isspace` ends the interpreter's name on, so a CRLF
+    // or a form feed after the path does not become part of it — a grant written
+    // for `/bin/sh\r` would name nothing and look like a refusal.
     let program = rest
-        .split(['\n', ' ', '\t'])
+        .split(['\n', '\r', '\t', '\x0b', '\x0c', ' '])
         .find(|token| !token.is_empty())?;
     let path = Path::new(program);
     path.is_absolute().then(|| path.to_path_buf())

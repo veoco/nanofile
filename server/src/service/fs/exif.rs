@@ -33,16 +33,24 @@ impl ExifService {
         .await
         .map_err(|_| AppError::NotFound("file not found".into()))?;
 
+        // The worker being unavailable is an environment problem, and it has to
+        // be distinguishable from "this image has no EXIF": a refusal from a
+        // worker that is running — a corrupt image, a format it will not read —
+        // is still `null`, but a switch that is off or a host below the minimum
+        // is an error the caller can see rather than a silent empty answer.
+        if let Err(why) = crate::sandbox::available(crate::sandbox::Profile::Images) {
+            return Err(AppError::Internal(format!(
+                "EXIF processing is unavailable: {why}"
+            )));
+        }
+
         let exif_data =
             tokio::task::spawn_blocking(move || crate::sandbox::jobs::images::exif(&content))
                 .await
                 .map_err(|e| AppError::Internal(format!("EXIF worker panicked: {e}")))?;
 
-        // The parse runs in the sandbox worker, and a refusal there — the
-        // switch off, a host below the minimum, an image it will not open — is
-        // answered as "no EXIF": that is what a file without any returns, and
-        // the page does not have to explain an environment problem it cannot
-        // fix.
+        // A refusal from a running worker is answered as "no EXIF": that is what
+        // a file without any returns.
         match exif_data {
             Ok(json) => Ok(serde_json::from_str(&json).unwrap_or(serde_json::Value::Null)),
             Err(_) => Ok(serde_json::Value::Null),

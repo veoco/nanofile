@@ -61,11 +61,15 @@
 //! denies every path and every socket through Landlock and seccomp, the Windows
 //! container denies the user's own files and the network but reads the system
 //! tree it loads from, and macOS's profile is a deny-by-default text with
-//! `process-fork` allowed because the parsers' thread needs it. Those are the
-//! residuals [`Report::notes`] carries — `fork=`, `helper=`, `system=`,
-//! `writes=`, `metadata=`, `ll_gaps=` — and they are *notes on the item they
-//! weaken*, not a fourth grade: an operator reads "进程创建: 有（注：macOS 允许
-//! fork）" rather than having to understand a second, stronger scale.
+//! `process-fork` allowed because the parsers' thread needs it. The fork is not
+//! left as a note under a `full` grade: a profile whose `fork` is open cannot
+//! claim the process item — the item's definition is that processes cannot be
+//! multiplied — so documents and images grade `partial` on macOS and `full` on
+//! Linux, where the fork is refused. The remaining residuals [`Report::notes`]
+//! carries — `fork=`, `helper=`, `system=`, `writes=`, `metadata=`, `ll_gaps=`,
+//! `token_unrestricted` — are *notes on the item they weaken*, not a fourth
+//! grade: an operator reads "进程创建: 缺失（注：macOS 允许 fork）" rather than
+//! having to understand a second, stronger scale.
 //!
 //! # Claims are measured
 //!
@@ -461,6 +465,15 @@ impl Report {
         if has("helper=allowed") {
             notes.push("helper");
         }
+        // A child in the container without the restricted token: files and the
+        // network are still bounded by the container, but the privileges the
+        // token's flags would have removed are still in it. Reported rather than
+        // graded — an AppContainer token is already stripped to roughly
+        // `SeChangeNotifyPrivilege` — so an operator can see which creation the
+        // launch settled for.
+        if has("token=unrestricted") {
+            notes.push("token_unrestricted");
+        }
         // How much the media helper may read, which is wider than "the helper and
         // its loader": the libraries beside it in every case, and on macOS the
         // package-manager trees a packaged build links against.
@@ -769,7 +782,18 @@ impl Grants<'_> {
 /// carried into the report so a probe of one profile can never be read as the
 /// answer for another. `grants` is what that profile may reach, and is empty for
 /// every profile that may reach nothing.
-pub fn confine(external: External, profile: Profile, grants: Grants, measure: Measure) -> Report {
+///
+/// `probe` is a file the parent created and no profile grants, which the files
+/// layer's measurement reads: it is the one candidate that is decisive on every
+/// platform. `None` leaves the measurement to the platform's own heuristics,
+/// which is what a request's child and a hand-run self-test get.
+pub fn confine(
+    external: External,
+    profile: Profile,
+    grants: Grants,
+    measure: Measure,
+    probe: Option<&Path>,
+) -> Report {
     let (mut protections, mut detail) = platform_confine(profile, grants);
 
     if external.runner {
@@ -787,13 +811,19 @@ pub fn confine(external: External, profile: Profile, grants: Grants, measure: Me
     // the parent created, or a profile a runner applied.
     #[cfg(any(unix, windows))]
     {
-        if protections.files {
-            if files_are_denied() {
+        if protections.files && files_are_measured(measure) {
+            if files_are_denied(probe) {
                 detail.push("files=measured-denied".to_string());
             } else {
                 protections.files = false;
                 detail.push("files=measured-open".to_string());
             }
+        } else if protections.files {
+            // The protection is what the mechanism installed; the effect probe
+            // that would confirm it needs the parent's own file, and the probe
+            // that runs once is where that belongs — the same arrangement as
+            // the network item on this platform.
+            detail.push("files=installed".to_string());
         }
         if protections.network {
             if network_is_measured(measure) {
@@ -834,16 +864,29 @@ pub fn confine(external: External, profile: Profile, grants: Grants, measure: Me
         detail.push(format!("fork={}", denial_token(facts.fork_denied)));
         detail.push(format!("exec={}", denial_token(facts.exec_denied)));
         if external.runner {
-            match facts.exec_denied {
-                Some(true) => detail.push("process=measured-denied".to_string()),
-                Some(false) => {
-                    protections.process = false;
-                    detail.push("process=measured-open".to_string());
+            // A profile that may copy itself has not bounded process creation,
+            // whatever it denies about starting programs: the item's own
+            // definition is that processes cannot be multiplied, and `fork=open`
+            // says they can. That is the macOS parsers' shape — Seatbelt charges
+            // their thread to `process-fork` — so their grade is `partial`
+            // rather than `full`, and the `fork` note beside the missing item is
+            // the reason. A profile that *does* deny the fork is measured by the
+            // exec it can then try.
+            if facts.fork_denied == Some(false) {
+                protections.process = false;
+                detail.push("process=measured-open".to_string());
+            } else {
+                match facts.exec_denied {
+                    Some(true) => detail.push("process=measured-denied".to_string()),
+                    Some(false) => {
+                        protections.process = false;
+                        detail.push("process=measured-open".to_string());
+                    }
+                    // The fork itself was refused, so the exec probe never ran:
+                    // the runner's claim stands unmeasured rather than being
+                    // cleared by a measurement that did not happen.
+                    None => detail.push("process=unmeasured".to_string()),
                 }
-                // The fork itself was refused, so the exec probe never ran: the
-                // runner's claim stands unmeasured rather than being cleared by
-                // a measurement that did not happen.
-                None => detail.push("process=unmeasured".to_string()),
             }
         }
     }
@@ -947,12 +990,41 @@ fn network_is_measured(measure: Measure) -> bool {
     }
 }
 
+/// Whether this tier runs the files layer's effect probe.
+///
+/// On unix it always does: Landlock's refusal is a syscall away and costs
+/// nothing. On Windows the decisive probe needs the parent's own file, which
+/// only the probe that runs once has, so a per-request child claims the layer
+/// from the container token the kernel gave it — the same arrangement the
+/// network item already uses there.
+#[cfg(any(unix, windows))]
+fn files_are_measured(measure: Measure) -> bool {
+    #[cfg(windows)]
+    {
+        measure == Measure::Thorough
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = measure;
+        true
+    }
+}
+
 /// Whether reading or writing a path outside the document is refused, measured.
 ///
 /// Both directions: a ruleset that granted writes would still deny every read
 /// here, and a parser that can write the host is the thing the layer is for.
 /// The temporary directory is the one place a process may write without asking
 /// anyone, so a refusal there is the sandbox and nothing else.
+///
+/// The parent's `probe` file comes first and is decisive: it is a path no
+/// profile grants, so a refusal is the sandbox and an open is the sandbox
+/// failing, whichever direction the other candidates would have answered. It
+/// exists because the write candidate alone is not enough on every platform —
+/// a Windows container redirects a write and still confines the read — and
+/// because a layer whose *read* side is open must not be certified by a denied
+/// write. A probe file that is gone says nothing and leaves the candidates
+/// below it to answer.
 ///
 /// Any one of the read paths failing to open is the denial. The candidates are
 /// only paths no profile of ours grants, which is why `/` is not among them: the
@@ -963,7 +1035,18 @@ fn network_is_measured(measure: Measure) -> bool {
 /// is granted by that profile for the same reason. What is left is two files
 /// every unconfined process can read and no profile grants.
 #[cfg(unix)]
-fn files_are_denied() -> bool {
+fn files_are_denied(probe: Option<&Path>) -> bool {
+    if let Some(probe) = probe {
+        match std::fs::File::open(probe) {
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return true,
+            // The parent's file is gone: no measurement, fall through.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            // Opened, or failed in a way that says nothing about the sandbox:
+            // a read that is not refused is not a files layer.
+            _ => return false,
+        }
+    }
+
     let reads = ["/etc/hostname", "/etc/passwd"].iter().any(|path| {
         matches!(
             std::fs::File::open(path),
@@ -989,14 +1072,28 @@ fn files_are_denied() -> bool {
 ///
 /// A Windows AppContainer is not a deny-everything rule: what it leaves readable
 /// is the system tree it loads from, which is what `ALL APPLICATION PACKAGES`
-/// grants on `Windows` and `Program Files`. So the measurement asks for paths a
-/// user can use and a container cannot: listing the directory the child's own
-/// image sits in — a per-user install, which does not carry that grant — and
-/// creating a file in the user's temporary directory. Either one failing is the
-/// denial.
+/// grants on `Windows` and `Program Files`. The parent's `probe` file is the
+/// decisive candidate: it lives in the server user's own temporary directory,
+/// which carries no package ACE, so the container must be refused reading it —
+/// and unlike a *write*, a read cannot be redirected into the container's store
+/// and answer with a success that means nothing. The candidates below are the
+/// fallback for a run that has no such file (a hand-run `--selftest`): listing
+/// the directory the child's own image sits in — a per-user install, which does
+/// not carry that grant — and creating a file in the user's temporary
+/// directory.
 #[cfg(windows)]
-fn files_are_denied() -> bool {
+fn files_are_denied(probe: Option<&Path>) -> bool {
     let denied = |error: &std::io::Error| error.kind() == std::io::ErrorKind::PermissionDenied;
+
+    if let Some(probe) = probe {
+        match std::fs::File::open(probe) {
+            Err(error) if denied(&error) => return true,
+            // The parent's file is gone: no measurement, fall through.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            // Opened, or failed in a way that says nothing about the sandbox.
+            _ => return false,
+        }
+    }
 
     if let Some(directory) = std::env::current_exe()
         .ok()
@@ -1803,6 +1900,14 @@ mod tests {
         assert_eq!(report("metadata=open").notes(), ["metadata"]);
         assert_eq!(report("ll_gaps=open").notes(), ["ll_gaps"]);
         assert_eq!(report("helper=allowed").notes(), ["helper"]);
+        // A container child whose token is not restricted: the container bounds
+        // files and the network, but the flags that strip privileges did not
+        // apply, and the page says so rather than letting the grade imply it.
+        assert_eq!(
+            report("token=restricted,helper=allowed").notes(),
+            ["helper"]
+        );
+        assert_eq!(report("token=unrestricted").notes(), ["token_unrestricted"]);
         // How much of the filesystem the helper may read, which is wider than the
         // process note beside it says; the wider macOS shape wins when both are
         // somehow present.

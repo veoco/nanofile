@@ -194,7 +194,8 @@ use windows_sys::Win32::Security::{
     PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES, TOKEN_ASSIGN_PRIMARY,
     TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TOKEN_USER, TokenGroups,
     TokenIntegrityLevel, TokenIsAppContainer, TokenIsRestricted, TokenUser, WELL_KNOWN_SID_TYPE,
-    WRITE_RESTRICTED, WinAuthenticatedUserSid, WinBuiltinUsersSid, WinInteractiveSid, WinWorldSid,
+    WRITE_RESTRICTED, WinAuthenticatedUserSid, WinBuiltinAnyPackageSid, WinBuiltinUsersSid,
+    WinInteractiveSid, WinWorldSid,
 };
 use windows_sys::Win32::Security::{EqualSid, GetAce, GetAclInformation};
 use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ};
@@ -203,6 +204,7 @@ use windows_sys::Win32::System::JobObjects::{
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
     JOB_OBJECT_LIMIT_PROCESS_TIME, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+    TerminateJobObject,
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
@@ -486,8 +488,14 @@ fn write_scope() -> &'static str {
     let probe = std::env::temp_dir().join("nanofile-extraction-write-probe");
     match std::fs::File::create(&probe) {
         Ok(_) => {
+            // The path that was *typed* is not where the file landed: a
+            // container redirects the write into its own store, and only the
+            // resolved path says whether it did. `canonicalize` is what
+            // resolves the redirection; a host that will not answer falls back
+            // to the typed path, which then reads as the user's own.
+            let resolved = std::fs::canonicalize(&probe).unwrap_or_else(|_| probe.clone());
             let _ = std::fs::remove_file(&probe);
-            if is_container_store(&probe) {
+            if is_container_store(&resolved) {
                 "store"
             } else {
                 "user"
@@ -502,13 +510,21 @@ fn write_scope() -> &'static str {
 ///
 /// `%LOCALAPPDATA%\Packages` is the directory a packaged process's per-app state
 /// lives under, and the shape the OS creates for a container and nothing else.
-/// A path that does not resolve there was not redirected, so the write is
-/// reported as the user's own rather than assumed to be bounded by the store.
+/// The path arrives as the kernel resolved it — a `\\?\`-prefixed verbatim path
+/// — so that prefix is removed before the components are compared: a verbatim
+/// `C:` is not the same component as a plain one. A path that does not resolve
+/// there was not redirected, so the write is reported as the user's own rather
+/// than assumed to be bounded by the store.
 fn is_container_store(path: &Path) -> bool {
     let Some(local) = std::env::var_os("LOCALAPPDATA") else {
         return false;
     };
-    path.starts_with(Path::new(&local).join("Packages"))
+    let verbatim = path.to_string_lossy();
+    let stripped = verbatim
+        .strip_prefix(r"\\?\")
+        .map(Path::new)
+        .unwrap_or(path);
+    stripped.starts_with(Path::new(&local).join("Packages"))
 }
 
 /// Ask the kernel for the process mitigations a document parser can live with.
@@ -646,6 +662,21 @@ impl Child {
 
     pub(crate) fn kill(&mut self) {
         unsafe { TerminateProcess(self.process, 1) };
+    }
+
+    /// End the child and everything it started.
+    ///
+    /// `TerminateProcess` on the direct child leaves a process it started
+    /// running — the media profile starts the helper that way — so the job is
+    /// what is ended: it holds the whole tree, and the parent is the side that
+    /// holds the job handle. A job that could not be created falls back to the
+    /// direct child, which is all this end knows about.
+    pub(crate) fn kill_tree(&mut self) {
+        if self.job.is_null() {
+            self.kill();
+        } else {
+            unsafe { TerminateJobObject(self.job, 1) };
+        }
     }
 
     /// Wait for the child to finish, however long that takes.
@@ -1457,36 +1488,49 @@ fn grant_helper_access(grants: Grants<'_>) {
         return;
     };
     if let Some(helper) = grants.helper {
-        if let Err(error) = add_access(
-            helper.as_os_str(),
-            sid,
-            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-        ) {
+        // The grant is written on a file, never on a directory: an ACE on a
+        // directory re-imposes inheritance on everything beneath it, and a
+        // configured path that is not a regular file is a path this profile
+        // cannot confine. It fails closed — the media profile then reports the
+        // helper as ungranted through `parse=`.
+        if !helper.is_file() {
+            let error = std::io::Error::other("the helper is not a regular file");
             note_shortfall("helper-grant-refused", Some(&error));
-        }
-        // A helper that is dynamically linked loads libraries from beside its
-        // own image, and each one needs the same grant. A directory that cannot
-        // be listed is not a reason to skip the source below.
-        if let Some(directory) = helper.parent()
-            && let Ok(entries) = std::fs::read_dir(directory)
-        {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let is_library = path
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case(OsStr::new("dll")));
-                if is_library {
-                    let _ = add_access(
-                        path.as_os_str(),
-                        sid,
-                        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-                    );
+        } else {
+            if let Err(error) = add_access(
+                helper.as_os_str(),
+                sid,
+                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+            ) {
+                note_shortfall("helper-grant-refused", Some(&error));
+            }
+            // A helper that is dynamically linked loads libraries from beside its
+            // own image, and each one needs the same grant. A directory that cannot
+            // be listed is not a reason to skip the source below.
+            if let Some(directory) = helper.parent()
+                && let Ok(entries) = std::fs::read_dir(directory)
+            {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let is_library = path
+                        .extension()
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case(OsStr::new("dll")));
+                    if is_library {
+                        let _ = add_access(
+                            path.as_os_str(),
+                            sid,
+                            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                        );
+                    }
                 }
             }
         }
     }
     if let Some(source) = grants.source {
-        if let Err(error) = add_access(source.as_os_str(), sid, FILE_GENERIC_READ) {
+        if !source.is_file() {
+            let error = std::io::Error::other("the source is not a regular file");
+            note_shortfall("source-grant-refused", Some(&error));
+        } else if let Err(error) = add_access(source.as_os_str(), sid, FILE_GENERIC_READ) {
             note_shortfall("source-grant-refused", Some(&error));
         }
     }
@@ -1566,8 +1610,10 @@ fn add_access(path: &OsStr, sid: PSID, mask: u32) -> std::io::Result<()> {
     // A grant an earlier run made is read rather than written again: the merge
     // below is a write to a file another process may be running from, and the
     // question the caller asks is whether the container can read the image, not
-    // whether this call changed anything.
-    if dacl_already_grants(dacl, sid, mask) {
+    // whether this call changed anything. An ACE for `ALL APPLICATION PACKAGES`
+    // answers the same question — the container's token carries that SID — so a
+    // system DLL the OS already granted is not rewritten on every request.
+    if dacl_already_grants(dacl, sid, mask) || dacl_grants_any_package(dacl, mask) {
         unsafe { LocalFree(descriptor) };
         return Ok(());
     }
@@ -1663,6 +1709,27 @@ fn dacl_already_grants(dacl: *const ACL, sid: PSID, wanted: u32) -> bool {
         }
     }
     false
+}
+
+/// Whether `dacl` already gives every AppContainer the access `wanted` asks for.
+///
+/// The container's token is checked against the package SIDs, and
+/// `ALL APPLICATION PACKAGES` (`WinBuiltinAnyPackageSid`) is the one the system
+/// tree carries: a file the OS already granted the container does not need this
+/// process to write its own ACE, which is what a per-request rewrite of every
+/// system DLL's DACL would otherwise be.
+fn dacl_grants_any_package(dacl: *const ACL, wanted: u32) -> bool {
+    let mut sid = [0u8; MAX_SID_BYTES];
+    let mut length = size_of_val(&sid) as u32;
+    let created = unsafe {
+        CreateWellKnownSid(
+            WinBuiltinAnyPackageSid,
+            null_mut(),
+            sid.as_mut_ptr().cast::<c_void>(),
+            &mut length,
+        )
+    };
+    created != 0 && dacl_already_grants(dacl, sid.as_mut_ptr().cast::<c_void>(), wanted)
 }
 
 /// Whether this process's token is an AppContainer's.

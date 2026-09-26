@@ -295,7 +295,7 @@ pub fn budget(plan: Plan, size: u64) -> Result<usize, &'static str> {
 /// Extract the indexable text of a file the caller read according to `plan`.
 ///
 /// Infallible by construction: see the module docs on failure handling.
-pub fn extract(plan: Plan, data: Vec<u8>) -> Extracted {
+pub(crate) fn extract(plan: Plan, data: Vec<u8>) -> Extracted {
     match plan {
         Plan::Text => extract_text(&data),
         Plan::Sniff => {

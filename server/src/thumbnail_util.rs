@@ -55,6 +55,28 @@ pub const THUMBNAIL_SIZE_SMALL: u32 = 48;
 pub const THUMBNAIL_SIZE_LARGE: u32 = 640;
 pub const RETAINED_THUMBNAIL_SIZES: [u32; 2] = [THUMBNAIL_SIZE_SMALL, THUMBNAIL_SIZE_LARGE];
 
+/// The avatar sizes the server materialises and caches.
+///
+/// The request may name any size — the Seafile clients do — but only these are
+/// generated: [`canonical_avatar_size`] snaps a request to the nearest one, so a
+/// client cannot multiply cache entries (and worker children) by walking the
+/// whole `1..=1024` range. Every size the UI and the desktop client ask for is
+/// here: the topbar's 32, the admin list's 64, the activity and file dots' 72,
+/// the account response's 80, the settings page's 96, and the stored 256.
+pub const AVATAR_SIZES: [u32; 8] = [32, 48, 64, 72, 80, 96, 128, 256];
+
+/// The canonical avatar size for a request.
+///
+/// The smallest configured size that is at least `requested`, and the largest
+/// when the request is above them all. A request for `0` becomes the smallest.
+pub fn canonical_avatar_size(requested: u32) -> u32 {
+    AVATAR_SIZES
+        .iter()
+        .copied()
+        .find(|size| *size >= requested)
+        .unwrap_or(AVATAR_SIZES[AVATAR_SIZES.len() - 1])
+}
+
 /// JPEG quality used for file thumbnails.
 ///
 /// Measured on 1280px photographs fitted to 640px: q80/82/85/90 produce
@@ -119,7 +141,7 @@ impl ThumbFormat {
 /// Decode image bytes, apply EXIF orientation, then produce a **square**
 /// thumbnail (center-crop + resize-exact).  Used for **avatar** thumbnails,
 /// matching seahub's `AvatarBase.create_thumbnail()` behaviour.
-pub fn generate_square_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, AppError> {
+pub(crate) fn generate_square_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, AppError> {
     let size = size.min(MAX_THUMBNAIL_SIZE);
     let img = load_image_with_orientation(content)?;
     let (w, h) = (img.width(), img.height());
@@ -141,7 +163,12 @@ pub fn generate_square_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, A
 ///
 /// Uses `Triangle` filter (faster than Lanczos3) — quality difference at
 /// thumbnail sizes is imperceptible.
-pub fn generate_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, AppError> {
+///
+/// Test-only: the server never encodes a PNG thumbnail of a whole image, and a
+/// decoder reachable from production code is the boundary this module exists to
+/// keep narrow.
+#[cfg(test)]
+pub(crate) fn generate_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, AppError> {
     let size = size.min(MAX_THUMBNAIL_SIZE);
     let img = load_image_with_orientation(content)?;
     let thumb = img.resize(size, size, FilterType::Triangle);
@@ -150,7 +177,7 @@ pub fn generate_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, AppError
 
 /// Decode image bytes, apply EXIF orientation, fit inside `size × size`, and
 /// encode in the container the pixels call for (see [`encode_thumbnail`]).
-pub fn generate_thumbnail_encoded(
+pub(crate) fn generate_thumbnail_encoded(
     content: &[u8],
     size: u32,
 ) -> Result<(Vec<u8>, ThumbFormat), AppError> {

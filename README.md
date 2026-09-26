@@ -135,8 +135,9 @@ The admin's **Sandbox** page shows the grade this host actually gives:
 
 Each item is listed with how much it matters and what its absence opens, beside
 the platform's own residuals: macOS has to allow `fork` for the parser's thread,
-the Windows container reads the system tree it loads from, and the media worker
-is granted the libraries it needs as well as the helper itself.
+so documents and images grade **Partial** there (the same profiles grade Full on
+Linux); the Windows container reads the system tree it loads from; and the media
+worker is granted the libraries it needs as well as the helper itself.
 
 The media worker is graded on its own line, and it is **Partial** on every
 platform by design: it exists to start a program, and every way of starting one
@@ -147,21 +148,27 @@ and the interpreter the kernel runs before it may be executed, never a directory
 `full` therefore disables media thumbnails, and the page says so.
 
 Its file item carries its own notes, because a helper is a program with
-libraries: it may read the libraries beside it, the system library directories,
-and — on macOS — the package-manager trees (`/opt/homebrew`, `/usr/local`,
-`/opt/local`) a packaged build links against. On Linux and macOS nothing bounds
-how many processes the helper may create; the parent's timeout and the process
-group it kills are what stop it, and the page says that too rather than leaving
-it to be inferred.
+libraries: it may read the libraries beside it (one file at a time), the system
+library directories, and — on macOS, and only when the helper actually lives
+there — the package-manager tree it is installed under (`/opt/homebrew`,
+`/usr/local` or `/opt/local`). On Linux and macOS nothing bounds how many
+processes the helper may create; the parent's timeout and the process group it
+kills are what stop it — and on Linux a copy cannot call `setsid`/`setpgid` to
+leave that group — and the page says that too rather than leaving it to be
+inferred.
 
 Two settings govern it. `sandbox.enabled` is the master switch: with it off,
 none of those features run, and nothing falls back to parsing inside the server
-process. `sandbox.min_level` is the grade the host must reach — `full`,
+process. A document skipped while the switch is off is recorded as a retryable
+failure rather than a verdict on its bytes, so turning the switch back on
+re-indexes it. `sandbox.min_level` is the grade the host must reach — `full`,
 `partial` (the default) or `none`; below it the features are disabled and the
 page says why, naming the item and what its absence means. A host that reaches
 Partial but not Full still runs them, with a warning; a host that does not reach
 Partial runs them only if an admin sets `min_level = "none"`, which the page
-marks as unsafe and explains.
+marks as unsafe and explains. On macOS, `min_level = "full"` disables document
+and image parsing, because no process bound is available for the parsers'
+thread there.
 
 `storage.ffmpeg_path` names the helper the media profile may execute. Saving it
 re-resolves the grant through the same hook as the two settings above, so the

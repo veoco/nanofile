@@ -244,6 +244,11 @@ jobs:
           grep -q ',parent' sandbox.txt
           grep -q 'container=appcontainer' sandbox.txt
           grep -q 'files=denied' sandbox.txt
+          # The measurement is the parent's own file, which carries no ACE for
+          # the package the container is checked against: a read the container
+          # is refused is the near edge of the files layer, and it is what the
+          # item is claimed on rather than a write it may have redirected.
+          grep -q 'files=measured-denied' sandbox.txt
           grep -q 'network=denied' sandbox.txt
           # The integrity level the token ended up with, which the container
           # sets. Asserted as a fact rather than as a value: a label this side
@@ -422,10 +427,12 @@ jobs:
           grep -q 'files=denied' sandbox.txt
           grep -q 'network=denied' sandbox.txt
           grep -q 'threads=ok' sandbox.txt
-          grep -q 'level=full' sandbox.txt
-          # Starting a program is refused, and the fork the profile has to allow
-          # (the parsers' thread is charged to it) is reported as the note it is
-          # rather than counted as a process bound.
+          # The fork the parser thread needs is open, so the process item is
+          # missing and the grade is `partial`, not `full`: the item means
+          # "processes cannot be multiplied" and here they can. A host that
+          # silently started claiming the item would fail here.
+          grep -q 'level=partial' sandbox.txt
+          grep -q 'process=open' sandbox.txt
           grep -q 'exec=denied' sandbox.txt
           grep -q 'fork=open' sandbox.txt
           grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
@@ -471,11 +478,12 @@ jobs:
           # The profile cannot have the process item, and says so.
           grep -q 'level=partial' /tmp/media.txt
           # The files item is in place — media is `partial` rather than `none`
-          # only because this one is — and the row says how wide it is: the helper
-          # and, on this platform, the package-manager trees a packaged build
-          # links against.
+          # only because this one is — and the row says how wide it is: `trees`
+          # when the helper lives in a package-manager tree (the libraries it
+          # links against are then readable), `libs` when it does not (the
+          # helper, its interpreter and the files beside it, each a literal).
           grep -q 'files=denied' /tmp/media.txt
-          grep -q 'helper_scope=trees' /tmp/media.txt
+          grep -qE 'helper_scope=(trees|libs)' /tmp/media.txt
           grep -q 'process=open' /tmp/media.txt
           grep -q 'helper=allowed' /tmp/media.txt
           # Starting a program other than the helper stays refused. Seatbelt

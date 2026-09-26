@@ -165,6 +165,17 @@ const SYS_NEWFSTATAT: libc::c_long = 79;
 #[cfg(not(target_arch = "loongarch64"))]
 const SYS_NEWFSTATAT: libc::c_long = libc::SYS_newfstatat;
 
+/// `fchmodat2`'s number, which `libc` 0.2.189 carries only for some targets.
+///
+/// Linux 6.6 added the call as 452 in the `asm-generic` table, and `x86_64`
+/// agrees; `aarch64`, `riscv64` and `loongarch64` read that table too but their
+/// `libc` modules do not define the constant. The number is therefore stated
+/// here, the way [`SYS_NEWFSTATAT`] is for `loongarch64`. It closes the one
+/// metadata write Landlock cannot govern that `fchmod` and `fchmodat` do not
+/// cover: an exploited parser could otherwise change the mode of any path the
+/// server user owns without ever opening it.
+const SYS_FCHMODAT2: libc::c_long = 452;
+
 /// Apply every layer this platform offers.
 pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec<String>) {
     let mut layers = Protections::default();
@@ -578,6 +589,15 @@ struct HelperRules {
 /// a 32-bit library directory on a 64-bit host, an interpreter for another
 /// architecture — rather than failing the ruleset over a rule that grants
 /// nothing.
+///
+/// One residual the `execute` count does not state: the ELF interpreter is
+/// granted execute and the library trees are granted read, and Landlock checks
+/// `FS_EXECUTE` where a program is *opened*, not where a mapping is made
+/// executable. A helper that invoked `ld.so` with another program as its
+/// argument could therefore run any ELF the library trees make readable. That
+/// stays inside this profile — Landlock, seccomp and the limits all still
+/// apply — so it is a widening of what the helper may run, not a way out of the
+/// sandbox, and it is named here rather than left for the report to imply.
 fn add_helper_rules(ruleset: i64, grants: Grants<'_>) -> HelperRules {
     let mut added = 0;
     let mut helper = false;
@@ -1000,12 +1020,24 @@ fn denied_syscalls(profile: Profile) -> Vec<libc::c_long> {
         libc::SYS_memfd_create,
         // Reading another process, and the signal that would end it: the sandbox
         // has no business addressing anything outside itself. `pidfd_open` is
-        // how a signal is sent without a pid race.
+        // how a signal is sent without a pid race, and the `rt_sig*queueinfo`
+        // pair is the third way a signal is sent — the queueing form the
+        // `kill`/`tgkill` entries above do not name.
         libc::SYS_kill,
         libc::SYS_tkill,
         libc::SYS_tgkill,
+        libc::SYS_rt_sigqueueinfo,
+        libc::SYS_rt_tgsigqueueinfo,
         libc::SYS_pidfd_open,
         libc::SYS_pidfd_send_signal,
+        // Leaving the process group the parent started this child in. The media
+        // profile is the one that may copy itself, so a copy could otherwise
+        // call `setsid`/`setpgid` and become unreachable by the `killpg` the
+        // parent uses to end the helper's descendants — an exploited ffmpeg
+        // would leave processes behind that outlive the request. A parser has no
+        // use for either call.
+        libc::SYS_setsid,
+        libc::SYS_setpgid,
         // Reading the shape of the filesystem without reading a file: names,
         // sizes and existence. Landlock governs opens, so these reach past it —
         // an exploited parser could otherwise map the machine it is confined to.
@@ -1020,13 +1052,22 @@ fn denied_syscalls(profile: Profile) -> Vec<libc::c_long> {
         libc::SYS_chdir,
         libc::SYS_fchdir,
         libc::SYS_name_to_handle_at,
+        // Watching the filesystem change, which is the metadata side of the same
+        // reach: the parsers have nothing to watch and the server's own trees
+        // are not theirs to observe.
+        libc::SYS_inotify_init1,
+        libc::SYS_inotify_add_watch,
+        libc::SYS_fanotify_init,
         // The calls Landlock documents as ungovernable: metadata changes and
         // truncation. None has a use here — the document arrives on stdin and
         // nothing is written — so the syscall is where they are refused.
+        // `fchmodat2` is the same operation as `fchmodat` under a newer number
+        // (Linux 6.6) and would otherwise be the one metadata write left open.
         libc::SYS_ftruncate,
         libc::SYS_truncate,
         libc::SYS_fchmod,
         libc::SYS_fchmodat,
+        SYS_FCHMODAT2,
         libc::SYS_fchown,
         libc::SYS_fchownat,
         libc::SYS_fsetxattr,
@@ -1036,6 +1077,9 @@ fn denied_syscalls(profile: Profile) -> Vec<libc::c_long> {
         libc::SYS_lremovexattr,
         libc::SYS_removexattr,
         libc::SYS_utimensat,
+        // A mount's attributes are the same class of ungovernable metadata, and
+        // the call is not one a parser or a helper has any business making.
+        libc::SYS_mount_setattr,
     ];
 
     // The bare path-taking forms of the same calls: the architectures that kept
@@ -1385,9 +1429,11 @@ mod tests {
         for (name, nr) in [
             ("ftruncate", libc::SYS_ftruncate),
             ("fchmodat", libc::SYS_fchmodat),
+            ("fchmodat2", SYS_FCHMODAT2),
             ("fchownat", libc::SYS_fchownat),
             ("fsetxattr", libc::SYS_fsetxattr),
             ("utimensat", libc::SYS_utimensat),
+            ("mount_setattr", libc::SYS_mount_setattr),
             ("newfstatat", SYS_NEWFSTATAT),
             ("readlinkat", libc::SYS_readlinkat),
             ("getdents64", libc::SYS_getdents64),
@@ -1401,6 +1447,35 @@ mod tests {
         }
     }
 
+    /// The call that made the files layer bypassable: Landlock cannot govern a
+    /// mode change, and `fchmodat2` is the one spelling of it the older entries
+    /// did not name. It must be refused for every profile, the media one too —
+    /// an exploited helper runs as the server's user and could otherwise plant a
+    /// setuid binary or take the server's own data away.
+    #[test]
+    fn a_mode_cannot_be_changed_by_any_spelling() {
+        for profile in Profile::ALL {
+            let denied = denied_syscalls(profile);
+            for (name, nr) in [
+                ("fchmod", libc::SYS_fchmod),
+                ("fchmodat", libc::SYS_fchmodat),
+                ("fchmodat2", SYS_FCHMODAT2),
+            ] {
+                assert!(
+                    denied.contains(&nr),
+                    "{name} must be refused for {}",
+                    profile.as_str()
+                );
+                assert_eq!(
+                    run_filter_for(profile, nr, 0),
+                    SECCOMP_RET_ERRNO | EPERM,
+                    "{name} must be refused for {}",
+                    profile.as_str()
+                );
+            }
+        }
+    }
+
     /// Signals are decided by their target, which a classic BPF filter cannot
     /// read — so the calls are refused outright, and ABI 6's `LANDLOCK_SCOPE_*`
     /// is what makes the same refusal precise rather than total.
@@ -1410,6 +1485,8 @@ mod tests {
             ("kill", libc::SYS_kill),
             ("tkill", libc::SYS_tkill),
             ("tgkill", libc::SYS_tgkill),
+            ("rt_sigqueueinfo", libc::SYS_rt_sigqueueinfo),
+            ("rt_tgsigqueueinfo", libc::SYS_rt_tgsigqueueinfo),
             ("pidfd_open", libc::SYS_pidfd_open),
             ("pidfd_send_signal", libc::SYS_pidfd_send_signal),
         ] {
@@ -1418,6 +1495,29 @@ mod tests {
                 SECCOMP_RET_ERRNO | EPERM,
                 "{name} reaches a process outside the sandbox"
             );
+        }
+    }
+
+    /// A process that may copy itself must not be able to leave the group the
+    /// parent started it in: the media helper's descendants are bounded by the
+    /// parent's timeout and the `killpg` it sends, and `setsid`/`setpgid` are
+    /// how a copy would step outside that group. Both profiles refuse them.
+    #[test]
+    fn the_process_group_cannot_be_left() {
+        for profile in Profile::ALL {
+            for (name, nr) in [("setsid", libc::SYS_setsid), ("setpgid", libc::SYS_setpgid)] {
+                assert!(
+                    denied_syscalls(profile).contains(&nr),
+                    "{name} must be refused for {}",
+                    profile.as_str()
+                );
+                assert_eq!(
+                    run_filter_for(profile, nr, 0),
+                    SECCOMP_RET_ERRNO | EPERM,
+                    "{name} must be refused for {}",
+                    profile.as_str()
+                );
+            }
         }
     }
 

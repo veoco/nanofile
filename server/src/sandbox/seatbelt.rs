@@ -18,17 +18,21 @@
 //! could still make copies of this process. Each copy inherits the profile and
 //! the resource limits — the address-space limit with them — so the copies are
 //! confined, but nothing bounds how many there are. The child says so (`fork=`
-//! in its report), which is the note the settings page puts beside the process
-//! item rather than a second, stronger grade.
+//! in its report), and the grade follows it: a profile whose `fork` is open does
+//! not claim the process item, so documents and images grade `partial` here
+//! while the same profiles grade `full` on Linux, where the fork is refused. The
+//! settings page puts the `fork` note beside the missing item, which is the
+//! reason rather than a second, stronger grade.
 //!
 //! # The media profile's helper
 //!
 //! The one profile that starts a program has a grant for it — `process-exec` as a
 //! `(literal …)` for the helper and for the interpreter a script helper names, and
-//! `file-read*`/`file-map-executable` for the helper, its directory and the trees
-//! a packaged one loads from — plus `file-write-data` on `/dev/null`, because the
-//! helper's standard streams are set to it and an open for write is not the read
-//! grant the base profile carries.
+//! `file-read*`/`file-map-executable` for the helper, the libraries beside it
+//! (one file at a time) and, only when the helper actually lives in one, the
+//! trees a packaged build loads from — plus `file-write-data` on `/dev/null`,
+//! because the helper's standard streams are set to it and an open for write is
+//! not the read grant the base profile carries.
 //!
 //! Two things had to be right for the helper to start, and each looked like the
 //! other from the outside: the spawn was refused with the same
@@ -80,8 +84,12 @@ pub(super) fn args(exe: &Path, profile: Profile, grants: Grants<'_>) -> Vec<Stri
 ///   only duplicates this process: the copy inherits the profile, so it can
 ///   still `exec` nothing but this binary.
 /// * `signal (target self)` — the runtime's own bookkeeping.
-/// * `sysctl-read` — the allocator and the runtime read a few sysctl values
-///   while starting up.
+/// * `sysctl-read` of a pinned list of names — the allocator and the runtime
+///   read a few values while starting up. The list is not optional: an
+///   unfiltered `sysctl-read` also answers `kern.procargs2`, which returns
+///   another same-uid process's argv and environment, so a parser with code
+///   execution could read the server's secrets from the kernel after the parent
+///   went to the trouble of clearing its environment.
 /// * `file-read*` of the root directory itself, which is what a process does
 ///   about a directory it is sitting in: the child's working directory is `/`
 ///   (`super::super::worker` sets it so nothing is relative), and the runtime
@@ -128,7 +136,7 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
         // relative) resolves against the child's directory, which is not where
         // it was configured, and the profile matches the path the kernel
         // resolved. Refusing the grant is the same outcome as today's useless
-        // literal, without the rule that followed it — see `granted_directory`.
+        // literal, without the rule that followed it.
         if let Some(path) = grants.helper.filter(|path| is_grantable(path)) {
             let helper_path = resolved(path);
             let helper = escape(&helper_path.to_string_lossy());
@@ -137,16 +145,27 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
                  (allow file-read* (literal \"{helper}\")) \
                  (allow file-map-executable (literal \"{helper}\"))"
             ));
-            if let Some(directory) = granted_directory(&helper_path) {
-                let directory = escape(&directory.to_string_lossy());
+            // The libraries beside the helper, one file at a time. A `(subpath
+            // …)` on the directory would be a read and map grant on every file
+            // in it — the shape the other two platforms also refuse, and the
+            // reason a helper dropped into a directory of the admin's own does
+            // not expose the rest of it.
+            for library in helper_libraries(&helper_path) {
+                let library = escape(&library.to_string_lossy());
                 extra.push_str(&format!(
-                    " (allow file-read* file-map-executable (subpath \"{directory}\"))"
+                    " (allow file-read* file-map-executable (literal \"{library}\"))"
                 ));
             }
+            // A package manager's tree is readable only when the helper actually
+            // lives in it: granting `/opt/homebrew` to a `/usr/bin/ffmpeg` helper
+            // would open `/opt/homebrew/var` and every other file under it for
+            // no reason.
             for tree in HELPER_LIBRARY_TREES {
-                extra.push_str(&format!(
-                    " (allow file-read* file-map-executable (subpath \"{tree}\"))"
-                ));
+                if helper_path.starts_with(Path::new(tree)) {
+                    extra.push_str(&format!(
+                        " (allow file-read* file-map-executable (subpath \"{tree}\"))"
+                    ));
+                }
             }
             // The helper's streams are set to `/dev/null`, and that is an open
             // for *write*: the read grant the base profile carries is not enough,
@@ -180,13 +199,118 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
     // that path does not exist and the rule grants nothing.
     format!(
         "(version 1) (deny default) (allow process-exec (literal \"{exe}\")){extra} \
-         (allow process-fork) (allow signal (target self)) (allow sysctl-read) \
+         (allow process-fork) (allow signal (target self)) {sysctl} \
          (allow file-read* file-test-existence (literal \"/\") (subpath \"/usr/lib\") \
          (subpath \"/System/Library\") (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") \
          (literal \"/dev/null\") (literal \"/dev/urandom\") (literal \"{exe}\")) \
          (allow file-map-executable (subpath \"/usr/lib\") (subpath \"/System/Library\") \
-         (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") (literal \"{exe}\"))"
+         (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") (literal \"{exe}\"))",
+        sysctl = sysctl_read_rule()
     )
+}
+
+/// The `sysctl-read` rule, with the names the runtime actually reads.
+///
+/// A bare `(allow sysctl-read)` is not a startup detail: `kern.procargs2`
+/// returns another same-uid process's argv *and environment*, so a parser with
+/// code execution could recover the server's environment from the kernel — the
+/// very thing the parent's cleared environment exists to keep from it — and
+/// `kern.proc.all`/`hw.*` describe the machine. The list is the one Codex pins
+/// for the same reason, without the operations its own profiles add (iokit,
+/// mach-lookup, ptys, ipc): only the `sysctl-read` names are adopted.
+fn sysctl_read_rule() -> String {
+    const NAMES: &[&str] = &[
+        "hw.activecpu",
+        "hw.busfrequency_compat",
+        "hw.byteorder",
+        "hw.cacheconfig",
+        "hw.cachelinesize_compat",
+        "hw.cpufamily",
+        "hw.cpufrequency_compat",
+        "hw.cputype",
+        "hw.l1dcachesize_compat",
+        "hw.l1icachesize_compat",
+        "hw.l2cachesize_compat",
+        "hw.l3cachesize_compat",
+        "hw.logicalcpu_max",
+        "hw.machine",
+        "hw.model",
+        "hw.memsize",
+        "hw.ncpu",
+        "hw.nperflevels",
+        "hw.packages",
+        "hw.pagesize_compat",
+        "hw.pagesize",
+        "hw.physicalcpu",
+        "hw.physicalcpu_max",
+        "hw.logicalcpu",
+        "hw.cpufrequency",
+        "hw.tbfrequency_compat",
+        "hw.vectorunit",
+        "machdep.cpu.brand_string",
+        "kern.argmax",
+        "kern.hostname",
+        "kern.maxfilesperproc",
+        "kern.maxproc",
+        "kern.osproductversion",
+        "kern.osrelease",
+        "kern.ostype",
+        "kern.osvariant_status",
+        "kern.osversion",
+        "kern.secure_kernel",
+        "kern.sysv.semmns",
+        "kern.usrstack64",
+        "kern.version",
+        "sysctl.proc_cputype",
+        "vm.loadavg",
+    ];
+    const PREFIXES: &[&str] = &[
+        "hw.optional.arm.",
+        "hw.optional.armv8_",
+        "hw.perflevel",
+        "kern.proc.pgrp.",
+        "kern.proc.pid.",
+        "net.routetable.",
+    ];
+
+    let mut rule = String::from("(allow sysctl-read");
+    for name in NAMES {
+        rule.push_str(&format!(" (sysctl-name \"{name}\")"));
+    }
+    for prefix in PREFIXES {
+        rule.push_str(&format!(" (sysctl-name-prefix \"{prefix}\")"));
+    }
+    rule.push(')');
+    rule
+}
+
+/// The shared libraries sitting beside the helper, which a packaged build links
+/// against by a `@loader_path`-relative path.
+///
+/// `*.dylib` is the platform's own name and `*.so*` what some ports ship; each
+/// is granted one file at a time. A directory that cannot be listed yields
+/// nothing: the caller grants what it can find and the helper says what it still
+/// needs through `parse=`, rather than the profile widening to a directory.
+fn helper_libraries(helper: &Path) -> Vec<PathBuf> {
+    let Some(directory) = helper.parent() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Vec::new();
+    };
+    let mut libraries: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains(".dylib") || name.contains(".so"))
+        })
+        .collect();
+    libraries.sort();
+    libraries
 }
 
 /// The path as the kernel resolves it, for a `(literal …)` form.
@@ -244,29 +368,15 @@ fn is_grantable(path: &Path) -> bool {
             .any(|character| character.is_control())
 }
 
-/// The directory a media grant may name, when naming one is what was meant.
-///
-/// The grant is a `(subpath …)`, which is a prefix match, so the paths that
-/// prefix everything are the ones that must never be written: `""` — which is
-/// what `Path::parent` gives for a bare command name, the shipped
-/// `storage.ffmpeg_path` default when its `PATH` lookup failed — and `/`, which
-/// is what it gives for a helper at the root. Either would hand the media child
-/// the whole filesystem to read and map; measured as `(subpath "")` for a
-/// helper configured as `ffmpeg` on a host whose `PATH` did not resolve it.
-fn granted_directory(helper: &Path) -> Option<&Path> {
-    let directory = helper.parent()?;
-    if directory.as_os_str().is_empty() || directory == Path::new("/") {
-        return None;
-    }
-    Some(directory)
-}
-
 /// The trees a helper installed by a package manager keeps its libraries in.
 ///
-/// Homebrew on both architectures and MacPorts. Granted `file-read*` and
-/// `file-map-executable` and never `process-exec`: dyld has to map a library to
-/// start the helper at all, and starting a *program* out of one of these trees
-/// is still refused, which is what keeps the process grant a literal.
+/// Homebrew on both architectures and MacPorts. A tree is granted
+/// `file-read*` and `file-map-executable` — and never `process-exec`: dyld has
+/// to map a library to start the helper at all, and starting a *program* out of
+/// one of these trees is still refused, which is what keeps the process grant a
+/// literal — **only when the helper actually lives inside it**. A `/usr/bin`
+/// helper has no business reading `/opt/homebrew/var` or `/usr/local/etc`, which
+/// is what an unconditional grant exposed.
 const HELPER_LIBRARY_TREES: &[&str] = &["/opt/homebrew", "/usr/local", "/opt/local"];
 
 /// Clamp the child's own resources. The rest of the confinement comes from the
@@ -288,13 +398,23 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
     }
     detail.push(format!("limits={}", limits.detail));
     if profile.runs_helper() {
-        // The widest this platform's media grants get, and wider than "the
-        // helper and its loader": a packaged build links against its own tree, so
-        // the package-manager trees are readable and mappable by the helper. Said
-        // out loud because the profile text is the only other place it appears,
-        // and an admin does not read the profile text.
-        if grants.helper.is_some_and(|path| is_grantable(path)) {
-            detail.push("helper_scope=trees".to_string());
+        // How wide this platform's media grants are, in one token: `trees` when
+        // the helper actually lives in a package-manager tree (so the tree is
+        // readable and mappable for the libraries a packaged build links), and
+        // `libs` when it does not (helper, interpreter and the files beside it,
+        // each a literal). Said out loud because the profile text is the only
+        // other place it appears, and an admin does not read the profile text.
+        if let Some(path) = grants.helper.filter(|path| is_grantable(path)) {
+            let resolved = resolved(path);
+            let scope = if HELPER_LIBRARY_TREES
+                .iter()
+                .any(|tree| resolved.starts_with(Path::new(tree)))
+            {
+                "trees"
+            } else {
+                "libs"
+            };
+            detail.push(format!("helper_scope={scope}"));
         }
         // `(allow process-fork)` is in every profile — the parsers' thread needs
         // it — and the media profile additionally starts the helper by copying
@@ -366,6 +486,70 @@ mod tests {
         ));
     }
 
+    /// The sysctl grant names what it allows.
+    ///
+    /// A bare `(allow sysctl-read)` also answers `kern.procargs2`, which is
+    /// another same-uid process's argv **and environment**: the parent clears
+    /// the child's environment because it holds the master secret and the
+    /// storage keys, and an unfiltered sysctl would hand the same values back
+    /// through the kernel. The rule must therefore carry a filter, and the one
+    /// name that matters must not be in it.
+    #[test]
+    fn the_sysctl_grant_is_filtered_and_excludes_the_process_environment() {
+        let profile = profile_text(
+            Path::new("/opt/nanofile/nanofile"),
+            Profile::Documents,
+            Grants::default(),
+        );
+        assert!(profile.contains("(allow sysctl-read (sysctl-name "));
+        assert!(
+            !profile.contains("(allow sysctl-read)"),
+            "the grant must not be unfiltered: {profile}"
+        );
+        assert!(
+            !profile.contains("kern.procargs2"),
+            "another process's environment must not be readable: {profile}"
+        );
+        // The names the runtime actually needs are still there.
+        for name in ["hw.ncpu", "hw.memsize", "kern.argmax"] {
+            assert!(
+                profile.contains(&format!("(sysctl-name \"{name}\")")),
+                "{name} must stay readable: {profile}"
+            );
+        }
+    }
+
+    /// A packaged helper's libraries are granted one file at a time, beside it —
+    /// not the directory they sit in.
+    #[test]
+    fn the_libraries_beside_a_helper_are_granted_one_by_one() {
+        let directory = std::env::temp_dir().join(format!(
+            "nanofile-seatbelt-libs-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).expect("create");
+        let helper = directory.join("ffmpeg");
+        std::fs::write(&helper, b"#!/bin/sh\n").expect("write helper");
+        std::fs::write(directory.join("libavcodec.61.dylib"), b"x").expect("write library");
+        std::fs::write(directory.join("libavutil.so"), b"x").expect("write library");
+        std::fs::write(directory.join("secret.txt"), b"secret").expect("write secret");
+
+        let found = helper_libraries(&helper);
+        let names: Vec<String> = found
+            .iter()
+            .filter_map(|path| path.file_name()?.to_str().map(str::to_string))
+            .collect();
+        assert!(
+            names.contains(&"libavcodec.61.dylib".to_string()),
+            "{names:?}"
+        );
+        assert!(names.contains(&"libavutil.so".to_string()), "{names:?}");
+        assert!(!names.contains(&"secret.txt".to_string()), "{names:?}");
+        assert!(!names.contains(&"ffmpeg".to_string()), "{names:?}");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
     /// A degenerate helper path must not become a grant that covers everything.
     ///
     /// `(subpath …)` is a prefix match, so `""` — what `Path::parent` gives for
@@ -387,7 +571,23 @@ mod tests {
             )
         };
 
-        assert!(text("/opt/homebrew/bin/ffmpeg").contains("(subpath \"/opt/homebrew/bin\")"));
+        // A helper inside a package-manager tree is the one case that still
+        // grants the tree, and the tree is granted, never the directory the
+        // helper happens to sit in.
+        let homebrew = text("/opt/homebrew/bin/ffmpeg");
+        assert!(homebrew.contains("(subpath \"/opt/homebrew\")"));
+        assert!(
+            !homebrew.contains("(subpath \"/opt/homebrew/bin\")"),
+            "the helper's own directory must not be a grant: {homebrew}"
+        );
+        // A helper outside every tree gets no tree at all.
+        let system = text("/usr/bin/ffmpeg");
+        for tree in HELPER_LIBRARY_TREES {
+            assert!(
+                !system.contains(&format!("(subpath \"{tree}\")")),
+                "{tree} must not be granted for a helper outside it: {system}"
+            );
+        }
         // The two prefixes of everything.
         for degenerate in ["ffmpeg", "/ffmpeg", ""] {
             let profile = text(degenerate);
@@ -396,13 +596,6 @@ mod tests {
                 "{degenerate} must not widen the profile: {profile}"
             );
         }
-        assert_eq!(granted_directory(Path::new("ffmpeg")), None);
-        assert_eq!(granted_directory(Path::new("/ffmpeg")), None);
-        assert_eq!(granted_directory(Path::new("")), None);
-        assert_eq!(
-            granted_directory(Path::new("/opt/homebrew/bin/ffmpeg")),
-            Some(Path::new("/opt/homebrew/bin"))
-        );
         assert!(!is_grantable(Path::new("ffmpeg")));
         assert!(!is_grantable(Path::new("/tmp/with\nnewline")));
         assert!(is_grantable(Path::new("/usr/bin/ffmpeg")));
@@ -468,19 +661,18 @@ mod tests {
             media.contains("(allow file-map-executable (literal \"/usr/bin/ffmpeg\"))"),
             "{media}"
         );
-        // The helper's own directory and the package-manager trees are readable
-        // and mappable — a dynamically linked helper cannot start without them —
-        // and never executable: `process-exec` has no `subpath` anywhere.
+        // The helper's own directory is not a grant, and neither is a
+        // package-manager tree it does not live in: `process-exec` has no
+        // `subpath` anywhere, and `file-read*` reaches the helper and the files
+        // beside it, one literal at a time.
         assert!(
-            media.contains("(allow file-read* file-map-executable (subpath \"/usr/bin\"))"),
-            "{media}"
+            !media.contains("(subpath \"/usr/bin\")"),
+            "the helper's directory must not be a grant: {media}"
         );
         for tree in HELPER_LIBRARY_TREES {
             assert!(
-                media.contains(&format!(
-                    "(allow file-read* file-map-executable (subpath \"{tree}\"))"
-                )),
-                "{tree} is granted for the loader: {media}"
+                !media.contains(&format!("(subpath \"{tree}\")")),
+                "{tree} must not be granted for a helper outside it: {media}"
             );
         }
         assert!(

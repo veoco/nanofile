@@ -31,7 +31,7 @@ pub const OP_EXIF: u8 = b'X';
 const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 
 /// A thumbnail, encoded and its container. `Err` is why there is none.
-pub fn thumbnail(content: &[u8], size: u32) -> Result<(Vec<u8>, ThumbFormat), String> {
+pub(crate) fn thumbnail(content: &[u8], size: u32) -> Result<(Vec<u8>, ThumbFormat), String> {
     let (tag, body) = run(OP_THUMBNAIL, size, content)?;
     match tag {
         b'P' => Ok((body, ThumbFormat::Png)),
@@ -42,7 +42,7 @@ pub fn thumbnail(content: &[u8], size: u32) -> Result<(Vec<u8>, ThumbFormat), St
 }
 
 /// A square avatar, encoded as PNG.
-pub fn square(content: &[u8], size: u32) -> Result<Vec<u8>, String> {
+pub(crate) fn square(content: &[u8], size: u32) -> Result<Vec<u8>, String> {
     let (tag, body) = run(OP_SQUARE, size, content)?;
     match tag {
         b'P' => Ok(body),
@@ -52,7 +52,7 @@ pub fn square(content: &[u8], size: u32) -> Result<Vec<u8>, String> {
 }
 
 /// The image's EXIF, as the JSON the endpoint serves.
-pub fn exif(content: &[u8]) -> Result<String, String> {
+pub(crate) fn exif(content: &[u8]) -> Result<String, String> {
     let (tag, body) = run(OP_EXIF, 0, content)?;
     match tag {
         b'X' => String::from_utf8(body)
@@ -93,6 +93,33 @@ fn refusal(body: Vec<u8>) -> String {
 
 fn unknown_tag(tag: u8) -> String {
     format!("the image worker answered with an unknown tag {tag:?}")
+}
+
+/// The gate that bounds how many image children are alive at once.
+///
+/// A cache miss for a file thumbnail, an avatar or an EXIF read spawns one
+/// confined child, and each may work for the whole timeout. Every caller that
+/// can be reached with an attacker's input queues on this permit rather than
+/// spawning without bound: the file-thumbnail path has always used it, and the
+/// avatar path is the one that could be reached without authentication, so it
+/// paces the same way. A constant rather than a setting, so it cannot be set to
+/// "unlimited" by accident.
+pub(crate) const MAX_CONCURRENT_IMAGE_WORKERS: usize = 4;
+
+static IMAGE_CONCURRENCY: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::OnceLock::new();
+
+/// Acquire a permit covering one image-worker child. Callers queue rather than
+/// fail, which is what preserves the behaviour of a normal burst.
+pub(crate) async fn acquire_image_permit() -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+    IMAGE_CONCURRENCY
+        .get_or_init(|| {
+            std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_IMAGE_WORKERS))
+        })
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|error| format!("image concurrency gate failed: {error}"))
 }
 
 /// The child's half of the protocol.

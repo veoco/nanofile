@@ -140,6 +140,12 @@ enum Command {
         /// The one scratch source the media profile may read.
         #[arg(long, value_name = "PATH")]
         src: Option<String>,
+        /// A file the parent created that no profile grants. The child must be
+        /// refused reading it for the files layer to count; the parent's own
+        /// probe is the only candidate that measures the read side on every
+        /// platform. Set by the startup probe, never by a request.
+        #[arg(long, value_name = "PATH")]
+        probe_path: Option<String>,
     },
 }
 
@@ -223,6 +229,7 @@ fn main() -> anyhow::Result<()> {
         sandbox_off,
         ffmpeg,
         src,
+        probe_path,
     } = &command
     {
         let profile =
@@ -255,7 +262,14 @@ fn main() -> anyhow::Result<()> {
             server::sandbox::worker::Job::Extract
         };
         let external = server::sandbox::worker::External { runner: *seatbelt };
-        return server::sandbox::worker::run(job, external, profile, requirement, grants);
+        return server::sandbox::worker::run(
+            job,
+            external,
+            profile,
+            requirement,
+            grants,
+            probe_path.as_deref().map(std::path::Path::new),
+        );
     }
     // A service is the server without a desktop: it has no console a person can
     // read, no session to show a dialog in, and it must never try to put an icon
