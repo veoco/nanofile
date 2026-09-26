@@ -297,9 +297,91 @@ pub fn probe(grants: Grants<'_>) -> String {
         command.creation_flags(CREATE_NO_WINDOW);
     }
     match run_helper(&mut command) {
-        Ok(output) if output.status.success() => "media-ok".to_string(),
+        Ok(output) if output.status.success() => {
+            #[cfg(target_os = "macos")]
+            return format!("media-ok,hand={}", hand_start(helper));
+            #[cfg(not(target_os = "macos"))]
+            return "media-ok".to_string();
+        }
         Ok(output) => format!("media-failed({})", output.status),
-        Err(error) => format!("media-unavailable({error})"),
+        Err(error) => {
+            #[cfg(target_os = "macos")]
+            return format!("media-unavailable({error}),hand={}", hand_start(helper));
+            #[cfg(not(target_os = "macos"))]
+            return format!("media-unavailable({error})");
+        }
+    }
+}
+
+/// Start the helper by hand, and say what the kernel answered.
+///
+/// macOS is the one platform where `parse=` has said
+/// `media-unavailable(Operation not permitted)` while the profile grants
+/// `process-exec (literal <helper>)`, the child can read that binary, and a
+/// synthetic profile with the same text starts a second generation. So this asks
+/// the kernel directly, in the child that is failing: `fork`, `execve` the helper
+/// with `-version`, its output on `/dev/null` (opened here, where the write is
+/// granted). `ok` means the grant is fine and the library's spawn path is what
+/// fails; `exec=<errno>` means the sandbox refuses *this* child, and the errno is
+/// what the sandbox log has an operation for.
+#[cfg(target_os = "macos")]
+fn hand_start(helper: &Path) -> String {
+    use std::ffi::CString;
+    use std::os::fd::AsRawFd as _;
+    use std::os::unix::ffi::OsStrExt as _;
+
+    /// What the copy exits with when the `execve` itself failed: the errno,
+    /// offset so it cannot be confused with the helper's own exit code.
+    const EXEC_FAILED: i32 = 100;
+
+    let Ok(program) = CString::new(helper.as_os_str().as_bytes()) else {
+        return "bad-path".to_string();
+    };
+    let Ok(sink) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/null")
+    else {
+        return "no-devnull".to_string();
+    };
+
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return format!(
+            "fork={}",
+            std::io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or_default()
+        );
+    }
+    if pid == 0 {
+        unsafe {
+            let fd = sink.as_raw_fd();
+            libc::dup2(fd, libc::STDOUT_FILENO);
+            libc::dup2(fd, libc::STDERR_FILENO);
+            let version = c"-version";
+            let argv = [program.as_ptr(), version.as_ptr(), std::ptr::null()];
+            let envp = [std::ptr::null()];
+            libc::execve(program.as_ptr(), argv.as_ptr(), envp.as_ptr());
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            libc::_exit(EXEC_FAILED + (errno & 0x7f));
+        }
+    }
+
+    let mut status = 0;
+    if unsafe { libc::waitpid(pid, &mut status, 0) } < 0 {
+        return "wait".to_string();
+    }
+    if !libc::WIFEXITED(status) {
+        return "signalled".to_string();
+    }
+    let code = libc::WEXITSTATUS(status);
+    if code == 0 {
+        "ok".to_string()
+    } else if code >= EXEC_FAILED {
+        format!("exec={}", code - EXEC_FAILED)
+    } else {
+        format!("exited={code}")
     }
 }
 
