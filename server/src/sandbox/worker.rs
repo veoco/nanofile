@@ -982,7 +982,11 @@ fn probe_once(
     let run = run_child(invocation, None, PROBE_TIMEOUT, start, profile, grants)
         .map_err(|error| format!("cannot start the sandbox worker: {error}"))?;
     if let Verdict::Unavailable(why) = verdict(run.exit_code, &run.stdout, &run.stderr) {
-        return Err(why);
+        // The summary rides along: a child that dies in its loader writes nothing
+        // on either stream, and its exit code is then the only thing that says
+        // which failure this was. Without it, every such rung reads as the same
+        // sentence with no way to tell them apart.
+        return Err(format!("{why} [{}]", run.summary()));
     }
 
     let line = String::from_utf8_lossy(
