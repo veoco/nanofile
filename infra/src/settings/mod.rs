@@ -52,6 +52,7 @@ pub enum Section {
     Storage,
     Encryption,
     Maintenance,
+    Sandbox,
     Email,
     Notifications,
     Advanced,
@@ -68,6 +69,7 @@ impl Section {
             Section::Storage => "storage",
             Section::Encryption => "encryption",
             Section::Maintenance => "maintenance",
+            Section::Sandbox => "sandbox",
             Section::Email => "email",
             Section::Notifications => "notifications",
             Section::Advanced => "advanced",
@@ -88,6 +90,7 @@ impl Section {
             "storage" => Some(Section::Storage),
             "encryption" => Some(Section::Encryption),
             "maintenance" => Some(Section::Maintenance),
+            "sandbox" => Some(Section::Sandbox),
             "email" => Some(Section::Email),
             "notifications" => Some(Section::Notifications),
             "advanced" => Some(Section::Advanced),
@@ -105,6 +108,7 @@ impl Section {
             Section::Storage => "setting.section_storage_title",
             Section::Encryption => "setting.section_encryption_title",
             Section::Maintenance => "setting.section_maintenance_title",
+            Section::Sandbox => "setting.section_sandbox_title",
             Section::Email => "setting.section_email_title",
             Section::Notifications => "setting.section_notifications_title",
             Section::Advanced => "setting.section_advanced_title",
@@ -121,6 +125,7 @@ impl Section {
             Section::Storage => "setting.section_storage_subtitle",
             Section::Encryption => "setting.section_encryption_subtitle",
             Section::Maintenance => "setting.section_maintenance_subtitle",
+            Section::Sandbox => "setting.section_sandbox_subtitle",
             Section::Email => "setting.section_email_subtitle",
             Section::Notifications => "setting.section_notifications_subtitle",
             Section::Advanced => "setting.section_advanced_subtitle",
@@ -128,7 +133,7 @@ impl Section {
     }
 
     /// Every section, in navigation order.
-    pub const ALL: [Section; 10] = [
+    pub const ALL: [Section; 11] = [
         Section::Server,
         Section::Security,
         Section::Authentication,
@@ -136,6 +141,7 @@ impl Section {
         Section::Storage,
         Section::Encryption,
         Section::Maintenance,
+        Section::Sandbox,
         Section::Email,
         Section::Notifications,
         Section::Advanced,
@@ -190,6 +196,10 @@ pub enum Hook {
     /// The outbound-mail drainer: its scheduler task is registered
     /// unconditionally and checks the live switch itself.
     MailDrain,
+    /// The process-wide sandbox requirement (`sandbox.enabled` and
+    /// `sandbox.min_level`), which every confined child is told before it reads
+    /// a request.
+    Sandbox,
 }
 
 /// When a saved change takes effect.
@@ -223,13 +233,14 @@ pub enum Apply {
 
 impl Hook {
     /// Every hook, for callers that want to re-apply all of them.
-    pub const ALL: [Hook; 6] = [
+    pub const ALL: [Hook; 7] = [
         Hook::RateLimits,
         Hook::TaskSystem,
         Hook::TaskLoad,
         Hook::NotificationManager,
         Hook::SyncStatics,
         Hook::MailDrain,
+        Hook::Sandbox,
     ];
 }
 
@@ -853,7 +864,8 @@ mod tests {
             "index.enabled",
             "index.index_dir",
             "index.backfill_enabled",
-            "index.sandbox",
+            "sandbox.enabled",
+            "sandbox.min_level",
             "notification.enabled",
             "notification.private_key",
             "notification.ping_interval",

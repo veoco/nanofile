@@ -22,7 +22,7 @@
 
 use std::mem::size_of;
 
-use super::Layers;
+use super::Protections;
 
 // ── prctl ───────────────────────────────────────────────────────────────────
 const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
@@ -150,8 +150,8 @@ const AUDIT_ARCH: Option<u32> = Some(0xC000_00F3);
 const AUDIT_ARCH: Option<u32> = None;
 
 /// Apply every layer this platform offers.
-pub(super) fn confine() -> (Layers, Vec<String>) {
-    let mut layers = Layers::default();
+pub(super) fn confine() -> (Protections, Vec<String>) {
+    let mut layers = Protections::default();
     let mut detail = Vec::new();
 
     close_extra_descriptors();

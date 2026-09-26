@@ -911,15 +911,28 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Sandbox
     setting!(
-        "index.sandbox",
-        Maintenance,
-        "NANOFILE_INDEX_SANDBOX",
-        Kind::Enum(&["require", "strict", "sealed", "prefer"]),
-        Apply::Restart,
-        |c| c.index.sandbox.clone(),
+        "sandbox.enabled",
+        Sandbox,
+        "NANOFILE_SANDBOX_ENABLED",
+        Kind::Bool,
+        Apply::LiveWithHook(Hook::Sandbox),
+        |c| fmt_bool(c.sandbox.enabled),
         |c, v| {
-            c.index.sandbox = parse_enum(v, &["require", "strict", "sealed", "prefer"])?;
+            c.sandbox.enabled = parse_bool(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "sandbox.min_level",
+        Sandbox,
+        "NANOFILE_SANDBOX_MIN_LEVEL",
+        Kind::Enum(&["full", "partial", "none"]),
+        Apply::LiveWithHook(Hook::Sandbox),
+        |c| c.sandbox.min_level.clone(),
+        |c, v| {
+            c.sandbox.min_level = parse_enum(v, &["full", "partial", "none"])?;
             Ok(())
         }
     ),
@@ -1685,12 +1698,13 @@ pub static GROUPS: &[GroupDef] = &[
         section: Section::Maintenance,
         id: "maintenance_index",
         title_key: "setting.group_maintenance_index",
-        keys: &[
-            "index.enabled",
-            "index.index_dir",
-            "index.backfill_enabled",
-            "index.sandbox",
-        ],
+        keys: &["index.enabled", "index.index_dir", "index.backfill_enabled"],
+    },
+    GroupDef {
+        section: Section::Sandbox,
+        id: "sandbox_policy",
+        title_key: "setting.group_sandbox_policy",
+        keys: &["sandbox.enabled", "sandbox.min_level"],
     },
     GroupDef {
         section: Section::Maintenance,

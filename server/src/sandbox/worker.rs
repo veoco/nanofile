@@ -20,7 +20,8 @@
 //! it may do. A memory limit, a file boundary and a CPU limit are all per-process
 //! on the platforms this ships to, and a parser that overflows its stack or
 //! aborts on a failed allocation takes its own process down instead of the
-//! server. The panic boundary in [`super::guard`] covers panics only; this
+//! server. The panic boundary in [`crate::indexer::extract::guard`] covers
+//! panics only; this
 //! covers everything a panic cannot.
 
 use std::ffi::OsString;
@@ -36,8 +37,8 @@ use std::sync::{Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use super::sandbox::{self, Level, Policy, Report};
-use super::{Extracted, MAX_INDEXED_CONTENT_BYTES, Plan, reason};
+use crate::indexer::extract::{Extracted, MAX_INDEXED_CONTENT_BYTES, Plan, reason};
+use crate::sandbox::{self, Level, Profile, Report, Requirement};
 
 /// The subcommand that turns this binary into the worker.
 pub const SUBCOMMAND: &str = "extract-worker";
@@ -204,12 +205,17 @@ impl Status {
 }
 
 /// Run the child side of the protocol and exit.
-pub fn run(job: Job, external: External, policy: Policy) -> anyhow::Result<()> {
+pub fn run(
+    job: Job,
+    external: External,
+    profile: Profile,
+    requirement: Requirement,
+) -> anyhow::Result<()> {
     // The parser limits are process-global and this process never runs the
     // server, so they are set here and nowhere else.
     configure_parser_limits();
     // The self-test is the one run that can afford every effect probe; a
-    // document's child is not, and it is not where the decision is made.
+    // request's child is not, and it is not where the decision is made.
     let measure = if job == Job::Selftest {
         sandbox::Measure::Thorough
     } else {
@@ -219,6 +225,7 @@ pub fn run(job: Job, external: External, policy: Policy) -> anyhow::Result<()> {
         sandbox::External {
             runner: external.runner,
         },
+        profile,
         measure,
     );
     if external.restricted_token {
@@ -235,13 +242,17 @@ pub fn run(job: Job, external: External, policy: Policy) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if !policy.accepts(&report) {
-        eprintln!("{SANDBOX_REFUSAL}: {} ({})", policy.as_str(), report.detail);
+    if let Err(refusal) = requirement.accepts(&report) {
+        eprintln!(
+            "{SANDBOX_REFUSAL}: {} ({})",
+            refusal.reason(),
+            report.detail
+        );
         std::process::exit(EXIT_SANDBOX_UNAVAILABLE);
     }
 
     let (plan, data) = read_request()?;
-    write_reply(super::extract(plan, data))
+    write_reply(crate::indexer::extract::extract(plan, data))
 }
 
 /// Print what the probe a serving process runs at startup found, and exit.
@@ -271,7 +282,7 @@ pub fn probe_report() -> anyhow::Result<()> {
 
 /// The parser limits the child sets for itself.
 pub fn configure_parser_limits() {
-    super::configure_limits();
+    crate::indexer::extract::configure_limits();
 }
 
 /// The self-test line: the confinement report, plus the parser limits this
@@ -291,19 +302,25 @@ fn selftest_line(report: &Report) -> String {
 ///
 /// One whitespace-free verdict per document, so the report stays a line the
 /// parent can parse and a probe step can `grep`. Every way a parser can decline
-/// reads as `unsupported`: a panic caught by [`super::guard`], a document the
+/// reads as `unsupported`: a panic caught by
+/// [`crate::indexer::extract::guard`], a document the
 /// reader will not open, a plan that stopped being supported. What a caller can
 /// act on is "this confined worker cannot read documents", and *why* belongs to
 /// the parser's own tests, which can say more than a token can.
 fn probe_parse() -> String {
-    super::PROBE_DOCUMENTS
+    crate::indexer::extract::PROBE_DOCUMENTS
         .iter()
         .map(|document| {
-            let verdict = match super::extract(document.plan, document.bytes.to_vec()) {
-                super::Extracted::Text(text) if text.contains(document.word) => "ok",
-                super::Extracted::Text(_) => "no-text",
-                super::Extracted::Unsupported(_) => "unsupported",
-            };
+            let verdict =
+                match crate::indexer::extract::extract(document.plan, document.bytes.to_vec()) {
+                    crate::indexer::extract::Extracted::Text(text)
+                        if text.contains(document.word) =>
+                    {
+                        "ok"
+                    }
+                    crate::indexer::extract::Extracted::Text(_) => "no-text",
+                    crate::indexer::extract::Extracted::Unsupported(_) => "unsupported",
+                };
             format!("{}-{verdict}", document.name)
         })
         .collect::<Vec<_>>()
@@ -345,12 +362,12 @@ fn write_reply(extracted: Extracted) -> anyhow::Result<()> {
 /// The caller decides what a failure means: an [`Outcome::Unavailable`] is the
 /// environment, an [`Outcome::Failed`] is the document.
 pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
-    let policy = configured_policy();
+    let requirement = configured_requirement();
 
     if let Status::Unavailable(reason) = status() {
         return Outcome::Unavailable(reason);
     }
-    let Some(invocation) = invocation(policy) else {
+    let Some(invocation) = invocation(requirement) else {
         return Outcome::Unavailable("cannot resolve the extraction worker".to_string());
     };
 
@@ -416,11 +433,11 @@ pub fn status() -> Status {
         Status::Unavailable(reason) => {
             tracing::error!(
                 reason = reason.as_str(),
-                "the document extraction sandbox is not available; documents will not be \
-                 indexed. Check the log line above, and see `index.sandbox`: `require` \
-                 accepts any confinement, `strict` requires every layer this host can \
-                 give, `sealed` also requires that none of the platform's residuals is \
-                 open, and a container may need the Landlock syscalls allowed."
+                "the sandbox is not available; documents will not be indexed and image/media \
+                 thumbnails will not be generated. Check the log line above, and see the \
+                 Sandbox settings page: `sandbox.enabled` is the switch over these features, \
+                 `sandbox.min_level` is the grade this host must reach, and a container may \
+                 need the Landlock syscalls allowed."
             );
             cache.retry_at = Some(Instant::now() + UNAVAILABLE_RETRY);
         }
@@ -442,13 +459,13 @@ pub fn configure_executable(path: PathBuf) -> bool {
     EXECUTABLE.set(path).is_ok()
 }
 
-/// Set the confinement policy the server resolved from `index.sandbox`.
-pub fn configure_policy(policy: Policy) {
-    let _ = POLICY.set(policy);
+/// Set the sandbox requirement the server resolved from `[sandbox]`.
+pub fn configure_requirement(requirement: Requirement) {
+    let _ = REQUIREMENT.set(requirement);
 }
 
-fn configured_policy() -> Policy {
-    POLICY.get().copied().unwrap_or(Policy::Require)
+fn configured_requirement() -> Requirement {
+    REQUIREMENT.get().copied().unwrap_or_default()
 }
 
 #[derive(Default)]
@@ -459,13 +476,13 @@ struct Cache {
 
 static STATUS: OnceLock<Mutex<Cache>> = OnceLock::new();
 static EXECUTABLE: OnceLock<PathBuf> = OnceLock::new();
-static POLICY: OnceLock<Policy> = OnceLock::new();
-/// The rung the probe last got a report from, for the documents that follow.
+static REQUIREMENT: OnceLock<Requirement> = OnceLock::new();
+/// The rung the probe last got a report from, for the requests that follow.
 static RUNG: OnceLock<Start> = OnceLock::new();
 
 /// Run the child once with `--selftest` and read its report.
 fn probe() -> Status {
-    let Some(invocation) = invocation(configured_policy()) else {
+    let Some(invocation) = invocation(configured_requirement()) else {
         return Status::Unavailable("cannot resolve the extraction worker".to_string());
     };
 
@@ -512,25 +529,23 @@ fn probe_on(invocation: &Invocation, start: Start) -> Result<Report, String> {
         .ok_or_else(|| format!("unreadable self-test line {line:?}: {}", run.summary()))
 }
 
-/// Whether the report the probe got is one the policy accepts.
+/// Whether the report the probe got is one the requirement accepts.
 ///
 /// Decided once, here, rather than left to each child: a host that cannot give
-/// what the setting asks for is an environment problem the operator has to see
-/// once at startup — with the reason — rather than one spawn per document that
+/// what the settings ask for is an environment problem the operator has to see
+/// once at startup — with the reason — rather than one spawn per request that
 /// ends in exit 125 and a warning nothing aggregates. The child keeps the same
 /// check before it reads a request; this is the half that makes the shortfall
 /// visible and stops the spawns.
 fn accept(report: Report) -> Status {
-    let policy = configured_policy();
-    if policy.accepts(&report) {
-        Status::Ready(report)
-    } else {
-        Status::Unavailable(format!(
-            "`index.sandbox` is `{}` and this host gives `{}` confinement: {}",
-            policy.as_str(),
+    match configured_requirement().accepts(&report) {
+        Ok(()) => Status::Ready(report),
+        Err(refusal) => Status::Unavailable(format!(
+            "the sandbox refused: {} — this host gives `{}` confinement: {}",
+            refusal.reason(),
             report.level().as_str(),
             report.detail
-        ))
+        )),
     }
 }
 
@@ -542,7 +557,7 @@ struct Invocation {
 
 /// Build the argv for one child, wrapping it in the platform's runner if it has
 /// one (macOS, where only `sandbox-exec` can apply a Seatbelt profile).
-fn invocation(policy: Policy) -> Option<Invocation> {
+fn invocation(requirement: Requirement) -> Option<Invocation> {
     let exe = EXECUTABLE
         .get()
         .cloned()
@@ -558,9 +573,12 @@ fn invocation(policy: Policy) -> Option<Invocation> {
 
     let mut args: Vec<OsString> = vec![
         OsString::from(SUBCOMMAND),
-        OsString::from("--policy"),
-        OsString::from(policy.as_str()),
+        OsString::from("--min-level"),
+        OsString::from(requirement.min_level.as_str()),
     ];
+    if !requirement.enabled {
+        args.push(OsString::from("--sandbox-off"));
+    }
 
     match sandbox::runner(&exe) {
         Some(runner) => {
@@ -1048,7 +1066,7 @@ mod tests {
         let plan = Plan::from_tag(prologue[4]).expect("known plan");
         let mut data = Vec::new();
         reader.read_to_end(&mut data)?;
-        let (tag, body) = match super::super::extract(plan, data) {
+        let (tag, body) = match crate::indexer::extract::extract(plan, data) {
             Extracted::Text(text) => (b'T', text.into_bytes()),
             Extracted::Unsupported(reason) => (b'U', reason.as_bytes().to_vec()),
         };
@@ -1086,7 +1104,7 @@ mod tests {
         let reply = {
             let mut out = Vec::new();
             let mut input = std::io::Cursor::new(request(
-                Plan::Document(super::super::Document::Pdf),
+                Plan::Document(crate::indexer::extract::Document::Pdf),
                 b"not a pdf",
             ));
             serve(&mut input, &mut out).expect("serve");
@@ -1149,7 +1167,8 @@ mod tests {
     #[test]
     fn the_self_test_line_carries_the_report_and_the_parser_budget() {
         let line = selftest_line(&Report {
-            layers: sandbox::Layers {
+            profile: Profile::Documents,
+            protections: sandbox::Protections {
                 limits: true,
                 files: true,
                 network: true,

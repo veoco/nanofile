@@ -1,56 +1,53 @@
-//! Confinement for the extraction child process.
+//! Confinement for every child process that reads attacker-chosen bytes.
 //!
-//! Document parsers are the only code here that reads attacker-chosen bytes, so
-//! they run in a separate process ([`super::worker`]) that confines itself
-//! before it reads a single byte. The layers, and what each is for:
+//! Documents, images and media are all parsed or decoded by a separate process
+//! ([`worker`]) that confines itself before it reads a single byte. The
+//! protections, and what each is for:
 //!
-//! | Layer | What it bounds | Linux | macOS | Windows |
+//! | Item | What it bounds | Linux | macOS | Windows |
 //! |---|---|---|---|---|
-//! | limits | memory, CPU seconds, descriptors, file size | `RLIMIT_AS` | `setrlimit` (mapped space plus the cap), footprint watchdog as fallback | Job Object memory cap |
-//! | files | reading or writing any path | Landlock, zero grants | Seatbelt profile | — |
-//! | network | creating a socket | seccomp denylist | Seatbelt profile | — |
-//! | process | `exec`, `fork`, extra processes | seccomp denylist | Seatbelt profile, `exec` only (`process-fork` is allowed) | Job active-process limit, plus the kernel's child-process policy |
+//! | limits | memory, CPU seconds, descriptors, file size | `RLIMIT_AS` | `setrlimit` (mapped space plus the cap) | Job Object memory cap |
+//! | files | reading or writing any path | Landlock, zero grants (scoped grants for media) | Seatbelt profile | AppContainer |
+//! | network | creating a socket | seccomp denylist, Landlock TCP rights | Seatbelt profile | AppContainer with no capabilities |
+//! | process | `exec`, `fork`, extra processes | seccomp denylist (`exec` allowed only for the media helper) | Seatbelt profile, `exec` only (`process-fork` is allowed) | Job active-process limit, plus the kernel's child-process policy |
 //!
 //! Memory is the one limit each platform has to be told about differently. Linux
 //! takes the cap as an address-space limit outright; Windows caps committed
 //! memory with a Job Object; Darwin refuses a limit below what a process already
 //! has mapped, so there the limit is the mapped size plus the cap — the same
-//! bound, stated from where the process already is. Where even that is refused
-//! (macOS 11 and older, whose VM map has no size limit) the child watches its own
-//! footprint instead. The report says which of them took rather than which were
-//! attempted.
+//! bound, stated from where the process already is. The report says which of
+//! them took rather than which were attempted.
 //!
-//! # Levels and policy
+//! # Levels, items and the two settings
 //!
-//! [`Level`] is what the layers add up to, and the `index.sandbox` setting says
-//! what the server requires of them. `require` (the default) refuses to extract
-//! a document that would run with nothing but resource limits, which is the
-//! `None` level; `strict` refuses anything short of [`Level::Full`], which is
-//! what makes a layer the platform can only sometimes provide — the Windows
-//! AppContainer is the one — a condition rather than a hope; `sealed` refuses a
-//! confinement that is full but not [`Closure::Full`], which is the one thing
-//! the level cannot say; `prefer` extracts anyway and logs the shortfall. All
-//! four run the child — there is no in-process path to fall back to.
+//! There are exactly three grades, and an admin sees them by name:
 //!
-//! # What a level does not say
+//! * [`Level::Full`] (完整) — every protection this platform can provide is in
+//!   place: resource limits, files, network and process.
+//! * [`Level::Partial`] (部分) — resource limits plus at least one of the other
+//!   three; the settings page names which item is missing.
+//! * [`Level::None`] (无) — nothing beyond resource limits.
 //!
-//! [`Level::Full`] means "every layer this platform can provide", and the three
-//! platforms provide materially different things under that name: Linux denies
-//! every path and every socket through Landlock and seccomp, the Windows
+//! Two settings govern the sandbox, and both live on the admin's "Sandbox" page:
+//! `sandbox.enabled` is the master switch over every feature that parses
+//! untrusted bytes, and `sandbox.min_level` is the grade the host must reach
+//! before those features run at all. When the switch is off, or the host grades
+//! below the minimum, the features are *disabled* — there is no in-process path
+//! to fall back to. [`Requirement`] is the pair, and [`Refusal`] says which of
+//! the two refused.
+//!
+//! # What a grade does not say
+//!
+//! [`Level::Full`] means "every protection this platform can provide", and the
+//! three platforms provide materially different things under that name: Linux
+//! denies every path and every socket through Landlock and seccomp, the Windows
 //! container denies the user's own files and the network but reads the system
 //! tree it loads from, and macOS's profile is a deny-by-default text with
-//! `process-fork` allowed because the parsers' thread needs it. `strict` is a
-//! statement about the *deployment* — this host gave what it has — and an
-//! operator who needs the stronger claim wants `sealed`, which reads
-//! [`Closure`]: the layer set plus the absence of the residuals each platform
-//! documents (`system=`, `writes=`, `fork=`, `ll_gaps=`).
-//!
-//! One consequence is worth stating where the setting is: the residuals those
-//! tokens name cannot be closed on Windows without a less privileged container
-//! (LPAC) and cannot be closed on macOS without bounding `fork`, so `sealed`
-//! is expected to refuse every document there. It is not a stronger version of
-//! the same promise; it is the promise that the sandbox has no known way out,
-//! which on those two platforms is not true.
+//! `process-fork` allowed because the parsers' thread needs it. Those are the
+//! residuals [`Facts`] carries — `fork=`, `system=`, `writes=`, `metadata=`,
+//! `ll_gaps=` — and they are *notes on the item they weaken*, not a fourth
+//! grade: an operator reads "进程创建: 有（注：macOS 允许 fork）" rather than
+//! having to understand a second, stronger scale.
 //!
 //! # Claims are measured
 //!
@@ -107,6 +104,7 @@ use std::path::Path;
 
 #[cfg(target_os = "linux")]
 mod linux;
+pub mod worker;
 // The Seatbelt profile is built on every platform so its tests can check the
 // text, but only macOS ever runs under it.
 #[cfg(any(target_os = "macos", test))]
@@ -208,9 +206,9 @@ impl Level {
     }
 }
 
-/// The confinement layers actually in force.
+/// The protections actually in force, one flag per item the admin page lists.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Layers {
+pub struct Protections {
     /// Memory, CPU seconds, descriptors, file size.
     pub limits: bool,
     /// Paths cannot be read or written.
@@ -221,14 +219,13 @@ pub struct Layers {
     pub process: bool,
 }
 
-impl Layers {
-    /// What these layers add up to.
+impl Protections {
+    /// What these items add up to.
     ///
-    /// [`Level::Full`] needs all four. [`Level::Partial`] is any confinement
+    /// [`Level::Full`] needs all four. [`Level::Partial`] is any protection
     /// beyond resource limits — a host without Landlock still confines the
     /// network, and Windows' Job Object confines processes — while a process
-    /// held only by `RLIMIT_*` is [`Level::None`], which the `require` policy
-    /// refuses.
+    /// held only by `RLIMIT_*` is [`Level::None`].
     pub fn level(self) -> Level {
         if self.limits && self.files && self.network && self.process {
             Level::Full
@@ -238,82 +235,152 @@ impl Layers {
             Level::None
         }
     }
+
+    /// Every item, in the order the settings page lists them.
+    ///
+    /// The name is the token the report line carries, so the page and the line
+    /// cannot drift apart.
+    pub fn items(self) -> [(&'static str, bool); 4] {
+        [
+            ("limits", self.limits),
+            ("files", self.files),
+            ("network", self.network),
+            ("process", self.process),
+        ]
+    }
+}
+
+/// Which pipeline a confined child runs, and therefore what it may reach.
+///
+/// The profile is what the child is told on its command line *before* it reads
+/// a request, because a grant Landlock or a Seatbelt profile can only express
+/// has to be installed before the bytes it applies to are read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Profile {
+    /// Document text extraction: no file, no socket, no program.
+    Documents,
+    /// Image decode, EXIF and avatar processing: the same shape as documents.
+    Images,
+    /// Media (ffmpeg) frame extraction: the one profile that may execute the
+    /// configured helper, and read the one scratch file it is handed.
+    Media,
+}
+
+impl Profile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Profile::Documents => "documents",
+            Profile::Images => "images",
+            Profile::Media => "media",
+        }
+    }
+
+    pub fn parse(token: &str) -> Option<Self> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "documents" => Some(Profile::Documents),
+            "images" => Some(Profile::Images),
+            "media" => Some(Profile::Media),
+            _ => None,
+        }
+    }
+
+    /// Whether this profile may execute the configured helper.
+    ///
+    /// Only the media profile: ffmpeg is an external program, so it is the one
+    /// child a request may start. Everything else is denied the `exec` outright,
+    /// and this profile's own `exec` is narrowed to the one binary the parent
+    /// names (see `parse` of the profile's grants in `linux`/`seatbelt`).
+    pub fn runs_helper(self) -> bool {
+        matches!(self, Profile::Media)
+    }
+
+    /// Every profile, for probes and tests.
+    pub const ALL: [Profile; 3] = [Profile::Documents, Profile::Images, Profile::Media];
 }
 
 /// What the child established, and how.
 #[derive(Debug, Clone)]
 pub struct Report {
-    pub layers: Layers,
+    /// Which pipeline this child confined itself for.
+    pub profile: Profile,
+    pub protections: Protections,
     /// Mechanism tokens and measurements, comma-joined and whitespace-free.
     pub detail: String,
 }
 
 impl Report {
     pub fn level(&self) -> Level {
-        self.layers.level()
+        self.protections.level()
     }
 
-    /// What the layers add up to, and whether anything closable is still open.
+    /// The residuals the detail carries, as note keys for the settings page.
     ///
-    /// Derived from the detail rather than carried as a claim of its own: every
-    /// input is a fact this process (or the parent) measured, so the answer is
-    /// one rule over those facts instead of a second thing to keep in step. The
-    /// line carries the conclusion for a reader, and [`Report::parse`] checks it
-    /// against the facts the way it checks the level against the layers.
-    pub fn closure(&self) -> Closure {
-        let open = |token: &str| self.detail.split(',').any(|fact| fact == token);
-
-        if !(self.layers.limits && self.layers.files && self.layers.network && self.layers.process)
-        {
-            return Closure::Bounded;
+    /// Derived from the detail rather than carried as claims of their own: every
+    /// token is a fact this process (or the parent) measured, and a token no
+    /// backend emits simply produces no note. They are *notes* — the grade is
+    /// decided from [`Protections`] alone, so a wording change here can never
+    /// weaken a decision.
+    pub fn notes(&self) -> Vec<&'static str> {
+        let has = |token: &str| self.detail.split(',').any(|fact| fact == token);
+        let mut notes = Vec::new();
+        if has("fork=open") {
+            notes.push("fork");
         }
-        // Facts, not layers: each is something the platform grants that a layer
-        // above cannot take back.
-        if open("system=readable") || open("fork=open") || open("ll_gaps=open") {
-            return Closure::Bounded;
+        if has("system=readable") {
+            notes.push("system_tree");
         }
-        if open("writes=own-store") || open("writes=user") {
-            return Closure::Bounded;
+        if has("writes=own-store") || has("writes=user") {
+            notes.push("writes");
         }
-        Closure::Full
+        if has("metadata=open") {
+            notes.push("metadata");
+        }
+        if has("ll_gaps=open") {
+            notes.push("ll_gaps");
+        }
+        if has("helper=allowed") {
+            notes.push("helper");
+        }
+        notes
     }
 
     /// The one-line report the self-test prints and the parent parses.
     pub fn line(&self) -> String {
         let yes = |on: bool| if on { "denied" } else { "open" };
         format!(
-            "NFX1-sandbox level={} limits={} files={} network={} process={} closure={} detail={}",
+            "NFS2-sandbox profile={} level={} limits={} files={} network={} process={} detail={}",
+            self.profile.as_str(),
             self.level().as_str(),
-            if self.layers.limits { "on" } else { "off" },
-            yes(self.layers.files),
-            yes(self.layers.network),
-            yes(self.layers.process),
-            self.closure().as_str(),
+            if self.protections.limits { "on" } else { "off" },
+            yes(self.protections.files),
+            yes(self.protections.network),
+            yes(self.protections.process),
             self.detail
         )
     }
 
     /// Parse a line produced by [`Report::line`].
     ///
-    /// Returns `None` for anything that is not one, which is what makes a
-    /// truncated or foreign line a failure rather than a wrong level.
+    /// Returns `None` for anything that is not one — including a line from
+    /// before the profile existed — which is what makes a truncated or foreign
+    /// line a failure rather than a wrong level.
     pub fn parse(line: &str) -> Option<Self> {
         let line = line.trim();
-        let mut fields = line.strip_prefix("NFX1-sandbox ")?.split(' ');
-        let mut layers = Layers::default();
+        let mut fields = line.strip_prefix("NFS2-sandbox ")?.split(' ');
+        let mut profile = None;
+        let mut protections = Protections::default();
         let mut level = None;
-        let mut closure = None;
         let mut detail = String::new();
 
         for field in fields.by_ref() {
             let (key, value) = field.split_once('=')?;
             match key {
+                "profile" => profile = Profile::parse(value),
                 "level" => level = Level::parse(value),
-                "limits" => layers.limits = parse_switch(value)?,
-                "files" => layers.files = parse_denial(value)?,
-                "network" => layers.network = parse_denial(value)?,
-                "process" => layers.process = parse_denial(value)?,
-                "closure" => closure = Closure::parse(value),
+                "limits" => protections.limits = parse_switch(value)?,
+                "files" => protections.files = parse_denial(value)?,
+                "network" => protections.network = parse_denial(value)?,
+                "process" => protections.process = parse_denial(value)?,
                 "detail" => {
                     detail = value.to_string();
                 }
@@ -324,10 +391,14 @@ impl Report {
             }
         }
 
-        // The level and the closure are both redundant with the facts, so a
-        // line whose halves disagree is not one of ours.
-        let report = Report { layers, detail };
-        (level == Some(report.level()) && closure == Some(report.closure())).then_some(report)
+        // The level is redundant with the items, so a line whose halves disagree
+        // is not one of ours.
+        let report = Report {
+            profile: profile?,
+            protections,
+            detail,
+        };
+        (level == Some(report.level())).then_some(report)
     }
 }
 
@@ -347,107 +418,88 @@ fn parse_denial(value: &str) -> Option<bool> {
     }
 }
 
-/// What the confinement adds up to, and whether anything it should close is
-/// still open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Closure {
-    /// Every layer is there *and* nothing this platform could close is open.
-    Full,
-    /// Every layer is there, and at least one residual is not.
-    ///
-    /// The residual is in the report's detail, next to the layer it belongs to:
-    /// `system=readable` (a Windows container reads the system tree),
-    /// `writes=own-store` (it writes its own profile store),
-    /// `fork=open` (macOS has to allow `process-fork` for the parsers' thread),
-    /// `ll_gaps=open` (a Linux without seccomp, where Landlock's blind spots
-    /// are unguarded).
-    Bounded,
-}
-
-impl Closure {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Closure::Full => "full",
-            Closure::Bounded => "bounded",
-        }
-    }
-
-    pub fn parse(token: &str) -> Option<Self> {
-        match token {
-            "full" => Some(Closure::Full),
-            "bounded" => Some(Closure::Bounded),
-            _ => None,
-        }
-    }
-}
-
 /// What the child must have before it will read a request.
+///
+/// The master switch and the minimum grade, as the admin set them. Both live on
+/// the settings page's Sandbox section; the pair crosses the process boundary so
+/// the child can refuse on its own, before it reads a byte, exactly as the
+/// parent refused to start it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Policy {
-    /// Refuse to extract without at least [`Level::Partial`].
-    ///
-    /// This refuses the `None` level — a child a host could not confine at all
-    /// — and accepts a host that has some of the layers. A layer the platform
-    /// can only sometimes provide, which on Windows is the AppContainer, is not
-    /// a condition here.
-    Require,
-    /// Refuse to extract without [`Level::Full`]: every layer this platform can
-    /// provide, the Windows AppContainer included.
-    ///
-    /// The difference from [`Policy::Require`] is what a host does when it
-    /// cannot provide one of them: `require` reads the document with the layers
-    /// that are left, `strict` reads nothing and leaves the documents for a host
-    /// that can.
-    Strict,
-    /// Refuse to extract without a confinement that is also [`Closure::Full`].
-    ///
-    /// `strict` says every layer this platform can give is there, which is not
-    /// the same claim on every platform: the Windows container reads the system
-    /// tree, macOS has to allow `process-fork`, and a Linux without seccomp has
-    /// Landlock's blind spots. Those are the residuals `closure` names. `sealed`
-    /// is for the operator who wants the sandbox the platform can *seal* and
-    /// would rather index nothing than index under a residual — which on
-    /// Windows and macOS means indexing nothing, because those residuals cannot
-    /// be closed without a lower-privileged container (LPAC) and a way to bound
-    /// process creation.
-    Sealed,
-    /// Extract at any level, reporting the shortfall.
-    Prefer,
+pub struct Requirement {
+    /// `sandbox.enabled`: the master switch over every parsing feature.
+    pub enabled: bool,
+    /// `sandbox.min_level`: the grade the host must reach.
+    pub min_level: Level,
 }
 
-impl Policy {
-    /// Parse the `index.sandbox` setting.
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "require" => Some(Policy::Require),
-            "strict" => Some(Policy::Strict),
-            "sealed" => Some(Policy::Sealed),
-            "prefer" => Some(Policy::Prefer),
-            _ => None,
+impl Default for Requirement {
+    /// The shipped default: sandbox on, and a host that gives at least resource
+    /// limits plus one real protection. A host below that has the features
+    /// disabled rather than parsed unconfined.
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_level: Level::Partial,
         }
     }
+}
 
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Policy::Require => "require",
-            Policy::Strict => "strict",
-            Policy::Sealed => "sealed",
-            Policy::Prefer => "prefer",
-        }
+impl Requirement {
+    pub fn new(enabled: bool, min_level: Level) -> Self {
+        Self { enabled, min_level }
     }
 
-    /// Whether this confinement is enough for this policy.
+    /// The requirement the `[sandbox]` section states.
     ///
-    /// Takes the whole report rather than its level because the decision is
-    /// made from the report's facts on both sides of the process boundary: the
-    /// parent asks it once at startup, and the child asks it again before it
-    /// reads a request.
-    pub fn accepts(self, report: &Report) -> bool {
+    /// An unparseable `min_level` falls back to the shipped default rather than
+    /// to "none": a typo must not quietly disable the confinement.
+    pub fn from_config(enabled: bool, min_level: &str) -> Self {
+        Self::new(enabled, Level::parse(min_level).unwrap_or(Level::Partial))
+    }
+
+    /// Whether this confinement is enough, and if not, which half refused.
+    ///
+    /// Takes the whole report rather than its level because the answer is about
+    /// the report's items on both sides of the process boundary: the parent asks
+    /// it once at startup, and the child asks it again before it reads a request.
+    pub fn accepts(&self, report: &Report) -> Result<(), Refusal> {
+        if !self.enabled {
+            return Err(Refusal::Disabled);
+        }
+        let got = report.level();
+        if got < self.min_level {
+            return Err(Refusal::BelowMinimum {
+                got,
+                min: self.min_level,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Why a confinement was refused.
+///
+/// The two cases are not the same problem: the switch is the admin's own choice
+/// and leaves the work undone, while a host below the minimum is an environment
+/// problem the backfill retries once the host can confine the child.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// `sandbox.enabled` is false.
+    Disabled,
+    /// The host grades below `sandbox.min_level`.
+    BelowMinimum { got: Level, min: Level },
+}
+
+impl Refusal {
+    /// The refusal as a sentence, for a log line or an error.
+    pub fn reason(self) -> String {
         match self {
-            Policy::Require => report.level() >= Level::Partial,
-            Policy::Strict => report.level() == Level::Full,
-            Policy::Sealed => report.level() == Level::Full && report.closure() == Closure::Full,
-            Policy::Prefer => true,
+            Refusal::Disabled => "the sandbox is switched off (`sandbox.enabled`)".to_string(),
+            Refusal::BelowMinimum { got, min } => format!(
+                "this host gives `{}` confinement and `sandbox.min_level` is `{}`",
+                got.as_str(),
+                min.as_str()
+            ),
         }
     }
 }
@@ -517,60 +569,61 @@ pub fn runner(exe: &Path) -> Option<Runner> {
     }
 }
 
-/// Apply every layer this platform offers to the current process.
+/// Apply every protection this platform offers to the current process.
 ///
-/// Must be called on the child's only thread and before the document is read:
+/// Must be called on the child's only thread and before the request is read:
 /// Landlock and seccomp are inherited by threads created afterwards, and the
-/// parsers create one.
-pub fn confine(external: External, measure: Measure) -> Report {
-    let (mut layers, mut detail) = platform_confine();
+/// parsers create one. `profile` says what the child is allowed to reach, and is
+/// carried into the report so a probe of one profile can never be read as the
+/// answer for another.
+pub fn confine(external: External, profile: Profile, measure: Measure) -> Report {
+    let (mut protections, mut detail) = platform_confine(profile);
 
     if external.runner {
         // The parent asserts it wrapped this process in a runner whose profile
         // governs all three. Every claim is measured below, so a wrapper that
         // silently did nothing drops the level instead of reporting it.
-        layers.files = true;
-        layers.network = true;
-        layers.process = true;
+        protections.files = true;
+        protections.network = true;
+        protections.process = true;
         detail.push("runner=external".to_string());
     }
 
-    // Every layer that was claimed by a mechanism is now measured, whichever
-    // process installed it: the child's own Landlock ruleset, a token the parent
-    // created, or a profile a runner applied.
+    // Every protection that was claimed by a mechanism is now measured,
+    // whichever process installed it: the child's own Landlock ruleset, a token
+    // the parent created, or a profile a runner applied.
     #[cfg(any(unix, windows))]
     {
-        if layers.files {
+        if protections.files {
             if files_are_denied() {
                 detail.push("files=measured-denied".to_string());
             } else {
-                layers.files = false;
+                protections.files = false;
                 detail.push("files=measured-open".to_string());
             }
         }
-        if layers.network {
+        if protections.network {
             if network_is_measured(measure) {
                 if network_is_denied() {
                     detail.push("network=measured-denied".to_string());
                 } else {
-                    layers.network = false;
+                    protections.network = false;
                     detail.push("network=measured-open".to_string());
                 }
             } else {
-                // The layer is what the kernel's token says it is; the effect
-                // probe that would confirm it costs a connection attempt, and
-                // the probe that runs once is where that belongs.
+                // The protection is what the kernel's token says it is; the
+                // effect probe that would confirm it costs a connection attempt,
+                // and the probe that runs once is where that belongs.
                 detail.push("network=installed".to_string());
             }
         }
     }
-    // The far edge of the Windows files layer, reported beside the near one: an
-    // AppContainer denies what the user's own ACLs grant and permits what `ALL
-    // APPLICATION PACKAGES` grants, which is the system tree the child loads
-    // from. Which of the two it found is as much of the answer as the layer
-    // count.
+    // The far edge of the Windows files protection, reported beside the near
+    // one: an AppContainer denies what the user's own ACLs grant and permits
+    // what `ALL APPLICATION PACKAGES` grants, which is the system tree the child
+    // loads from. Which of the two it found is as much of the answer as the item.
     #[cfg(windows)]
-    if layers.files {
+    if protections.files {
         detail.push(format!("system={}", system_tree()));
     }
 
@@ -578,7 +631,7 @@ pub fn confine(external: External, measure: Measure) -> Report {
     // see the effect of cheaply: an external runner's profile on macOS, and on
     // Linux the seccomp filter that is installed in the same step that denies
     // `fork`. Both are checked here, in the tier that can afford a fork; the
-    // per-document child claims what it installed and leaves the effect to the
+    // per-request child claims what it installed and leaves the effect to the
     // probe.
     #[cfg(unix)]
     if measure == Measure::Thorough {
@@ -589,7 +642,7 @@ pub fn confine(external: External, measure: Measure) -> Report {
             match facts.exec_denied {
                 Some(true) => detail.push("process=measured-denied".to_string()),
                 Some(false) => {
-                    layers.process = false;
+                    protections.process = false;
                     detail.push("process=measured-open".to_string());
                 }
                 // The fork itself was refused, so the exec probe never ran: the
@@ -614,7 +667,8 @@ pub fn confine(external: External, measure: Measure) -> Report {
     detail.push(format!("measure={}", measure.as_str()));
 
     Report {
-        layers,
+        profile,
+        protections,
         detail: detail.join(","),
     }
 }
@@ -1038,24 +1092,28 @@ fn threads_work() -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn platform_confine() -> (Layers, Vec<String>) {
+fn platform_confine(profile: Profile) -> (Protections, Vec<String>) {
+    let _ = profile;
     linux::confine()
 }
 
 #[cfg(target_os = "macos")]
-fn platform_confine() -> (Layers, Vec<String>) {
+fn platform_confine(profile: Profile) -> (Protections, Vec<String>) {
+    let _ = profile;
     seatbelt::confine()
 }
 
 #[cfg(target_os = "windows")]
-fn platform_confine() -> (Layers, Vec<String>) {
+fn platform_confine(profile: Profile) -> (Protections, Vec<String>) {
+    let _ = profile;
     windows::confine()
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn platform_confine() -> (Layers, Vec<String>) {
+fn platform_confine(profile: Profile) -> (Protections, Vec<String>) {
+    let _ = profile;
     (
-        Layers::default(),
+        Protections::default(),
         vec![format!("backend=none,os={}", std::env::consts::OS)],
     )
 }
@@ -1129,30 +1187,30 @@ mod tests {
 
     #[test]
     fn a_level_needs_limits_and_something_else() {
-        assert_eq!(Layers::default().level(), Level::None);
+        assert_eq!(Protections::default().level(), Level::None);
         assert_eq!(
-            Layers {
+            Protections {
                 limits: true,
-                ..Layers::default()
+                ..Protections::default()
             }
             .level(),
             Level::None,
             "resource limits alone are not confinement"
         );
         for other in ["files", "network", "process"] {
-            let mut layers = Layers {
+            let mut items = Protections {
                 limits: true,
-                ..Layers::default()
+                ..Protections::default()
             };
             match other {
-                "files" => layers.files = true,
-                "network" => layers.network = true,
-                _ => layers.process = true,
+                "files" => items.files = true,
+                "network" => items.network = true,
+                _ => items.process = true,
             }
-            assert_eq!(layers.level(), Level::Partial, "{other}");
+            assert_eq!(items.level(), Level::Partial, "{other}");
         }
         assert_eq!(
-            Layers {
+            Protections {
                 limits: true,
                 files: true,
                 network: true,
@@ -1162,31 +1220,47 @@ mod tests {
             Level::Full
         );
         assert_eq!(
-            Layers {
+            Protections {
                 files: true,
-                ..Layers::default()
+                ..Protections::default()
             }
             .level(),
             Level::None,
             "confinement without resource limits is not a level"
         );
+        // The page lists exactly these items, in this order.
+        assert_eq!(
+            Protections {
+                limits: true,
+                files: true,
+                network: false,
+                process: true,
+            }
+            .items(),
+            [
+                ("limits", true),
+                ("files", true),
+                ("network", false),
+                ("process", true)
+            ]
+        );
     }
 
     #[test]
-    fn each_policy_refuses_the_levels_below_it() {
-        /// A report whose layers add up to `level`.
+    fn the_requirement_refuses_the_switch_and_the_grades_below_it() {
+        /// A report whose items add up to `level`.
         fn report_at(level: Level) -> Report {
-            let layers = match level {
-                Level::None => Layers {
+            let items = match level {
+                Level::None => Protections {
                     limits: true,
-                    ..Layers::default()
+                    ..Protections::default()
                 },
-                Level::Partial => Layers {
+                Level::Partial => Protections {
                     limits: true,
                     files: true,
-                    ..Layers::default()
+                    ..Protections::default()
                 },
-                Level::Full => Layers {
+                Level::Full => Protections {
                     limits: true,
                     files: true,
                     network: true,
@@ -1194,60 +1268,85 @@ mod tests {
                 },
             };
             Report {
-                layers,
+                profile: Profile::Documents,
+                protections: items,
                 detail: String::new(),
             }
         }
 
-        for level in [Level::None, Level::Partial, Level::Full] {
-            let report = report_at(level);
-            assert_eq!(report.level(), level, "the fixture is the level it says");
-            assert_eq!(
-                Policy::Require.accepts(&report),
-                level >= Level::Partial,
-                "require at {level:?}"
-            );
-            assert_eq!(
-                Policy::Strict.accepts(&report),
-                level == Level::Full,
-                "strict at {level:?}"
-            );
-            assert!(Policy::Prefer.accepts(&report), "prefer at {level:?}");
-        }
-        assert_eq!(Policy::parse(" require "), Some(Policy::Require));
-        assert_eq!(Policy::parse("strict"), Some(Policy::Strict));
-        assert_eq!(Policy::parse("sealed"), Some(Policy::Sealed));
-        assert_eq!(Policy::parse("PREFER"), Some(Policy::Prefer));
-        assert_eq!(Policy::parse("off"), None);
+        let accepts = |enabled, min_level, level| {
+            Requirement::new(enabled, min_level)
+                .accepts(&report_at(level))
+                .is_ok()
+        };
 
-        // `sealed` is `strict` plus the closure, so it is the one policy that
-        // cares whether a residual is open.
-        let mut report = report_at(Level::Full);
-        assert!(Policy::Strict.accepts(&report));
-        assert!(Policy::Sealed.accepts(&report));
-        report.detail = "system=readable".to_string();
-        assert!(Policy::Strict.accepts(&report), "the layers are unchanged");
-        assert!(
-            !Policy::Sealed.accepts(&report),
-            "a residual is what sealed refuses"
+        // The switch refuses whatever the host gives.
+        for level in [Level::None, Level::Partial, Level::Full] {
+            assert_eq!(
+                Requirement::new(false, Level::None).accepts(&report_at(level)),
+                Err(Refusal::Disabled),
+                "the switch is off at {level:?}"
+            );
+        }
+
+        // `min_level` refuses the grades below it and accepts the rest.
+        for min in [Level::None, Level::Partial, Level::Full] {
+            for level in [Level::None, Level::Partial, Level::Full] {
+                assert_eq!(
+                    accepts(true, min, level),
+                    level >= min,
+                    "min {min:?} against a host that gives {level:?}"
+                );
+            }
+        }
+        assert_eq!(
+            Requirement::new(true, Level::Full).accepts(&report_at(Level::Partial)),
+            Err(Refusal::BelowMinimum {
+                got: Level::Partial,
+                min: Level::Full
+            })
+        );
+
+        // A residual in the detail never changes the decision: it is a note on
+        // an item, not a grade.
+        let mut full = report_at(Level::Full);
+        assert!(Requirement::default().accepts(&full).is_ok());
+        full.detail = "system=readable,fork=open".to_string();
+        assert!(Requirement::default().accepts(&full).is_ok());
+
+        assert_eq!(Requirement::default().enabled, true);
+        assert_eq!(Requirement::default().min_level, Level::Partial);
+        assert_eq!(
+            Requirement::from_config(true, "typo").min_level,
+            Level::Partial,
+            "an unreadable level falls back to the default, never to `none`"
+        );
+        assert_eq!(
+            Requirement::from_config(true, "full").min_level,
+            Level::Full
         );
     }
 
     #[test]
     fn a_report_round_trips_through_its_line() {
         let report = Report {
-            layers: Layers {
+            profile: Profile::Media,
+            protections: Protections {
                 limits: true,
                 files: true,
                 network: true,
                 process: true,
             },
-            detail: "landlock_abi=6,seccomp=on".to_string(),
+            detail: "landlock_abi=6,seccomp=on,helper=allowed".to_string(),
         };
         let line = report.line();
-        assert!(line.starts_with("NFX1-sandbox level=full "), "{line}");
+        assert!(
+            line.starts_with("NFS2-sandbox profile=media level=full "),
+            "{line}"
+        );
         let parsed = Report::parse(&line).expect("parses");
-        assert_eq!(parsed.layers, report.layers);
+        assert_eq!(parsed.profile, Profile::Media);
+        assert_eq!(parsed.protections, report.protections);
         assert_eq!(parsed.level(), Level::Full);
         assert_eq!(parsed.detail, report.detail);
     }
@@ -1258,39 +1357,53 @@ mod tests {
         assert!(Report::parse("level=full limits=on").is_none());
         assert!(
             Report::parse(
-                "NFX1-sandbox level=full limits=on files=open network=open process=open detail=x"
+                "NFS2-sandbox profile=documents level=full limits=on files=open network=open \
+                 process=open detail=x"
             )
             .is_none(),
-            "the level token must match the layers"
+            "the level token must match the items"
         );
         assert!(
             Report::parse(
-                "NFX1-sandbox level=none limits=maybe files=open network=open process=open detail=x"
+                "NFS2-sandbox profile=documents level=none limits=maybe files=open network=open \
+                 process=open detail=x"
             )
             .is_none()
         );
-        // A line missing the closure, or claiming one the facts do not support,
-        // is a line this process did not write.
-        let closed = "NFX1-sandbox level=full limits=on files=denied network=denied \
-                      process=denied closure={closure} detail=x";
-        assert!(Report::parse(&closed.replace("{closure}", "full")).is_some());
-        assert!(Report::parse(&closed.replace("{closure}", "bounded")).is_none());
+        assert!(
+            Report::parse(
+                "NFS2-sandbox profile=documents level=full limits=on files=denied network=denied \
+                 process=denied detail=x"
+            )
+            .is_some()
+        );
+        // A profile is what every report names now, so a line without one — and
+        // a line from the format before it — is not a report.
+        assert!(
+            Report::parse(
+                "NFS2-sandbox level=full limits=on files=denied network=denied process=denied \
+                 detail=x"
+            )
+            .is_none()
+        );
         assert!(
             Report::parse(
                 "NFX1-sandbox level=full limits=on files=denied network=denied process=denied \
                  detail=x"
             )
             .is_none(),
-            "a line from before the closure existed is not a report"
+            "a line from before the profile existed is not a report"
         );
+        assert!(Report::parse("NFS2-sandbox profile=elsewhere level=none limits=off files=open network=open process=open detail=x").is_none());
     }
 
-    /// The residuals are what `sealed` is about: a layer being there is not the
-    /// same as nothing being open, and the difference is a fact in the detail.
+    /// The residuals are notes on the items they weaken, never a grade: each
+    /// known token produces its note and an unknown one produces none.
     #[test]
-    fn a_residual_bounds_an_otherwise_full_report() {
+    fn the_residuals_are_notes_on_the_items() {
         let report = |detail: &str| Report {
-            layers: Layers {
+            profile: Profile::Media,
+            protections: Protections {
                 limits: true,
                 files: true,
                 network: true,
@@ -1298,32 +1411,16 @@ mod tests {
             },
             detail: detail.to_string(),
         };
-        assert_eq!(report("seccomp=1").closure(), Closure::Full);
-        for residual in [
-            "system=readable",
-            "writes=own-store",
-            "writes=user",
-            "fork=open",
-            "ll_gaps=open",
-        ] {
-            assert_eq!(
-                report(&format!("ll_scoped=on,{residual}")).closure(),
-                Closure::Bounded,
-                "{residual} is a residual"
-            );
-        }
-        // `system=denied` is a host stricter than the platform, not a residual.
-        assert_eq!(report("system=denied").closure(), Closure::Full);
-
-        // A missing layer is bounded whatever the facts say.
-        let partial = Report {
-            layers: Layers {
-                limits: true,
-                files: true,
-                ..Layers::default()
-            },
-            detail: "seccomp=1".to_string(),
-        };
-        assert_eq!(partial.closure(), Closure::Bounded);
+        assert!(report("seccomp=1").notes().is_empty());
+        assert_eq!(report("fork=open").notes(), ["fork"]);
+        assert_eq!(report("system=readable").notes(), ["system_tree"]);
+        assert_eq!(report("writes=own-store").notes(), ["writes"]);
+        assert_eq!(report("metadata=open").notes(), ["metadata"]);
+        assert_eq!(report("ll_gaps=open").notes(), ["ll_gaps"]);
+        assert_eq!(report("helper=allowed").notes(), ["helper"]);
+        // The notes never touch the grade.
+        assert_eq!(report("system=readable,fork=open").level(), Level::Full);
+        // A token this build does not know is not a note.
+        assert!(report("something=else").notes().is_empty());
     }
 }

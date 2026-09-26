@@ -1437,7 +1437,7 @@ async fn document_formats_are_searchable() {
 /// server does with it.
 #[test]
 fn the_extraction_worker_reports_its_confinement() {
-    use server::indexer::extract::sandbox::{Level, Report};
+    use server::sandbox::{Level, Report};
 
     // `--probe` rather than `--selftest`: it starts the child the way the
     // server does, with the platform's runner around it, which is the level a

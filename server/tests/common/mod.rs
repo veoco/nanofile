@@ -397,16 +397,16 @@ impl TestServer {
         // `configure_executable` is process-global and set once; a test that
         // wants a worker that cannot run points it elsewhere before the first
         // fixture and is then responsible for the outcome.
-        if server::indexer::extract::worker::configure_executable(std::path::PathBuf::from(env!(
+        if server::sandbox::worker::configure_executable(std::path::PathBuf::from(env!(
             "CARGO_BIN_EXE_nanofile"
         ))) {
-            match server::indexer::extract::worker::status() {
-                server::indexer::extract::worker::Status::Ready(report) => assert!(
-                    report.level() >= server::indexer::extract::sandbox::Level::Partial,
+            match server::sandbox::worker::status() {
+                server::sandbox::worker::Status::Ready(report) => assert!(
+                    report.level() >= server::sandbox::Level::Partial,
                     "the extraction sandbox must confine the worker: {}",
                     report.detail
                 ),
-                server::indexer::extract::worker::Status::Unavailable(reason) => {
+                server::sandbox::worker::Status::Unavailable(reason) => {
                     panic!("the extraction worker is not available: {reason}")
                 }
             }
@@ -530,6 +530,7 @@ impl TestServer {
                 index_dir: index_dir.clone(),
                 ..Default::default()
             },
+            sandbox: infra::config::SandboxConfig::default(),
             tasks: infra::config::TaskConfig {
                 max_active_tasks: task_limits.unwrap_or_default().max_active_tasks,
                 // Tests submit few runs; the byte budget only has to be large

@@ -23,7 +23,7 @@ use server::indexer::DocStatus;
 #[tokio::test]
 async fn a_document_is_not_indexed_without_the_worker() {
     assert!(
-        server::indexer::extract::worker::configure_executable(PathBuf::from(
+        server::sandbox::worker::configure_executable(PathBuf::from(
             "/nonexistent/nanofile-extract-worker"
         )),
         "this file must be the first to configure the worker"

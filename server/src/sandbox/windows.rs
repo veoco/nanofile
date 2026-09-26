@@ -137,7 +137,7 @@ use windows_sys::Win32::System::Threading::{
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
-use super::Layers;
+use super::Protections;
 
 /// Most committed memory the child may use, in bytes.
 ///
@@ -182,8 +182,8 @@ const MAX_SID_BYTES: usize = 68;
 /// token, read here rather than taken from the parent's word. A token that is not
 /// one claims neither layer, and the measurement below clears a claim the token
 /// does not back up.
-pub(super) fn confine() -> (Layers, Vec<String>) {
-    let mut layers = Layers::default();
+pub(super) fn confine() -> (Protections, Vec<String>) {
+    let mut layers = Protections::default();
     let mut detail = Vec::new();
 
     // The job is the parent's, so this process can only read it back: what the

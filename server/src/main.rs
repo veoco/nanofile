@@ -96,19 +96,21 @@ enum Command {
         #[command(subcommand)]
         action: startup::service::ServiceAction,
     },
-    /// Extract one document in a confined process (`indexer::extract::worker`).
+    /// Run one confined job (`sandbox::worker`).
     ///
-    /// The server spawns this on itself for every document it indexes, so the
-    /// parser runs with an address-space limit, a CPU limit, a timeout and the
-    /// platform's file, network and process confinement rather than inside the
-    /// server. Hidden because it is not an operator command: running it by hand
-    /// reads one request from standard input, and `--selftest` prints what the
-    /// sandbox could establish on this host.
+    /// The server spawns this on itself for every request a sandbox-backed
+    /// feature has — document text extraction, image decode, EXIF and media
+    /// (ffmpeg) thumbnails — so the parser runs with an address-space limit, a
+    /// CPU limit, a timeout and the platform's file, network and process
+    /// confinement rather than inside the server. Hidden because it is not an
+    /// operator command: running it by hand reads one request from standard
+    /// input, and `--selftest` prints what the sandbox could establish on this
+    /// host for the profile it names.
     #[command(hide = true)]
     ExtractWorker {
         /// The parent says it wrapped this process in the platform runner
         /// (macOS `sandbox-exec`), so files, the network and process creation
-        /// are not its own layers to establish.
+        /// are not its own protections to establish.
         #[arg(long, default_value_t = false)]
         seatbelt: bool,
         /// Report the confinement this host can give, then exit.
@@ -122,13 +124,19 @@ enum Command {
         /// The parent created this process with a restricted token (Windows).
         #[arg(long, default_value_t = false)]
         restricted: bool,
-        /// What to do when the confinement is below what the server requires.
+        /// Which pipeline this child confines itself for.
         #[arg(
             long,
-            value_name = "require|strict|sealed|prefer",
-            default_value = "require"
+            value_name = "documents|images|media",
+            default_value = "documents"
         )]
-        policy: String,
+        profile: String,
+        /// The grade `sandbox.min_level` requires of this host.
+        #[arg(long, value_name = "full|partial|none", default_value = "partial")]
+        min_level: String,
+        /// `sandbox.enabled` is false: refuse before reading a request.
+        #[arg(long, default_value_t = false)]
+        sandbox_off: bool,
     },
 }
 
@@ -208,29 +216,34 @@ fn main() -> anyhow::Result<()> {
         selftest,
         probe,
         restricted,
-        policy,
+        profile,
+        min_level,
+        sandbox_off,
     } = &command
     {
-        let policy = server::indexer::extract::sandbox::Policy::parse(policy)
-            .unwrap_or(server::indexer::extract::sandbox::Policy::Require);
+        let profile =
+            server::sandbox::Profile::parse(profile).unwrap_or(server::sandbox::Profile::Documents);
+        let min_level =
+            server::sandbox::Level::parse(min_level).unwrap_or(server::sandbox::Level::Partial);
+        let requirement = server::sandbox::Requirement::new(!sandbox_off, min_level);
         // `--probe` runs the parent's half of the startup check, and that half
-        // applies the policy to the report it gets back — so the policy has to
-        // be known here and not only passed to the child. The server takes the
-        // same path through `lib.rs`, before any document is handed over.
-        server::indexer::extract::worker::configure_policy(policy);
+        // applies the requirement to the report it gets back — so the pair has
+        // to be known here and not only passed to the child. The server takes
+        // the same path through `lib.rs`, before any request is handed over.
+        server::sandbox::worker::configure_requirement(requirement);
         if *probe {
-            return server::indexer::extract::worker::probe_report();
+            return server::sandbox::worker::probe_report();
         }
         let job = if *selftest {
-            server::indexer::extract::worker::Job::Selftest
+            server::sandbox::worker::Job::Selftest
         } else {
-            server::indexer::extract::worker::Job::Extract
+            server::sandbox::worker::Job::Extract
         };
-        let external = server::indexer::extract::worker::External {
+        let external = server::sandbox::worker::External {
             runner: *seatbelt,
             restricted_token: *restricted,
         };
-        return server::indexer::extract::worker::run(job, external, policy);
+        return server::sandbox::worker::run(job, external, profile, requirement);
     }
     // A service is the server without a desktop: it has no console a person can
     // read, no session to show a dialog in, and it must never try to put an icon

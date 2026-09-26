@@ -481,7 +481,6 @@ load_sample_interval_secs = 5
 #   NANOFILE_INDEX_ENABLED
 #   NANOFILE_INDEX_INDEX_DIR
 #   NANOFILE_INDEX_BACKFILL_ENABLED
-#   NANOFILE_INDEX_SANDBOX
 enabled = true
 # Relative paths resolve against the binary's directory, like `[database] url`.
 index_dir = "data/index"
@@ -490,21 +489,29 @@ index_dir = "data/index"
 # `tasks.load_aware = true`; without it the pass runs in small increments
 # regardless of load.
 backfill_enabled = true
-# Documents are parsed in a separate, confined process: an address-space and CPU
-# limit, a wall-clock timeout, and this platform's file, network and process
-# confinement. "require" (the default) refuses to index a document when this
-# host cannot confine that process at all, and leaves it to be retried once it
-# can. "strict" refuses anything short of every layer this host can provide — on
-# Windows that includes the AppContainer, which a host can otherwise fail to
-# give without the document being refused. "sealed" also refuses a confinement
-# that still has a residual this platform allows: the Windows container's
-# readable system tree and its writable profile store, macOS's process-fork, and
-# a Linux whose seccomp filter did not install. None of those can be closed
-# everywhere, so "sealed" is expected to index nothing on Windows and macOS.
-# "prefer" indexes it with whatever layers the host does have. A container may
-# need the Landlock syscalls allowed (`landlock_create_ruleset`,
-# `landlock_add_rule`, `landlock_restrict_self`) for "require" to hold.
-sandbox = "require"
+
+[sandbox]
+# Environment variables:
+#   NANOFILE_SANDBOX_ENABLED
+#   NANOFILE_SANDBOX_MIN_LEVEL
+# Every feature that parses content a user supplied runs in a separate,
+# confined process: an address-space and CPU limit, a wall-clock timeout, and
+# this platform's file, network and process protection. That covers document
+# text extraction for the search index, image and media thumbnails (including
+# ffmpeg), EXIF, and avatar processing.
+#
+# `false` disables all of those features. Nothing is parsed inside the server
+# process — there is no unconfined path — so a document is simply not indexed
+# and a thumbnail is not generated. Env: NANOFILE_SANDBOX_ENABLED
+enabled = true
+# The grade this host must reach before those features run. "full" (完整)
+# requires every protection this platform can provide; "partial" (部分) accepts
+# a host missing one of them, which the settings page names; "none" (无)
+# accepts resource limits alone. Below the setting the features are disabled.
+# A container may need the Landlock syscalls allowed
+# (`landlock_create_ruleset`, `landlock_add_rule`, `landlock_restrict_self`)
+# for "full" to hold. Env: NANOFILE_SANDBOX_MIN_LEVEL
+min_level = "partial"
 
 [notification]
 # Environment variables:

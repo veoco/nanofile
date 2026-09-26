@@ -26,9 +26,10 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use tokio::sync::Semaphore;
 
-use crate::indexer::extract::{self, Plan, worker};
+use crate::indexer::extract::{self, Plan};
 use crate::indexer::{DocMeta, TextIndexer, collect_file_entries_under};
 use crate::repository::Repositories;
+use crate::sandbox::worker;
 use crate::tasks::context::JobContext;
 use crate::tasks::run::JobFailure;
 use crate::tasks::spec::JobKey;
@@ -488,7 +489,7 @@ impl IndexService {
 
         let extracted = if matches!(plan, extract::Plan::Document(_)) {
             // A document is parsed by a confined child process and never here:
-            // see `extract::worker`. Spawning it and waiting for it is
+            // see `sandbox::worker`. Spawning it and waiting for it is
             // synchronous and can take seconds, so it runs on the blocking
             // pool under a gate permit that bounds how many children are alive
             // at once. The permit is released when this branch ends.

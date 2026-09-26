@@ -29,7 +29,7 @@
 //! alternative is only that the copy is unbounded for the rest of its life.
 
 #[cfg(target_os = "macos")]
-use super::Layers;
+use super::Protections;
 use std::path::Path;
 
 /// Hardcoded path to the Seatbelt runner.
@@ -117,8 +117,8 @@ fn escape(path: &str) -> String {
 /// footprint watchdog instead, and the report says which of the two is in force:
 /// `as+…` inside the limits, or `as=refused` next to `memwatch…`.
 #[cfg(target_os = "macos")]
-pub(super) fn confine() -> (Layers, Vec<String>) {
-    let mut layers = Layers::default();
+pub(super) fn confine() -> (Protections, Vec<String>) {
+    let mut layers = Protections::default();
     let mut detail = Vec::new();
 
     let limits = super::clamp_resources();

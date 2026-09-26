@@ -21,6 +21,7 @@ pub mod notification;
 pub mod repository;
 pub mod restart;
 pub mod routes;
+pub mod sandbox;
 pub mod serve;
 pub mod service;
 pub mod settings;
@@ -305,13 +306,16 @@ impl AppState {
         // Full-text indexer (its commit task is registered below alongside the
         // other background tasks).
         let indexer = if config.index.enabled {
-            // The extraction worker's confinement policy is process-global:
-            // resolve it once, before any document is handed to a child. The
-            // parser limits themselves are set inside the child, which is the
-            // only process that parses anything.
-            crate::indexer::extract::worker::configure_policy(
-                crate::indexer::extract::sandbox::Policy::parse(&config.index.sandbox)
-                    .unwrap_or(crate::indexer::extract::sandbox::Policy::Require),
+            // The sandbox requirement is process-global: resolve it once, before
+            // any request is handed to a child. The parser limits themselves are
+            // set inside the child, which is the only process that parses
+            // anything. The settings hook re-applies it when an admin saves a
+            // change on the Sandbox page.
+            crate::sandbox::worker::configure_requirement(
+                crate::sandbox::Requirement::from_config(
+                    config.sandbox.enabled,
+                    &config.sandbox.min_level,
+                ),
             );
             match TextIndexer::new(&config.index.index_dir) {
                 Ok(idx) => {
@@ -469,6 +473,14 @@ impl AppState {
                 // The outbox drainer is registered unconditionally and checks
                 // the live switch itself, so flipping it needs no push.
                 Hook::MailDrain => {}
+                Hook::Sandbox => {
+                    crate::sandbox::worker::configure_requirement(
+                        crate::sandbox::Requirement::from_config(
+                            config.sandbox.enabled,
+                            &config.sandbox.min_level,
+                        ),
+                    );
+                }
             }
         }
     }

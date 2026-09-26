@@ -1,4 +1,4 @@
-//! What happens when the host cannot give what `index.sandbox` asks for.
+//! What happens when the host cannot give what `sandbox.min_level` asks for.
 //!
 //! Its own integration-test binary because both the worker's executable and the
 //! policy are process-global and set once. The worker here is a script that
@@ -14,11 +14,12 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use server::indexer::extract::worker::{self, Outcome, Status};
-use server::indexer::extract::{Plan, sandbox};
+use server::indexer::extract::Plan;
+use server::sandbox::worker::{self, Outcome, Status};
+use server::sandbox::{Level, Requirement};
 
-/// A worker that reports a confinement `strict` does not accept, and leaves a
-/// mark behind whenever it is started for a document rather than for a probe.
+/// A worker that reports a confinement `full` does not accept, and leaves a
+/// mark behind whenever it is started for a request rather than for a probe.
 fn short_worker(directory: &Path) -> (PathBuf, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
 
@@ -30,7 +31,7 @@ fn short_worker(directory: &Path) -> (PathBuf, PathBuf) {
             r#"#!/bin/sh
 case "$*" in
   *--selftest*)
-    printf '%s\n' "NFX1-sandbox level=partial limits=on files=denied network=open process=open closure=bounded detail=fake"
+    printf '%s\n' "NFS2-sandbox profile=documents level=partial limits=on files=denied network=open process=open detail=fake"
     exit 0
     ;;
 esac
@@ -47,22 +48,22 @@ exit 0
 }
 
 #[test]
-fn a_policy_the_host_cannot_meet_is_decided_before_any_child() {
+fn a_minimum_the_host_cannot_meet_is_decided_before_any_child() {
     let directory = tempfile::tempdir().expect("temp dir");
     let (executable, marker) = short_worker(directory.path());
     assert!(
         worker::configure_executable(executable),
         "this file must be the first to configure the worker"
     );
-    worker::configure_policy(sandbox::Policy::Strict);
+    worker::configure_requirement(Requirement::new(true, Level::Full));
 
     let status = worker::status();
     let Status::Unavailable(reason) = &status else {
-        panic!("strict must not accept partial confinement: {status:?}");
+        panic!("a `full` minimum must not accept partial confinement: {status:?}");
     };
     assert!(
-        reason.contains("strict") && reason.contains("partial"),
-        "the reason has to name the setting and what the host gave: {reason}"
+        reason.contains("full") && reason.contains("partial"),
+        "the reason has to name the minimum and what the host gave: {reason}"
     );
 
     // The document is not indexed, and — the point — no child was started to
@@ -71,7 +72,7 @@ fn a_policy_the_host_cannot_meet_is_decided_before_any_child() {
     let outcome = worker::extract(Plan::Text, b"irrelevant".to_vec());
     assert!(
         matches!(outcome, Outcome::Unavailable(_)),
-        "a host the policy refuses is an environment problem, not a verdict"
+        "a host below the minimum is an environment problem, not a verdict"
     );
     assert!(
         started.elapsed() < Duration::from_secs(5),
@@ -79,6 +80,6 @@ fn a_policy_the_host_cannot_meet_is_decided_before_any_child() {
     );
     assert!(
         !marker.exists(),
-        "the parent must not hand a document to a worker the policy refuses"
+        "the parent must not hand a request to a worker the requirement refuses"
     );
 }

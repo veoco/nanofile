@@ -66,8 +66,6 @@
 
 mod office;
 mod pdf;
-pub mod sandbox;
-pub mod worker;
 
 /// Version of the extraction pipeline as a whole.
 ///

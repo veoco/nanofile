@@ -20,6 +20,7 @@ const AREAS = [
   "storage/",
   "encryption/",
   "maintenance/",
+  "sandbox/",
   "email/",
   "notifications/",
   "advanced/",

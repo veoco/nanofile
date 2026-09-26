@@ -38,6 +38,8 @@ pub struct Config {
     #[serde(default)]
     pub index: IndexConfig,
     #[serde(default)]
+    pub sandbox: SandboxConfig,
+    #[serde(default)]
     pub notification: NotificationConfig,
     #[serde(default)]
     pub tasks: TaskConfig,
@@ -1416,31 +1418,6 @@ pub struct IndexConfig {
     /// Env: NANOFILE_INDEX_BACKFILL_ENABLED
     #[serde(default = "default_true")]
     pub backfill_enabled: bool,
-    /// What to do when the extraction worker cannot confine itself on this
-    /// host.
-    ///
-    /// Documents are parsed in a separate, confined process; `require` (the
-    /// default) refuses to index one that would run with nothing but resource
-    /// limits, and records it as a failure the backfill retries once the host
-    /// can confine it. `strict` refuses anything short of every layer the host
-    /// can provide — on Windows, the AppContainer included — which is what
-    /// makes the difference between reading a document with fewer layers and
-    /// not reading it. `sealed` refuses a confinement that has a residual the
-    /// platform allows but this configuration does not: the Windows container's
-    /// readable system tree and its own writable profile store, macOS's
-    /// `process-fork`, and a Linux whose seccomp filter did not install. Those
-    /// residuals cannot be closed everywhere, so `sealed` is expected to index
-    /// nothing on Windows and macOS. `prefer` indexes it anyway, which is the
-    /// escape hatch for a kernel or container that blocks the sandbox: the
-    /// worker still applies every layer it can.
-    ///
-    /// Env: NANOFILE_INDEX_SANDBOX
-    #[serde(default = "default_index_sandbox")]
-    pub sandbox: String,
-}
-
-fn default_index_sandbox() -> String {
-    "require".to_string()
 }
 
 impl Default for IndexConfig {
@@ -1449,7 +1426,47 @@ impl Default for IndexConfig {
             enabled: true,
             index_dir: PathBuf::from("data/index"),
             backfill_enabled: true,
-            sandbox: default_index_sandbox(),
+        }
+    }
+}
+
+/// The sandbox that confines every child process which reads untrusted bytes.
+///
+/// Documents, images, EXIF and media (ffmpeg) are all parsed or decoded in a
+/// separate, confined process. This section is the master switch over those
+/// features and the grade this host must reach before they run at all.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct SandboxConfig {
+    /// Master switch over every feature that parses untrusted bytes.
+    ///
+    /// With it off, documents are not parsed for the index, image and media
+    /// thumbnails are not generated, EXIF is not read and avatars are not
+    /// processed. The features are *disabled* rather than run inside the server
+    /// process: there is no unconfined path.
+    ///
+    /// Env: NANOFILE_SANDBOX_ENABLED
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// The grade this host must reach before those features run: `full`,
+    /// `partial` or `none`.
+    ///
+    /// Below it the features are disabled and the settings page says which
+    /// protection this host is missing.
+    ///
+    /// Env: NANOFILE_SANDBOX_MIN_LEVEL
+    #[serde(default = "default_sandbox_min_level")]
+    pub min_level: String,
+}
+
+fn default_sandbox_min_level() -> String {
+    "partial".to_string()
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_level: default_sandbox_min_level(),
         }
     }
 }

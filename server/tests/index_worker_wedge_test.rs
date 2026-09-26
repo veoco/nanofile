@@ -16,8 +16,9 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use server::indexer::extract::worker::{self, Outcome};
-use server::indexer::extract::{Plan, sandbox};
+use server::indexer::extract::Plan;
+use server::sandbox::worker::{self, Outcome};
+use server::sandbox::{Level, Requirement};
 
 /// Write a shell script that answers the startup self-test like a confined
 /// worker and then exits while a background process holds the pipes.
@@ -33,7 +34,7 @@ fn wedge_worker(directory: &std::path::Path) -> PathBuf {
         r#"#!/bin/sh
 case "$*" in
   *--selftest*)
-    printf '%s\n' "NFX1-sandbox level=full limits=on files=denied network=denied process=denied closure=full detail=fake text_chars=8388608"
+    printf '%s\n' "NFS2-sandbox profile=documents level=full limits=on files=denied network=denied process=denied detail=fake text_chars=8388608"
     exit 0
     ;;
 esac
@@ -56,9 +57,9 @@ fn a_process_left_holding_the_pipes_does_not_hold_the_caller() {
         worker::configure_executable(executable),
         "this file must be the first to configure the worker"
     );
-    // A policy that the fake report satisfies: what is under test is the pipe,
+    // A requirement the fake report satisfies: what is under test is the pipe,
     // not the level.
-    worker::configure_policy(sandbox::Policy::Prefer);
+    worker::configure_requirement(Requirement::new(true, Level::Partial));
 
     let started = Instant::now();
     let outcome = worker::extract(Plan::Text, b"irrelevant".to_vec());
