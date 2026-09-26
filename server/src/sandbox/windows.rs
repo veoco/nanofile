@@ -144,27 +144,17 @@ use windows_sys::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, CreateProcessW,
     EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess,
     GetProcessMitigationPolicy, INFINITE, InitializeProcThreadAttributeList, OpenProcessToken,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST,
-    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ProcessChildProcessPolicy,
-    ProcessDynamicCodePolicy, ProcessExtensionPointDisablePolicy, ProcessFontDisablePolicy,
-    ProcessImageLoadPolicy, ProcessStrictHandleCheckPolicy, ProcessSystemCallDisablePolicy,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, SetProcessMitigationPolicy, TerminateProcess,
-    UpdateProcThreadAttribute, WaitForSingleObject,
+    PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+    PROCESS_INFORMATION, ProcessChildProcessPolicy, ProcessDynamicCodePolicy,
+    ProcessExtensionPointDisablePolicy, ProcessFontDisablePolicy, ProcessImageLoadPolicy,
+    ProcessStrictHandleCheckPolicy, ProcessSystemCallDisablePolicy, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW, SetProcessMitigationPolicy, TerminateProcess, UpdateProcThreadAttribute,
+    WaitForSingleObject,
 };
+use windows_sys::Win32::System::WindowsProgramming::PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT;
 
 use super::{Grants, Profile, Protections};
-
-/// `PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY`, from the Windows 11
-/// SDK's `winbase.h`.
-///
-/// Defined here rather than taken from `windows-sys`, whose binding pins an SDK
-/// older than the attribute; the same choice the file makes for `PR_SET_MDWE`
-/// on the Linux side.
-const PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY: usize = 0x0002_0007;
-
-/// `PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT`: the less privileged
-/// container, which is denied everything `ALL APPLICATION PACKAGES` grants.
-const PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT: u32 = 0x0000_0001;
 
 /// Whether the less privileged container should be asked for.
 static LPAC_WANTED: AtomicBool = AtomicBool::new(true);
@@ -981,7 +971,7 @@ impl AttributeList {
     fn container_policy(&mut self, policy: u32) -> std::io::Result<()> {
         unsafe {
             self.set(
-                PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY,
+                PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY as usize,
                 std::ptr::from_ref(&policy).cast::<c_void>(),
                 size_of::<u32>(),
             )
@@ -1248,7 +1238,7 @@ fn grant_helper_access(grants: Grants<'_>) {
                 let path = entry.path();
                 let is_library = path
                     .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("dll"));
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case(OsStr::new("dll")));
                 if is_library {
                     let _ = add_access(
                         path.as_os_str(),
