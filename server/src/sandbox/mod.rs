@@ -115,12 +115,53 @@ mod macos;
 mod seatbelt;
 #[cfg(target_os = "windows")]
 mod windows;
-/// Start the child the way Windows has to: a restricted token cannot be applied
-/// to a running process, so it is part of creation. `spawn_unrestricted` is the
-/// same start without the token, which is how the probe tells a child its token
-/// killed from a child that never started.
+/// Start the child the way Windows has to: a restricted token and an AppContainer
+/// cannot be applied to a running process, so they are part of creation.
 #[cfg(target_os = "windows")]
-pub(super) use windows::{Child as WindowsChild, spawn, spawn_token_only, spawn_unrestricted};
+pub(super) use windows::{Child as WindowsChild, spawn};
+
+/// Whether the child runs in a less privileged container, where the platform
+/// has one.
+///
+/// Windows 11 can opt a container out of `ALL APPLICATION PACKAGES`, which is
+/// what closes the residual note that the container reads the system tree it
+/// loads from. A Windows 10 host keeps that note; the answer here is what the
+/// last launch actually asked for, not what the platform could give.
+pub fn lpac() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows::lpac()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
+/// Whether a launch asked for the less privileged container.
+pub fn lpac_attempted() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows::lpac_attempted()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
+/// Stop asking for the less privileged container, for this process's life.
+///
+/// The attribute is accepted at creation, so a container whose loader cannot
+/// start inside the opt-out fails *after* `CreateProcess` succeeds. When that
+/// happens the parent stops asking and starts over with the plain container:
+/// the confinement is kept, and only the opt-out is given up.
+pub fn disable_lpac() {
+    #[cfg(target_os = "windows")]
+    {
+        windows::disable_lpac();
+    }
+}
 
 /// Why the child was not started in an AppContainer, where the platform has one.
 ///

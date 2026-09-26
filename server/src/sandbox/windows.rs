@@ -58,24 +58,38 @@
 //! a per-user install does not carry that ACE on, so the parent grants it to the
 //! container's SID before the first launch (see [`grant_image_access`]).
 //!
-//! With the container in place, all four layers are the platform's own and the
-//! level is `full`. Without it — a host that refuses the token, or the container,
-//! or the launch — the child still runs, and reports the layers it has rather
-//! than the ones that were asked for, which is what the parent's fallback logs.
+//! With the container in place, all four protections are the platform's own and
+//! the grade is `full`. Without it — a host that refuses the token, or the
+//! container, or the launch — the child still runs, and reports what it has
+//! rather than what was asked for, and the requirement decides whether that is
+//! enough. There is no weaker launch to fall back to.
 //!
-//! What no layer here bounds is the shape of the boundary itself. The container
-//! reads the system tree it loads from (`Windows`, `Program Files` — the paths
-//! `ALL APPLICATION PACKAGES` covers), which is the over-grant this
-//! configuration has, and the reason the child reports `system=readable` beside
-//! the per-user paths it was refused. It also writes inside its own profile
-//! store, which is what `writes=own-store` says: bounded by the store rather
-//! than denied, and the one resource this platform has no bound for at all (the
-//! unix file-size limit has no equivalent here). Everything else is that same
-//! dual-principal check rather than an open door: the registry it reads is the
-//! keys carrying the same grant — system ones, not the user's — while its writes
-//! are redirected to its own per-app store, and the IPC it reaches is over the
-//! handles this process handed it. Those are the platform's own limits, and they
-//! are the same shape as the macOS profile's grants.
+//! # The less privileged container
+//!
+//! Windows 11 lets a container opt out of `ALL APPLICATION PACKAGES`, which is
+//! what closes the residual note below: `PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_
+//! PACKAGES_POLICY` with `…_OPT_OUT` is asked for whenever a container is used,
+//! and the child's `system=` measurement then reports `denied` instead of
+//! `readable`. Windows 10 answers the attribute with an error, so it is dropped
+//! from the list and the host keeps the note. The attribute is accepted at
+//! creation, so a container the loader cannot start inside fails *after*
+//! `CreateProcess` returns success; when that happens the parent stops asking and
+//! starts over in the plain container, keeping every protection and giving up
+//! only the opt-out.
+//!
+//! What no protection here bounds is the shape of the boundary itself. A plain
+//! container reads the system tree it loads from (`Windows`, `Program Files` —
+//! the paths `ALL APPLICATION PACKAGES` covers), which is the over-grant the
+//! child reports as `system=readable` beside the per-user paths it was refused.
+//! It also writes inside its own profile store, which is what `writes=own-store`
+//! says: bounded by the store rather than denied, and the one resource this
+//! platform has no bound for at all (the unix file-size limit has no equivalent
+//! here). Everything else is that same dual-principal check rather than an open
+//! door: the registry it reads is the keys carrying the same grant — system
+//! ones, not the user's — while its writes are redirected to its own per-app
+//! store, and the IPC it reaches is over the handles this process handed it.
+//! Those are the platform's own limits, and they are the same shape as the macOS
+//! profile's grants.
 //!
 //! # References
 //!
@@ -96,6 +110,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{FromRawHandle, RawHandle};
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, HANDLE, LocalFree, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
@@ -138,6 +153,51 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use super::{Grants, Profile, Protections};
+
+/// `PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY`, from the Windows 11
+/// SDK's `winbase.h`.
+///
+/// Defined here rather than taken from `windows-sys`, whose binding pins an SDK
+/// older than the attribute; the same choice the file makes for `PR_SET_MDWE`
+/// on the Linux side.
+const PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY: usize = 0x0002_0007;
+
+/// `PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT`: the less privileged
+/// container, which is denied everything `ALL APPLICATION PACKAGES` grants.
+const PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT: u32 = 0x0000_0001;
+
+/// Whether the less privileged container should be asked for.
+static LPAC_WANTED: AtomicBool = AtomicBool::new(true);
+/// Whether a launch actually asked for it (the platform may be too old).
+static LPAC_ATTEMPTED: AtomicBool = AtomicBool::new(false);
+/// Whether the last launch got it.
+static LPAC_APPLIED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the child runs in a less privileged AppContainer.
+///
+/// Only the parent knows: the policy is a creation attribute, and the child's
+/// own token looks the same either way. `true` means the residual this
+/// configuration used to have — read access to the system tree that
+/// `ALL APPLICATION PACKAGES` covers — is closed.
+pub(super) fn lpac() -> bool {
+    LPAC_APPLIED.load(Ordering::Relaxed)
+}
+
+/// Whether a launch asked for the less privileged container.
+pub(super) fn lpac_attempted() -> bool {
+    LPAC_ATTEMPTED.load(Ordering::Relaxed)
+}
+
+/// Stop asking for it, for the rest of this process's life.
+///
+/// Called when a child that was created under the policy did not come back:
+/// the attribute is accepted at creation, so a container the loader cannot
+/// start in fails *after* `CreateProcess` returns success, and the only way to
+/// tell is to try again without it. The container itself is kept — what is
+/// given up is the opt-out, not the confinement.
+pub(super) fn disable_lpac() {
+    LPAC_WANTED.store(false, Ordering::Relaxed);
+}
 
 /// Most committed memory the child may use, in bytes.
 ///
@@ -553,9 +613,14 @@ fn parent_job(active_process_limit: u32) -> Option<HANDLE> {
 /// The container is what bounds files and the network, and it is applied on top
 /// of the token rather than instead of it: the token takes the privileges away,
 /// the container makes every access check require the package SID as well as the
-/// user's. A host that will not give one still gets the token, and a host that
-/// will not give that either still gets a job-limited child rather than no child
-/// at all.
+/// user's.
+///
+/// There is one launch. A container or a token the system refuses is recorded as
+/// a shortfall and the child is started without it — it still gets the job — and
+/// the report it prints then says what it actually has. What must not happen is
+/// a *launch* failure being walked down to a weaker start until something
+/// succeeds: a child that only runs unconfined is a child whose request must not
+/// run at all, which is the requirement's decision and not this function's.
 pub(crate) fn spawn(
     program: &OsStr,
     args: &[OsString],
@@ -571,109 +636,53 @@ pub(crate) fn spawn(
     if profile.runs_helper() {
         grant_helper_access(grants);
     }
-    let attempts: &[bool] = if container.is_some() {
-        &[true, false]
-    } else {
-        &[false]
-    };
-    let mut refused: Vec<String> = Vec::new();
 
-    for &with_container in attempts {
-        let Some(token) = restricted_token() else {
-            // Recorded, not swallowed: a child that runs without the token has
-            // less confinement than this host asked for, and the reason has to
-            // reach the log next to that fact.
-            note_shortfall("token-refused", None);
-            // No token at all leaves the ordinary child, which still bounds
-            // itself with a Job Object.
-            break;
-        };
-        let mut attempt = args.to_vec();
-        // The child cannot see the token it was created with, and whether
-        // writes are restricted is worth saying out loud.
+    let token = restricted_token();
+    if token.is_none() {
+        // Recorded, not swallowed: a child that runs without the token has less
+        // confinement than this host asked for, and the reason has to reach the
+        // log next to that fact.
+        note_shortfall("token-refused", None);
+    }
+    let mut attempt = args.to_vec();
+    if token.is_some() {
+        // The child cannot see the token it was created with, and whether writes
+        // are restricted is worth saying out loud. Which token it *actually*
+        // carries is read back by the child (`windows::confine`).
         attempt.push(OsString::from("--restricted"));
-        let held = if with_container {
-            container.as_ref()
-        } else {
-            None
-        };
-        match start(program, &attempt, Some(token), held, active_process_limit) {
-            Ok(child) => return Ok(child),
-            Err(error) => {
-                if with_container {
-                    note_shortfall("launch-refused", Some(&error));
-                }
-                refused.push(format!(
-                    "with {}: {error}",
-                    if with_container {
-                        "a container"
-                    } else {
-                        "a restricted token"
-                    }
-                ));
-            }
-        }
     }
-
-    if let Some(error) = refused.first() {
-        tracing::warn!(
-            "extract-worker: the child was refused {error}; starting it with the default token"
-        );
-    }
-    // Every failure is carried, not just the last one: the first says whether the
-    // container or the token was refused, and the probe path has no subscriber
-    // for the warning above to reach.
-    start(program, args, None, None, active_process_limit).map_err(|default| {
-        std::io::Error::new(
-            default.kind(),
-            format!("{}; with the default token: {default}", refused.join("; ")),
-        )
-    })
-}
-
-/// Start the child with this process's own token and no container.
-///
-/// Only the diagnosis uses this. A child that was created and then died before
-/// it reported can be failing because of its token, because of its container or
-/// because of everything else about how it was started, and the rungs are told
-/// apart the only way that cannot be argued with: start it again without them
-/// and see.
-pub(crate) fn spawn_unrestricted(program: &OsStr, args: &[OsString]) -> std::io::Result<Child> {
-    start(program, args, None, None, 1)
-}
-
-/// Start the child with the restricted token and no container.
-///
-/// The rung between the other two: a host whose container will not start still
-/// gets the token, and a run that fails here names the token rather than the
-/// container.
-pub(crate) fn spawn_token_only(program: &OsStr, args: &[OsString]) -> std::io::Result<Child> {
-    match restricted_token() {
-        Some(token) => {
-            let mut attempt = args.to_vec();
-            attempt.push(OsString::from("--restricted"));
-            start(program, &attempt, Some(token), None, 1)
-        }
-        None => Err(std::io::Error::other(
-            "the system refused a restricted token",
-        )),
-    }
+    start(
+        program,
+        &attempt,
+        token,
+        container.as_ref(),
+        active_process_limit,
+        LPAC_WANTED.load(Ordering::Relaxed),
+    )
 }
 
 /// Create the process, its pipes and the handle list that keeps inheritance to
 /// those pipes.
 ///
 /// The token is closed on every path, including the failing ones: this runs
-/// once per document, and a leak here would be a leak in the server's own
-/// handle table.
+/// once per request, and a leak here would be a leak in the server's own handle
+/// table.
 fn start(
     program: &OsStr,
     args: &[OsString],
     token: Option<HANDLE>,
     container: Option<&AppContainer>,
     active_process_limit: u32,
+    want_lpac: bool,
 ) -> std::io::Result<Child> {
-    let started = start_with(program, args, token, container, active_process_limit);
+    let started = start_with(
+        program,
+        args,
+        token,
+        container,
+        active_process_limit,
+        want_lpac,
+    );
     if let Some(token) = token {
         unsafe { CloseHandle(token) };
     }
@@ -686,6 +695,7 @@ fn start_with(
     token: Option<HANDLE>,
     container: Option<&AppContainer>,
     active_process_limit: u32,
+    want_lpac: bool,
 ) -> std::io::Result<Child> {
     let [
         (child_stdin, parent_stdin),
@@ -706,14 +716,31 @@ fn start_with(
     // it may already have lost control of.
     let job = parent_job(active_process_limit);
     // Only these three handles are inherited, the container is named in the same
-    // list, and the job and the child-process policy travel with it. Without the
+    // list, and the job and the container policy travel with it. Without the
     // list, `bInheritHandles` would hand the child everything inheritable this
     // process holds — the server's own standard streams among it.
-    let mut attributes = match AttributeList::new(
+    //
+    // The less privileged container is asked for whenever there is a container
+    // at all. Windows 11 introduced the attribute; on Windows 10 the list
+    // refuses to take it, and it is built again without it — a fallback between
+    // two confined containers, never to an unconfined child. Which one the child
+    // got is reported (`lpac=`), not assumed.
+    let mut lpac = want_lpac && container.is_some();
+    let capabilities = container.map(|held| &held.capabilities);
+    let built = AttributeList::new(
         &inherited,
-        container.map(|held| &held.capabilities),
+        capabilities,
         job.as_ref(),
-    ) {
+        lpac.then_some(PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT),
+    )
+    .or_else(|error| {
+        if !lpac {
+            return Err(error);
+        }
+        lpac = false;
+        AttributeList::new(&inherited, capabilities, job.as_ref(), None)
+    });
+    let mut attributes = match built {
         Ok(attributes) => attributes,
         Err(error) => {
             close_all(&inherited);
@@ -725,6 +752,12 @@ fn start_with(
         }
     };
     startup.lpAttributeList = attributes.as_mut_ptr();
+    // Recorded once the list is live: `true` only when the attribute the
+    // container policy needs actually made it into the list. `attempted` is
+    // what the caller reads to decide whether a child that never reported is
+    // worth starting again without the opt-out.
+    LPAC_APPLIED.store(lpac, Ordering::Relaxed);
+    LPAC_ATTEMPTED.store(lpac, Ordering::Relaxed);
 
     let application: Vec<u16> = program.encode_wide().chain(std::iter::once(0)).collect();
     let mut command_line: Vec<u16> = command_line(program, args)
@@ -898,8 +931,12 @@ impl AttributeList {
         handles: &[HANDLE; 3],
         capabilities: Option<&SECURITY_CAPABILITIES>,
         job: Option<&HANDLE>,
+        container_policy: Option<u32>,
     ) -> std::io::Result<Self> {
-        let count = 1 + usize::from(capabilities.is_some()) + usize::from(job.is_some()) as usize;
+        let count = 1
+            + usize::from(capabilities.is_some())
+            + usize::from(job.is_some())
+            + usize::from(container_policy.is_some());
         let mut size = 0usize;
         unsafe { InitializeProcThreadAttributeList(null_mut(), count as u32, 0, &mut size) };
         let mut buffer = vec![0u8; size];
@@ -918,6 +955,10 @@ impl AttributeList {
                     Some(capabilities) => attributes.container(capabilities),
                     None => Ok(()),
                 })
+                .and_then(|()| match container_policy {
+                    Some(policy) => attributes.container_policy(policy),
+                    None => Ok(()),
+                })
                 .and_then(|()| match job {
                     Some(job) => attributes.job(job),
                     None => Ok(()),
@@ -929,6 +970,21 @@ impl AttributeList {
                 drop(attributes);
                 Err(error)
             }
+        }
+    }
+
+    /// Ask for the less privileged container, which opts out of
+    /// `ALL APPLICATION PACKAGES`.
+    ///
+    /// The attribute is one Windows 11 introduced; on Windows 10 the call
+    /// refuses it, which is how support is detected without reading a version.
+    fn container_policy(&mut self, policy: u32) -> std::io::Result<()> {
+        unsafe {
+            self.set(
+                PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY,
+                std::ptr::from_ref(&policy).cast::<c_void>(),
+                size_of::<u32>(),
+            )
         }
     }
 

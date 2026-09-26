@@ -176,11 +176,16 @@ jobs:
           # API is not working at all.
           grep -qE 'mitigations=[1-9]' sandbox.txt
           # The far edge of the files protection: the container refuses the
-          # user's own paths (above) and reads the system tree, which is the
-          # over-grant this configuration has. Asserted rather than left in a
-          # comment, so a host where `ALL APPLICATION PACKAGES` stops covering
-          # the system tree says so in the log.
-          grep -q 'system=readable' sandbox.txt
+          # user's own paths (above). On Windows 11 the less privileged
+          # container also takes away the system tree that
+          # `ALL APPLICATION PACKAGES` covers, so `system=readable` is what a
+          # Windows 10 host reports and `denied` is what 11 reports. Either is
+          # a fact about the host, and asserting both keeps a change to either
+          # deliberate.
+          grep -qE 'system=(readable|denied|absent)' sandbox.txt
+          # Which container the launch asked for and got. `off` is what
+          # Windows 10 answers, where the attribute does not exist.
+          grep -qE 'lpac=(on|off)' sandbox.txt
           grep -q 'threads=ok' sandbox.txt
           # Every protection, not `partial|full`: the container is the one this
           # host can lose on its own, and losing it now fails here.
