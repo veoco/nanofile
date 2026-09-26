@@ -672,13 +672,19 @@ pub(crate) fn spawn(
         // carries is read back by the child (`windows::confine`).
         attempt.push(OsString::from("--restricted"));
     }
+    // The media profile asks for the plain container. The less privileged one is
+    // measured to refuse the helper's `CreateProcess` (`Access is denied`), and
+    // what this asks is whether the plain one runs it — the report's `lpac=` says
+    // which container this launch got, and the media probe in CI is what answers
+    // it. The files item is the container's either way.
+    let lpac = LPAC_WANTED.load(Ordering::Relaxed) && !profile.runs_helper();
     start(
         program,
         &attempt,
         token,
         container.as_ref(),
         active_process_limit,
-        LPAC_WANTED.load(Ordering::Relaxed),
+        lpac,
     )
 }
 

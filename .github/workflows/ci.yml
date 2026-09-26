@@ -331,6 +331,51 @@ jobs:
           grep -q 'parse=media-ok' /tmp/media.txt ||
             echo "media helper did not run: $(grep -o 'parse=media-[^ ]*' /tmp/media.txt)"
 
+      # Diagnostics for the one thing the media probe cannot say: *why* the exec
+      # is refused, and whether a Seatbelt profile can start a second generation
+      # of program at all. Synthetic profiles against system binaries answer the
+      # second in one run — `sh` is the child, `echo` the program it starts — and
+      # the sandbox's own log answers the first with the operation it denied.
+      # Nothing here asserts: it prints, and the step above is what gates the
+      # build.
+      - name: Bisect the media profile
+        if: always()
+        run: |
+          # The child is `/bin/sh` and the helper it starts is `/bin/echo`, so the
+          # grants below are the ones the media profile's text is made of.
+          BASE='(version 1) (deny default) (allow process-exec (literal "/bin/sh")) \
+            (allow file-read* (literal "/bin/sh")) (allow file-map-executable (literal "/bin/sh"))'
+          LIBS='(allow file-read* file-test-existence (literal "/") (subpath "/usr/lib") \
+            (subpath "/System/Library") (subpath "/System/Volumes/Preboot/Cryptexes/OS") \
+            (literal "/dev/null") (literal "/dev/urandom")) \
+            (allow file-map-executable (subpath "/usr/lib") (subpath "/System/Library") \
+            (subpath "/System/Volumes/Preboot/Cryptexes/OS")) (allow sysctl-read)'
+          ECHO='(allow process-exec (literal "/bin/echo")) (allow file-read* (literal "/bin/echo")) \
+            (allow file-map-executable (literal "/bin/echo"))'
+          run() {
+            echo "--- $1"
+            sandbox-exec -p "$2" -- /bin/sh -c "$3" && echo "OK $1" || echo "DENIED $1"
+          }
+          # Generations: the first is the sandboxed child itself, the second is
+          # the helper that child starts — which is what the media profile is for.
+          run "first generation, sh only" "$BASE $LIBS" '/bin/echo first'
+          run "second generation, sh only" "$BASE $LIBS" '/bin/echo second'
+          run "second generation, sh and echo" "$BASE $ECHO $LIBS" '/bin/echo second-both'
+          run "second generation, sh, echo, /bin readable" \
+            "$BASE $ECHO (allow file-read* file-map-executable (subpath \"/bin\")) $LIBS" \
+            '/bin/echo second-dir'
+          run "our media profile, child starts the helper" \
+            "$BASE $ECHO (allow file-read* file-map-executable (subpath \"/bin\")) \
+             (allow file-read* file-map-executable (subpath \"/opt/homebrew\")) \
+             (allow file-read* file-map-executable (subpath \"/usr/local\")) \
+             (allow file-read* file-map-executable (subpath \"/opt/local\")) \
+             (allow process-fork) (allow signal (target self)) $LIBS" \
+            'exec /bin/echo helper'
+          echo "--- sandbox denials"
+          log show --last 3m --info \
+            --predicate 'sender == "Sandbox" OR eventMessage CONTAINS "deny"' 2>/dev/null |
+            grep -iE "deny|echo" | tail -30 || true
+
   # ── Frontend tests (pure JS, no npm deps) ──────────────────────────
   frontend-test:
     name: Frontend tests
