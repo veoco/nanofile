@@ -394,20 +394,33 @@ impl TestServer {
         // reason — if this host cannot confine it, instead of letting each
         // document test fail on its own.
         //
+        // The image profile is measured beside it: avatars, EXIF and the image
+        // thumbnails are the other three paths that decode bytes a user chose,
+        // each of them through this one profile. A host that confines documents
+        // and not images would otherwise pass every test in this file and fail
+        // only in the three that ask for an image.
+        //
         // `configure_executable` is process-global and set once; a test that
         // wants a worker that cannot run points it elsewhere before the first
         // fixture and is then responsible for the outcome.
         if server::sandbox::worker::configure_executable(std::path::PathBuf::from(env!(
             "CARGO_BIN_EXE_nanofile"
         ))) {
-            match server::sandbox::worker::status(server::sandbox::Profile::Documents) {
-                server::sandbox::worker::Status::Ready(report) => assert!(
-                    report.level() >= server::sandbox::Level::Partial,
-                    "the extraction sandbox must confine the worker: {}",
-                    report.detail
-                ),
-                server::sandbox::worker::Status::Unavailable(reason) => {
-                    panic!("the extraction worker is not available: {reason}")
+            for profile in [
+                server::sandbox::Profile::Documents,
+                server::sandbox::Profile::Images,
+            ] {
+                match server::sandbox::worker::status(profile) {
+                    server::sandbox::worker::Status::Ready(report) => assert!(
+                        report.level() >= server::sandbox::Level::Partial,
+                        "the {} sandbox must confine the worker: {}",
+                        profile.as_str(),
+                        report.detail
+                    ),
+                    server::sandbox::worker::Status::Unavailable(reason) => panic!(
+                        "the extraction worker is not available for {}: {reason}",
+                        profile.as_str()
+                    ),
                 }
             }
         }

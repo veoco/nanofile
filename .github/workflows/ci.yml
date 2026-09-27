@@ -282,6 +282,21 @@ jobs:
           # count cannot say.
           grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
 
+      # The image profile, which the probe above does not reach: avatars, EXIF
+      # and the image thumbnails are the other three paths that decode bytes a
+      # user chose, and they share this one child.
+      - name: Report the image sandbox profile
+        shell: bash
+        run: |
+          ./target/debug/nanofile.exe extract-worker --probe --profile images | tee images.txt
+          grep -q 'profile=images' images.txt
+          # `level=full` carries files, the network and process creation: a
+          # container that was not created would drop the grade here.
+          grep -q 'level=full' images.txt
+          grep -q 'files=denied' images.txt
+          grep -q 'network=denied' images.txt
+          grep -q 'parse=image-ok(' images.txt
+
       # The media profile is the one that may execute a helper, so it is probed
       # with the helper it will actually be given: a packaged ffmpeg.
       #
@@ -454,6 +469,20 @@ jobs:
           # has. A fork that came back fresh would report `denied` here.
           grep -qE 'exec=(denied|unmeasured)' sandbox.txt
           grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
+
+      # The image profile, which the probe above does not reach: every
+      # thumbnail, avatar and EXIF read runs as this one child, and a profile
+      # that confines documents says nothing about the job this one does.
+      - name: Report the image sandbox profile
+        run: |
+          ./target/debug/nanofile extract-worker --probe --profile images |
+            tee /tmp/images.txt
+          grep -q 'profile=images' /tmp/images.txt
+          grep -q 'files=denied' /tmp/images.txt
+          grep -q 'network=denied' /tmp/images.txt
+          grep -q 'process=denied' /tmp/images.txt
+          grep -q 'level=full' /tmp/images.txt
+          grep -q 'parse=image-ok(' /tmp/images.txt
 
       # Parsing *under* the profile, which the probe above does not do: a
       # profile that denies something the parsers need shows up as a document
@@ -698,6 +727,21 @@ jobs:
           # older than 6.3 answers, which is a fact about the runner.
           grep -qE 'mdwe=(on|off)' /tmp/sandbox.txt
           grep -qE 'seccomp=[0-9]+' /tmp/sandbox.txt
+
+      # The image profile: the child every thumbnail, avatar and EXIF read runs
+      # as. Nothing probed it before this step, and the documents profile above
+      # is not a substitute for it — the two differ in the job they run, not in
+      # what confines them, which is exactly why the missing row went unnoticed.
+      - name: Report the image sandbox profile
+        run: |
+          ./target/debug/nanofile extract-worker --selftest --profile images |
+            tee /tmp/images.txt
+          grep -q 'profile=images level=full' /tmp/images.txt
+          grep -q 'files=denied' /tmp/images.txt
+          grep -q 'network=denied' /tmp/images.txt
+          grep -q 'process=denied' /tmp/images.txt
+          # The effect, not the layers: an image still decodes and encodes.
+          grep -q 'parse=image-ok(' /tmp/images.txt
 
       # The media profile is the one that may execute a helper. This runner has
       # ffmpeg installed (the step above the suite), so the probe runs it under
