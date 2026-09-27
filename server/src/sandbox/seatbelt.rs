@@ -435,10 +435,11 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
         // The media profile is the one that keeps `(allow process-fork)`: it
         // starts the helper by copying this process. Nothing on this platform
         // bounds how many such copies there may be: the CPU limit is per
-        // process, so it bounds each copy and not their number. The parent's
-        // wall-clock timeout and the process group it kills are the bound, and
-        // the report says so instead of letting the absence of a kernel one be
-        // inferred from a note about `fork`.
+        // process, so it bounds each copy and not their number, and no
+        // operation here refuses the `setsid`/`setpgid` a copy would call to
+        // leave the group the parent kills. What is left is the parent's
+        // wall-clock timeout, and the report says so instead of letting the
+        // absence of a kernel bound be inferred from a note about `fork`.
         detail.push("media_process=unbounded".to_string());
     }
     (protections, detail)
