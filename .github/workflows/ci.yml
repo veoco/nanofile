@@ -253,7 +253,8 @@ jobs:
   # in the `linux-amd64` row below and aarch64-linux-gnu in its `linux-arm64`
   # sibling, so these four are compiled by nothing else: a syscall name that only
   # exists on x86_64, or a musl-only libc module, would otherwise reach a release
-  # artifact first.
+  # artifact first. Their arch-specific code is also linted here, which no other
+  # row can do: clippy only ever sees the `target_arch` it is running on.
   cross-check:
     name: Cross check (${{ matrix.target }})
     runs-on: ubuntu-latest
@@ -272,6 +273,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: ${{ matrix.target }}
+          # The wrapped build below runs clippy's lints.
+          components: clippy
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           shared-key: "nanofile"
@@ -291,7 +294,20 @@ jobs:
           echo "/tmp/zig-x86_64-linux-0.16.0" >> $GITHUB_PATH
       - name: Install cargo-zigbuild
         run: cargo install cargo-zigbuild --locked --version 0.23.4
-      - name: Build the workspace for the target
+      # clippy-driver as the workspace wrapper runs clippy's lints inside the same
+      # `cargo zigbuild` pass: no second compile, and the zig CC/linker wiring
+      # cargo-zigbuild already sets up is reused instead of re-derived (`cargo
+      # clippy --target` would have to reproduce it, because this graph's bundled
+      # SQLite needs a C compiler for the target — cc-rs otherwise stops at
+      # `failed to find tool "loongarch64-linux-gnu-gcc"`). What denies the lints
+      # is `[workspace.lints.clippy]` in Cargo.toml; the wrapper is what runs them.
+      #
+      # `clippy::all` and not `-D warnings`: zig's `linker stderr: ignoring
+      # deprecated linker optimization setting '1'` arrives through the
+      # `linker_messages` lint and would fail every row.
+      - name: Build and lint the workspace for the target
+        env:
+          RUSTC_WORKSPACE_WRAPPER: clippy-driver
         run: cargo zigbuild --workspace --target "${{ matrix.target }}"
 
   # ── The whole Rust suite, on every platform we ship ──────────────────
