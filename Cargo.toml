@@ -12,6 +12,13 @@ members = [
 [workspace.lints.rust]
 unused = "deny"
 
+# Clippy's lints are denied the same way. The level reaches every build of a
+# workspace member, and the four Linux cross builds are where it matters: clippy
+# only runs there because `ci.yml` wraps them with clippy-driver. A plain rustc
+# build ignores the group, so nothing else changes.
+[workspace.lints.clippy]
+all = "deny"
+
 [profile.release]
 lto = true
 codegen-units = 1
