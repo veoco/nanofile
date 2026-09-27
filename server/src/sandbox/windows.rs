@@ -1465,7 +1465,7 @@ fn app_container_sid() -> Option<PSID> {
         }
         sid as usize
     });
-    (stored != 0).then(|| stored as PSID)
+    (stored != 0).then_some(stored as PSID)
 }
 
 /// Give the container the read access the media profile's grants need.
