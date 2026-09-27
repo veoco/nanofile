@@ -9,21 +9,21 @@
 //!
 //! * **The Job Object** (the parent, named as a creation attribute) caps the
 //!   process's committed memory, its CPU time and how many processes it may
-//!   hold, restricts the window station, the clipboard and handles to other
-//!   processes, and — because `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` is set and
-//!   the handle stays here — takes whatever it started with it. The child reads
+//!   hold, and — because `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` is set and the
+//!   handle stays here — takes whatever it started with it. The child reads
 //!   the limits back rather than trusting that they were set. A child that held
 //!   its own job handle, which is what this used to be, could have raised the
-//!   limit it was bounded by.
+//!   limit it was bounded by. It carries no window-station, clipboard or handle
+//!   restrictions: those were removed for the reason recorded with the job's
+//!   constants below, because they killed the child in its own loader.
 //! * **The restricted token** (the parent, at creation) cannot be applied to a
 //!   running process, so it is the parent that starts the child with one:
 //!   `CreateProcessAsUser` with a restricted version of the parent's own token,
 //!   which is the one case Windows allows without `SeAssignPrimaryToken`.
 //!   Privileges are gone, the administrative SIDs are deny-only, and write
-//!   access is checked against the restricting SIDs alone. The token is also put
-//!   at **low integrity**, which is the one mechanism that bounds a write by
-//!   itself: the mandatory check is a second, independent half of every access
-//!   check, and it is why Chromium runs its renderers below medium.
+//!   access is checked against the restricting SIDs alone. No integrity label is
+//!   set here: low integrity is the container's own property, and the child
+//!   reports the level it reads back (`il=`) rather than assuming one.
 //! * **The AppContainer** (the parent, at creation) is a process-creation
 //!   attribute rather than a token: `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`
 //!   with an AppContainer SID and *no capabilities* is what turns the child into
@@ -69,8 +69,10 @@
 //! With the container in place, all four protections are the platform's own and
 //! the grade is `full`. Without it — a host that refuses the token, or the
 //! container, or the launch — the child still runs, and reports what it has
-//! rather than what was asked for, and the requirement decides whether that is
-//! enough. There is no weaker launch to fall back to.
+//! rather than what was asked for. The probe walks the weaker creations this
+//! module also starts (container only, token only, neither) when a stronger one
+//! answers nothing, and the requirement decides whether the creation that
+//! answered is enough.
 //!
 //! # The less privileged container
 //!
@@ -121,7 +123,8 @@
 //! decided by ACEs that name its own package SID, so a helper somewhere the user
 //! installed it needs an explicit grant — on the helper's own file and on the
 //! libraries beside it, and on nothing else. The child opens the file it was
-//! granted and reports `helper=allowed` either way.
+//! granted and says which way that went: `helper=allowed` when the grant took,
+//! and a `helper-grant-refused` token when it did not.
 //!
 //! Granting only files is deliberate, on two counts. Walking *up* to the helper
 //! and granting every directory on the way looks like the thorough thing to do,
