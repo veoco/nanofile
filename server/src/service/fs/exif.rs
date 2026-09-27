@@ -44,6 +44,11 @@ impl ExifService {
             )));
         }
 
+        // The child may work for the whole image timeout, so this queues on the
+        // same gate every image path uses; the permit covers the wait below.
+        let _permit = crate::sandbox::jobs::images::acquire_image_permit()
+            .await
+            .map_err(|e| AppError::Internal(format!("EXIF worker gate failed: {e}")))?;
         let exif_data =
             tokio::task::spawn_blocking(move || crate::sandbox::jobs::images::exif(&content))
                 .await

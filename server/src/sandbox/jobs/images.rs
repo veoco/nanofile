@@ -98,12 +98,12 @@ fn unknown_tag(tag: u8) -> String {
 /// The gate that bounds how many image children are alive at once.
 ///
 /// A cache miss for a file thumbnail, an avatar or an EXIF read spawns one
-/// confined child, and each may work for the whole timeout. Every caller that
-/// can be reached with an attacker's input queues on this permit rather than
-/// spawning without bound: the file-thumbnail path has always used it, and the
-/// avatar path is the one that could be reached without authentication, so it
-/// paces the same way. A constant rather than a setting, so it cannot be set to
-/// "unlimited" by accident.
+/// confined child, and each may work for the whole timeout. Every caller queues
+/// on this permit rather than spawning without bound: the file-thumbnail path
+/// has always used it, the avatar path paces both its write and its read side
+/// this way, and the EXIF path does too. The avatar *read* path is the one that
+/// can be reached without authentication. A constant rather than a setting, so
+/// it cannot be set to "unlimited" by accident.
 pub(crate) const MAX_CONCURRENT_IMAGE_WORKERS: usize = 4;
 
 static IMAGE_CONCURRENCY: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
