@@ -12,7 +12,7 @@
 use std::io::Read;
 
 use crate::sandbox::worker::{self, RunOutcome};
-use crate::sandbox::{Grants, Profile};
+use crate::sandbox::{Grants, JobVerdict, Profile};
 use crate::thumbnail_util::{self, ThumbFormat};
 
 /// Re-encode the image as a thumbnail of `size`.
@@ -169,12 +169,13 @@ fn answer(op: u8, size: u32, data: &[u8]) -> (u8, Vec<u8>) {
 /// The self-test: decode a generated image and encode it again.
 ///
 /// A profile that cannot do the work says so here rather than on the first
-/// thumbnail a user asks for.
-pub fn probe() -> String {
+/// thumbnail a user asks for. The token is what the report carries and a CI step
+/// greps; the verdict beside it is what the parent decides on.
+pub fn probe() -> (String, JobVerdict) {
     let png = tiny_png();
     match thumbnail_util::generate_thumbnail_encoded(&png, 16) {
-        Ok((bytes, _)) => format!("image-ok({})", bytes.len()),
-        Err(error) => format!("image-failed({error})"),
+        Ok((bytes, _)) => (format!("image-ok({})", bytes.len()), JobVerdict::Ok),
+        Err(error) => (format!("image-failed({error})"), JobVerdict::Failed),
     }
 }
 
@@ -233,7 +234,9 @@ mod tests {
     /// The self-test does the work rather than assuming it.
     #[test]
     fn the_probe_decodes_and_re_encodes() {
-        assert!(probe().starts_with("image-ok("), "{}", probe());
+        let (token, job) = probe();
+        assert!(token.starts_with("image-ok("), "{token}");
+        assert_eq!(job, JobVerdict::Ok);
     }
 
     /// The request framing is the magic, the operation, the size and the bytes.

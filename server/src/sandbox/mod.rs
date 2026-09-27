@@ -427,12 +427,44 @@ impl Profile {
     pub const ALL: [Profile; 3] = [Profile::Documents, Profile::Images, Profile::Media];
 }
 
+/// What the profile's own work produced, when the self-test measured it.
+///
+/// The items say what the host *allows* a child to do. They cannot say whether
+/// the program the profile exists to run still does its work: a profile can
+/// install every item and decode nothing. The child measures that half too and
+/// writes it as the `parse=` token, which [`Report::parse`] reads back as this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobVerdict {
+    /// The work came out as the input says it should.
+    Ok,
+    /// There was nothing to work with — no helper configured, no file to read.
+    /// A state, not a failure.
+    Nothing,
+    /// The work produced no text at all.
+    Empty,
+    /// The work produced something other than the input's own answer.
+    Different,
+    /// The work declined the input.
+    Unsupported,
+    /// The program that does the work could not be started, or failed.
+    Failed,
+}
+
 /// What the child established, and how.
 #[derive(Debug, Clone)]
 pub struct Report {
     /// Which pipeline this child confined itself for.
     pub profile: Profile,
     pub protections: Protections,
+    /// What the profile's own work produced in the self-test, when the child
+    /// ran it. `None` for a request's child, which reports nothing, and for a
+    /// line from before the token existed.
+    ///
+    /// Read from the `parse=` detail token rather than carried as a claim of its
+    /// own, exactly like [`Report::notes`]: the token is what crosses the
+    /// process boundary. Unlike a note this one *is* decided on, for the media
+    /// profile alone — see `worker::accept`.
+    pub job: Option<JobVerdict>,
     /// Mechanism tokens and measurements, comma-joined and whitespace-free.
     pub detail: String,
 }
@@ -579,13 +611,60 @@ impl Report {
 
         // The level is redundant with the items, so a line whose halves disagree
         // is not one of ours.
+        let job = job_verdict(&detail);
         let report = Report {
             profile: profile?,
             protections,
+            job,
             detail,
         };
         (level == Some(report.level())).then_some(report)
     }
+}
+
+/// The profile's own work, as the self-test's `parse=` token says.
+///
+/// The child writes the token last, and a parent appends its own facts after it
+/// (`rung=`, `skipped0=`), so the item list ends at the first field that names a
+/// key again. The answer is the first item that is not `ok`: a profile that read
+/// one document and truncated another did not do its job, whichever order they
+/// arrive in. An item whose verdict this build does not know cannot refuse
+/// anything and is skipped.
+fn job_verdict(detail: &str) -> Option<JobVerdict> {
+    let mut overall: Option<JobVerdict> = None;
+    let mut inside = false;
+    for field in detail.split(',') {
+        let item = match field.strip_prefix("parse=") {
+            Some(item) => {
+                inside = true;
+                item
+            }
+            None if !inside => continue,
+            None if field.contains('=') => break,
+            None => field,
+        };
+        match item_verdict(item) {
+            Some(JobVerdict::Ok) => overall = overall.or(Some(JobVerdict::Ok)),
+            Some(other) => return Some(other),
+            None => {}
+        }
+    }
+    overall
+}
+
+/// One item of the token: `pdf-ok`, `media-ok(2333)`, `media-failed(exit_1)`.
+fn item_verdict(item: &str) -> Option<JobVerdict> {
+    let (_, verdict) = item.split_once('-')?;
+    let verdict = verdict.split('(').next().unwrap_or(verdict);
+    Some(match verdict {
+        "ok" => JobVerdict::Ok,
+        "no-text" => JobVerdict::Empty,
+        "no-helper" | "no-source" => JobVerdict::Nothing,
+        "text-differs" => JobVerdict::Different,
+        "unsupported" => JobVerdict::Unsupported,
+        "failed" | "unavailable" => JobVerdict::Failed,
+        _ => return None,
+    })
 }
 
 fn parse_switch(value: &str) -> Option<bool> {
@@ -830,6 +909,7 @@ pub fn confine(
     Report {
         profile,
         protections,
+        job: None,
         detail: detail.join(","),
     }
 }
@@ -1862,6 +1942,7 @@ mod tests {
             Report {
                 profile: Profile::Documents,
                 protections: items,
+                job: None,
                 detail: String::new(),
             }
         }
@@ -1930,6 +2011,7 @@ mod tests {
                 process: true,
             },
             detail: "landlock_abi=6,seccomp=on".to_string(),
+            job: None,
         };
         let line = report.line();
         assert!(
@@ -1953,6 +2035,7 @@ mod tests {
                 process: false,
             },
             detail: "fork=open,helper=allowed".to_string(),
+            job: None,
         };
         let line = media.line();
         assert!(
@@ -1966,6 +2049,54 @@ mod tests {
         assert_eq!(parsed.protections, media.protections);
         assert_eq!(parsed.level(), Level::Partial);
         assert_eq!(parsed.notes(), ["fork", "helper"]);
+    }
+
+    /// The profile's own verdict is read from the token the child wrote, and a
+    /// token this build does not know refuses nothing.
+    #[test]
+    fn the_job_verdict_is_read_from_the_parse_token() {
+        let job = |detail: &str| {
+            Report::parse(&format!(
+                "NFS2-sandbox profile=media level=partial limits=on files=denied \
+                 network=denied process=open detail={detail}"
+            ))
+            .expect("a media line parses")
+            .job
+        };
+
+        assert_eq!(job("parse=media-ok(2333)"), Some(JobVerdict::Ok));
+        assert_eq!(job("parse=media-no-helper"), Some(JobVerdict::Nothing));
+        assert_eq!(job("parse=media-no-source"), Some(JobVerdict::Nothing));
+        assert_eq!(
+            job("parse=media-failed(exit_status:_1)"),
+            Some(JobVerdict::Failed)
+        );
+        assert_eq!(
+            job("parse=media-unavailable(Access_is_denied)"),
+            Some(JobVerdict::Failed)
+        );
+        // macOS appends the hand-attempted exec check after the verdict.
+        assert_eq!(job("parse=media-ok(2333),hand=ok"), Some(JobVerdict::Ok));
+        // Every item has to be `ok` for a profile with several to be `ok`.
+        assert_eq!(
+            job("parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok"),
+            Some(JobVerdict::Ok)
+        );
+        assert_eq!(
+            job("parse=pdf-ok,docx-text-differs"),
+            Some(JobVerdict::Different)
+        );
+        assert_eq!(job("parse=pdf-unsupported"), Some(JobVerdict::Unsupported));
+        assert_eq!(job("parse=pdf-no-text"), Some(JobVerdict::Empty));
+        // A parent's own facts follow the token and are not items.
+        assert_eq!(
+            job("parse=media-ok(1),rung=container,lpac=on"),
+            Some(JobVerdict::Ok)
+        );
+        // News from a build that spoke another token: no verdict, so nothing is
+        // refused on it.
+        assert_eq!(job("fork=open,helper=allowed"), None);
+        assert_eq!(job("parse=media-invented(1)"), None);
     }
 
     /// A detail token that carries an error string still produces a line the
@@ -1982,12 +2113,14 @@ mod tests {
                 process: false,
             },
             detail: "parse=media-unavailable(Permission denied (os error 13))".to_string(),
+            job: Some(JobVerdict::Failed),
         };
         let line = report.line();
         assert!(!line.contains("Permission denied"), "{line}");
         assert!(line.contains("Permission_denied_(os_error_13)"), "{line}");
         let parsed = Report::parse(&line).expect("the parent must be able to read it");
         assert!(parsed.detail.contains("media-unavailable"));
+        assert_eq!(parsed.job, Some(JobVerdict::Failed));
         assert_eq!(parsed.protections, report.protections);
     }
 
@@ -2078,6 +2211,7 @@ mod tests {
                 process: true,
             },
             detail: detail.to_string(),
+            job: None,
         };
         assert!(report("seccomp=1").notes().is_empty());
         assert_eq!(report("fork=open").notes(), ["fork"]);

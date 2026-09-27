@@ -39,7 +39,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::indexer::extract::{Extracted, MAX_INDEXED_CONTENT_BYTES, Plan, reason};
-use crate::sandbox::{self, Level, Profile, Report, Requirement};
+use crate::sandbox::{self, JobVerdict, Level, Profile, Report, Requirement};
 
 /// The subcommand that turns this binary into the worker.
 pub const SUBCOMMAND: &str = "extract-worker";
@@ -338,10 +338,12 @@ pub fn run(
 
     if job == Job::Selftest {
         // Parsing is the other half of the answer: the report says what was
-        // installed, this says the installed thing can still do its work.
-        report
-            .detail
-            .push_str(&format!(",parse={}", probe_parse(profile, grants)));
+        // installed, this says the installed thing can still do its work. The
+        // token is what the parent reads; the typed verdict beside it is what
+        // the parent decides on, and both come from the one measurement.
+        let (items, verdict) = probe_parse(profile, grants);
+        report.detail.push_str(&format!(",parse={items}"));
+        report.job = Some(verdict);
         println!("{}", selftest_line(&report));
         return Ok(());
     }
@@ -407,10 +409,11 @@ fn selftest_line(report: &Report) -> String {
 /// Do the profile's own work here, under the confinement just installed.
 ///
 /// One whitespace-free verdict per item, so the report stays a line the parent
-/// can parse and a probe step can `grep`. What a caller can act on is "this
-/// confined worker cannot do its job", and *why* belongs to the job's own tests,
-/// which can say more than a token can.
-fn probe_parse(profile: Profile, grants: crate::sandbox::Grants<'_>) -> String {
+/// can parse and a probe step can `grep`, beside the profile's own answer as a
+/// [`JobVerdict`]. What a caller can act on is "this confined worker cannot do
+/// its job", and *why* belongs to the job's own tests, which can say more than a
+/// token can.
+fn probe_parse(profile: Profile, grants: crate::sandbox::Grants<'_>) -> (String, JobVerdict) {
     match profile {
         Profile::Documents => document_verdicts(),
         Profile::Images => crate::sandbox::jobs::images::probe(),
@@ -426,27 +429,39 @@ fn probe_parse(profile: Profile, grants: crate::sandbox::Grants<'_>) -> String {
 /// is the *whole* text: a parser that stopped early, or a limit that cut it
 /// short, is a worker that no longer does its job even though it returned
 /// something containing the words the fixture is made of.
-fn document_verdicts() -> String {
-    crate::indexer::extract::PROBE_DOCUMENTS
+fn document_verdicts() -> (String, JobVerdict) {
+    let mut overall = JobVerdict::Ok;
+    let items = crate::indexer::extract::PROBE_DOCUMENTS
         .iter()
         .map(|document| {
-            let verdict =
+            let (verdict, job) =
                 match crate::indexer::extract::extract(document.plan, document.bytes.to_vec()) {
                     crate::indexer::extract::Extracted::Text(text)
                         if text.trim() == document.expected =>
                     {
-                        "ok"
+                        ("ok", JobVerdict::Ok)
                     }
                     crate::indexer::extract::Extracted::Text(text) if text.trim().is_empty() => {
-                        "no-text"
+                        ("no-text", JobVerdict::Empty)
                     }
-                    crate::indexer::extract::Extracted::Text(_) => "text-differs",
-                    crate::indexer::extract::Extracted::Unsupported(_) => "unsupported",
+                    crate::indexer::extract::Extracted::Text(_) => {
+                        ("text-differs", JobVerdict::Different)
+                    }
+                    crate::indexer::extract::Extracted::Unsupported(_) => {
+                        ("unsupported", JobVerdict::Unsupported)
+                    }
                 };
+            // The profile's answer is its first item that is not `ok`: a reader
+            // that truncated one document did not do its job, whichever order
+            // the documents are in.
+            if overall == JobVerdict::Ok {
+                overall = job;
+            }
             format!("{}-{verdict}", document.name)
         })
         .collect::<Vec<_>>()
-        .join(",")
+        .join(",");
+    (items, overall)
 }
 
 /// Read one request: magic, plan byte, then the file to end of input.
@@ -789,20 +804,49 @@ pub enum PageAnswer {
 /// The page's answer for one profile.
 pub fn page_answer(profile: Profile) -> PageAnswer {
     match capability(profile) {
-        Ok(report) => match configured_requirement().accepts(&report) {
-            Ok(()) => PageAnswer::Measured {
-                report,
-                running: true,
-                reason: None,
-            },
-            Err(refusal) => PageAnswer::Measured {
-                report,
-                running: false,
-                reason: Some(refusal.reason()),
-            },
-        },
+        Ok(report) => {
+            // The profile's own job first: the page leads with whether the
+            // features run, and a media profile whose helper cannot decode does
+            // not run them however well the host confines it.
+            if let Some(why) = job_refusal(&report) {
+                return PageAnswer::Measured {
+                    report,
+                    running: false,
+                    reason: Some(why),
+                };
+            }
+            match configured_requirement().accepts(&report) {
+                Ok(()) => PageAnswer::Measured {
+                    report,
+                    running: true,
+                    reason: None,
+                },
+                Err(refusal) => PageAnswer::Measured {
+                    report,
+                    running: false,
+                    reason: Some(refusal.reason()),
+                },
+            }
+        }
         Err(why) => PageAnswer::Unavailable(why),
     }
+}
+
+/// Why a profile that passed every item may still not serve requests.
+///
+/// The items say what the host allows; they cannot say whether the program the
+/// profile exists to run still does its work. Media is the profile whose whole
+/// job is one program, and its self-test decodes a frame — so a profile that
+/// installed everything and failed that has nothing left to offer. Every request
+/// would start the same doomed helper and answer 404, and the page would show it
+/// as ready. A profile with no helper configured is `Nothing`, not `Failed`:
+/// that is a state an admin chose, not a fault.
+///
+/// Documents and images are not gated on their verdict: a document the probe
+/// could not read is still attempted, and its outcome is recorded per file.
+fn job_refusal(report: &Report) -> Option<String> {
+    (report.profile.runs_helper() && report.job == Some(JobVerdict::Failed))
+        .then(|| format!("the media profile cannot decode a frame: {}", report.detail))
 }
 
 fn measure_capability(profile: Profile) -> Result<Report, String> {
@@ -1230,6 +1274,9 @@ fn probe_once(
 /// check before it reads a request; this is the half that makes the shortfall
 /// visible and stops the spawns.
 fn accept(report: Report) -> Status {
+    if let Some(why) = job_refusal(&report) {
+        return Status::Unavailable(why);
+    }
     match configured_requirement().accepts(&report) {
         Ok(()) => Status::Ready(report),
         Err(refusal) => Status::Unavailable(format!(
@@ -2082,6 +2129,7 @@ mod tests {
                 network: true,
                 process: true,
             },
+            job: None,
             detail: "landlock_abi=6,seccomp=on".to_string(),
         });
         let report = Report::parse(&line).expect("the parent parses it");
@@ -2194,7 +2242,57 @@ mod tests {
         configure_parser_limits();
         assert_eq!(
             probe_parse(Profile::Documents, crate::sandbox::Grants::default()),
-            "pdf-ok,docx-ok,xlsx-ok,pptx-ok"
+            ("pdf-ok,docx-ok,xlsx-ok,pptx-ok".to_string(), JobVerdict::Ok)
+        );
+    }
+
+    /// A media profile that installed every item and cannot decode a frame is
+    /// not one a request may be spawned for; a profile with no helper at all is
+    /// a state, not a failure; and a document's own verdict never gates, because
+    /// its per-file outcome is recorded where the file is.
+    #[test]
+    fn a_media_job_that_failed_is_not_ready() {
+        let media = |job: Option<JobVerdict>, detail: &str| Report {
+            profile: Profile::Media,
+            protections: sandbox::Protections {
+                limits: true,
+                files: true,
+                network: true,
+                process: false,
+            },
+            job,
+            detail: detail.to_string(),
+        };
+
+        for detail in [
+            "parse=media-failed(exit_status:_1)",
+            "parse=media-unavailable(Access_is_denied)",
+        ] {
+            assert!(
+                matches!(
+                    accept(media(Some(JobVerdict::Failed), detail)),
+                    Status::Unavailable(_)
+                ),
+                "{detail} must not be ready"
+            );
+        }
+
+        // No helper configured: the page says so, and requests have nothing to
+        // spawn rather than a broken helper to spawn.
+        assert!(matches!(
+            accept(media(Some(JobVerdict::Nothing), "parse=media-no-helper")),
+            Status::Ready(_)
+        ));
+        assert!(matches!(
+            accept(media(Some(JobVerdict::Ok), "parse=media-ok(2333)")),
+            Status::Ready(_)
+        ));
+
+        let mut documents = media(Some(JobVerdict::Failed), "parse=pdf-failed,docx-ok");
+        documents.profile = Profile::Documents;
+        assert!(
+            matches!(accept(documents), Status::Ready(_)),
+            "a document's verdict is recorded per file, not by refusing the profile"
         );
     }
 

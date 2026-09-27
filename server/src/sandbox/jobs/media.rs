@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::sandbox::worker::{self, RunOutcome};
-use crate::sandbox::{Grants, Profile};
+use crate::sandbox::{Grants, JobVerdict, Profile};
 use crate::thumbnail_util::{self, ThumbFormat};
 
 /// What the source is, which decides how ffmpeg is asked for a frame.
@@ -211,11 +211,7 @@ impl FrameError {
 ///
 /// Shared with the service's own tests, which drive the invocation without the
 /// sandbox to check the arguments ffmpeg is given.
-pub(crate) fn grab_frame(
-    helper: &Path,
-    kind: Kind,
-    source: &Path,
-) -> Result<Vec<u8>, FrameError> {
+pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec<u8>, FrameError> {
     // Video is tried a second in before the first frame; a short clip has no
     // second to seek to, and that attempt failing is not a refusal.
     let attempts: Vec<Option<&str>> = match kind {
@@ -343,21 +339,28 @@ fn run_helper(command: &mut Command) -> std::io::Result<std::process::Output> {
 /// thumbnail from it, through the same call a request takes, so a profile that
 /// cannot read the source or cannot decode what it holds says so here rather
 /// than on the first video a user uploads.
-pub fn probe(grants: Grants<'_>) -> String {
+pub fn probe(grants: Grants<'_>) -> (String, JobVerdict) {
     let Some(helper) = grants.helper else {
-        return "media-no-helper".to_string();
+        return ("media-no-helper".to_string(), JobVerdict::Nothing);
     };
     let Some(source) = grants.source else {
-        return "media-no-source".to_string();
+        // The parent could not write the probe's own file. That says nothing
+        // about the helper, so it is not a failure of the profile.
+        return ("media-no-source".to_string(), JobVerdict::Nothing);
     };
-    let verdict = match encoded_thumbnail(helper, Kind::Video, source, PROBE_SIZE) {
-        Ok((bytes, _)) => format!("media-ok({})", bytes.len()),
-        Err(FrameError::Unavailable(why)) => format!("media-unavailable({})", token(&why)),
-        Err(FrameError::Failed(why)) => format!("media-failed({})", token(&why)),
+    let (token_text, job) = match encoded_thumbnail(helper, Kind::Video, source, PROBE_SIZE) {
+        Ok((bytes, _)) => (format!("media-ok({})", bytes.len()), JobVerdict::Ok),
+        Err(FrameError::Unavailable(why)) => (
+            format!("media-unavailable({})", token(&why)),
+            JobVerdict::Failed,
+        ),
+        Err(FrameError::Failed(why)) => {
+            (format!("media-failed({})", token(&why)), JobVerdict::Failed)
+        }
     };
     #[cfg(target_os = "macos")]
-    let verdict = format!("{verdict},hand={}", hand_start(helper));
-    verdict
+    let token_text = format!("{token_text},hand={}", hand_start(helper));
+    (token_text, job)
 }
 
 /// One token out of a failure message.

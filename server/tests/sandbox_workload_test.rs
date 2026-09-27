@@ -110,7 +110,10 @@ fn text_past_the_cap_is_cut_exactly_at_the_cap() {
     the_worker_ran();
     require_confinement();
 
-    let text = format!("{}{MARKER}", "a".repeat(MAX_INDEXED_CONTENT_BYTES + 512 * 1024));
+    let text = format!(
+        "{}{MARKER}",
+        "a".repeat(MAX_INDEXED_CONTENT_BYTES + 512 * 1024)
+    );
     let extracted = extracted(pdf_with_text(&text));
 
     assert_eq!(
