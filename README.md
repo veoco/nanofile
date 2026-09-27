@@ -186,30 +186,31 @@ null device, because a container may refuse to open that device and the refusal
 would read as "the helper cannot run". A container may need the Landlock
 syscalls allowed for the grade to be Full.
 
-The confinement is tested where it is used, not only where it is described. The
-report is asserted item by item and token by token on each platform — the Linux
-job on every push, macOS and Windows in the daily and manual runs — so a host
-that loses a layer fails a test rather than a thumbnail that quietly returns
-nothing. Each profile also has to do its job under the confinement it claims,
-and the job is judged by its product rather than by a process that started: the
-self-test parses every structured format it carries and compares the **whole**
-text each parser returns, the images child's reply is checked against the pixels
-it was given, and the media child reads a file the parent wrote, decodes a frame
-from it and hands back the encoded thumbnail. That media pipeline — upload,
-scratch file, confined child, thumbnail — is run end to end on all three
-platforms, because the helper is the one program the sandbox executes and a host
+The confinement is tested where it is used, not only where it is described. Every
+platform this project ships runs the whole Rust suite on every push — Linux x86_64
+and arm64, macOS arm64, Windows amd64 — and the four Linux targets with no runner
+(two musl, two loongarch64) are compiled on every push as well. Each profile's
+report is asserted in one place, `server/tests/sandbox_probe_test.rs`: the items
+and the grade from the typed report, and the platform's own mechanism tokens
+beside them. The report is not the whole answer: each profile also has to do its
+job under the confinement it claims, judged by its product rather than by a
+process that started. The probe parses every structured format it carries and
+compares the **whole** text each parser returns, the images child's reply is
+checked against the pixels it was given, and the media child reads a file the
+parent wrote, decodes a frame from it and hands back the encoded thumbnail. That
+media pipeline — upload, scratch file, confined child, thumbnail — is run end to
+end as well, because the helper is the one program the sandbox executes and a host
 that could start it and do nothing else would otherwise pass. A document whose
-text is near the size cap is extracted whole in the confined child, the marker
-at its end included, so the resource limits are measured as sufficient rather
-than merely installed. The protocol's own hand-written requests and that
-size-cap document are asserted in the Linux jobs; every platform asserts its own
-probe and runs the media pipeline. A host where the worker cannot run at all has
-to refuse an avatar, an EXIF read and a thumbnail rather than decode them in the
-server process. On Linux the refusals are put to the running kernel: the filter
-is installed in a child that then makes the calls a parser must not be able to
-make, each beside the same call in the same kind of process without the filter,
-so a refusal that comes from the process's own privileges cannot pass for the
-sandbox.
+text is near the size cap is extracted whole in the confined child, the marker at
+its end included, so the resource limits are measured as sufficient rather than
+merely installed. A host where the worker cannot run at all has to refuse an
+avatar, an EXIF read and a thumbnail rather than decode them in the server
+process. The released binary and the published image run the same probe, which is
+the only place the sandbox runs in `FROM scratch`. On Linux the refusals are put
+to the running kernel: the filter is installed in a child that then makes the
+calls a parser must not be able to make, each beside the same call in the same
+kind of process without the filter, so a refusal that comes from the process's own
+privileges cannot pass for the sandbox.
 
 What the sandbox does not defend against is not asserted to hold: a kernel
 vulnerability, and another process running as the same user. The tests are about
@@ -287,9 +288,9 @@ data/
 
 **Frontend**: the web interface is server-rendered (Askama) with Tailwind CSS and modular JavaScript under `server/frontend/`. `server/build.rs` bundles `frontend/entries/*.js` into the binary with esbuild (required; Tailwind optional). Frontend changes require a `cargo build`; there is no hot reload.
 
-**Testing**: `cargo test --workspace` for Rust, `node --test "server/frontend/**/*.test.js"` for frontend units, and `cd e2e && npx playwright test` for browser end-to-end. CI also runs `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.
+**Testing**: `cargo test --workspace` for Rust, `node --test "server/frontend/**/*.test.js"` for frontend units, and `cd e2e && npx playwright test` for browser end-to-end. CI runs the workspace suite on Linux x86_64 and arm64, macOS arm64 and Windows amd64, plus `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` on Linux.
 
-**CI and releases**: `ci.yml` runs the test suites on push and pull requests; `nightly.yml` builds multi-architecture images daily (`:edge`); `release.yml` publishes versioned images and a GitHub release on a version tag.
+**CI and releases**: `ci.yml` runs on every push and pull request: the whole Rust suite on four platforms, a compile check of the Linux targets that have no runner, and the frontend, e2e and audit jobs. `nightly.yml` builds multi-architecture images daily (`:edge`) and smoke-tests the sandbox of every native artifact and of the published image; `release.yml` does the same and publishes versioned images and a GitHub release on a version tag.
 
 ## License
 

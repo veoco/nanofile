@@ -132,7 +132,7 @@ docker run -d --name nanofile \
 
 `storage.ffmpeg_path` 指定媒体 profile 可以执行的辅助程序。保存它会通过与上面两个设置相同的钩子重新解析这份授权，因此下一次媒体请求执行的就是刚配置的二进制。在 Windows 上，容器只会被授予 helper 的文件**以及它旁边的库文件**，绝不涉及目录：它的令牌保留了 `SeChangeNotifyPrivilege`，所以到达该文件的路径不会被检查，而在目录上写入 DACL 会把继承关系重新施加到其下所有对象上。helper 的标准流使用管道而不是空设备，因为容器可能拒绝打开该设备，而这种拒绝看起来就像“helper 起不来”。容器中可能需要放行 Landlock 系统调用，等级才能达到“完整”。
 
-沙盒是在**使用它的地方**被测的，而不只是在描述它的地方。报告在各自平台上逐项、逐 token 断言：Linux 每次推送都跑，macOS 与 Windows 在每日与手动触发的运行中跑；某一层丢了会让测试失败，而不是让缩略图悄悄返回空。每个 profile 还必须在它声称的约束下完成本职工作，而判定依据是**产物**而不是「进程起来了」：自检会解析它携带的每一种结构化格式并比对解析器返回的**全文**，图片子进程的回复会对照交给它的像素，媒体子进程则读取父进程写下的文件、从中解码一帧并交回编码后的缩略图。整条媒体流水线——上传、scratch 文件、受限子进程、缩略图——在三个平台上都端到端跑一遍，因为 helper 是沙盒唯一会执行的程序，一台只能把它启动起来、别的什么也做不了的机器否则就会蒙混过关。文本接近上限的文档会在受限子进程里被完整抽出（含末尾标记），因此资源限制是按「够用」来测的，而不只是「装上了」。协议层的手写请求与这份上限文档在 Linux 各作业里断言；每个平台都会断言自己的 probe 并跑媒体流水线。worker 完全起不来的机器上，头像上传、EXIF 读取与缩略图都必须拒绝，而不是退回服务器进程内解码。Linux 上这些拒绝会被交给正在运行的内核验证：把过滤器装进一个子进程，再让它发起解析器绝不该发起的调用；每个调用都配一个同样进程、但不装过滤器的对照，因此「因为本进程自身权限而被拒」不可能冒充沙盒。
+沙盒是在**使用它的地方**被测的，而不只是在描述它的地方。本项目交付的每个平台在**每次推送**时都跑完整的 Rust 测试套件——Linux x86_64 与 arm64、macOS arm64、Windows amd64——另外四个没有 runner 的 Linux 目标（两个 musl、两个 loongarch64）每次推送都会编译一遍。每个 profile 的报告只在**一处**断言，即 `server/tests/sandbox_probe_test.rs`：项目与等级取自类型化的 report，平台自身的机制 token 排在旁边。报告并不是全部答案：每个 profile 还必须在它声称的约束下完成本职工作，判定依据是**产物**而不是「进程起来了」——probe 会解析它携带的每一种结构化格式并比对解析器返回的**全文**，图片子进程的回复会对照交给它的像素，媒体子进程则读取父进程写下的文件、从中解码一帧并交回编码后的缩略图。整条媒体流水线——上传、scratch 文件、受限子进程、缩略图——同样端到端跑一遍，因为 helper 是沙盒唯一会执行的程序，一台只能把它启动起来、别的什么也做不了的机器否则就会蒙混过关。文本接近上限的文档会在受限子进程里被完整抽出（含末尾标记），因此资源限制是按「够用」来测的，而不只是「装上了」。worker 完全起不来的机器上，头像上传、EXIF 读取与缩略图都必须拒绝，而不是退回服务器进程内解码。发布出去的二进制与镜像也会跑同一份 probe，那也是沙盒唯一一次在 `FROM scratch` 里运行。Linux 上这些拒绝会被交给正在运行的内核验证：把过滤器装进一个子进程，再让它发起解析器绝不该发起的调用；每个调用都配一个同样进程、但不装过滤器的对照，因此「因为本进程自身权限而被拒」不可能冒充沙盒。
 
 沙盒不防的东西不会被断言为成立：内核漏洞，以及以同一用户运行的其他进程。这些测试针对的是本服务自己建立的约束，而不是它下面的内核。
 
@@ -206,9 +206,9 @@ data/
 
 **前端**：网页由 Askama 服务端渲染 + Tailwind + `server/frontend/` 下的模块化 JS 组成。`server/build.rs` 用 esbuild 把 `frontend/entries/*.js` 打包进二进制（esbuild 必需，Tailwind 可选）。改前端后需重新 `cargo build`，无热重载。
 
-**测试**：`cargo test --workspace`（Rust）、`node --test "server/frontend/**/*.test.js"`（前端）、`cd e2e && npx playwright test`（浏览器端到端）。CI 还会跑 `cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings`。
+**测试**：`cargo test --workspace`（Rust）、`node --test "server/frontend/**/*.test.js"`（前端）、`cd e2e && npx playwright test`（浏览器端到端）。CI 在 Linux x86_64 与 arm64、macOS arm64、Windows amd64 上跑完整的 workspace 套件，并在 Linux 上跑 `cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings`。
 
-**CI 与发布**：`ci.yml` 在 push/PR 时跑测试；`nightly.yml` 每日构建多架构镜像（`:edge`）；`release.yml` 在版本 tag 发布带版本号的镜像与 GitHub Release。
+**CI 与发布**：`ci.yml` 在每次 push/PR 时运行：四平台完整 Rust 套件、没有 runner 的 Linux 目标的编译检查，以及前端、e2e 与依赖审计作业。`nightly.yml` 每日构建多架构镜像（`:edge`），并对每个原生产物与已推送镜像的沙盒做冒烟；`release.yml` 同样冒烟，并在版本 tag 上发布带版本号的镜像与 GitHub Release。
 
 ## 许可证
 
