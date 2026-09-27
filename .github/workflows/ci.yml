@@ -222,10 +222,11 @@ jobs:
           shared-key: "nanofile"
       - name: Install Tailwind CSS
         run: npm ci
-      # `cargo check` still runs the build scripts, and the bundled SQLite and
-      # zstd in this workspace compile C for the *target*: zig is the one C
-      # compiler that covers all four. The archive is pinned to its published
-      # SHA-256, like the cross builds in nightly.yml.
+      # `cargo check` cannot do this: its C compiler is `cc`, which hands zig the
+      # Rust triple (`x86_64-unknown-linux-musl`) and zig parses only
+      # `arch-os-abi`. cargo-zigbuild converts the triple and wires the linker,
+      # and it is the path nightly.yml and release.yml build these targets with.
+      # The archive is pinned to its published SHA-256, as it is there.
       - name: Install zig
         run: |
           curl -sL --retry 3 --retry-delay 2 https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz \
@@ -233,20 +234,10 @@ jobs:
           echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz" | sha256sum -c -
           tar xf /tmp/zig.tar.xz -C /tmp
           echo "/tmp/zig-x86_64-linux-0.16.0" >> $GITHUB_PATH
-      - name: Check the workspace for the target
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          key="${TARGET//-/_}"
-          zig_target="$(echo "$TARGET" | sed -E 's/-unknown-linux-/-linux-/')"
-          echo "CC_$key=zig cc -target $zig_target" >> "$GITHUB_ENV"
-          echo "AR_$key=zig ar" >> "$GITHUB_ENV"
-          # Not `--all-targets`: the test targets pull `aws-lc-sys` (through
-          # reqwest's rustls), whose build script wants a `<triple>-gcc` for the
-          # target, and no such cross compiler exists for three of these four.
-          # The shipped code — which is where a target-specific syscall constant
-          # lives — is checked either way.
-          cargo check --workspace --target "$TARGET"
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked --version 0.23.4
+      - name: Build the workspace for the target
+        run: cargo zigbuild --workspace --target "${{ matrix.target }}"
 
   # ── The whole Rust suite, on every platform we ship ──────────────────
   # One definition and four runners, so "the platform runs the same tests" is

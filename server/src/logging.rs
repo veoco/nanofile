@@ -529,8 +529,10 @@ mod tests {
             Some("custom.log")
         );
 
-        // Absolute paths are used verbatim, no fallback needed.
-        config.logging.file = Some(PathBuf::from("/var/log/nanofile.log"));
+        // Absolute paths are used verbatim, no fallback needed. Built from the
+        // temp directory rather than a literal: `/var/log/…` is relative on
+        // Windows, where an absolute path carries a drive letter.
+        config.logging.file = Some(std::env::temp_dir().join("nanofile.log"));
         assert_eq!(candidate_paths(&config).len(), 1);
     }
 }

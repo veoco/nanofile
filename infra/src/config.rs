@@ -2826,13 +2826,21 @@ request_timeout_secs = 600
         let cwd = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         config.database.url = "postgres://localhost/nanofile".to_string();
-        config.storage.block_dir = PathBuf::from("/srv/blocks");
+        // An absolute path for *this* platform: `/srv/blocks` is relative on
+        // Windows, where an absolute path carries a drive letter, and the check
+        // below is about what absolute means rather than about `/srv`.
+        let absolute = if cfg!(windows) {
+            PathBuf::from(r"C:\srv\blocks")
+        } else {
+            PathBuf::from("/srv/blocks")
+        };
+        config.storage.block_dir = absolute.clone();
         config.logging.file = Some(PathBuf::from("logs/nanofile.log"));
 
         let resolved = config.resolve_state_paths_in(&base, cwd.path());
 
         assert_eq!(config.database.url, "postgres://localhost/nanofile");
-        assert_eq!(config.storage.block_dir, PathBuf::from("/srv/blocks"));
+        assert_eq!(config.storage.block_dir, absolute);
         // `[logging] file` resolves against the same directory, but inside
         // `logging::init`, which also writes the resolved path back.
         assert_eq!(

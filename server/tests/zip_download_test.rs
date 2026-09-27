@@ -228,12 +228,10 @@ async fn test_nested_dir_structure() {
     assert_eq!(zip_resp.status(), 200);
 
     let (names, files) = parse_zip(&zip_resp.bytes().await.unwrap());
-    // Path should preserve full nesting
-    let expected_path = if cfg!(windows) {
-        r"a\b\c\d\e.txt"
-    } else {
-        "a/b/c/d/e.txt"
-    };
+    // Path should preserve full nesting. The separator is `/` on every platform:
+    // that is what the archive format requires, and a name built with the host's
+    // separator would unpack as one entry called `a\b\c\d\e.txt` on Windows.
+    let expected_path = "a/b/c/d/e.txt";
     assert_eq!(names, vec![expected_path]);
     assert_eq!(files[expected_path], b"deeply nested");
 }

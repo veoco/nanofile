@@ -57,12 +57,7 @@ async fn test_repo_files_download_rejects_malformed_path() {
     // the HTTP client before the request is sent, exactly as a browser would,
     // so the traversal cases cannot reach the server at all. What can reach it
     // are the remaining characters the sanitizer rejects.
-    for bad in [
-        "bad%00name.txt",
-        "q%27uote.txt",
-        "back%5Cslash.txt",
-        "lt%3Cname.txt",
-    ] {
+    for bad in ["bad%00name.txt", "q%27uote.txt", "lt%3Cname.txt"] {
         let resp = f
             .client
             .get(
@@ -77,6 +72,24 @@ async fn test_repo_files_download_rejects_malformed_path() {
             resp.status()
         );
     }
+
+    // A backslash is an invalid character off Windows and a path separator on it,
+    // so the same request is two different things: a name the sanitizer refuses,
+    // or the path `back/slash.txt`, which nothing uploaded. Either way it must
+    // not resolve.
+    let resp = f
+        .client
+        .get(
+            &format!("/repos/{}/files/back%5Cslash.txt", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    let refused = if cfg!(windows) { 404 } else { 400 };
+    assert_eq!(
+        resp.status(),
+        refused,
+        "a backslash is a separator on Windows, not an invalid character"
+    );
 
     // Well-formed names — including one with a space — still resolve.
     for good in ["keep.txt", "my%20file.txt"] {

@@ -83,13 +83,19 @@ async fn a_body_over_the_configured_json_limit_is_refused() {
     );
 }
 
+/// The same 65 MiB the JSON route just refused, sent to an upload route: that
+/// group raised its own limit, so the global cap must not apply to it. Without
+/// the per-group limit in `app_routes` this is the assertion that fails.
+///
+/// Not on Windows: `/upload-aj/` rejects a request with no session cookie before
+/// it reads the body, and a server that answers mid-upload closes the connection
+/// under the client's write — which Windows reports as an aborted connection
+/// rather than as the response. The layer the case measures is configured the
+/// same on both platforms.
+#[cfg(not(windows))]
 #[tokio::test]
 async fn an_upload_route_still_takes_a_large_body() {
     let f = TestFixture::new().await;
-    // The same 65 MiB the JSON route just refused, sent to an upload route:
-    // that group raised its own limit, so the global cap must not apply to it.
-    // Without the per-group limit in `app_routes` this is the assertion that
-    // fails.
     let body = vec![b'x'; 65 * 1024 * 1024];
     let resp = reqwest::Client::builder()
         .no_proxy()

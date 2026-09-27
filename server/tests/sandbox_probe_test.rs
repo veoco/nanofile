@@ -251,26 +251,34 @@ fn the_platform_answer(profile: Profile, report: &Report) {
 /// The creation the parent settled on, and the token the child read back.
 #[cfg(windows)]
 fn the_platform_answer(profile: Profile, report: &Report) {
-    // The token is read back from the process rather than believed from the
-    // command line the parent wrote.
-    assert!(has(report, "token=restricted"), "{}", report.detail);
-    // The job is the parent's, named at creation; `,parent` is the mark of that
-    // arrangement, and `limits-missing` is what a job without it would report.
-    assert!(has(report, "job=memory"), "{}", report.detail);
-    assert!(has(report, "parent"), "{}", report.detail);
+    // The ladder tries the strongest creation first and reports the one it
+    // settled for, so the rung and the token beside it are one answer: a
+    // container with the restricted token and one without are two different
+    // creations, and the grade above is what says a container was reached at
+    // all — a host that fell to the token alone could not have `files` denied.
+    let rung = value(report, "rung");
+    assert!(
+        matches!(rung, "container" | "container-only" | "token" | "plain"),
+        "{rung}: {}",
+        report.detail
+    );
+    let token = value(report, "token");
+    match rung {
+        "container" => assert_eq!(token, "restricted", "{}", report.detail),
+        "container-only" => assert_eq!(token, "unrestricted", "{}", report.detail),
+        _ => {}
+    }
     assert!(has(report, "container=appcontainer"), "{}", report.detail);
+    // The job is the parent's, named at creation, and the child reads its limits
+    // back from it: the value is the memory bound, `,parent` is the mark of that
+    // arrangement, and `limits-missing` is what a job without them would report.
+    let job = value(report, "job");
+    assert!(job.starts_with("memory"), "job={job}");
+    assert!(has(report, "parent"), "{}", report.detail);
     // Which creation was asked for and got: `off` is what Windows 10 answers,
     // where the attribute does not exist.
     assert!(
         matches!(value(report, "lpac"), "on" | "off"),
-        "{}",
-        report.detail
-    );
-    assert!(
-        matches!(
-            value(report, "rung"),
-            "container" | "container-only" | "token" | "plain"
-        ),
         "{}",
         report.detail
     );
