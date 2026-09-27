@@ -1076,7 +1076,12 @@ fn files_are_denied(probe: Option<&Path>) -> bool {
         )
     });
 
-    let probe = std::env::temp_dir().join("nanofile-extraction-write-probe");
+    // A unique name, the way the parent's own probe file is made: a path a
+    // local user could predict is a path they could leave a symlink at.
+    let probe = std::env::temp_dir().join(format!(
+        "nanofile-extraction-write-probe-{}",
+        uuid::Uuid::new_v4()
+    ));
     let writes = match std::fs::File::create(&probe) {
         Ok(_) => {
             let _ = std::fs::remove_file(&probe);
@@ -1126,7 +1131,12 @@ fn files_are_denied(probe: Option<&Path>) -> bool {
         return true;
     }
 
-    let probe = std::env::temp_dir().join("nanofile-extraction-write-probe");
+    // Unique for the same reason the unix candidate is: a predictable path is a
+    // path a local user could leave a symlink at.
+    let probe = std::env::temp_dir().join(format!(
+        "nanofile-extraction-write-probe-{}",
+        uuid::Uuid::new_v4()
+    ));
     match std::fs::File::create(&probe) {
         Ok(_) => {
             let _ = std::fs::remove_file(&probe);
