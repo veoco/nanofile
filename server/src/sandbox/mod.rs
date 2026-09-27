@@ -1931,6 +1931,9 @@ mod tests {
         assert_eq!(report("writes=denied").notes(), Vec::<&str>::new());
         assert_eq!(report("metadata=open").notes(), ["metadata"]);
         assert_eq!(report("ll_gaps=open").notes(), ["ll_gaps"]);
+        // The media profile keeps the fork and no platform bounds how many
+        // copies it may make, which is the note beside the item it cannot have.
+        assert_eq!(report("media_process=unbounded").notes(), ["media_process"]);
         assert_eq!(report("helper=allowed").notes(), ["helper"]);
         // A container child whose token is not restricted: the container bounds
         // files and the network, but the flags that strip privileges did not

@@ -281,6 +281,7 @@ jobs:
           # ... and the confined child can still read a document, which the item
           # count cannot say.
           grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
+          grep -q 'measure=thorough' sandbox.txt
 
       # The image profile, which the probe above does not reach: avatars, EXIF
       # and the image thumbnails are the other three paths that decode bytes a
@@ -384,6 +385,9 @@ jobs:
           grep -q 'level=partial' media.txt
           grep -q 'process=open' media.txt
           grep -q 'helper=allowed' media.txt
+          # What the helper may read beyond its own image: the DLLs beside it,
+          # one file at a time. A count would not say how wide the grant is.
+          grep -q 'helper_scope=libs' media.txt
           if [ -n "${FFMPEG_WIN:-}" ]; then
             # ffmpeg answers `-version` and exits 0.
             grep -q 'parse=media-ok' media.txt
@@ -469,6 +473,15 @@ jobs:
           # has. A fork that came back fresh would report `denied` here.
           grep -qE 'exec=(denied|unmeasured)' sandbox.txt
           grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
+          # The profile the parent applied is not this process's own, and the
+          # report says which of the two it is: without this token a Seatbelt
+          # profile that silently did nothing would be measured as if the child
+          # had confined itself.
+          grep -q 'runner=external' sandbox.txt
+          # The fork is refused, so the exec probe has no copy to run in and the
+          # process item is measured as far as this platform can measure it.
+          grep -qE 'process=(unmeasured|measured-denied)' sandbox.txt
+          grep -q 'measure=thorough' sandbox.txt
 
       # The image profile, which the probe above does not reach: every
       # thumbnail, avatar and EXIF read runs as this one child, and a profile
@@ -543,6 +556,10 @@ jobs:
           # exec attempted by hand in that child.
           grep -q 'parse=media-ok' /tmp/media.txt
           grep -q 'hand=ok' /tmp/media.txt
+          # Nothing on this platform bounds how many copies of the media worker
+          # there may be: the profile keeps the fork, and the note beside the
+          # missing process item is what says so.
+          grep -q 'media_process=unbounded' /tmp/media.txt
 
       # What a probe cannot say: whether a Seatbelt profile can start a second
       # generation of program at all, and which operation the sandbox refuses when
@@ -727,6 +744,24 @@ jobs:
           # older than 6.3 answers, which is a fact about the runner.
           grep -qE 'mdwe=(on|off)' /tmp/sandbox.txt
           grep -qE 'seccomp=[0-9]+' /tmp/sandbox.txt
+          # Every layer the report claims, plus the facts beside them. A kernel
+          # that refused one of the limits would drop the grade above, and the
+          # tokens are what say which one to look at.
+          grep -qE 'limits=as[0-9]+,cpu[0-9]+/[0-9]+,nofile[0-9]+,fsize[0-9]+m,core0' \
+            /tmp/sandbox.txt
+          grep -q 'no_new_privs=on' /tmp/sandbox.txt
+          # The capabilities of the process that started this child, read back
+          # after they were dropped: a server started as root must not hand
+          # root to a parser.
+          grep -q 'caps=empty' /tmp/sandbox.txt
+          grep -q 'pdeathsig=on' /tmp/sandbox.txt
+          grep -qE 'landlock_abi=[0-9]+' /tmp/sandbox.txt
+          # The TCP rights and the IPC scopes are the two groups Landlock only
+          # has from a given ABI, so which one this kernel took is a fact about
+          # the runner rather than a claim.
+          grep -qE 'landlock_net=(on|off)' /tmp/sandbox.txt
+          grep -qE 'landlock_scoped=(on|off)' /tmp/sandbox.txt
+          grep -q 'measure=thorough' /tmp/sandbox.txt
 
       # The image profile: the child every thumbnail, avatar and EXIF read runs
       # as. Nothing probed it before this step, and the documents profile above
@@ -771,6 +806,14 @@ jobs:
           # alone, which the report carries rather than leaving the reader to
           # infer it from the files item.
           grep -q 'metadata=open' /tmp/media.txt
+          # The fork is the profile's own: a helper is a second process. What
+          # is missing is any bound on their number, which is the note beside
+          # the item rather than a claim this profile cannot make.
+          grep -q 'fork=open' /tmp/media.txt
+          grep -q 'media_process=unbounded' /tmp/media.txt
+          # The helper's reach, one literal at a time: `libs` here, `trees` on
+          # macOS when the helper lives in a package-manager tree.
+          grep -q 'helper_scope=libs' /tmp/media.txt
 
       # The arm64 syscall table is not the x86_64 one: several of the calls the
       # filter names (the bare path-taking forms) do not exist there, and every
