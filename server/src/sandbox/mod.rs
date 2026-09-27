@@ -802,6 +802,12 @@ impl Grants<'_> {
 /// layer's measurement reads: it is the one candidate that is decisive on every
 /// platform. `None` leaves the measurement to the platform's own heuristics,
 /// which is what a request's child and a hand-run self-test get.
+///
+/// The measurement and the decision are two functions: [`measure_facts`] runs
+/// the effect probes this tier can afford, and [`protect`] decides the grade
+/// from what they answered. The split is what makes every branch of the
+/// decision — including the ones a correctly confining host never takes —
+/// reachable from a test without applying real confinement.
 pub fn confine(
     external: External,
     profile: Profile,
@@ -809,8 +815,136 @@ pub fn confine(
     measure: Measure,
     probe: Option<&Path>,
 ) -> Report {
-    let (mut protections, mut detail) = platform_confine(profile, grants);
+    let (protections, detail) = platform_confine(profile, grants);
+    let facts = measure_facts(protections, profile, grants, measure, probe);
+    let (protections, detail) = protect(protections, detail, external, profile, measure, &facts);
 
+    Report {
+        profile,
+        protections,
+        detail: detail.join(","),
+    }
+}
+
+/// What the effect probes answered, as the fold below reads them.
+///
+/// Every probe field is `None` when *this tier* did not measure that item, which
+/// is not the same as measuring it as missing: a claim no probe was put to stays
+/// a claim, and the fold reports it as what the mechanism installed.
+#[derive(Default)]
+struct Facts {
+    /// Whether a path no profile grants was refused. `Some(true)` is the layer
+    /// standing, `Some(false)` the layer not being there.
+    files: Option<bool>,
+    /// Whether a socket could not be made, or a connection not opened.
+    network: Option<bool>,
+    /// Which side of the files item the system tree is on: the residual the two
+    /// platforms that grant it report beside the item.
+    system: Option<&'static str>,
+    /// What the fork/exec probe answered, on the tier that can afford one.
+    process: Option<ProcessFacts>,
+    /// Why opening the granted helper failed, where the grant is creation
+    /// rather than a rule this side can read back.
+    helper_refused: Option<String>,
+    /// Whether the parent named a helper for this profile at all.
+    helper_granted: bool,
+    /// Whether this process can still spawn a thread.
+    threads: bool,
+}
+
+/// Run the effect probes this tier can afford.
+///
+/// Each `cfg` below is the one the measurement had inline before the split, so
+/// a claim no mechanism made is still never put to a probe: opening the parent's
+/// file or binding a socket is a cost, and a layer that was never installed is
+/// not one this process can measure the absence of.
+fn measure_facts(
+    claimed: Protections,
+    profile: Profile,
+    grants: Grants<'_>,
+    measure: Measure,
+    probe: Option<&Path>,
+) -> Facts {
+    let mut facts = Facts {
+        helper_granted: grants.helper.is_some(),
+        threads: threads_work(),
+        ..Facts::default()
+    };
+    // The profile is read by the helper probe alone, and that probe only exists
+    // on the two platforms whose grant is creation rather than a rule this side
+    // can read back.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = profile;
+
+    // Every protection that was claimed by a mechanism is put to its probe,
+    // whichever process installed it: the child's own Landlock ruleset, a token
+    // the parent created, or a profile a runner applied.
+    #[cfg(any(unix, windows))]
+    {
+        if claimed.files && files_are_measured(measure) {
+            facts.files = Some(files_are_denied(probe));
+        }
+        if claimed.network && network_is_measured(measure) {
+            facts.network = Some(network_is_denied());
+        }
+    }
+    // The far edge of the files protection, reported beside the near one: a
+    // Windows low-box check needs the package the process is checked against,
+    // over and above the user's own ACLs, so the system tree the child loads
+    // from stays readable. macOS reaches the same shape for a different reason —
+    // the worker is dynamically linked, so its profile has to grant the system
+    // library trees the loader reads. Which of the two it found is as much of
+    // the answer as the item, and the mechanism behind the grant is left to the
+    // platform docs rather than asserted here.
+    #[cfg(windows)]
+    if claimed.files {
+        facts.system = Some(system_tree());
+    }
+    #[cfg(target_os = "macos")]
+    if claimed.files {
+        facts.system = Some(macos::system_tree());
+    }
+    // Process creation is only ever claimed by a mechanism this process cannot
+    // see the effect of cheaply: an external runner's profile on macOS, and on
+    // Linux the seccomp filter that is installed in the same step that denies
+    // `fork`. Both are checked here, in the tier that can afford a fork; the
+    // per-request child claims what it installed and leaves the effect to the
+    // probe that runs once.
+    #[cfg(unix)]
+    if measure == Measure::Thorough {
+        facts.process = Some(process_facts());
+    }
+    // The helper is a grant the parent made before this process existed, and on
+    // the platforms that apply one as creation rather than as a rule this side
+    // cannot inspect, the only way to check it is to try: opening the file is
+    // what a profile or an ACL that does not reach it looks like from in here.
+    // The effect is `parse=`; this is the grant that leads to it.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if profile.runs_helper()
+        && let Some(helper) = grants.helper
+        && let Err(error) = std::fs::File::open(helper)
+    {
+        facts.helper_refused = Some(error.to_string());
+    }
+
+    facts
+}
+
+/// Decide the grade from the claims and the measurements.
+///
+/// This is the fail-closed half of the report: a layer a mechanism claimed is
+/// cleared when the probe says the effect is not there, and a claim no probe
+/// reached is reported as what the mechanism installed rather than as a
+/// measurement. Nothing in here touches the process, which is what lets a test
+/// take the paths a host that confines correctly never takes.
+fn protect(
+    mut protections: Protections,
+    mut detail: Vec<String>,
+    external: External,
+    profile: Profile,
+    measure: Measure,
+    facts: &Facts,
+) -> (Protections, Vec<String>) {
     if external.runner {
         // The parent asserts it wrapped this process in a runner whose profile
         // governs all three. Every claim is measured below, so a wrapper that
@@ -821,71 +955,45 @@ pub fn confine(
         detail.push("runner=external".to_string());
     }
 
-    // Every protection that was claimed by a mechanism is now measured,
-    // whichever process installed it: the child's own Landlock ruleset, a token
-    // the parent created, or a profile a runner applied.
-    #[cfg(any(unix, windows))]
-    {
-        if protections.files && files_are_measured(measure) {
-            if files_are_denied(probe) {
-                detail.push("files=measured-denied".to_string());
-            } else {
+    if protections.files {
+        match facts.files {
+            Some(true) => detail.push("files=measured-denied".to_string()),
+            Some(false) => {
                 protections.files = false;
                 detail.push("files=measured-open".to_string());
             }
-        } else if protections.files {
             // The protection is what the mechanism installed; the effect probe
             // that would confirm it needs the parent's own file, and the probe
             // that runs once is where that belongs — the same arrangement as
             // the network item on this platform.
-            detail.push("files=installed".to_string());
+            None => detail.push("files=installed".to_string()),
         }
-        if protections.network {
-            if network_is_measured(measure) {
-                if network_is_denied() {
-                    detail.push("network=measured-denied".to_string());
-                } else {
-                    protections.network = false;
-                    detail.push("network=measured-open".to_string());
-                }
-            } else {
-                // The protection is what the kernel's token says it is; the
-                // effect probe that would confirm it costs a connection attempt,
-                // and the probe that runs once is where that belongs.
-                detail.push("network=installed".to_string());
+    }
+    if protections.network {
+        match facts.network {
+            Some(true) => detail.push("network=measured-denied".to_string()),
+            Some(false) => {
+                protections.network = false;
+                detail.push("network=measured-open".to_string());
             }
+            // The protection is what the kernel's token says it is; the effect
+            // probe that would confirm it costs a connection attempt, and the
+            // probe that runs once is where that belongs.
+            None => detail.push("network=installed".to_string()),
         }
     }
-    // The far edge of the Windows files protection, reported beside the near
-    // one: a low-box check needs the package the process is checked against, over
-    // and above the user's own ACLs, so the system tree the child loads from
-    // stays readable. Which of the two it found is as much of the answer as the
-    // item, and the mechanism behind the grant is left to the platform docs
-    // rather than asserted here — it differs with the container.
-    #[cfg(windows)]
-    if protections.files {
-        detail.push(format!("system={}", system_tree()));
-    }
-    // macOS reaches the same shape for a different reason: the worker is
-    // dynamically linked, so its profile has to grant the system library trees
-    // the loader reads. Reported through the same token, so the page says the
-    // files item is narrower than "no file at all" here too.
-    #[cfg(target_os = "macos")]
-    if protections.files {
-        detail.push(format!("system={}", macos::system_tree()));
+    // Beside the item and never in place of it: a cleared files layer has no
+    // system tree to speak of, and the token would then describe a protection
+    // that is not there.
+    if protections.files
+        && let Some(system) = facts.system
+    {
+        detail.push(format!("system={system}"));
     }
 
-    // Process creation is only ever claimed by a mechanism this process cannot
-    // see the effect of cheaply: an external runner's profile on macOS, and on
-    // Linux the seccomp filter that is installed in the same step that denies
-    // `fork`. Both are checked here, in the tier that can afford a fork; the
-    // per-request child claims what it installed and leaves the effect to the
-    // probe.
-    #[cfg(unix)]
-    if measure == Measure::Thorough {
-        let facts = process_facts();
-        detail.push(format!("fork={}", denial_token(facts.fork_denied)));
-        detail.push(format!("exec={}", denial_token(facts.exec_denied)));
+    if let Some(process) = facts.process {
+        detail.push(format!("fork={}", denial_token(process.fork_denied)));
+        detail.push(format!("exec={}", denial_token(process.exec_denied)));
         if external.runner {
             // A profile that may copy itself has not bounded process creation,
             // whatever it denies about starting programs: the item's own
@@ -897,11 +1005,11 @@ pub fn confine(
             // fork itself is refused there is no copy to try `execve` in, and
             // the claim stands unmeasured rather than being cleared by a
             // measurement that did not happen — the shape Linux already has.
-            if facts.fork_denied == Some(false) {
+            if process.fork_denied == Some(false) {
                 protections.process = false;
                 detail.push("process=measured-open".to_string());
             } else {
-                match facts.exec_denied {
+                match process.exec_denied {
                     Some(true) => detail.push("process=measured-denied".to_string()),
                     Some(false) => {
                         protections.process = false;
@@ -913,16 +1021,7 @@ pub fn confine(
         }
     }
 
-    // The helper is a grant the parent made before this process existed, and on
-    // the platforms that apply one as creation rather than as a rule this side
-    // cannot inspect, the only way to check it is to try: opening the file is
-    // what a profile or an ACL that does not reach it looks like from in here.
-    // The effect is `parse=`; this is the grant that leads to it.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    if profile.runs_helper()
-        && let Some(helper) = grants.helper
-        && let Err(error) = std::fs::File::open(helper)
-    {
+    if let Some(error) = &facts.helper_refused {
         detail.push(format!("helper-grant-refused({error})"));
     }
 
@@ -940,7 +1039,7 @@ pub fn confine(
     // is what the probe reports as `parse=`.
     if profile.runs_helper() {
         protections.process = false;
-        if helper_is_granted(grants.helper.is_some(), &detail) {
+        if helper_is_granted(facts.helper_granted, &detail) {
             detail.push("helper=allowed".to_string());
         }
     }
@@ -949,7 +1048,7 @@ pub fn confine(
     // would make every document unreadable, so it is reported rather than
     // assumed.
     detail.push(
-        if threads_work() {
+        if facts.threads {
             "threads=ok"
         } else {
             "threads=failed"
@@ -958,11 +1057,7 @@ pub fn confine(
     );
     detail.push(format!("measure={}", measure.as_str()));
 
-    Report {
-        profile,
-        protections,
-        detail: detail.join(","),
-    }
+    (protections, detail)
 }
 
 /// Whether the platform said the helper's grant took.
@@ -982,7 +1077,6 @@ fn helper_is_granted(helper: bool, detail: &[String]) -> bool {
 }
 
 /// How a three-valued denial is spelled in the report.
-#[cfg(unix)]
 fn denial_token(denied: Option<bool>) -> &'static str {
     match denied {
         Some(true) => "denied",
@@ -1251,7 +1345,11 @@ fn system_tree() -> &'static str {
 /// nothing. `None` means the question could not be asked (the fork was refused,
 /// so there was no copy to try `execve` in, or the attempt failed in a way that
 /// says nothing about the sandbox).
-#[cfg(unix)]
+///
+/// Only the unix tier fills this in, but [`protect`] reads it on every platform,
+/// so the shape is defined everywhere; a platform with no `fork` probe is one
+/// where the field is always `None`.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, Clone, Copy)]
 struct ProcessFacts {
     fork_denied: Option<bool>,
@@ -1971,5 +2069,376 @@ mod tests {
         assert_eq!(report("system=readable,fork=open").level(), Level::Full);
         // A token this build does not know is not a note.
         assert!(report("something=else").notes().is_empty());
+    }
+
+    /// The protections a mechanism claimed, and the detail that came with them:
+    /// what [`protect`] is handed before it decides anything.
+    fn claimed(files: bool, network: bool, process: bool) -> (Protections, Vec<String>) {
+        (
+            Protections {
+                limits: true,
+                files,
+                network,
+                process,
+            },
+            vec!["backend=test".to_string()],
+        )
+    }
+
+    /// What the fold appended to a detail, which is everything after the
+    /// mechanism's own tokens.
+    fn appended(detail: Vec<String>) -> Vec<String> {
+        detail.into_iter().skip(1).collect()
+    }
+
+    /// The runner's claim is the one the parent asserts rather than measures, so
+    /// it is the one a liar could make. Every layer it claims has to be put to a
+    /// probe, and a probe that answers "open" has to drop the layer and the
+    /// grade with it.
+    #[test]
+    fn a_claim_the_probe_does_not_back_up_is_cleared() {
+        let (protections, detail) = claimed(true, true, true);
+        let facts = Facts {
+            files: Some(false),
+            network: Some(false),
+            process: Some(ProcessFacts {
+                fork_denied: Some(false),
+                exec_denied: Some(false),
+            }),
+            threads: true,
+            ..Facts::default()
+        };
+        let (protections, detail) = protect(
+            protections,
+            detail,
+            External { runner: true },
+            Profile::Documents,
+            Measure::Thorough,
+            &facts,
+        );
+
+        assert!(
+            !protections.files && !protections.network && !protections.process,
+            "a wrapper that did nothing may not keep a layer: {protections:?}"
+        );
+        assert_eq!(
+            protections.level(),
+            Level::None,
+            "resource limits alone are not confinement"
+        );
+        assert_eq!(
+            appended(detail),
+            [
+                "runner=external",
+                "files=measured-open",
+                "network=measured-open",
+                "fork=open",
+                "exec=open",
+                "process=measured-open",
+                "threads=ok",
+                "measure=thorough",
+            ]
+        );
+    }
+
+    /// A claim a probe *did* back up stands, and one no probe reached is reported
+    /// as what the mechanism installed.
+    #[test]
+    fn a_measured_layer_stands_and_an_unmeasured_one_is_what_was_installed() {
+        let (protections, detail) = claimed(true, true, true);
+        let facts = Facts {
+            files: Some(true),
+            network: Some(true),
+            // The fork was refused, so there was no copy to try `execve` in. The
+            // claim is not measured — and is not cleared by a measurement that
+            // could not happen either.
+            process: Some(ProcessFacts {
+                fork_denied: Some(true),
+                exec_denied: None,
+            }),
+            threads: true,
+            ..Facts::default()
+        };
+        let (protections, detail) = protect(
+            protections,
+            detail,
+            External { runner: true },
+            Profile::Documents,
+            Measure::Thorough,
+            &facts,
+        );
+        assert_eq!(protections.level(), Level::Full);
+        assert_eq!(
+            appended(detail),
+            [
+                "runner=external",
+                "files=measured-denied",
+                "network=measured-denied",
+                "fork=denied",
+                "exec=unmeasured",
+                "process=unmeasured",
+                "threads=ok",
+                "measure=thorough",
+            ]
+        );
+
+        // The cheap tier is the per-request child: it may not afford the effect
+        // probes, so it says what the mechanism installed rather than claiming a
+        // measurement it never made.
+        let (protections, detail) = claimed(true, true, false);
+        let (protections, detail) = protect(
+            protections,
+            detail,
+            External::default(),
+            Profile::Documents,
+            Measure::Cheap,
+            &Facts {
+                threads: true,
+                ..Facts::default()
+            },
+        );
+        assert!(protections.files && protections.network);
+        assert_eq!(
+            appended(detail),
+            [
+                "files=installed",
+                "network=installed",
+                "threads=ok",
+                "measure=cheap",
+            ]
+        );
+    }
+
+    /// The media profile starts a program by definition, so it cannot carry the
+    /// process item whatever the platform installed — and the `fork` fact is the
+    /// note beside the item rather than a way to claim it.
+    #[test]
+    fn the_media_profile_cannot_claim_the_process_item() {
+        let (protections, detail) = claimed(true, true, true);
+        let facts = Facts {
+            files: Some(true),
+            network: Some(true),
+            process: Some(ProcessFacts {
+                fork_denied: Some(false),
+                exec_denied: Some(false),
+            }),
+            helper_granted: true,
+            threads: true,
+            ..Facts::default()
+        };
+        let (protections, detail) = protect(
+            protections,
+            detail,
+            External::default(),
+            Profile::Media,
+            Measure::Thorough,
+            &facts,
+        );
+
+        assert!(
+            !protections.process,
+            "a profile that starts a helper cannot bound process creation"
+        );
+        assert_eq!(protections.level(), Level::Partial);
+        let tokens = appended(detail);
+        assert!(tokens.contains(&"fork=open".to_string()), "{tokens:?}");
+        assert!(
+            tokens.contains(&"helper=allowed".to_string()),
+            "the grant that took is a fact beside the item: {tokens:?}"
+        );
+    }
+
+    /// A platform that refused the helper's grant has to suppress the note that
+    /// says it took, and the note needs the parent to have named a helper at all.
+    #[test]
+    fn a_refused_helper_grant_is_not_reported_as_allowed() {
+        let (protections, detail) = claimed(true, true, true);
+        let facts = Facts {
+            helper_granted: true,
+            helper_refused: Some("Access is denied".to_string()),
+            threads: true,
+            ..Facts::default()
+        };
+        let (_, detail) = protect(
+            protections,
+            detail,
+            External::default(),
+            Profile::Media,
+            Measure::Cheap,
+            &facts,
+        );
+        let tokens = appended(detail);
+        assert!(
+            tokens.contains(&"helper-grant-refused(Access is denied)".to_string()),
+            "{tokens:?}"
+        );
+        assert!(
+            !tokens.contains(&"helper=allowed".to_string()),
+            "the refusal is the platform saying the grant did not take: {tokens:?}"
+        );
+
+        // No helper grant at all: there is nothing to have failed and nothing to
+        // report.
+        let (protections, detail) = claimed(true, true, true);
+        let (_, detail) = protect(
+            protections,
+            detail,
+            External::default(),
+            Profile::Media,
+            Measure::Cheap,
+            &Facts {
+                threads: true,
+                ..Facts::default()
+            },
+        );
+        assert!(!appended(detail).contains(&"helper=allowed".to_string()));
+    }
+
+    /// The system-tree token describes the files layer it sits beside, and is
+    /// dropped with it: it is a fact about that layer's reach, not a claim of
+    /// its own.
+    #[test]
+    fn the_system_tree_token_belongs_to_a_files_layer_that_stands() {
+        let (protections, detail) = claimed(true, false, false);
+        let facts = Facts {
+            files: Some(true),
+            system: Some("readable"),
+            threads: true,
+            ..Facts::default()
+        };
+        let (_, detail) = protect(
+            protections,
+            detail,
+            External::default(),
+            Profile::Documents,
+            Measure::Thorough,
+            &facts,
+        );
+        assert!(appended(detail).contains(&"system=readable".to_string()));
+
+        let (protections, detail) = claimed(true, false, false);
+        let facts = Facts {
+            files: Some(false),
+            system: Some("readable"),
+            threads: true,
+            ..Facts::default()
+        };
+        let (protections, detail) = protect(
+            protections,
+            detail,
+            External::default(),
+            Profile::Documents,
+            Measure::Thorough,
+            &facts,
+        );
+        assert!(!protections.files);
+        assert!(
+            !appended(detail).contains(&"system=readable".to_string()),
+            "a cleared layer has no tree to speak of"
+        );
+    }
+
+    /// Every token the fold can put in a report, and the whole of what it can
+    /// say.
+    ///
+    /// The list is the mechanism for "no token without an assertion": a token
+    /// added to the fold fails this test until it is added here, and a token
+    /// removed fails it until it is removed. Most of them are asserted against a
+    /// real host by the `sandbox` CI job, which is where their meanings are
+    /// pinned; this one is about the vocabulary being closed.
+    const FOLD_TOKENS: [&str; 23] = [
+        "runner=external",
+        "files=measured-denied",
+        "files=measured-open",
+        "files=installed",
+        "network=measured-denied",
+        "network=measured-open",
+        "network=installed",
+        "system=readable",
+        "fork=denied",
+        "fork=open",
+        "fork=unmeasured",
+        "exec=denied",
+        "exec=open",
+        "exec=unmeasured",
+        "process=measured-denied",
+        "process=measured-open",
+        "process=unmeasured",
+        "helper-grant-refused(denied)",
+        "helper=allowed",
+        "threads=ok",
+        "threads=failed",
+        "measure=cheap",
+        "measure=thorough",
+    ];
+
+    #[test]
+    fn the_fold_says_only_what_this_list_knows_about() {
+        let processes = [
+            None,
+            Some(ProcessFacts {
+                fork_denied: Some(false),
+                exec_denied: Some(false),
+            }),
+            Some(ProcessFacts {
+                fork_denied: Some(true),
+                exec_denied: None,
+            }),
+            Some(ProcessFacts {
+                fork_denied: None,
+                exec_denied: Some(true),
+            }),
+        ];
+
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for files in [None, Some(true), Some(false)] {
+            for network in [None, Some(true), Some(false)] {
+                for system in [None, Some("readable")] {
+                    for process in processes {
+                        for helper_refused in [None, Some("denied".to_string())] {
+                            for helper_granted in [false, true] {
+                                for threads in [true, false] {
+                                    for measure in [Measure::Cheap, Measure::Thorough] {
+                                        for external in
+                                            [External::default(), External { runner: true }]
+                                        {
+                                            for profile in [Profile::Documents, Profile::Media] {
+                                                let facts = Facts {
+                                                    files,
+                                                    network,
+                                                    system,
+                                                    process,
+                                                    helper_refused: helper_refused.clone(),
+                                                    helper_granted,
+                                                    threads,
+                                                };
+                                                let (protections, detail) =
+                                                    claimed(true, true, true);
+                                                let (_, detail) = protect(
+                                                    protections,
+                                                    detail,
+                                                    external,
+                                                    profile,
+                                                    measure,
+                                                    &facts,
+                                                );
+                                                seen.extend(appended(detail));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let known: std::collections::BTreeSet<String> =
+            FOLD_TOKENS.iter().map(|token| token.to_string()).collect();
+        assert_eq!(
+            seen, known,
+            "the fold's vocabulary is exactly what this list says it is"
+        );
     }
 }
