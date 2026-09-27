@@ -314,7 +314,10 @@ jobs:
           grep -q 'parse=image-ok(' images.txt
 
       # The media profile is the one that may execute a helper, so it is probed
-      # with the helper it will actually be given: a packaged ffmpeg.
+      # with the helper it will actually be given: a packaged ffmpeg. The install
+      # is required rather than best-effort: the probe decodes a frame and the
+      # test below runs the whole pipeline, so a run without a real helper would
+      # report the media path as measured when nothing measured it.
       #
       # winget, and Chocolatey only as the fallback: the Windows Server 2025
       # images carry winget even though the image's own software list does not
@@ -346,8 +349,8 @@ jobs:
               -type f 2>/dev/null | head -1)"
           fi
           if [ -z "$FFMPEG" ]; then
-            echo "ffmpeg could not be installed; the media probe falls back to the worker's own image"
-            exit 0
+            echo "::error::ffmpeg could not be installed; the media profile and its end-to-end test need a real helper"
+            exit 1
           fi
           echo "ffmpeg=$FFMPEG"
           # Timed: this is the install's own first execution of the binary, and it
@@ -360,7 +363,8 @@ jobs:
       # starts a program by definition — that is what a helper is — so it cannot
       # carry the process item and must not pretend to. `helper=allowed` is the
       # fact beside it (the container could open the helper the parent granted),
-      # and `parse=` is the effect: the helper starts and answers.
+      # and `parse=` is the effect: the helper decodes a frame from the file the
+      # parent handed it and answers.
       #
       # The helper is where winget put it, several levels down inside the user
       # profile, which is what makes this step the one that measures the grant's
@@ -381,7 +385,7 @@ jobs:
       - name: Probe the media sandbox profile
         shell: bash
         run: |
-          HELPER="${FFMPEG_WIN:-$(cygpath -w "$PWD/target/debug/nanofile.exe")}"
+          HELPER="$FFMPEG_WIN"
           echo "probing the media profile with helper=$HELPER"
           start=$(date +%s)
           ./target/debug/nanofile.exe extract-worker --probe --profile media \
@@ -403,14 +407,17 @@ jobs:
           # What the helper may read beyond its own image: the DLLs beside it,
           # one file at a time. A count would not say how wide the grant is.
           grep -q 'helper_scope=libs' media.txt
-          if [ -n "${FFMPEG_WIN:-}" ]; then
-            # ffmpeg answers `-version` and exits 0.
-            grep -q 'parse=media-ok' media.txt
-          else
-            # The worker's own image: it starts and exits non-zero, because
-            # `-version` is not one of its flags.
-            grep -q 'parse=media-failed' media.txt
-          fi
+          # ffmpeg answers with a decoded frame, not only with its version.
+          grep -q 'parse=media-ok' media.txt
+
+      # The pipeline the probe samples: an upload, the scratch file the server
+      # writes, the confined child reading it under the container, and a decoded
+      # thumbnail back. The helper is the installed binary rather than the
+      # package manager's shim, which the grant would refuse as a second
+      # generation.
+      - name: Thumbnail a video in the container
+        shell: bash
+        run: NANOFILE_TEST_FFMPEG_PATH="$FFMPEG_WIN" cargo test -p server --test thumbnail_sandbox_test -- --nocapture
 
       # Parsing *under* the container, which the probe's self-test does but the
       # whole pipeline does not: a container that denies something a reader
@@ -531,21 +538,20 @@ jobs:
           FFMPEG="$(command -v ffmpeg || true)"
           if [ -z "$FFMPEG" ]; then
             # The image has no ffmpeg. A packaged one is exactly the case this
-            # profile's library grants exist for, so try to install it — and say
-            # why if that fails, rather than silently measuring something else.
+            # profile's library grants exist for, so install it. Required rather
+            # than best-effort: the probe below decodes a frame and the test
+            # after it runs the whole pipeline, so a stand-in that only exits
+            # zero would leave the media path measured by nothing.
             if ! brew install ffmpeg >/tmp/brew.log 2>&1; then
-              echo "brew could not install ffmpeg; falling back to /bin/echo"
-              tail -5 /tmp/brew.log
+              echo "::error::brew could not install ffmpeg; the media profile and its end-to-end test need a real helper"
+              tail -20 /tmp/brew.log
+              exit 1
             fi
             FFMPEG="$(command -v ffmpeg || true)"
           fi
           if [ -z "$FFMPEG" ]; then
-            # Still nothing: the cheapest program every macOS host has. It prints
-            # the flag it was given and exits zero, so a profile that could start
-            # it would report `media-ok`; `exec=denied` below still measures the
-            # other side, because `/usr/bin/true` is not the helper.
-            FFMPEG=/bin/echo
-            echo "no ffmpeg on this runner; probing with /bin/echo as the helper"
+            echo "::error::no ffmpeg on this runner; the media profile cannot be measured without one"
+            exit 1
           fi
           ./target/debug/nanofile extract-worker \
             --probe --profile media --ffmpeg "$FFMPEG" | tee /tmp/media.txt
@@ -575,6 +581,13 @@ jobs:
           # there may be: the profile keeps the fork, and the note beside the
           # missing process item is what says so.
           grep -q 'media_process=unbounded' /tmp/media.txt
+
+      # The pipeline the probe samples: an upload, the scratch file the server
+      # writes, the confined child reading it under Seatbelt, and a decoded
+      # thumbnail back. Before this step existed no media request ran on this
+      # platform at all.
+      - name: Thumbnail a video under the profile
+        run: NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo test -p server --test thumbnail_sandbox_test -- --nocapture
 
       # What a probe cannot say: whether a Seatbelt profile can start a second
       # generation of program at all, and which operation the sandbox refuses when
@@ -796,7 +809,11 @@ jobs:
       # The media profile is the one that may execute a helper. This runner has
       # ffmpeg installed (the step above the suite), so the probe runs it under
       # the profile, prints what the grants installed, and reads a document's
-      # worth of proof that the confined helper still starts.
+      # worth of proof that the confined helper still does its job.
+      #
+      # `--probe` rather than `--selftest`: the job starts by reading a file the
+      # parent wrote, so only the parent's half can hand one over. The other two
+      # platforms' media steps measure the same half for the same reason.
       #
       # The last two assertions are the narrowing this profile needed: `exec` is
       # granted to the helper and its interpreter, never to a directory, so the
@@ -807,7 +824,7 @@ jobs:
       - name: Report the media sandbox profile
         run: |
           ./target/debug/nanofile extract-worker \
-            --selftest --profile media --ffmpeg "$(command -v ffmpeg)" |
+            --probe --profile media --ffmpeg "$(command -v ffmpeg)" |
             tee /tmp/media.txt
           grep -q 'profile=media' /tmp/media.txt
           grep -q 'level=partial' /tmp/media.txt
@@ -829,6 +846,11 @@ jobs:
           # The helper's reach, one literal at a time: `libs` here, `trees` on
           # macOS when the helper lives in a package-manager tree.
           grep -q 'helper_scope=libs' /tmp/media.txt
+
+      # The pipeline the probe samples: an upload, the scratch file the server
+      # writes, the confined child reading it, and a decoded thumbnail back.
+      - name: Thumbnail a video under the profile
+        run: cargo test -p server --test thumbnail_sandbox_test -- --nocapture
 
       # The arm64 syscall table is not the x86_64 one: several of the calls the
       # filter names (the bare path-taking forms) do not exist there, and every

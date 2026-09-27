@@ -294,6 +294,29 @@ impl TestServer {
         .await
     }
 
+    /// Start a server with arbitrary `storage.*` tweaks (for testing the media
+    /// helper the sandbox grants, and the directories a request writes to).
+    pub async fn start_with_storage_config(
+        tweak: impl FnOnce(&mut infra::config::StorageConfig) + Send + 'static,
+    ) -> Self {
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            move |config| tweak(&mut config.storage),
+        )
+        .await
+    }
+
     /// Start a server with `auth.*` switched (invitations, password reset, …).
     pub async fn start_with_auth_config(
         tweak: impl FnOnce(&mut infra::config::AuthConfig) + Send + 'static,
@@ -1017,6 +1040,20 @@ impl TestFixture {
         tweak: impl FnOnce(&mut infra::config::ServerConfig) + Send + 'static,
     ) -> Self {
         Self::from_server(TestServer::start_with_server_info_config(tweak).await).await
+    }
+
+    /// Create a full test environment whose media helper is `path`.
+    ///
+    /// `storage.ffmpeg_path` is a command name looked up on the process's own
+    /// `PATH`, and the sandbox grants the one file it resolves to. A test that
+    /// has an absolute helper — the real `ffmpeg` CI installed, rather than a
+    /// package manager's shim — points the server at it with this.
+    pub async fn new_with_media_helper(path: &str) -> Self {
+        let path = path.to_string();
+        Self::from_server(
+            TestServer::start_with_storage_config(move |cfg| cfg.ffmpeg_path = path).await,
+        )
+        .await
     }
 
     /// Log in a fresh user against an already-started server and give them one
