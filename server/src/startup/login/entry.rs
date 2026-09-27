@@ -14,6 +14,7 @@ use std::path::Path;
 /// Split one of our command lines back into its arguments — the inverse of the
 /// quoting in `crate::startup::cmdline` and of `exec_arg`: double quotes group,
 /// `\"` and `\\` escape, bare whitespace separates.
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
 pub(crate) fn split_quoted_args(text: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
