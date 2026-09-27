@@ -800,8 +800,9 @@ pub fn page_answer(profile: Profile) -> PageAnswer {
 }
 
 fn measure_capability(profile: Profile) -> Result<Report, String> {
-    let grants = probe_grants(profile);
     let probe_file = DenyProbe::create();
+    let source_file = source_probe(profile);
+    let grants = probe_grants(profile, source_file.as_ref().map(SourceProbe::path));
     let Some(invocation) = invocation(
         Requirement::new(true, Level::None),
         profile,
@@ -958,16 +959,17 @@ pub fn resolve_helper(configured: &str) -> PathBuf {
 
 /// The grants a probe of `profile` runs under.
 ///
-/// The media probe gets the helper and no source: a probe has no request, and
-/// what it checks is that the helper can be executed at all under the profile.
-fn probe_grants(profile: Profile) -> crate::sandbox::Grants<'static> {
+/// The media probe gets the helper *and* a source: the job it has to measure
+/// starts by reading the file the parent handed over, so a probe with nothing to
+/// read would measure half of it. Every other probe reads nothing.
+fn probe_grants<'a>(profile: Profile, source: Option<&'a Path>) -> crate::sandbox::Grants<'a> {
     crate::sandbox::Grants {
         helper: if profile.runs_helper() {
             helper()
         } else {
             None
         },
-        source: None,
+        source,
     }
 }
 
@@ -1029,13 +1031,63 @@ impl Drop for DenyProbe {
     }
 }
 
+/// The media a probe hands the media child, in a file it may read.
+///
+/// The request path writes every upload to a scratch file for the same reason —
+/// `ffmpeg` seeks a container to find a frame — so a probe that is to measure
+/// the job rather than the helper's `-version` has to hand over a file too. It
+/// is created and deleted exactly like [`DenyProbe`], beside it in the
+/// temporary directory.
+///
+/// A temporary directory that will not take it leaves the probe with no source,
+/// and the report says `media-no-source` rather than claiming work it never did.
+struct SourceProbe {
+    path: PathBuf,
+}
+
+impl SourceProbe {
+    fn create() -> Option<Self> {
+        let path =
+            std::env::temp_dir().join(format!("nanofile-media-probe-{}.mp4", uuid::Uuid::new_v4()));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .ok()?;
+        file.write_all(crate::sandbox::jobs::media::PROBE_MEDIA)
+            .ok()?;
+        file.flush().ok()?;
+        Some(Self { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for SourceProbe {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// The source a probe of `profile` is handed, when its job reads one.
+fn source_probe(profile: Profile) -> Option<SourceProbe> {
+    if profile.runs_helper() {
+        SourceProbe::create()
+    } else {
+        None
+    }
+}
+
 /// Run the child once per creation, strongest first, and read the first report.
 ///
 /// The answer is returned rather than recorded here: the caller holds the status
 /// cache's lock, and a helper that took it again would deadlock.
 fn probe(profile: Profile) -> (Start, Status) {
-    let grants = probe_grants(profile);
     let probe_file = DenyProbe::create();
+    let source_file = source_probe(profile);
+    let grants = probe_grants(profile, source_file.as_ref().map(SourceProbe::path));
     let Some(invocation) = invocation(
         configured_requirement(),
         profile,

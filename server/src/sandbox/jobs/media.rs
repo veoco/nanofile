@@ -59,6 +59,23 @@ const MAX_FRAME_BYTES: u64 = 64 * 1024 * 1024;
 /// Most bytes of the source path in a request.
 const MAX_PATH_BYTES: usize = 4096;
 
+/// The media the self-test decodes: two seconds of a 64×64 test pattern.
+///
+/// The child has nothing to open, so it travels in the binary. Checked in
+/// rather than generated because the profile is measured on hosts with no
+/// fixture tooling, and encoded with the native MPEG-4 codec every build of
+/// `ffmpeg` carries. Regenerate with:
+///
+/// ```text
+/// ffmpeg -y -f lavfi -i testsrc=duration=2:size=64x64:rate=5 \
+///   -pix_fmt yuv420p -c:v mpeg4 -q:v 5 server/tests/fixtures/probe.mp4
+/// ```
+pub(crate) const PROBE_MEDIA: &[u8] = include_bytes!("../../../tests/fixtures/probe.mp4");
+
+/// The thumbnail size the self-test asks for, the size a request usually asks
+/// for as well.
+const PROBE_SIZE: u32 = 48;
+
 /// Extract a thumbnail for `source` with `ffmpeg`, in the confined child.
 pub fn thumbnail(
     kind: Kind,
@@ -143,22 +160,62 @@ pub fn serve(grants: Grants<'_>) -> anyhow::Result<()> {
         return worker::write_frame(b'U', b"the media profile has no helper grant");
     };
 
-    let (tag, body) = match grab_frame(helper, kind, &source) {
-        Ok(frame) => match thumbnail_util::generate_thumbnail_encoded(&frame, size) {
-            Ok((bytes, ThumbFormat::Png)) => (b'P', bytes),
-            Ok((bytes, ThumbFormat::Jpeg)) => (b'J', bytes),
-            Err(error) => (b'U', error.to_string().into_bytes()),
-        },
-        Err(why) => (b'U', why.into_bytes()),
+    let (tag, body) = match encoded_thumbnail(helper, kind, &source, size) {
+        Ok((bytes, ThumbFormat::Png)) => (b'P', bytes),
+        Ok((bytes, ThumbFormat::Jpeg)) => (b'J', bytes),
+        Err(why) => (b'U', why.message().as_bytes().to_vec()),
     };
     worker::write_frame(tag, &body)
+}
+
+/// Grab one frame and encode the thumbnail a request answers with.
+///
+/// [`serve`] and the self-test both run this one call, so what the probe
+/// measures is the work a request does — read the granted file, demux it,
+/// decode a frame, resize and encode — rather than a helper that merely starts.
+fn encoded_thumbnail(
+    helper: &Path,
+    kind: Kind,
+    source: &Path,
+    size: u32,
+) -> Result<(Vec<u8>, ThumbFormat), FrameError> {
+    let frame = grab_frame(helper, kind, source)?;
+    thumbnail_util::generate_thumbnail_encoded(&frame, size)
+        .map_err(|error| FrameError::Failed(error.to_string()))
+}
+
+/// Why the helper handed over no frame.
+///
+/// The two cases are different failures: one is the environment (the helper
+/// never ran), the other is the input (it ran and produced nothing usable).
+/// The report keeps them apart; the reply frame does not need to, because both
+/// are a refusal.
+#[derive(Debug)]
+pub(crate) enum FrameError {
+    /// The helper could not be started at all.
+    Unavailable(String),
+    /// The helper ran and produced no frame this profile can use.
+    Failed(String),
+}
+
+impl FrameError {
+    /// The message a refusal frame carries and the report token names.
+    fn message(&self) -> &str {
+        match self {
+            FrameError::Unavailable(why) | FrameError::Failed(why) => why,
+        }
+    }
 }
 
 /// Run the helper once and hand back the PNG frame it wrote to its stdout.
 ///
 /// Shared with the service's own tests, which drive the invocation without the
 /// sandbox to check the arguments ffmpeg is given.
-pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec<u8>, String> {
+pub(crate) fn grab_frame(
+    helper: &Path,
+    kind: Kind,
+    source: &Path,
+) -> Result<Vec<u8>, FrameError> {
     // Video is tried a second in before the first frame; a short clip has no
     // second to seek to, and that attempt failing is not a refusal.
     let attempts: Vec<Option<&str>> = match kind {
@@ -231,10 +288,14 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
                     stderr.trim().to_string()
                 };
             }
-            Err(error) => return Err(format!("cannot run the media helper: {error}")),
+            Err(error) => {
+                return Err(FrameError::Unavailable(format!(
+                    "cannot run the media helper: {error}"
+                )));
+            }
         }
     }
-    Err(last)
+    Err(FrameError::Failed(last))
 }
 
 /// The command that starts the helper.
@@ -275,42 +336,44 @@ fn run_helper(command: &mut Command) -> std::io::Result<std::process::Output> {
     child.wait_with_output()
 }
 
-/// The self-test: run the helper under the profile.
+/// The self-test: decode a frame under the profile, the way a request does.
 ///
-/// `-version` proves the grant reaches the binary and its libraries. It does not
-/// decode anything, which is what the first real request is for. The streams are
-/// the same pipes the frame extraction uses, for the same reason.
+/// The grant reaching the helper and its libraries is half the answer; this is
+/// the other half. It hands the child a file the parent wrote and asks for a
+/// thumbnail from it, through the same call a request takes, so a profile that
+/// cannot read the source or cannot decode what it holds says so here rather
+/// than on the first video a user uploads.
 pub fn probe(grants: Grants<'_>) -> String {
     let Some(helper) = grants.helper else {
         return "media-no-helper".to_string();
     };
-    let mut command = helper_command(helper);
-    command
-        .arg("-version")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    match run_helper(&mut command) {
-        Ok(output) if output.status.success() => {
-            #[cfg(target_os = "macos")]
-            return format!("media-ok,hand={}", hand_start(helper));
-            #[cfg(not(target_os = "macos"))]
-            return "media-ok".to_string();
-        }
-        Ok(output) => format!("media-failed({})", output.status),
-        Err(error) => {
-            #[cfg(target_os = "macos")]
-            return format!("media-unavailable({error}),hand={}", hand_start(helper));
-            #[cfg(not(target_os = "macos"))]
-            return format!("media-unavailable({error})");
-        }
-    }
+    let Some(source) = grants.source else {
+        return "media-no-source".to_string();
+    };
+    let verdict = match encoded_thumbnail(helper, Kind::Video, source, PROBE_SIZE) {
+        Ok((bytes, _)) => format!("media-ok({})", bytes.len()),
+        Err(FrameError::Unavailable(why)) => format!("media-unavailable({})", token(&why)),
+        Err(FrameError::Failed(why)) => format!("media-failed({})", token(&why)),
+    };
+    #[cfg(target_os = "macos")]
+    let verdict = format!("{verdict},hand={}", hand_start(helper));
+    verdict
+}
+
+/// One token out of a failure message.
+///
+/// The report's detail is comma-separated and whitespace-free, so a reason
+/// carrying either would read as more than one fact.
+fn token(why: &str) -> String {
+    why.chars()
+        .map(|character| {
+            if character.is_whitespace() || character == ',' {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 /// Start the helper by hand, and say what the kernel answered.
