@@ -179,6 +179,21 @@ jobs:
           path: ${{ matrix.cross && format('target/{0}/release/nanofile{1}', matrix.target, matrix.ext) || format('target/release/nanofile{0}', matrix.ext) }}
           retention-days: 7
 
+      # The release profile is what ships (LTO, stripped, `debug_assert!` off),
+      # and this is the only job that runs the sandbox of an artifact rather than
+      # of a test binary. The media profile is not probed: this runner has no
+      # ffmpeg, and a probe without a helper would measure nothing.
+      - name: Smoke-test the artifact's own sandbox
+        if: ${{ !matrix.cross }}
+        shell: bash
+        run: |
+          BIN="target/release/nanofile${{ matrix.ext }}"
+          "$BIN" extract-worker --probe | tee probe.txt
+          grep -q 'level=full' probe.txt
+          grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' probe.txt
+          "$BIN" extract-worker --probe --profile images | tee images.txt
+          grep -q 'parse=image-ok(' images.txt
+
   # ── Dev Docker image (multi-arch from pre-built binaries) ─────────
   docker-dev:
     name: Docker (dev)
@@ -252,3 +267,14 @@ jobs:
           annotations: |
             org.opencontainers.image.description=nanofile - A Rust-based Seafile-compatible server
           push: true
+
+      # The image is `FROM scratch` with a musl binary and no shell, no `/tmp`
+      # and no `/etc/passwd`: nothing else in this repository runs the sandbox in
+      # that environment. `extract-worker` returns before it loads a config, so
+      # this needs neither a mounted data directory nor a config file.
+      - name: Smoke-test the image's own sandbox
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}:sha-${{ github.sha }}"
+          docker run --rm "$IMAGE" extract-worker --probe | tee /tmp/probe.txt
+          grep -q 'level=full' /tmp/probe.txt
+          grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' /tmp/probe.txt
