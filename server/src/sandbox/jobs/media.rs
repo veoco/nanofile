@@ -76,6 +76,32 @@ pub(crate) const PROBE_MEDIA: &[u8] = include_bytes!("../../../tests/fixtures/pr
 /// for as well.
 const PROBE_SIZE: u32 = 48;
 
+/// The path a media grant and a media request must agree on.
+///
+/// The Seatbelt rule is a `(literal …)` for the resolved file, and the child has
+/// to open that same path: a macOS probe measured
+/// `parse=media-failed(... Error opening input: Operation not permitted … /var/folders/…/nanofile-media-probe-….mp4)`
+/// with the grant written for `/private/var/folders/…` — `TMPDIR` is reached
+/// through the `/var` symlink on every Mac, so the profile named a path the
+/// helper's `open` never used. Resolving the scratch path once, before it is
+/// named in the request and on the child's command line, is what makes the two
+/// agree; the helper's own grant is resolved for the same reason (see
+/// `worker::invocation`).
+///
+/// Elsewhere the path is returned as it was: Landlock rules are on the object
+/// rather than the spelling, and Windows `canonicalize` returns a `\\?\` path
+/// that is not what this binary was invoked as.
+pub(crate) fn granted_source(source: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        std::fs::canonicalize(source).unwrap_or_else(|_| source.to_path_buf())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        source.to_path_buf()
+    }
+}
+
 /// Extract a thumbnail for `source` with `ffmpeg`, in the confined child.
 pub fn thumbnail(
     kind: Kind,
@@ -83,10 +109,11 @@ pub fn thumbnail(
     size: u32,
     ffmpeg: &Path,
 ) -> Result<(Vec<u8>, ThumbFormat), String> {
-    let request = request(kind, size, source)?;
+    let source = granted_source(source);
+    let request = request(kind, size, &source)?;
     let grants = Grants {
         helper: Some(ffmpeg),
-        source: Some(source),
+        source: Some(&source),
     };
     match worker::run_request(Profile::Media, worker::MEDIA_TIMEOUT, request, grants) {
         RunOutcome::Reply { tag, body } => match tag {

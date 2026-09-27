@@ -113,9 +113,19 @@ async fn the_media_profile_confines_itself() {
                 "the helper grant must be reported: {}",
                 report.detail
             );
+            // The fork the media profile needs is a unix measurement; Windows
+            // has no fork, and says what it does bound instead: the Job Object's
+            // process slots, one of which the helper takes.
+            #[cfg(unix)]
             assert!(
                 report.detail.contains("fork=open"),
                 "the fork the media profile needs must be measured and said: {}",
+                report.detail
+            );
+            #[cfg(windows)]
+            assert!(
+                report.detail.contains("processes2"),
+                "the media profile's second process slot must be said: {}",
                 report.detail
             );
         }

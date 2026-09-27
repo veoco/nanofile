@@ -1107,7 +1107,12 @@ impl SourceProbe {
         file.write_all(crate::sandbox::jobs::media::PROBE_MEDIA)
             .ok()?;
         file.flush().ok()?;
-        Some(Self { path })
+        // The path the profile will name and the path the child will open are
+        // the same one, which on macOS means the resolved file rather than the
+        // one typed here (see `media::granted_source`).
+        Some(Self {
+            path: crate::sandbox::jobs::media::granted_source(&path),
+        })
     }
 
     fn path(&self) -> &Path {
