@@ -23,6 +23,7 @@ fn value<'a>(report: &'a Report, key: &str) -> &'a str {
 /// The resource clamps are one fact carrying a list of its own
 /// (`limits=as…,cpu…,nofile…,fsize…m,core0`), so they are looked up as tokens
 /// rather than as `key=value`.
+#[cfg(target_os = "linux")]
 fn bare<'a>(report: &'a Report, prefix: &str) -> Option<&'a str> {
     report
         .detail
@@ -31,6 +32,7 @@ fn bare<'a>(report: &'a Report, prefix: &str) -> Option<&'a str> {
 }
 
 /// Whether a value is digits.
+#[cfg(target_os = "linux")]
 fn is_number(text: &str) -> bool {
     !text.is_empty() && text.chars().all(|c| c.is_ascii_digit())
 }
