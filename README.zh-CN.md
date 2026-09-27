@@ -206,9 +206,9 @@ data/
 
 **前端**：网页由 Askama 服务端渲染 + Tailwind + `server/frontend/` 下的模块化 JS 组成。`server/build.rs` 用 esbuild 把 `frontend/entries/*.js` 打包进二进制（esbuild 必需，Tailwind 可选）。改前端后需重新 `cargo build`，无热重载。
 
-**测试**：`cargo test --workspace`（Rust）、`node --test "server/frontend/**/*.test.js"`（前端）、`cd e2e && npx playwright test`（浏览器端到端）。CI 在 Linux x86_64 与 arm64、macOS arm64、Windows amd64 上跑完整的 workspace 套件，并在 Linux 上跑 `cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings`。
+**测试**：`cargo test --workspace`（Rust）、`node --test "server/frontend/**/*.test.js"`（前端）、`cd e2e && npx playwright test`（浏览器端到端）。CI 在 Linux x86_64 与 arm64、macOS arm64、Windows amd64 上跑完整的 workspace 套件，在这三个平台上都跑 `cargo clippy --workspace --all-targets -- -D warnings`（macOS 与 Windows 另跑 `tray` feature）；`cargo fmt --check` 只在 Linux 跑。
 
-**CI 与发布**：`ci.yml` 在每次 push/PR 时运行：四平台完整 Rust 套件、没有 runner 的 Linux 目标的编译检查，以及前端、e2e 与依赖审计作业。`nightly.yml` 每日构建多架构镜像（`:edge`），并对每个原生产物与已推送镜像的沙盒做冒烟；`release.yml` 同样冒烟，并在版本 tag 上发布带版本号的镜像与 GitHub Release。
+**CI 与发布**：`ci.yml` 在每次 push/PR 时运行：四平台完整 Rust 套件、其中三平台的 lint、没有 runner 的 Linux 目标的编译检查，以及前端、e2e 与依赖审计作业。`nightly.yml` 每日构建多架构镜像（`:edge`），并对每个原生产物与已推送镜像的沙盒做冒烟；`release.yml` 同样冒烟，并在版本 tag 上发布带版本号的镜像与 GitHub Release。
 
 ## 许可证
 

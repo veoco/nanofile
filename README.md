@@ -288,9 +288,9 @@ data/
 
 **Frontend**: the web interface is server-rendered (Askama) with Tailwind CSS and modular JavaScript under `server/frontend/`. `server/build.rs` bundles `frontend/entries/*.js` into the binary with esbuild (required; Tailwind optional). Frontend changes require a `cargo build`; there is no hot reload.
 
-**Testing**: `cargo test --workspace` for Rust, `node --test "server/frontend/**/*.test.js"` for frontend units, and `cd e2e && npx playwright test` for browser end-to-end. CI runs the workspace suite on Linux x86_64 and arm64, macOS arm64 and Windows amd64, plus `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` on Linux.
+**Testing**: `cargo test --workspace` for Rust, `node --test "server/frontend/**/*.test.js"` for frontend units, and `cd e2e && npx playwright test` for browser end-to-end. CI runs the workspace suite on Linux x86_64 and arm64, macOS arm64 and Windows amd64, and `cargo clippy --workspace --all-targets -- -D warnings` on all three of those platforms (with the `tray` feature on macOS and Windows); `cargo fmt --check` runs on Linux.
 
-**CI and releases**: `ci.yml` runs on every push and pull request: the whole Rust suite on four platforms, a compile check of the Linux targets that have no runner, and the frontend, e2e and audit jobs. `nightly.yml` builds multi-architecture images daily (`:edge`) and smoke-tests the sandbox of every native artifact and of the published image; `release.yml` does the same and publishes versioned images and a GitHub release on a version tag.
+**CI and releases**: `ci.yml` runs on every push and pull request: the whole Rust suite on four platforms, lint on three of them, a compile check of the Linux targets that have no runner, and the frontend, e2e and audit jobs. `nightly.yml` builds multi-architecture images daily (`:edge`) and smoke-tests the sandbox of every native artifact and of the published image; `release.yml` does the same and publishes versioned images and a GitHub release on a version tag.
 
 ## License
 
