@@ -418,7 +418,16 @@ jobs:
       # its footprint — the two numbers the memory limit and its fallback are set
       # from — and neither call can be made anywhere but macOS.
       - name: Test the sandbox's own measurements
-        run: cargo test -p server --lib indexer::extract::sandbox
+        run: |
+          # The module is `server::sandbox`; the filter used to name a path it no
+          # longer lives at, and a filter that matches nothing runs zero tests and
+          # still exits 0 — so the count is asserted, not the status.
+          listed=$(cargo test -p server --lib sandbox:: -- --list | grep -c ': test$' || true)
+          if [ "$listed" -eq 0 ]; then
+            echo "::error::the sandbox unit-test filter matched no tests"
+            exit 1
+          fi
+          cargo test -p server --lib sandbox::
       - name: Run the extraction sandbox probe
         run: |
           cargo build --bin nanofile
