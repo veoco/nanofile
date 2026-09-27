@@ -362,10 +362,13 @@ impl ThumbnailService {
         let source = scratch_media.clone();
         let extracted =
             tokio::task::spawn_blocking(move || media::thumbnail(kind, &source, size, &ffmpeg))
-                .await
-                .map_err(|e| AppError::Internal(format!("media thumbnail worker panicked: {e}")))?;
-
+                .await;
+        // Ahead of the join result: a worker that panicked is exactly the case
+        // that used to return here and leave the copy on disk.
         let _ = tokio::fs::remove_file(&scratch_media).await;
+        let extracted = extracted
+            .map_err(|e| AppError::Internal(format!("media thumbnail worker panicked: {e}")))?;
+
         extracted.map_err(|_| AppError::NotFound("thumbnail not available".into()))
     }
 
