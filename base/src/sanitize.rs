@@ -422,6 +422,12 @@ mod tests {
         assert!(safe_normalize_path("/foo\"bar").is_err()); // double quote blocked
         assert!(safe_normalize_path("/foo<bar").is_err()); // < blocked
         assert!(safe_normalize_path("/foo>bar").is_err()); // > blocked
+        // A backslash is a separator on Windows, so `components` consumes it and
+        // the character check never sees it. That is the right answer there: what
+        // is left is a relative path, and nothing in it reaches outside the root.
+        #[cfg(windows)]
+        assert_eq!(safe_normalize_path("/foo\\bar").unwrap(), "/foo/bar");
+        #[cfg(not(windows))]
         assert!(safe_normalize_path("/foo\\bar").is_err()); // backslash blocked
     }
 

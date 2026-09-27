@@ -1,10 +1,10 @@
 //! What the parent remembers about a host it has already asked.
 //!
-//! Its own binary because the worker's executable is process-global: here it is
-//! a script that answers the self-test, records every invocation, and can answer
-//! for the *wrong* profile on purpose. The host is asked once per profile and per
-//! requirement, and one answer never stands for another's.
-#![cfg(unix)]
+//! Its own binary because the worker's executable is process-global; Linux only
+//! because the worker here is a shell script, and macOS applies the real Seatbelt
+//! profile to it — which grants the child's own image, not the `/bin/sh` its
+//! shebang needs. The host is asked once per profile and per requirement.
+#![cfg(target_os = "linux")]
 
 mod common;
 

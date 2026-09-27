@@ -1,10 +1,10 @@
 //! What the parent does when the worker leaves a process holding the pipes.
 //!
-//! Its own binary because the worker's executable is process-global: the script
-//! here answers the self-test and exits while something it started keeps the
-//! inherited stdout open. Reading until end of file would wait for that process
-//! and hold the extraction permit with it, so the pipes get a deadline.
-#![cfg(unix)]
+//! Its own binary because the worker's executable is process-global; Linux only
+//! because the worker here is a shell script, and macOS applies the real Seatbelt
+//! profile to it — which grants the child's own image, not the `/bin/sh` its
+//! shebang needs. A reply past the pipe deadline is a failed document.
+#![cfg(target_os = "linux")]
 
 mod common;
 

@@ -241,7 +241,12 @@ jobs:
           zig_target="$(echo "$TARGET" | sed -E 's/-unknown-linux-/-linux-/')"
           echo "CC_$key=zig cc -target $zig_target" >> "$GITHUB_ENV"
           echo "AR_$key=zig ar" >> "$GITHUB_ENV"
-          cargo check --workspace --all-targets --target "$TARGET"
+          # Not `--all-targets`: the test targets pull `aws-lc-sys` (through
+          # reqwest's rustls), whose build script wants a `<triple>-gcc` for the
+          # target, and no such cross compiler exists for three of these four.
+          # The shipped code — which is where a target-specific syscall constant
+          # lives — is checked either way.
+          cargo check --workspace --target "$TARGET"
 
   # ── The whole Rust suite, on every platform we ship ──────────────────
   # One definition and four runners, so "the platform runs the same tests" is
@@ -332,4 +337,6 @@ jobs:
           time "$FFMPEG" -version >/dev/null
           echo "NANOFILE_TEST_FFMPEG_PATH=$(cygpath -w "$FFMPEG")" >> "$GITHUB_ENV"
       - name: Run the workspace suite
-        run: cargo test --workspace -- --nocapture
+        # `--no-fail-fast`: cargo stops at the first failing test binary, and a
+        # platform's first full run has failures in more than one.
+        run: cargo test --workspace --no-fail-fast -- --nocapture

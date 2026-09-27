@@ -1,10 +1,10 @@
-//! What the parent does with a child that does not answer, answers too much, or
-//! was started with the wrong surroundings.
+//! What the parent does with a child that does not answer, or answers too much.
 //!
-//! Its own binary because the worker's executable is process-global: the script
-//! here answers the startup self-test and then does the one thing under test.
-//! The phases are one test — the deadline, the process group and the reply cap.
-#![cfg(unix)]
+//! Its own binary because the worker's executable is process-global; Linux only
+//! because the worker here is a shell script, and macOS applies the real Seatbelt
+//! profile to it — which grants the child's own image, not the `/bin/sh` its
+//! shebang needs. The phases are one test: deadline, process group, reply cap.
+#![cfg(target_os = "linux")]
 
 mod common;
 

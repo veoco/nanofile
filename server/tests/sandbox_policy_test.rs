@@ -1,10 +1,10 @@
 //! What happens when the host cannot give what `sandbox.min_level` asks for.
 //!
 //! Its own binary because the worker's executable and the requirement are
-//! process-global: the script here reports *partial* confinement, which is a
-//! Linux host without Landlock or a Windows container that would not start.
-//! Where the decision is taken — the probe the parent already runs — is the test.
-#![cfg(unix)]
+//! process-global; Linux only because the worker here is a shell script, and
+//! macOS applies the real Seatbelt profile to it — which grants the child's own
+//! image, not the `/bin/sh` its shebang needs. The decision's *place* is the test.
+#![cfg(target_os = "linux")]
 
 mod common;
 
