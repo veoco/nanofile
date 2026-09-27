@@ -1201,7 +1201,21 @@ impl TestClient {
         url: &str,
         form: reqwest::multipart::Form,
     ) -> reqwest::Response {
-        self.client.post(url).multipart(form).send().await.unwrap()
+        self.try_post_multipart_url(url, form).await.unwrap()
+    }
+
+    /// The same POST, for a caller that has to see a transport error.
+    ///
+    /// A server that refuses a large body before it reads it closes the
+    /// connection while the client is still writing, which Windows reports as an
+    /// aborted connection rather than as the response. A case that asserts *why*
+    /// an oversized body was refused needs both halves of that answer.
+    pub async fn try_post_multipart_url(
+        &self,
+        url: &str,
+        form: reqwest::multipart::Form,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        self.client.post(url).multipart(form).send().await
     }
 
     /// GET /api2/repos/{repo_id}/upload-blks-link/

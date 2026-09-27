@@ -87,12 +87,10 @@ async fn a_body_over_the_configured_json_limit_is_refused() {
 /// group raised its own limit, so the global cap must not apply to it. Without
 /// the per-group limit in `app_routes` this is the assertion that fails.
 ///
-/// Not on Windows: `/upload-aj/` rejects a request with no session cookie before
-/// it reads the body, and a server that answers mid-upload closes the connection
-/// under the client's write — which Windows reports as an aborted connection
-/// rather than as the response. The layer the case measures is configured the
-/// same on both platforms.
-#[cfg(not(windows))]
+/// `/upload-aj/` rejects a request with no session cookie before it reads the
+/// body, so it can close the connection while 65 MiB is still going out: Windows
+/// reports that as an aborted connection instead of the response. Either way the
+/// request was not refused with a 413, which is what the cap is about.
 #[tokio::test]
 async fn an_upload_route_still_takes_a_large_body() {
     let f = TestFixture::new().await;
@@ -105,12 +103,20 @@ async fn an_upload_route_still_takes_a_large_body() {
         .header("Authorization", format!("Token {}", f.api_token))
         .body(body)
         .send()
-        .await
-        .unwrap();
+        .await;
 
-    assert_ne!(
-        resp.status(),
-        413,
-        "an upload route must not inherit the JSON cap"
-    );
+    match resp {
+        Ok(resp) => assert_ne!(
+            resp.status(),
+            413,
+            "an upload route must not inherit the JSON cap"
+        ),
+        Err(error) if cfg!(windows) => {
+            assert!(
+                error.is_request(),
+                "the request must fail at the socket: {error}"
+            )
+        }
+        Err(error) => panic!("the request did not complete: {error}"),
+    }
 }
