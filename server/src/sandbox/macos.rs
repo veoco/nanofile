@@ -51,6 +51,37 @@ pub(super) fn mapped_address_space() -> Option<u64> {
     (read == 0 && buffer[0] > 0).then_some(buffer[0])
 }
 
+/// Whether the OS image the loader reads is still reachable, which it is.
+///
+/// The far edge of this platform's files layer, and a residual rather than a
+/// claim: the worker is dynamically linked, so its profile has to grant
+/// `file-read*` and `file-map-executable` on the system library trees and the
+/// shared cache it loads from — which is why the files item means "no path the
+/// server's user owns" here, not "no file at all". Reported through the same
+/// token Windows uses for its own over-grant, so the page says it rather than
+/// leaving `files=denied` to imply more than the child measured.
+///
+/// The candidates are files every supported macOS carries and no profile grants
+/// beyond those trees; the first that answers decides. A host where this
+/// answered `denied` would be stricter than the platform, not broken.
+pub(super) fn system_tree() -> &'static str {
+    let candidates = [
+        "/usr/lib/dyld",
+        "/usr/lib/libSystem.B.dylib",
+        "/System/Library/CoreServices/SystemVersion.plist",
+    ];
+
+    let mut refused = false;
+    for candidate in candidates {
+        match std::fs::File::open(candidate) {
+            Ok(_) => return "readable",
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => refused = true,
+            Err(_) => {}
+        }
+    }
+    if refused { "denied" } else { "absent" }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

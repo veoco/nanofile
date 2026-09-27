@@ -850,6 +850,14 @@ pub fn confine(
     if protections.files {
         detail.push(format!("system={}", system_tree()));
     }
+    // macOS reaches the same shape for a different reason: the worker is
+    // dynamically linked, so its profile has to grant the system library trees
+    // the loader reads. Reported through the same token, so the page says the
+    // files item is narrower than "no file at all" here too.
+    #[cfg(target_os = "macos")]
+    if protections.files {
+        detail.push(format!("system={}", macos::system_tree()));
+    }
 
     // Process creation is only ever claimed by a mechanism this process cannot
     // see the effect of cheaply: an external runner's profile on macOS, and on

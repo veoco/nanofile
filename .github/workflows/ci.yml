@@ -435,6 +435,10 @@ jobs:
           grep -q 'profile=documents' sandbox.txt
           grep -q 'files=denied' sandbox.txt
           grep -q 'network=denied' sandbox.txt
+          # The far edge of the files layer, which this profile grants on
+          # purpose so the dynamically linked worker can load: reported as the
+          # same residual token Windows uses, never as a missing protection.
+          grep -qE 'system=(readable|denied|absent)' sandbox.txt
           # Thread creation is the thing that was said to need the fork, so this
           # is the assertion that decides it: a parser whose profile broke
           # `pthread_create` reports `threads=failed`, and one whose profile
