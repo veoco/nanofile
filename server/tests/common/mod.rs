@@ -1405,7 +1405,15 @@ const OFFICE_DOC_REL: &str =
 /// Written out by hand so the cross-reference table is genuinely valid: the
 /// parser must accept it for the round-trip to mean anything.
 pub fn minimal_pdf(text: &str) -> Vec<u8> {
-    let stream = format!("BT /F1 24 Tf 72 720 Td ({text}) Tj ET");
+    minimal_pdf_with_stream(&format!("BT /F1 24 Tf 72 720 Td ({text}) Tj ET"))
+}
+
+/// Build a one-page PDF whose content stream is `stream` verbatim.
+///
+/// The same hand-written structure as [`minimal_pdf`], for a caller that needs a
+/// stream larger than one text object: a document at the size cap is built this
+/// way. The stream must be ASCII, because the offsets below are byte offsets.
+pub fn minimal_pdf_with_stream(stream: &str) -> Vec<u8> {
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
