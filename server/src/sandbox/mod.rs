@@ -23,10 +23,19 @@
 //! starts one the same way, by copying the process first, so a media child that
 //! denied both would deny its own job. Its report therefore says the item is
 //! *not* in place, and the grade is `partial`: what bounds the helper is the
-//! files layer (only the helper and the interpreter the kernel runs before it
-//! may be executed) and what bounds the copies is the CPU and wall-clock limit
-//! the parent enforces, which is a note and not a fourth protection. The
-//! document and image profiles deny both outright and do grade `full`.
+//! files layer and what bounds the copies is the CPU and wall-clock limit the
+//! parent enforces, which is a note and not a fourth protection. The document
+//! and image profiles deny both outright and do grade `full`.
+//!
+//! What the files layer means for `exec` differs by platform here. Linux and
+//! macOS decide it per path, and the media grant reaches exactly two files — the
+//! helper and the interpreter the kernel runs before it, never a directory — so
+//! a helper that got loose cannot start a second program the grant does not
+//! name. Windows has no path-level `exec` bound: the container refuses the
+//! user's own files and the network, while the system tree it loads from stays
+//! readable and executable, so a compromised media worker can start any program
+//! the container can read. What bounds it there is the Job Object's process
+//! count and the parent's timeout, not a rule about which image may run.
 //!
 //! Memory is the one limit each platform has to be told about differently. Linux
 //! takes the cap as an address-space limit outright; Windows caps committed

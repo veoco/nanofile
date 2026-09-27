@@ -125,7 +125,8 @@ The admin's **Sandbox** page shows the grade this host actually gives:
 
 - **Full** — every protection the platform can provide: resource limits (memory
   and CPU everywhere, plus descriptors and file size on Linux and macOS), no
-  file access, no network, and no way to start another program.
+  access to the server user's own files, no network, and no way to start another
+  program.
 - **Partial** — resource limits **and** no file access, with the network or the
   process bound missing; the missing item is named. The files layer is what makes
   this grade worth having: a host that denies the network and the processes but
@@ -134,19 +135,23 @@ The admin's **Sandbox** page shows the grade this host actually gives:
   without Landlock and a Windows launch that could not produce a container.
 
 Each item is listed with how much it matters and what its absence opens, beside
-the platform's own residuals: macOS's parser profiles deny both the fork and the
-exec, so documents and images grade Full there as they do on Linux; the Windows
-container reads the system tree it loads from, and its Job Object bounds memory
-and CPU time where it has no descriptor or file-size bound; and the media worker
-is granted the libraries it needs as well as the helper itself.
+the platform's own residuals: macOS's parser profiles deny the fork outright and
+narrow the exec to the child's own image, so documents and images grade Full
+there as they do on Linux; the Windows container reads the system tree it loads
+from, and its Job Object bounds memory and CPU time where it has no descriptor or
+file-size bound; and the media worker is granted the libraries it needs as well
+as the helper itself.
 
 The media worker is graded on its own line, and it is **Partial** on every
 platform by design: it exists to start a program, and every way of starting one
 copies the process first, so it cannot carry the process item the document and
-image profiles carry. What bounds it instead is the file layer — only the helper
-and the interpreter the kernel runs before it may be executed, never a directory
-— and the time limits, which bound the copies. Raising `sandbox.min_level` to
-`full` therefore disables media thumbnails, and the page says so.
+image profiles carry. What bounds it instead is the file layer and the time
+limits, which bound the copies. On Linux and macOS the file layer decides `exec`
+per path — the helper and the interpreter the kernel runs before it, never a
+directory — while on Windows the container does not restrict which readable
+program may run, so only the Job Object's process count and the timeout bound a
+compromised helper. Raising `sandbox.min_level` to `full` therefore disables
+media thumbnails, and the page says so.
 
 Its file item carries its own notes, because a helper is a program with
 libraries: it may read the libraries beside it (one file at a time), the system
