@@ -37,7 +37,7 @@ pub(crate) fn interpreter(helper: &Path) -> Option<PathBuf> {
     path.is_absolute().then(|| path.to_path_buf())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -48,7 +48,6 @@ mod tests {
     /// Windows answers false for `/bin/dash` — the path the kernel would run is
     /// not a Windows path at all. The reader itself is exercised on every
     /// platform by the seatbelt tests that build a profile text around it.
-    #[cfg(unix)]
     #[test]
     fn a_script_names_its_own_interpreter() {
         let path = std::env::temp_dir().join(format!(

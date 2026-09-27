@@ -243,7 +243,10 @@ pub fn generate_unique_filename(existing: &[DirEntryData], name: &str) -> String
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_private_dir, format_size};
+    use super::format_size;
+
+    #[cfg(unix)]
+    use super::ensure_private_dir;
 
     #[cfg(unix)]
     #[test]
