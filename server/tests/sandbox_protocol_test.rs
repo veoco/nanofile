@@ -243,13 +243,64 @@ fn the_child_refuses_to_serve_with_the_sandbox_off() {
     );
 }
 
+/// The request path returns the whole text of a real document, not a word of it.
+///
+/// The probe's `parse=` is the self-test's own answer; this is the same
+/// documents arriving the way the server sends them, plan tag and bytes, with
+/// the fixtures the parsers are tested against. A parser that stopped early, or
+/// a limit that cut the text short, still contains the words these fixtures are
+/// made of — the whole text is what says the request path is intact.
+#[test]
+fn the_child_returns_the_whole_text_of_a_real_document() {
+    let args = ["--profile", "documents", "--min-level", "none"];
+    let cases: [(u8, &[u8], &str); 4] = [
+        (
+            2,
+            include_bytes!("fixtures/probe.pdf"),
+            "nanofile sandbox probe",
+        ),
+        (
+            3,
+            include_bytes!("fixtures/probe.docx"),
+            "nanofile sandbox probe",
+        ),
+        (
+            4,
+            include_bytes!("fixtures/probe.xlsx"),
+            // A workbook's text arrives with its sheet name beside it.
+            "Sheet1\nnanofile sandbox probe",
+        ),
+        (
+            5,
+            include_bytes!("fixtures/probe.pptx"),
+            "nanofile sandbox probe",
+        ),
+    ];
+
+    for (plan, bytes, expected) in cases {
+        let answer = run_worker(&args, &document_request(plan, bytes));
+        answer.finished("a packaged document");
+        let (reply_tag, body) = answer.frame();
+        assert_eq!(reply_tag, b'T', "plan {plan} is a document, not a refusal");
+        let text = std::str::from_utf8(body).expect("extracted text is UTF-8");
+        assert_eq!(
+            text.trim(),
+            expected,
+            "plan {plan} must return its whole text"
+        );
+    }
+}
+
 /// The images child bounds what it will hold and refuses what it does not know.
 #[test]
 fn an_image_request_is_parsed_or_refused() {
     let args = ["--profile", "images", "--min-level", "none"];
 
-    // The positive control: a real PNG decodes and comes back as an image.
-    let answer = run_worker(&args, &image_request(b'T', 16, &a_png()));
+    // The positive control: a real PNG decodes and comes back as an image,
+    // fitted to the box the request names. The source is deliberately not
+    // square: 32x16 fits a 16px box at 16x8, so the geometry says the frame was
+    // decoded and resized rather than passed through.
+    let answer = run_worker(&args, &image_request(b'T', 16, &a_png_of(32, 16)));
     answer.finished("a thumbnail request");
     let (tag, body) = answer.frame();
     assert!(
@@ -258,7 +309,11 @@ fn an_image_request_is_parsed_or_refused() {
         tag as char
     );
     let decoded = image::load_from_memory(body).expect("the reply is an image");
-    assert!(decoded.width() <= 16 && decoded.height() <= 16);
+    assert_eq!(
+        (decoded.width(), decoded.height()),
+        (16, 8),
+        "a 32x16 source fits a 16px box at 16x8"
+    );
 
     let answer = run_worker(&args, &image_request(b'?', 16, &a_png()));
     answer.finished("an unknown operation");
@@ -379,10 +434,13 @@ fn a_media_request_cannot_name_its_own_source() {
     assert_eq!(answer.refusal(), "the media profile has no helper grant");
 }
 
-/// A one-pixel PNG: small enough that no size limit is what refuses it.
-fn a_png() -> Vec<u8> {
-    let mut image = image::RgbImage::new(1, 1);
-    image.put_pixel(0, 0, image::Rgb([10, 20, 30]));
+/// A PNG of `width`×`height` pixels: small enough that no size limit is what
+/// refuses it.
+fn a_png_of(width: u32, height: u32) -> Vec<u8> {
+    let mut image = image::RgbImage::new(width, height);
+    for pixel in image.pixels_mut() {
+        *pixel = image::Rgb([10, 20, 30]);
+    }
     let mut bytes = Vec::new();
     image
         .write_to(
@@ -391,4 +449,9 @@ fn a_png() -> Vec<u8> {
         )
         .expect("encode a PNG");
     bytes
+}
+
+/// A one-pixel PNG.
+fn a_png() -> Vec<u8> {
+    a_png_of(1, 1)
 }
