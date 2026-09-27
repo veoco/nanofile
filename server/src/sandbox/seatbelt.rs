@@ -590,6 +590,14 @@ mod tests {
     /// helper may not reach it at all: the profile matches what the kernel
     /// resolved, so a rule written from a relative path grants nothing while
     /// looking like it grants something.
+    ///
+    /// Unix-only, and so are the three tests below it that name a helper or a
+    /// path: the inputs are the paths this profile is written for, and Windows
+    /// answers `is_absolute() == false` for every one of them, so the grants
+    /// would be refused for a reason that has nothing to do with what is under
+    /// test. Linux still runs them, which is where the text builder is covered
+    /// for the platform that uses it.
+    #[cfg(unix)]
     #[test]
     fn a_degenerate_helper_path_grants_nothing() {
         let text = |helper: &str| {
@@ -665,6 +673,10 @@ mod tests {
     /// it may read the helper, the scratch source it was handed and the trees a
     /// packaged helper keeps its libraries in — but `process-exec` stays a
     /// literal, so starting a *program* reaches the one file the parent named.
+    ///
+    /// Unix-only: the helper and the source are paths this profile is written
+    /// for, and neither is absolute to Windows.
+    #[cfg(unix)]
     #[test]
     fn only_the_media_profile_may_execute_the_helper() {
         let helper = Path::new("/usr/bin/ffmpeg");
@@ -730,6 +742,10 @@ mod tests {
     /// The literal is the *resolved* interpreter: a script that names `/bin/sh`
     /// is started through whatever that resolves to here, and the sandbox checks
     /// the resolved path.
+    ///
+    /// Unix-only: a shebang names a unix interpreter, and `/bin/sh` is not a
+    /// path this side of the platform can grant.
+    #[cfg(unix)]
     #[test]
     fn a_script_helper_names_the_one_other_program_that_may_run() {
         let path = std::env::temp_dir().join(format!(

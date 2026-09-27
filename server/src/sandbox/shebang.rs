@@ -43,6 +43,12 @@ mod tests {
 
     /// A script's own interpreter is read from its first line, and only an
     /// absolute path counts.
+    ///
+    /// Unix-only: a shebang names a unix interpreter, and `is_absolute` on
+    /// Windows answers false for `/bin/dash` — the path the kernel would run is
+    /// not a Windows path at all. The reader itself is exercised on every
+    /// platform by the seatbelt tests that build a profile text around it.
+    #[cfg(unix)]
     #[test]
     fn a_script_names_its_own_interpreter() {
         let path = std::env::temp_dir().join(format!(
