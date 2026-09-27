@@ -591,14 +591,23 @@ pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
 /// request path calls this. Two threads that race here both probe and both
 /// store the same answer, which is cheaper than serialising every caller
 /// behind one host's slow launch.
+///
+/// An answer belongs to the requirement it was measured under: the switch and
+/// the minimum decide what a report *means*, so a stored answer is only usable
+/// while the requirement that produced it is still the configured one. A probe
+/// that runs across a settings change is returned but never stored — the change
+/// cleared the cache, and publishing would put the old answer back.
 pub fn status(profile: Profile) -> Status {
     let cache = STATUS.get_or_init(|| Mutex::new(HashMap::new()));
+    let requirement = configured_requirement();
 
     {
         let cache = cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let entry = cache.get(&profile);
+        let entry = cache
+            .get(&profile)
+            .filter(|entry| entry.requirement == requirement);
         if let Some(status) = entry.and_then(|entry| entry.status.clone()) {
             return status;
         }
@@ -611,10 +620,15 @@ pub fn status(profile: Profile) -> Status {
 
     let (start, status) = probe(profile);
 
+    if configured_requirement() != requirement {
+        return status;
+    }
+
     let mut cache = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let entry = cache.entry(profile).or_default();
+    entry.requirement = requirement;
     match &status {
         Status::Ready(report) => {
             tracing::info!(
@@ -676,10 +690,14 @@ fn mark_unavailable(profile: Profile) {
     let Some(cache) = STATUS.get() else {
         return;
     };
+    // Read before the cache lock: the requirement slot has its own, and this
+    // keeps the two from ever being held at once.
+    let requirement = configured_requirement();
     let mut cache = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let entry = cache.entry(profile).or_default();
+    entry.requirement = requirement;
     entry.status = None;
     entry.retry_at = Some(Instant::now() + UNAVAILABLE_RETRY);
 }
@@ -863,6 +881,10 @@ fn configured_requirement() -> Requirement {
 
 #[derive(Default)]
 struct Cache {
+    /// The requirement this answer was measured under. `Requirement::default`
+    /// is the shipped policy, which is also what a `Default` entry carries
+    /// before anything has been stored.
+    requirement: Requirement,
     status: Option<Status>,
     retry_at: Option<Instant>,
     /// The creation the probe last got a report from, for the requests that
