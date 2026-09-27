@@ -1,0 +1,7 @@
+# One line ending in the working tree on every platform.
+* text=auto eol=lf
+
+# The fixtures are documents, not text: `include_bytes!` hands their bytes to a
+# parser, and the PDFs carry no NUL byte, so git would otherwise classify them as
+# text and a Windows checkout would rewrite a PDF's xref offsets.
+server/tests/fixtures/** binary
