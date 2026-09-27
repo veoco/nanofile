@@ -107,6 +107,7 @@ const ENOSYS: u32 = 38;
 
 const BPF_LD_W_ABS: u16 = 0x20;
 const BPF_JEQ_K: u16 = 0x15;
+const BPF_JGE_K: u16 = 0x35;
 const BPF_JSET_K: u16 = 0x45;
 const BPF_RET_K: u16 = 0x06;
 
@@ -114,6 +115,15 @@ const BPF_RET_K: u16 = 0x06;
 const SECCOMP_DATA_NR: u32 = 0;
 const SECCOMP_DATA_ARCH: u32 = 4;
 const SECCOMP_DATA_ARGS0_LOW: u32 = 16;
+
+/// `__X32_SYSCALL_BIT` from `arch/x86/include/uapi/asm/unistd.h`.
+///
+/// A call made through the x32 ABI carries this bit in `nr`, and x32 shares
+/// `AUDIT_ARCH_X86_64` with the 64-bit ABI: the architecture check cannot tell
+/// the two apart, and every number in the denylist below is a 64-bit one that
+/// an x32 call can never equal. `seccomp(2)` names exactly this as the way a
+/// `nr`-keyed denylist is bypassed, which is what this bound closes.
+const X32_SYSCALL_BIT: u32 = 0x4000_0000;
 
 const CLONE_THREAD: u32 = 0x0001_0000;
 
@@ -136,7 +146,8 @@ struct SockFprog {
 ///
 /// The constant is `EM_* | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE` from
 /// `linux/audit.h`; the arch check is what stops a 32-bit compatibility entry
-/// point from bypassing the filter.
+/// point from bypassing the filter. It does *not* separate the x86-64 and x32
+/// ABIs, which report the same value: `X32_SYSCALL_BIT` is what that needs.
 #[cfg(target_arch = "x86_64")]
 const AUDIT_ARCH: Option<u32> = Some(0xC000_003E);
 #[cfg(target_arch = "aarch64")]
@@ -885,6 +896,16 @@ fn filter_program(profile: Profile) -> Option<(Vec<SockFilter>, usize)> {
     program.push(stmt(BPF_RET_K, SECCOMP_RET_KILL_PROCESS));
 
     program.push(stmt(BPF_LD_W_ABS, SECCOMP_DATA_NR));
+    // The architecture check above does not cover the x32 ABI, which reports
+    // `AUDIT_ARCH_X86_64` and marks itself in `nr` instead. Every comparison
+    // below is against a 64-bit number, so a call carrying `__X32_SYSCALL_BIT`
+    // would fall through the whole list to `SECCOMP_RET_ALLOW` — the bypass
+    // `seccomp(2)` documents. Refusing the range closes it. No syscall any
+    // architecture's table carries is numbered near the bit, so nothing a
+    // parser legitimately does is refused, and the bound is harmless on the
+    // targets where the bit means nothing.
+    program.push(jump(BPF_JGE_K, X32_SYSCALL_BIT, 0, 1));
+    program.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | EPERM));
     for number in &denied {
         program.push(jump(BPF_JEQ_K, *number as u32, 0, 1));
         program.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | EPERM));
@@ -1344,6 +1365,13 @@ mod tests {
                         instruction.jf as usize
                     }
                 }
+                BPF_JGE_K => {
+                    pc += if accumulator >= instruction.k {
+                        instruction.jt as usize
+                    } else {
+                        instruction.jf as usize
+                    }
+                }
                 BPF_JSET_K => {
                     pc += if accumulator & instruction.k != 0 {
                         instruction.jt as usize
@@ -1419,6 +1447,50 @@ mod tests {
             SECCOMP_RET_ERRNO | EPERM,
             "another process's limits are not this process's to state"
         );
+    }
+
+    /// The x32 ABI marks itself in `nr` while reporting the same
+    /// `AUDIT_ARCH_X86_64` as the 64-bit one, so the architecture check cannot
+    /// tell the two apart and every comparison in the list is against a 64-bit
+    /// number. Without the upper bound a call carrying `__X32_SYSCALL_BIT`
+    /// reaches the filter's final `ALLOW`: this is the bypass `seccomp(2)`
+    /// documents, and it is what the bound closes.
+    #[test]
+    fn the_filter_refuses_the_x32_syscall_range() {
+        for number in [
+            // The calls the denylist refuses, reached through the other ABI.
+            libc::SYS_socket,
+            libc::SYS_execve,
+            libc::SYS_ptrace,
+            libc::SYS_bpf,
+            libc::SYS_setsid,
+            libc::SYS_clone,
+            // The calls it allows: these are the bypass, not a defence.
+            libc::SYS_read,
+            libc::SYS_write,
+            libc::SYS_mmap,
+            libc::SYS_futex,
+        ] {
+            let x32 = X32_SYSCALL_BIT | number as u32;
+            assert_eq!(
+                run_filter(x32 as libc::c_long, 0),
+                SECCOMP_RET_ERRNO | EPERM,
+                "x32 syscall {number} must be refused, not fall through"
+            );
+            assert_eq!(
+                run_filter_for(Profile::Media, x32 as libc::c_long, 0),
+                SECCOMP_RET_ERRNO | EPERM,
+                "x32 syscall {number} must be refused for the media profile too"
+            );
+        }
+        // The bit on its own is inside the range as well.
+        assert_eq!(
+            run_filter(X32_SYSCALL_BIT as libc::c_long, 0),
+            SECCOMP_RET_ERRNO | EPERM
+        );
+        // The 64-bit numbers are untouched by the bound.
+        assert_eq!(run_filter(libc::SYS_read, 0), SECCOMP_RET_ALLOW);
+        assert_eq!(run_filter(libc::SYS_socket, 0), SECCOMP_RET_ERRNO | EPERM);
     }
 
     /// The calls Landlock cannot govern are refused here instead, which is the
