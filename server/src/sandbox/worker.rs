@@ -1643,7 +1643,14 @@ enum Verdict {
 /// both are checked before the reply, because a child that never ran cannot
 /// have written one.
 fn verdict(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Verdict {
-    if exit_code == Some(EXIT_SANDBOX_UNAVAILABLE) || stderr.contains(SANDBOX_REFUSAL) {
+    // The exit code is the child's own and is what a runner passes through. The
+    // text is the belt for a runner that rewrote it, and it is read only when
+    // nothing came back on the reply stream and the refusal is the child's first
+    // line: a document whose bytes reach a diagnostic must not be able to talk
+    // the parent into marking the profile unavailable.
+    let refusal_is_the_childs =
+        stdout.is_empty() && stderr.trim_start().starts_with(SANDBOX_REFUSAL);
+    if exit_code == Some(EXIT_SANDBOX_UNAVAILABLE) || refusal_is_the_childs {
         return Verdict::Unavailable(detail_or(stderr, "the sandbox refused to run"));
     }
     #[cfg(windows)]
@@ -1879,6 +1886,37 @@ mod tests {
             "extract-worker: sandbox unavailable: partial (limits=off)",
         );
         assert!(matches!(outcome, Verdict::Unavailable(_)));
+    }
+
+    /// The text clause is the belt for a runner that rewrote the exit code. It
+    /// is read only when nothing came back on the reply stream and the refusal is
+    /// the child's first line, so bytes a document got echoed into a diagnostic
+    /// cannot mark the profile unavailable.
+    #[test]
+    fn a_document_cannot_write_the_refusal_the_parent_looks_for() {
+        assert!(matches!(
+            verdict(
+                Some(101),
+                b"",
+                "parse failed near extract-worker: sandbox unavailable",
+            ),
+            Verdict::Failed(reason::FAILED)
+        ));
+        // A child that answered is not overridden by its stderr.
+        assert!(matches!(
+            verdict(
+                Some(0),
+                b"U\x05\x00\x00\x00hello",
+                "extract-worker: sandbox unavailable",
+            ),
+            Verdict::Reply { tag: b'U', .. }
+        ));
+        // With no exit code to read, the child's own first line is still the
+        // environment.
+        assert!(matches!(
+            verdict(None, b"", "extract-worker: sandbox unavailable: partial"),
+            Verdict::Unavailable(_)
+        ));
     }
 
     #[test]
