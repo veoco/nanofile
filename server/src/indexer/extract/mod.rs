@@ -245,8 +245,13 @@ pub(crate) struct ProbeDocument {
     /// The name its verdict is reported under.
     pub(crate) name: &'static str,
     pub(crate) plan: Plan,
-    /// A word the extracted text must contain.
-    pub(crate) word: &'static str,
+    /// The whole text the parse has to produce, compared after trimming.
+    ///
+    /// The whole text rather than a word from it: a parser that stopped early,
+    /// a limit that truncated it or a filter that changed it still contains the
+    /// word. A verdict here is "the confined child read this document the way
+    /// it should", not "it recognised the file".
+    pub(crate) expected: &'static str,
     pub(crate) bytes: &'static [u8],
 }
 
@@ -264,13 +269,13 @@ pub(crate) const PROBE_DOCUMENTS: &[ProbeDocument] = &[
     ProbeDocument {
         name: "pdf",
         plan: Plan::Document(Document::Pdf),
-        word: "nanofile",
+        expected: "nanofile sandbox probe",
         bytes: include_bytes!("../../../tests/fixtures/probe.pdf"),
     },
     ProbeDocument {
         name: "docx",
         plan: Plan::Document(Document::Office(office_oxide::DocumentFormat::Docx)),
-        word: "nanofile",
+        expected: "nanofile sandbox probe",
         bytes: include_bytes!("../../../tests/fixtures/probe.docx"),
     },
 ];

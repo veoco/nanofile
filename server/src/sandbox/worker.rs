@@ -422,7 +422,10 @@ fn probe_parse(profile: Profile, grants: crate::sandbox::Grants<'_>) -> String {
 ///
 /// Every way a parser can decline reads as `unsupported`: a panic caught by
 /// [`crate::indexer::extract::guard`], a document the reader will not open, a
-/// plan that stopped being supported.
+/// plan that stopped being supported. What separates `ok` from `text-differs`
+/// is the *whole* text: a parser that stopped early, or a limit that cut it
+/// short, is a worker that no longer does its job even though it returned
+/// something containing the words the fixture is made of.
 fn document_verdicts() -> String {
     crate::indexer::extract::PROBE_DOCUMENTS
         .iter()
@@ -430,11 +433,14 @@ fn document_verdicts() -> String {
             let verdict =
                 match crate::indexer::extract::extract(document.plan, document.bytes.to_vec()) {
                     crate::indexer::extract::Extracted::Text(text)
-                        if text.contains(document.word) =>
+                        if text.trim() == document.expected =>
                     {
                         "ok"
                     }
-                    crate::indexer::extract::Extracted::Text(_) => "no-text",
+                    crate::indexer::extract::Extracted::Text(text) if text.trim().is_empty() => {
+                        "no-text"
+                    }
+                    crate::indexer::extract::Extracted::Text(_) => "text-differs",
                     crate::indexer::extract::Extracted::Unsupported(_) => "unsupported",
                 };
             format!("{}-{verdict}", document.name)
