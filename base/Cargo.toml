@@ -5,6 +5,9 @@ edition = "2024"
 description = "Base types for nanofile — pure types, no axum dependency"
 license = "MIT"
 
+[lints]
+workspace = true
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"

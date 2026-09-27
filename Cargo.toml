@@ -7,6 +7,11 @@ members = [
     "migration",
 ]
 
+# Unused code is an error in every build, not only where `ci.yml` runs clippy:
+# this is what reaches the targets with no runner and the release builds.
+[workspace.lints.rust]
+unused = "deny"
+
 [profile.release]
 lto = true
 codegen-units = 1

@@ -5,6 +5,9 @@ edition = "2024"
 description = "Infrastructure layer for nanofile — entities, storage, crypto, config"
 license = "MIT"
 
+[lints]
+workspace = true
+
 [dependencies]
 base = { path = "../base", features = ["with-sea-orm"] }
 

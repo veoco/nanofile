@@ -8,6 +8,9 @@ publish = false
 name = "migration"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 sea-orm-migration = { version = "2", features = [
     "sqlx-sqlite",

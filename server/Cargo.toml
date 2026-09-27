@@ -5,6 +5,9 @@ edition = "2024"
 description = "Nanofile server — Seafile-compatible sync server"
 license = "MIT"
 
+[lints]
+workspace = true
+
 [features]
 # System tray icon with a right-click menu (open Web UI, toggle auto-start,
 # open config file, quit). The tray icon and the Windows exe icon are
