@@ -758,6 +758,7 @@ const HELPER_INTERPRETERS: &[&str] = &[
     // musl, which names its interpreter after the architecture
     "/lib/ld-musl-x86_64.so.1",
     "/lib/ld-musl-aarch64.so.1",
+    "/lib/ld-musl-loongarch64.so.1",
     "/lib/ld-musl-riscv64.so.1",
 ];
 
@@ -1281,6 +1282,50 @@ mod tests {
                 .map(PathBuf::from)
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// Every architecture the media worker ships on names its loader here.
+    ///
+    /// The build matrix carries x86_64, aarch64 and loongarch64 on glibc and on
+    /// musl. A dynamically linked helper cannot start without the interpreter
+    /// the kernel runs before it, and a missing entry is invisible on any host
+    /// that does not use that loader.
+    #[test]
+    fn every_shipped_linux_target_names_its_interpreter() {
+        for (gnu, glibc, musl) in [
+            (
+                "x86_64-unknown-linux-gnu",
+                "/lib64/ld-linux-x86-64.so.2",
+                "/lib/ld-musl-x86_64.so.1",
+            ),
+            (
+                "aarch64-unknown-linux-gnu",
+                "/lib/ld-linux-aarch64.so.1",
+                "/lib/ld-musl-aarch64.so.1",
+            ),
+            (
+                "loongarch64-unknown-linux-gnu",
+                "/lib/ld-linux-loongarch-lp64d.so.1",
+                "/lib/ld-musl-loongarch64.so.1",
+            ),
+        ] {
+            assert!(
+                HELPER_INTERPRETERS.contains(&glibc),
+                "{gnu}: the helper's loader {glibc} is not granted"
+            );
+            assert!(
+                HELPER_INTERPRETERS.contains(&musl),
+                "{}: the helper's loader {musl} is not granted",
+                gnu.replace("-gnu", "-musl")
+            );
+        }
+        // Referenced by this file, not shipped by the matrix.
+        for loader in [
+            "/lib/ld-linux-riscv64-lp64d.so.1",
+            "/lib/ld-musl-riscv64.so.1",
+        ] {
+            assert!(HELPER_INTERPRETERS.contains(&loader), "{loader}");
+        }
     }
 
     #[test]
