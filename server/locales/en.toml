@@ -1428,7 +1428,7 @@ sandbox.note_container_plain = "Note: this child was started with a weaker creat
 sandbox.note_container_no_token = "Note: this child runs in the container but without the restricted token: file access and the network are still confined, while the token's privileges were left in place."
 sandbox.note_container_refused = "Note: the container the host would normally give was not applied. The parent's reason is in the raw report below as container_refused=."
 sandbox.note_token_unrestricted = "Note: this child runs inside the container but its token is not restricted. File access and the network are still confined; the privileges a restricted token would have removed are still in the token."
-sandbox.note_media_process = "Note: nothing on this platform bounds how many processes the media worker may create — the CPU limit is per process, and RLIMIT_NPROC counts per user. What bounds them is the parent's timeout and the process group it kills."
+sandbox.note_media_process = "Note: nothing bounds how many processes the media worker may create — the CPU limit is per process, and RLIMIT_NPROC counts per user. On Linux a copy cannot call `setsid`/`setpgid`, so the process group the parent kills still reaches it; on macOS those calls are not denied, so a copy can leave that group and only the per-copy CPU limit and the timeout bound it."
 sandbox.note_lpac_off = "Note: the container could not opt out of ALL APPLICATION PACKAGES, so it inherits that package's grants on the system tree and on some per-user locations."
 sandbox.note_metadata = "Note: the media worker can see which paths exist, though it cannot read them."
 sandbox.note_ll_gaps = "Note: the seccomp filter is not installed, so Landlock's blind spots are unguarded."

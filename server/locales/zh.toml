@@ -1423,7 +1423,7 @@ sandbox.note_container_no_token = "注：该子进程运行在容器中，但没
 sandbox.note_container_refused = "注：本机通常会提供的容器没有被应用。父进程给出的原因见下方原始报告中的 container_refused=。"
 sandbox.note_token_unrestricted = "注：该子进程运行在容器中，但它的令牌不是受限令牌。文件访问与网络仍被约束；受限令牌本应剥离的特权仍留在令牌里。"
 sandbox.note_lpac_off = "注：容器没能退出 ALL APPLICATION PACKAGES，因此继承了该包在系统目录及部分用户目录上的授权。"
-sandbox.note_media_process = "注：本平台上没有任何机制限制媒体 worker 能创建多少进程——CPU 限制是按进程计的，而 RLIMIT_NPROC 是按用户计的。约束它们的是父进程的超时与它杀掉的进程组。"
+sandbox.note_media_process = "注：没有任何机制限制媒体 worker 能创建多少进程——CPU 限制是按进程计的，而 RLIMIT_NPROC 是按用户计的。Linux 上副本不得调用 `setsid`/`setpgid`，父进程杀掉的进程组仍能覆盖它；macOS 上没有拒绝这两个调用，副本可以脱离该进程组，只剩下每副本的 CPU 上限与超时。"
 sandbox.note_metadata = "注：媒体 worker 能查到路径是否存在，但读不到内容。"
 sandbox.note_ll_gaps = "注：seccomp 过滤未装上，Landlock 的盲区因此没有兜底。"
 sandbox.media_ok = "已在沙盒中"

@@ -157,11 +157,12 @@ Its file item carries its own notes, because a helper is a program with
 libraries: it may read the libraries beside it (one file at a time), the system
 library directories, and — on macOS, and only when the helper actually lives
 there — the package-manager tree it is installed under (`/opt/homebrew`,
-`/usr/local` or `/opt/local`). On Linux and macOS nothing bounds how many
-processes the helper may create; the parent's timeout and the process group it
-kills are what stop it — and on Linux a copy cannot call `setsid`/`setpgid` to
-leave that group — and the page says that too rather than leaving it to be
-inferred.
+`/usr/local` or `/opt/local`). Nothing bounds how many processes the helper may
+create. On Linux the media child may not call `setsid`/`setpgid`, so a copy it
+makes cannot leave the process group the parent kills; on macOS nothing denies
+those calls, so a copy can leave that group and the only bound left is the CPU
+limit each copy carries and the parent's timeout — not the number of copies. The
+page says that too rather than leaving it to be inferred.
 
 Two settings govern it. `sandbox.enabled` is the master switch: with it off,
 none of those features run, and nothing falls back to parsing inside the server
