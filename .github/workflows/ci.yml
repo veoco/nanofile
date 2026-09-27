@@ -105,7 +105,8 @@ jobs:
   # `#[cfg(windows)]` and `#[cfg(target_os = "macos")]` code is not compiled on
   # the `lint` job's runner, so clippy there cannot see it. Not a dependency of
   # the other jobs: the Linux `lint` job stays the fast gate while these rows run
-  # beside the suite. Also the macOS and Windows half of `tray-check`.
+  # beside the suite. The `tray` feature is linted by `tray-check`, which covers
+  # the same platforms.
   lint-platforms:
     name: Lint (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
@@ -136,8 +137,6 @@ jobs:
         run: npm ci
       - name: Lint the workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Lint with the tray feature
-        run: cargo clippy -p server --features tray --bin nanofile -- -D warnings
 
   # ── Optional tray feature (compiled out by default; keep it healthy) ──
   # One definition and three runners: the tray unit tests sit behind a feature
