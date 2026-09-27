@@ -6,10 +6,17 @@
 //!
 //! | Item | What it bounds | Linux | macOS | Windows |
 //! |---|---|---|---|---|
-//! | limits | memory, CPU seconds, descriptors, file size | `RLIMIT_AS` | `setrlimit` (mapped space plus the cap) | Job Object memory cap |
+//! | limits | memory, CPU seconds, and — on unix — descriptors and file size | `RLIMIT_AS` | `setrlimit` (mapped space plus the cap) | Job Object memory and CPU cap |
 //! | files | reading or writing any path | Landlock, zero grants (the helper, its interpreter and the source for media) | Seatbelt profile | AppContainer |
 //! | network | creating a socket | seccomp denylist, Landlock TCP rights | Seatbelt profile | AppContainer with no capabilities |
 //! | process | `exec`, `fork`, extra processes | seccomp denylist (`exec` allowed only for the media helper and its loader) | Seatbelt profile: `exec` only for the media profile, `fork` and `exec` denied for a parser | Job active-process limit, plus the kernel's child-process policy |
+//!
+//! `limits` is the one item whose contents differ by platform under one name.
+//! Linux and macOS state an address-space bound, a CPU bound, a descriptor count
+//! and a file-size bound through `setrlimit`; the Windows Job Object bounds
+//! committed memory and CPU time and has no equivalent of the last two, so a
+//! Windows child is not bounded in how many descriptors it holds or how much it
+//! writes.
 //!
 //! The process item is the one the media profile cannot have. That profile
 //! exists to start a program — that is what the helper is — and every platform

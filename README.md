@@ -123,9 +123,9 @@ asked for.
 
 The admin's **Sandbox** page shows the grade this host actually gives:
 
-- **Full** — every protection the platform can provide: resource limits (memory,
-  CPU, descriptors, file size), no file access, no network, and no way to start
-  another program.
+- **Full** — every protection the platform can provide: resource limits (memory
+  and CPU everywhere, plus descriptors and file size on Linux and macOS), no
+  file access, no network, and no way to start another program.
 - **Partial** — resource limits **and** no file access, with the network or the
   process bound missing; the missing item is named. The files layer is what makes
   this grade worth having: a host that denies the network and the processes but
@@ -136,8 +136,9 @@ The admin's **Sandbox** page shows the grade this host actually gives:
 Each item is listed with how much it matters and what its absence opens, beside
 the platform's own residuals: macOS's parser profiles deny both the fork and the
 exec, so documents and images grade Full there as they do on Linux; the Windows
-container reads the system tree it loads from; and the media worker is granted
-the libraries it needs as well as the helper itself.
+container reads the system tree it loads from, and its Job Object bounds memory
+and CPU time where it has no descriptor or file-size bound; and the media worker
+is granted the libraries it needs as well as the helper itself.
 
 The media worker is graded on its own line, and it is **Partial** on every
 platform by design: it exists to start a program, and every way of starting one
