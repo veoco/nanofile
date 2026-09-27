@@ -17,14 +17,11 @@ use server::sandbox::{Level, Profile, Report};
 
 /// The helper the media profile is granted, and the one that writes the clips.
 ///
-/// `NANOFILE_TEST_FFMPEG_PATH` names the binary CI installed. Without it the
-/// command is resolved on this process's `PATH` the way the server resolves its
-/// own configured helper: the media grant names one file, so a bare command name
-/// would be a grant on a relative path. The server would otherwise resolve
-/// `ffmpeg` on its own `PATH`, which on Windows and macOS is often a package
-/// manager's shim — the media grant reaches the one file the parent names and
-/// nothing it starts, so a shim would be measured as its own refused second
-/// generation.
+/// `NANOFILE_TEST_FFMPEG_PATH` names the binary CI installed; without it the
+/// command is resolved on this process's `PATH`, because the media grant names
+/// one file and a bare name would be a grant on a relative path. The one file is
+/// also why a package manager's shim will not do: the grant reaches the named
+/// binary and nothing it starts.
 pub fn helper() -> &'static str {
     static HELPER: OnceLock<String> = OnceLock::new();
     HELPER.get_or_init(|| {
@@ -125,12 +122,9 @@ pub fn require_level(profile: Profile, minimum: Level) -> Report {
 
 /// Run the worker's own startup probe in a child process, and parse its line.
 ///
-/// `--probe` is the half the server runs at startup: it starts the extraction
-/// child with the platform's runner around it and applies the requirement, so
-/// this measures the path a document takes rather than the child's own
-/// diagnostic. `helper` is the media profile's grant; the other profiles have
-/// none. The line is printed as well as returned, because a CI log is where it
-/// is read when a runner disagrees with what was expected.
+/// `--probe` is the half the server runs at startup; `helper` is the media
+/// profile's grant, and the other profiles have none. The line is printed as
+/// well as returned: a CI log is where it is read when a runner disagrees.
 pub fn probe(profile: Profile, helper: Option<&str>) -> (Report, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_nanofile"));
     command.args(["extract-worker", "--probe", "--profile", profile.as_str()]);

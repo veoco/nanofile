@@ -16,10 +16,8 @@ use server::indexer::DocStatus;
 
 /// Point the worker at a path that cannot be started, once, before any fixture.
 ///
-/// `OnceLock` rather than a plain call because the tests below run on their own
-/// threads: whoever gets there first configures, the rest wait, and no fixture
-/// can be built before the path is set. Every test offers the same path, so
-/// whichever wins the set-once race the answer is the same.
+/// `OnceLock` because the tests run on their own threads: whoever gets there
+/// first configures and the rest wait, so no fixture can be built first.
 fn the_worker_cannot_run() {
     static CONFIGURED: OnceLock<()> = OnceLock::new();
     CONFIGURED.get_or_init(|| {
