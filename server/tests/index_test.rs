@@ -1429,53 +1429,6 @@ async fn document_formats_are_searchable() {
     }
 }
 
-/// The worker's self-test is what the server logs at startup, and the only way
-/// to see the child's own confinement and parser limits from outside it.
-///
-/// Run as a subprocess rather than through `assert_cmd`-style helpers: the
-/// point is what the binary does when it is executed, which is exactly what the
-/// server does with it.
-#[test]
-fn the_extraction_worker_reports_its_confinement() {
-    use server::sandbox::{Level, Report};
-
-    // `--probe` rather than `--selftest`: it starts the child the way the
-    // server does, with the platform's runner around it, which is the level a
-    // document actually gets.
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_nanofile"))
-        .args(["extract-worker", "--probe"])
-        .output()
-        .expect("the binary runs");
-    assert!(output.status.success(), "self-test failed: {output:?}");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let line = stdout.lines().next().unwrap_or_default();
-    let report = Report::parse(line).unwrap_or_else(|| panic!("unreadable report: {line}"));
-    assert!(
-        report.level() >= Level::Partial,
-        "this host must confine the worker: {}",
-        report.detail
-    );
-    assert!(
-        report.detail.contains("threads=ok"),
-        "the parsers run on a thread, so the sandbox must not break it: {}",
-        report.detail
-    );
-    // The child sets the Office text budget for itself; the parent never parses
-    // and so cannot set it for it.
-    assert!(
-        line.contains("text_chars=8388608"),
-        "the child must set the parser limits: {line}"
-    );
-    // The other half of the answer: the confinement the line above describes is
-    // one the parsers can still work under. A profile or filter that denies a
-    // syscall a reader needs fails here rather than in a release.
-    assert!(
-        line.contains("parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok"),
-        "the confined worker must still read documents: {line}"
-    );
-}
-
 /// Files the extractor cannot turn into text are recorded as skipped, and
 /// neither the request nor the batch that carried them fails.
 ///

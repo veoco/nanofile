@@ -17,16 +17,30 @@ use server::sandbox::{Level, Profile, Report};
 
 /// The helper the media profile is granted, and the one that writes the clips.
 ///
-/// `NANOFILE_TEST_FFMPEG_PATH` names the binary CI installed. The server would
-/// otherwise resolve `ffmpeg` on its own `PATH`, which on Windows and macOS is
-/// often a package manager's shim: the media grant reaches the one file the
-/// parent names and nothing it starts, so a shim would be measured as its own
-/// refused second generation.
+/// `NANOFILE_TEST_FFMPEG_PATH` names the binary CI installed. Without it the
+/// command is resolved on this process's `PATH` the way the server resolves its
+/// own configured helper: the media grant names one file, so a bare command name
+/// would be a grant on a relative path. The server would otherwise resolve
+/// `ffmpeg` on its own `PATH`, which on Windows and macOS is often a package
+/// manager's shim — the media grant reaches the one file the parent names and
+/// nothing it starts, so a shim would be measured as its own refused second
+/// generation.
 pub fn helper() -> &'static str {
     static HELPER: OnceLock<String> = OnceLock::new();
     HELPER.get_or_init(|| {
-        std::env::var("NANOFILE_TEST_FFMPEG_PATH").unwrap_or_else(|_| "ffmpeg".to_string())
+        std::env::var("NANOFILE_TEST_FFMPEG_PATH")
+            .ok()
+            .or_else(|| on_path("ffmpeg"))
+            .unwrap_or_else(|| "ffmpeg".to_string())
     })
+}
+
+/// The first file named `name` on `PATH`, if there is one.
+fn on_path(name: &str) -> Option<String> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
+        .map(|candidate| candidate.to_string_lossy().into_owned())
 }
 
 /// Whether the helper runs at all.
