@@ -2079,4 +2079,36 @@ mod tests {
             "the empty path must not become the media grant"
         );
     }
+
+    /// The probe file the files layer has to refuse is the parent's, and it is
+    /// the one candidate that measures the same thing on every platform.
+    #[test]
+    fn the_deny_probe_is_private_and_removed() {
+        let probe = DenyProbe::create().expect("the temporary directory takes a file");
+        let path = probe.path().to_path_buf();
+        assert!(path.exists(), "the child is given a file that is there");
+        assert!(
+            path.starts_with(std::env::temp_dir()),
+            "the probe lives where no profile grants: {}",
+            path.display()
+        );
+
+        // A second probe is a second path, and the first is still there: a
+        // predictable name is a name another local user could leave something at.
+        let second = DenyProbe::create().expect("a second file");
+        let second_path = second.path().to_path_buf();
+        assert_ne!(second_path, path);
+        assert!(path.exists());
+
+        drop(second);
+        assert!(
+            !second_path.exists(),
+            "a dropped probe takes its file with it"
+        );
+        drop(probe);
+        assert!(
+            !path.exists(),
+            "the file must not outlive the probe that named it on the child's command line"
+        );
+    }
 }

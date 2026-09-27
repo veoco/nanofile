@@ -1668,6 +1668,41 @@ mod tests {
         );
     }
 
+    /// The other two probes, in the same direction: they may answer "denied"
+    /// only when something denied it. A probe that could only answer one way
+    /// would certify a sandbox that is not there, which is the failure the whole
+    /// report exists to prevent, and a test process is the one process this
+    /// suite knows is not confined.
+    #[cfg(unix)]
+    #[test]
+    fn the_files_and_network_probes_report_an_unconfined_process() {
+        assert!(
+            !files_are_denied(None),
+            "this process can read the host's files and write its temporary directory"
+        );
+
+        let readable =
+            std::env::temp_dir().join(format!("nanofile-open-file-{}", std::process::id()));
+        std::fs::write(&readable, b"x").expect("write a file this process may read");
+        assert!(
+            !files_are_denied(Some(&readable)),
+            "a file this process can read is not a refusal"
+        );
+        let _ = std::fs::remove_file(&readable);
+
+        // A probe file the parent is done with says nothing and is not itself a
+        // refusal: the candidates below it are what answer.
+        assert!(
+            !files_are_denied(Some(Path::new("/nonexistent-sandbox-probe"))),
+            "a probe file that is gone is not a denial"
+        );
+
+        assert!(
+            !network_is_denied(),
+            "this process may bind a socket, so the network layer is not there"
+        );
+    }
+
     /// The report names every limit that took and every one the kernel refused,
     /// so a missing limits layer says which limit to look at.
     #[cfg(unix)]
