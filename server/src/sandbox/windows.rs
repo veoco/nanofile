@@ -153,8 +153,9 @@
 //! program" — and the traverse grants were added on that reading, which is what
 //! made them ruinous rather than merely redundant. The streams are pipes now —
 //! stdin closed by this side, stdout and stderr drained — and the same launch
-//! reports `parse=media-failed(exit code: 2)` for the worker's own image and
-//! `parse=media-ok` for a packaged ffmpeg: the helper starts. Seatbelt refuses the
+//! reports `parse=media-failed(...)` for the worker's own image and
+//! `parse=media-ok(<bytes>)` for a packaged ffmpeg: the helper runs and the
+//! probe decodes a frame with it. Seatbelt refuses the
 //! write to `/dev/null` in exactly the same way, which is how this was found.
 //!
 //! # References
