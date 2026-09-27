@@ -136,10 +136,7 @@ fn defer(action: TrayAction) {
 /// has returned, and only from there.
 #[cfg(target_os = "windows")]
 pub(super) fn drain() {
-    loop {
-        let Some(action) = PENDING.with(|queue| queue.borrow_mut().pop_front()) else {
-            break;
-        };
+    while let Some(action) = PENDING.with(|queue| queue.borrow_mut().pop_front()) {
         action.run();
     }
 }
