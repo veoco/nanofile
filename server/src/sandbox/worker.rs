@@ -1737,6 +1737,179 @@ fn parse_frame(reply: &[u8]) -> Option<(u8, Vec<u8>)> {
 mod tests {
     use super::*;
 
+    /// One child's invocation, as the parent builds it.
+    struct Launched {
+        program: String,
+        args: Vec<String>,
+    }
+
+    impl Launched {
+        /// The arguments the child itself is started with: whatever the platform
+        /// runner needs and the path to the binary come in front of these.
+        fn child(&self) -> Vec<&str> {
+            let at = self
+                .args
+                .iter()
+                .position(|arg| arg == SUBCOMMAND)
+                .expect("the child is named on the command line");
+            self.args[at..].iter().map(String::as_str).collect()
+        }
+
+        /// The flags the child is given, without their values.
+        fn flags(&self) -> Vec<&str> {
+            self.child()
+                .into_iter()
+                .filter(|arg| arg.starts_with("--"))
+                .collect()
+        }
+    }
+
+    /// Build one invocation the way the parent does.
+    fn launched(
+        requirement: Requirement,
+        profile: Profile,
+        grants: sandbox::Grants<'_>,
+        probe: Option<&Path>,
+    ) -> Launched {
+        let invocation = invocation(requirement, profile, grants, probe)
+            .expect("this process has a path to itself");
+        Launched {
+            program: invocation.program.to_string_lossy().into_owned(),
+            args: invocation
+                .args
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect(),
+        }
+    }
+
+    /// The child is started with the policy the parent resolved and nothing else:
+    /// every flag is one the parent decided, and each is named exactly when it
+    /// has something to say. A flag that leaked in unconditionally would change
+    /// what the child installs, and a flag that went missing would leave a grant
+    /// the child needs unavailable without failing anything.
+    #[test]
+    fn the_child_is_started_with_the_policy_the_parent_resolved() {
+        let launched = launched(
+            Requirement::new(true, Level::Full),
+            Profile::Documents,
+            sandbox::Grants::default(),
+            None,
+        );
+        let child = launched.child();
+        assert_eq!(child[0], SUBCOMMAND);
+        assert_eq!(
+            &child[1..5],
+            ["--min-level", "full", "--profile", "documents"]
+        );
+        let flags = launched.flags();
+        assert!(flags.contains(&"--min-level") && flags.contains(&"--profile"));
+        for absent in ["--ffmpeg", "--src", "--probe-path", "--sandbox-off"] {
+            assert!(
+                !flags.contains(&absent),
+                "{absent} names nothing here: {flags:?}"
+            );
+        }
+    }
+
+    /// The switch reaches the child as well as the parent that decides not to
+    /// spawn one, and the minimum travels beside it.
+    #[test]
+    fn the_switch_and_the_minimum_travel_to_the_child() {
+        let launched = launched(
+            Requirement::new(false, Level::None),
+            Profile::Documents,
+            sandbox::Grants::default(),
+            None,
+        );
+        let child = launched.child();
+        assert_eq!(&child[1..3], ["--min-level", "none"]);
+        assert!(
+            launched.flags().contains(&"--sandbox-off"),
+            "the child has to know the switch is off: {:?}",
+            launched.flags()
+        );
+    }
+
+    /// The grants are the paths the child may reach, and they travel on its own
+    /// command line because they have to be installed before the request is read.
+    /// The probe file is how the files layer is measured at all, so a parent that
+    /// stopped naming it would leave the item claimed rather than measured.
+    #[test]
+    fn the_grants_are_named_once_and_only_when_they_exist() {
+        let helper = Path::new("/opt/nanofile/ffmpeg");
+        let source = Path::new("/var/tmp/nanofile/scratch.bin");
+        let probe = Path::new("/var/tmp/nanofile/probe");
+        let launched = launched(
+            Requirement::new(true, Level::Partial),
+            Profile::Media,
+            sandbox::Grants {
+                helper: Some(helper),
+                source: Some(source),
+            },
+            Some(probe),
+        );
+
+        let child = launched.child();
+        for (flag, value) in [
+            ("--ffmpeg", helper),
+            ("--src", source),
+            ("--probe-path", probe),
+        ] {
+            assert_eq!(
+                child.iter().filter(|arg| **arg == flag).count(),
+                1,
+                "{flag} must be named exactly once: {child:?}"
+            );
+            let at = child
+                .iter()
+                .position(|arg| *arg == flag)
+                .expect("just counted");
+            assert_eq!(Path::new(child[at + 1]), value, "{flag} names its value");
+        }
+    }
+
+    /// The platform runner is the parent's wrapper rather than the child's own
+    /// protection, and the child is told which of the two it is: on macOS the
+    /// Seatbelt profile is applied by `sandbox-exec`, and a child that thought
+    /// the layers were its own would refuse for lacking them.
+    #[test]
+    fn only_the_platform_with_a_runner_wraps_the_child() {
+        let launched = launched(
+            Requirement::new(true, Level::Partial),
+            Profile::Documents,
+            sandbox::Grants::default(),
+            None,
+        );
+
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(launched.program, "/usr/bin/sandbox-exec");
+            assert_eq!(launched.args[0], "-p");
+            assert_eq!(
+                launched.args[2], "--",
+                "the runner needs its own separator before the child"
+            );
+            assert!(
+                launched.flags().contains(&"--seatbelt"),
+                "the child has to know its confinement came from the runner: {:?}",
+                launched.flags()
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_ne!(
+                launched.program, "/usr/bin/sandbox-exec",
+                "only macOS needs a runner"
+            );
+            assert!(
+                !launched.flags().contains(&"--seatbelt"),
+                "no runner is applied here, so the child is not told one was: {:?}",
+                launched.flags()
+            );
+        }
+    }
+
     /// The child's half of the protocol, without a sandbox: read a request from
     /// `reader`, write the reply to `writer`.
     fn serve(reader: &mut impl Read, writer: &mut impl Write) -> anyhow::Result<()> {
