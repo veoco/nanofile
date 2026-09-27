@@ -1,11 +1,9 @@
 //! What each profile's startup report says on this host.
 //!
-//! The typed half comes from `Report`; the mechanism tokens come from the
-//! profile that installed them. This is the one place either is asserted, and it
-//! is the path the server walks at startup: `extract-worker --probe` starts the
-//! child the way a request does, applies the requirement, and prints what it
-//! found. No fixture is built, so the worker's process-global executable is left
-//! alone.
+//! The typed half comes from `Report`, the mechanism tokens from the profile
+//! that installed them, and this is the one place either is asserted — on the
+//! path the server walks at startup. No fixture is built, so the worker's
+//! process-global executable is left alone.
 
 mod common;
 

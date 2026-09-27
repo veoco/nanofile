@@ -1,20 +1,9 @@
 //! What the parent remembers about a host it has already asked.
 //!
-//! Its own integration-test binary because the worker's executable is
-//! process-global and set once. Here it points at a script that answers the
-//! self-test, records every invocation, and can answer for the *wrong* profile
-//! on purpose.
-//!
-//! The parent's job here is to ask once and to keep the answers apart. The probe
-//! starts children and may walk a launch ladder, so a request path that
-//! re-probed per call would pay that cost per document; two profiles hold
-//! different powers (only media may execute a helper), so one profile's answer
-//! must never stand for another's; and an answer belongs to the requirement it
-//! was measured under, because the switch and the minimum are what decide what a
-//! report *means*.
-//!
-//! One test, because the executable is set once — the same reason
-//! `index_worker_wedge_test` is one.
+//! Its own binary because the worker's executable is process-global: here it is
+//! a script that answers the self-test, records every invocation, and can answer
+//! for the *wrong* profile on purpose. The host is asked once per profile and per
+//! requirement, and one answer never stands for another's.
 #![cfg(unix)]
 
 mod common;

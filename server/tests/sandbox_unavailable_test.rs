@@ -1,33 +1,26 @@
-//! What each sandbox-backed feature does when the image worker cannot run.
+//! What the server does when the extraction worker cannot run.
 //!
-//! Its own integration-test binary because the worker's executable is
-//! process-global and set once: every other test's fixture points it at the
-//! real binary and then insists the sandbox confines it. This file points it at
-//! something that does not exist *before* the first fixture, which is the only
-//! way to reach the unavailable path from the outside — the same shape a host
-//! below `sandbox.min_level` has from the parent's side.
-//!
-//! The behaviour under test is fail-closed. Three paths decode bytes a user
-//! chose — the avatar upload, the EXIF endpoint and the file thumbnail — and
-//! with the image profile unavailable each has to refuse rather than decode
-//! them in this process. A 200 with no thumbnail, or `null` from an EXIF read
-//! the worker never ran, would be the failure this file exists to catch.
+//! Points the worker at a path that cannot be started *before* the first
+//! fixture, which is the only way to reach the unavailable path from outside.
+//! The executable is process-global, so this is a binary of its own, and nothing
+//! here may build a fixture before it is pointed away.
 
 mod common;
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use common::TestFixture;
+use server::indexer::DocStatus;
 
-/// Point the worker at a path that cannot be started, once, before any fixture
-/// is built.
+/// Point the worker at a path that cannot be started, once, before any fixture.
 ///
 /// `OnceLock` rather than a plain call because the tests below run on their own
 /// threads: whoever gets there first configures, the rest wait, and no fixture
-/// can be built before the path is set. Every test in this file offers the same
-/// path, so whichever thread wins the set-once race the answer is the same.
-fn the_image_worker_cannot_run() {
+/// can be built before the path is set. Every test offers the same path, so
+/// whichever wins the set-once race the answer is the same.
+fn the_worker_cannot_run() {
     static CONFIGURED: OnceLock<()> = OnceLock::new();
     CONFIGURED.get_or_init(|| {
         assert!(
@@ -73,6 +66,71 @@ fn stored_files(directory: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// A document the worker could not carry is a retryable failure, is not parsed
+/// in this process, and does not stop what needs no worker.
+#[tokio::test]
+async fn a_document_is_not_indexed_without_the_worker() {
+    the_worker_cannot_run();
+
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+    let path = "/report.pdf";
+
+    let resp = f
+        .client
+        .upload_file(
+            token,
+            &f.repo_id,
+            "/",
+            "report.pdf",
+            &common::minimal_pdf("zebraquartz"),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed");
+
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/repos/{}/file/reindex/", f.repo_id),
+            Some(token),
+            &serde_json::json!({ "p": path }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "the request itself must succeed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["indexed"].as_bool(),
+        Some(false),
+        "a document the worker could not carry is not indexed"
+    );
+
+    // The server has to be alive and still able to index what needs no worker.
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "after.txt", b"aftermath signal")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert!(
+        wait_for(Duration::from_secs(30), || async {
+            !search_results(&f, token, "aftermath").await.is_empty()
+        })
+        .await,
+        "text needs no worker, so it must still be indexed"
+    );
+
+    // Failed, not skipped: the environment is the problem, so the retry that a
+    // fixed host needs has to stay open.
+    let indexer = f.server.state.indexer.clone().expect("indexer is enabled");
+    let states = indexer
+        .doc_states(&f.repo_id, &[path.to_string()])
+        .expect("read document states");
+    assert_eq!(
+        states.get(path).map(|state| state.status.clone()),
+        Some(DocStatus::Failed),
+        "an unavailable worker is a retryable failure, not a verdict on the file"
+    );
+}
+
 /// An avatar is refused, and nothing of it is kept.
 ///
 /// The refusal has to land *before* the bytes are stored: a host that cannot
@@ -80,7 +138,7 @@ fn stored_files(directory: &Path) -> Vec<PathBuf> {
 /// unavailable would only move the decode to a later request.
 #[tokio::test]
 async fn an_avatar_upload_is_refused_without_the_image_worker() {
-    the_image_worker_cannot_run();
+    the_worker_cannot_run();
     let f = TestFixture::new().await;
 
     let form = reqwest::multipart::Form::new().part(
@@ -118,7 +176,7 @@ async fn an_avatar_upload_is_refused_without_the_image_worker() {
 /// caller would have no way to tell that this host grew no EXIF support.
 #[tokio::test]
 async fn exif_is_an_error_without_the_image_worker() {
-    the_image_worker_cannot_run();
+    the_worker_cannot_run();
     let f = TestFixture::new().await;
 
     let resp = f
@@ -160,7 +218,7 @@ async fn exif_is_an_error_without_the_image_worker() {
 /// A thumbnail is not produced, and none is cached.
 #[tokio::test]
 async fn a_thumbnail_is_not_generated_without_the_image_worker() {
-    the_image_worker_cannot_run();
+    the_worker_cannot_run();
     let f = TestFixture::new().await;
 
     let resp = f
@@ -188,4 +246,35 @@ async fn a_thumbnail_is_not_generated_without_the_image_worker() {
         "a refused thumbnail must not be cached: {:?}",
         stored_files(&thumbnail_dir)
     );
+}
+
+/// Perform a full-text content search and return the `results` array.
+async fn search_results(f: &common::TestFixture, token: &str, q: &str) -> Vec<serde_json::Value> {
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/search/?q={q}&search_filename_only=false"),
+            Some(token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    resp.json::<serde_json::Value>().await.unwrap()["results"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+async fn wait_for<F, Fut>(timeout: Duration, mut predicate: F) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if predicate().await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
 }

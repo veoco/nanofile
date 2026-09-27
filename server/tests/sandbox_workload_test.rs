@@ -1,19 +1,9 @@
 //! What the confined child does with a document at the size the pipeline allows.
 //!
 //! Every other sandbox test uses a document of a few hundred bytes, so the
-//! resource limits the child installs are measured as *present* and never as
-//! *sufficient*: address space, CPU time, descriptors and file size could all be
-//! clamped to values no real document survives and the suite would stay green
-//! while every large document became an unparsable file in production.
-//!
-//! The two cases below put the documented sizes to the running limit. A
-//! document whose text is most of the way to `MAX_INDEXED_CONTENT_BYTES` has to
-//! come back whole — the marker at its end is what says the parse was not cut
-//! short — and one past the cap has to come back cut exactly at the cap.
-//!
-//! Its own integration-test binary because the worker's executable is
-//! process-global and set once: this file points it at the real binary before
-//! any probe, and no fixture is built here.
+//! limits are measured as *present* and never as *sufficient*. Its own binary
+//! because the worker's executable is process-global, and it is pointed at this
+//! package's binary here before any probe.
 
 mod common;
 

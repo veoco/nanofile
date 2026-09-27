@@ -1,20 +1,9 @@
-//! What the parent does with a child that does not answer, answers too much,
-//! or was started with the wrong surroundings.
+//! What the parent does with a child that does not answer, answers too much, or
+//! was started with the wrong surroundings.
 //!
-//! Its own integration-test binary because the worker's executable is
-//! process-global and set once: every other test's fixture points it at the
-//! real binary and then insists the sandbox confines it. Here it points at a
-//! script that answers the startup self-test like a confined worker and then
-//! does the one thing under test.
-//!
-//! One test rather than several for the same reason `index_worker_wedge_test`
-//! is one: the executable is set once per process, and the phases below are
-//! three faces of one question — what the parent bounds about the child that it,
-//! and only it, can see. A request that never comes back has to end at the
-//! deadline; the process group the child leads has to be killed with it, or a
-//! copy keeps the protocol pipes; a reply past the cap has to be no reply at
-//! all; and the child has to be started outside the server's directory and
-//! without its environment.
+//! Its own binary because the worker's executable is process-global: the script
+//! here answers the startup self-test and then does the one thing under test.
+//! The phases are one test — the deadline, the process group and the reply cap.
 #![cfg(unix)]
 
 mod common;

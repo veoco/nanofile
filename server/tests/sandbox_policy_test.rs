@@ -1,14 +1,9 @@
 //! What happens when the host cannot give what `sandbox.min_level` asks for.
 //!
-//! Its own integration-test binary because both the worker's executable and the
-//! policy are process-global and set once. The worker here is a script that
-//! reports *partial* confinement, which is what a Linux host without Landlock,
-//! or a Windows host whose AppContainer would not start, looks like from the
-//! parent's side.
-//!
-//! The behaviour under test is the decision's *place*: the parent applies the
-//! policy once, from the probe it already runs, so a shortfall is an error at
-//! startup rather than a child spawned per document that dies with exit 125.
+//! Its own binary because the worker's executable and the requirement are
+//! process-global: the script here reports *partial* confinement, which is a
+//! Linux host without Landlock or a Windows container that would not start.
+//! Where the decision is taken — the probe the parent already runs — is the test.
 #![cfg(unix)]
 
 mod common;

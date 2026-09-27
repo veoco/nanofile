@@ -1,12 +1,9 @@
 //! Media thumbnails are produced by the sandbox worker, not in this process.
 //!
-//! The image path is covered where thumbnails are tested generally; this file
-//! covers the one pipeline that executes an external program, because that is
-//! the pipeline whose confinement can fail in a way a thumbnail test would see
-//! as "no thumbnail" rather than as a broken sandbox. It runs on every platform
-//! that installs the helper, which is what makes the file authorization, the
-//! decode and the resize measured rather than described: a host with no helper
-//! fails here rather than passing with the pipeline untested.
+//! This is the one pipeline that executes an external program: a confinement
+//! that fails here reads as "no thumbnail" rather than as a broken sandbox. A
+//! host with no helper fails the test rather than passing it, so the file
+//! authorization, the decode and the resize are measured, not described.
 
 mod common;
 

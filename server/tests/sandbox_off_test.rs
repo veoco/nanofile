@@ -1,14 +1,9 @@
-//! What a document gets while `sandbox.enabled` is off, and what it gets when
-//! the switch is turned back on.
+//! What a document gets while `sandbox.enabled` is off, and when it is back on.
 //!
-//! Its own integration-test binary because the sandbox requirement is
-//! process-global and the fixture sets it at startup: this file changes it
-//! after the fixture is built, so no other test may share the process.
-//!
-//! The behaviour under test is that the switch is reversible: a document
-//! skipped while it is off is recorded as a *retryable* state rather than as
-//! "this file is not indexable", so turning the sandbox back on re-indexes it
-//! instead of leaving the document missing from search forever.
+//! Its own binary because the requirement is process-global and the fixture sets
+//! it: this file changes it after the fixture is built. The switch has to be
+//! reversible — a document skipped while it is off is *retryable*, or nothing
+//! would re-index it when it returns.
 
 mod common;
 

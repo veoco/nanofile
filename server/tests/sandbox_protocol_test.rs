@@ -1,25 +1,9 @@
 //! What the extraction worker does with a request it did not expect.
 //!
-//! The child is the security boundary: it confines itself and *then* reads the
-//! request, so every byte it parses after that point came from the parent —
-//! which builds it from a document, an image or a media file. These tests spawn
-//! the real binary and hand it hand-written bytes, the way an attacker who
-//! reached the protocol would, and assert that each unexpected shape is refused
-//! rather than guessed at.
-//!
-//! The child is started with `--min-level none`: what is under test is the
-//! request parser, and a host that cannot reach the default minimum would
-//! otherwise refuse before reading anything — turning every assertion below
-//! into a test of this machine rather than of the parser.
-//!
-//! Every case is bounded by a deadline and killed when it expires, and each
-//! case asserts the run did *not* time out: a child that hangs is the failure a
-//! bare "exited non-zero" check would read as a pass.
-//!
-//! The protocol constants are spelled here rather than imported. `MAGIC` is
-//! `pub(crate)` for the jobs that share it, and a wire format is what this file
-//! is about: a test that reached for the parent's copy would follow it wherever
-//! it moved instead of pinning what the child actually reads.
+//! The child confines itself and *then* reads the request, so these tests hand
+//! the real binary hand-written bytes, the way an attacker who reached the
+//! protocol would. `--min-level none` keeps the subject the parser rather than
+//! this host, and the constants are spelled here: a wire format is pinned.
 
 use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};

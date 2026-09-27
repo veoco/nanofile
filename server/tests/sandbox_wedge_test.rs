@@ -1,16 +1,9 @@
 //! What the parent does when the worker leaves a process holding the pipes.
 //!
-//! Its own integration-test binary for the same reason as
-//! `index_worker_unavailable_test`: the worker's executable is process-global
-//! and set once, and every other test's fixture points it at the real binary.
-//!
-//! The behaviour under test is the one a timeout cannot reach: the direct child
-//! *exits* — successfully, even — while something it started keeps the inherited
-//! stdout open. Reading until end of file would then wait for that process, and
-//! the extraction permit the caller holds (see `service::index`) would be held
-//! with it: two such documents would stop document extraction for good. The
-//! parent gives the pipes a deadline instead, and a run whose reply did not
-//! arrive by then is a failed document, which the backfill retries.
+//! Its own binary because the worker's executable is process-global: the script
+//! here answers the self-test and exits while something it started keeps the
+//! inherited stdout open. Reading until end of file would wait for that process
+//! and hold the extraction permit with it, so the pipes get a deadline.
 #![cfg(unix)]
 
 mod common;
