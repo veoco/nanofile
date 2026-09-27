@@ -343,19 +343,23 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
+          # The `find`s below are allowed to come up empty: the step runs with
+          # `-e -o pipefail`, and a package directory that is not there (or a
+          # `head` that closes the pipe) would otherwise abort it before the next
+          # installer is tried.
           FFMPEG=""
           if command -v winget >/dev/null 2>&1; then
             echo "installing ffmpeg with winget"
             winget install --id Gyan.FFmpeg -e --silent --disable-interactivity \
               --accept-package-agreements --accept-source-agreements || true
             FFMPEG="$(find "$(cygpath -u "$LOCALAPPDATA")/Microsoft/WinGet/Packages" \
-              -name ffmpeg.exe 2>/dev/null | head -1)"
+              -name ffmpeg.exe 2>/dev/null | head -1 || true)"
           fi
           if [ -z "$FFMPEG" ]; then
             echo "no winget on this image; installing ffmpeg with Chocolatey"
             choco install ffmpeg -y --no-progress
             FFMPEG="$(find /c/ProgramData/chocolatey/lib/ffmpeg/tools -name ffmpeg.exe \
-              -type f 2>/dev/null | head -1)"
+              -type f 2>/dev/null | head -1 || true)"
           fi
           if [ -z "$FFMPEG" ]; then
             echo "::error::ffmpeg could not be installed; the media tests need a real helper"
