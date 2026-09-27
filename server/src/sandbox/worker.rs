@@ -914,6 +914,13 @@ static HELPER: OnceLock<Mutex<Option<&'static Path>>> = OnceLock::new();
 /// to outlive the child that is using it. One leaked path per change of the
 /// setting is the price of a grant that names a file.
 pub fn configure_helper(path: PathBuf) {
+    // An empty path is not a grant. The settings hook fires on any Sandbox save,
+    // and `storage.ffmpeg_path` is empty when no helper is configured, so
+    // installing it here would leave the media profile with a rule that names
+    // nothing.
+    if path.as_os_str().is_empty() {
+        return;
+    }
     let leaked: &'static Path = Box::leak(path.into_boxed_path());
     let slot = HELPER.get_or_init(|| Mutex::new(None));
     *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(leaked);
@@ -2015,6 +2022,18 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .is_empty(),
             "the Sandbox page must re-measure after the helper changes"
+        );
+    }
+
+    /// A settings save with no helper configured names the empty path, which is
+    /// not a grant: installing it would refuse every media rule that follows.
+    #[test]
+    fn an_empty_helper_is_not_installed() {
+        configure_helper(PathBuf::new());
+        assert_ne!(
+            helper().map(|path| path.as_os_str().is_empty()),
+            Some(true),
+            "the empty path must not become the media grant"
         );
     }
 }

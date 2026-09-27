@@ -490,9 +490,13 @@ impl AppState {
                     // fires when `storage.ffmpeg_path` is saved: re-resolve it so
                     // the next media request runs the helper the admin just
                     // configured rather than the one the process started with.
-                    crate::sandbox::worker::configure_helper(
-                        crate::sandbox::worker::resolve_helper(&config.storage.ffmpeg_path),
-                    );
+                    // An empty path is the same "no helper" the startup guard
+                    // above treats it as, so it is not installed.
+                    if !config.storage.ffmpeg_path.trim().is_empty() {
+                        crate::sandbox::worker::configure_helper(
+                            crate::sandbox::worker::resolve_helper(&config.storage.ffmpeg_path),
+                        );
+                    }
                 }
             }
         }
