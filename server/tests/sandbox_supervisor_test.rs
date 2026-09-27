@@ -17,6 +17,8 @@
 //! without its environment.
 #![cfg(unix)]
 
+mod common;
+
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -26,7 +28,6 @@ use server::sandbox::{Grants, Profile};
 
 /// The script and the files it leaves behind.
 struct Worker {
-    executable: std::path::PathBuf,
     /// What the child saw of its surroundings: its working directory, then its
     /// environment.
     facts: std::path::PathBuf,
@@ -48,19 +49,15 @@ fn reply_cap() -> u64 {
 /// A worker that reports a confinement it does not have, then hangs — or, for
 /// the images profile, floods its reply.
 fn script(directory: &Path) -> Worker {
-    use std::os::unix::fs::PermissionsExt;
-
-    let worker = Worker {
-        executable: directory.join("supervisor-worker.sh"),
-        facts: directory.join("child-facts"),
-        beats: directory.join("copy-beats"),
-        flooded: directory.join("flooded-reply"),
-    };
-    // The parent sets no `PATH`, so the shell finds the programs below the way
-    // it finds any program with an empty environment: its own default.
-    std::fs::write(
-        &worker.executable,
-        format!(
+    let facts = common::sandbox::marker_file(directory, "child-facts");
+    let beats = common::sandbox::marker_file(directory, "copy-beats");
+    let flooded = common::sandbox::marker_file(directory, "flooded-reply");
+    common::sandbox::FakeWorker::install(
+        directory,
+        "supervisor-worker.sh",
+        // The parent sets no `PATH`, so the shell finds the programs below the
+        // way it finds any program with an empty environment: its own default.
+        &format!(
             r#"#!/bin/sh
 case "$*" in
   *--selftest*)
@@ -95,16 +92,17 @@ while [ $i -lt 200 ]; do
 done &
 sleep 300
 "#,
-            flooded = worker.flooded.display(),
+            flooded = flooded.display(),
             blocks = reply_cap() / 1024,
-            facts = worker.facts.display(),
-            beats = worker.beats.display(),
+            facts = facts.display(),
+            beats = beats.display(),
         ),
-    )
-    .expect("write the fake worker");
-    std::fs::set_permissions(&worker.executable, std::fs::Permissions::from_mode(0o755))
-        .expect("make it executable");
-    worker
+    );
+    Worker {
+        facts,
+        beats,
+        flooded,
+    }
 }
 
 /// One request, framed the way the parent frames it — the bytes are not what
@@ -114,13 +112,6 @@ fn a_request() -> Vec<u8> {
     request.push(Plan::Text.tag());
     request.extend_from_slice(b"irrelevant");
     request
-}
-
-/// How many beats the child's copy has written.
-fn beats(path: &Path) -> usize {
-    std::fs::read_to_string(path)
-        .map(|text| text.lines().count())
-        .unwrap_or(0)
 }
 
 /// One run of the hanging child, and how long it took.
@@ -134,10 +125,6 @@ fn a_hanging_request(timeout: Duration) -> (RunOutcome, Duration) {
 fn the_parent_bounds_what_the_child_does_and_sees() {
     let directory = tempfile::tempdir().expect("temp dir");
     let worker = script(directory.path());
-    assert!(
-        worker::configure_executable(worker.executable.clone()),
-        "this file must be the first to configure the worker"
-    );
 
     // ── The child's surroundings ────────────────────────────────────────
     let (outcome, elapsed) = a_hanging_request(Duration::from_millis(500));
@@ -175,14 +162,14 @@ fn the_parent_bounds_what_the_child_does_and_sees() {
     // The copy was running while the request did: without this the assertion
     // below would pass on a script that never started one.
     let (_, _) = a_hanging_request(Duration::from_millis(1000));
-    let before = beats(&worker.beats);
+    let before = common::sandbox::lines(&worker.beats);
     assert!(
         before > 0,
         "the worker's copy must have been running before the deadline"
     );
     std::thread::sleep(Duration::from_millis(600));
     assert_eq!(
-        beats(&worker.beats),
+        common::sandbox::lines(&worker.beats),
         before,
         "the process group has to be killed with the child, or a copy keeps \
          running with the protocol pipes"

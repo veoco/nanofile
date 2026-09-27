@@ -13,7 +13,8 @@
 //! arrive by then is a failed document, which the backfill retries.
 #![cfg(unix)]
 
-use std::path::PathBuf;
+mod common;
+
 use std::time::{Duration, Instant};
 
 use server::indexer::extract::Plan;
@@ -22,12 +23,10 @@ use server::sandbox::{Level, Requirement};
 
 /// Write a shell script that answers the startup self-test like a confined
 /// worker and then exits while a background process holds the pipes.
-fn wedge_worker(directory: &std::path::Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
-    let path = directory.join("wedge-worker.sh");
-    std::fs::write(
-        &path,
+fn wedge_worker(directory: &std::path::Path) {
+    common::sandbox::FakeWorker::install(
+        directory,
+        "wedge-worker.sh",
         // The self-test line is what `probe()` parses; without it the parent
         // would decide the worker is unavailable and never start the run this
         // test is about.
@@ -42,21 +41,13 @@ esac
 ( sleep 30 ) &
 exit 0
 "#,
-    )
-    .expect("write the fake worker");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-        .expect("make it executable");
-    path
+    );
 }
 
 #[test]
 fn a_process_left_holding_the_pipes_does_not_hold_the_caller() {
     let directory = tempfile::tempdir().expect("temp dir");
-    let executable = wedge_worker(directory.path());
-    assert!(
-        worker::configure_executable(executable),
-        "this file must be the first to configure the worker"
-    );
+    wedge_worker(directory.path());
     // A requirement the fake report satisfies: what is under test is the pipe,
     // not the level.
     worker::configure_requirement(Requirement::new(true, Level::Partial));

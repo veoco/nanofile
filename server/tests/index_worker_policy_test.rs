@@ -11,6 +11,8 @@
 //! startup rather than a child spawned per document that dies with exit 125.
 #![cfg(unix)]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -20,14 +22,12 @@ use server::sandbox::{Level, Requirement};
 
 /// A worker that reports a confinement `full` does not accept, and leaves a
 /// mark behind whenever it is started for a request rather than for a probe.
-fn short_worker(directory: &Path) -> (PathBuf, PathBuf) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let marker = directory.join("a-document-was-spawned");
-    let path = directory.join("short-worker.sh");
-    std::fs::write(
-        &path,
-        format!(
+fn short_worker(directory: &Path) -> PathBuf {
+    let marker = common::sandbox::marker_file(directory, "a-document-was-spawned");
+    common::sandbox::FakeWorker::install(
+        directory,
+        "short-worker.sh",
+        &format!(
             r#"#!/bin/sh
 case "$*" in
   *--selftest*)
@@ -40,21 +40,14 @@ exit 0
 "#,
             marker = marker.display()
         ),
-    )
-    .expect("write the fake worker");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-        .expect("make it executable");
-    (path, marker)
+    );
+    marker
 }
 
 #[test]
 fn a_minimum_the_host_cannot_meet_is_decided_before_any_child() {
     let directory = tempfile::tempdir().expect("temp dir");
-    let (executable, marker) = short_worker(directory.path());
-    assert!(
-        worker::configure_executable(executable),
-        "this file must be the first to configure the worker"
-    );
+    let marker = short_worker(directory.path());
     worker::configure_requirement(Requirement::new(true, Level::Full));
 
     let status = worker::status(server::sandbox::Profile::Documents);

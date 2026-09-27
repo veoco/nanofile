@@ -10,73 +10,8 @@
 
 mod common;
 
-use std::sync::OnceLock;
-
 use common::TestFixture;
-
-/// The helper the sandbox is granted, and the one that writes the clips.
-///
-/// `NANOFILE_TEST_FFMPEG_PATH` names the binary CI installed. The server would
-/// otherwise resolve `ffmpeg` on its own `PATH`, which on Windows and macOS is
-/// often a package manager's shim: the media grant reaches the one file the
-/// parent names and nothing it starts, so a shim would be measured as its own
-/// refused second generation.
-fn helper() -> &'static str {
-    static HELPER: OnceLock<String> = OnceLock::new();
-    HELPER.get_or_init(|| {
-        std::env::var("NANOFILE_TEST_FFMPEG_PATH").unwrap_or_else(|_| "ffmpeg".to_string())
-    })
-}
-
-/// Skip the test on a development host, fail it on CI.
-///
-/// A host without the helper can do nothing here, but a green suite that never
-/// ran the media pipeline is the failure this file exists to catch — and that is
-/// what a silent `return` produced before.
-fn without_ffmpeg() {
-    if std::env::var_os("CI").is_some() {
-        panic!(
-            "{} is not runnable; CI installs ffmpeg on this platform",
-            helper()
-        );
-    }
-    eprintln!(
-        "{} is not available; skipping the media sandbox test",
-        helper()
-    );
-}
-
-/// Whether the helper runs at all.
-fn helper_runs() -> bool {
-    std::process::Command::new(helper())
-        .arg("-version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
-/// Generate a one-second clip with the helper, or answer false when the host
-/// has none.
-fn generate_clip(path: &std::path::Path) -> bool {
-    std::process::Command::new(helper())
-        .args([
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=duration=1:size=320x240:rate=10",
-            "-pix_fmt",
-            "yuv420p",
-        ])
-        .arg(path)
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
+use common::sandbox::{generate_clip, helper, helper_runs, without_ffmpeg};
 
 /// The media profile confines itself, decodes under the confinement, and starts
 /// the helper it is granted.

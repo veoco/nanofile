@@ -17,29 +17,21 @@
 //! `index_worker_wedge_test` is one.
 #![cfg(unix)]
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::Path;
 
 use server::sandbox::worker::{self, Status};
 use server::sandbox::{Level, Profile, Requirement};
 
-/// The script and the record of how often it was started.
-struct Worker {
-    executable: PathBuf,
-    asked: PathBuf,
-}
-
 /// A worker that reports one profile's confinement, records every start, and
 /// answers the media probe with the *documents* report.
-fn script(directory: &Path) -> Worker {
-    use std::os::unix::fs::PermissionsExt;
-
-    let worker = Worker {
-        executable: directory.join("status-worker.sh"),
-        asked: directory.join("asked"),
-    };
-    std::fs::write(
-        &worker.executable,
-        format!(
+fn script(directory: &Path) -> (common::sandbox::FakeWorker, std::path::PathBuf) {
+    let asked = common::sandbox::marker_file(directory, "asked");
+    let worker = common::sandbox::FakeWorker::install(
+        directory,
+        "status-worker.sh",
+        &format!(
             r#"#!/bin/sh
 echo "$*" >> "{asked}"
 case "$*" in
@@ -61,20 +53,15 @@ case "$*" in
 esac
 exit 0
 "#,
-            asked = worker.asked.display(),
+            asked = asked.display(),
         ),
-    )
-    .expect("write the fake worker");
-    std::fs::set_permissions(&worker.executable, std::fs::Permissions::from_mode(0o755))
-        .expect("make it executable");
-    worker
+    );
+    (worker, asked)
 }
 
 /// How many times the child was started, whichever way it was asked.
-fn starts(worker: &Worker) -> usize {
-    std::fs::read_to_string(&worker.asked)
-        .map(|asked| asked.lines().count())
-        .unwrap_or(0)
+fn starts(asked: &Path) -> usize {
+    common::sandbox::lines(asked)
 }
 
 /// The grade one profile's cached answer holds, or `None` when it holds none.
@@ -88,17 +75,13 @@ fn grade(profile: Profile) -> Option<Level> {
 #[test]
 fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
     let directory = tempfile::tempdir().expect("temp dir");
-    let worker = script(directory.path());
-    assert!(
-        worker::configure_executable(worker.executable.clone()),
-        "this file must be the first to configure the worker"
-    );
+    let (_worker, asked) = script(directory.path());
 
     // A ready answer is cached: the host is asked once, not once per caller.
     assert_eq!(grade(Profile::Documents), Some(Level::Full));
-    assert_eq!(starts(&worker), 1, "the first call probes");
+    assert_eq!(starts(&asked), 1, "the first call probes");
     assert_eq!(grade(Profile::Documents), Some(Level::Full));
-    assert_eq!(starts(&worker), 1, "a second call is the cached answer");
+    assert_eq!(starts(&asked), 1, "a second call is the cached answer");
 
     // A report for another profile is not this profile's answer.
     let Status::Unavailable(why) = worker::status(Profile::Media) else {
@@ -108,13 +91,13 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
         why.contains("reported profile=documents"),
         "the reason has to name what came back: {why}"
     );
-    assert_eq!(starts(&worker), 2);
+    assert_eq!(starts(&asked), 2);
 
     // ... and it did not land in the documents slot, which is still the answer
     // its own probe gave.
     assert_eq!(grade(Profile::Documents), Some(Level::Full));
     assert_eq!(
-        starts(&worker),
+        starts(&asked),
         2,
         "a refused report must not have replaced a stored one"
     );
@@ -122,7 +105,7 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
     // The profiles hold different powers, so their answers are kept apart: a
     // shared entry would have answered `full` here.
     assert_eq!(grade(Profile::Images), Some(Level::Partial));
-    assert_eq!(starts(&worker), 3);
+    assert_eq!(starts(&asked), 3);
 
     // An answer belongs to the requirement it was measured under. A new
     // minimum makes the stored one unusable, so the host is asked again — and
@@ -138,7 +121,7 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
         why.contains("partial") && why.contains("full"),
         "the reason has to name what the host gave and what was asked: {why}"
     );
-    assert_eq!(starts(&worker), 4, "a new requirement has to re-probe");
+    assert_eq!(starts(&asked), 4, "a new requirement has to re-probe");
 
     // The shortfall is not asked about again inside the retry window: the next
     // call answers from the record without starting a child.
@@ -150,7 +133,7 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
         "the window is what waits, and it says so: {why}"
     );
     assert_eq!(
-        starts(&worker),
+        starts(&asked),
         4,
         "the retry window must not spawn a child per caller"
     );
@@ -158,5 +141,5 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
     // Under the stricter requirement the documents answer is measured again —
     // its stored one was taken under the old requirement — and meets it.
     assert_eq!(grade(Profile::Documents), Some(Level::Full));
-    assert_eq!(starts(&worker), 5);
+    assert_eq!(starts(&asked), 5);
 }

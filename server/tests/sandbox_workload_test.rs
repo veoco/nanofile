@@ -17,12 +17,11 @@
 
 mod common;
 
-use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use server::indexer::extract::{Document, Extracted, MAX_INDEXED_CONTENT_BYTES, Plan};
-use server::sandbox::worker::{self, Outcome, Status};
+use server::sandbox::worker::{self, Outcome};
 use server::sandbox::{Level, Profile};
 
 /// How much text the large document carries.
@@ -41,7 +40,7 @@ fn the_worker_ran() {
     static CONFIGURED: OnceLock<()> = OnceLock::new();
     CONFIGURED.get_or_init(|| {
         assert!(
-            worker::configure_executable(PathBuf::from(env!("CARGO_BIN_EXE_nanofile"))),
+            common::sandbox::configure_real_worker(),
             "this file must be the first to configure the worker"
         );
     });
@@ -50,14 +49,7 @@ fn the_worker_ran() {
 /// The child has to confine itself on this host, and the failure has to say
 /// what the host gave instead.
 fn require_confinement() {
-    match worker::status(Profile::Documents) {
-        Status::Ready(report) => assert!(
-            report.level() >= Level::Partial,
-            "this host must confine the worker: {}",
-            report.detail
-        ),
-        Status::Unavailable(why) => panic!("the extraction worker is not available: {why}"),
-    }
+    common::sandbox::require_level(Profile::Documents, Level::Partial);
 }
 
 /// A PDF whose one text object draws `text`.

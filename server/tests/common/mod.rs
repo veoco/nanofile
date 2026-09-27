@@ -1,6 +1,7 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod client;
+pub mod sandbox;
 
 use axum::Router;
 use sea_orm::{ActiveModelTrait, DatabaseConnection};
