@@ -219,6 +219,21 @@ jobs:
       # `main`.
       - name: Check the Windows code and its tests
         run: cargo check -p server --all-targets
+      # Type-checking a test is not running it, and no other job can run these:
+      # every other runner is Linux, where `#[cfg(target_os = "windows")]` blocks
+      # are not compiled at all. The sandbox module is where that matters most —
+      # the Job Object, the restricted token and the container exist only in a
+      # Windows process — and the count is asserted rather than the status,
+      # because a filter that matches nothing runs zero tests and still exits 0.
+      - name: Run the sandbox unit tests
+        shell: bash
+        run: |
+          listed=$(cargo test -p server --lib sandbox:: -- --list | grep -c ': test$' || true)
+          if [ "$listed" -eq 0 ]; then
+            echo "::error::the sandbox unit-test filter matched no tests"
+            exit 1
+          fi
+          cargo test -p server --lib sandbox::
       # ... and the Job Object, the restricted token and the pipes the protocol
       # runs over only exist at runtime, which no other job can reach: everything
       # else runs on Linux, where none of this code is compiled. The probe

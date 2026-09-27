@@ -2201,4 +2201,75 @@ mod tests {
         names.sort_by_key(|name| name.to_ascii_uppercase());
         assert_eq!(written, names, "{written:?}");
     }
+
+    /// The process count the job must allow is the profile's own: a worker that
+    /// starts a helper has two slots and one that does not has one.
+    #[test]
+    fn only_the_media_profile_needs_a_second_process_slot() {
+        assert_eq!(process_slots(Profile::Documents), 1);
+        assert_eq!(process_slots(Profile::Images), 1);
+        assert_eq!(process_slots(Profile::Media), 2);
+    }
+
+    /// The redirected store is the one path a container's write lands in, and it
+    /// is decided by the path rather than by the write having succeeded.
+    #[test]
+    fn the_container_store_is_recognised_by_its_path() {
+        let Some(local) = std::env::var_os("LOCALAPPDATA") else {
+            return; // a host that does not say where the user's state lives
+        };
+        let packages = Path::new(&local).join("Packages");
+        let inside = packages.join("nanofile_abc").join("Temp").join("x");
+        assert!(is_container_store(&inside), "{}", inside.display());
+
+        // The kernel resolves the write to a verbatim path, and the prefix is
+        // not a path component: `\\?\C:` is the same place as `C:`.
+        let verbatim = std::path::PathBuf::from(format!(r"\\?\{}", inside.display()));
+        assert!(is_container_store(&verbatim), "{}", verbatim.display());
+
+        // A write anywhere else is the user's own, which is the case the
+        // container exists to prevent.
+        assert!(!is_container_store(
+            &Path::new(&local).join("Temp").join("x")
+        ));
+        assert!(!is_container_store(Path::new(r"C:\Windows\Temp\x")));
+        // `Packages` as a prefix of a longer component name is not the store.
+        assert!(!is_container_store(
+            &Path::new(&local).join("Packages-old").join("x")
+        ));
+    }
+
+    /// A write from a process that is not in a container reaches the user's own
+    /// temporary directory, and says so: `store` is a fact about a redirected
+    /// path, not a name for the benign case. The three measurements the report
+    /// is built on have to answer "not confined" for a process that is not — one
+    /// stuck on a single answer would certify a sandbox that is not there.
+    #[test]
+    fn this_process_reports_itself_unconfined() {
+        assert!(!is_app_container(), "a test process is not in a container");
+        assert!(
+            !is_restricted_token(),
+            "a test process does not carry a restricted token"
+        );
+        assert_ne!(
+            integrity_level(),
+            "unknown",
+            "the token's integrity level is readable on any supported Windows"
+        );
+        assert_eq!(
+            write_scope(),
+            "user",
+            "nothing redirects this process's writes"
+        );
+
+        // Nothing named a job for this process, so it must not claim the job's
+        // limits: either there is no job at all or it is one the host made,
+        // whose values are not these.
+        for slots in [1, 2] {
+            assert!(
+                job_limits(slots).is_err(),
+                "a process the parent did not confine has no limits to report"
+            );
+        }
+    }
 }
