@@ -1305,15 +1305,20 @@ impl Child {
     /// copy holding the protocol pipes, and the read after this would then wait
     /// on a pipe nobody will close. Windows reaches the whole tree through the
     /// Job Object the child was created in, which the parent holds — ending the
-    /// job is what takes the helper a media child started with it.
+    /// job is what takes the helper a media child started with it. The group
+    /// reaches the whole tree on Linux only: a macOS copy can leave it.
     fn kill_tree(&mut self) {
         match self {
             #[cfg(not(windows))]
             Child::Standard(child) => {
                 // `killpg` on the group the child leads; the child's own pid is
-                // the group id because it was made a group leader at spawn. A
-                // copy cannot leave that group: `setsid`/`setpgid` are refused
-                // by the filter the child installs (`sandbox::linux`).
+                // the group id because it was made a group leader at spawn. On
+                // Linux that group is the whole tree: `setsid`/`setpgid` are
+                // refused by the filter the child installs (`sandbox::linux`),
+                // so a copy cannot leave it. On macOS nothing refuses those
+                // calls and Seatbelt has no operation that could, so a copy
+                // that makes one leaves the group and this signal does not
+                // reach it.
                 unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
                 let _ = child.kill();
             }
