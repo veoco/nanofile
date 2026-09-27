@@ -190,14 +190,26 @@ The confinement is tested where it is used, not only where it is described. The
 report is asserted item by item and token by token on each platform — the Linux
 job on every push, macOS and Windows in the daily and manual runs — so a host
 that loses a layer fails a test rather than a thumbnail that quietly returns
-nothing. Each profile also has to do its job under the confinement it claims: a
-document is still parsed, an image still decoded, the helper still started; a
-host where the worker cannot run at all has to refuse an avatar, an EXIF read
-and a thumbnail rather than decode them in the server process. On Linux the
-refusals are put to the running kernel: the filter is installed in a child that
-then makes the calls a parser must not be able to make, each beside the same
-call in the same kind of process without the filter, so a refusal that comes
-from the process's own privileges cannot pass for the sandbox.
+nothing. Each profile also has to do its job under the confinement it claims,
+and the job is judged by its product rather than by a process that started: the
+self-test parses every structured format it carries and compares the **whole**
+text each parser returns, the images child's reply is checked against the pixels
+it was given, and the media child reads a file the parent wrote, decodes a frame
+from it and hands back the encoded thumbnail. That media pipeline — upload,
+scratch file, confined child, thumbnail — is run end to end on all three
+platforms, because the helper is the one program the sandbox executes and a host
+that could start it and do nothing else would otherwise pass. A document whose
+text is near the size cap is extracted whole in the confined child, the marker
+at its end included, so the resource limits are measured as sufficient rather
+than merely installed. The protocol's own hand-written requests and that
+size-cap document are asserted in the Linux jobs; every platform asserts its own
+probe and runs the media pipeline. A host where the worker cannot run at all has
+to refuse an avatar, an EXIF read and a thumbnail rather than decode them in the
+server process. On Linux the refusals are put to the running kernel: the filter
+is installed in a child that then makes the calls a parser must not be able to
+make, each beside the same call in the same kind of process without the filter,
+so a refusal that comes from the process's own privileges cannot pass for the
+sandbox.
 
 What the sandbox does not defend against is not asserted to hold: a kernel
 vulnerability, and another process running as the same user. The tests are about

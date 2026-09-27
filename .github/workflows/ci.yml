@@ -81,6 +81,10 @@ jobs:
               - 'server/static/**'
               - 'server/templates/**'
               - 'server/frontend/**'
+              # The probe's documents, images and clips are compiled into the
+              # binary with `include_bytes!`, so a fixture change is a build
+              # change even when no `.rs` file moved with it.
+              - 'server/tests/fixtures/**'
               # build.rs shells out to the pinned esbuild/tailwind versions, so
               # a dependency bump is a build change.
               - 'package.json'
@@ -408,7 +412,7 @@ jobs:
           # one file at a time. A count would not say how wide the grant is.
           grep -q 'helper_scope=libs' media.txt
           # ffmpeg answers with a decoded frame, not only with its version.
-          grep -q 'parse=media-ok' media.txt
+          grep -q 'parse=media-ok(' media.txt
 
       # The pipeline the probe samples: an upload, the scratch file the server
       # writes, the confined child reading it under the container, and a decoded
@@ -574,8 +578,10 @@ jobs:
           # them (a Homebrew helper is reached through `/opt/homebrew/bin` and
           # checked in the Cellar), and its streams are pipes with `/dev/null`
           # granted for the write the helper itself may want. `hand=` is the same
-          # exec attempted by hand in that child.
-          grep -q 'parse=media-ok' /tmp/media.txt
+          # exec attempted by hand in that child. The bracket form is the
+          # decode: `media-ok` alone was `ffmpeg -version`, which says the grant
+          # reaches the binary and nothing about the work the profile exists for.
+          grep -q 'parse=media-ok(' /tmp/media.txt
           grep -q 'hand=ok' /tmp/media.txt
           # Nothing on this platform bounds how many copies of the media worker
           # there may be: the profile keeps the fork, and the note beside the
@@ -831,7 +837,9 @@ jobs:
           grep -q 'files=denied' /tmp/media.txt
           grep -q 'process=open' /tmp/media.txt
           grep -q 'helper=allowed' /tmp/media.txt
-          grep -q 'parse=media-ok' /tmp/media.txt
+          # The bracket form is the decode: the probe reads the source the
+          # parent wrote, runs the helper and encodes a thumbnail from a frame.
+          grep -q 'parse=media-ok(' /tmp/media.txt
           grep -qE 'helper_grants=[1-9]' /tmp/media.txt
           grep -q 'exec=denied' /tmp/media.txt
           # The metadata calls the loader needs are re-allowed for this profile
@@ -851,6 +859,13 @@ jobs:
       # writes, the confined child reading it, and a decoded thumbnail back.
       - name: Thumbnail a video under the profile
         run: cargo test -p server --test thumbnail_sandbox_test -- --nocapture
+
+      # The limits the child installs, measured as sufficient rather than as
+      # present: a document most of the way to the text cap has to come back
+      # whole, within the parent's timeout, and one past the cap cut exactly at
+      # it. The step prints how long the larger document took.
+      - name: Extract a document at the size cap
+        run: cargo test -p server --test sandbox_workload_test -- --nocapture
 
       # The arm64 syscall table is not the x86_64 one: several of the calls the
       # filter names (the bare path-taking forms) do not exist there, and every
