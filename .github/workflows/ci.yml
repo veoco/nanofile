@@ -11,35 +11,11 @@ on:
     branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
-  # The Windows and macOS jobs are not run by a push. They are the two slow ones
-  # — 12m and 5m against a 3m Linux path — and most pushes cannot change what
-  # they measure, so they run in the two cases below and at no other time.
-  # Asking for them from a commit is deliberately not possible: a marker in a
-  # commit subject would have to be threaded through the shell, and a label would
-  # make the same request behave differently on a push than on a pull request.
-  #
-  # A full run once a day, Windows and macOS included. What it catches is not the
-  # last commit — the nightly build already compiles every platform — but the
-  # environment moving underneath: a runner image whose kernel lost Landlock or
-  # whose `/etc/hostname` moved, a macOS update that starts refusing a Seatbelt
-  # profile, a Windows image that changed what an AppContainer may open. None of
-  # those waits for a commit to land, so this runs whether or not one has. 04:00
-  # UTC keeps it clear of the nightly build at 10:00.
-  schedule:
-    - cron: "0 4 * * *"
-  workflow_dispatch:
-    inputs:
-      platform:
-        description: "Also run the Windows and macOS jobs"
-        type: boolean
-        default: true
 
 # One run per ref per event, newest wins. The head commit's tree is what a run
 # verifies, so a superseded push cannot have found anything the newer one will
-# not. The event is part of the group so the daily run neither cancels a push's
-# verification nor is cancelled by one: two minutes into a 13-minute daily run a
-# push would otherwise end it, and the daily run is the only one that reaches
-# Windows and macOS without being asked.
+# not. The event is part of the group so a pull request's run and a push's run of
+# the same branch do not cancel each other.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
@@ -59,18 +35,12 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      rust: ${{ steps.plan.outputs.rust }}
-      frontend: ${{ steps.plan.outputs.frontend }}
+      rust: ${{ steps.filter.outputs.rust }}
+      frontend: ${{ steps.filter.outputs.frontend }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
-        # Only a push or a pull request has a range to diff. On the other two
-        # events this action has no `before` and falls back to reporting every
-        # file as added — which happens to be what is wanted, but it is another
-        # action's undocumented fallback, and the daily run must not depend on
-        # it. `plan` below decides those two events instead.
-        if: github.event_name == 'push' || github.event_name == 'pull_request'
         with:
           filters: |
             rust:
@@ -99,22 +69,6 @@ jobs:
               - 'server/templates/**'
               - 'package.json'
               - 'package-lock.json'
-      # A scheduled or manual run is a full run. The filter above is skipped for
-      # both, so this is where those two events get their answer; the outputs
-      # stay the strings 'true'/'false' that the job conditions below compare
-      # against.
-      - name: Treat a scheduled or manual run as a full run
-        id: plan
-        env:
-          EVENT: ${{ github.event_name }}
-          RUST_CHANGED: ${{ steps.filter.outputs.rust }}
-          FRONTEND_CHANGED: ${{ steps.filter.outputs.frontend }}
-        run: |
-          case "$EVENT" in
-            schedule|workflow_dispatch) RUST_CHANGED=true; FRONTEND_CHANGED=true ;;
-          esac
-          echo "rust=$RUST_CHANGED" >> "$GITHUB_OUTPUT"
-          echo "frontend=$FRONTEND_CHANGED" >> "$GITHUB_OUTPUT"
 
   # ── Formatting + linting (single job to reuse checkout/toolchain) ────
   lint:
@@ -153,9 +107,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, lint]
     if: needs.changes.outputs.rust == 'true'
-    # Same `debug` reduction as the `test` job, and deliberately identical
+    # Same `debug` reduction as the `tests` job, and deliberately identical
     # values: rust-cache keys on `CARGO_*`, so matching them keeps this job and
-    # `test` on one Linux cache entry instead of two.
+    # the Linux rows on one cache entry instead of two.
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -173,481 +127,6 @@ jobs:
         run: cargo clippy -p server --features tray --bin nanofile -- -D warnings
       - name: Test with tray feature
         run: cargo test -p server --features tray --bin nanofile -- --nocapture
-
-  # ── Windows-only code: the Service Control Manager front-end and the Win32
-  #    tray back-end. Every other job runs on Linux, where
-  #    `#[cfg(target_os = "windows")]` blocks are not compiled at all, so
-  #    without this job a Windows build break would only surface in the
-  #    nightly/release builds.
-  #
-  #    Scope: the type check of the whole test suite, plus the runtime the probes
-  #    below reach — neither of which any other job can do. The `tray` feature
-  #    the Windows artifacts also ship is not checked here: the nightly builds
-  #    `windows-amd64-tray` natively, and a second `cargo check` for that feature
-  #    cost 90s of its own.
-  windows-check:
-    name: Windows check
-    runs-on: windows-latest
-    needs: [changes, lint]
-    # Taken by the daily run, and by a manual one unless its input says
-    # otherwise. There is deliberately no way to ask for them from a commit.
-    if: >-
-      github.event_name == 'schedule'
-      || (github.event_name == 'workflow_dispatch' && inputs.platform)
-    # A deadline for a hang, not for a slow run: the steps below have their own.
-    #
-    # Deliberately no `CARGO_PROFILE_*_DEBUG=0` here, unlike the Linux jobs.
-    # rust-cache keys on `CARGO*`, so setting it re-keys this job's cache, and
-    # this job now runs rarely enough that reusing the cache is worth more than
-    # the codegen it would save. Measured with it: the check step took 203s and
-    # the cache restore 84s, against 87s and 51s before the change.
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
-        with:
-          shared-key: "nanofile"
-      - name: Install Tailwind CSS
-        run: npm ci
-      # `--all-targets` is what reaches the test code: the extraction worker
-      # confines *itself* on Windows with a Job Object, and that module is only
-      # type-checked where its target's tests are built. This is also the only
-      # job that type-checks the whole test suite on Windows.
-      #
-      # A second step here checked `--features tray --bin nanofile` as well, and
-      # it is gone: `check` output is never reused by the `build` and `test`
-      # below, so it cost 90s of its own, and `tray` is a feature rather than a
-      # platform — the nightly workflow already builds `windows-amd64-tray`
-      # natively every night. Put it back if a tray-only Windows break reaches
-      # `main`.
-      - name: Check the Windows code and its tests
-        run: cargo check -p server --all-targets
-      # Type-checking a test is not running it, and no other job can run these:
-      # every other runner is Linux, where `#[cfg(target_os = "windows")]` blocks
-      # are not compiled at all. The sandbox module is where that matters most —
-      # the Job Object, the restricted token and the container exist only in a
-      # Windows process — and the count is asserted rather than the status,
-      # because a filter that matches nothing runs zero tests and still exits 0.
-      - name: Run the sandbox unit tests
-        shell: bash
-        run: |
-          listed=$(cargo test -p server --lib sandbox:: -- --list | grep -c ': test$' || true)
-          if [ "$listed" -eq 0 ]; then
-            echo "::error::the sandbox unit-test filter matched no tests"
-            exit 1
-          fi
-          cargo test -p server --lib sandbox::
-      # ... and the Job Object, the restricted token and the pipes the protocol
-      # runs over only exist at runtime, which no other job can reach: everything
-      # else runs on Linux, where none of this code is compiled. The probe
-      # starts the child exactly as the server does and reports what the child
-      # found, so a Job Object that could not be created or a token the system
-      # refused shows up here rather than in a release.
-      - name: Run the extraction sandbox probe
-        # `bash`, not the runner's default `pwsh`: this step asserts with `grep`,
-        # and PowerShell fails on neither a native command's non-zero exit code
-        # nor a missing tool the way `bash -eo pipefail` does.
-        shell: bash
-        run: |
-          cargo build --bin nanofile
-          ./target/debug/nanofile.exe extract-worker --probe | tee sandbox.txt
-          grep -q 'profile=documents' sandbox.txt
-          # The token is read back from the process rather than believed from
-          # the command line the parent wrote.
-          grep -q 'token=restricted' sandbox.txt
-          # The job is the parent's, named at creation, and the child reads its
-          # limits back from it: `,parent` is the mark of that arrangement, and
-          # `limits-missing` is what a job without them would report instead.
-          grep -q 'job=memory' sandbox.txt
-          grep -q ',parent' sandbox.txt
-          grep -q 'container=appcontainer' sandbox.txt
-          grep -q 'files=denied' sandbox.txt
-          # The measurement is the parent's own file, which carries no ACE for
-          # the package the container is checked against: a read the container
-          # is refused is the near edge of the files layer, and it is what the
-          # item is claimed on rather than a write it may have redirected.
-          grep -q 'files=measured-denied' sandbox.txt
-          grep -q 'network=denied' sandbox.txt
-          # The integrity level the token ended up with, which the container
-          # sets. Asserted as a fact rather than as a value: a label this side
-          # sets is one the token-only fallback cannot survive.
-          grep -qE 'il=(untrusted|low|medium)' sandbox.txt
-          # How many process mitigations the kernel took and the child read
-          # back. The count moves with the Windows build; zero would mean the
-          # API is not working at all.
-          grep -qE 'mitigations=[1-9][0-9]*' sandbox.txt
-          # The far edge of the files protection: the container refuses the
-          # user's own paths (above). The system tree stays readable through the
-          # packages a low-box process is checked against — not through the
-          # user's own SID, and not a documented invariant — so a host that
-          # answered `denied` would be stricter than the platform and both are
-          # asserted; a change to either is deliberate.
-          grep -qE 'system=(readable|denied|absent)' sandbox.txt
-          # Which container the launch asked for and got. `off` is what
-          # Windows 10 answers, where the attribute does not exist.
-          grep -qE 'lpac=(on|off)' sandbox.txt
-          # Which creation the parent settled on, and where a write from it
-          # lands. `store` means the file resolved into the container's own
-          # redirected store; `user` means it did not, which is a fact the report
-          # states rather than labels benign.
-          grep -qE 'rung=(container|container-only|token|plain)' sandbox.txt
-          grep -qE 'writes=(store|user|denied|unmeasured)' sandbox.txt
-          grep -q 'threads=ok' sandbox.txt
-          # Every protection, not `partial|full`: the container is the one this
-          # host can lose on its own, and losing it now fails here.
-          grep -q 'level=full' sandbox.txt
-          # ... and the confined child can still read a document, which the item
-          # count cannot say.
-          grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' sandbox.txt
-          grep -q 'measure=thorough' sandbox.txt
-
-      # The image profile, which the probe above does not reach: avatars, EXIF
-      # and the image thumbnails are the other three paths that decode bytes a
-      # user chose, and they share this one child.
-      - name: Report the image sandbox profile
-        shell: bash
-        run: |
-          ./target/debug/nanofile.exe extract-worker --probe --profile images | tee images.txt
-          grep -q 'profile=images' images.txt
-          # `level=full` carries files, the network and process creation: a
-          # container that was not created would drop the grade here.
-          grep -q 'level=full' images.txt
-          grep -q 'files=denied' images.txt
-          grep -q 'network=denied' images.txt
-          grep -q 'parse=image-ok(' images.txt
-
-      # The media profile is the one that may execute a helper, so it is probed
-      # with the helper it will actually be given: a packaged ffmpeg. The install
-      # is required rather than best-effort: the probe decodes a frame and the
-      # test below runs the whole pipeline, so a run without a real helper would
-      # report the media path as measured when nothing measured it.
-      #
-      # winget, and Chocolatey only as the fallback: the Windows Server 2025
-      # images carry winget even though the image's own software list does not
-      # mention it, while the older ones carry Chocolatey and no winget — the
-      # maintainers turned winget down for those as incompatible with Server.
-      # Which one ran is printed below.
-      #
-      # The package's `PATH` entry is deliberately not used. It is a shim: an
-      # executable that starts the real ffmpeg (Chocolatey writes one, and a
-      # portable winget package gets a link). The media grant reaches the one
-      # helper the parent named and nothing else, so a probe handed the shim
-      # would measure the shim's second generation being refused — a fact about
-      # the launcher, not about the sandbox.
-      - name: Install ffmpeg
-        shell: bash
-        run: |
-          FFMPEG=""
-          if command -v winget >/dev/null 2>&1; then
-            echo "installing ffmpeg with winget"
-            winget install --id Gyan.FFmpeg -e --silent --disable-interactivity \
-              --accept-package-agreements --accept-source-agreements || true
-            FFMPEG="$(find "$(cygpath -u "$LOCALAPPDATA")/Microsoft/WinGet/Packages" \
-              -name ffmpeg.exe 2>/dev/null | head -1)"
-          fi
-          if [ -z "$FFMPEG" ]; then
-            echo "no winget on this image; installing ffmpeg with Chocolatey"
-            choco install ffmpeg -y --no-progress
-            FFMPEG="$(find /c/ProgramData/chocolatey/lib/ffmpeg/tools -name ffmpeg.exe \
-              -type f 2>/dev/null | head -1)"
-          fi
-          if [ -z "$FFMPEG" ]; then
-            echo "::error::ffmpeg could not be installed; the media profile and its end-to-end test need a real helper"
-            exit 1
-          fi
-          echo "ffmpeg=$FFMPEG"
-          # Timed: this is the install's own first execution of the binary, and it
-          # is paid here rather than inside the probe below, which measures the
-          # sandbox rather than this machine.
-          time "$FFMPEG" -version >/dev/null
-          echo "FFMPEG_WIN=$(cygpath -w "$FFMPEG")" >> "$GITHUB_ENV"
-
-      # `level=partial` and `process=open` are the point of the row: this profile
-      # starts a program by definition — that is what a helper is — so it cannot
-      # carry the process item and must not pretend to. `helper=allowed` is the
-      # fact beside it (the container could open the helper the parent granted),
-      # and `parse=` is the effect: the helper decodes a frame from the file the
-      # parent handed it and answers.
-      #
-      # The helper is where winget put it, several levels down inside the user
-      # profile, which is what makes this step the one that measures the grant's
-      # cost. It did not always: an earlier version copied the worker's own image
-      # into `Program Files` when no ffmpeg was installed, and granted the
-      # container the traverse to reach the helper by writing a DACL on every
-      # ancestor. `SetNamedSecurityInfo` re-imposes inheritance on everything
-      # below the object it writes, so that walk rewrote the ACLs of the whole
-      # tree under `C:\Program Files` — or `C:\Users\<user>` — which took 7 to 10
-      # minutes of I/O, and 4m39s using 0.4s of CPU on the run that timed itself.
-      # The grant is written on the files alone now, and how long this step takes
-      # is asserted rather than described.
-      #
-      # The helper starting is what the null device used to prevent: `NUL` is a
-      # device a container may refuse to open, and that refusal arrives from the
-      # same call as the process creation — which read as "the container cannot
-      # start a helper" until the streams became pipes.
-      - name: Probe the media sandbox profile
-        shell: bash
-        run: |
-          HELPER="$FFMPEG_WIN"
-          echo "probing the media profile with helper=$HELPER"
-          start=$(date +%s)
-          ./target/debug/nanofile.exe extract-worker --probe --profile media \
-            --ffmpeg "$HELPER" | tee media.txt
-          elapsed=$(( $(date +%s) - start ))
-          echo "the media probe took ${elapsed}s"
-          # A grant that walks the ancestors again would show up here as minutes
-          # rather than seconds. The deadline is not a performance target, it is
-          # the shape of that error: a directory DACL write re-imposes inheritance
-          # on everything under it, so this cannot be a slow step.
-          if [ "$elapsed" -gt 60 ]; then
-            echo "::error::the media probe took ${elapsed}s; a grant on a directory propagates inheritance through its whole tree"
-            exit 1
-          fi
-          grep -q 'profile=media' media.txt
-          grep -q 'level=partial' media.txt
-          grep -q 'process=open' media.txt
-          grep -q 'helper=allowed' media.txt
-          # What the helper may read beyond its own image: the DLLs beside it,
-          # one file at a time. A count would not say how wide the grant is.
-          grep -q 'helper_scope=libs' media.txt
-          # ffmpeg answers with a decoded frame, not only with its version.
-          grep -q 'parse=media-ok(' media.txt
-
-      # The pipeline the probe samples: an upload, the scratch file the server
-      # writes, the confined child reading it under the container, and a decoded
-      # thumbnail back. The helper is the installed binary rather than the
-      # package manager's shim, which the grant would refuse as a second
-      # generation.
-      - name: Thumbnail a video in the container
-        shell: bash
-        run: NANOFILE_TEST_FFMPEG_PATH="$FFMPEG_WIN" cargo test -p server --test thumbnail_sandbox_test -- --nocapture
-
-      # Parsing *under* the container, which the probe's self-test does but the
-      # whole pipeline does not: a container that denies something a reader
-      # needs, or a mitigation that breaks it, shows up as a document that
-      # cannot be read rather than as a missing protection.
-      - name: Extract documents in the container
-        run: cargo test -p server --test index_test -- document
-
-  # ── macOS-only code: the tray back-end, and the Seatbelt profile the
-  #    extraction worker runs under. Every other job runs on Linux, where
-  #    `#[cfg(target_os = "macos")]` blocks are not compiled at all — and the
-  #    profile is not merely compiled but *applied* by `/usr/bin/sandbox-exec`,
-  #    so the probe and the document tests below are the only places its effect
-  #    on files and on the network is checked well enough to trust.
-  macos-check:
-    name: macOS check
-    runs-on: macos-latest
-    needs: [changes, lint]
-    # Taken by the daily run, and by a manual one unless its input says
-    # otherwise. There is deliberately no way to ask for them from a commit.
-    if: >-
-      github.event_name == 'schedule'
-      || (github.event_name == 'workflow_dispatch' && inputs.platform)
-    # Same deadline, and the same decision on debug info: `dsymutil` is what
-    # makes a macOS link slow, but re-keying this job's cache costs it more than
-    # the symbols do — the check step went 57s to 100s against a warm cache.
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
-        with:
-          shared-key: "nanofile"
-      - name: Install Tailwind CSS
-        run: npm ci
-      - name: Check the macOS-only code
-        run: cargo check -p server --tests --bin nanofile
-      # The sandbox's own unit tests read this process's mapped address space and
-      # its footprint — the two numbers the memory limit and its fallback are set
-      # from — and neither call can be made anywhere but macOS.
-      - name: Test the sandbox's own measurements
-        run: |
-          # The module is `server::sandbox`; the filter used to name a path it no
-          # longer lives at, and a filter that matches nothing runs zero tests and
-          # still exits 0 — so the count is asserted, not the status.
-          listed=$(cargo test -p server --lib sandbox:: -- --list | grep -c ': test$' || true)
-          if [ "$listed" -eq 0 ]; then
-            echo "::error::the sandbox unit-test filter matched no tests"
-            exit 1
-          fi
-          cargo test -p server --lib sandbox::
-      - name: Run the extraction sandbox probe
-        run: |
-          cargo build --bin nanofile
-          ./target/debug/nanofile extract-worker --probe | tee sandbox.txt
-          grep -q 'profile=documents' sandbox.txt
-          grep -q 'files=denied' sandbox.txt
-          grep -q 'network=denied' sandbox.txt
-          # The far edge of the files layer, which this profile grants on
-          # purpose so the dynamically linked worker can load: reported as the
-          # same residual token Windows uses, never as a missing protection.
-          grep -qE 'system=(readable|denied|absent)' sandbox.txt
-          # Thread creation is the thing that was said to need the fork, so this
-          # is the assertion that decides it: a parser whose profile broke
-          # `pthread_create` reports `threads=failed`, and one whose profile
-          # broke the parsers reports `parse=` without the words below.
-          grep -q 'threads=ok' sandbox.txt
-          # The fork is denied, so the process item is real and the grade is
-          # `full`, as it is on Linux for the same profile.
-          grep -q 'level=full' sandbox.txt
-          grep -q 'process=denied' sandbox.txt
-          grep -q 'fork=denied' sandbox.txt
-          # The exec probe needs a fork to try `execve` in, so a profile that
-          # denies the fork reports `exec=unmeasured` — the same shape Linux
-          # has. A fork that came back fresh would report `denied` here.
-          grep -qE 'exec=(denied|unmeasured)' sandbox.txt
-          grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' sandbox.txt
-          # The profile the parent applied is not this process's own, and the
-          # report says which of the two it is: without this token a Seatbelt
-          # profile that silently did nothing would be measured as if the child
-          # had confined itself.
-          grep -q 'runner=external' sandbox.txt
-          # The fork is refused, so the exec probe has no copy to run in and the
-          # process item is measured as far as this platform can measure it.
-          grep -qE 'process=(unmeasured|measured-denied)' sandbox.txt
-          grep -q 'measure=thorough' sandbox.txt
-
-      # The image profile, which the probe above does not reach: every
-      # thumbnail, avatar and EXIF read runs as this one child, and a profile
-      # that confines documents says nothing about the job this one does.
-      - name: Report the image sandbox profile
-        run: |
-          ./target/debug/nanofile extract-worker --probe --profile images |
-            tee /tmp/images.txt
-          grep -q 'profile=images' /tmp/images.txt
-          grep -q 'files=denied' /tmp/images.txt
-          grep -q 'network=denied' /tmp/images.txt
-          grep -q 'process=denied' /tmp/images.txt
-          grep -q 'level=full' /tmp/images.txt
-          grep -q 'parse=image-ok(' /tmp/images.txt
-
-      # Parsing *under* the profile, which the probe above does not do: a
-      # profile that denies something the parsers need shows up as a document
-      # that cannot be read, not as a missing protection. The fixture also
-      # insists the worker confines itself before the tests run.
-      - name: Extract documents under the profile
-        run: cargo test -p server --test index_test -- document
-
-      # The media profile is the one that may execute a helper, and until this
-      # step existed nothing ran it on this platform: its Seatbelt text was
-      # unit-tested and never applied. It reports the profile's shape and that
-      # the helper starts — which is what it found missing: the profile granted
-      # the helper's image and its interpreter but not the `/dev/null` its
-      # standard streams are set to, so the spawn died in its own stdio setup and
-      # reported `media-unavailable(EPERM)` next to `helper=allowed`.
-      - name: Report the media sandbox profile
-        run: |
-          FFMPEG="$(command -v ffmpeg || true)"
-          if [ -z "$FFMPEG" ]; then
-            # The image has no ffmpeg. A packaged one is exactly the case this
-            # profile's library grants exist for, so install it. Required rather
-            # than best-effort: the probe below decodes a frame and the test
-            # after it runs the whole pipeline, so a stand-in that only exits
-            # zero would leave the media path measured by nothing.
-            if ! brew install ffmpeg >/tmp/brew.log 2>&1; then
-              echo "::error::brew could not install ffmpeg; the media profile and its end-to-end test need a real helper"
-              tail -20 /tmp/brew.log
-              exit 1
-            fi
-            FFMPEG="$(command -v ffmpeg || true)"
-          fi
-          if [ -z "$FFMPEG" ]; then
-            echo "::error::no ffmpeg on this runner; the media profile cannot be measured without one"
-            exit 1
-          fi
-          ./target/debug/nanofile extract-worker \
-            --probe --profile media --ffmpeg "$FFMPEG" | tee /tmp/media.txt
-          grep -q 'profile=media' /tmp/media.txt
-          # The profile cannot have the process item, and says so.
-          grep -q 'level=partial' /tmp/media.txt
-          # The files item is in place — media is `partial` rather than `none`
-          # only because this one is — and the row says how wide it is: `trees`
-          # when the helper lives in a package-manager tree (the libraries it
-          # links against are then readable), `libs` when it does not (the
-          # helper, its interpreter and the files beside it, each a literal).
-          grep -q 'files=denied' /tmp/media.txt
-          grep -qE 'helper_scope=(trees|libs)' /tmp/media.txt
-          grep -q 'process=open' /tmp/media.txt
-          grep -q 'helper=allowed' /tmp/media.txt
-          # Starting a program other than the helper stays refused. Seatbelt
-          # refuses it with EPERM, which is the denial this reads.
-          grep -q 'exec=denied' /tmp/media.txt
-          # The helper starts: the literals are written as the kernel resolves
-          # them (a Homebrew helper is reached through `/opt/homebrew/bin` and
-          # checked in the Cellar), and its streams are pipes with `/dev/null`
-          # granted for the write the helper itself may want. `hand=` is the same
-          # exec attempted by hand in that child. The bracket form is the
-          # decode: `media-ok` alone was `ffmpeg -version`, which says the grant
-          # reaches the binary and nothing about the work the profile exists for.
-          grep -q 'parse=media-ok(' /tmp/media.txt
-          grep -q 'hand=ok' /tmp/media.txt
-          # Nothing on this platform bounds how many copies of the media worker
-          # there may be: the profile keeps the fork, and the note beside the
-          # missing process item is what says so.
-          grep -q 'media_process=unbounded' /tmp/media.txt
-
-      # The pipeline the probe samples: an upload, the scratch file the server
-      # writes, the confined child reading it under Seatbelt, and a decoded
-      # thumbnail back. Before this step existed no media request ran on this
-      # platform at all.
-      - name: Thumbnail a video under the profile
-        run: NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo test -p server --test thumbnail_sandbox_test -- --nocapture
-
-      # What a probe cannot say: whether a Seatbelt profile can start a second
-      # generation of program at all, and which operation the sandbox refuses when
-      # it cannot. Synthetic profiles against system binaries answer the first —
-      # `bash` is the child, `echo` the program it starts — and the sandbox's own
-      # log answers the second. This is the step that ruled the grant out as the
-      # cause of the media probe's `EPERM`, so it asserts both edges of the
-      # grant: one that was given starts a second generation, one that was not
-      # does not.
-      - name: Check the Seatbelt grant's shape
-        if: always()
-        run: |
-          # The child is `/bin/bash` and the helper it starts is `/bin/echo`, so
-          # the grants below are the ones the media profile's text is made of.
-          # `/bin/sh` cannot play the child: on this host it is a shim that
-          # re-execs `/bin/bash`, which a literal grant correctly refuses, and the
-          # first generation then never runs — which is what the first version of
-          # this step measured. One line per profile: a backslash continuation
-          # inside single quotes is a literal backslash, not a continuation.
-          rm -f /tmp/bisect.txt
-          BASE='(version 1) (deny default) (allow process-exec (literal "/bin/bash")) (allow file-read* (literal "/bin/bash")) (allow file-map-executable (literal "/bin/bash"))'
-          LIBS='(allow file-read* file-test-existence (literal "/") (subpath "/usr/lib") (subpath "/System/Library") (subpath "/System/Volumes/Preboot/Cryptexes/OS") (literal "/dev/null") (literal "/dev/urandom")) (allow file-map-executable (subpath "/usr/lib") (subpath "/System/Library") (subpath "/System/Volumes/Preboot/Cryptexes/OS")) (allow sysctl-read)'
-          ECHO='(allow process-exec (literal "/bin/echo")) (allow file-read* (literal "/bin/echo")) (allow file-map-executable (literal "/bin/echo"))'
-          BIN='(allow file-read* file-map-executable (subpath "/bin"))'
-          HOMEBREW='(allow file-read* file-map-executable (subpath "/opt/homebrew")) (allow file-read* file-map-executable (subpath "/usr/local")) (allow file-read* file-map-executable (subpath "/opt/local"))'
-          FORK='(allow process-fork) (allow signal (target self))'
-          run() {
-            echo "--- $1"
-            if sandbox-exec -p "$2" -- /bin/bash -c "$3" >/dev/null 2>&1; then
-              echo "OK $1" | tee -a /tmp/bisect.txt
-            else
-              echo "DENIED $1" | tee -a /tmp/bisect.txt
-            fi
-          }
-          # Generations: the first is the sandboxed child itself, the second is
-          # the helper that child starts — which is what the media profile is for.
-          run "first generation, bash only" "$BASE $LIBS" '/bin/echo first'
-          run "second generation, helper not granted (control)" "$BASE $LIBS" '/bin/echo control'
-          run "second generation, helper granted" "$BASE $ECHO $LIBS" '/bin/echo second'
-          run "second generation, helper granted, /bin readable" "$BASE $ECHO $BIN $LIBS" '/bin/echo second-dir'
-          run "our media profile, child starts the helper" "$BASE $ECHO $BIN $HOMEBREW $FORK $LIBS" 'exec /bin/echo helper'
-          # The two properties this profile rests on, asserted rather than
-          # printed: a granted second generation starts, and one that was not
-          # granted does not. (The first version of this step only printed, and
-          # measured a `/bin/sh` shim for a while before that was noticed.)
-          grep -q '^OK second generation, helper granted$' /tmp/bisect.txt
-          grep -qx 'OK our media profile, child starts the helper' /tmp/bisect.txt
-          grep -qx 'DENIED second generation, helper not granted (control)' /tmp/bisect.txt
-          sleep 3
-          echo "--- sandbox denials"
-          log show --last 1m --info \
-            --predicate 'sender == "Sandbox" OR eventMessage CONTAINS "deny"' 2>/dev/null |
-            grep -iE "process-exec|file-write-data|mach-lookup com.apple" |
-            grep -viE "/usr/bin/true" | tail -25 || true
 
   # ── Frontend tests (pure JS, no npm deps) ──────────────────────────
   frontend-test:
@@ -716,9 +195,10 @@ jobs:
 
   # ── Every Linux target we ship that has no runner ───────────────────
   # The build matrices carry six Linux targets. x86_64-linux-gnu runs natively
-  # in `test` and aarch64-linux-gnu in the macOS/arm job's sibling, so these four
-  # are compiled by nothing else: a syscall name that only exists on x86_64, or a
-  # musl-only libc module, would otherwise reach a release artifact first.
+  # in the `linux-amd64` row below and aarch64-linux-gnu in its `linux-arm64`
+  # sibling, so these four are compiled by nothing else: a syscall name that only
+  # exists on x86_64, or a musl-only libc module, would otherwise reach a release
+  # artifact first.
   cross-check:
     name: Cross check (${{ matrix.target }})
     runs-on: ubuntu-latest
@@ -763,202 +243,93 @@ jobs:
           echo "AR_$key=zig ar" >> "$GITHUB_ENV"
           cargo check --workspace --all-targets --target "$TARGET"
 
-  # ── The Linux sandbox's own report ──────────────────────────────────
-  # Its own job rather than the head of the `test` job, where it was: the
-  # ffmpeg install and the three reports below are 146s of the 449s that job
-  # spent, and none of them depends on the suite. As a sibling they run beside
-  # it instead of in front of it. The sweep is 550s to 485s rather than the
-  # 146s the subtraction suggests, because `cargo build --bin nanofile` here
-  # was also warming the dev-profile dependency graph that `Run tests` now
-  # has to compile itself.
-  sandbox:
-    name: Linux sandbox
-    runs-on: ubuntu-latest
+  # ── The whole Rust suite, on every platform we ship ──────────────────
+  # One definition and four runners, so "the platform runs the same tests" is
+  # what the file says rather than what someone remembered to copy. The media
+  # tests need a real helper and fail on CI without one, which is why every
+  # runner installs it.
+  #
+  # The cache keys are the same as the other Rust jobs on purpose: rust-cache
+  # keys on `CARGO*`, so a per-platform job that set its own would keep a second
+  # copy of the same dependency graph.
+  tests:
+    name: Tests (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
     needs: [changes, lint]
     if: needs.changes.outputs.rust == 'true'
-    # Same `debug` reduction as `test`, and deliberately identical values:
-    # rust-cache keys on `CARGO*`, so matching them keeps this job and `test`
-    # on one Linux cache entry rather than two.
+    # A deadline for a hang, not for a slow run.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, label: linux-amd64 }
+          - { os: ubuntu-24.04-arm, label: linux-arm64 }
+          - { os: macos-latest, label: macos-arm64 }
+          - { os: windows-latest, label: windows-amd64 }
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           shared-key: "nanofile"
-
       - name: Install Tailwind CSS
         run: npm ci
-
-      - name: Install ffmpeg
-        # `--no-install-recommends`: without it apt pulls 99 packages and
-        # 12.4 MB, most of them video drivers (`i965-va-driver`,
-        # `libnvidia-encode1`) and subtitle libraries no assertion here can
-        # reach. The encoder is a dependency, not a recommendation.
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-
-      # This report says which layers the kernel gave the worker and why, which
-      # is the first thing to look at when a document test fails. `full` is
-      # asserted rather than `full|partial` because `partial` now means
-      # "resource limits and no file access, with something else missing": a
-      # runner whose kernel lost Landlock would grade `none`, and by default
-      # that host does not parse documents at all. A CI runner silently
-      # dropping to a weaker grade is the thing this step exists to catch, so
-      # it must not be accepted by the assertion.
-      - name: Report the document extraction sandbox
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
         run: |
-          cargo build --bin nanofile
-          ./target/debug/nanofile extract-worker --selftest |
-            tee /tmp/sandbox.txt
-          grep -q 'profile=documents' /tmp/sandbox.txt
-          grep -q 'level=full' /tmp/sandbox.txt
-          grep -q 'files=denied' /tmp/sandbox.txt
-          grep -q 'network=denied' /tmp/sandbox.txt
-          grep -q 'process=denied' /tmp/sandbox.txt
-          grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' /tmp/sandbox.txt
-          # The calls Landlock cannot govern are this filter's job, and a kernel
-          # without seccomp is the one case where they are not covered.
-          grep -q 'll_gaps=closed' /tmp/sandbox.txt
-          grep -q 'dumpable=off' /tmp/sandbox.txt
-          # Memory that is writable is not executable. `off` is what a kernel
-          # older than 6.3 answers, which is a fact about the runner.
-          grep -qE 'mdwe=(on|off)' /tmp/sandbox.txt
-          grep -qE 'seccomp=[0-9]+' /tmp/sandbox.txt
-          # Every layer the report claims, plus the facts beside them. A kernel
-          # that refused one of the limits would drop the grade above, and the
-          # tokens are what say which one to look at.
-          grep -qE 'limits=as[0-9]+,cpu[0-9]+/[0-9]+,nofile[0-9]+,fsize[0-9]+m,core0' \
-            /tmp/sandbox.txt
-          grep -q 'no_new_privs=on' /tmp/sandbox.txt
-          # The capabilities of the process that started this child, read back
-          # after they were dropped: a server started as root must not hand
-          # root to a parser.
-          grep -q 'caps=empty' /tmp/sandbox.txt
-          grep -q 'pdeathsig=on' /tmp/sandbox.txt
-          grep -qE 'landlock_abi=[0-9]+' /tmp/sandbox.txt
-          # The TCP rights and the IPC scopes are the two groups Landlock only
-          # has from a given ABI, so which one this kernel took is a fact about
-          # the runner rather than a claim.
-          grep -qE 'landlock_net=(on|off)' /tmp/sandbox.txt
-          grep -qE 'landlock_scoped=(on|off)' /tmp/sandbox.txt
-          grep -q 'measure=thorough' /tmp/sandbox.txt
-
-      # The image profile: the child every thumbnail, avatar and EXIF read runs
-      # as. Nothing probed it before this step, and the documents profile above
-      # is not a substitute for it — the two differ in the job they run, not in
-      # what confines them, which is exactly why the missing row went unnoticed.
-      - name: Report the image sandbox profile
+          sudo apt-get update
+          # `--no-install-recommends`: without it apt pulls 99 packages, most of
+          # them video drivers and subtitle libraries no assertion can reach.
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          echo "NANOFILE_TEST_FFMPEG_PATH=$(command -v ffmpeg)" >> "$GITHUB_ENV"
+      - name: Install ffmpeg (macOS)
+        if: runner.os == 'macOS'
         run: |
-          ./target/debug/nanofile extract-worker --selftest --profile images |
-            tee /tmp/images.txt
-          grep -q 'profile=images level=full' /tmp/images.txt
-          grep -q 'files=denied' /tmp/images.txt
-          grep -q 'network=denied' /tmp/images.txt
-          grep -q 'process=denied' /tmp/images.txt
-          # The effect, not the layers: an image still decodes and encodes.
-          grep -q 'parse=image-ok(' /tmp/images.txt
-
-      # The media profile is the one that may execute a helper. This runner has
-      # ffmpeg installed (the step above the suite), so the probe runs it under
-      # the profile, prints what the grants installed, and reads a document's
-      # worth of proof that the confined helper still does its job.
-      #
-      # `--probe` rather than `--selftest`: the job starts by reading a file the
-      # parent wrote, so only the parent's half can hand one over. The other two
-      # platforms' media steps measure the same half for the same reason.
-      #
-      # The last two assertions are the narrowing this profile needed: `exec` is
-      # granted to the helper and its interpreter, never to a directory, so the
-      # child's own attempt to start `/bin/true` is refused by the files layer
-      # (`exec=denied`) even though ffmpeg runs. `process=open` is the item that
-      # follows from the profile's job: it starts a program, so it cannot claim
-      # the process protection the document profile claims.
-      - name: Report the media sandbox profile
+          if [ -z "$(command -v ffmpeg || true)" ]; then
+            if ! brew install ffmpeg >/tmp/brew.log 2>&1; then
+              echo "::error::brew could not install ffmpeg; the media tests need a real helper"
+              tail -20 /tmp/brew.log
+              exit 1
+            fi
+          fi
+          FFMPEG="$(command -v ffmpeg || true)"
+          if [ -z "$FFMPEG" ]; then
+            echo "::error::no ffmpeg on this runner; the media tests need a real helper"
+            exit 1
+          fi
+          echo "NANOFILE_TEST_FFMPEG_PATH=$FFMPEG" >> "$GITHUB_ENV"
+      - name: Install ffmpeg (Windows)
+        # `bash`, not the runner's default `pwsh`: the media grant reaches the
+        # one file the parent names and nothing it starts, so the tests are handed
+        # the binary itself rather than the shim a package manager puts on `PATH`.
+        if: runner.os == 'Windows'
+        shell: bash
         run: |
-          ./target/debug/nanofile extract-worker \
-            --probe --profile media --ffmpeg "$(command -v ffmpeg)" |
-            tee /tmp/media.txt
-          grep -q 'profile=media' /tmp/media.txt
-          grep -q 'level=partial' /tmp/media.txt
-          grep -q 'files=denied' /tmp/media.txt
-          grep -q 'process=open' /tmp/media.txt
-          grep -q 'helper=allowed' /tmp/media.txt
-          # The bracket form is the decode: the probe reads the source the
-          # parent wrote, runs the helper and encodes a thumbnail from a frame.
-          grep -q 'parse=media-ok(' /tmp/media.txt
-          grep -qE 'helper_grants=[1-9]' /tmp/media.txt
-          grep -q 'exec=denied' /tmp/media.txt
-          # The metadata calls the loader needs are re-allowed for this profile
-          # alone, which the report carries rather than leaving the reader to
-          # infer it from the files item.
-          grep -q 'metadata=open' /tmp/media.txt
-          # The fork is the profile's own: a helper is a second process. What
-          # is missing is any bound on their number, which is the note beside
-          # the item rather than a claim this profile cannot make.
-          grep -q 'fork=open' /tmp/media.txt
-          grep -q 'media_process=unbounded' /tmp/media.txt
-          # The helper's reach, one literal at a time: `libs` here, `trees` on
-          # macOS when the helper lives in a package-manager tree.
-          grep -q 'helper_scope=libs' /tmp/media.txt
-
-      # The pipeline the probe samples: an upload, the scratch file the server
-      # writes, the confined child reading it, and a decoded thumbnail back.
-      - name: Thumbnail a video under the profile
-        run: cargo test -p server --test thumbnail_sandbox_test -- --nocapture
-
-      # The limits the child installs, measured as sufficient rather than as
-      # present: a document most of the way to the text cap has to come back
-      # whole, within the parent's timeout, and one past the cap cut exactly at
-      # it. The step prints how long the larger document took.
-      - name: Extract a document at the size cap
-        run: cargo test -p server --test sandbox_workload_test -- --nocapture
-
-  # ── Tests (linux only, fastest) ─────────────────────────────────────
-  test:
-    name: Tests
-    runs-on: ubuntu-latest
-    needs: [changes, lint]
-    if: needs.changes.outputs.rust == 'true'
-    # Debug info is most of what `rustc` writes and the linker has to move: this
-    # job builds 74 integration-test binaries against the whole server crate,
-    # and nothing here reads a symbol. A failing test still reports its own
-    # `file:line`, because that comes from `panic!`'s location rather than from
-    # debug info — only a `RUST_BACKTRACE` would be poorer. Note this is the
-    # `debug` key, not `debug-assertions`: the suite still runs with
-    # `debug_assert!` enabled. Set per job, so local profiles and the nightly
-    # release build are untouched.
-    #
-    # What `Run tests` spends its 362s on, read off the job's own log rather
-    # than assumed: 200s in cargo's build phase — ~110s of it the 74
-    # integration-test binaries at ~1.5s each, which is a link, and `lld` was
-    # measured here and does not shorten it, plus ~90s the server crate and its
-    # dependencies — and 156s running the 1916 tests across 87 binaries, which
-    # cargo starts one after another. Splitting the 74 targets across runners
-    # is what would cut both halves; this repository is public, so the minutes
-    # cost nothing.
-    env:
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      CARGO_PROFILE_TEST_DEBUG: "0"
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-
-      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
-        with:
-          shared-key: "nanofile"
-
-      - name: Install Tailwind CSS
-        run: npm ci
-
-      # `thumbnail_sandbox_test` starts ffmpeg and skips itself when the host
-      # has none, so keeping this installed is what keeps that coverage real
-      # rather than merely green.
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-
-      - name: Run tests
+          FFMPEG=""
+          if command -v winget >/dev/null 2>&1; then
+            echo "installing ffmpeg with winget"
+            winget install --id Gyan.FFmpeg -e --silent --disable-interactivity \
+              --accept-package-agreements --accept-source-agreements || true
+            FFMPEG="$(find "$(cygpath -u "$LOCALAPPDATA")/Microsoft/WinGet/Packages" \
+              -name ffmpeg.exe 2>/dev/null | head -1)"
+          fi
+          if [ -z "$FFMPEG" ]; then
+            echo "no winget on this image; installing ffmpeg with Chocolatey"
+            choco install ffmpeg -y --no-progress
+            FFMPEG="$(find /c/ProgramData/chocolatey/lib/ffmpeg/tools -name ffmpeg.exe \
+              -type f 2>/dev/null | head -1)"
+          fi
+          if [ -z "$FFMPEG" ]; then
+            echo "::error::ffmpeg could not be installed; the media tests need a real helper"
+            exit 1
+          fi
+          # Timed: this is the install's own first execution of the binary, paid
+          # here rather than inside the probe, which measures the sandbox.
+          time "$FFMPEG" -version >/dev/null
+          echo "NANOFILE_TEST_FFMPEG_PATH=$(cygpath -w "$FFMPEG")" >> "$GITHUB_ENV"
+      - name: Run the workspace suite
         run: cargo test --workspace -- --nocapture
-
