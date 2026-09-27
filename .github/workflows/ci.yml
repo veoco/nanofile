@@ -723,6 +723,10 @@ jobs:
           grep -q 'parse=media-ok' /tmp/media.txt
           grep -qE 'helper_grants=[1-9]' /tmp/media.txt
           grep -q 'exec=denied' /tmp/media.txt
+          # The metadata calls the loader needs are re-allowed for this profile
+          # alone, which the report carries rather than leaving the reader to
+          # infer it from the files item.
+          grep -q 'metadata=open' /tmp/media.txt
 
       # The arm64 syscall table is not the x86_64 one: several of the calls the
       # filter names (the bare path-taking forms) do not exist there, and every

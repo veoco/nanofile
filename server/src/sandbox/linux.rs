@@ -267,6 +267,13 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
             layers.network = true;
             layers.process = true;
             detail.push(format!("seccomp={denied}"));
+            // The media filter is the one that re-allows the metadata calls the
+            // dynamic loader makes, so the paths this child can see are wider
+            // than the two parser profiles'; the page says so beside the item
+            // rather than leaving `ll_gaps=closed` to imply otherwise.
+            if profile.runs_helper() {
+                detail.push("metadata=open".to_string());
+            }
             // Landlock sees opens and creations; it does not see a metadata
             // change, a truncation before ABI 3, or who a signal is for. Those
             // are this filter's job (see `denied_syscalls`), so a host where it
