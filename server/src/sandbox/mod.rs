@@ -815,14 +815,42 @@ pub fn confine(
     measure: Measure,
     probe: Option<&Path>,
 ) -> Report {
-    let (protections, detail) = platform_confine(profile, grants);
-    let facts = measure_facts(protections, profile, grants, measure, probe);
-    let (protections, detail) = protect(protections, detail, external, profile, measure, &facts);
+    let (installed, detail) = platform_confine(profile, grants);
+    // The parent's claim is applied *before* the probes, not in the fold below: a
+    // layer a runner claims is one this tier measures like any other. Left until
+    // after the measurement, the macOS report says `files=installed` — a claim no
+    // probe was put to — instead of the refusal the probe found, and the
+    // system-tree residual beside the item disappears with it. That was the shape
+    // of the first version of this split, and the macOS job's assertion on
+    // `system=` is what caught it.
+    let claimed = claimed_by_mechanism(installed, external);
+    let facts = measure_facts(claimed, profile, grants, measure, probe);
+    let (protections, detail) = protect(claimed, detail, external, profile, measure, &facts);
 
     Report {
         profile,
         protections,
         detail: detail.join(","),
+    }
+}
+
+/// What a mechanism claimed, before any of it is measured.
+///
+/// The runner is the one claim the *parent* makes rather than this process: it
+/// wrapped this process in a profile it says governs files, the network and
+/// process creation, and none of that is visible from in here. Each of the three
+/// is still put to its probe, which is what makes "a wrapper that did nothing
+/// drops the level" true rather than a claim with nothing behind it.
+fn claimed_by_mechanism(installed: Protections, external: External) -> Protections {
+    if external.runner {
+        Protections {
+            files: true,
+            network: true,
+            process: true,
+            ..installed
+        }
+    } else {
+        installed
     }
 }
 
@@ -946,12 +974,9 @@ fn protect(
     facts: &Facts,
 ) -> (Protections, Vec<String>) {
     if external.runner {
-        // The parent asserts it wrapped this process in a runner whose profile
-        // governs all three. Every claim is measured below, so a wrapper that
-        // silently did nothing drops the level instead of reporting it.
-        protections.files = true;
-        protections.network = true;
-        protections.process = true;
+        // The parent asserted it wrapped this process in a runner whose profile
+        // governs all three; `confine` applied that claim before the probes, and
+        // what stands here is what they backed up.
         detail.push("runner=external".to_string());
     }
 
@@ -2170,6 +2195,134 @@ mod tests {
                 "fork=open",
                 "exec=open",
                 "process=measured-open",
+                "threads=ok",
+                "measure=thorough",
+            ]
+        );
+    }
+
+    /// The runner's claim is the parent's own, and it has to reach the probes: a
+    /// layer it claims is measured like any other, which is what makes "a wrapper
+    /// that did nothing drops the level" true rather than a claim with nothing
+    /// behind it.
+    #[test]
+    fn the_runners_claim_is_applied_before_the_probes() {
+        let installed = Protections {
+            limits: true,
+            ..Protections::default()
+        };
+        assert_eq!(
+            claimed_by_mechanism(installed, External { runner: true }),
+            Protections {
+                limits: true,
+                files: true,
+                network: true,
+                process: true,
+            }
+        );
+        assert_eq!(
+            claimed_by_mechanism(installed, External::default()),
+            installed,
+            "with no runner there is nothing to claim"
+        );
+    }
+
+    /// A probe is run for what a mechanism claimed and for nothing else: it costs
+    /// a file open and a socket, and a layer that was never installed is not one
+    /// this process can measure the absence of.
+    #[cfg(unix)]
+    #[test]
+    fn only_a_claimed_layer_is_put_to_its_probe() {
+        let claimed = measure_facts(
+            claimed_by_mechanism(
+                Protections {
+                    limits: true,
+                    ..Protections::default()
+                },
+                External { runner: true },
+            ),
+            Profile::Documents,
+            Grants::default(),
+            Measure::Thorough,
+            None,
+        );
+        assert!(claimed.files.is_some(), "a claimed files layer is measured");
+        assert!(
+            claimed.network.is_some(),
+            "and so is a claimed network layer"
+        );
+        assert!(
+            claimed.process.is_some(),
+            "the process probe runs in the thorough tier"
+        );
+
+        let unclaimed = measure_facts(
+            Protections {
+                limits: true,
+                ..Protections::default()
+            },
+            Profile::Documents,
+            Grants::default(),
+            Measure::Cheap,
+            None,
+        );
+        assert!(
+            unclaimed.files.is_none() && unclaimed.network.is_none(),
+            "a layer no mechanism installed is not put to a probe"
+        );
+        assert!(
+            unclaimed.process.is_none(),
+            "and the cheap tier runs no process probe at all"
+        );
+    }
+
+    /// The macOS shape, token for token: the parent's runner claims three layers,
+    /// the probes back files and the network up, and the report has to say they
+    /// were *measured* rather than merely installed. This is the sequence the
+    /// macOS job asserts one grep at a time, and the one a claim applied after
+    /// the probes loses.
+    #[test]
+    fn a_runner_claim_backed_by_its_probes_is_measured() {
+        let claimed = claimed_by_mechanism(
+            Protections {
+                limits: true,
+                ..Protections::default()
+            },
+            External { runner: true },
+        );
+        let facts = Facts {
+            files: Some(true),
+            network: Some(true),
+            system: Some("readable"),
+            // The profile denies the fork, so there was no copy to try `execve`
+            // in and the process item stands unmeasured.
+            process: Some(ProcessFacts {
+                fork_denied: Some(true),
+                exec_denied: None,
+            }),
+            threads: true,
+            ..Facts::default()
+        };
+        let (protections, detail) = protect(
+            claimed,
+            vec!["limits=as+1073741824".to_string()],
+            External { runner: true },
+            Profile::Documents,
+            Measure::Thorough,
+            &facts,
+        );
+
+        assert_eq!(protections.level(), Level::Full);
+        assert_eq!(
+            appended(detail),
+            [
+                "runner=external",
+                "files=measured-denied",
+                "network=measured-denied",
+                "system=readable",
+                "fork=denied",
+                "exec=unmeasured",
+                "process=unmeasured",
                 "threads=ok",
                 "measure=thorough",
             ]
