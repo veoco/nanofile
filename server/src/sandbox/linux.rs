@@ -851,6 +851,15 @@ fn fs_mask_for_abi(abi: i64) -> u64 {
 /// where the list silently stopped covering a call is a report that says so.
 fn install_seccomp(profile: Profile) -> Option<usize> {
     let (program, denied) = filter_program(profile)?;
+    install_program(&program).then_some(denied)
+}
+
+/// Install a filter that is already built.
+///
+/// Split from [`install_seccomp`] so the effect test can build the program in
+/// the parent and hand it to a forked child: this path allocates nothing, which
+/// is what makes it callable between `fork` and `_exit`.
+fn install_program(program: &[SockFilter]) -> bool {
     let fprog = SockFprog {
         length: program.len() as u16,
         filter: program.as_ptr(),
@@ -863,7 +872,7 @@ fn install_seccomp(profile: Profile) -> Option<usize> {
             &fprog as *const SockFprog,
         )
     };
-    (installed == 0).then_some(denied)
+    installed == 0
 }
 
 /// The filter, and how many syscalls it names.
@@ -1738,5 +1747,180 @@ mod tests {
             denied_syscalls(Profile::Media).len() < denied_syscalls(Profile::Documents).len(),
             "the media list is the document list with calls removed"
         );
+    }
+
+    /// One syscall, called the way an exploited parser would.
+    #[derive(Debug, Clone, Copy)]
+    enum Attempt {
+        Socket,
+        Setsid,
+        Setpgid,
+        Fork,
+        MemfdCreate,
+        PidfdOpen,
+        Fchmodat2,
+        Kill,
+        Ptrace,
+        ProcessVmReadv,
+    }
+
+    /// Call one, and answer with the errno it set — or `0` when it succeeded.
+    ///
+    /// This runs in a forked child, so it allocates nothing: every branch is a
+    /// raw syscall and a comparison, and the errno is read back by number.
+    fn attempt(what: Attempt, path: *const libc::c_char) -> i32 {
+        let result = unsafe {
+            match what {
+                Attempt::Socket => {
+                    libc::syscall(libc::SYS_socket, libc::AF_INET, libc::SOCK_DGRAM, 0)
+                }
+                Attempt::Setsid => libc::syscall(libc::SYS_setsid),
+                Attempt::Setpgid => libc::syscall(libc::SYS_setpgid, 0, 0),
+                Attempt::Fork => {
+                    libc::syscall(libc::SYS_clone, libc::SIGCHLD as libc::c_ulong, 0, 0, 0, 0)
+                }
+                Attempt::MemfdCreate => libc::syscall(libc::SYS_memfd_create, path, 0),
+                Attempt::PidfdOpen => libc::syscall(libc::SYS_pidfd_open, libc::getpid(), 0),
+                Attempt::Fchmodat2 => libc::syscall(
+                    SYS_FCHMODAT2,
+                    libc::AT_FDCWD,
+                    path,
+                    0o644 as libc::c_uint,
+                    0,
+                ),
+                Attempt::Kill => libc::syscall(libc::SYS_kill, libc::getpid(), 0),
+                Attempt::Ptrace => libc::syscall(
+                    libc::SYS_ptrace,
+                    libc::PTRACE_TRACEME as libc::c_uint,
+                    0,
+                    0,
+                    0,
+                ),
+                Attempt::ProcessVmReadv => libc::syscall(
+                    libc::SYS_process_vm_readv,
+                    libc::getppid(),
+                    std::ptr::null::<libc::iovec>(),
+                    0 as libc::c_ulong,
+                    std::ptr::null::<libc::iovec>(),
+                    0 as libc::c_ulong,
+                    0 as libc::c_ulong,
+                ),
+            }
+        };
+        if result >= 0 {
+            0
+        } else {
+            std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+        }
+    }
+
+    /// What one syscall answered in a child that installed `program`, or in one
+    /// left bare.
+    ///
+    /// The child is a `fork` of this process with the program already built, so
+    /// nothing on its side of the fork allocates or takes a lock: `prctl`,
+    /// `seccomp`, one `syscall`, one `write` and `_exit`. `-1` means the filter
+    /// would not install, which is not an answer about the syscall.
+    fn errno_for(program: Option<&[SockFilter]>, what: Attempt, path: *const libc::c_char) -> i32 {
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(
+            unsafe { libc::pipe(fds.as_mut_ptr()) },
+            0,
+            "the parent's own pipe"
+        );
+        let (read_end, write_end) = (fds[0], fds[1]);
+
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "the parent's own fork");
+        if pid == 0 {
+            let answer = match program {
+                Some(program) if set_no_new_privs() && install_program(program) => {
+                    attempt(what, path)
+                }
+                Some(_) => -1,
+                None => attempt(what, path),
+            };
+            let bytes = answer.to_ne_bytes();
+            unsafe {
+                libc::write(write_end, bytes.as_ptr().cast(), bytes.len());
+                libc::_exit(0);
+            }
+        }
+
+        let _ = unsafe { libc::close(write_end) };
+        let mut bytes = [0u8; 4];
+        let mut read = 0usize;
+        while read < bytes.len() {
+            let got = unsafe {
+                libc::read(
+                    read_end,
+                    bytes[read..].as_mut_ptr().cast(),
+                    bytes.len() - read,
+                )
+            };
+            if got <= 0 {
+                break;
+            }
+            read += got as usize;
+        }
+        let _ = unsafe { libc::close(read_end) };
+        let mut status: libc::c_int = 0;
+        let _ = unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(read, bytes.len(), "{what:?}: the child answered nothing");
+        i32::from_ne_bytes(bytes)
+    }
+
+    /// Every refusal the filter is built for, against the running kernel.
+    ///
+    /// The simulator above says what the program *means*; it cannot say that the
+    /// numbers in it are this kernel's numbers, because it compares each call
+    /// against the same constant the filter was built from. This installs the
+    /// real filter in a child and makes the calls, and then makes the same calls
+    /// in the same kind of process without it: a refusal on both sides is this
+    /// process's own privilege rather than the sandbox, so only a case where the
+    /// two disagree is a case about the filter at all.
+    #[test]
+    fn the_filter_refuses_what_the_kernel_gives_it_to_refuse() {
+        let Some((program, _)) = filter_program(Profile::Documents) else {
+            return; // an architecture this file does not carry
+        };
+        let owned = std::env::temp_dir().join(format!("nanofile-fchmodat2-{}", std::process::id()));
+        std::fs::write(&owned, b"x").expect("a file this process owns");
+        let path = std::ffi::CString::new(owned.as_os_str().as_encoded_bytes())
+            .expect("a path without NULs");
+
+        for what in [
+            Attempt::Socket,
+            Attempt::Setsid,
+            Attempt::Setpgid,
+            Attempt::Fork,
+            Attempt::MemfdCreate,
+            Attempt::PidfdOpen,
+            Attempt::Fchmodat2,
+            Attempt::Kill,
+            Attempt::Ptrace,
+            Attempt::ProcessVmReadv,
+        ] {
+            let confined = errno_for(Some(&program), what, path.as_ptr());
+            assert_ne!(
+                confined, -1,
+                "{what:?}: the child could not install the filter at all"
+            );
+            assert_eq!(
+                confined,
+                libc::EPERM,
+                "{what:?} must be refused by the filter the child installed"
+            );
+
+            let bare = errno_for(None, what, path.as_ptr());
+            assert_ne!(
+                bare,
+                libc::EPERM,
+                "{what:?} is refused without the filter too, so this case says \
+                 nothing about the sandbox"
+            );
+        }
+
+        let _ = std::fs::remove_file(&owned);
     }
 }
