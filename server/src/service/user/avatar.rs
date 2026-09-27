@@ -116,23 +116,34 @@ impl AvatarService {
             .await
             .map_err(|e| AppError::Internal(format!("failed to save avatar: {e}")))?;
 
-        // Generate and save the default-size thumbnail (256x256)
-        match crate::sandbox::jobs::images::square(&data, 256) {
-            Ok(thumbnail_data) => {
+        // The length the record carries, taken before the bytes move into the
+        // worker below.
+        let data_len = data.len() as i32;
+
+        // Generate and save the default-size thumbnail (256x256). The decode
+        // runs in the confined child, which may work for the whole image
+        // timeout, so it takes the same gate the reading path takes and runs off
+        // the runtime: a child spawn is a blocking call and this is an `async
+        // fn`. The permit lives for the block, which is what covers the wait.
+        if let Ok(_permit) = crate::sandbox::jobs::images::acquire_image_permit().await {
+            let worker_input = data;
+            let squared = tokio::task::spawn_blocking(move || {
+                crate::sandbox::jobs::images::square(&worker_input, 256)
+            })
+            .await;
+            if let Ok(Ok(thumbnail_data)) = squared {
                 let thumbnail_path = storage_dir.join("256.png");
                 let _ = tokio::fs::write(&thumbnail_path, &thumbnail_data).await;
             }
-            Err(_) => {
-                // Non-fatal: the worker may decline a corrupt image, and the
-                // original is already saved.
-            }
+            // Anything else is non-fatal: the worker may decline a corrupt
+            // image, and the original is already saved.
         }
 
         // Upsert avatar database record
         let now = chrono::Utc::now().timestamp();
         self.repos
             .avatar
-            .upsert(email, &file_name, mime_type, data.len() as i32, now)
+            .upsert(email, &file_name, mime_type, data_len, now)
             .await?;
 
         Ok(primary_avatar_url(email, 256))

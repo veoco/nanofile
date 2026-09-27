@@ -111,4 +111,13 @@ async fn test_avatar_upload_size_limited() {
     assert_eq!(resp.status(), 200, "small PNG avatar should upload");
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body["avatar_url"].as_str().is_some(), "avatar_url missing");
+
+    // The thumbnail is the confined worker's, produced behind the image gate and
+    // off the runtime: a 200 with no file on disk would mean that path never ran.
+    let avatar_dir = f.server.state.config().storage.avatar_dir.clone();
+    let wrote_256 = std::fs::read_dir(&avatar_dir)
+        .expect("the avatar directory exists")
+        .flatten()
+        .any(|entry| entry.path().join("256.png").exists());
+    assert!(wrote_256, "the sandbox worker wrote no 256 avatar");
 }
