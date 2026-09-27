@@ -1471,7 +1471,7 @@ fn the_extraction_worker_reports_its_confinement() {
     // one the parsers can still work under. A profile or filter that denies a
     // syscall a reader needs fails here rather than in a release.
     assert!(
-        line.contains("parse=pdf-ok,docx-ok"),
+        line.contains("parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok"),
         "the confined worker must still read documents: {line}"
     );
 }

@@ -2188,13 +2188,13 @@ mod tests {
 
     /// The self-test's parse step agrees with the parsers on this host. The
     /// confinement around it is what the probe reports; this is the half that
-    /// says the packaged fixtures still yield the word they are looked for.
+    /// says every packaged fixture still yields its whole text.
     #[test]
     fn the_self_test_parses_the_packaged_documents() {
         configure_parser_limits();
         assert_eq!(
             probe_parse(Profile::Documents, crate::sandbox::Grants::default()),
-            "pdf-ok,docx-ok"
+            "pdf-ok,docx-ok,xlsx-ok,pptx-ok"
         );
     }
 

@@ -295,7 +295,7 @@ jobs:
           grep -q 'level=full' sandbox.txt
           # ... and the confined child can still read a document, which the item
           # count cannot say.
-          grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
+          grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' sandbox.txt
           grep -q 'measure=thorough' sandbox.txt
 
       # The image profile, which the probe above does not reach: avatars, EXIF
@@ -494,7 +494,7 @@ jobs:
           # denies the fork reports `exec=unmeasured` — the same shape Linux
           # has. A fork that came back fresh would report `denied` here.
           grep -qE 'exec=(denied|unmeasured)' sandbox.txt
-          grep -q 'parse=pdf-ok,docx-ok' sandbox.txt
+          grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' sandbox.txt
           # The profile the parent applied is not this process's own, and the
           # report says which of the two it is: without this token a Seatbelt
           # profile that silently did nothing would be measured as if the child
@@ -763,7 +763,7 @@ jobs:
           grep -q 'files=denied' /tmp/sandbox.txt
           grep -q 'network=denied' /tmp/sandbox.txt
           grep -q 'process=denied' /tmp/sandbox.txt
-          grep -q 'parse=pdf-ok,docx-ok' /tmp/sandbox.txt
+          grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' /tmp/sandbox.txt
           # The calls Landlock cannot govern are this filter's job, and a kernel
           # without seccomp is the one case where they are not covered.
           grep -q 'll_gaps=closed' /tmp/sandbox.txt

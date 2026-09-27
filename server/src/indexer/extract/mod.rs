@@ -278,6 +278,19 @@ pub(crate) const PROBE_DOCUMENTS: &[ProbeDocument] = &[
         expected: "nanofile sandbox probe",
         bytes: include_bytes!("../../../tests/fixtures/probe.docx"),
     },
+    ProbeDocument {
+        name: "xlsx",
+        plan: Plan::Document(Document::Office(office_oxide::DocumentFormat::Xlsx)),
+        // A workbook's text arrives with its sheet name beside it.
+        expected: "Sheet1\nnanofile sandbox probe",
+        bytes: include_bytes!("../../../tests/fixtures/probe.xlsx"),
+    },
+    ProbeDocument {
+        name: "pptx",
+        plan: Plan::Document(Document::Office(office_oxide::DocumentFormat::Pptx)),
+        expected: "nanofile sandbox probe",
+        bytes: include_bytes!("../../../tests/fixtures/probe.pptx"),
+    },
 ];
 
 /// How many bytes of a file the plan needs, or why it cannot be indexed.
