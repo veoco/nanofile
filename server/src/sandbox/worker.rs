@@ -1025,12 +1025,14 @@ pub fn resolve_helper(configured: &str) -> PathBuf {
 /// Resolve a bare command name to its full path the way the shell finds an
 /// executable, so `storage.ffmpeg_path = "ffmpeg"` works without a full path.
 ///
-/// `SearchPathW` appends the `PATHEXT` extension (`.exe`, …) the way
-/// `CreateProcess` does — a manual `directory.join(name).is_file()` walk never
-/// matches `ffmpeg.exe`. When nothing on `PATH` matches, the running image's
-/// directory and its `bin/` are tried too, covering a helper placed next to the
-/// server/tray executable. Windows-only: the unix walk in [`resolve_helper`]
-/// needs no extension.
+/// `SearchPathW` appends only the one extension it is handed — it never applies
+/// the shell's `PATHEXT` list itself — so a bare `ffmpeg` would otherwise miss
+/// `ffmpeg.exe`, the same way a manual `directory.join(name).is_file()` walk
+/// does. Each `PATHEXT` entry is tried, with `.EXE` last so the usual case
+/// resolves even where `PATHEXT` is unset. When nothing on `PATH` matches, the
+/// running image's directory and its `bin/` are tried too, covering a helper
+/// placed next to the server/tray executable. Windows-only: the unix walk in
+/// [`resolve_helper`] needs no extension.
 ///
 /// It lives here rather than in the binary's Win32 helpers so the media grants
 /// and the service preflight resolve a configured name through the same library
@@ -1038,47 +1040,18 @@ pub fn resolve_helper(configured: &str) -> PathBuf {
 /// every thumbnail returned 404.
 #[cfg(windows)]
 fn resolve_command(name: &str) -> Option<PathBuf> {
-    use windows_sys::Win32::Storage::FileSystem::SearchPathW;
-
-    // `SearchPathW` appends the executable extension from `PATHEXT`, so a bare
-    // `ffmpeg` finds `ffmpeg.exe`.
     let name_w: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut buffer = vec![0u16; 1024];
-    let mut found = unsafe {
-        SearchPathW(
-            std::ptr::null(),
-            name_w.as_ptr(),
-            std::ptr::null(),
-            buffer.len() as u32,
-            buffer.as_mut_ptr(),
-            std::ptr::null_mut(),
-        )
-    };
-    // The call reports the length it needs (null included) when the buffer is
-    // too small; grow once and retry rather than silently miss a long path.
-    if found != 0 && found as usize > buffer.len() {
-        buffer = vec![0u16; found as usize];
-        found = unsafe {
-            SearchPathW(
-                std::ptr::null(),
-                name_w.as_ptr(),
-                std::ptr::null(),
-                buffer.len() as u32,
-                buffer.as_mut_ptr(),
-                std::ptr::null_mut(),
-            )
-        };
-    }
-    if found != 0 {
-        let end = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
-        if end > 0 {
-            let resolved = PathBuf::from(String::from_utf16_lossy(&buffer[..end]));
-            // A name with no separator resolves to an absolute `PATH` entry;
-            // guard against a relative result the call could in theory produce
-            // against the working directory.
-            if resolved.is_absolute() {
-                return Some(resolved);
-            }
+
+    // `.COM;.EXE;.BAT;.CMD` is the usual `PATHEXT`; a host that has it unset
+    // still gets `.EXE` from the chain, so `ffmpeg` always finds `ffmpeg.exe`.
+    let pathext = std::env::var("PATHEXT").unwrap_or_default();
+    let extensions = pathext
+        .split(';')
+        .filter(|extension| extension.starts_with('.'));
+    for extension in extensions.chain([".EXE"]) {
+        let extension_w: Vec<u16> = extension.encode_utf16().chain(std::iter::once(0)).collect();
+        if let Some(resolved) = search_path(&name_w, &extension_w) {
+            return Some(resolved);
         }
     }
 
@@ -1099,6 +1072,53 @@ fn resolve_command(name: &str) -> Option<PathBuf> {
     }
 
     None
+}
+
+/// One `SearchPathW` lookup: a NUL-terminated `name` with the NUL-terminated
+/// `extension` appended when the name carries none. `None` when the search fails
+/// or answers with a path that is not absolute.
+#[cfg(windows)]
+fn search_path(name: &[u16], extension: &[u16]) -> Option<PathBuf> {
+    use windows_sys::Win32::Storage::FileSystem::SearchPathW;
+
+    let mut buffer = vec![0u16; 1024];
+    let mut found = unsafe {
+        SearchPathW(
+            std::ptr::null(),
+            name.as_ptr(),
+            extension.as_ptr(),
+            buffer.len() as u32,
+            buffer.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    };
+    // The call reports the length it needs (null included) when the buffer is
+    // too small; grow once and retry rather than silently miss a long path.
+    if found != 0 && found as usize > buffer.len() {
+        buffer = vec![0u16; found as usize];
+        found = unsafe {
+            SearchPathW(
+                std::ptr::null(),
+                name.as_ptr(),
+                extension.as_ptr(),
+                buffer.len() as u32,
+                buffer.as_mut_ptr(),
+                std::ptr::null_mut(),
+            )
+        };
+    }
+    if found == 0 {
+        return None;
+    }
+    let end = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
+    if end == 0 {
+        return None;
+    }
+    let resolved = PathBuf::from(String::from_utf16_lossy(&buffer[..end]));
+    // A name with no separator resolves to an absolute `PATH` entry; guard
+    // against a relative result the call could in theory produce against the
+    // working directory.
+    resolved.is_absolute().then_some(resolved)
 }
 
 /// The grants a probe of `profile` runs under.
