@@ -204,6 +204,7 @@ use std::ptr::{null, null_mut};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
     CloseHandle, HANDLE, LocalFree, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
@@ -1534,7 +1535,21 @@ fn app_container(program: &OsStr, opt_out: &mut bool) -> Option<AppContainer> {
 /// this asks for it — and a cached failure would leave every later launch of this
 /// process without a container at all, which the Sandbox page then reads as a
 /// host that cannot confine anything. Asking again costs one call.
+///
+/// It is asked more than once for the same reason. The call is a *create or
+/// find*, and this installation has more than one process that makes it — the
+/// tray and the service, a probe and the request behind it, three probes on one
+/// CI host — so one of them can find the profile half-established, which is an
+/// error about the race rather than about the host. A child created in a
+/// container the system has no profile for fails with `ERROR_FILE_NOT_FOUND`,
+/// which reads as a host with no files layer: the retry is what keeps a lost
+/// race from being reported as a sandbox that cannot confine anything. The pause
+/// is paid only on a path that is already failing.
 fn app_container_sid() -> Option<PSID> {
+    /// Attempts before the host is believed, and the pause between them.
+    const ATTEMPTS: usize = 3;
+    const PAUSE: Duration = Duration::from_millis(50);
+
     static SID: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
     let slot = SID.get_or_init(|| Mutex::new(None));
     let mut cached = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1546,33 +1561,37 @@ fn app_container_sid() -> Option<PSID> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    let mut sid: PSID = null_mut();
-    let created = unsafe {
-        CreateAppContainerProfile(
-            name.as_ptr(),
-            name.as_ptr(),
-            name.as_ptr(),
-            null(),
-            0,
-            &mut sid,
-        )
-    };
-    if created == PROFILE_EXISTS {
-        // Already made — by an earlier run, or by another copy of this
-        // binary — and the call does not hand back the SID it did not make.
-        // The name is the same, so the derived SID is the same value.
-        let derived = unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
-        if derived < 0 {
-            return None;
+    for attempt in 0..ATTEMPTS {
+        if attempt > 0 {
+            std::thread::sleep(PAUSE);
         }
-    } else if created < 0 {
-        return None;
+        let mut sid: PSID = null_mut();
+        let created = unsafe {
+            CreateAppContainerProfile(
+                name.as_ptr(),
+                name.as_ptr(),
+                name.as_ptr(),
+                null(),
+                0,
+                &mut sid,
+            )
+        };
+        if created == PROFILE_EXISTS {
+            // Already made — by an earlier run, or by another copy of this
+            // binary — and the call does not hand back the SID it did not make.
+            // The name is the same, so the derived SID is the same value.
+            let derived =
+                unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
+            if derived < 0 || sid.is_null() {
+                continue;
+            }
+        } else if created < 0 || sid.is_null() {
+            continue;
+        }
+        *cached = Some(sid as usize);
+        return Some(sid);
     }
-    if sid.is_null() {
-        return None;
-    }
-    *cached = Some(sid as usize);
-    Some(sid)
+    None
 }
 
 /// Give the container the read access the media profile's grants need.
