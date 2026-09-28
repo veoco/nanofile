@@ -420,22 +420,23 @@ async fn test_upload_blks_block_size_limited() {
     );
     let resp = f.client.try_post_multipart_url(&url, form).await;
     // The server refuses the part as soon as the cap is passed, so it can close
-    // the connection while 13 MiB is still going out: Windows reports that as an
-    // aborted connection instead of the 413. Both mean the part was not taken,
-    // which is what the case is about.
+    // the connection while 13 MiB is still going out. Which side wins that race
+    // is timing, not platform: the client may report an aborted connection
+    // instead of the 413 anywhere. Both mean the part was not taken, which is
+    // what the case is about.
     match resp {
         Ok(resp) => assert_eq!(
             resp.status(),
             413,
             "oversized block part must be rejected with 413"
         ),
-        Err(error) if cfg!(windows) => {
-            assert!(
-                error.is_request(),
-                "the request must fail at the socket: {error}"
-            )
-        }
-        Err(error) => panic!("the request did not complete: {error}"),
+        // Only a send-stage failure is the early close this case allows: a
+        // server that never came up fails as `is_connect()`, which must not be
+        // mistaken for it.
+        Err(error) => assert!(
+            error.is_request(),
+            "the request must fail at the socket: {error}"
+        ),
     }
 
     // A normal small block still succeeds.

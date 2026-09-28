@@ -88,9 +88,10 @@ async fn a_body_over_the_configured_json_limit_is_refused() {
 /// the per-group limit in `app_routes` this is the assertion that fails.
 ///
 /// `/upload-aj/` rejects a request with no session cookie before it reads the
-/// body, so it can close the connection while 65 MiB is still going out: Windows
-/// reports that as an aborted connection instead of the response. Either way the
-/// request was not refused with a 413, which is what the cap is about.
+/// body, so it can close the connection while 65 MiB is still going out. Which
+/// side wins that race is timing, not platform: the client may then report an
+/// aborted connection instead of the response anywhere. Either way the request
+/// was not refused with a 413, which is what the cap is about.
 #[tokio::test]
 async fn an_upload_route_still_takes_a_large_body() {
     let f = TestFixture::new().await;
@@ -111,12 +112,12 @@ async fn an_upload_route_still_takes_a_large_body() {
             413,
             "an upload route must not inherit the JSON cap"
         ),
-        Err(error) if cfg!(windows) => {
-            assert!(
-                error.is_request(),
-                "the request must fail at the socket: {error}"
-            )
-        }
-        Err(error) => panic!("the request did not complete: {error}"),
+        // Only a send-stage failure is the early close this case allows: a
+        // server that never came up fails as `is_connect()`, which must not be
+        // mistaken for it.
+        Err(error) => assert!(
+            error.is_request(),
+            "the request must fail at the socket: {error}"
+        ),
     }
 }
