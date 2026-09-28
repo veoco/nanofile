@@ -65,6 +65,25 @@ fn decode_master_key(key: &str) -> Vec<u8> {
     }
 }
 
+/// The media helper the sandbox should run, from the configured setting.
+///
+/// `storage.ffmpeg_path` is a command name by default, and a grant names a file:
+/// the configured value is resolved here, once, so the child's command line and
+/// the ACL the container needs are both written for the same absolute path.
+///
+/// An empty (or blank) setting resolves to an empty path rather than to the
+/// setting's own text, because that is how the caller says "no helper": a
+/// whitespace value that reached `configure_helper` unemptied would be installed
+/// as the program the media profile runs.
+fn configured_helper(ffmpeg_path: &str) -> std::path::PathBuf {
+    let configured = ffmpeg_path.trim();
+    if configured.is_empty() {
+        std::path::PathBuf::new()
+    } else {
+        crate::sandbox::worker::resolve_helper(configured)
+    }
+}
+
 /// Unified application state injected into all axum handlers.
 #[derive(Clone)]
 pub struct AppState {
@@ -314,11 +333,10 @@ impl AppState {
             config.sandbox.enabled,
             &config.sandbox.min_level,
         ));
-        if !config.storage.ffmpeg_path.trim().is_empty() {
-            crate::sandbox::worker::configure_helper(crate::sandbox::worker::resolve_helper(
-                &config.storage.ffmpeg_path,
-            ));
-        }
+        // Called even when the setting is empty, because empty is how an
+        // administrator says there is no helper: skipping the call would leave
+        // the media profile running whatever this process was last pointed at.
+        crate::sandbox::worker::configure_helper(configured_helper(&config.storage.ffmpeg_path));
 
         // Full-text indexer (its commit task is registered below alongside the
         // other background tasks).
@@ -490,13 +508,11 @@ impl AppState {
                     // fires when `storage.ffmpeg_path` is saved: re-resolve it so
                     // the next media request runs the helper the admin just
                     // configured rather than the one the process started with.
-                    // An empty path is the same "no helper" the startup guard
-                    // above treats it as, so it is not installed.
-                    if !config.storage.ffmpeg_path.trim().is_empty() {
-                        crate::sandbox::worker::configure_helper(
-                            crate::sandbox::worker::resolve_helper(&config.storage.ffmpeg_path),
-                        );
-                    }
+                    // An emptied setting clears the helper for the same reason
+                    // it is cleared at startup.
+                    crate::sandbox::worker::configure_helper(configured_helper(
+                        &config.storage.ffmpeg_path,
+                    ));
                 }
             }
         }

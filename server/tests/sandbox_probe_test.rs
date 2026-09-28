@@ -284,6 +284,22 @@ fn the_platform_answer(profile: Profile, report: &Report) {
         "{}",
         report.detail
     );
+    // The opt-out is the profile's own decision, and the media profile makes it
+    // by measuring: a helper that cannot run under the less privileged container
+    // is measured again in the plain one rather than reported as an environment
+    // problem. So a media report that says the helper did not run must not also
+    // claim the opt-out was applied.
+    if profile.runs_helper()
+        && value(report, "lpac") == "on"
+        && let Some(parse) = fact(report, "parse")
+    {
+        assert!(
+            !parse.starts_with("media-unavailable") && !parse.starts_with("media-failed"),
+            "a media report under the opt-out must have been measured in the plain \
+             container first: {}",
+            report.detail
+        );
+    }
     // Where a write from the container lands: `store` means it resolved into the
     // container's own redirected store, `user` means it did not.
     assert!(

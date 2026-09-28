@@ -958,23 +958,30 @@ static HELPER: OnceLock<Mutex<Option<&'static Path>>> = OnceLock::new();
 ///
 /// Mutable because the setting is: saving a new `storage.ffmpeg_path` re-points
 /// every later media grant at the new binary, and the cached answers that were
-/// measured against the old one are dropped with it ([`invalidate`]).
+/// measured against the old one are dropped with it ([`invalidate`]) — including
+/// the answer to whether the media profile had to give the opt-out up for it
+/// ([`crate::sandbox::forget_plain_container`]).
+///
+/// An empty path clears the helper. The settings hook fires on any Sandbox save,
+/// so an administrator who empties `storage.ffmpeg_path` is saying there is no
+/// helper; keeping the leaked path would leave the media profile running a
+/// program the settings no longer name.
 ///
 /// The path is leaked into the process's own lifetime: a child's command line
 /// and a Landlock rule are both built from a `&'static Path`, and the value has
 /// to outlive the child that is using it. One leaked path per change of the
 /// setting is the price of a grant that names a file.
 pub fn configure_helper(path: PathBuf) {
-    // An empty path is not a grant. The settings hook fires on any Sandbox save,
-    // and `storage.ffmpeg_path` is empty when no helper is configured, so
-    // installing it here would leave the media profile with a rule that names
-    // nothing.
-    if path.as_os_str().is_empty() {
-        return;
-    }
-    let leaked: &'static Path = Box::leak(path.into_boxed_path());
     let slot = HELPER.get_or_init(|| Mutex::new(None));
-    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(leaked);
+    let mut installed = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if path.as_os_str().is_empty() {
+        *installed = None;
+    } else {
+        let leaked: &'static Path = Box::leak(path.into_boxed_path());
+        *installed = Some(leaked);
+    }
+    drop(installed);
+    crate::sandbox::forget_plain_container();
     invalidate();
 }
 
@@ -1313,6 +1320,16 @@ fn probe(profile: Profile) -> (Start, Status) {
 /// `CreateProcess` and dies afterwards. The retry keeps the container and gives
 /// up only the opt-out; the shortfall is logged, and `lpac=` in the report says
 /// what the next request will get.
+///
+/// The retry is owed to the *shape* of the failure rather than to its
+/// occurrence: a child that ran out its timeout says nothing about the container
+/// flavour, and giving the opt-out up for it would make the confinement depend
+/// on how busy the machine was ([`opt_out_suspect`]).
+///
+/// The media profile is the one that can fail *with* an answer instead: its
+/// report says the helper did not run, and the helper is the program the opt-out
+/// takes away. That report is measured again in the plain container before it is
+/// believed ([`media_in_plain_container`]).
 fn probe_on(
     invocation: &Invocation,
     profile: Profile,
@@ -1321,25 +1338,115 @@ fn probe_on(
 ) -> Result<Report, String> {
     #[cfg(not(target_os = "windows"))]
     {
-        probe_once(invocation, profile, grants, start)
+        probe_once(invocation, profile, grants, start).map_err(|failure| failure.why)
     }
     #[cfg(target_os = "windows")]
     {
         match probe_once(invocation, profile, grants, start) {
-            Ok(report) => Ok(report),
-            Err(why) => {
-                if !crate::sandbox::lpac_attempted() {
-                    return Err(why);
+            Ok(report) => media_in_plain_container(invocation, profile, grants, start, report),
+            Err(failure) => {
+                if !failure.opt_out_suspect || !crate::sandbox::lpac_attempted() {
+                    return Err(failure.why);
                 }
                 tracing::warn!(
                     "extract-worker: the worker did not report under the less privileged \
-                     container ({why}); starting it in the plain one"
+                     container ({}); starting it in the plain one",
+                    failure.why
                 );
                 crate::sandbox::disable_lpac();
-                probe_once(invocation, profile, grants, start)
+                probe_once(invocation, profile, grants, start).map_err(|failure| failure.why)
             }
         }
     }
+}
+
+/// Why one creation produced no report at all.
+struct NoReport {
+    /// The reason, for the log and the rung's summary.
+    why: String,
+    /// Whether the failure is the shape a container the opt-out makes unreadable
+    /// leaves behind, and therefore worth a second creation without it. Only the
+    /// Windows ladder has a second creation to try, so the field is part of the
+    /// record everywhere and read in one place.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    opt_out_suspect: bool,
+}
+
+/// Whether a launch that produced no report is worth repeating without the
+/// opt-out.
+///
+/// A child that was created and died before it said anything, and a child that
+/// could not be created at all, are both "nothing ran inside the container" —
+/// which is what an image the opt-out made unreadable looks like from here. Every
+/// other failure is evidence about something else: a timeout says how long the
+/// machine took, a child that refused on its own report ran perfectly well, and a
+/// child whose line could not be read ran too.
+fn opt_out_suspect(run: &Run) -> bool {
+    if run.timed_out {
+        return false;
+    }
+    // The child's own refusal is printed on stderr and exits with the child's own
+    // code: it ran inside the container and reported on itself.
+    if run.stderr.trim_start().starts_with(SANDBOX_REFUSAL) {
+        return false;
+    }
+    run.exit_code.is_some() && run.stdout.is_empty()
+}
+
+/// Measure a media report that says the helper could not run again in the plain
+/// container.
+///
+/// The helper is granted through `ALL APPLICATION PACKAGES` on every host whose
+/// tree carries that ACE — the OS's own trees do, and an installer may have put
+/// the helper in one — and the opt-out is exactly what makes the low-box check
+/// ignore that principal. So a media report that says the helper did not run is
+/// the one failure whose first suspect is the container flavour, and the profile
+/// asks for the plain one and measures again rather than answering the operator
+/// with an environment problem it has not tried to remove.
+///
+/// One retry, and only for this profile: the report it returns is the one kept,
+/// so `lpac=off` and whichever `parse=` the second launch produced travel
+/// together.
+#[cfg(target_os = "windows")]
+fn media_in_plain_container(
+    invocation: &Invocation,
+    profile: Profile,
+    grants: crate::sandbox::Grants<'_>,
+    start: Start,
+    report: Report,
+) -> Result<Report, String> {
+    if !media_needs_the_plain_container(
+        profile,
+        crate::sandbox::lpac(),
+        crate::sandbox::plain_container(profile),
+        report.job,
+    ) {
+        return Ok(report);
+    }
+    tracing::warn!(
+        detail = report.detail.as_str(),
+        "extract-worker: the media helper did not run inside the less privileged container; \
+         measuring the media profile in the plain one"
+    );
+    crate::sandbox::use_plain_container(profile);
+    probe_once(invocation, profile, grants, start).map_err(|failure| failure.why)
+}
+
+/// Whether a report says the media profile needs the plain container.
+///
+/// Four facts, and all four are needed: the profile is the one that runs a
+/// helper, the launch actually applied the opt-out (a plain launch has nothing to
+/// give up and would only loop), the profile is not already using the plain
+/// container, and the child's own verdict is that the helper failed — not that no
+/// helper is configured, which is a state its operator chose.
+#[cfg(any(target_os = "windows", test))]
+fn media_needs_the_plain_container(
+    profile: Profile,
+    opt_out_applied: bool,
+    already_plain: bool,
+    job: Option<JobVerdict>,
+) -> bool {
+    profile.runs_helper() && opt_out_applied && !already_plain && job == Some(JobVerdict::Failed)
 }
 
 /// One creation and one report.
@@ -1348,15 +1455,25 @@ fn probe_once(
     profile: Profile,
     grants: crate::sandbox::Grants<'_>,
     start: Start,
-) -> Result<Report, String> {
-    let run = run_child(invocation, None, PROBE_TIMEOUT, start, profile, grants)
-        .map_err(|error| format!("cannot start the sandbox worker: {error}"))?;
+) -> Result<Report, NoReport> {
+    let run =
+        run_child(invocation, None, PROBE_TIMEOUT, start, profile, grants).map_err(|error| {
+            NoReport {
+                why: format!("cannot start the sandbox worker: {error}"),
+                // Nothing was created at all, which is as close to "the container
+                // refused it" as a creation can get.
+                opt_out_suspect: true,
+            }
+        })?;
     if let Verdict::Unavailable(why) = verdict(run.exit_code, &run.stdout, &run.stderr) {
         // The summary rides along: a child that dies in its loader writes nothing
         // on either stream, and its exit code is then the only thing that says
         // which failure this was. Without it, every such rung reads as the same
         // sentence with no way to tell them apart.
-        return Err(format!("{why} [{}]", run.summary()));
+        return Err(NoReport {
+            why: format!("{why} [{}]", run.summary()),
+            opt_out_suspect: opt_out_suspect(&run),
+        });
     }
 
     let line = String::from_utf8_lossy(
@@ -1369,17 +1486,22 @@ fn probe_once(
     // A child that never printed its report says why on stderr, and the probe is
     // the only place that can be read: `tracing` has no subscriber on this path,
     // so the summary is the whole diagnosis.
-    let report = Report::parse(line)
-        .ok_or_else(|| format!("unreadable self-test line {line:?}: {}", run.summary()))?;
+    let report = Report::parse(line).ok_or_else(|| NoReport {
+        why: format!("unreadable self-test line {line:?}: {}", run.summary()),
+        opt_out_suspect: opt_out_suspect(&run),
+    })?;
     // A report for another profile is not this profile's answer: the two may
     // hold different powers (only media may execute a helper), so accepting one
     // for the other would be a decision made on the wrong facts.
     if report.profile != profile {
-        return Err(format!(
-            "the child reported profile={} for a profile={} probe",
-            report.profile.as_str(),
-            profile.as_str()
-        ));
+        return Err(NoReport {
+            why: format!(
+                "the child reported profile={} for a profile={} probe",
+                report.profile.as_str(),
+                profile.as_str()
+            ),
+            opt_out_suspect: false,
+        });
     }
     Ok(report)
 }
@@ -2578,5 +2700,108 @@ mod tests {
             "a bare command name must resolve to a real, absolute path: {}",
             resolved.display()
         );
+    }
+
+    /// One child's outcome, as the parent classified it.
+    fn finished(exit_code: Option<i32>, stdout: &[u8], stderr: &str, timed_out: bool) -> Run {
+        Run {
+            exit_code,
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_string(),
+            timed_out,
+        }
+    }
+
+    /// The opt-out is given up for a container the loader could not start in, and
+    /// for nothing else. The distinction decides whether the confinement of every
+    /// later launch depends on how busy the machine was: a probe that ran out its
+    /// five seconds says nothing about the container flavour, and a child that
+    /// refused on its own report ran inside it.
+    #[test]
+    fn only_a_child_that_never_ran_makes_the_opt_out_the_suspect() {
+        // Created, died in its loader, said nothing: the shape the attribute
+        // leaves behind. The constant is spelled out because the loader status is
+        // Windows' own and this test runs everywhere.
+        assert!(opt_out_suspect(&finished(
+            Some(0xC000_0142u32 as i32),
+            b"",
+            "",
+            false
+        )));
+        // The timeout the probe is allowed: no evidence about the container.
+        assert!(!opt_out_suspect(&finished(None, b"", "", true)));
+        // The child's own refusal: it ran and reported on itself.
+        assert!(!opt_out_suspect(&finished(
+            Some(EXIT_SANDBOX_UNAVAILABLE),
+            b"",
+            &format!("{SANDBOX_REFUSAL}: the host grades below the minimum"),
+            false,
+        )));
+        // Lines the parent could not read: the child still ran.
+        assert!(!opt_out_suspect(&finished(
+            Some(0),
+            b"not a report",
+            "",
+            false
+        )));
+        // A child that reported and then died: nothing to re-ask.
+        assert!(!opt_out_suspect(&finished(
+            Some(1),
+            b"NFS2-sandbox profile=media level=partial limits=on files=denied \
+              network=denied process=open detail=x",
+            "",
+            false,
+        )));
+    }
+
+    /// The media profile gives the opt-out up only for its own helper's failure.
+    /// Any one of the four facts missing turns the retry into either a loop (the
+    /// profile already plain) or a wrong answer (another profile's report, a
+    /// helper that was never configured).
+    #[test]
+    fn only_a_failed_media_helper_selects_the_plain_container() {
+        assert!(media_needs_the_plain_container(
+            Profile::Media,
+            true,
+            false,
+            Some(JobVerdict::Failed)
+        ));
+        // No opt-out applied: there is nothing to give up.
+        assert!(!media_needs_the_plain_container(
+            Profile::Media,
+            false,
+            false,
+            Some(JobVerdict::Failed)
+        ));
+        // Already plain: measuring again would measure the same launch.
+        assert!(!media_needs_the_plain_container(
+            Profile::Media,
+            true,
+            true,
+            Some(JobVerdict::Failed)
+        ));
+        // A profile that runs no program has no helper to fail.
+        for profile in [Profile::Documents, Profile::Images] {
+            assert!(!media_needs_the_plain_container(
+                profile,
+                true,
+                false,
+                Some(JobVerdict::Failed)
+            ));
+        }
+        // "No helper configured" is a state the operator chose, not a fault.
+        for job in [
+            None,
+            Some(JobVerdict::Ok),
+            Some(JobVerdict::Nothing),
+            Some(JobVerdict::Empty),
+            Some(JobVerdict::Different),
+            Some(JobVerdict::Unsupported),
+        ] {
+            assert!(
+                !media_needs_the_plain_container(Profile::Media, true, false, job),
+                "{job:?} is not a helper that failed to run"
+            );
+        }
     }
 }

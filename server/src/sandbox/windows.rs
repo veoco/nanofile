@@ -158,6 +158,30 @@
 //! probe decodes a frame with it. Seatbelt refuses the
 //! write to `/dev/null` in exactly the same way, which is how this was found.
 //!
+//! That measurement was taken while the null device was still in the way, so
+//! "the container flavour makes no difference to the helper" was not something it
+//! could show: both containers refused the same stdio. What the flavour *does*
+//! change is which principal answers for the helper — see the note below — and
+//! the media profile therefore gives the opt-out up when its helper cannot run
+//! under it rather than reporting an environment problem it has not tried to
+//! remove ([`use_plain_container`]).
+//!
+//! # The two principals, and why the opt-out is the one that can go
+//!
+//! A low-box access check is answered by an ACE for the process's own package SID
+//! *or* by one for `ALL APPLICATION PACKAGES`. The second is what the system tree
+//! carries — and what an installer may have put on the tree a helper lives in —
+//! and it is the shortcut [`dacl_grants_any_package`] takes so that a file the OS
+//! already granted is not re-written on every launch. The opt-out of the section
+//! above makes the check *ignore* `ALL APPLICATION PACKAGES`, so that shortcut
+//! certifies a read only while the launch is not asking for it. [`add_access`]
+//! therefore asks the question from the launch's own decision, and a file this
+//! process may not re-DACL — a system-owned DLL, an image under `Program Files` —
+//! is where the two meet: the opt-out is given up and the container kept, rather
+//! than the child being handed an image it cannot read. Nothing about that is
+//! silent: the launch reports `lpac=off`, the settings page carries the note, and
+//! the log says the media profile gave it up.
+//!
 //! # References
 //!
 //! * Microsoft, *Launch an AppContainer*: the attribute, the empty capability
@@ -233,6 +257,20 @@ static LPAC_WANTED: AtomicBool = AtomicBool::new(true);
 static LPAC_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 /// Whether the last launch got it.
 static LPAC_APPLIED: AtomicBool = AtomicBool::new(false);
+/// The profiles that gave the opt-out up because the program they run could not
+/// run under it.
+///
+/// One per profile, and only the media profile ever sets one: the opt-out makes
+/// the low-box check ignore `ALL APPLICATION PACKAGES`, which is the principal
+/// the helper's own ACL is granted through, so a helper the plain container can
+/// start and the less privileged one cannot is a fact about that profile rather
+/// than about the host. The other two profiles run no second program and have
+/// nothing to give up for.
+static PLAIN_CONTAINER: [AtomicBool; 3] = [
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+];
 
 /// Whether the child runs in a less privileged AppContainer.
 ///
@@ -262,6 +300,45 @@ pub(super) fn disable_lpac() {
     LPAC_WANTED.store(false, Ordering::Relaxed);
 }
 
+/// Whether `profile` gave the opt-out up for itself.
+pub(super) fn plain_container(profile: Profile) -> bool {
+    PLAIN_CONTAINER[slot(profile)].load(Ordering::Relaxed)
+}
+
+/// Stop asking for the opt-out where this profile's own program is concerned.
+///
+/// The container is kept; only the opt-out is given up. What asks for this is a
+/// helper that could not run under the opt-out while the plain container starts
+/// it: `ALL APPLICATION PACKAGES` is the principal such a helper's ACL carries,
+/// and the opt-out is what makes the low-box check ignore it.
+pub(super) fn use_plain_container(profile: Profile) {
+    PLAIN_CONTAINER[slot(profile)].store(true, Ordering::Relaxed);
+}
+
+/// Forget that a profile gave the opt-out up.
+///
+/// A different helper is a different measurement: the answer above was about the
+/// program the media profile was pointed at when it was taken.
+pub(super) fn forget_plain_container() {
+    for held in &PLAIN_CONTAINER {
+        held.store(false, Ordering::Relaxed);
+    }
+}
+
+/// Which of the per-profile slots `profile` uses.
+fn slot(profile: Profile) -> usize {
+    match profile {
+        Profile::Documents => 0,
+        Profile::Images => 1,
+        Profile::Media => 2,
+    }
+}
+
+/// Whether a launch for `profile` should ask for the less privileged container.
+fn want_lpac(profile: Profile) -> bool {
+    LPAC_WANTED.load(Ordering::Relaxed) && !plain_container(profile)
+}
+
 /// Most committed memory the child may use, in bytes.
 ///
 /// The same gigabyte the Unix layer allows, for the same reason: a document is
@@ -288,6 +365,10 @@ const RESTRICTED_FLAGS: u32 = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICT
 
 /// `SE_GROUP_LOGON_ID` from `winnt.h`.
 const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
+
+/// `INHERIT_ONLY_ACE` from `winnt.h`: an ACE the object passes down but that
+/// does not apply to the object itself.
+const INHERIT_ONLY_ACE: u8 = 0x08;
 
 // The window station, desktop, clipboard and handle restrictions this job used
 // to carry are gone, and the reason is measured: a job's UI restrictions apply
@@ -767,14 +848,19 @@ pub(crate) fn spawn(
     profile: Profile,
     grants: Grants<'_>,
 ) -> std::io::Result<Child> {
-    let container = app_container(program);
+    // The opt-out is decided before the grants, because the grants are what
+    // decide it: a file whose only package grant is `ALL APPLICATION PACKAGES` is
+    // unreadable under the opt-out, so `app_container` and the helper's grant may
+    // hand the opt-out back rather than hand the child an image it cannot read.
+    let mut opt_out = want_lpac(profile);
+    let container = app_container(program, &mut opt_out);
     // A worker that starts a helper gets two slots in its job and a container
     // that can read the helper and the one source file the parent wrote. A
     // worker that starts nothing keeps a single slot, which is the tighter
     // bound and the one every other profile runs under.
     let active_process_limit = process_slots(profile);
     if profile.runs_helper() {
-        grant_helper_access(grants);
+        grant_helper_access(grants, &mut opt_out);
     }
 
     let token = restricted_token();
@@ -784,18 +870,19 @@ pub(crate) fn spawn(
         // log next to that fact.
         note_shortfall("token-refused", None);
     }
-    // The media profile asks for the same container every other profile gets.
-    // The less privileged one was tried for it — the media probe measured the
-    // plain container refusing the helper's `CreateProcess` too (`lpac=off`,
-    // `Access is denied`) — so there is nothing to gain by asking for the weaker
-    // one, and the files item stays the strongest this host can give.
+    // The media profile asks for the same container every other profile gets,
+    // unless its own helper gave the opt-out up: the less privileged one was
+    // measured refusing the helper's `CreateProcess` (`Access is denied`), and
+    // the grant it reads the helper through is the principal that opt-out
+    // ignores. `want_lpac` carries both facts; `lpac=` in the report says which
+    // container the launch actually got.
     start(
         program,
         args,
         token,
         container.as_ref(),
         active_process_limit,
-        LPAC_WANTED.load(Ordering::Relaxed),
+        opt_out,
     )
 }
 
@@ -810,8 +897,12 @@ pub(crate) fn spawn_unrestricted(
     profile: Profile,
     grants: Grants<'_>,
 ) -> std::io::Result<Child> {
+    // No container in this creation: the opt-out is not a decision it makes, so a
+    // grant that is only good through `ALL APPLICATION PACKAGES` is good enough
+    // here.
+    let mut opt_out = false;
     if profile.runs_helper() {
-        grant_helper_access(grants);
+        grant_helper_access(grants, &mut opt_out);
     }
     start(program, args, None, None, process_slots(profile), false)
 }
@@ -831,9 +922,10 @@ pub(crate) fn spawn_container_only(
     profile: Profile,
     grants: Grants<'_>,
 ) -> std::io::Result<Child> {
-    let container = app_container(program);
+    let mut opt_out = want_lpac(profile);
+    let container = app_container(program, &mut opt_out);
     if profile.runs_helper() {
-        grant_helper_access(grants);
+        grant_helper_access(grants, &mut opt_out);
     }
     start(
         program,
@@ -841,7 +933,7 @@ pub(crate) fn spawn_container_only(
         None,
         container.as_ref(),
         process_slots(profile),
-        LPAC_WANTED.load(Ordering::Relaxed),
+        opt_out,
     )
 }
 
@@ -852,8 +944,9 @@ pub(crate) fn spawn_token_only(
     profile: Profile,
     grants: Grants<'_>,
 ) -> std::io::Result<Child> {
+    let mut opt_out = false;
     if profile.runs_helper() {
-        grant_helper_access(grants);
+        grant_helper_access(grants, &mut opt_out);
     }
     let token = restricted_token();
     if token.is_none() {
@@ -1391,7 +1484,12 @@ struct AppContainer {
 /// before the launch: a name no profile has established and an image the
 /// container cannot read are each a launch that fails rather than a child that
 /// runs confined.
-fn app_container(program: &OsStr) -> Option<AppContainer> {
+///
+/// `opt_out` is the caller's decision to ask for the less privileged container,
+/// and this call may have to give it up: an image whose only package grant is
+/// `ALL APPLICATION PACKAGES` is one the opt-out makes unreadable, and the
+/// opt-out is the half that can be dispensed with.
+fn app_container(program: &OsStr, opt_out: &mut bool) -> Option<AppContainer> {
     let Some(sid) = app_container_sid() else {
         note_shortfall("sid-refused", None);
         return None;
@@ -1399,7 +1497,7 @@ fn app_container(program: &OsStr) -> Option<AppContainer> {
     // The image is the one file the child cannot run without, and it is the
     // parent's job to make it readable: inside the container the check that
     // matters is the package SID's, and a per-user install has no ACE for it.
-    if !grant_image_access(program, sid) {
+    if !grant_image_access(program, sid, opt_out) {
         // The grant records why it could not be made.
         return None;
     }
@@ -1430,42 +1528,51 @@ fn app_container(program: &OsStr) -> Option<AppContainer> {
 /// against it is a property of the image, and freeing it would only mean
 /// deriving the same value again. The allocation is one SID, for the life of the
 /// process.
+///
+/// A *failure* is not kept. Both calls can fail for a reason of the moment — the
+/// profile store is open in another process, the profile is being established as
+/// this asks for it — and a cached failure would leave every later launch of this
+/// process without a container at all, which the Sandbox page then reads as a
+/// host that cannot confine anything. Asking again costs one call.
 fn app_container_sid() -> Option<PSID> {
-    static SID: OnceLock<usize> = OnceLock::new();
-    let stored = *SID.get_or_init(|| {
-        let name: Vec<u16> = OsStr::new(APP_CONTAINER_NAME)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let mut sid: PSID = null_mut();
-        let created = unsafe {
-            CreateAppContainerProfile(
-                name.as_ptr(),
-                name.as_ptr(),
-                name.as_ptr(),
-                null(),
-                0,
-                &mut sid,
-            )
-        };
-        if created == PROFILE_EXISTS {
-            // Already made — by an earlier run, or by another copy of this
-            // binary — and the call does not hand back the SID it did not make.
-            // The name is the same, so the derived SID is the same value.
-            let derived =
-                unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
-            if derived < 0 {
-                return 0;
-            }
-        } else if created < 0 {
-            return 0;
+    static SID: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
+    let slot = SID.get_or_init(|| Mutex::new(None));
+    let mut cached = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(stored) = *cached {
+        return Some(stored as PSID);
+    }
+
+    let name: Vec<u16> = OsStr::new(APP_CONTAINER_NAME)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut sid: PSID = null_mut();
+    let created = unsafe {
+        CreateAppContainerProfile(
+            name.as_ptr(),
+            name.as_ptr(),
+            name.as_ptr(),
+            null(),
+            0,
+            &mut sid,
+        )
+    };
+    if created == PROFILE_EXISTS {
+        // Already made — by an earlier run, or by another copy of this
+        // binary — and the call does not hand back the SID it did not make.
+        // The name is the same, so the derived SID is the same value.
+        let derived = unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
+        if derived < 0 {
+            return None;
         }
-        if sid.is_null() {
-            return 0;
-        }
-        sid as usize
-    });
-    (stored != 0).then_some(stored as PSID)
+    } else if created < 0 {
+        return None;
+    }
+    if sid.is_null() {
+        return None;
+    }
+    *cached = Some(sid as usize);
+    Some(sid)
 }
 
 /// Give the container the read access the media profile's grants need.
@@ -1487,7 +1594,12 @@ fn app_container_sid() -> Option<PSID> {
 /// A grant that cannot be made is recorded as a shortfall and left to fail
 /// loudly: a helper the container may not read means the media profile cannot
 /// run, which the child's own report then says.
-fn grant_helper_access(grants: Grants<'_>) {
+///
+/// `opt_out` is the launch's decision to ask for the less privileged container,
+/// and this call may have to give it up: a helper whose only package grant is
+/// `ALL APPLICATION PACKAGES` is unreadable under the opt-out, and the opt-out
+/// is the half that can be dispensed with (see [`add_access`]).
+fn grant_helper_access(grants: Grants<'_>, opt_out: &mut bool) {
     let Some(sid) = app_container_sid() else {
         return;
     };
@@ -1505,6 +1617,7 @@ fn grant_helper_access(grants: Grants<'_>) {
                 helper.as_os_str(),
                 sid,
                 FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                opt_out,
             ) {
                 note_shortfall("helper-grant-refused", Some(&error));
             }
@@ -1524,6 +1637,7 @@ fn grant_helper_access(grants: Grants<'_>) {
                             path.as_os_str(),
                             sid,
                             FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                            opt_out,
                         );
                     }
                 }
@@ -1534,7 +1648,7 @@ fn grant_helper_access(grants: Grants<'_>) {
         if !source.is_file() {
             let error = std::io::Error::other("the source is not a regular file");
             note_shortfall("source-grant-refused", Some(&error));
-        } else if let Err(error) = add_access(source.as_os_str(), sid, FILE_GENERIC_READ) {
+        } else if let Err(error) = add_access(source.as_os_str(), sid, FILE_GENERIC_READ, opt_out) {
             note_shortfall("source-grant-refused", Some(&error));
         }
     }
@@ -1560,8 +1674,8 @@ fn grant_helper_access(grants: Grants<'_>) {
 /// with the token alone. That is less confinement than this host could give, and
 /// the child's own measurement is what says so: nothing here claims a layer the
 /// token did not hand over.
-fn grant_image_access(program: &OsStr, sid: PSID) -> bool {
-    match add_read_execute(program, sid) {
+fn grant_image_access(program: &OsStr, sid: PSID, opt_out: &mut bool) -> bool {
+    match add_read_execute(program, sid, opt_out) {
         Ok(()) => true,
         Err(error) => {
             note_shortfall("image-grant-refused", Some(&error));
@@ -1576,12 +1690,29 @@ fn grant_image_access(program: &OsStr, sid: PSID) -> bool {
 /// file away from the user who owns it. `FILE_GENERIC_EXECUTE` is in the mask
 /// because executing an image and traversing into a directory are the same bit,
 /// and the loader needs both to map the file it was started from.
-fn add_read_execute(program: &OsStr, sid: PSID) -> std::io::Result<()> {
-    add_access(program, sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE)
+fn add_read_execute(program: &OsStr, sid: PSID, opt_out: &mut bool) -> std::io::Result<()> {
+    add_access(
+        program,
+        sid,
+        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        opt_out,
+    )
 }
 
 /// Add `mask` for `sid` to `path`'s DACL, keeping every ACE it already has.
-fn add_access(path: &OsStr, sid: PSID, mask: u32) -> std::io::Result<()> {
+///
+/// The two SIDs a low-box check can be answered by are not interchangeable:
+/// `ALL APPLICATION PACKAGES` is ignored under the opt-out (the module docs have
+/// why), so an ACE for it certifies a read only while the launch is *not* asking
+/// for the opt-out. `opt_out` is that decision, and it is what decides whether
+/// such an ACE may stand in for the package's own.
+///
+/// A file whose ACL cannot be re-written — a system-owned DLL, an image under
+/// `Program Files` — is then the one case where the caller has a choice, and it
+/// is made here: the opt-out is given up (the container stays) rather than the
+/// file being reported ungranted. That is not a silent weakening — the launch
+/// says `lpac=off` and the page carries the note.
+fn add_access(path: &OsStr, sid: PSID, mask: u32, opt_out: &mut bool) -> std::io::Result<()> {
     let path: Vec<u16> = path.encode_wide().chain(std::iter::once(0)).collect();
 
     let mut dacl: *mut ACL = null_mut();
@@ -1611,17 +1742,51 @@ fn add_access(path: &OsStr, sid: PSID, mask: u32) -> std::io::Result<()> {
             "the image has no discretionary ACL to add to",
         ));
     }
-    // A grant an earlier run made is read rather than written again: the merge
-    // below is a write to a file another process may be running from, and the
-    // question the caller asks is whether the container can read the image, not
-    // whether this call changed anything. An ACE for `ALL APPLICATION PACKAGES`
-    // answers the same question — the container's token carries that SID — so a
-    // system DLL the OS already granted is not rewritten on every request.
-    if dacl_already_grants(dacl, sid, mask) || dacl_grants_any_package(dacl, mask) {
+    // The grant the launch needs, asked as the launch's own decision: under the
+    // opt-out only the package's ACE answers, and without it either principal
+    // does. Asking it this way is also what keeps a grant an earlier launch made
+    // from being written again — the merge below is a write to a file another
+    // process may be running from, and the question the caller has is whether the
+    // container can read the file, not whether this call changed anything.
+    if already_granted(dacl, sid, mask, !*opt_out) {
         unsafe { LocalFree(descriptor) };
         return Ok(());
     }
+    let written = write_access(&path, sid, mask, dacl);
+    if written.is_ok() || !*opt_out {
+        unsafe { LocalFree(descriptor) };
+        return written;
+    }
+    // The file is not this process's to re-write, and the launch was going to
+    // need the package's own ACE to read it. When the principal the opt-out
+    // ignores still answers for it, the opt-out is given up rather than the read;
+    // a file with neither grant is the shortfall the caller records, with the
+    // launch's decision left as it was.
+    let through_any_package = already_granted(dacl, sid, mask, true);
+    if through_any_package {
+        *opt_out = false;
+    }
+    unsafe { LocalFree(descriptor) };
+    if through_any_package { Ok(()) } else { written }
+}
 
+/// Whether `dacl` already gives the container the access this launch needs.
+///
+/// The package's own ACE is the answer in every case. `ALL APPLICATION PACKAGES`
+/// is the answer only when the low-box check will consult it — which is why the
+/// caller passes `allow_any_package` from the launch's own opt-out decision
+/// rather than leaving it out of the question.
+fn already_granted(dacl: *const ACL, sid: PSID, mask: u32, allow_any_package: bool) -> bool {
+    dacl_already_grants(dacl, sid, mask)
+        || (allow_any_package && dacl_grants_any_package(dacl, mask))
+}
+
+/// Merge one ACE for `sid` into `dacl` and write the result onto `path`.
+///
+/// The write is what a system file may refuse, so the caller decides what that
+/// means: for the opt-out it is the reason to give the opt-out up, and anywhere
+/// else it is the shortfall the report carries.
+fn write_access(path: &[u16], sid: PSID, mask: u32, dacl: *const ACL) -> std::io::Result<()> {
     let entry = EXPLICIT_ACCESS_W {
         grfAccessPermissions: mask,
         grfAccessMode: GRANT_ACCESS,
@@ -1639,7 +1804,6 @@ fn add_access(path: &OsStr, sid: PSID, mask: u32) -> std::io::Result<()> {
     let mut merged: *mut ACL = null_mut();
     let built = unsafe { SetEntriesInAclW(1, &entry, dacl, &mut merged) };
     if built != 0 {
-        unsafe { LocalFree(descriptor) };
         return Err(std::io::Error::from_raw_os_error(built as i32));
     }
 
@@ -1654,11 +1818,7 @@ fn add_access(path: &OsStr, sid: PSID, mask: u32) -> std::io::Result<()> {
             null_mut(),
         )
     };
-    unsafe {
-        LocalFree(merged.cast());
-        // Frees the descriptor and the DACL that came with it.
-        LocalFree(descriptor);
-    }
+    unsafe { LocalFree(merged.cast()) };
     if written != 0 {
         return Err(std::io::Error::from_raw_os_error(written as i32));
     }
@@ -1705,6 +1865,12 @@ fn dacl_already_grants(dacl: *const ACL, sid: PSID, wanted: u32) -> bool {
         if allowed.Header.AceType != ALLOWED {
             continue;
         }
+        // An ACE that is inherited-only does not apply to the object it sits on:
+        // it is what the object passes down, and counting it would answer "the
+        // container may read this" for a file whose own mask says otherwise.
+        if allowed.Header.AceFlags & INHERIT_ONLY_ACE != 0 {
+            continue;
+        }
         // `SidStart` is the first four bytes of the SID that follows the header,
         // so its address is the SID's address.
         let entry = std::ptr::addr_of!(allowed.SidStart).cast::<c_void>() as PSID;
@@ -1722,6 +1888,11 @@ fn dacl_already_grants(dacl: *const ACL, sid: PSID, wanted: u32) -> bool {
 /// tree carries: a file the OS already granted the container does not need this
 /// process to write its own ACE, which is what a per-request rewrite of every
 /// system DLL's DACL would otherwise be.
+///
+/// It answers for the *plain* container only. The less privileged one makes the
+/// low-box check ignore this principal, so the caller must not ask the question
+/// on behalf of a launch that is asking for it — see [`already_granted`] and the
+/// module docs.
 fn dacl_grants_any_package(dacl: *const ACL, wanted: u32) -> bool {
     let mut sid = [0u8; MAX_SID_BYTES];
     let mut length = size_of_val(&sid) as u32;
@@ -2272,5 +2443,148 @@ mod tests {
                 "a process the parent did not confine has no limits to report"
             );
         }
+    }
+
+    /// A package SID that belongs to no file on this host, as owned bytes.
+    ///
+    /// Derived rather than created: the question these tests ask is about an ACL,
+    /// and a name is all the derivation needs. Nothing is registered by it, so a
+    /// test leaves no profile behind.
+    fn package_sid(name: &str) -> Vec<u8> {
+        let name: Vec<u16> = OsStr::new(name)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut sid: PSID = null_mut();
+        let derived = unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
+        assert!(
+            derived >= 0 && !sid.is_null(),
+            "deriving a SID from a name works on any supported Windows"
+        );
+        let length = unsafe { GetLengthSid(sid) } as usize;
+        assert!(length > 0 && length <= MAX_SID_BYTES);
+        // Copied out: the allocation belongs to the API's caller, and these tests
+        // only need the value.
+        unsafe { std::slice::from_raw_parts(sid.cast::<u8>(), length) }.to_vec()
+    }
+
+    /// A file in the temporary directory whose name nothing else uses.
+    fn scratch_file() -> (std::path::PathBuf, Vec<u16>) {
+        let path = std::env::temp_dir().join(format!("nanofile-acl-test-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"").expect("a file to grant on");
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        (path, wide)
+    }
+
+    /// The DACL of `wide`, in a descriptor the caller frees with `LocalFree`.
+    fn dacl_of(wide: &[u16]) -> (*mut ACL, PSECURITY_DESCRIPTOR) {
+        let mut dacl: *mut ACL = null_mut();
+        let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+        let read = unsafe {
+            GetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                &mut dacl,
+                null_mut(),
+                &mut descriptor,
+            )
+        };
+        assert_eq!(read, 0, "the DACL of a file this process just made is read");
+        assert!(!dacl.is_null(), "a created file has a DACL");
+        (dacl, descriptor)
+    }
+
+    /// The `ALL APPLICATION PACKAGES` shortcut answers for the plain container and
+    /// not for the less privileged one. This is the whole reason the launch's
+    /// opt-out decision travels into the grant: a skipped ACE is a child that
+    /// cannot read the file it was started from, and the failure arrives as a
+    /// loader death rather than as anything an operator can read.
+    #[test]
+    fn the_any_package_shortcut_is_asked_of_the_launch_that_needs_it() {
+        let (path, wide) = scratch_file();
+        let any_package = package_sid("Nanofile.Test.AnyPackage");
+        let package = package_sid("Nanofile.Test.Package");
+        let mask = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+
+        // An ACE for the wildcard package, which is what an installer's tree
+        // carries: written with the shortcut allowed, because that is how such a
+        // tree gets one.
+        let mut opt_out = false;
+        add_access(
+            path.as_os_str(),
+            any_package.as_ptr().cast_mut().cast::<c_void>(),
+            mask,
+            &mut opt_out,
+        )
+        .expect("the wildcard ACE is written");
+
+        let (dacl, descriptor) = dacl_of(&wide);
+        let held = package.as_ptr().cast_mut().cast::<c_void>();
+        assert!(
+            already_granted(dacl, held, mask, true),
+            "the plain container is answered by ALL APPLICATION PACKAGES"
+        );
+        assert!(
+            !already_granted(dacl, held, mask, false),
+            "under the opt-out that principal is ignored, so the grant is missing"
+        );
+        unsafe { LocalFree(descriptor) };
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// An inherited-only ACE is what the object passes down, not what it grants,
+    /// and counting it would certify a read the object's own mask does not.
+    #[test]
+    fn an_inherit_only_ace_does_not_grant_the_object() {
+        use windows_sys::Win32::Security::{AddAccessAllowedAceEx, InitializeAcl};
+        use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+
+        const ACL_REVISION: u32 = 2;
+        let mask = FILE_GENERIC_READ;
+        // `_owned` is what the pointer points into, and it outlives every use of
+        // it: the shadowing below does not free it.
+        let sid_owned = package_sid("Nanofile.Test.InheritOnly");
+        let sid = sid_owned.as_ptr().cast_mut().cast::<c_void>();
+
+        // Word-aligned because an ACL holds pointers, and room for two ACEs.
+        let mut storage = [0u64; 32];
+        let length = size_of_val(&storage) as u32;
+        let acl = storage.as_mut_ptr().cast::<ACL>();
+        assert_ne!(
+            unsafe { InitializeAcl(acl, length, ACL_REVISION) },
+            0,
+            "an empty ACL is made"
+        );
+        assert_ne!(
+            unsafe { AddAccessAllowedAceEx(acl, ACL_REVISION, INHERIT_ONLY_ACE as u32, mask, sid) },
+            0,
+            "the inherited-only ACE is added"
+        );
+        assert!(
+            !dacl_already_grants(acl, sid, mask),
+            "an ACE the object only passes down does not apply to it"
+        );
+        assert_ne!(
+            unsafe { AddAccessAllowedAceEx(acl, ACL_REVISION, 0, mask, sid) },
+            0,
+            "the plain ACE is added"
+        );
+        assert!(
+            dacl_already_grants(acl, sid, mask),
+            "an ACE with no flags is the grant"
+        );
+        // The answer is about the access asked for: this ACE carries read, not
+        // write, so a wanted mask with both is not granted by it.
+        assert!(
+            !dacl_already_grants(acl, sid, mask | FILE_GENERIC_WRITE),
+            "the ACE carries read and not write"
+        );
     }
 }

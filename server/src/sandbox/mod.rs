@@ -216,6 +216,47 @@ pub fn disable_lpac() {
     }
 }
 
+/// Whether this profile gave the opt-out up and runs in the plain container.
+///
+/// Per profile rather than per process: the opt-out is given up when the program
+/// a profile exists to run cannot start under it, and only the media profile runs
+/// a second program. The container itself is kept either way — what is lost is
+/// `ALL APPLICATION PACKAGES`, and the report says so as `lpac=off`.
+pub fn plain_container(profile: Profile) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows::plain_container(profile)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = profile;
+        false
+    }
+}
+
+/// Stop asking for the opt-out where this profile's own program is concerned.
+pub fn use_plain_container(profile: Profile) {
+    #[cfg(target_os = "windows")]
+    {
+        windows::use_plain_container(profile);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = profile;
+    }
+}
+
+/// Forget which profiles gave the opt-out up.
+///
+/// A different helper is a different measurement: the answer was about the
+/// program the media profile was pointed at when it was taken.
+pub fn forget_plain_container() {
+    #[cfg(target_os = "windows")]
+    {
+        windows::forget_plain_container();
+    }
+}
+
 /// Forget the reasons the last launch recorded, before the next sequence begins.
 ///
 /// A "sequence" is the ladder the probe walks or the single creation a request
