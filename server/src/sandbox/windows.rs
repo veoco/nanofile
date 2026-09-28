@@ -1643,10 +1643,23 @@ fn ensure_profile(name: &[u16]) -> Option<PSID> {
 /// serialises every collision this host can actually have. Released and closed on
 /// drop, so it is never held across a panic in the create-or-find, and an
 /// abandoned mutex (a previous owner crashed mid-create) is treated as acquired —
-/// the operation is idempotent, so continuing is safe.
+/// the operation is idempotent, so continuing is safe. The wait is bounded rather
+/// than infinite (`LOCK_TIMEOUT_MS`), so a wedged owner is given up on instead of
+/// blocking every spawn.
 struct ProfileLock(HANDLE);
 
 impl ProfileLock {
+    /// How long to wait for the lock before giving it up.
+    ///
+    /// `CreateAppContainerProfile` is a registry write measured in milliseconds,
+    /// so a wait that reaches this bound is not a slow owner but a wedged one — a
+    /// process that holds the mutex and hangs without crashing (`WAIT_ABANDONED`
+    /// only covers a crashed or killed owner). Dropping the lock after the bound
+    /// and proceeding lock-free is the safer choice: the create-or-find is
+    /// idempotent and `ensure_profile` retries it, so a brief race is recovered
+    /// rather than letting one stuck process block every spawn for the host's life.
+    const LOCK_TIMEOUT_MS: u32 = 2000;
+
     fn acquire() -> Option<Self> {
         // The AppContainer store is per user, so the colliding processes always
         // share a user; `Global\` also reaches a service in another session.
@@ -1663,11 +1676,19 @@ impl ProfileLock {
                 // lock-free path rather than denying confinement.
                 continue;
             }
-            let waited = unsafe { WaitForSingleObject(handle, INFINITE) };
-            if waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED {
-                return Some(ProfileLock(handle));
+            let waited = unsafe { WaitForSingleObject(handle, Self::LOCK_TIMEOUT_MS) };
+            match waited {
+                // A crashed owner leaves the mutex abandoned; taking it is safe
+                // because the create-or-find is idempotent.
+                WAIT_OBJECT_0 | WAIT_ABANDONED => return Some(ProfileLock(handle)),
+                // A wedged owner, or any error, means this lock cannot be won:
+                // drop the handle and try the next name. If every name times out
+                // we fall through to the lock-free degrade below rather than
+                // blocking here for the host's life.
+                _ => unsafe {
+                    CloseHandle(handle);
+                },
             }
-            unsafe { CloseHandle(handle) };
         }
         None
     }
