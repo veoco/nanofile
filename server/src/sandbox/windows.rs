@@ -2468,6 +2468,31 @@ mod tests {
         unsafe { std::slice::from_raw_parts(sid.cast::<u8>(), length) }.to_vec()
     }
 
+    /// `ALL APPLICATION PACKAGES`, the wildcard principal a tree the OS or an
+    /// installer granted carries.
+    ///
+    /// Not a package's own SID: `WinBuiltinAnyPackageSid` is `S-1-15-2-1`, and the
+    /// name-derived SID above is one package, which the shortcut does not answer
+    /// for. Building the wildcard here is what [`dacl_grants_any_package`] builds
+    /// when it looks for it.
+    fn any_package_sid() -> Vec<u8> {
+        let mut sid = [0u8; MAX_SID_BYTES];
+        let mut length = size_of_val(&sid) as u32;
+        let created = unsafe {
+            CreateWellKnownSid(
+                WinBuiltinAnyPackageSid,
+                null_mut(),
+                sid.as_mut_ptr().cast::<c_void>(),
+                &mut length,
+            )
+        };
+        assert_ne!(
+            created, 0,
+            "the well-known SID is built on any supported Windows"
+        );
+        sid[..length as usize].to_vec()
+    }
+
     /// A file in the temporary directory whose name nothing else uses.
     fn scratch_file() -> (std::path::PathBuf, Vec<u16>) {
         let path = std::env::temp_dir().join(format!("nanofile-acl-test-{}", uuid::Uuid::new_v4()));
@@ -2509,7 +2534,7 @@ mod tests {
     #[test]
     fn the_any_package_shortcut_is_asked_of_the_launch_that_needs_it() {
         let (path, wide) = scratch_file();
-        let any_package = package_sid("Nanofile.Test.AnyPackage");
+        let any_package = any_package_sid();
         let package = package_sid("Nanofile.Test.Package");
         let mask = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
 
