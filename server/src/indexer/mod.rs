@@ -228,12 +228,55 @@ pub struct IndexHit {
     pub content_highlight: String,
 }
 
+/// The schema fields every read and write path needs, resolved once.
+///
+/// Resolving them here instead of a `get_field(..).expect(..)` per call site
+/// keeps the schema invariant in exactly one place: a missing field fails at
+/// construction — behind the rebuild guard in [`TextIndexer::new`] — rather
+/// than panicking whichever task touches the index first.
+#[derive(Clone, Copy)]
+struct SchemaFields {
+    repo_id: Field,
+    fullpath: Field,
+    filename: Field,
+    content: Field,
+    fs_id: Field,
+    extractor_version: Field,
+    status: Field,
+    attempted_at: Field,
+}
+
+impl SchemaFields {
+    /// Resolve every field the indexer uses, or report the first one missing.
+    ///
+    /// Called once, after the compatibility guard in [`TextIndexer::new`], so a
+    /// failure here means that guard is wrong rather than a state the server is
+    /// expected to run in — but it still returns an error instead of panicking.
+    fn resolve(schema: &Schema) -> Result<Self, AppError> {
+        let field = |name: &str| -> Result<Field, AppError> {
+            schema.get_field(name).map_err(|e| {
+                AppError::internal(format!("index schema is missing field {name:?}: {e}"))
+            })
+        };
+        Ok(Self {
+            repo_id: field(FIELD_REPO_ID)?,
+            fullpath: field(FIELD_FULLPATH)?,
+            filename: field(FIELD_FILENAME)?,
+            content: field(FIELD_CONTENT)?,
+            fs_id: field(FIELD_FS_ID)?,
+            extractor_version: field(FIELD_EXTRACTOR_VERSION)?,
+            status: field(FIELD_STATUS)?,
+            attempted_at: field(FIELD_ATTEMPTED_AT)?,
+        })
+    }
+}
+
 /// Full-text indexer wrapping Tantivy.
 #[derive(Clone)]
 pub struct TextIndexer {
     index: Index,
     writer: Arc<Mutex<tantivy::IndexWriter<TantivyDocument>>>,
-    schema: Schema,
+    fields: SchemaFields,
     reader: tantivy::IndexReader,
     /// Number of uncommitted index operations since the last `commit()`.
     /// Lets the background committer skip a needless commit+fsync when nothing
@@ -339,10 +382,12 @@ impl TextIndexer {
             tracing::warn!("could not write the index schema marker: {e}");
         }
 
-        // The schema the writer must use is the one on disk, not the one just
-        // built: they are equal (the guard above guarantees it) and taking it
-        // from the index keeps a future edit from silently disagreeing.
+        // The fields the writer and reader use are the ones on disk, not the
+        // ones just built: they are equal (the guard above guarantees it) and
+        // taking them from the index keeps a future edit from silently
+        // disagreeing.
         let schema = index.schema();
+        let fields = SchemaFields::resolve(&schema)?;
 
         // Register the jieba Chinese tokenizer for content fields.
         // LowerCaser ensures case-insensitive search for non-CJK text.
@@ -370,23 +415,11 @@ impl TextIndexer {
         Ok(Self {
             index: index.clone(),
             writer: writer_arc,
-            schema,
+            fields,
             reader,
             pending: Arc::new(AtomicUsize::new(0)),
             commit_scheduled: Arc::new(AtomicBool::new(false)),
         })
-    }
-
-    /// Resolve a schema field the read paths rely on.
-    ///
-    /// The startup check in [`Self::new`] keeps an index without these fields
-    /// from ever being served, so a miss here is a late regression rather than
-    /// an expected state; it must surface as an error, not a panic on the
-    /// request path.
-    fn require_field(&self, name: &str) -> Result<Field, AppError> {
-        self.schema
-            .get_field(name)
-            .map_err(|e| AppError::internal(format!("index schema missing field {name:?}: {e}")))
     }
 
     /// Index a file's text content.
@@ -459,38 +492,16 @@ impl TextIndexer {
         // Delete any existing document with this (repo_id, fullpath) pair.
         self.delete_docs_inner(&mut writer, repo_id, fullpath)?;
 
-        let repo_id_field = self
-            .schema
-            .get_field(FIELD_REPO_ID)
-            .expect("repo_id field defined");
-        let fullpath_field = self
-            .schema
-            .get_field(FIELD_FULLPATH)
-            .expect("fullpath field defined");
-        let filename_field = self
-            .schema
-            .get_field(FIELD_FILENAME)
-            .expect("filename field defined");
-        let content_field = self
-            .schema
-            .get_field(FIELD_CONTENT)
-            .expect("content field defined");
-        let fs_id_field = self
-            .schema
-            .get_field(FIELD_FS_ID)
-            .expect("fs_id field defined");
-        let version_field = self
-            .schema
-            .get_field(FIELD_EXTRACTOR_VERSION)
-            .expect("extractor_version field defined");
-        let status_field = self
-            .schema
-            .get_field(FIELD_STATUS)
-            .expect("status field defined");
-        let attempted_field = self
-            .schema
-            .get_field(FIELD_ATTEMPTED_AT)
-            .expect("attempted_at field defined");
+        let SchemaFields {
+            repo_id: repo_id_field,
+            fullpath: fullpath_field,
+            filename: filename_field,
+            content: content_field,
+            fs_id: fs_id_field,
+            extractor_version: version_field,
+            status: status_field,
+            attempted_at: attempted_field,
+        } = self.fields;
 
         let doc = doc!(
             repo_id_field => repo_id,
@@ -536,30 +547,15 @@ impl TextIndexer {
         }
         let searcher = self.reader.searcher();
 
-        let repo_id_field = self
-            .schema
-            .get_field(FIELD_REPO_ID)
-            .expect("repo_id field defined");
-        let fullpath_field = self
-            .schema
-            .get_field(FIELD_FULLPATH)
-            .expect("fullpath field defined");
-        let fs_id_field = self
-            .schema
-            .get_field(FIELD_FS_ID)
-            .expect("fs_id field defined");
-        let version_field = self
-            .schema
-            .get_field(FIELD_EXTRACTOR_VERSION)
-            .expect("extractor_version field defined");
-        let status_field = self
-            .schema
-            .get_field(FIELD_STATUS)
-            .expect("status field defined");
-        let attempted_field = self
-            .schema
-            .get_field(FIELD_ATTEMPTED_AT)
-            .expect("attempted_at field defined");
+        let SchemaFields {
+            repo_id: repo_id_field,
+            fullpath: fullpath_field,
+            fs_id: fs_id_field,
+            extractor_version: version_field,
+            status: status_field,
+            attempted_at: attempted_field,
+            ..
+        } = self.fields;
 
         // 256 paths per query: large enough that a repository pass is a few
         // round trips, small enough that the query stays cheap.
@@ -920,10 +916,13 @@ impl TextIndexer {
         let reader = self.reader.clone();
         let searcher = reader.searcher();
 
-        let filename_field = self.require_field(FIELD_FILENAME)?;
-        let content_field = self.require_field(FIELD_CONTENT)?;
-        let repo_id_field = self.require_field(FIELD_REPO_ID)?;
-        let fullpath_field = self.require_field(FIELD_FULLPATH)?;
+        let SchemaFields {
+            filename: filename_field,
+            content: content_field,
+            repo_id: repo_id_field,
+            fullpath: fullpath_field,
+            ..
+        } = self.fields;
 
         // Build a BooleanQuery that combines:
         // 1. Exact term matching via standard QueryParser.
@@ -1019,7 +1018,7 @@ impl TextIndexer {
         // or "failed" document exists for its state alone: it records that the
         // backfill need not look at the file again, and must not surface as a
         // hit with no content.
-        let status_field = self.require_field(FIELD_STATUS)?;
+        let status_field = self.fields.status;
         let status_query: Box<dyn tantivy::query::Query> = Box::new(TermQuery::new(
             tantivy::Term::from_field_text(status_field, DocStatus::Indexed.as_str()),
             IndexRecordOption::Basic,
@@ -1087,14 +1086,11 @@ impl TextIndexer {
         use tantivy::query::{BooleanQuery, Occur, TermQuery};
         use tantivy::schema::IndexRecordOption;
 
-        let repo_id_field = self
-            .schema
-            .get_field(FIELD_REPO_ID)
-            .expect("repo_id field defined");
-        let fullpath_field = self
-            .schema
-            .get_field(FIELD_FULLPATH)
-            .expect("fullpath field defined");
+        let SchemaFields {
+            repo_id: repo_id_field,
+            fullpath: fullpath_field,
+            ..
+        } = self.fields;
 
         // Build a boolean query with ALL terms marked as Must (AND).
         let subqueries = vec![
@@ -1139,10 +1135,13 @@ impl TextIndexer {
         use tantivy::query::{BooleanQuery, Occur, TermQuery};
         use tantivy::schema::IndexRecordOption;
 
-        let repo_id_field = self.require_field(FIELD_REPO_ID)?;
-        let fullpath_field = self.require_field(FIELD_FULLPATH)?;
-        let content_field = self.require_field(FIELD_CONTENT)?;
-        let status_field = self.require_field(FIELD_STATUS)?;
+        let SchemaFields {
+            repo_id: repo_id_field,
+            fullpath: fullpath_field,
+            content: content_field,
+            status: status_field,
+            ..
+        } = self.fields;
 
         let subqueries: Vec<(Occur, Box<dyn tantivy::query::Query>)> = vec![
             (
