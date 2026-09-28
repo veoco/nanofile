@@ -853,6 +853,18 @@ async fn run_server(
         });
     }
 
+    // Media thumbnail scratch files an earlier run could not remove: the request
+    // path deletes its own, and a process that was killed mid-request does not
+    // get to. Swept before anything serves, so a request cannot find — and then
+    // race — a file from the run before this one.
+    {
+        let removed =
+            server::service::fs::thumbnail::purge_media_scratch(&config.storage.temp_dir).await;
+        if removed > 0 {
+            tracing::info!("removed {removed} leftover media thumbnail scratch files");
+        }
+    }
+
     let temp_file_manager = server::handler::web::temp_file::TempFileManager::new(
         config.storage.temp_dir.clone(),
         config.storage.max_temp_uploads,

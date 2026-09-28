@@ -571,6 +571,36 @@ impl ThumbnailCachePurge {
     }
 }
 
+/// Remove the media-thumbnail scratch files an earlier run left behind.
+///
+/// Every request that streams a media file writes one scratch file under
+/// `{temp_dir}/media_thumbs/` and removes it when it is done. A server that was
+/// killed mid-request cannot: a tray quit ends the process with
+/// `std::process::exit`, which runs no destructor, and a media child that the
+/// job terminated may still hold the file open when the removal is attempted, in
+/// which case Windows refuses the delete and the file stays. Nothing else sweeps
+/// this directory, so it is swept here — once at startup, where the temporary
+/// directory is known, exactly as `{temp_dir}/upload/` is.
+///
+/// Only files at the top level are removed, and a file that cannot be removed is
+/// left rather than failing the sweep: a leftover scratch file costs disk, and
+/// the request that is about to write one does not need this to succeed first.
+pub async fn purge_media_scratch(temp_dir: &Path) -> usize {
+    let directory = temp_dir.join("media_thumbs");
+    let Ok(mut entries) = tokio::fs::read_dir(&directory).await else {
+        return 0;
+    };
+    let mut removed = 0;
+    // A `read_dir` error mid-walk (a directory removed under us, a permission
+    // that changed) ends the sweep with what was removed so far.
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if tokio::fs::remove_file(entry.path()).await.is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// Delete thumbnail cache files for sizes the UI no longer requests.
 ///
 /// The database half of this lives in the `purge_legacy_thumbnail_sizes`
@@ -1006,7 +1036,9 @@ mod concurrency_tests {
 
 #[cfg(test)]
 mod purge_tests {
-    use super::{cache_file_size, legacy_purge_marker, purge_legacy_cache_files};
+    use super::{
+        cache_file_size, legacy_purge_marker, purge_legacy_cache_files, purge_media_scratch,
+    };
     use std::path::Path;
 
     /// Both naming schemes (hashed and pre-hash) end in `_<size>.<ext>`; a name
@@ -1125,5 +1157,34 @@ mod purge_tests {
             "the directory entry keeps the repo dir"
         );
         assert!(repo.join("thumb_x_256.png").is_dir());
+    }
+
+    /// A server that was killed mid-request leaves its media scratch file behind,
+    /// and the next start removes it: the request path deletes its own, and a
+    /// process that never ran its destructors does not.
+    #[tokio::test]
+    async fn the_media_scratch_of_a_previous_run_is_swept_and_the_rest_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let scratch = root.join("media_thumbs");
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(scratch.join("repo-a_key_1.bin"), b"leftover").unwrap();
+        std::fs::write(scratch.join("repo-b_key_2.bin"), b"leftover").unwrap();
+        // A directory is not a scratch file, and the sibling of the scratch
+        // directory is not this sweep's business.
+        std::fs::create_dir_all(scratch.join("not-a-file")).unwrap();
+        std::fs::create_dir_all(root.join("upload")).unwrap();
+        std::fs::write(root.join("upload").join("staged"), b"staged").unwrap();
+
+        assert_eq!(purge_media_scratch(root).await, 2);
+        assert!(!scratch.join("repo-a_key_1.bin").exists());
+        assert!(!scratch.join("repo-b_key_2.bin").exists());
+        assert!(scratch.join("not-a-file").is_dir());
+        assert!(root.join("upload").join("staged").exists());
+
+        // A host with no scratch directory is not an error, and neither is a
+        // second sweep: there is nothing left to remove.
+        assert_eq!(purge_media_scratch(root).await, 0);
+        assert_eq!(purge_media_scratch(&root.join("absent")).await, 0);
     }
 }
