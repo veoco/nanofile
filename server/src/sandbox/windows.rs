@@ -207,7 +207,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, HANDLE, LocalFree, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    CloseHandle, HANDLE, LocalFree, SetHandleInformation, WAIT_ABANDONED, WAIT_OBJECT_0,
+    WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT,
@@ -237,16 +238,16 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, CreateProcessW,
-    EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess,
+    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateMutexW, CreateProcessAsUserW,
+    CreateProcessW, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess,
     GetProcessMitigationPolicy, INFINITE, InitializeProcThreadAttributeList, OpenProcessToken,
     PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
     PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
     PROCESS_INFORMATION, ProcessASLRPolicy, ProcessChildProcessPolicy, ProcessDynamicCodePolicy,
     ProcessExtensionPointDisablePolicy, ProcessFontDisablePolicy, ProcessImageLoadPolicy,
-    ProcessStrictHandleCheckPolicy, ProcessSystemCallDisablePolicy, STARTF_USESTDHANDLES,
-    STARTUPINFOEXW, SetProcessMitigationPolicy, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    ProcessStrictHandleCheckPolicy, ProcessSystemCallDisablePolicy, ReleaseMutex,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW, SetProcessMitigationPolicy, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 use windows_sys::Win32::System::WindowsProgramming::PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT;
 
@@ -1546,10 +1547,6 @@ fn app_container(program: &OsStr, opt_out: &mut bool) -> Option<AppContainer> {
 /// race from being reported as a sandbox that cannot confine anything. The pause
 /// is paid only on a path that is already failing.
 fn app_container_sid() -> Option<PSID> {
-    /// Attempts before the host is believed, and the pause between them.
-    const ATTEMPTS: usize = 3;
-    const PAUSE: Duration = Duration::from_millis(50);
-
     static SID: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
     let slot = SID.get_or_init(|| Mutex::new(None));
     let mut cached = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1561,6 +1558,50 @@ fn app_container_sid() -> Option<PSID> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
+    let sid = ensure_profile(&name)?;
+    *cached = Some(sid as usize);
+    Some(sid)
+}
+
+/// Create or find the worker's AppContainer profile, returning its SID, while
+/// holding a cross-process lock that keeps the operation from racing itself.
+///
+/// `CreateAppContainerProfile` is a create-or-find that several processes call
+/// for the same name — the tray and the service at boot, each
+/// `extract-worker --probe` (three profiles, three processes), the first worker a
+/// fresh process starts. Without the lock the losers of that race can see the
+/// winner's profile store (the registry plus `%LOCALAPPDATA%\Packages\<name>`)
+/// while it is still half written: the create answers with a transient error, or
+/// the derive that follows `ERROR_ALREADY_EXISTS` finds nothing to derive. Either
+/// way no SID comes back, the child is launched in a container the system has no
+/// profile for, `CreateProcess` returns `ERROR_FILE_NOT_FOUND`, the loader dies
+/// with `STATUS_DLL_INIT_FAILED`, and the probe reports `sid-refused`. The lock
+/// makes one process finish the create before any other opens the store, so the
+/// half-written window the race lived in is gone.
+///
+/// The lock is what makes the *order* sound: the create is asked first, and a
+/// `PROFILE_EXISTS` reached under the lock always means a profile some other
+/// process finished writing before it released the mutex — never one still being
+/// written. Deriving first would be cheaper on a host that already has the
+/// profile, but `DeriveAppContainerSidFromAppContainerName` is documented only to
+/// take a name, so whether it fails on a store with no profile is not something
+/// this code may assume; the create-or-find is the shape that works either way.
+///
+/// A *failure* is not kept by the caller, and this asks again on the next launch:
+/// both calls fail for a reason of the moment, and a cached failure would leave
+/// every later launch without a container. A child started in a container the
+/// system has no profile for fails with `ERROR_FILE_NOT_FOUND`, which reads as a
+/// host with no files layer; the retry is what keeps a lost race from being
+/// reported as a sandbox that cannot confine anything. The pause is paid only on
+/// a path that is already failing.
+fn ensure_profile(name: &[u16]) -> Option<PSID> {
+    /// Attempts before the host is believed, and the pause between them.
+    const ATTEMPTS: usize = 3;
+    const PAUSE: Duration = Duration::from_millis(50);
+
+    // Serialise the create across processes; released on every exit path.
+    let _lock = ProfileLock::acquire()?;
+
     for attempt in 0..ATTEMPTS {
         if attempt > 0 {
             std::thread::sleep(PAUSE);
@@ -1579,19 +1620,69 @@ fn app_container_sid() -> Option<PSID> {
         if created == PROFILE_EXISTS {
             // Already made — by an earlier run, or by another copy of this
             // binary — and the call does not hand back the SID it did not make.
-            // The name is the same, so the derived SID is the same value.
+            // The name is the same, so the derived SID is the same value, and
+            // under the lock the profile it names is finished.
             let derived =
                 unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
-            if derived < 0 || sid.is_null() {
-                continue;
+            if derived >= 0 && !sid.is_null() {
+                return Some(sid);
             }
-        } else if created < 0 || sid.is_null() {
-            continue;
+        } else if created >= 0 && !sid.is_null() {
+            return Some(sid);
         }
-        *cached = Some(sid as usize);
-        return Some(sid);
     }
     None
+}
+
+/// A cross-process mutex held only for the duration of [`ensure_profile`].
+///
+/// Its one job is to stop two processes from running `CreateAppContainerProfile`
+/// for the same name at once. Created with a `Global\` name so a service in
+/// another session is covered too; a host that will not let a non-privileged
+/// process create in the global namespace falls back to `Local\`, which still
+/// serialises every collision this host can actually have. Released and closed on
+/// drop, so it is never held across a panic in the create-or-find, and an
+/// abandoned mutex (a previous owner crashed mid-create) is treated as acquired —
+/// the operation is idempotent, so continuing is safe.
+struct ProfileLock(HANDLE);
+
+impl ProfileLock {
+    fn acquire() -> Option<Self> {
+        // The AppContainer store is per user, so the colliding processes always
+        // share a user; `Global\` also reaches a service in another session.
+        static NAMES: &[&str] = &["Global\\nanofile-ac-profile", "Local\\nanofile-ac-profile"];
+        for name in NAMES {
+            let wide: Vec<u16> = OsStr::new(name)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let handle = unsafe { CreateMutexW(null(), 0, wide.as_ptr()) };
+            if handle.is_null() {
+                // Creation was refused (e.g. `Global\` without the privilege):
+                // try the next name. Both refused means no lock — degrade to the
+                // lock-free path rather than denying confinement.
+                continue;
+            }
+            let waited = unsafe { WaitForSingleObject(handle, INFINITE) };
+            if waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED {
+                return Some(ProfileLock(handle));
+            }
+            unsafe { CloseHandle(handle) };
+        }
+        None
+    }
+}
+
+impl Drop for ProfileLock {
+    fn drop(&mut self) {
+        // Release before close: a held mutex that is only closed is left
+        // abandoned for the next acquirer, which would then wait on a lock it
+        // cannot win from a dead owner.
+        unsafe {
+            ReleaseMutex(self.0);
+            CloseHandle(self.0);
+        }
+    }
 }
 
 /// Give the container the read access the media profile's grants need.
