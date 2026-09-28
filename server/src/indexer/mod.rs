@@ -63,6 +63,23 @@ const FIELD_ATTEMPTED_AT: &str = "attempted_at";
 const SCHEMA_VERSION_FILE: &str = ".nanofile_schema_version";
 /// Bump whenever the field set below changes.
 const SCHEMA_VERSION: u32 = 2;
+/// Fields the on-disk schema must expose for this code to serve it.
+///
+/// [`SCHEMA_VERSION_FILE`] alone is not a sufficient guard: an index opened
+/// before the marker was ever written leaves `on_disk = None`, which the
+/// version check treats as current, so a stale schema can survive and the
+/// marker then gets stamped with the current version. The field set is the
+/// real contract, so rebuild also triggers when any of these is missing.
+const REQUIRED_FIELDS: &[&str] = &[
+    FIELD_REPO_ID,
+    FIELD_FULLPATH,
+    FIELD_FILENAME,
+    FIELD_CONTENT,
+    FIELD_FS_ID,
+    FIELD_EXTRACTOR_VERSION,
+    FIELD_STATUS,
+    FIELD_ATTEMPTED_AT,
+];
 
 /// How long a failed document waits before the backfill retries it.
 ///
@@ -256,30 +273,47 @@ impl TextIndexer {
 
         // An index written by an older field set cannot be served by this code
         // (`get_field` on a missing field panics), and the index is derived data
-        // that the backfill can rebuild, so a version mismatch means "start
-        // over" rather than "run with the old schema".
+        // that the backfill can rebuild, so incompatibility means "start over"
+        // rather than "run with the old schema".
+        //
+        // The marker alone is not enough: an index opened before the marker
+        // existed leaves `on_disk = None`, which the version check reads as
+        // current, so a stale schema can survive and be stamped with the
+        // current version. The field set is the real contract, so a marker
+        // mismatch *or* a missing required field both force a rebuild.
         let marker = index_dir.join(SCHEMA_VERSION_FILE);
         let on_disk: Option<u32> = std::fs::read_to_string(&marker)
             .ok()
             .and_then(|s| s.trim().parse().ok());
-        if on_disk.is_some_and(|v| v != SCHEMA_VERSION) {
-            tracing::warn!(
-                "full-text index at {:?} has schema version {:?}, current is {SCHEMA_VERSION}; rebuilding",
-                index_dir,
-                on_disk
-            );
-            std::fs::remove_dir_all(index_dir)
-                .map_err(|e| AppError::internal(format!("remove stale index dir: {e}")))?;
-            std::fs::create_dir_all(index_dir)
-                .map_err(|e| AppError::internal(format!("create index dir: {e}")))?;
-        }
+
+        let schema_is_compatible = |index: &Index| -> bool {
+            REQUIRED_FIELDS
+                .iter()
+                .all(|name| index.schema().get_field(name).is_ok())
+        };
 
         // Try to open an existing index first. This preserves indexed data
         // across restarts. Only if no valid index exists do we create a new one.
         let index = match Index::open_in_dir(index_dir) {
             Ok(index) => {
-                tracing::info!("Opened existing full-text index at {:?}", index_dir);
-                index
+                let stale_marker = on_disk.is_some_and(|v| v != SCHEMA_VERSION);
+                if stale_marker || !schema_is_compatible(&index) {
+                    tracing::warn!(
+                        "full-text index at {:?} is incompatible (on-disk schema version {:?}, current is {SCHEMA_VERSION}, required fields present: {}); rebuilding",
+                        index_dir,
+                        on_disk,
+                        schema_is_compatible(&index)
+                    );
+                    std::fs::remove_dir_all(index_dir)
+                        .map_err(|e| AppError::internal(format!("remove stale index dir: {e}")))?;
+                    std::fs::create_dir_all(index_dir)
+                        .map_err(|e| AppError::internal(format!("create index dir: {e}")))?;
+                    Index::create_in_dir(index_dir, schema.clone())
+                        .map_err(|e| AppError::internal(format!("create tantivy index: {e}")))?
+                } else {
+                    tracing::info!("Opened existing full-text index at {:?}", index_dir);
+                    index
+                }
             }
             Err(_) => {
                 // No valid index found — check if the directory is empty or corrupt.
@@ -341,6 +375,18 @@ impl TextIndexer {
             pending: Arc::new(AtomicUsize::new(0)),
             commit_scheduled: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// Resolve a schema field the read paths rely on.
+    ///
+    /// The startup check in [`Self::new`] keeps an index without these fields
+    /// from ever being served, so a miss here is a late regression rather than
+    /// an expected state; it must surface as an error, not a panic on the
+    /// request path.
+    fn require_field(&self, name: &str) -> Result<Field, AppError> {
+        self.schema
+            .get_field(name)
+            .map_err(|e| AppError::internal(format!("index schema missing field {name:?}: {e}")))
     }
 
     /// Index a file's text content.
@@ -874,22 +920,10 @@ impl TextIndexer {
         let reader = self.reader.clone();
         let searcher = reader.searcher();
 
-        let filename_field = self
-            .schema
-            .get_field(FIELD_FILENAME)
-            .expect("filename field defined");
-        let content_field = self
-            .schema
-            .get_field(FIELD_CONTENT)
-            .expect("content field defined");
-        let repo_id_field = self
-            .schema
-            .get_field(FIELD_REPO_ID)
-            .expect("repo_id field defined");
-        let fullpath_field = self
-            .schema
-            .get_field(FIELD_FULLPATH)
-            .expect("fullpath field defined");
+        let filename_field = self.require_field(FIELD_FILENAME)?;
+        let content_field = self.require_field(FIELD_CONTENT)?;
+        let repo_id_field = self.require_field(FIELD_REPO_ID)?;
+        let fullpath_field = self.require_field(FIELD_FULLPATH)?;
 
         // Build a BooleanQuery that combines:
         // 1. Exact term matching via standard QueryParser.
@@ -985,10 +1019,7 @@ impl TextIndexer {
         // or "failed" document exists for its state alone: it records that the
         // backfill need not look at the file again, and must not surface as a
         // hit with no content.
-        let status_field = self
-            .schema
-            .get_field(FIELD_STATUS)
-            .expect("status field defined");
+        let status_field = self.require_field(FIELD_STATUS)?;
         let status_query: Box<dyn tantivy::query::Query> = Box::new(TermQuery::new(
             tantivy::Term::from_field_text(status_field, DocStatus::Indexed.as_str()),
             IndexRecordOption::Basic,
@@ -1108,22 +1139,10 @@ impl TextIndexer {
         use tantivy::query::{BooleanQuery, Occur, TermQuery};
         use tantivy::schema::IndexRecordOption;
 
-        let repo_id_field = self
-            .schema
-            .get_field(FIELD_REPO_ID)
-            .expect("repo_id field defined");
-        let fullpath_field = self
-            .schema
-            .get_field(FIELD_FULLPATH)
-            .expect("fullpath field defined");
-        let content_field = self
-            .schema
-            .get_field(FIELD_CONTENT)
-            .expect("content field defined");
-        let status_field = self
-            .schema
-            .get_field(FIELD_STATUS)
-            .expect("status field defined");
+        let repo_id_field = self.require_field(FIELD_REPO_ID)?;
+        let fullpath_field = self.require_field(FIELD_FULLPATH)?;
+        let content_field = self.require_field(FIELD_CONTENT)?;
+        let status_field = self.require_field(FIELD_STATUS)?;
 
         let subqueries: Vec<(Occur, Box<dyn tantivy::query::Query>)> = vec![
             (
@@ -1974,5 +1993,46 @@ mod document_state_tests {
             .doc_states("repo-1", &["/a.txt".to_string()])
             .unwrap();
         assert!(states.is_empty(), "the stale index was rebuilt empty");
+    }
+
+    /// Regression: an index stamped with the current marker version but whose
+    /// on-disk schema is missing a required field — exactly the poison the old
+    /// marker-only guard produced — must be rebuilt, not served. Serving it used
+    /// to unwrap `get_field("status")` and panic on the read path.
+    #[tokio::test]
+    async fn an_incompatible_schema_with_current_marker_rebuilds() {
+        // Build the schema an older release wrote: every current field except
+        // `status`, then stamp the CURRENT marker over it — the old guard never
+        // validated the schema it stamped.
+        let mut builder = Schema::builder();
+        builder.add_text_field(FIELD_REPO_ID, STRING | STORED);
+        builder.add_text_field(FIELD_FULLPATH, STRING | STORED);
+        builder.add_text_field(FIELD_FILENAME, STRING | STORED);
+        builder.add_text_field(FIELD_CONTENT, STRING | STORED);
+        builder.add_text_field(FIELD_FS_ID, STRING | STORED);
+        builder.add_text_field(FIELD_EXTRACTOR_VERSION, STRING | STORED);
+        builder.add_text_field(FIELD_ATTEMPTED_AT, STRING | STORED);
+        let old_schema = builder.build();
+
+        let dir = tempfile::tempdir().unwrap();
+        Index::create_in_dir(dir.path(), old_schema)
+            .unwrap()
+            .writer::<TantivyDocument>(50_000_000)
+            .unwrap()
+            .commit()
+            .unwrap();
+        std::fs::write(
+            dir.path().join(SCHEMA_VERSION_FILE),
+            SCHEMA_VERSION.to_string(),
+        )
+        .unwrap();
+
+        // Before the fix this unwrapped `get_field("status")` and panicked.
+        let indexer = TextIndexer::new(dir.path()).unwrap();
+        let content = indexer
+            .get_indexed_content("repo-1", "/a.txt")
+            .await
+            .unwrap();
+        assert!(content.is_none(), "the poisoned index was rebuilt empty");
     }
 }
