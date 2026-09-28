@@ -88,6 +88,38 @@ pub fn generate_clip(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Generate a clip larger than the media head cap, so the thumbnail is built
+/// from a prefix of the file rather than the whole upload.
+///
+/// `v210` is uncompressed, so the size is a steady ~43 MiB at this duration —
+/// large enough to clear the head cap, which a compressed fixture at this
+/// resolution cannot reach. `faststart` places the container index at the front
+/// (the common case) when true, and at the end when false — the latter forces
+/// the full-file fallback for non-faststart containers.
+pub fn generate_large_clip(path: &Path, faststart: bool) -> bool {
+    let mut args: Vec<&str> = vec![
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=duration=7:size=320x240:rate=30",
+        "-c:v",
+        "v210",
+    ];
+    if faststart {
+        args.push("-movflags");
+        args.push("+faststart");
+    }
+    args.push(path.to_str().expect("utf8 path"));
+    Command::new(helper())
+        .args(&args)
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 /// Point the worker at this package's binary instead of the test process.
 ///
 /// Returns whether *this* call set it: the value is process-global and set once,

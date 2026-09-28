@@ -307,6 +307,16 @@ impl ThumbnailService {
     /// nothing of the media reaches this process. Returns `NotFound` when the
     /// helper is unavailable or no frame/cover exists — the UI then falls back
     /// to an extension badge / play icon.
+    ///
+    /// Only the *head* of the file is streamed for an audio/video source: the
+    /// first frame and any embedded cover art sit at offset zero, and a
+    /// faststart container keeps its index there too, so a small prefix is all
+    /// ffmpeg needs (see [`media_head_cap`]). That keeps a multi-gigabyte upload
+    /// off disk and out of the read path. When that head misses a container
+    /// whose index is at the end (a non-faststart file), and the file fits the
+    /// per-kind cap, the whole file is fetched once as a fallback so those files
+    /// keep working. Images (HEIC/AVIF) are not streams, so they keep the
+    /// whole-file cap unchanged.
     async fn generate_media_thumbnail(
         &self,
         repo_id: &str,
@@ -319,57 +329,158 @@ impl ThumbnailService {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
-        if file_data.size > max_ffmpeg_source(kind) {
+        // Images cannot be decoded from a truncated read, so they still need the
+        // whole file; a pathological >256 MiB image is refused — it could never
+        // be decoded from a prefix anyway.
+        if kind == MediaKind::Image && file_data.size > max_ffmpeg_source(kind) {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
-        // Stream the whole media file to a scratch file so the helper can seek.
+        let ffmpeg = crate::sandbox::worker::resolve_helper(self.ffmpeg_path.as_str());
+        let file_size = file_data.size as u64;
+
+        // First try the head: a prefix is enough for the common faststart case
+        // and avoids reading a large file in full.
+        let head_cap = media_head_cap(kind);
+        if let Some(source) = self
+            .write_media_scratch(repo_id, normalized_path, &file_data.block_ids, head_cap)
+            .await?
+        {
+            match Self::run_media_thumbnail(kind, &source, size, &ffmpeg).await {
+                Ok(ok) => {
+                    let _ = tokio::fs::remove_file(&source).await;
+                    return Ok(ok);
+                }
+                // A panic is a worker failure, not an unthumbnailable file:
+                // propagate it rather than fall through to a 404 / a retry.
+                Err(AppError::Internal(e)) => {
+                    let _ = tokio::fs::remove_file(&source).await;
+                    return Err(AppError::Internal(e));
+                }
+                Err(_) => {
+                    let _ = tokio::fs::remove_file(&source).await;
+                }
+            }
+        }
+
+        // Fallback: only worth reading the rest when the file is within the cap.
+        // A file past it was refused above for images, and is left to fail for
+        // huge video/audio where reading the whole thing is the cost we avoid.
+        let fallback = if kind != MediaKind::Image
+            && file_size > head_cap
+            && file_data.size <= max_ffmpeg_source(kind)
+        {
+            self.write_media_scratch(
+                repo_id,
+                normalized_path,
+                &file_data.block_ids,
+                max_ffmpeg_source(kind) as u64,
+            )
+            .await?
+        } else {
+            None
+        };
+        if let Some(source) = fallback {
+            match Self::run_media_thumbnail(kind, &source, size, &ffmpeg).await {
+                Ok(ok) => {
+                    let _ = tokio::fs::remove_file(&source).await;
+                    return Ok(ok);
+                }
+                Err(AppError::Internal(e)) => {
+                    let _ = tokio::fs::remove_file(&source).await;
+                    return Err(AppError::Internal(e));
+                }
+                Err(_) => {
+                    let _ = tokio::fs::remove_file(&source).await;
+                }
+            }
+        }
+
+        Err(AppError::NotFound("thumbnail not available".into()))
+    }
+
+    /// Stream at most `cap` bytes of a file (by its block IDs) into a fresh,
+    /// unique scratch file and return its path.
+    ///
+    /// A prefix is all ffmpeg needs to extract a frame from a faststart
+    /// container, so capping the bytes here keeps large uploads from being read
+    /// in full. Returns `Ok(None)` on a write or stream error — nothing usable
+    /// was written — which the caller treats as an unthumbnailable file.
+    async fn write_media_scratch(
+        &self,
+        repo_id: &str,
+        normalized_path: &str,
+        block_ids: &[String],
+        cap: u64,
+    ) -> Result<Option<PathBuf>, AppError> {
         let scratch_dir = self.temp_dir.join("media_thumbs");
         tokio::fs::create_dir_all(&scratch_dir)
             .await
             .map_err(|e| AppError::Internal(format!("create scratch dir failed: {e}")))?;
-        // Unique per request: two concurrent misses for the same path used to
-        // share this filename and truncate each other's source stream mid-write.
-        let scratch_media = scratch_dir.join(format!(
+        // Unique per request: a previous version shared this name across
+        // concurrent misses for the same path and truncated each other's stream.
+        let scratch = scratch_dir.join(format!(
             "{}_{}_{}.bin",
             thumbnail_dir_name(repo_id),
             thumbnail_key(repo_id, normalized_path),
             uuid::Uuid::new_v4()
         ));
 
-        let write_result: Result<(), std::io::Error> = async {
-            let mut out = tokio::fs::File::create(&scratch_media).await?;
+        let written: Result<(), std::io::Error> = async {
+            let mut out = tokio::fs::File::create(&scratch).await?;
             let mut stream = crate::fs::core::download::stream_blocks(
                 repo_id.to_string(),
-                file_data.block_ids.clone(),
+                block_ids.to_vec(),
                 self.block_store.clone(),
                 None,
             );
+            let mut total: u64 = 0;
             while let Some(chunk) = stream.next().await {
-                out.write_all(&chunk?).await?;
+                let chunk = chunk?;
+                let remaining = cap.saturating_sub(total);
+                if remaining == 0 {
+                    break;
+                }
+                let take = remaining.min(chunk.len() as u64) as usize;
+                out.write_all(&chunk[..take]).await?;
+                total += take as u64;
+                if take < chunk.len() {
+                    break;
+                }
             }
             out.flush().await
         }
         .await;
-        if write_result.is_err() {
-            let _ = tokio::fs::remove_file(&scratch_media).await;
-            return Err(AppError::NotFound("thumbnail not available".into()));
-        }
 
-        // The grant has to name one absolute file, so the configured command
-        // name is resolved the same way the worker resolves it at startup.
-        let ffmpeg = crate::sandbox::worker::resolve_helper(self.ffmpeg_path.as_str());
-        let source = scratch_media.clone();
+        match written {
+            Ok(()) => Ok(Some(scratch)),
+            Err(_) => {
+                let _ = tokio::fs::remove_file(&scratch).await;
+                Ok(None)
+            }
+        }
+    }
+
+    /// Hand a scratch file to the confined media worker and map its answer (a
+    /// decoded, resized thumbnail) onto the service's result type.
+    ///
+    /// The scratch is removed by the caller on either outcome; a worker that
+    /// panicked is exactly the case that used to leave the copy on disk, so the
+    /// caller removes it regardless of the answer.
+    async fn run_media_thumbnail(
+        kind: MediaKind,
+        source: &Path,
+        size: u32,
+        ffmpeg: &Path,
+    ) -> Result<(Vec<u8>, ThumbFormat), AppError> {
+        let source = source.to_path_buf();
+        let ffmpeg = ffmpeg.to_path_buf();
         let extracted =
             tokio::task::spawn_blocking(move || media::thumbnail(kind, &source, size, &ffmpeg))
                 .await;
-        // Ahead of the join result: a worker that panicked is exactly the case
-        // that used to return here and leave the copy on disk.
-        let _ = tokio::fs::remove_file(&scratch_media).await;
-        let extracted = extracted
-            .map_err(|e| AppError::Internal(format!("media thumbnail worker panicked: {e}")))?;
-
-        extracted.map_err(|_| AppError::NotFound("thumbnail not available".into()))
+        extracted
+            .map_err(|e| AppError::Internal(format!("media thumbnail worker panicked: {e}")))?
+            .map_err(|_| AppError::NotFound("thumbnail not available".into()))
     }
 
     /// Remove all cached thumbnails (disk + DB) for a given repo path.
@@ -560,6 +671,24 @@ fn max_ffmpeg_source(kind: MediaKind) -> i64 {
     match kind {
         MediaKind::Image => 256 * 1024 * 1024,
         MediaKind::Video | MediaKind::Audio => 512 * 1024 * 1024,
+    }
+}
+
+/// How much of a video/audio file is streamed to the scratch file for a frame.
+///
+/// A frame and an embedded cover art both sit at the start of the file, so this
+/// prefix is enough for the common (faststart) case; a container whose index is
+/// at the end falls back to the full file only when it fits [`max_ffmpeg_source`].
+/// `Image` (HEIC/AVIF) is not a stream, so a truncated read cannot decode it and
+/// it keeps the whole-file cap.
+const MEDIA_HEAD_BYTES: u64 = 32 * 1024 * 1024;
+
+/// The head of a media file handed to ffmpeg: a small prefix for video/audio,
+/// the whole-file cap for images (which cannot be decoded from a truncate).
+fn media_head_cap(kind: MediaKind) -> u64 {
+    match kind {
+        MediaKind::Image => max_ffmpeg_source(kind) as u64,
+        MediaKind::Video | MediaKind::Audio => MEDIA_HEAD_BYTES,
     }
 }
 

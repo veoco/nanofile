@@ -989,22 +989,116 @@ pub fn helper() -> Option<&'static Path> {
 /// A grant is a rule about one file, so it cannot be written for the name
 /// `ffmpeg`: the child's environment is cleared, and its working directory is
 /// `/`, so a name would resolve nowhere. A configured command name is therefore
-/// looked up on this process's own `PATH` once, at startup, and the absolute
-/// path is what every later request names.
+/// resolved to an absolute path and that path is what every later request names.
+///
+/// On Windows the bare name resolves through the shell's executable search
+/// ([`resolve_command`]: `PATHEXT`/`.exe` and the image directory), because a
+/// manual `is_file()` walk never matches `ffmpeg.exe` — which is why
+/// `storage.ffmpeg_path = "ffmpeg"` used to be reported unavailable even though
+/// `ffmpeg` runs from a shell. The unix branch keeps the previous `PATH` walk,
+/// which needs no extension.
 pub fn resolve_helper(configured: &str) -> PathBuf {
     let path = Path::new(configured);
     if path.is_absolute() {
         return path.to_path_buf();
     }
-    if let Some(path_var) = std::env::var_os("PATH") {
-        for directory in std::env::split_paths(&path_var) {
-            let candidate = directory.join(path);
-            if candidate.is_file() {
-                return candidate;
+    #[cfg(windows)]
+    {
+        if let Some(resolved) = resolve_command(configured) {
+            return resolved;
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(path_var) = std::env::var_os("PATH") {
+            for directory in std::env::split_paths(&path_var) {
+                let candidate = directory.join(path);
+                if candidate.is_file() {
+                    return candidate;
+                }
             }
         }
     }
     path.to_path_buf()
+}
+
+/// Resolve a bare command name to its full path the way the shell finds an
+/// executable, so `storage.ffmpeg_path = "ffmpeg"` works without a full path.
+///
+/// `SearchPathW` appends the `PATHEXT` extension (`.exe`, …) the way
+/// `CreateProcess` does — a manual `directory.join(name).is_file()` walk never
+/// matches `ffmpeg.exe`. When nothing on `PATH` matches, the running image's
+/// directory and its `bin/` are tried too, covering a helper placed next to the
+/// server/tray executable. Windows-only: the unix walk in [`resolve_helper`]
+/// needs no extension.
+///
+/// It lives here rather than in the binary's Win32 helpers so the media grants
+/// and the service preflight resolve a configured name through the same library
+/// call; the two disagreeing is what let a bare `ffmpeg` look configured while
+/// every thumbnail returned 404.
+#[cfg(windows)]
+fn resolve_command(name: &str) -> Option<PathBuf> {
+    use windows_sys::Win32::Storage::FileSystem::SearchPathW;
+
+    // `SearchPathW` appends the executable extension from `PATHEXT`, so a bare
+    // `ffmpeg` finds `ffmpeg.exe`.
+    let name_w: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut buffer = vec![0u16; 1024];
+    let mut found = unsafe {
+        SearchPathW(
+            std::ptr::null(),
+            name_w.as_ptr(),
+            std::ptr::null(),
+            buffer.len() as u32,
+            buffer.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    };
+    // The call reports the length it needs (null included) when the buffer is
+    // too small; grow once and retry rather than silently miss a long path.
+    if found != 0 && found as usize > buffer.len() {
+        buffer = vec![0u16; found as usize];
+        found = unsafe {
+            SearchPathW(
+                std::ptr::null(),
+                name_w.as_ptr(),
+                std::ptr::null(),
+                buffer.len() as u32,
+                buffer.as_mut_ptr(),
+                std::ptr::null_mut(),
+            )
+        };
+    }
+    if found != 0 {
+        let end = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
+        if end > 0 {
+            let resolved = PathBuf::from(String::from_utf16_lossy(&buffer[..end]));
+            // A name with no separator resolves to an absolute `PATH` entry;
+            // guard against a relative result the call could in theory produce
+            // against the working directory.
+            if resolved.is_absolute() {
+                return Some(resolved);
+            }
+        }
+    }
+
+    // Beside the running image and its `bin/`.
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        for candidate in [
+            dir.join(name),
+            dir.join(format!("{name}.exe")),
+            dir.join("bin").join(name),
+            dir.join("bin").join(format!("{name}.exe")),
+        ] {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
 }
 
 /// The grants a probe of `profile` runs under.
@@ -2443,6 +2537,26 @@ mod tests {
         assert!(
             !path.exists(),
             "the file must not outlive the probe that named it on the child's command line"
+        );
+    }
+
+    /// A bare command name resolves to a real, absolute path, so the media grant
+    /// can name a file. On Windows that means `cmd` → `…\cmd.exe`: the old
+    /// `directory.join(name).is_file()` walk never appended the extension and
+    /// handed back the bare name, which made `storage.ffmpeg_path = "ffmpeg"`
+    /// fail even when `ffmpeg.exe` was on `PATH`.
+    #[test]
+    fn a_bare_command_name_resolves_to_a_path_that_exists() {
+        // A name every host this ships on has, and one whose executable carries
+        // an extension on Windows (`cmd.exe`) but not on unix (`sh`).
+        #[cfg(windows)]
+        let resolved = resolve_helper("cmd");
+        #[cfg(not(windows))]
+        let resolved = resolve_helper("sh");
+        assert!(
+            resolved.is_absolute() && resolved.is_file(),
+            "a bare command name must resolve to a real, absolute path: {}",
+            resolved.display()
         );
     }
 }

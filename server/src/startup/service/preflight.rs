@@ -211,8 +211,6 @@ fn check_temp_dir(report: &mut Preflight) {
 /// `storage.ffmpeg_path` is a command name by default, looked up on `PATH` — and
 /// a service inherits the machine `PATH`, not the one a user's session added to.
 fn check_ffmpeg(report: &mut Preflight, ffmpeg_path: &str) {
-    use windows_sys::Win32::Storage::FileSystem::SearchPathW;
-
     let value = ffmpeg_path.trim();
     if value.is_empty() {
         return;
@@ -232,19 +230,13 @@ fn check_ffmpeg(report: &mut Preflight, ffmpeg_path: &str) {
         return;
     }
 
-    let name = crate::startup::win32::wide(value);
-    let mut buffer = vec![0u16; 1024];
-    let found = unsafe {
-        SearchPathW(
-            std::ptr::null(),
-            name.as_ptr(),
-            std::ptr::null(),
-            buffer.len() as u32,
-            buffer.as_mut_ptr(),
-            std::ptr::null_mut(),
-        )
-    };
-    if found == 0 {
+    // Resolve the bare name through the same library call the runtime uses
+    // (`sandbox::worker::resolve_helper`), so a helper the media grants will find
+    // is not reported as missing here — the two disagreeing is what let a bare
+    // `ffmpeg` look configured while every thumbnail returned 404. An unresolved
+    // name comes back relative, which is how the two answers are told apart.
+    let resolved = server::sandbox::worker::resolve_helper(value);
+    if !resolved.is_absolute() {
         report.push(
             Severity::Warn,
             "storage.ffmpeg_path",
@@ -255,8 +247,7 @@ fn check_ffmpeg(report: &mut Preflight, ffmpeg_path: &str) {
         );
         return;
     }
-    let end = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
-    let resolved = String::from_utf16_lossy(&buffer[..end]);
+    let resolved = resolved.to_string_lossy();
     if let Ok(profile) = std::env::var("USERPROFILE")
         && !profile.trim().is_empty()
         && resolved.to_lowercase().starts_with(&profile.to_lowercase())
