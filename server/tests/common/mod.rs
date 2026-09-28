@@ -536,7 +536,12 @@ impl TestServer {
                     .share_download_max_per_minute,
                 webdav_max_failures_per_5min: 30,
                 reindex_max_per_hour: 5,
-                search_max_per_minute: 60,
+                // The index tests poll `/api2/search/` while the debounced
+                // commit lands; the production cadence (60/min) would throttle
+                // the test's own polling on a slow runner. `0` disables the
+                // meter, which its own unit test covers; a test that wants it
+                // can set `auth.search_max_per_minute` in its `tweak`.
+                search_max_per_minute: 0,
                 api_key_ttl_presets_days: vec![7, 30, 90, 180, 365],
                 api_key_max_ttl_days: 0,
             },
