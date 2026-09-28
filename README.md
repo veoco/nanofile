@@ -183,8 +183,11 @@ directory: its token keeps `SeChangeNotifyPrivilege`, so the walk to the file is
 not checked, while writing a DACL on a directory re-imposes inheritance on
 everything below it. The helper's standard streams are pipes rather than the
 null device, because a container may refuse to open that device and the refusal
-would read as "the helper cannot run". A container may need the Landlock
-syscalls allowed for the grade to be Full.
+would read as "the helper cannot run". A helper that can only run in the plain
+container — its read access coming from `ALL APPLICATION PACKAGES`, which the
+less privileged container makes the check ignore — is run there instead: the
+opt-out is given up (`lpac=off` in the report and on the page) and the container
+kept. A container may need the Landlock syscalls allowed for the grade to be Full.
 
 The confinement is tested where it is used, not only where it is described. Every
 platform this project ships runs the whole Rust suite on every push — Linux x86_64
