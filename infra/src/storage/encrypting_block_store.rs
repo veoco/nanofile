@@ -187,6 +187,22 @@ impl BlockStorageBackend for EncryptingBlockStore {
             .await
     }
 
+    async fn write_block_with_id_force(
+        &self,
+        repo_id: &str,
+        block_id: &str,
+        data: &[u8],
+    ) -> Result<String, io::Error> {
+        // `data` is logical (plaintext) bytes, as for `write_block_with_id`, so
+        // encrypt them and then force-write the ciphertext: the trait default
+        // would re-enter `write_block_with_id`, which skips an existing block
+        // instead of replacing it.
+        let ct = self.encrypt_offload(data.to_vec()).await?;
+        self.inner
+            .write_block_with_id_force(repo_id, block_id, &ct)
+            .await
+    }
+
     async fn remove_block(&self, repo_id: &str, block_id: &str) -> Result<(), io::Error> {
         self.inner.remove_block(repo_id, block_id).await
     }
@@ -270,33 +286,33 @@ impl BlockStorageBackend for EncryptingBlockStore {
 
     async fn convert_legacy_block(&self, repo_id: &str, block_id: &str) -> Result<bool, io::Error> {
         // Read the raw on-disk bytes (not through `read_decrypted`, which in
-        // `Lazy` mode would fall back to plaintext and hide the distinction).
+        // `Lazy` mode would hand back plaintext and hide the distinction).
         let raw = self.inner.read_block(repo_id, block_id).await?;
-        // Probe the GCM-SIV tag: a successful decrypt means the block is already
-        // ciphertext (nothing to do); a tag mismatch means legacy plaintext.
-        // Both the probe and the re-encryption are CPU-bound, so run them on the
-        // blocking thread pool.
+        // A versioned block is already converted — or corrupt/tampered.
+        // Re-encrypting it would launder the corruption into a "valid" block,
+        // so leave it alone.
+        if BlockCipher::looks_encrypted(&raw) {
+            return Ok(false);
+        }
+        // Header-less: either legacy *plaintext* (written before encryption was
+        // enabled) or legacy *ciphertext* (written before the versioned header
+        // existed). Only the tag probe can tell them apart, and it decides what
+        // to re-encrypt: a body that decrypts is ciphertext, so its plaintext is
+        // what gets re-encrypted (a format change, not a content change);
+        // anything else is plaintext and is encrypted as-is. Encrypting the raw
+        // ciphertext would double-encrypt it and serve the inner ciphertext as
+        // the block's bytes.
         let cipher = self.cipher.clone();
-        let converted = tokio::task::spawn_blocking(move || {
-            // Only a block without the versioned header can be legacy
-            // plaintext. A block that has the header but fails to authenticate
-            // must not be re-encrypted blind — that would launder a corrupt or
-            // tampered block into a "valid" one.
-            if BlockCipher::looks_encrypted(&raw) {
-                return None;
-            }
-            Some(cipher.encrypt(&raw))
+        let ct = tokio::task::spawn_blocking(move || {
+            let plaintext = cipher.decrypt(&raw).unwrap_or(raw);
+            cipher.encrypt(&plaintext)
         })
         .await
         .map_err(|e| io::Error::other(e.to_string()))?;
-        if let Some(ct) = converted {
-            self.inner
-                .write_block_with_id_force(repo_id, block_id, &ct)
-                .await?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        self.inner
+            .write_block_with_id_force(repo_id, block_id, &ct)
+            .await?;
+        Ok(true)
     }
 
     async fn list_blocks(&self, repo_id: &str) -> Result<Vec<String>, io::Error> {
@@ -551,6 +567,47 @@ mod tests {
             total,
             plaintexts.iter().map(|d| d.len() as i64).sum::<i64>()
         );
+        drop(dir);
+    }
+
+    /// A header-less *ciphertext* block converted to the versioned format keeps
+    /// its plaintext; encrypting the on-disk bytes instead would double-encrypt
+    /// them and serve the inner ciphertext as the block's content.
+    #[tokio::test]
+    async fn convert_legacy_ciphertext_keeps_the_plaintext_and_adds_the_header() {
+        let (dir, store, raw) = temp_store(BlockEncryptionMode::On);
+        let data = pseudo_block(11, 1024);
+        let id = store.write_block(REPO, &data).await.unwrap();
+        strip_versioned_header(&raw, &id).await;
+        assert_eq!(
+            raw.read_block(REPO, &id).await.unwrap().len(),
+            data.len() + TAG_LEN
+        );
+
+        assert!(store.convert_legacy_block(REPO, &id).await.unwrap());
+        // Format change only: same plaintext, same id, versioned bytes on disk.
+        assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
+        let stored = raw.read_block(REPO, &id).await.unwrap();
+        assert_eq!(&stored[..4], MAGIC.as_slice());
+        assert_eq!(stored.len(), data.len() + HEADER_LEN + TAG_LEN);
+        // Idempotent: an already-versioned block is left alone.
+        assert!(!store.convert_legacy_block(REPO, &id).await.unwrap());
+        drop(dir);
+    }
+
+    /// Legacy *plaintext* is encrypted exactly once.
+    #[tokio::test]
+    async fn convert_legacy_plaintext_encrypts_it_once() {
+        let (dir, store, raw) = temp_store(BlockEncryptionMode::On);
+        let data = pseudo_block(13, 512);
+        let id = raw.write_block(REPO, &data).await.unwrap();
+        raw.invalidate_exists_cache();
+
+        assert!(store.convert_legacy_block(REPO, &id).await.unwrap());
+        assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
+        let stored = raw.read_block(REPO, &id).await.unwrap();
+        assert_eq!(&stored[..4], MAGIC.as_slice());
+        assert_eq!(stored.len(), data.len() + HEADER_LEN + TAG_LEN);
         drop(dir);
     }
 }

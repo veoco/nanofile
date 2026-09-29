@@ -1,22 +1,24 @@
-//! One-shot conversion of legacy plaintext blocks to at-rest ciphertext.
+//! One-shot conversion of legacy blocks to versioned at-rest ciphertext.
 //!
 //! In `Lazy` encryption mode new writes are encrypted but pre-existing blocks
-//! stay plaintext on disk. This task rewrites every legacy plaintext block as
-//! ciphertext under the same content-addressed id, so the migration window can
-//! converge and the server can eventually switch to `On` mode.
+//! stay as they are on disk. Two legacy shapes exist, and both must converge to
+//! the versioned (`NFE1 || key_id || ciphertext || tag`) format before the
+//! server can switch to `On` mode:
 //!
-//! Block ids are `sha1(logical bytes)` and unchanged by encryption, so Seafile
-//! clients, content-addressed dedup and GC are all unaffected. A block is
-//! detected as plaintext by probing the GCM-SIV authentication tag (a
-//! successful decrypt means it is already ciphertext).
+//! - pre-encryption **plaintext** blocks, and
+//! - header-less **ciphertext** written before the versioned header existed.
+//!
+//! A block is classified by probing the GCM-SIV tag: a body that decrypts is
+//! ciphertext, whose plaintext is re-encrypted (a format change that only adds
+//! the header); anything else is plaintext and is encrypted as-is. Block ids
+//! are `sha1(logical bytes)` and unchanged by the conversion, so Seafile
+//! clients, content-addressed dedup and GC are all unaffected.
 //!
 //! The conversion is idempotent and blocks are immutable (except under GC), so
-//! the set of legacy plaintext blocks is fixed and finite. The task therefore
-//! runs once: it walks every block, probes each exactly once, converts the
-//! plaintext ones, then writes a marker file in `block_dir` recording
-//! completion. Later runs (startup or manual re-trigger) see the marker and
-//! skip entirely with zero I/O. No in-memory set is needed because each block
-//! is probed only once.
+//! the set of legacy blocks is fixed and finite. The task therefore runs once:
+//! it walks every block, converts the legacy ones, then writes a marker file in
+//! `block_dir` recording completion. Later runs (startup or manual re-trigger)
+//! see the marker and skip entirely with zero I/O.
 
 use std::path::Path;
 use std::time::Duration;
@@ -164,6 +166,35 @@ mod tests {
             raw.read_block(REPO, &legacy_id).await.unwrap().len(),
             legacy.len() + 16 + 6
         );
+    }
+
+    #[tokio::test]
+    async fn converts_headerless_legacy_ciphertext_without_changing_content() {
+        let (_dir, store, raw) = temp_lazy_store();
+
+        // A block written before the versioned header existed: versioned
+        // ciphertext with the 6-byte header stripped.
+        let data = b"headerless legacy ciphertext block".to_vec();
+        let id = store.write_block(REPO, &data).await.unwrap();
+        let stored = raw.read_block(REPO, &id).await.unwrap();
+        assert_eq!(&stored[..4], b"NFE1", "fixture must start versioned");
+        raw.write_block_with_id_force(REPO, &id, &stored[6..])
+            .await
+            .unwrap();
+        raw.invalidate_exists_cache();
+
+        let converted =
+            BlockEncryptionConverter::convert_legacy_blocks(&store, 100, Duration::ZERO)
+                .await
+                .unwrap();
+        assert_eq!(converted, 1, "a header-less ciphertext block needs conversion");
+
+        // Format change only: content and id are unchanged, and the stored bytes
+        // carry the versioned header again.
+        assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
+        let on_disk = raw.read_block(REPO, &id).await.unwrap();
+        assert_eq!(&on_disk[..4], b"NFE1");
+        assert_eq!(on_disk.len(), data.len() + 16 + 6);
     }
 
     #[tokio::test]
