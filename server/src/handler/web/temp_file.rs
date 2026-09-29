@@ -83,6 +83,12 @@ struct UploadStream {
     /// Tracked so the caller can clean them up on quota failure without
     /// deleting blocks shared with other files.
     new_block_ids: Vec<String>,
+    /// `(block_id, logical length)` for every block the streaming path wrote, in
+    /// order. The fast commit re-checks these against the store before using
+    /// them: a block that is missing or shorter than what was streamed cannot
+    /// reproduce the file, so the upload must fall back to assembling the temp
+    /// file instead of committing a file object that cannot be read back.
+    streamed_blocks: Vec<(String, u64)>,
     /// Total declared file size, copied from the entry so the stream is
     /// self-contained once the map lock is released.
     file_size: u64,
@@ -245,6 +251,7 @@ impl TempFileManager {
                     next_offset: 0,
                     block_ids: Vec::new(),
                     new_block_ids: Vec::new(),
+                    streamed_blocks: Vec::new(),
                     file_size,
                     broken: false,
                 }))),
@@ -368,13 +375,16 @@ impl TempFileManager {
             .get_or_insert_with(|| Chunker::new(state.file_size as usize));
         let mut ids = Vec::new();
         let mut new_ids = Vec::new();
+        let mut streamed = Vec::new();
         for blk in chunker.feed(data) {
             let block_id = sha1_hex(&blk);
+            let len = blk.len() as u64;
             match store
                 .write_block_with_id_tracked(repo_id, &block_id, &blk)
                 .await
             {
                 Ok((id, was_new)) => {
+                    streamed.push((id.clone(), len));
                     ids.push(id.clone());
                     if was_new {
                         new_ids.push(id);
@@ -390,6 +400,7 @@ impl TempFileManager {
         }
         state.block_ids.extend(ids.iter().cloned());
         state.new_block_ids.extend(new_ids.iter().cloned());
+        state.streamed_blocks.extend(streamed);
         state.next_offset += data.len() as u64;
         FeedOutcome::Streamed {
             block_ids: ids,
@@ -435,6 +446,7 @@ impl TempFileManager {
         let tail = chunker.finish();
         if !tail.is_empty() {
             let block_id = sha1_hex(&tail);
+            let len = tail.len() as u64;
             match store
                 .write_block_with_id_tracked(repo_id, &block_id, &tail)
                 .await
@@ -443,11 +455,47 @@ impl TempFileManager {
                     if was_new {
                         state.new_block_ids.push(id.clone());
                     }
+                    state.streamed_blocks.push((id.clone(), len));
                     state.block_ids.push(id);
                 }
                 Err(_) => return None,
             }
         }
+
+        // The fast path skips the temp-file assembly, so it must confirm what
+        // the streaming path wrote is still intact: every block present at the
+        // length that was streamed, and the streamed bytes covering the whole
+        // declared file. Anything else falls back to the temp file, whose
+        // `total_size == file_size` check then decides.
+        let streamed_len: u64 = state.streamed_blocks.iter().map(|(_, len)| *len).sum();
+        if streamed_len != state.file_size {
+            tracing::warn!(
+                "streamed {streamed_len} bytes but the upload declared {}; \
+                 falling back to the assembled temp file",
+                state.file_size
+            );
+            return None;
+        }
+        for (id, expected) in &state.streamed_blocks {
+            match store.block_size(repo_id, id).await {
+                Ok(size) if size as u64 == *expected => {}
+                Ok(size) => {
+                    tracing::warn!(
+                        "streamed block {id} is {size} bytes on disk, expected {expected}; \
+                         falling back to the assembled temp file"
+                    );
+                    return None;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "streamed block {id} is unreadable ({e}); \
+                         falling back to the assembled temp file"
+                    );
+                    return None;
+                }
+            }
+        }
+
         Some((
             std::mem::take(&mut state.block_ids),
             state.file_size as i64,

@@ -603,3 +603,96 @@ async fn test_chunked_upload_streams_in_order_to_blocks() {
     }
     assert_eq!(roundtrip_ids, expected_ids);
 }
+
+/// Truncate the first content-addressed block file under `block_dir` (simulating
+/// a partial write left by a killed writer) and return its remaining length;
+/// `0` when no block exists yet.
+fn truncate_one_block_file(block_dir: &std::path::Path) -> u64 {
+    let mut stack = vec![block_dir.join("repos")];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.len() == 40 && name.bytes().all(|b| b.is_ascii_hexdigit()) {
+                let half = std::fs::metadata(&path).map(|m| m.len() / 2).unwrap_or(0);
+                std::fs::write(&path, vec![0u8; half as usize]).unwrap();
+                return half;
+            }
+        }
+    }
+    0
+}
+
+/// A block the in-transit streaming path already persisted must not be trusted
+/// blindly by the fast commit: truncating it (a partial write) has to fall back
+/// to the assembled temp file, whose block writes repair the stored block. The
+/// committed file must still round-trip the exact bytes.
+#[tokio::test]
+async fn test_chunked_upload_repairs_a_truncated_streamed_block() {
+    let f = TestFixture::new().await;
+    let base = f.server.base_url.clone();
+    let repo_id = f.repo_id.clone();
+    let token = get_upload_token(&f).await;
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+
+    // 12 MiB spans several official CDC blocks, so the chunker has emitted
+    // blocks well before the final chunk.
+    let content = pseudo_data(12 * 1024 * 1024 + 123);
+    let chunk_size = 8192usize;
+    let n_chunks = content.len().div_ceil(chunk_size);
+    for i in 0..n_chunks - 1 {
+        let start = i * chunk_size;
+        let end = ((i + 1) * chunk_size - 1).min(content.len() - 1);
+        let resp = client
+            .post(format!("{}/upload-aj/{}", base, token))
+            .header(
+                "content-range",
+                format!("bytes {}-{}/{}", start, end, content.len()),
+            )
+            .multipart(chunked_upload_form(&repo_id, content[start..=end].to_vec()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "chunk {i} failed");
+    }
+
+    let remaining = truncate_one_block_file(&f.server.block_dir);
+    assert!(remaining > 0, "expected at least one streamed block on disk");
+    // The presence cache is per-process and would otherwise hold the length the
+    // block had before it was truncated.
+    f.server.state.block_store.invalidate_exists_cache();
+
+    let i = n_chunks - 1;
+    let start = i * chunk_size;
+    let end = content.len() - 1;
+    let resp = client
+        .post(format!("{}/upload-aj/{}", base, token))
+        .header(
+            "content-range",
+            format!("bytes {}-{}/{}", start, end, content.len()),
+        )
+        .multipart(chunked_upload_form(&repo_id, content[start..=end].to_vec()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "final chunk failed");
+
+    let resp = f
+        .client
+        .download_file(&f.api_token, &repo_id, "/big.txt")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let downloaded = resp.bytes().await.unwrap();
+    assert_eq!(
+        downloaded.as_ref(),
+        content.as_slice(),
+        "a truncated streamed block must not become a committed file"
+    );
+}
