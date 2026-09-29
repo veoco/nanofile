@@ -247,6 +247,13 @@ max_zip_task_bytes = 33554432
 #            blocks — the migration window.
 # The block id (sha1 of logical bytes) is unchanged in every mode, so Seafile clients
 # and the existing content-addressed dedup keep working.
+#
+# Ciphertext written by earlier releases has no `NFE1` header (tag only, 16 bytes
+# over the plaintext); the current format adds a 6-byte header. Reads accept both,
+# and a block's logical size — the value `block-map` and range/resume offsets are
+# derived from — follows its stored format. `nanofile verify-blocks` reports blocks
+# whose bytes do not hash to their id, and file objects whose blocks do not add up
+# to the size they declare.
 block_encryption_mode = "off"
 # Master key for block at-rest encryption. When block_encryption_mode is not "off" and
 # this is unset, it's auto-derived from [server] secret_key. Set explicitly via

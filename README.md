@@ -237,6 +237,13 @@ nanofile [--config <path>] adduser   create a user (admin by default; --regular 
 nanofile [--config <path>] migrate-blocks [--dry-run]
                                      move from the shared block directory to the per-library layout
                                      (normally done automatically at startup; --dry-run previews only)
+nanofile [--config <path>] verify-blocks [--dry-run] [--repair] [--repo <id>] [--json]
+                                     hash every stored block against its content-addressed id, and check
+                                     every file object's blocks against the size it declares. Read-only
+                                     unless --repair is given; --repair quarantines blocks that fail the
+                                     id check under {block_dir}/.quarantine/ (their bytes are kept) so a
+                                     client holding a good copy re-uploads them. Exits non-zero when it
+                                     finds anything to act on.
 ```
 
 Windows service control (administrator rights required):

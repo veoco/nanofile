@@ -11,10 +11,13 @@
 //! - **Authenticated**: a 128-bit tag is appended, so on-disk tampering is
 //!   detected on read. Under `lazy` migration mode the tag check doubles as a
 //!   cheap discriminator between newly-encrypted and legacy plaintext blocks.
-//! - **Length-preserving**: GCM-SIV adds no padding; `ciphertext.len() ==
-//!   plaintext.len() + 16 + 6` (16-byte tag + 6-byte `NFE1 || key_id` header),
-//!   so logical sizes are recoverable without reading
-//!   the whole block (see the store wrapper).
+//! - **Length-preserving**: GCM-SIV adds no padding, so the logical size never
+//!   needs a full decrypt — only the leading bytes that identify the format.
+//!   Versioned ciphertext is `plaintext.len() + 16 + 6` (tag + `NFE1 || key_id`
+//!   header); the header-less legacy format is `plaintext.len() + 16`. Sizing a
+//!   block by the versioned constant alone under-reports legacy blocks by six
+//!   bytes, which shifts every offset a client derives from it (see
+//!   [`BlockCipher::plaintext_len`]).
 //!
 //! The 12-byte nonce is fixed to all-zeros. GCM-SIV is nonce-misuse-resistant:
 //! reusing a nonce only leaks whether two plaintexts are equal — which is

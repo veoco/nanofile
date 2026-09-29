@@ -12,6 +12,19 @@
 //!
 //! Every read/write method therefore takes a `repo_id`; enumeration is
 //! per-repository as well.
+//!
+//! Two invariants hold for every backend and decorator, and clients depend on
+//! both:
+//!
+//! * A block is written under the sha1 of the bytes it holds, and is published
+//!   atomically — an interrupted write leaves a `.tmp` file, never a short block
+//!   at the block's final path.
+//! * [`BlockStorageBackend::block_size`] equals
+//!   `read_block(repo_id, block_id).len()`. `block-map` responses and the
+//!   `Range` fast path turn those sizes into byte offsets, so a size that is
+//!   even slightly off shifts every byte after it. A decorator that cannot
+//!   guarantee the property must return `false` from
+//!   [`BlockStorageBackend::logical_sizes_are_exact`].
 pub mod block_store;
 pub mod cdc;
 pub mod encrypting_block_store;

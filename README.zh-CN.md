@@ -154,6 +154,11 @@ nanofile [--config <path>] adduser  建用户（默认管理员；--regular 建�
 nanofile [--config <path>] migrate-blocks [--dry-run]
                                      把旧版"所有库共用一个块目录"迁移成"每个库独立目录"
                                      （一般启动时自动做；--dry-run 只预览不执行）
+nanofile [--config <path>] verify-blocks [--dry-run] [--repair] [--repo <id>] [--json]
+                                     逐块校验 sha1(id) 是否与内容一致，并校验每个文件对象
+                                     "各块字节和 == 声明大小"。默认只读；--repair 会把校验失败的块
+                                     隔离到 {block_dir}/.quarantine/（保留字节不删除），
+                                     让持有正确副本的客户端重新上传。有发现时退出码非 0。
 ```
 
 Windows 服务（需管理员权限）：

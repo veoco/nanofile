@@ -18,6 +18,14 @@
 //! - `On`: everything written is encrypted; reads always decrypt.
 //! - `Lazy`: writes are encrypted, reads probe the GCM-SIV tag and fall back to
 //!   plaintext on mismatch — the migration window for pre-existing blocks.
+//!
+//! Two ciphertext formats exist on disk: the versioned `NFE1 || key_id` header
+//! plus tag (`On` writes), and a header-less legacy format written before that
+//! header existed (tag only). `decrypt` accepts both, and so must every
+//! *length* this wrapper reports: [`BlockStorageBackend::block_size`] derives
+//! the logical size from the stored format, because clients compute `block-map`
+//! and range/resume offsets from it. Reporting a legacy block as if it carried
+//! the versioned overhead under-reports it by six bytes.
 
 use async_trait::async_trait;
 use std::io;
