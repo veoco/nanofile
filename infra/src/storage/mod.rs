@@ -18,6 +18,11 @@ pub mod encrypting_block_store;
 
 use std::sync::Arc;
 
+/// Upper bound on how many leading bytes [`BlockStorageBackend::read_block_prefix`]
+/// returns. Callers only ever need a format header (a few bytes), so a backend
+/// can bound its buffer without changing the contract.
+pub const MAX_BLOCK_PREFIX_LEN: usize = 64 * 1024;
+
 /// Outcome of copying one legacy block into a repository's directory during the
 /// one-shot layout migration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +46,31 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
     async fn has_block(&self, repo_id: &str, block_id: &str) -> bool;
 
     /// Read raw block data by its SHA-1 ID from this repository's directory.
+    ///
+    /// For a store that decrypts transparently this returns the *logical* bytes,
+    /// so `data.len()` is always the block's logical size — the property
+    /// [`Self::block_size`] must agree with.
     async fn read_block(&self, repo_id: &str, block_id: &str) -> Result<Vec<u8>, std::io::Error>;
+
+    /// Read at most `min(max, MAX_BLOCK_PREFIX_LEN)` leading bytes of the block
+    /// **as stored**, i.e. bypassing any at-rest decryption `read_block`
+    /// applies.
+    ///
+    /// A decorator that encrypts blocks at rest must delegate this to its inner
+    /// store: the leading bytes are the on-disk format header, which is what
+    /// decides how to size the block. The default reads the whole block through
+    /// [`Self::read_block`] and truncates; backends with a real partial read
+    /// should override it.
+    async fn read_block_prefix(
+        &self,
+        repo_id: &str,
+        block_id: &str,
+        max: usize,
+    ) -> Result<Vec<u8>, std::io::Error> {
+        let data = self.read_block(repo_id, block_id).await?;
+        let take = max.min(data.len()).min(MAX_BLOCK_PREFIX_LEN);
+        Ok(data[..take].to_vec())
+    }
 
     /// Write raw block data, computing and returning its SHA-1 ID.
     async fn write_block(&self, repo_id: &str, data: &[u8]) -> Result<String, std::io::Error>;

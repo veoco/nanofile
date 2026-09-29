@@ -22,7 +22,7 @@
 use async_trait::async_trait;
 use std::io;
 
-use crate::crypto::block_encryption::{BlockCipher, HEADER_LEN, TAG_LEN};
+use crate::crypto::block_encryption::{BlockCipher, HEADER_LEN};
 use crate::crypto::fs_id::sha1_hex;
 use crate::storage::BlockStorageBackend;
 use crate::storage::DynBlockStorage;
@@ -143,6 +143,17 @@ impl BlockStorageBackend for EncryptingBlockStore {
         self.read_decrypted(repo_id, block_id).await
     }
 
+    async fn read_block_prefix(
+        &self,
+        repo_id: &str,
+        block_id: &str,
+        max: usize,
+    ) -> Result<Vec<u8>, io::Error> {
+        // The leading bytes are the *stored* format header, so this must not go
+        // through `read_decrypted`.
+        self.inner.read_block_prefix(repo_id, block_id, max).await
+    }
+
     async fn write_block(&self, repo_id: &str, data: &[u8]) -> Result<String, io::Error> {
         // Content-addressed id is the sha1 of the *logical* bytes, so it is the
         // same whether the store is encrypted or not. We encrypt and write
@@ -180,26 +191,44 @@ impl BlockStorageBackend for EncryptingBlockStore {
         self.inner.remove_block(repo_id, block_id).await
     }
 
+    /// Logical size of a stored block.
+    ///
+    /// Contract: the returned value equals `read_block(repo_id, block_id).len()`.
+    /// Clients derive block offsets for range/segmented downloads from it, and
+    /// `range_stream` uses it to skip blocks, so a value that is systematically
+    /// off shifts everything after it.
     async fn block_size(&self, repo_id: &str, block_id: &str) -> Result<i64, io::Error> {
         let stored = self.inner.block_size(repo_id, block_id).await?;
         match self.mode {
             // Logical size equals the stored size for legacy plaintext blocks.
             BlockEncryptionMode::Off => Ok(stored),
-            // GCM-SIV adds exactly the 16-byte tag and no padding, plus the
-            // 6-byte `NFE1 || key_id` header, so the logical size is
-            // recoverable without reading the block.
+            // GCM-SIV adds no padding, but the overhead depends on the stored
+            // format: versioned ciphertext carries the 6-byte `NFE1 || key_id`
+            // header *and* the 16-byte tag, while blocks written before that
+            // header existed (or by an older deployment) carry only the tag.
+            // Deciding by the stored header — not by the versioned constant —
+            // is what keeps this equal to `read_block(..).len()`.
             BlockEncryptionMode::On => {
-                let overhead = (TAG_LEN + HEADER_LEN) as i64;
-                if stored < overhead {
-                    return Err(io::Error::new(
+                let prefix = self
+                    .inner
+                    .read_block_prefix(repo_id, block_id, HEADER_LEN)
+                    .await?;
+                let stored_len = usize::try_from(stored).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "negative stored block size")
+                })?;
+                let logical = BlockCipher::plaintext_len(&prefix, stored_len).map_err(|_| {
+                    io::Error::new(
                         io::ErrorKind::InvalidData,
                         "encrypted block shorter than its header and authentication tag",
-                    ));
-                }
-                Ok(stored - overhead)
+                    )
+                })?;
+                i64::try_from(logical)
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "block size overflow"))
             }
             // In the migration window a block may still be plaintext; decide by
-            // the `NFE1` header rather than by a failed decode.
+            // the `NFE1` header rather than by a failed decode. A header-less
+            // block is what `read_decrypted` hands back verbatim in this mode,
+            // so its size is the stored size — the two must agree.
             BlockEncryptionMode::Lazy => {
                 let raw = self.inner.read_block(repo_id, block_id).await?;
                 if !BlockCipher::looks_encrypted(&raw) {
@@ -294,6 +323,7 @@ impl BlockStorageBackend for EncryptingBlockStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::block_encryption::{MAGIC, TAG_LEN};
     use crate::storage::block_store::BlockStorage;
     use std::sync::Arc;
 
@@ -438,6 +468,89 @@ mod tests {
             BlockEncryptionMode::On,
         );
         assert!(on_store.block_size(REPO, &id).await.is_err());
+        drop(dir);
+    }
+
+    /// Deterministic pseudo-random bytes (no `rand` dependency). The sizes are
+    /// what matters here, never the content; `seed` keeps distinct blocks
+    /// distinct so content-addressed dedup cannot collapse the fixture.
+    fn pseudo_block(seed: u64, len: usize) -> Vec<u8> {
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15 ^ seed.wrapping_mul(0x9E37_79B9);
+        (0..len)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (x >> 33) as u8
+            })
+            .collect()
+    }
+
+    /// Rewrite a stored block in the pre-`NFE1` header-less format: what a
+    /// deployment that encrypted blocks before the versioned header existed
+    /// left on disk — the same GCM-SIV body, without the 6-byte header.
+    async fn strip_versioned_header(raw: &BlockStorage, id: &str) {
+        let stored = raw.read_block(REPO, id).await.unwrap();
+        assert_eq!(&stored[..4], MAGIC.as_slice(), "fixture must be versioned");
+        raw.write_block_with_id_force(REPO, id, &stored[HEADER_LEN..])
+            .await
+            .unwrap();
+        raw.invalidate_exists_cache();
+    }
+
+    #[tokio::test]
+    async fn on_mode_sizes_headerless_legacy_blocks_by_the_tag_only() {
+        let (dir, store, raw) = temp_store(BlockEncryptionMode::On);
+        let data = pseudo_block(1, 4096);
+        let id = store.write_block(REPO, &data).await.unwrap();
+        strip_versioned_header(&raw, &id).await;
+
+        // Still readable: `decrypt` accepts the header-less legacy format.
+        assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
+        // Sizing follows the *stored* format. Subtracting the versioned
+        // overhead for a legacy block under-reported every such block by 6
+        // bytes, which is what shifted clients' segmented downloads.
+        assert_eq!(store.block_size(REPO, &id).await.unwrap(), data.len() as i64);
+        drop(dir);
+    }
+
+    /// The property the incident violated: the sizes a file's block list
+    /// reports must sum to the logical file size, for a mix of versioned and
+    /// header-less legacy blocks, and each must equal `read_block(..).len()`.
+    #[tokio::test]
+    async fn on_mode_reported_sizes_sum_to_the_logical_file_size_for_mixed_formats() {
+        let (dir, store, raw) = temp_store(BlockEncryptionMode::On);
+        let plaintexts: Vec<Vec<u8>> = [4096usize, 8192, 8192, 2048]
+            .iter()
+            .enumerate()
+            .map(|(seed, len)| pseudo_block(seed as u64 + 1, *len))
+            .collect();
+        let mut ids = Vec::new();
+        for data in &plaintexts {
+            ids.push(store.write_block(REPO, data).await.unwrap());
+        }
+        // The first three blocks predate the versioned header (the incident's
+        // shape: three legacy blocks skipped -> an 18-byte gap); the last one
+        // was written by the current build.
+        for id in &ids[..3] {
+            strip_versioned_header(&raw, id).await;
+        }
+
+        let mut total = 0i64;
+        for (id, data) in ids.iter().zip(&plaintexts) {
+            let size = store.block_size(REPO, id).await.unwrap();
+            assert_eq!(
+                size as usize,
+                store.read_block(REPO, id).await.unwrap().len(),
+                "block_size must equal read_block(..).len()"
+            );
+            assert_eq!(size, data.len() as i64);
+            total += size;
+        }
+        assert_eq!(
+            total,
+            plaintexts.iter().map(|d| d.len() as i64).sum::<i64>()
+        );
         drop(dir);
     }
 }

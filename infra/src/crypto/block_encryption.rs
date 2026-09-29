@@ -107,6 +107,45 @@ impl BlockCipher {
         stored.len() >= HEADER_LEN && &stored[..4] == MAGIC
     }
 
+    /// Logical (plaintext) length of a stored block, derived from its on-disk
+    /// format alone — no decryption.
+    ///
+    /// `stored_prefix` may be the whole stored block or just its leading
+    /// [`HEADER_LEN`] bytes (only the magic decides the format) while
+    /// `stored_len` is the block's real on-disk length, so a caller can size a
+    /// large block from a short read.
+    ///
+    /// Versioned ciphertext carries the header *and* the tag; the header-less
+    /// legacy format carries only the tag. Assuming the versioned overhead for
+    /// a header-less block therefore under-reports it by [`HEADER_LEN`] — which
+    /// is exactly what the store wrapper must not do, because clients compute
+    /// block offsets from the sizes it reports.
+    ///
+    /// Returns `Err` for an unknown versioned key id, or when `stored_len`
+    /// cannot hold the overhead the format implies (a truncated or non-cipher
+    /// block), so a reported size can never come from an underflow.
+    ///
+    /// A header-less block is treated as legacy *ciphertext* (tag only). That
+    /// matches `On` mode, where every read decrypts; a header-less block that
+    /// held bare plaintext would fail authentication anyway.
+    pub fn plaintext_len(
+        stored_prefix: &[u8],
+        stored_len: usize,
+    ) -> Result<usize, aes_gcm_siv::aead::Error> {
+        let overhead = if Self::looks_encrypted(stored_prefix) {
+            let key_id = u16::from_be_bytes([stored_prefix[4], stored_prefix[5]]);
+            if key_id != ACTIVE_KEY_ID {
+                return Err(aes_gcm_siv::aead::Error);
+            }
+            HEADER_LEN + TAG_LEN
+        } else {
+            TAG_LEN
+        };
+        stored_len
+            .checked_sub(overhead)
+            .ok_or(aes_gcm_siv::aead::Error)
+    }
+
     /// Decrypt a value produced by [`BlockCipher::encrypt`].
     ///
     /// Accepts both the versioned (`NFE1 || key_id`) format written by this
@@ -207,6 +246,39 @@ mod tests {
         let c2 = BlockCipher::from_master_key(&[0x22u8; 32]);
         let ct = c1.encrypt(b"secret");
         assert!(c2.decrypt(&ct).is_err());
+    }
+
+    #[test]
+    fn plaintext_len_matches_both_stored_formats() {
+        let c = BlockCipher::from_master_key(&test_key());
+        let data = b"format sizing".as_slice();
+
+        // Versioned ciphertext: header + body, so the overhead is header + tag.
+        let versioned = c.encrypt(data);
+        assert_eq!(versioned.len(), data.len() + HEADER_LEN + TAG_LEN);
+        assert_eq!(
+            BlockCipher::plaintext_len(&versioned, versioned.len()).unwrap(),
+            data.len()
+        );
+        // A short prefix is enough: only the magic decides the format.
+        assert_eq!(
+            BlockCipher::plaintext_len(&versioned[..HEADER_LEN], versioned.len()).unwrap(),
+            data.len()
+        );
+
+        // Header-less legacy ciphertext: tag only, so the logical size is the
+        // stored size minus TAG_LEN (not minus the versioned overhead).
+        let legacy = versioned[HEADER_LEN..].to_vec();
+        assert_eq!(
+            BlockCipher::plaintext_len(&legacy, legacy.len()).unwrap(),
+            data.len()
+        );
+
+        // Truncated block / unknown key id are errors, never underflowed sizes.
+        assert!(BlockCipher::plaintext_len(&legacy[..TAG_LEN - 1], TAG_LEN - 1).is_err());
+        let mut foreign = versioned.clone();
+        foreign[5] = 0xFF;
+        assert!(BlockCipher::plaintext_len(&foreign, foreign.len()).is_err());
     }
 
     #[test]

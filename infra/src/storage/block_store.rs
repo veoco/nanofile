@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::crypto::fs_id::sha1_hex;
-use crate::storage::{BlockStorageBackend, LegacyCopyOutcome};
+use crate::storage::{BlockStorageBackend, LegacyCopyOutcome, MAX_BLOCK_PREFIX_LEN};
 
 /// Subdirectory of the block root that holds the per-repository directories.
 ///
@@ -368,6 +368,43 @@ impl BlockStorageBackend for BlockStorage {
             ));
         }
         tokio::fs::read(self.block_path(repo_id, block_id)).await
+    }
+
+    /// Read at most `min(max, MAX_BLOCK_PREFIX_LEN)` leading bytes.
+    ///
+    /// A real partial read (open + bounded read) rather than [`Self::read_block`],
+    /// so probing a large block's on-disk format header never pulls the whole
+    /// block off disk: `get_block_map` and `range_stream`'s prefix skip probe
+    /// every block of a file.
+    async fn read_block_prefix(
+        &self,
+        repo_id: &str,
+        block_id: &str,
+        max: usize,
+    ) -> io::Result<Vec<u8>> {
+        if !Self::is_valid_block_id(block_id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid block id",
+            ));
+        }
+        let want = max.min(MAX_BLOCK_PREFIX_LEN);
+        if want == 0 {
+            return Ok(Vec::new());
+        }
+        use tokio::io::AsyncReadExt;
+        let mut file = tokio::fs::File::open(self.block_path(repo_id, block_id)).await?;
+        let mut buf = vec![0u8; want];
+        let mut filled = 0usize;
+        while filled < want {
+            let n = file.read(&mut buf[filled..]).await?;
+            if n == 0 {
+                break; // short block: the file is smaller than `max`
+            }
+            filled += n;
+        }
+        buf.truncate(filled);
+        Ok(buf)
     }
 
     async fn write_block(&self, repo_id: &str, data: &[u8]) -> Result<String, io::Error> {
