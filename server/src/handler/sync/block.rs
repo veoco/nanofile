@@ -256,5 +256,19 @@ pub async fn get_block_map(
         out
     };
 
+    // A file object whose blocks do not add up to its declared size cannot be
+    // mapped onto offsets: a client that slices its download (or its resume
+    // point) from these sizes would drop or duplicate bytes at the seam. Fail
+    // the request instead of handing out offsets that cannot be right.
+    if let Some(declared) = json_val.get("size").and_then(|v| v.as_i64()) {
+        let actual: i64 = block_sizes.iter().sum();
+        if actual != declared {
+            return Err(AppError::Internal(format!(
+                "file object {file_id} declares {declared} bytes but its {} blocks hold {actual}",
+                block_sizes.len()
+            )));
+        }
+    }
+
     Ok(Json(block_sizes))
 }

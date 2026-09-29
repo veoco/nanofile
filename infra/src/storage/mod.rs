@@ -134,7 +134,23 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
     async fn remove_block(&self, repo_id: &str, block_id: &str) -> Result<(), std::io::Error>;
 
     /// Get the size of a block on disk in bytes.
+    ///
+    /// For a store that decrypts transparently this is the *logical* size, and
+    /// it must equal `read_block(repo_id, block_id).len()`.
     async fn block_size(&self, repo_id: &str, block_id: &str) -> Result<i64, std::io::Error>;
+
+    /// Whether [`Self::block_size`] is guaranteed to equal the length of the
+    /// bytes [`Self::read_block`] returns, for every block this store holds.
+    ///
+    /// `range_stream` turns these sizes into byte offsets when it skips blocks
+    /// that lie entirely before a `Range` start, so an offset that is even
+    /// slightly off shifts every byte after it (a size-only check cannot catch
+    /// that: nothing is read while skipping). A decorator that changes block
+    /// lengths — compression, re-encoding, and formerly the at-rest encryption
+    /// wrapper — must return `false` until it can guarantee the property.
+    fn logical_sizes_are_exact(&self) -> bool {
+        true
+    }
 
     /// Modification time of a block file as Unix epoch seconds, or `None` when
     /// the block is absent or the backend cannot report it.

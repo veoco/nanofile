@@ -264,14 +264,20 @@ pub fn range_stream(
                 return None;
             }
 
-            // Fast-forward past blocks that lie entirely before `start`. For
-            // plaintext repos the stored block size equals the logical size, so
-            // a cheap stat is enough — no need to read + decrypt a whole block
-            // only to discard it (a tail `Range` request / resume would
-            // otherwise read and decrypt nearly the entire file prefix).
-            // Encrypted repos are skipped here because the ciphertext length
-            // includes PKCS7 padding and cannot be used as a logical offset.
-            if key.is_none() && pos < start {
+            // Fast-forward past blocks that lie entirely before `start`, but
+            // only when the reported sizes are known to be logical byte
+            // offsets: the `Range` response is sliced by them, and nothing is
+            // read while skipping, so a size that is even slightly off shifts
+            // every byte after it (an at-rest decorator that mis-sized
+            // header-less legacy blocks made clients' segmented downloads drop
+            // bytes at the seam).
+            //
+            // - E2EE downloads report ciphertext lengths (padding included),
+            //   which are not logical offsets, so `enc_key` disables the skip.
+            // - A store that cannot guarantee `block_size == read_block().len()`
+            //   must not be trusted to skip either.
+            let mut expected_block_len: Option<u64> = None;
+            if key.is_none() && store.logical_sizes_are_exact() && pos < start {
                 loop {
                     // Peek the next block id without cloning the whole remaining
                     // iterator (cloning `IntoIter` copies every remaining entry,
@@ -285,6 +291,10 @@ pub fn range_stream(
                         _ => break, // fall through to the read path
                     };
                     if pos + size > start {
+                        // The size that stopped the skip is also the offset
+                        // accounting for this block; keep it so the read path can
+                        // catch a store whose reported sizes drift.
+                        expected_block_len = Some(size);
                         break; // next block intersects the range
                     }
                     pos += size;
@@ -312,6 +322,22 @@ pub fn range_stream(
                 None => data,
             };
             let data = bytes::Bytes::from(data);
+
+            // The prefix skip decided this block's start offset from its
+            // reported size. If the bytes do not match that size, the offsets
+            // are wrong and every byte of the response would be shifted: fail
+            // the request instead of serving a silently mangled range.
+            if let Some(expected) = expected_block_len
+                && data.len() as u64 != expected
+            {
+                return Some((
+                    Err(std::io::Error::other(format!(
+                        "block {block_id} is {} bytes but its reported size was {expected}",
+                        data.len()
+                    ))),
+                    (iter, pos, true),
+                ));
+            }
 
             let len = data.len() as u64;
             let block_start = pos;
@@ -509,7 +535,9 @@ pub fn file_download_response(p: FileDownloadParams) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{content_disposition, parse_range, range_stream};
+    use super::{
+        FileDownloadParams, content_disposition, file_download_response, parse_range, range_stream,
+    };
     use axum::http::HeaderValue;
     use futures::StreamExt;
     use infra::storage::{BlockStorageBackend, DynBlockStorage};
@@ -704,5 +732,171 @@ mod tests {
             d.ends_with(r#"filename="download""#),
             "empty ASCII fallback should be 'download': {d}"
         );
+    }
+
+    // ── At-rest block formats vs. range offsets ─────────────────────────────
+
+    /// Deterministic pseudo-random bytes; only the lengths matter here.
+    fn pseudo_block(seed: u64, len: usize) -> Vec<u8> {
+        let mut x: u64 = 0x9E37_79B9_7F4A_7C15 ^ seed.wrapping_mul(0x9E37_79B9);
+        (0..len)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (x >> 33) as u8
+            })
+            .collect()
+    }
+
+    /// Write `plaintexts` into an at-rest-encrypting store over a temp
+    /// directory, then rewrite the first `legacy` blocks in the pre-`NFE1`
+    /// header-less format — what a deployment that encrypted blocks before the
+    /// versioned header existed left on disk.
+    async fn at_rest_fixture(
+        plaintexts: &[Vec<u8>],
+        legacy: usize,
+    ) -> (tempfile::TempDir, DynBlockStorage, Vec<String>) {
+        use infra::crypto::block_encryption::{BlockCipher, HEADER_LEN};
+        use infra::storage::block_store::BlockStorage;
+        use infra::storage::encrypting_block_store::{BlockEncryptionMode, EncryptingBlockStore};
+
+        let dir = tempfile::tempdir().unwrap();
+        let raw = Arc::new(BlockStorage::new(dir.path().join("blocks")));
+        let store: DynBlockStorage = Arc::new(EncryptingBlockStore::new(
+            raw.clone(),
+            BlockCipher::from_master_key(&[0x42u8; 32]),
+            BlockEncryptionMode::On,
+        ));
+
+        let mut ids = Vec::new();
+        for data in plaintexts {
+            ids.push(store.write_block("test-repo", data).await.unwrap());
+        }
+        for id in ids.iter().take(legacy) {
+            let stored = raw.read_block("test-repo", id).await.unwrap();
+            assert_eq!(&stored[..4], b"NFE1", "fixture must start versioned");
+            raw.write_block_with_id_force("test-repo", id, &stored[HEADER_LEN..])
+                .await
+                .unwrap();
+            raw.invalidate_exists_cache();
+        }
+        (dir, store, ids)
+    }
+
+    /// A `Range` starting after header-less legacy blocks must deliver the
+    /// exact tail. The incident: the at-rest store reported every legacy block
+    /// 6 bytes short, so a client that segmented its download by those offsets
+    /// (three skipped blocks) lost 18 bytes at the seam.
+    #[tokio::test]
+    async fn range_stream_keeps_offsets_with_headerless_at_rest_blocks() {
+        let plaintexts: Vec<Vec<u8>> = [4096usize, 8192, 8192, 2048]
+            .iter()
+            .enumerate()
+            .map(|(seed, len)| pseudo_block(seed as u64 + 1, *len))
+            .collect();
+        let (_dir, store, ids) = at_rest_fixture(&plaintexts, 3).await;
+        let content: Vec<u8> = plaintexts.concat();
+
+        // The offset a correct client derives from the block layout: the start
+        // of the 4th block. The buggy sizes put it 18 bytes earlier, which is
+        // where an offset-based client actually resumed from.
+        let start = plaintexts[..3].iter().map(|d| d.len() as u64).sum::<u64>();
+        let got = collect_range(store, ids, start, content.len() as u64 - 1).await;
+        assert_eq!(got, content[start as usize..]);
+    }
+
+    /// The same slice, through the response builder the file-download handlers
+    /// use, so status/headers and the stream are covered together.
+    #[tokio::test]
+    async fn file_range_response_serves_the_requested_slice_for_headerless_blocks() {
+        let plaintexts: Vec<Vec<u8>> = [4096usize, 8192, 8192, 2048]
+            .iter()
+            .enumerate()
+            .map(|(seed, len)| pseudo_block(seed as u64 + 100, *len))
+            .collect();
+        let (_dir, store, ids) = at_rest_fixture(&plaintexts, 3).await;
+        let content: Vec<u8> = plaintexts.concat();
+        let start = plaintexts[..3].iter().map(|d| d.len() as u64).sum::<u64>();
+
+        let resp = file_download_response(FileDownloadParams {
+            repo_id: "test-repo".to_string(),
+            block_ids: ids,
+            block_store: store,
+            enc_key: None,
+            total_size: content.len() as u64,
+            content_type: "application/octet-stream",
+            content_disposition: None,
+            range_header: Some(format!("bytes={start}-")),
+            etag: None,
+        });
+        assert_eq!(resp.status(), axum::http::StatusCode::PARTIAL_CONTENT);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), &content[start as usize..]);
+    }
+
+    /// A store whose reported sizes are six bytes short must not be trusted to
+    /// skip blocks: the skip turns those sizes into offsets and nothing is read
+    /// while skipping.
+    #[derive(Debug)]
+    struct InexactSizeStore(MockStore);
+
+    #[async_trait::async_trait]
+    impl BlockStorageBackend for InexactSizeStore {
+        async fn has_block(&self, repo_id: &str, block_id: &str) -> bool {
+            self.0.has_block(repo_id, block_id).await
+        }
+        async fn read_block(
+            &self,
+            repo_id: &str,
+            block_id: &str,
+        ) -> Result<Vec<u8>, std::io::Error> {
+            self.0.read_block(repo_id, block_id).await
+        }
+        async fn write_block(
+            &self,
+            _repo_id: &str,
+            _data: &[u8],
+        ) -> Result<String, std::io::Error> {
+            unimplemented!()
+        }
+        async fn remove_block(
+            &self,
+            _repo_id: &str,
+            _block_id: &str,
+        ) -> Result<(), std::io::Error> {
+            unimplemented!()
+        }
+        async fn block_size(&self, repo_id: &str, block_id: &str) -> Result<i64, std::io::Error> {
+            Ok(self.0.block_size(repo_id, block_id).await? - 6)
+        }
+        async fn list_blocks(&self, _repo_id: &str) -> Result<Vec<String>, std::io::Error> {
+            unimplemented!()
+        }
+        fn logical_sizes_are_exact(&self) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn range_stream_does_not_skip_on_a_store_with_inexact_sizes() {
+        let content: Vec<u8> = (0..160u8).collect();
+        let mut blocks = HashMap::new();
+        let mut ids = Vec::new();
+        for (i, chunk) in content.chunks(40).enumerate() {
+            let id = format!("blk{i}");
+            blocks.insert(id.clone(), chunk.to_vec());
+            ids.push(id);
+        }
+        let store: DynBlockStorage =
+            Arc::new(InexactSizeStore(MockStore {
+                blocks: Mutex::new(blocks),
+            }));
+        // Starting in the 4th block would skip three blocks; with sizes that
+        // are six bytes short each, skipping would serve from 18 bytes ahead.
+        let got = collect_range(store, ids, 120, 159).await;
+        assert_eq!(got, content[120..]);
     }
 }
