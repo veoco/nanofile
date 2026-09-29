@@ -89,6 +89,23 @@ enum Command {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
+    /// Verify stored blocks against their content-addressed ids and file objects
+    /// against the sizes they declare. Read-only unless `--repair` is given.
+    VerifyBlocks {
+        /// Report only (the default); rejects `--repair`.
+        #[arg(long, default_value_t = false, conflicts_with = "repair")]
+        dry_run: bool,
+        /// Quarantine blocks whose bytes do not hash to their id, so a client
+        /// holding a good copy re-uploads them. Bytes are never deleted.
+        #[arg(long, default_value_t = false)]
+        repair: bool,
+        /// Restrict the check to one library.
+        #[arg(long, value_name = "REPO_ID")]
+        repo: Option<String>,
+        /// Machine-readable report on stdout.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Windows service control. `run` is what the registered service's binary
     /// path calls; `install`/`uninstall` need administrator rights.
     #[cfg(target_os = "windows")]
@@ -611,6 +628,35 @@ fn main() -> anyhow::Result<()> {
                         report.missing_block_ids.len(),
                         report.missing_block_ids.join(", ")
                     );
+                }
+                anyhow::Ok(())
+            })
+        }
+        Command::VerifyBlocks {
+            dry_run: _,
+            repair,
+            repo,
+            json,
+        } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async move {
+                let db = establish_connection(&config.database).await?;
+                migration::Migrator::up(&db, None).await?;
+                infra::common::util::ensure_private_dir(&config.storage.block_dir)?;
+                let store = server::fs::core::block_verify::open_block_store(&config)?;
+                let report = server::fs::core::block_verify::BlockVerify::run(
+                    &db,
+                    &store,
+                    &config.storage.block_dir,
+                    repo.as_deref(),
+                    repair,
+                )
+                .await?;
+                report.print(json);
+                if report.has_findings() {
+                    // Non-zero so a monitoring wrapper notices without parsing
+                    // the report.
+                    std::process::exit(1);
                 }
                 anyhow::Ok(())
             })

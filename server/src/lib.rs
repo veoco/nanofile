@@ -54,7 +54,7 @@ use infra::storage::DynBlockStorage;
 /// treated as 32 raw bytes (AES-256); any other length is used verbatim. The
 /// caller already validated the key is present; an invalid hex string here is a
 /// configuration error and must not silently produce a weak key.
-fn decode_master_key(key: &str) -> Vec<u8> {
+pub fn decode_master_key(key: &str) -> Vec<u8> {
     if key.len() == 64 {
         match hex::decode(key) {
             Ok(bytes) => bytes,
