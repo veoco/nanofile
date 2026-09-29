@@ -1139,9 +1139,15 @@ mod tests {
         store.invalidate_exists_cache();
         assert_eq!(store.block_size(REPO, &id).await.unwrap(), 4);
 
-        assert_eq!(store.write_block_with_id(REPO, &id, data).await.unwrap(), id);
+        assert_eq!(
+            store.write_block_with_id(REPO, &id, data).await.unwrap(),
+            id
+        );
         assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
-        assert_eq!(store.block_size(REPO, &id).await.unwrap(), data.len() as i64);
+        assert_eq!(
+            store.block_size(REPO, &id).await.unwrap(),
+            data.len() as i64
+        );
     }
 
     /// The tracked (quota-accounted) write repairs the same way and reports

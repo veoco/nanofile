@@ -534,7 +534,10 @@ mod tests {
         // Sizing follows the *stored* format. Subtracting the versioned
         // overhead for a legacy block under-reported every such block by 6
         // bytes, which is what shifted clients' segmented downloads.
-        assert_eq!(store.block_size(REPO, &id).await.unwrap(), data.len() as i64);
+        assert_eq!(
+            store.block_size(REPO, &id).await.unwrap(),
+            data.len() as i64
+        );
         drop(dir);
     }
 

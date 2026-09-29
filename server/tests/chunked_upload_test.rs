@@ -664,7 +664,10 @@ async fn test_chunked_upload_repairs_a_truncated_streamed_block() {
     }
 
     let remaining = truncate_one_block_file(&f.server.block_dir);
-    assert!(remaining > 0, "expected at least one streamed block on disk");
+    assert!(
+        remaining > 0,
+        "expected at least one streamed block on disk"
+    );
     // The presence cache is per-process and would otherwise hold the length the
     // block had before it was truncated.
     f.server.state.block_store.invalidate_exists_cache();

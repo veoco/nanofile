@@ -890,10 +890,9 @@ mod tests {
             blocks.insert(id.clone(), chunk.to_vec());
             ids.push(id);
         }
-        let store: DynBlockStorage =
-            Arc::new(InexactSizeStore(MockStore {
-                blocks: Mutex::new(blocks),
-            }));
+        let store: DynBlockStorage = Arc::new(InexactSizeStore(MockStore {
+            blocks: Mutex::new(blocks),
+        }));
         // Starting in the 4th block would skip three blocks; with sizes that
         // are six bytes short each, skipping would serve from 18 bytes ahead.
         let got = collect_range(store, ids, 120, 159).await;

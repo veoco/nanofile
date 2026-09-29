@@ -187,7 +187,10 @@ mod tests {
             BlockEncryptionConverter::convert_legacy_blocks(&store, 100, Duration::ZERO)
                 .await
                 .unwrap();
-        assert_eq!(converted, 1, "a header-less ciphertext block needs conversion");
+        assert_eq!(
+            converted, 1,
+            "a header-less ciphertext block needs conversion"
+        );
 
         // Format change only: content and id are unchanged, and the stored bytes
         // carry the versioned header again.

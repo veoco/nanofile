@@ -880,7 +880,8 @@ async fn run_server(
     // itself, but it would linger forever. Sweep once, before requests are
     // served.
     {
-        let store = infra::storage::block_store::BlockStorage::new(config.storage.block_dir.clone());
+        let store =
+            infra::storage::block_store::BlockStorage::new(config.storage.block_dir.clone());
         match store.purge_layout_temp_files().await {
             Ok(0) => {}
             Ok(removed) => tracing::info!("removed {removed} stale block temp file(s)"),

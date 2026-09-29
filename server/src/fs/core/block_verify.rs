@@ -102,8 +102,14 @@ impl VerifyReport {
 
         println!("libraries scanned:            {}", self.repos_scanned);
         println!("blocks checked:               {}", self.blocks_checked);
-        println!("file objects checked:         {}", self.file_objects_checked);
-        println!("corrupt blocks:               {}", self.corrupt_blocks.len());
+        println!(
+            "file objects checked:         {}",
+            self.file_objects_checked
+        );
+        println!(
+            "corrupt blocks:               {}",
+            self.corrupt_blocks.len()
+        );
         for block in &self.corrupt_blocks {
             let len = block
                 .stored_len
@@ -125,7 +131,11 @@ impl VerifyReport {
                 .unwrap_or_else(|| format!("(fs {} — not in the current tree)", file.fs_id));
             println!(
                 "  - {}{} declares {} bytes, blocks hold {} ({} block(s), {} missing)",
-                file.repo_id, where_, file.declared_size, file.stored_size, file.blocks,
+                file.repo_id,
+                where_,
+                file.declared_size,
+                file.stored_size,
+                file.blocks,
                 file.missing_blocks
             );
         }
@@ -260,9 +270,7 @@ impl BlockVerify {
             store.invalidate_exists_cache();
         }
 
-        corrupt.sort_by(|a, b| {
-            (&a.repo_id, &a.block_id).cmp(&(&b.repo_id, &b.block_id))
-        });
+        corrupt.sort_by(|a, b| (&a.repo_id, &a.block_id).cmp(&(&b.repo_id, &b.block_id)));
         report.corrupt_blocks = corrupt;
         Ok(report)
     }
@@ -459,9 +467,7 @@ mod tests {
         let db = sea_orm::Database::connect(opts)
             .await
             .expect("in-memory sqlite");
-        migration::Migrator::up(&db, None)
-            .await
-            .expect("migrate");
+        migration::Migrator::up(&db, None).await.expect("migrate");
         db
     }
 
@@ -518,9 +524,7 @@ mod tests {
         // The pre-2017 chunker's 1 MiB / 4 MiB blocks: a non-last block below
         // the 6 MiB minimum.
         assert!(BlockVerify::non_official_chunking(&[
-            1_048_576,
-            1_048_576,
-            4_194_304
+            1_048_576, 1_048_576, 4_194_304
         ]));
         // A non-last block above the 10 MiB maximum cannot come from it either.
         assert!(BlockVerify::non_official_chunking(&[
@@ -563,9 +567,10 @@ mod tests {
             "a quarantined block must read as missing"
         );
         assert!(store.has_block(REPO, &good_id).await);
-        let kept: Vec<_> = std::fs::read_dir(quarantine_root(&block_dir).join(sha1_hex(REPO.as_bytes())))
-            .unwrap()
-            .collect();
+        let kept: Vec<_> =
+            std::fs::read_dir(quarantine_root(&block_dir).join(sha1_hex(REPO.as_bytes())))
+                .unwrap()
+                .collect();
         assert_eq!(kept.len(), 1, "quarantined bytes must be preserved");
     }
 
@@ -578,7 +583,8 @@ mod tests {
         let data = b"sixteen bytes...";
         let block_id = store.write_block(REPO, data).await.unwrap();
         // The same block, but the object claims a size its bytes cannot reach.
-        let fs_id = add_file_object(&db, std::slice::from_ref(&block_id), data.len() as i64 + 1).await;
+        let fs_id =
+            add_file_object(&db, std::slice::from_ref(&block_id), data.len() as i64 + 1).await;
 
         let report = BlockVerify::run(&db, &store, &block_dir, None, false)
             .await
