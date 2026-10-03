@@ -99,9 +99,20 @@ encrypted_library_version = 2
 #      NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS
 # encrypted_library_pwd_hash_algo = "pbkdf2_sha256"
 # encrypted_library_pwd_hash_params = "1000"
-# IPs of trusted reverse proxies (comma-separated). X-Forwarded-For is only
-# honored for rate limiting when the TCP peer is one of these. Keep empty when
-# the server is exposed directly.
+# Trusted reverse proxies (comma-separated). Forwarded client-address headers
+# (CF-Connecting-IP, X-Forwarded-For) are only honored for rate limiting when
+# the TCP peer is one of these; otherwise the raw peer address is used. Keep
+# empty when the server is exposed directly.
+#
+# Each entry is an exact IP, a CIDR range (e.g. 172.16.0.0/12, fd00::/8), or a
+# keyword: loopback, private, link-local, unique-local.
+#
+# Behind a Cloudflare Tunnel (cloudflared) the origin sees connections from a
+# loopback or private address and Cloudflare sets CF-Connecting-IP to the real
+# visitor. To restore correct client IPs set this to private AND bind the origin
+# to 127.0.0.1 (or isolate it on the Docker network) so only the tunnel can
+# reach it — otherwise a LAN peer could forge the header.
+# trusted_proxies = ["private"]
 trusted_proxies = []
 # Hosts allowed in generated absolute URLs (download / block links) while
 # `site_url` above is still the built-in default. In that state the request

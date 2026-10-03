@@ -166,41 +166,126 @@ pub fn ensure_share_links_enabled(state: &std::sync::Arc<AppState>) -> Result<()
 
 /// Determine the effective client IP for rate limiting.
 ///
-/// Uses the TCP peer address exposed via `ConnectInfo`. `X-Forwarded-For` is
-/// only consulted when the peer is a configured `trusted_proxies` entry.
+/// Uses the TCP peer address exposed via `ConnectInfo`. `X-Forwarded-For` and
+/// `CF-Connecting-IP` are only consulted when the peer is a configured
+/// `trusted_proxies` entry (see [`proxy_matches`]); when the peer is not
+/// trusted, those headers are ignored so a client cannot choose its own rate
+/// limit bucket.
 ///
-/// The list is then walked **right to left**, skipping entries that are
-/// themselves trusted proxies, and the first address that is not one of ours is
-/// returned. Taking the leftmost entry instead would hand the value to the
-/// client: the common proxy configuration appends to `X-Forwarded-For`
-/// (`$proxy_add_x_forwarded_for`), so a forged `X-Forwarded-For: 1.2.3.4` sent
-/// by an attacker would sit to the left of the real client address and every
-/// per-IP limit keyed on it becomes attacker-chosen.
+/// Behind a trusted proxy the client address is taken in this order:
+///
+/// 1. `CF-Connecting-IP` — Cloudflare writes this single, immutable client
+///    address on every request from its edge to the origin (it overwrites any
+///    client-supplied value), so it is the authoritative source when a
+///    Cloudflare Tunnel / `cloudflared` sits in front of the server.
+/// 2. `X-Forwarded-For` — walked **right to left**, skipping entries that are
+///    trusted proxies, and the first untrusted hop is returned. This is the
+///    ordinary reverse-proxy path (nginx/caddy), where the proxy appends to the
+///    chain. Cloudflare additionally appends its *own* edge IP as the rightmost
+///    entry, which is why the `CF-Connecting-IP` step above is preferred: it
+///    avoids mistaking Cloudflare's edge for the visitor. Taking the leftmost
+///    entry instead would hand the value to the client, since a forged
+///    `X-Forwarded-For: 1.2.3.4` would sit left of the real client address.
+///
+/// If neither header yields a usable address, the peer itself is returned rather
+/// than an attacker-supplied value.
 pub fn effective_client_ip(
     addr: &SocketAddr,
     headers: &axum::http::HeaderMap,
     trusted_proxies: &[String],
 ) -> String {
-    let peer = addr.ip().to_string();
-    if !trusted_proxies.iter().any(|p| p == &peer) {
-        return peer;
+    let peer = addr.ip();
+    if !proxy_matches(&peer, trusted_proxies) {
+        return peer.to_string();
     }
 
-    let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) else {
-        return peer;
-    };
+    // Cloudflare Tunnel / `cloudflared`: the edge sets a single, spoof-proof
+    // client address. Prefer it over the X-Forwarded-For chain.
+    if let Some(ip) = cf_connecting_ip(headers) {
+        return ip;
+    }
 
-    for hop in xff.split(',').rev() {
-        let hop = hop.trim();
-        if hop.is_empty() || trusted_proxies.iter().any(|p| p == hop) {
-            continue;
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        for hop in xff.split(',').rev() {
+            let hop = hop.trim();
+            if hop.is_empty() {
+                continue;
+            }
+            if let Ok(ip) = hop.parse::<std::net::IpAddr>()
+                && !proxy_matches(&ip, trusted_proxies)
+            {
+                return ip.to_string();
+            }
         }
-        return hop.to_string();
     }
 
-    // Every hop was one of our own proxies (or the header was empty): fall back
-    // to the peer rather than to an attacker-supplied value.
-    peer
+    // Every hop was one of our own proxies (or the headers were absent/empty):
+    // fall back to the peer rather than to an attacker-supplied value.
+    peer.to_string()
+}
+
+/// Whether `peer` is a configured trusted reverse proxy.
+///
+/// Each entry is matched as one of:
+/// - `loopback` / `private` / `link-local` / `unique-local` keywords,
+/// - a CIDR range (e.g. `172.16.0.0/12`, `fd00::/8`), or
+/// - an exact IP address (IPv4/IPv6).
+///
+/// Empty `trusted_proxies` means nothing sits in front of the server.
+fn proxy_matches(peer: &std::net::IpAddr, entries: &[String]) -> bool {
+    entries.iter().any(|e| entry_matches(peer, e.trim()))
+}
+
+fn entry_matches(peer: &std::net::IpAddr, entry: &str) -> bool {
+    match entry.to_ascii_lowercase().as_str() {
+        "loopback" => peer.is_loopback(),
+        "private" => is_private(peer),
+        "link-local" => is_link_local(peer),
+        "unique-local" => is_unique_local(peer),
+        _ => {
+            if let Ok(net) = entry.parse::<ipnet::IpNet>() {
+                net.contains(peer)
+            } else if let Ok(ip) = entry.parse::<std::net::IpAddr>() {
+                &ip == peer
+            } else {
+                false
+            }
+        }
+    }
+}
+
+/// RFC1918 / loopback / link-local, plus the IPv6 equivalents.
+fn is_private(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => {
+            v6.is_unique_local() || v6.is_loopback() || v6.is_unicast_link_local()
+        }
+    }
+}
+
+fn is_unique_local(ip: &std::net::IpAddr) -> bool {
+    matches!(ip, std::net::IpAddr::V6(v6) if v6.is_unique_local())
+}
+
+fn is_link_local(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => v6.is_unicast_link_local(),
+    }
+}
+
+/// Parse `CF-Connecting-IP` into a single, validated client address.
+///
+/// Returns `None` when the header is absent or does not hold a single IP (so the
+/// caller falls back to `X-Forwarded-For` / the peer rather than trusting a
+/// malformed value).
+fn cf_connecting_ip(headers: &axum::http::HeaderMap) -> Option<String> {
+    let raw = headers
+        .get("cf-connecting-ip")
+        .and_then(|v| v.to_str().ok())?;
+    let ip = raw.trim().parse::<std::net::IpAddr>().ok()?;
+    Some(ip.to_string())
 }
 
 #[cfg(test)]
@@ -275,5 +360,118 @@ mod security_header_tests {
             .expect("script-src directive");
         assert_eq!(script_src.trim(), "script-src 'self'");
         assert!(!csp.contains("script-src 'self' 'unsafe-inline'"));
+    }
+}
+
+#[cfg(test)]
+mod ip_tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderName, HeaderValue};
+
+    fn sock(ip: &str) -> SocketAddr {
+        let ip: std::net::IpAddr = ip.parse().unwrap();
+        SocketAddr::new(ip, 1234)
+    }
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(
+                HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                HeaderValue::from_str(v).unwrap(),
+            );
+        }
+        h
+    }
+
+    // An untrusted peer keeps the peer address regardless of any spoofed header.
+    #[test]
+    fn untrusted_peer_ignores_forwarded_headers() {
+        let addr = sock("203.0.113.7");
+        let hdrs = headers(&[
+            ("cf-connecting-ip", "198.51.100.9"),
+            ("x-forwarded-for", "198.51.100.9, 203.0.113.7"),
+        ]);
+        assert_eq!(
+            effective_client_ip(&addr, &hdrs, &[]),
+            "203.0.113.7",
+            "an untrusted peer must not honour client-supplied headers"
+        );
+    }
+
+    // The cloudflared scenario: peer is loopback (or a private bridge gateway)
+    // and Cloudflare's edge IP header carries the real visitor.
+    #[test]
+    fn trusted_peer_prefers_cf_connecting_ip() {
+        let addr = sock("127.0.0.1");
+        let hdrs = headers(&[("cf-connecting-ip", "203.0.113.4")]);
+        assert_eq!(
+            effective_client_ip(&addr, &hdrs, &["private".into()]),
+            "203.0.113.4"
+        );
+    }
+
+    #[test]
+    fn cf_connecting_ip_wins_over_xff() {
+        let addr = sock("127.0.0.1");
+        let hdrs = headers(&[
+            ("cf-connecting-ip", "203.0.113.4"),
+            // rightmost is Cloudflare's edge — the old code would have picked this
+            ("x-forwarded-for", "203.0.113.4, 162.158.1.1"),
+        ]);
+        assert_eq!(
+            effective_client_ip(&addr, &hdrs, &["private".into()]),
+            "203.0.113.4"
+        );
+    }
+
+    #[test]
+    fn trusted_peer_without_cf_falls_back_to_xff() {
+        let addr = sock("10.0.0.2");
+        // ordinary reverse proxy: single client hop, no CF header
+        let hdrs = headers(&[("x-forwarded-for", "203.0.113.9")]);
+        assert_eq!(
+            effective_client_ip(&addr, &hdrs, &["10.0.0.2".into()]),
+            "203.0.113.9"
+        );
+    }
+
+    #[test]
+    fn trusted_by_cidr() {
+        let addr = sock("172.17.0.1");
+        let hdrs = headers(&[("cf-connecting-ip", "203.0.113.4")]);
+        assert_eq!(
+            effective_client_ip(&addr, &hdrs, &["172.16.0.0/12".into()]),
+            "203.0.113.4"
+        );
+        // A peer just outside the range is not trusted.
+        let outside = sock("172.32.0.1");
+        assert_eq!(
+            effective_client_ip(&outside, &hdrs, &["172.16.0.0/12".into()]),
+            "172.32.0.1"
+        );
+    }
+
+    #[test]
+    fn trusted_by_loopback_keyword() {
+        let addr = sock("::1");
+        let hdrs = headers(&[("cf-connecting-ip", "203.0.113.4")]);
+        assert_eq!(
+            effective_client_ip(&addr, &hdrs, &["loopback".into()]),
+            "203.0.113.4"
+        );
+    }
+
+    #[test]
+    fn malformed_cf_connecting_ip_falls_back() {
+        let addr = sock("127.0.0.1");
+        let hdrs = headers(&[
+            ("cf-connecting-ip", "not-an-ip"),
+            ("x-forwarded-for", "203.0.113.9"),
+        ]);
+        assert_eq!(
+            effective_client_ip(&addr, &hdrs, &["private".into()]),
+            "203.0.113.9"
+        );
     }
 }

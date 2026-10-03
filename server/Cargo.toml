@@ -60,6 +60,9 @@ futures-util = "0.3"
 bytes = "1"
 futures = "0.3"
 http-body-util = "0.1"
+# CIDR matching for `server.trusted_proxies` (covers cloudflared's Docker
+# bridge source without the operator having to name a single address).
+ipnet = "2"
 
 sea-orm = { version = "2", features = [
     "sqlx-sqlite",

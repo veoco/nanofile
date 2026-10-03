@@ -223,7 +223,8 @@ the confinement this server builds rather than about the kernel underneath it.
 
 - When the server runs behind an HTTPS reverse proxy, `site_url` is set to the HTTPS address. That setting controls the `Secure` cookie attribute and HSTS. Sessions, share passwords and API tokens are bearer credentials.
 - The default bind address is `0.0.0.0`. Where only a reverse proxy should reach the server, `127.0.0.1` plus a closed firewall port restricts it.
-- Behind a reverse proxy, `trusted_proxies` determines whether `X-Forwarded-For` is honoured. Without it, client IPs can be spoofed to bypass per-IP rate limits.
+- Behind a reverse proxy, `trusted_proxies` decides which peer addresses may supply `CF-Connecting-IP` / `X-Forwarded-For` for the client IP. Without it those headers are ignored, so every client collapses to the proxy address and per-IP rate limits become one shared bucket. Entries may be an exact IP, a CIDR range, or a keyword (`loopback`, `private`, `link-local`, `unique-local`).
+- Behind a Cloudflare Tunnel (`cloudflared`), the origin sees a loopback or private peer. Set `trusted_proxies = ["private"]` and bind the origin to `127.0.0.1` (or isolate it on the Docker network); Cloudflare then supplies the visitor in `CF-Connecting-IP`, which is preferred over `X-Forwarded-For`. Only trust `private` when nothing else can reach the origin, or a LAN peer could forge the header.
 - Encrypted libraries require the library password for uploads as well as reads. Without it, web preview and download return 440, and anonymous upload links cannot be created for or used against an encrypted library.
 - A password change, deactivation or device wipe revokes every credential the account holds: other devices, sync clients and API keys, plus unused reset links.
 - Release builds refuse to start without `secret_key`. Debug builds generate one, but sessions do not survive a restart. `NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` covers local and CI use.

@@ -563,10 +563,21 @@ pub struct ServerConfig {
     /// Env: NANOFILE_SERVER_SHARE_LINK_ENABLED
     #[serde(default = "default_true")]
     pub share_link_enabled: bool,
-    /// IP addresses of trusted reverse proxies. The `X-Forwarded-For` header is
-    /// only honored for rate limiting when the TCP peer is one of these. When
-    /// empty (default) rate limiting uses the raw TCP peer address, so clients
-    /// cannot spoof the header to bypass per-IP limits.
+    /// IP addresses of trusted reverse proxies. Forwarded client-address headers
+    /// (`CF-Connecting-IP`, `X-Forwarded-For`) are only honored for rate limiting
+    /// when the TCP peer is one of these; otherwise the raw TCP peer address is
+    /// used, so clients cannot spoof the header to bypass per-IP limits. When
+    /// empty (default) the server is assumed to be exposed directly.
+    ///
+    /// Each entry is an exact IP, a CIDR range (e.g. `172.16.0.0/12`,
+    /// `fd00::/8`), or one of the keywords `loopback`, `private`, `link-local`,
+    /// `unique-local`. A Cloudflare Tunnel (`cloudflared`) reaches the origin
+    /// from a loopback or private address, and Cloudflare sets `CF-Connecting-IP`
+    /// to the real visitor — so `trusted_proxies = ["private"]` plus binding the
+    /// origin to `127.0.0.1` (or isolating it on the Docker network) restores
+    /// correct client IPs. Trusting `private` only on a host where the origin is
+    /// reachable solely through that proxy, or a LAN peer could forge the
+    /// headers.
     /// Env: NANOFILE_SERVER_TRUSTED_PROXIES (comma-separated)
     #[serde(default)]
     pub trusted_proxies: Vec<String>,

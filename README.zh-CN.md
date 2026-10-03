@@ -140,7 +140,8 @@ docker run -d --name nanofile \
 
 - 部署在 HTTPS 反向代理后时，将 `site_url` 设为 HTTPS 地址。该设置决定会话 cookie 的 `Secure` 属性与 HSTS 是否启用。会话、分享密码与 API 密钥均为持有即有效的凭据。
 - 默认绑定 `0.0.0.0`；仅由反向代理访问时，改用 `127.0.0.1` 并关闭防火墙对应端口。
-- 反向代理后需设置 `trusted_proxies`，否则 `X-Forwarded-For` 可被伪造，绕过按 IP 的限流。
+- 反向代理后需设置 `trusted_proxies`，它决定哪些对端地址提供的 `CF-Connecting-IP` / `X-Forwarded-For` 会被采信。未设置时这些头一律被忽略，所有客户端都会塌缩成代理地址，按 IP 的限流退化为同一个桶。每项可填具体 IP、CIDR 网段，或关键字（`loopback`、`private`、`link-local`、`unique-local`）。
+- 经 Cloudflare Tunnel（cloudflared）暴露时，源站看到的对端是回环或私有地址。设置 `trusted_proxies = ["private"]` 并把源站绑定到 `127.0.0.1`（或在 Docker 网络中隔离），Cloudflare 会通过 `CF-Connecting-IP` 提供真实访客 IP，其优先级高于 `X-Forwarded-For`。只有在源站无法被其他来源访问时才可信任 `private`，否则同网段设备可伪造该头。
 - 加密资料库上传同样需要资料库密码；未提供时网页预览与下载返回 440，匿名上传链接不可用于加密库。
 - 改密码、停用账号或远程擦除会吊销该账号持有的全部登录：其他设备、同步客户端、API 密钥，以及未使用的重置链接。
 - release 构建在未设置 `secret_key` 时拒绝启动；debug 构建自动生成，但会话无法跨重启保留。`NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` 仅用于本地与 CI。
