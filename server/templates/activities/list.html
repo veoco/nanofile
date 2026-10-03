@@ -21,8 +21,12 @@
    reader's timezone, which only the browser knows, so every row carries its raw
    timestamp and `core/local-time.js` inserts the local-day headers. The label
    already says whether the object was a file, a folder or a library, so the row
-   carries only who, what, where and when. #}
-<div class="nf-list mt-5">
+   carries only who, what, where and when.
+   `data-day-group` marks the panel as one the bands have to be built inside:
+   a band is 41px of layout between two rows, so CSS holds this panel out of the
+   first paint until that pass has run — otherwise the browser paints the parsed
+   but ungrouped feed and every band then shoves the rows below it down. #}
+<div class="nf-list mt-5" data-day-group>
     {% for item in activities %}
     <div class="nf-prow" data-ts-day="{{ item.time_ts }}">
         <span class="nf-prow-ic rounded-full">

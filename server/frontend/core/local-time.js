@@ -143,8 +143,24 @@ function renderDayBoundary(el) {
 var TICK_MS = 60_000;
 var started = false;
 
+// The activity feed ships ungrouped and CSS holds it out of the first paint
+// until this pass has run (see `.nf-list[data-day-group]` in input.css): a day
+// band is 41px of layout between two rows, so a feed painted before the bands
+// exist moves every row below them once they land. Marking the feeds grouped is
+// what releases that paint.
+function markFeedsGrouped() {
+  document.querySelectorAll("[data-day-group]").forEach(function (el) {
+    el.dataset.dayGrouped = "1";
+  });
+}
+
 export function initLocalTime() {
-  renderAll(document);
+  // `finally`: a render that throws must not leave the feed held back forever.
+  try {
+    renderAll(document);
+  } finally {
+    markFeedsGrouped();
+  }
 
   // The file list is refreshed/paginated via AJAX, which swaps in new DOM
   // containing fresh `[data-ts]` elements. Watch the document body (not the

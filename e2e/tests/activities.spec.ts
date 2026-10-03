@@ -182,3 +182,55 @@ test("a phone row sheds its time column", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 820 });
   await expect(meta).toBeHidden();
 });
+
+// The local-day bands are built by core/local-time.js, and its bundle is the
+// last thing in <body>. The server ships the feed ungrouped, so the browser
+// used to be free to paint it before that bundle ran — and each band (41px of
+// layout) then shoved every row below it down. The feed is now held out of the
+// first paint until the bands are in place, which this pins by holding the
+// bundle back and watching what the browser is allowed to paint.
+test("the feed does not shift when the day bands are inserted", async ({ page }) => {
+  const repoId = await seedRepo(state.baseURL, state.adminToken, `act-${Date.now()}`);
+  await uploadFile(state.baseURL, state.adminToken, repoId, "/", `shift-${Date.now()}.txt`, "x");
+
+  await page.addInitScript(() => {
+    (window as any).__feedShifts = [];
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries() as any[]) {
+        const inFeed = (e.sources || []).some(
+          (s: any) => s.node && s.node.closest && s.node.closest("main .nf-list"),
+        );
+        if (!e.hadRecentInput && inFeed) (window as any).__feedShifts.push(e.value);
+      }
+    }).observe({ type: "layout-shift", buffered: true });
+  });
+
+  // Hold the bundle: the parsed-but-ungrouped feed is what the browser has in
+  // hand. Without the hold the grouping pass usually beats the first paint and
+  // the test would prove nothing.
+  await page.route("**/static/js/common.*.js", async (route) => {
+    await new Promise((r) => setTimeout(r, 2500));
+    await route.continue();
+  });
+
+  await page.goto("/activities/", { waitUntil: "commit" });
+  // `attached`, not the default `visible`: the feed is deliberately held at
+  // `visibility: hidden`, so waiting for it to be visible would wait for the
+  // very pass this test needs to observe *after* the snapshot below.
+  await page.waitForSelector("main .nf-list[data-day-group] .nf-prow", { state: "attached" });
+
+  // Parsed, ungrouped, and held back from paint.
+  expect(await page.locator("main .nf-sec").count()).toBe(0);
+  await expect(page.locator("main .nf-list[data-day-group]")).toHaveCSS("visibility", "hidden");
+
+  // Once the pass has run the bands exist and the feed is released, so the
+  // first painted feed is already grouped.
+  await page.waitForSelector("main .nf-list[data-day-grouped]", { timeout: 10_000 });
+  expect(await page.locator("main .nf-sec").count()).toBeGreaterThan(0);
+  await expect(page.locator("main .nf-list[data-day-group]")).toHaveCSS("visibility", "visible");
+  await expect(page.locator("main .nf-prow").first()).toBeVisible();
+
+  await page.waitForLoadState("networkidle");
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => (window as any).__feedShifts)).toEqual([]);
+});

@@ -14,6 +14,13 @@
   function paintCanvas() {
     root.style.backgroundColor = root.classList.contains("dark") ? "#111111" : "#fcfcfc";
   }
+  // Publish that scripts run at all. A block whose final geometry only exists
+  // after the common bundle has rearranged it — the activity feed's local-day
+  // bands — is held back from the first paint by CSS keyed on this attribute
+  // (see input.css). A reader without JS never gets it, so nothing held back
+  // this way can be lost; set it before the preference reads below, which may
+  // throw.
+  root.dataset.js = "1";
   try {
     if (localStorage.getItem("darkMode") === "true") {
       root.classList.add("dark");

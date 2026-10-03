@@ -272,6 +272,22 @@ html:not([data-view]) .seg .js-view-list {
   color: var(--color-ink);
 }
 
+/* The activity feed's local-day bands are inserted by core/local-time.js once
+   its rows exist, and a band is 41px of layout between two rows. The bundle
+   that runs that pass sits at the end of <body>, so the browser may paint the
+   parsed but ungrouped feed first — every row below the first band then moved
+   down when the bundle landed. Hold the feed's paint until the pass has marked
+   itself done instead: the first paint is then already the grouped feed, and
+   nothing is ever inserted into a painted list.
+   `visibility`, not `display`: the rows keep their boxes, so the panel's height
+   and the scroller's length are settled before the first paint, and an
+   unpainted subtree cannot be a layout-shift source.
+   Keyed on `html[data-js]` (published pre-paint by theme-init.js), so a reader
+   without JS renders the feed ungrouped rather than not at all. */
+html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
+  visibility: hidden;
+}
+
 /* Virtual scrolling optimisation — skip off-screen row rendering */
 .js-file-list-view .js-entry-row {
   content-visibility: auto;
