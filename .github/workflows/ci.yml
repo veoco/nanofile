@@ -11,6 +11,17 @@ on:
     branches: [main, master, develop]
   pull_request:
     branches: [main, master, develop]
+  # Manual entry point: "Run workflow" runs the full suite regardless of the
+  # changed-file filter. Useful after a force-push (whose tree can match the
+  # previous commit, making the filter skip everything) or to re-run every job
+  # from the UI — a plain "Re-run all jobs" reuses the original event and would
+  # skip again.
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Run all jobs regardless of which files changed (use after a force-push or to re-run everything).
+        type: boolean
+        default: true
 
 # One run per ref per event, newest wins. The head commit's tree is what a run
 # verifies, so a superseded push cannot have found anything the newer one will
@@ -32,11 +43,18 @@ env:
 jobs:
   # ── Detect which areas changed, so Rust jobs can be skipped on pure
   #    frontend/docs changes ────────────────────────────────────────────
+  #
+  # Fail-open: the filter decides only *which* jobs to skip on an ordinary
+  # fast-forward push. A force-push (`github.event.forced`) rewrites history, so
+  # the diff against `github.event.before` is not a trustworthy "what changed"
+  # signal — and an amend that keeps the same tree would otherwise skip every
+  # job. A manual dispatch defaults to `force`, so "Run workflow" always runs
+  # the full suite. In both cases the outputs are forced true, never false.
   changes:
     runs-on: ubuntu-latest
     outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-      frontend: ${{ steps.filter.outputs.frontend }}
+      rust: ${{ steps.filter.outputs.rust == 'true' || github.event.forced == true || inputs.force == true }}
+      frontend: ${{ steps.filter.outputs.frontend == 'true' || github.event.forced == true || inputs.force == true }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
