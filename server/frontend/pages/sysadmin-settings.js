@@ -211,6 +211,16 @@ export function initSettingsFilter(deps) {
   const empty = root.querySelector("[data-settings-empty]");
   const groups = Array.from(root.querySelectorAll("[data-setting-group]"));
 
+  // The page-wide count, and the text the server rendered into it. Counting the
+  // rows here rather than trusting an attribute keeps this working on a page
+  // whose markup is assembled by a test.
+  const counter = root.querySelector("[data-settings-count]");
+  const totalText = counter ? counter.textContent : "";
+  let total = 0;
+  groups.forEach(function (group) {
+    total += group.querySelectorAll("[data-setting]").length;
+  });
+
   function apply() {
     const query = input.value;
     let shown = 0;
@@ -227,6 +237,13 @@ export function initSettingsFilter(deps) {
       shown += inGroup;
     });
     if (empty) empty.hidden = shown > 0;
+    // With nothing typed the page says what it holds; a query turns the same
+    // line into "3 of 47", so the reader knows how much of the page is left.
+    if (counter) {
+      counter.textContent = query.trim()
+        ? __t("setting.filter_count", { shown: String(shown), total: String(total) })
+        : totalText;
+    }
   }
 
   input.addEventListener("input", apply);

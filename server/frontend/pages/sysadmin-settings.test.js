@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+// `__t` reads the dictionary the server injects into `window`, and the filter
+// formats its counter through it: a node run has no window, so it stands one up
+// with the one key it asks for.
+globalThis.window = {
+  __T: { "setting.filter_count": "{shown} of {total} settings" },
+};
+
 import {
   probeHealth,
   isBack,
@@ -204,15 +211,20 @@ function fakeSettingsPage() {
     },
   };
   const empty = { hidden: true };
+  // The page-wide counter, carrying the text the server rendered — the same
+  // thing the template does before the filter has been touched.
+  const counter = { textContent: "3 settings" };
   return {
     input,
     empty,
+    counter,
     groups,
     rows,
     doc: {
       querySelector: (sel) => {
         if (sel === "[data-settings-filter]") return input;
         if (sel === "[data-settings-empty]") return empty;
+        if (sel === "[data-settings-count]") return counter;
         return null;
       },
       querySelectorAll: (sel) => (sel === "[data-setting-group]" ? groups : []),
@@ -228,9 +240,11 @@ test("initSettingsFilter hides rows and a heading left with none", () => {
   const page = fakeSettingsPage();
   assert.equal(initSettingsFilter({ doc: page.doc }), true);
 
-  // Nothing typed: every row and heading is visible, and the note is hidden.
+  // Nothing typed: every row and heading is visible, the note is hidden, and the
+  // counter is the page's own tally — the text the server rendered, untouched.
   assert.equal(page.empty.hidden, true);
   assert.equal(page.groups[0].hidden, false);
+  assert.equal(page.counter.textContent, "3 settings");
 
   page.type("email");
   assert.equal(page.rows.addr.hidden, true);
@@ -240,11 +254,14 @@ test("initSettingsFilter hides rows and a heading left with none", () => {
   assert.equal(page.empty.hidden, true);
   // A heading counts what is left under it, not what it started with.
   assert.equal(page.groups[1].count.textContent, "1");
+  // The page-wide counter says how much of the page is left.
+  assert.equal(page.counter.textContent, "1 of 3 settings");
 
   // A query that matches nothing says so rather than showing a blank page.
   page.type("nothing matches this");
   assert.equal(page.groups[1].hidden, true);
   assert.equal(page.empty.hidden, false);
+  assert.equal(page.counter.textContent, "0 of 3 settings");
 
   // Clearing the box brings the page back.
   page.type("");
@@ -252,6 +269,7 @@ test("initSettingsFilter hides rows and a heading left with none", () => {
   assert.equal(page.groups[1].hidden, false);
   assert.equal(page.groups[0].count.textContent, "2");
   assert.equal(page.empty.hidden, true);
+  assert.equal(page.counter.textContent, "3 settings");
 });
 
 test("initSettingsFilter is inert on a page without a box", () => {

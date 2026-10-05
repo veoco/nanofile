@@ -146,6 +146,9 @@ pub struct SystemSettingsTemplate {
     pub section_subtitle_key: &'static str,
     pub sections: Vec<SectionLink>,
     pub groups: Vec<SettingGroup>,
+    /// How many rows this page holds, for the filter's "12 of 47" count. Counted
+    /// here rather than in the template because Askama has no fold.
+    pub row_count: usize,
     /// Keys whose saved value supersedes a config-file entry that disagrees.
     pub drift_keys: Vec<String>,
     pub pending_restart: Vec<String>,
@@ -220,6 +223,9 @@ pub struct SandboxDecisionView {
 /// absence means.
 pub struct SandboxItemView {
     pub label_key: &'static str,
+    /// The mark the row leads with, named rather than inlined so the template
+    /// picks the glyph and the item keeps choosing what it means.
+    pub icon: &'static str,
     pub present: bool,
     /// `badge-red` for a critical item that is missing, `badge-gray` otherwise.
     pub class: &'static str,
@@ -386,6 +392,7 @@ async fn render(
                 active: *id == section,
             })
             .collect(),
+        row_count: groups.iter().map(|group| group.rows.len()).sum(),
         groups,
         drift_keys,
         pending_restart: pending.iter().cloned().collect(),
@@ -481,6 +488,7 @@ fn sandbox_view(t: &'static I18n, enabled: bool, min_level: crate::sandbox::Leve
                     .into_iter()
                     .map(|(item, present)| SandboxItemView {
                         label_key: item_label(item),
+                        icon: item_icon(item),
                         present,
                         class: item_class(item, present),
                         severity: t.tr(item_severity(item)).to_string(),
@@ -712,6 +720,17 @@ fn item_impact(item: &str) -> &'static str {
         "files" => "sandbox.impact_files",
         "network" => "sandbox.impact_network",
         _ => "sandbox.impact_process",
+    }
+}
+
+/// The mark beside one protection. A name rather than a path: the template owns
+/// the SVG, this only says which one belongs to the item.
+fn item_icon(item: &str) -> &'static str {
+    match item {
+        "limits" => "clock",
+        "files" => "lock",
+        "network" => "share",
+        _ => "cog",
     }
 }
 
@@ -1309,6 +1328,7 @@ mod tests {
         fn files_item(present: bool) -> SandboxItemView {
             SandboxItemView {
                 label_key: "sandbox.item_files",
+                icon: "lock",
                 present,
                 class: if present { "badge-green" } else { "badge-red" },
                 severity: String::new(),

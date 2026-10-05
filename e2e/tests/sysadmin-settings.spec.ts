@@ -34,61 +34,58 @@ test("the admin menu reaches system management", async ({ page }) => {
 });
 
 /**
- * The settings area is the page rather than a card inside it: the rows start at
- * the same left edge as the title and the filter above them, instead of being
- * inset by a panel form's padding.
+ * The panel is the page's own width: it starts at the same left edge as the
+ * title and the filter above it. Inside it a setting is one of the app's list
+ * rows, so its text is inset by the row's own padding rather than by the page.
  */
-test("the rows line up with the page header and the filter", async ({ page }) => {
+test("the panel lines up with the page header and the filter", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");
   const title = (await page.locator("main .page-title").boundingBox())!;
-  const filter = (await page.locator("[data-settings-filter]").boundingBox())!;
-  const row = (await page.locator('[data-setting="server.addr"]').boundingBox())!;
-  for (const box of [filter, row]) {
+  // The filter's own box: the input inside it starts after the search glyph, so
+  // the control whose left edge is meant to line up is the label.
+  const filter = (await page.locator("label.nf-find").boundingBox())!;
+  const panel = (await page.locator("form.nf-list").boundingBox())!;
+  for (const box of [filter, panel]) {
     expect(Math.abs(box.x - title.x)).toBeLessThan(1);
   }
+
+  // A row's text starts one border plus one row padding inside the panel, and
+  // its control column ends the same distance from the other edge.
+  const row = page.locator('[data-setting="server.addr"]');
+  const label = (await row.locator("label").boundingBox())!;
+  expect(Math.round(label.x - panel.x)).toBe(15);
+  const control = (await row.locator(".nf-srow-act").boundingBox())!;
+  expect(Math.round(panel.x + panel.width - (control.x + control.width))).toBe(15);
 });
 
 /**
- * The group heading is the one thing on the page that is inset: the band is
- * full width and carries its own sides, because nothing else draws them — a
- * background whose text sits flush with its edge and whose left and right are
- * open reads as a stripe the page cut off.
+ * The group heading is the panel's own band: full width inside the panel, whose
+ * border draws the sides the band used to have to draw itself, with the group's
+ * count beside the label. It is also a separator — a hairline under it, and the
+ * first group leaves the one above it to the panel's border.
  */
-test("a group heading carries its own sides and inset", async ({ page }) => {
+test("a group heading is a full-width band in the panel", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");
   const band = page.locator('[data-setting-group="server_addresses"] .nf-sec');
+  const panel = page.locator("form.nf-list");
   const box = (await band.boundingBox())!;
-  const title = (await page.locator("main .page-title").boundingBox())!;
-  // The band spans the page rather than floating inside it...
-  expect(Math.abs(box.x - title.x)).toBeLessThan(1);
-  // ...and draws the sides the form does not.
-  await expect(band).toHaveCSS("border-left-width", "1px");
-  await expect(band).toHaveCSS("border-right-width", "1px");
+  const outer = (await panel.boundingBox())!;
+  // The band spans the panel edge to edge, inside its border...
+  expect(Math.abs(box.x - (outer.x + 1))).toBeLessThan(1);
+  expect(Math.abs(box.width - (outer.width - 2))).toBeLessThan(1);
+  // ...and the first group draws no top hairline of its own.
+  await expect(band).toHaveCSS("border-bottom-width", "1px");
+  await expect(band).toHaveCSS("border-top-width", "0px");
 
-  // The label is inset inside the band, so it is no longer against the edge.
+  // The label is inset by the band's own 14px.
   const heading = (await band.locator("h2").boundingBox())!;
-  expect(heading.x).toBeGreaterThan(box.x + 10);
+  expect(Math.round(heading.x - box.x)).toBe(14);
 
-  // The band is a 43px separator here, not the 49.5px the inherited line height
-  // would give: this page's heading is 13px (`.nf-form h2`) and the count beside
-  // it is 11px, so both need `leading-none` for the band to shed that height.
-  expect(box.height).toBeLessThanOrEqual(44);
+  // 41px: an 11px label at `leading-none`, 14px of padding either side and the
+  // two hairlines. The inherited 1.5 line height would make it 46.5px.
+  expect(box.height).toBeLessThanOrEqual(42);
   const middle = (r: { y: number; height: number }) => r.y + r.height / 2;
   expect(Math.abs(middle(heading) - middle(box))).toBeLessThanOrEqual(1);
-
-  // The label's four insets are equal here too: the same 14px the band gives its
-  // sides, which is what squares the label's ink in the corner.
-  const pad = await band.evaluate((el) => {
-    const cs = getComputedStyle(el);
-    const b = el.getBoundingClientRect();
-    const h = (el.querySelector("h2") as HTMLElement).getBoundingClientRect();
-    return {
-      left: h.left - b.left - parseFloat(cs.borderLeftWidth),
-      top: h.top - b.top - parseFloat(cs.borderTopWidth),
-    };
-  });
-  expect(Math.round(pad.left)).toBe(14);
-  expect(Math.round(pad.top)).toBe(14);
 });
 
 /**
@@ -143,7 +140,9 @@ test("every area renders its rows and its section bar", async ({ page }) => {
  */
 test("the sandbox page shows the measured grade and items", async ({ page }) => {
   await page.goto("/sysadmin/settings/sandbox/");
-  await expect(page.locator("[data-sandbox-status]")).toBeVisible();
+  // The verdict leads, the strip of four numbers follows it.
+  await expect(page.locator("[data-sandbox-verdict-label]")).toBeVisible();
+  await expect(page.locator("[data-sandbox-status] .field-label")).toHaveCount(4);
   await expect(page.locator("[data-sandbox-grade]")).toBeVisible();
   // One row per protection, in the order the report carries them.
   for (const item of ["limits", "files", "network", "process"]) {
@@ -152,13 +151,37 @@ test("the sandbox page shows the measured grade and items", async ({ page }) => 
     ).toBeVisible();
   }
   // The media worker is its own child with its own grade: the profile that
-  // cannot have the process item says so on its own line.
+  // cannot have the process item says so on its own row.
   await expect(page.locator("[data-sandbox-media]")).toBeVisible();
   await expect(page.locator("[data-sandbox-media-state]")).toBeVisible();
   // The panel names a grade and an item state rather than a locale key.
   const body = (await page.locator("[data-sandbox-status]").innerText()).trim();
   expect(body).not.toContain("sandbox.grade_");
   expect(body).not.toContain("sandbox.item_");
+});
+
+/**
+ * The page is a report, not a log: what each protection is and what its absence
+ * opens is one row apiece, and the platform's own residuals — the paragraphs
+ * about fork, `setpgid` and the loader, which used to run down the page — are
+ * one disclosure away, closed by default.
+ */
+test("the sandbox page keeps its technical details in disclosures", async ({ page }) => {
+  await page.goto("/sysadmin/settings/sandbox/");
+  // The process note is the longest sentence on the page: it must not be in the
+  // flow of it.
+  const process = page.locator("[data-sandbox-media-process]");
+  await expect(process).toBeHidden();
+
+  await page.locator("[data-sandbox-media] details summary").click();
+  await expect(process).toBeVisible();
+
+  // A missing protection keeps its consequence in the row: hiding that would
+  // leave the reader to infer it from a grey badge.
+  const missing = page.locator("[data-sandbox-item]").filter({ hasText: "Missing" });
+  for (let i = 0; i < (await missing.count()); i++) {
+    await expect(missing.nth(i).locator("[data-sandbox-impact]")).toBeVisible();
+  }
 });
 
 test("a live setting takes effect immediately and says where it came from", async ({
@@ -306,7 +329,12 @@ test("an enum names its choices instead of the wire value", async ({ page }) => 
 test("the filter narrows the page to the rows that match", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");
   const filter = page.locator("[data-settings-filter]");
+  const counter = page.locator("[data-settings-count]");
   await expect(page.locator('[data-setting="server.addr"]')).toBeVisible();
+  // Untouched, the counter is the page's own tally, rendered by the server.
+  const total = await page.locator("[data-setting]").count();
+  expect(total).toBeGreaterThan(2);
+  await expect(counter).toHaveText(`${total} settings`);
 
   await filter.fill("tray");
   await expect(page.locator('[data-setting="ui.tray_language"]')).toBeVisible();
@@ -318,13 +346,17 @@ test("the filter narrows the page to the rows that match", async ({ page }) => {
   await expect(
     page.locator('[data-setting-group="server_desktop"] [data-setting-group-count]'),
   ).toHaveText("2");
+  // The page-wide counter says how much of the page is left.
+  await expect(counter).toHaveText(`2 of ${total} settings`);
 
   await filter.fill("no setting says this");
   await expect(page.locator("[data-settings-empty]")).toBeVisible();
+  await expect(counter).toHaveText(`0 of ${total} settings`);
 
   await filter.fill("");
   await expect(page.locator('[data-setting="server.addr"]')).toBeVisible();
   await expect(page.locator("[data-settings-empty]")).toBeHidden();
+  await expect(counter).toHaveText(`${total} settings`);
 });
 
 test("a regular account cannot reach the pages", async ({ page, browser }) => {

@@ -972,12 +972,15 @@ async fn the_settings_page_offers_a_restart_button() {
     );
 }
 
-/// The settings form is the page, not a panel inside one: it must not re-add
-/// the padding that would push its rows out of line with the title and the
-/// filter above them. And the group heading's own hairline closes the group it
-/// belongs to, so the first row under it draws no second hairline.
+/// The settings form is one of the app's panels: a `.nf-list` holding a band per
+/// group and a row per setting, so the page reads as a list rather than as a
+/// sheet of fields. Its own two `hidden` inputs follow the groups, which is what
+/// leaves the first group's `<section>` the panel's first child — the band relies
+/// on that to leave its top hairline to the panel's border. And the group
+/// heading's own hairline closes the group it belongs to, so the first row under
+/// it draws no second hairline.
 #[tokio::test]
-async fn the_settings_form_is_flush_with_the_page() {
+async fn the_settings_form_is_a_panel() {
     let server = TestServer::start().await;
     common::create_test_admin(&server.db, "root@example.com", "password123").await;
     let admin = ui_login(&server, "root@example.com", "password123").await;
@@ -988,10 +991,34 @@ async fn the_settings_form_is_flush_with_the_page() {
         .expect("the save form is on the page");
     let tag_start = html[..form_at].rfind('<').expect("the form is an element");
     let tag_end = form_at + html[form_at..].find('>').expect("the tag closes");
+    let tag = &html[tag_start..tag_end];
     assert!(
-        html[tag_start..tag_end].contains("is-flush"),
-        "the settings form must opt out of the panel padding: {}",
-        &html[tag_start..tag_end]
+        tag.contains("nf-list"),
+        "the settings form must be one of the app's panels: {tag}"
+    );
+    assert!(
+        !tag.contains("is-flush"),
+        "the old flush-to-the-page special case is gone: {tag}"
+    );
+
+    // Inside the form: the last row comes before the hidden fields, and the
+    // hidden fields before the Save button.
+    let groups_from = html
+        .find(r#"data-setting-group=""#)
+        .expect("the page has rows");
+    let form_end = groups_from
+        + html[groups_from..]
+            .find("</form>")
+            .expect("the form closes");
+    let body = &html[groups_from..form_end];
+    let last_row = body.rfind(r#"data-setting=""#).expect("the form has rows");
+    let hidden = body
+        .find(r#"name="section""#)
+        .expect("the save form carries the section field");
+    assert!(
+        last_row < hidden,
+        "the hidden fields must follow the rows, or the first band loses its \
+         top hairline to the panel's border: {body}"
     );
 
     // `server.addr` is the first key of the Server page's first group; the row
@@ -1010,6 +1037,10 @@ async fn the_settings_form_is_flush_with_the_page() {
         assert!(
             !tag.contains("border-t"),
             "the separator is the hidden-aware rule's job, not the row's: {tag}"
+        );
+        assert!(
+            tag.contains("nf-prow"),
+            "a setting is one of the app's list rows: {tag}"
         );
     }
 }

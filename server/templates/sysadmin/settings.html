@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "includes/time.html" as time %}
+{% import "includes/icons.html" as icons %}
 {% import "sysadmin/settings/includes/nav.html" as settings_nav %}
 
 {# System management: one page per area, each a form over the settings catalog.
@@ -12,6 +13,12 @@
    for a restart, needing one, or read-only). Read-only values (the master
    secret, the database URL, the state directories) are shown for their origin
    but have no control: the server refuses to store them.
+
+   The rows are the app's own list rows — one `.nf-list` panel, a `.nf-sec` band
+   per group, a `.nf-prow` per setting with the control as its right-hand column
+   — because this is the same task as every other list in the app: scan named
+   things and act on one. The panel is the form itself, so the Save button saves
+   exactly the rows the panel shows.
 
    A row's internal key is a `data-` hook and the label's tooltip, not text: the
    page prints the environment variable when one owns the value, because that is
@@ -107,293 +114,339 @@
     </div>
     {% endif %}
 
-    {# The measured sandbox, on its own page: what this host actually gives,
-       which of the four protections is missing, and what the platform still
-       leaves open. Every value comes from a child that confined itself and
+    {# The measured sandbox, on its own page. The page leads with the verdict,
+       because that is the one sentence an admin came for; the four numbers an
+       admin acts on follow as one strip; what each protection is and what its
+       absence opens is a row apiece, in the same panel shape as every other
+       list in the app. Every value comes from a child that confined itself and
        printed what took, so the page cannot claim protection the host does not
-       provide. #}
+       provide — and the platform's own residuals are one disclosure away rather
+       than prose every reader has to walk past. #}
     {% if let Some(sandbox) = sandbox %}
-    <section class="nf-form is-flush mt-5" data-sandbox-status>
-        <div class="nf-sec">
-            <h2>{{ t.tr("sandbox.status_title") }}</h2>
-            <span class="badge {{ sandbox.grade_class }}" data-sandbox-grade>{{ sandbox.grade }}</span>
+    <div class="nf-banner {{ sandbox.verdict.banner }} mt-5" data-sandbox-verdict="{{ sandbox.verdict.class }}">
+        <p class="font-semibold" data-sandbox-verdict-label>{{ sandbox.verdict.label }}</p>
+        {% if let Some(detail) = sandbox.verdict.detail %}
+        <p class="mt-0.5 text-[12px]">{{ detail }}</p>
+        {% endif %}
+    </div>
+
+    <div class="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-box border border-line bg-line sm:grid-cols-4"
+         data-sandbox-status role="group" aria-label="{{ t.tr("sandbox.status_label") }}">
+        <div class="bg-panel px-3.5 py-3">
+            <p class="field-label">{{ t.tr("sandbox.status_grade") }}</p>
+            <p class="mt-1.5"><span class="badge {{ sandbox.grade_class }}" data-sandbox-grade>{{ sandbox.grade }}</span></p>
         </div>
-        <div class="body flex flex-col gap-2 text-[13px]">
-            <div class="flex items-center justify-between gap-2">
-                <span class="text-ink-2">{{ t.tr("sandbox.status_switch") }}</span>
+        <div class="bg-panel px-3.5 py-3">
+            <p class="field-label">{{ t.tr("sandbox.status_switch") }}</p>
+            <p class="mt-1.5">
                 <span class="badge {% if sandbox.enabled %}badge-green{% else %}badge-red{% endif %}">
                     {% if sandbox.enabled %}{{ t.tr("sandbox.status_on") }}{% else %}{{ t.tr("sandbox.status_off") }}{% endif %}
                 </span>
-            </div>
-            <div class="flex items-center justify-between gap-2">
-                <span class="text-ink-2">{{ t.tr("sandbox.status_min") }}</span>
-                <span>{{ sandbox.min_level }}</span>
-            </div>
-            {# Whether the features actually run under the policy the admin set.
-               Distinct from the grade above, which says what the host could give:
-               a red item with a green decision is a host that is safe enough for
-               the settings, and a green item with a red decision is not. #}
-            <div class="flex items-center justify-between gap-2" data-sandbox-decision>
-                <span class="text-ink-2">{{ t.tr("sandbox.status_running") }}</span>
-                <span class="badge {{ sandbox.decision.class }}" data-sandbox-decision-state>{{ sandbox.decision.label }}</span>
-            </div>
+            </p>
+        </div>
+        <div class="bg-panel px-3.5 py-3">
+            <p class="field-label">{{ t.tr("sandbox.status_min") }}</p>
+            <p class="mt-1.5 text-[13px] text-ink">{{ sandbox.min_level }}</p>
+        </div>
+        {# Whether the features actually run under the policy the admin set.
+           Distinct from the grade, which says what the host could give: a red
+           item with a green decision is a host that is safe enough for the
+           settings, and a green item with a red decision is not. #}
+        <div class="bg-panel px-3.5 py-3" data-sandbox-decision>
+            <p class="field-label">{{ t.tr("sandbox.status_running") }}</p>
+            <p class="mt-1.5"><span class="badge {{ sandbox.decision.class }}" data-sandbox-decision-state>{{ sandbox.decision.label }}</span></p>
             {% if let Some(reason) = sandbox.decision.reason %}
-            <p class="desc" data-sandbox-decision-reason>{{ reason }}</p>
-            {% endif %}
-            <div class="flex items-center justify-between gap-2" data-sandbox-media>
-                <span class="text-ink-2">{{ t.tr("sandbox.status_media") }}</span>
-                <span class="flex items-center gap-2">
-                    {# Its own grade: the media profile cannot have the process
-                       item, so it grades below the profile above on every
-                       platform, and hiding that would undo the point of the
-                       row. #}
-                    {% if let Some(grade) = sandbox.media.grade %}
-                    <span class="badge {{ sandbox.media.grade_class }}" data-sandbox-media-grade>{{ grade }}</span>
-                    {% endif %}
-                    <span class="badge {{ sandbox.media.class }}" data-sandbox-media-state>{{ sandbox.media.label }}</span>
-                </span>
-            </div>
-            <p class="desc" data-sandbox-media-process>{{ sandbox.media.process_note }}</p>
-            {% for note in sandbox.media.notes %}
-            <p class="desc" data-sandbox-media-note>{{ note }}</p>
-            {% endfor %}
-            {% if let Some(reason) = sandbox.media.reason %}
-            <p class="desc" data-sandbox-media-reason>{{ reason }}</p>
+            <p class="mt-1.5 text-[11.5px] text-ink-3" data-sandbox-decision-reason>{{ reason }}</p>
             {% endif %}
         </div>
+    </div>
 
-        {# The verdict: the one line the page leads with, because "this host is
-           weaker than it could be" and "the policy you chose accepts a host that
-           lets a parser read your files" are different sentences and only the
-           second is a decision the admin made. #}
-        <div class="nf-banner {{ sandbox.verdict.banner }} mt-3" data-sandbox-verdict="{{ sandbox.verdict.class }}">
-            <p class="font-semibold" data-sandbox-verdict-label>{{ sandbox.verdict.label }}</p>
-            {% if let Some(detail) = sandbox.verdict.detail %}
-            <p class="desc">{{ detail }}</p>
-            {% endif %}
+    <div class="nf-list mt-4">
+        <div class="nf-sec">
+            <h2>{{ t.tr("sandbox.items_title") }}</h2>
         </div>
-
-        <div class="mt-4">
-            <h3>{{ t.tr("sandbox.items_title") }}</h3>
-            <div class="mt-2 flex flex-col gap-2 text-[13px]" data-sandbox-items>
-                {% for item in sandbox.items %}
-                <div data-sandbox-item="{{ item.label_key }}" data-sandbox-severity="{{ item.severity }}">
-                    <div class="flex items-center justify-between gap-2">
-                        <span class="text-ink-2">{{ t.tr(item.label_key) }}</span>
-                        <span class="flex items-center gap-2">
-                            <span class="badge badge-gray">{{ item.severity }}</span>
-                            <span class="badge {{ item.class }}">
-                                {% if item.present %}{{ t.tr("sandbox.item_present") }}{% else %}{{ t.tr("sandbox.item_missing") }}{% endif %}
-                            </span>
-                        </span>
-                    </div>
-                    {# What its absence opens, in the operator's terms, rather
-                       than a restatement of the item's name. #}
-                    {% if let Some(impact) = item.impact %}
-                    <p class="desc" data-sandbox-impact>{{ impact }}</p>
-                    {% endif %}
-                    {% for note in item.notes %}
-                    <p class="desc">{{ note }}</p>
-                    {% endfor %}
+        {% for item in sandbox.items %}
+        <div class="nf-prow" data-sandbox-item="{{ item.label_key }}" data-sandbox-severity="{{ item.severity }}">
+            <span class="nf-prow-ic">
+                {% if item.icon == "clock" %}{{ icons::icon_clock("w-[15px] h-[15px]") }}
+                {% else if item.icon == "lock" %}{{ icons::icon_lock("w-[15px] h-[15px]") }}
+                {% else if item.icon == "share" %}{{ icons::icon_share("w-[15px] h-[15px]") }}
+                {% else %}{{ icons::icon_cog("w-[15px] h-[15px]") }}{% endif %}
+            </span>
+            <div class="nf-prow-main">
+                <div class="nf-prow-name flex-wrap">
+                    <span class="base">{{ t.tr(item.label_key) }}</span>
+                    <span class="badge badge-gray shrink-0">{{ item.severity }}</span>
+                    <span class="badge {{ item.class }} shrink-0">
+                        {% if item.present %}{{ t.tr("sandbox.item_present") }}{% else %}{{ t.tr("sandbox.item_missing") }}{% endif %}
+                    </span>
                 </div>
-                {% endfor %}
+                {# What its absence opens, in the operator's terms, rather than a
+                   restatement of the item's name. #}
+                {% if let Some(impact) = item.impact %}
+                <p class="mt-0.5 text-[12px] text-ink-3" data-sandbox-impact>{{ impact }}</p>
+                {% endif %}
+                {% if !item.notes.is_empty() %}
+                <details class="mt-1.5">
+                    <summary class="nf-toggle">
+                        {{ icons::icon_arrow_right("w-3 h-3") }}
+                        {{ t.tr("sandbox.details_show") }}
+                    </summary>
+                    <div class="nf-expand flex flex-col gap-1">
+                        {% for note in item.notes %}
+                        <p class="text-[12px] text-ink-3">{{ note }}</p>
+                        {% endfor %}
+                    </div>
+                </details>
+                {% endif %}
             </div>
         </div>
+        {% endfor %}
 
-        {# The raw report, one disclosure away: an operator filing a bug has the
-           whole measurement without the page shouting it at every reader. #}
-        <details class="mt-4">
-            <summary class="text-[12px] text-ink-3">{{ t.tr("sandbox.detail_title") }}</summary>
-            <p class="mono text-[11px] break-all mt-2">{{ sandbox.detail }}</p>
-            <p class="mono text-[11px] break-all mt-1">{{ sandbox.media.detail }}</p>
-        </details>
-    </section>
+        {# The media worker is a second child with its own report: its own grade,
+           because it starts a program by definition and so grades below the
+           document profile on every platform. #}
+        <div class="nf-sec">
+            <h2>{{ t.tr("sandbox.status_media") }}</h2>
+        </div>
+        <div class="nf-prow" data-sandbox-media>
+            <span class="nf-prow-ic">{{ icons::icon_camera("w-[15px] h-[15px]") }}</span>
+            <div class="nf-prow-main">
+                <div class="nf-prow-name flex-wrap">
+                    <span class="base">{{ t.tr("sandbox.media_worker") }}</span>
+                    {% if let Some(grade) = sandbox.media.grade %}
+                    <span class="badge {{ sandbox.media.grade_class }} shrink-0" data-sandbox-media-grade>{{ grade }}</span>
+                    {% endif %}
+                    <span class="badge {{ sandbox.media.class }} shrink-0" data-sandbox-media-state>{{ sandbox.media.label }}</span>
+                </div>
+                {% if let Some(reason) = sandbox.media.reason %}
+                <p class="mt-0.5 text-[12px] text-ink-3" data-sandbox-media-reason>{{ reason }}</p>
+                {% endif %}
+                {# Always a disclosure, even when there is no note: the process
+                   item cannot exist for this profile, and that sentence is the
+                   longest one on the page. #}
+                <details class="mt-1.5">
+                    <summary class="nf-toggle">
+                        {{ icons::icon_arrow_right("w-3 h-3") }}
+                        {{ t.tr("sandbox.details_show") }}
+                    </summary>
+                    <div class="nf-expand flex flex-col gap-1">
+                        <p class="text-[12px] text-ink-3" data-sandbox-media-process>{{ sandbox.media.process_note }}</p>
+                        {% for note in sandbox.media.notes %}
+                        <p class="text-[12px] text-ink-3" data-sandbox-media-note>{{ note }}</p>
+                        {% endfor %}
+                    </div>
+                </details>
+            </div>
+        </div>
+    </div>
+
+    {# The raw report, one disclosure away: an operator filing a bug has the
+       whole measurement without the page shouting it at every reader. #}
+    <details class="mt-4">
+        <summary class="nf-toggle">
+            {{ icons::icon_arrow_right("w-3 h-3") }}
+            {{ t.tr("sandbox.detail_title") }}
+        </summary>
+        <p class="mono text-[11px] break-all mt-2">{{ sandbox.detail }}</p>
+        <p class="mono text-[11px] break-all mt-1">{{ sandbox.media.detail }}</p>
+    </details>
     {% endif %}
 
     {# The catalog is over a hundred settings across ten pages, so the page can
-       be filtered. Without scripting the box is inert and the page is what it
-       always was. #}
+       be filtered. The box sits outside the form: a search field inside it would
+       submit the settings on Enter. Without scripting it stays inert and the
+       page is what it always was. #}
     <div class="mt-5 flex flex-wrap items-center gap-3">
-        <input type="search" class="input max-w-sm" data-settings-filter
-               placeholder="{{ t.tr("setting.filter_placeholder") }}"
-               aria-label="{{ t.tr("setting.filter_placeholder") }}">
+        <label class="nf-find w-[300px] max-w-[40vw] shrink-0">
+            {{ icons::icon_search("w-[13px] h-[13px] shrink-0") }}
+            <input type="search" autocomplete="off" data-settings-filter
+                   placeholder="{{ t.tr("setting.filter_placeholder") }}"
+                   aria-label="{{ t.tr("setting.filter_placeholder") }}">
+        </label>
+        <span class="nf-libcount" data-settings-count role="status">{{ t.trf("setting.filter_total", [("n", row_count.to_string())]) }}</span>
         <p class="text-[12px] text-ink-3" data-settings-empty hidden>{{ t.tr("setting.filter_empty") }}</p>
     </div>
 
-    <form action="/sysadmin/settings/{{ section }}/save/" method="POST" class="nf-form is-flush mt-5">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="section" value="{{ section }}">
+    {# The panel is the form. The two `hidden` inputs come after the groups so
+       that the first group's `<section>` is the panel's own first child — the
+       band relies on that to leave its top hairline to the panel's border. #}
+    <form action="/sysadmin/settings/{{ section }}/save/" method="POST" class="nf-list mt-5">
+        {% for group in groups %}
+        {# One `<section>` per group, so a filter can hide a heading together
+           with the rows it belongs to instead of leaving it behind. #}
+        <section data-setting-group="{{ group.id }}">
+            <div class="nf-sec">
+                <h2>{{ t.tr(group.title_key) }}</h2>
+                {# The count is what the group holds now, so the filter updates
+                   it as it hides rows rather than leaving a stale number. #}
+                <span class="n num" data-setting-group-count>{{ group.rows.len() }}</span>
+            </div>
+            {% for row in group.rows %}
+            {# `data-setting` is the hook a test (or a future script) uses to find
+               one row without depending on the markup around it; it is also the
+               key the label repeats as a tooltip, so an operator naming the
+               setting in a bug report can find it without the page printing it
+               once per row.
 
-        {# `.nf-form` normally pads its body; the page-level form is flush with
-           the title and the filter above it, so this wrapper carries no class. #}
-        <div>
-            {% for group in groups %}
-            {# One `<section>` per group, so a filter can hide a heading together
-               with the rows it belongs to instead of leaving it behind. #}
-            <section data-setting-group="{{ group.id }}">
-                <div class="nf-sec">
-                    <h2>{{ t.tr(group.title_key) }}</h2>
-                    {# The count is what the group holds now, so the filter updates
-                       it as it hides rows rather than leaving a stale number. #}
-                    <span class="n num" data-setting-group-count>{{ group.rows.len() }}</span>
-                </div>
-                {% for row in group.rows %}
-                {# `data-setting` is the hook a test (or a future script) uses to find
-                   one row without depending on the markup around it; it is also
-                   the key the label repeats as a tooltip, so an operator naming
-                   the setting in a bug report can find it without the page
-                   printing it once per row.
-
-                   Rows are separated by a hairline drawn above every row but the
-                   first, and that is a stylesheet rule rather than a per-row
-                   class: the filter hides rows, and a hidden row must not leave
-                   the row beneath it carrying a hairline for a row nobody
-                   sees. #}
-                <div data-setting="{{ row.key }}" data-setting-search="{{ row.search_text }}"
-                     class="grid grid-cols-1 gap-3 py-3.5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] lg:gap-6">
-                    <div class="min-w-0">
+               The row draws no bottom hairline of its own: the separator belongs
+               to the row below it, which is a stylesheet rule rather than a
+               per-row class, because the filter hides rows and a hidden row must
+               not leave the next one carrying a line for a row nobody sees. #}
+            <div data-setting="{{ row.key }}" data-setting-search="{{ row.search_text }}"
+                 class="nf-prow nf-srow">
+                <div class="nf-prow-main">
+                    <div class="nf-prow-name flex-wrap">
                         <label class="text-[13px] font-medium text-ink" title="{{ row.key }}"
                                {% if !row.locked && !row.read_only %}for="field-{{ row.key }}"{% endif %}>
                             {{ t.tr(row.label_key) }}
                         </label>
-                        <p class="desc">{{ row.help }}</p>
 
-                        <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-                            {# The badge names the kind of source; which file key or
-                               which save sits behind it is in the tooltip. #}
-                            {% if row.origin == "environment" %}
-                            <span class="badge badge-green"
-                                  {% if !row.origin_title.is_empty() %}title="{{ row.origin_title }}"{% endif %}>{{ t.tr("setting.origin_environment") }}</span>
-                            {% else if row.origin == "database" %}
-                            <span class="badge badge-brand"
-                                  {% if !row.origin_title.is_empty() %}title="{{ row.origin_title }}"{% endif %}>{{ t.tr("setting.origin_database") }}</span>
-                            {% else if row.origin == "config" %}
-                            <span class="badge badge-gray"
-                                  {% if !row.origin_title.is_empty() %}title="{{ row.origin_title }}"{% endif %}>{{ t.tr("setting.origin_config") }}</span>
-                            {% else %}
-                            <span class="badge badge-gray"
-                                  {% if !row.origin_title.is_empty() %}title="{{ row.origin_title }}"{% endif %}>{{ t.tr("setting.origin_default") }}</span>
-                            {% endif %}
+                        {# The badge names the kind of source; which file key or
+                           which save sits behind it is in the tooltip. #}
+                        {% if row.origin == "environment" %}
+                        <span class="badge badge-green shrink-0"
+                              {% if !row.origin_title.is_empty() %}title="{{ row.origin_title }}"{% endif %}>{{ t.tr("setting.origin_environment") }}</span>
+                        {% else if row.origin == "database" %}
+                        <span class="badge badge-brand shrink-0"
+                              {% if !row.origin_title.is_empty() %}title="{{ row.origin_title }}"{% endif %}>{{ t.tr("setting.origin_database") }}</span>
+                        {% else if row.origin == "config" %}
+                        <span class="badge badge-gray shrink-0"
+                              {% if !row.origin_title.is_empty() %}title="{{ row.origin_title }}"{% endif %}>{{ t.tr("setting.origin_config") }}</span>
+                        {% else %}
+                        <span class="badge badge-gray shrink-0"
+                              {% if !row.origin_title.is_empty() %}title="{{ row.origin_title }}"{% endif %}>{{ t.tr("setting.origin_default") }}</span>
+                        {% endif %}
 
-                            {# The one origin an operator has to act on, named in full. #}
-                            {% if let Some(var) = row.env_var %}
-                            <span class="mono text-[11px] text-ink-3">{{ var }}</span>
-                            {% endif %}
-
-                            {% if let Some(state) = row.state_badge %}
-                            <span class="badge {{ state.class }}">{{ state.label }}</span>
-                            {% endif %}
-
-                            {% if let Some(ts) = row.origin_at %}
-                            <span class="text-[11px] text-ink-3">{{ time::ts(ts) }}</span>
-                            {% endif %}
-                        </div>
-
-                        {% if let Some(config_value) = row.config_value %}
-                        <p class="text-[12px] text-warn-text mt-1.5">
-                            {{ t.tr("setting.config_superseded") }}
-                            <span class="mono">{{ config_value }}</span>
-                        </p>
+                        {% if let Some(state) = row.state_badge %}
+                        <span class="badge {{ state.class }} shrink-0">{{ state.label }}</span>
                         {% endif %}
                     </div>
 
-                    <div class="flex min-w-0 flex-col items-start gap-2">
-                        {% if row.read_only %}
-                        <p class="mono text-[12px] text-ink-2 break-all" data-setting-value>
-                            {% if row.control == "secret" %}
-                                {% if row.secret_set %}{{ t.tr("setting.secret_set") }}
-                                {% else if row.secret_broken %}{{ t.tr("setting.secret_broken") }}
-                                {% else %}{{ t.tr("setting.secret_unset") }}{% endif %}
-                            {% else if row.value.is_empty() %}
-                                {# An unset optional value: say so rather than showing nothing. #}
-                                {{ t.tr("setting.value_unset") }}
-                            {% else %}
-                                {{ row.value }}
-                            {% endif %}
-                            {% if let Some(unit) = row.unit %}<span class="text-ink-3"> {{ unit }}</span>{% endif %}
-                        </p>
-                        {% else if row.locked %}
-                        <p class="mono text-[12px] text-ink-2 break-all" data-setting-value>{{ row.value }}{% if let Some(unit) = row.unit %}<span class="text-ink-3"> {{ unit }}</span>{% endif %}</p>
-                        <p class="text-[11px] text-ink-3">{{ t.tr("setting.env_locked") }}</p>
-                        {% else if row.control == "bool" %}
-                        <div class="flex items-center gap-2">
-                            {# A hidden "false" first, then the checkbox: the browser
-                               submits both when it is on, and last-wins folding is
-                               what makes an unchecked box mean false rather than
-                               "leave it alone". #}
-                            <input type="hidden" name="{{ row.key }}" value="false">
-                            <input type="checkbox" name="{{ row.key }}" value="true" id="field-{{ row.key }}"
-                                   class="accent-ink" {% if row.checked %}checked{% endif %}>
-                        </div>
-                        {% else if row.control == "enum" %}
-                        <select class="input w-full" name="{{ row.key }}" id="field-{{ row.key }}">
-                            {% for option in row.options %}
-                            <option value="{{ option.value }}" {% if option.selected %}selected{% endif %}>
-                                {{ option.label }}
-                            </option>
-                            {% endfor %}
-                        </select>
-                        {% else if row.control == "secret" %}
-                        <input class="input w-full" type="password" name="{{ row.field }}"
-                               id="field-{{ row.key }}" autocomplete="new-password"
-                               placeholder="{% if row.secret_set %}{{ t.tr("setting.secret_keep") }}{% else %}{{ t.tr("setting.secret_unset") }}{% endif %}">
-                        <label class="flex items-center gap-2 text-[12px] text-ink-2">
-                            <input type="checkbox" name="clear:{{ row.key }}" value="on" class="accent-ink">
-                            {{ t.tr("setting.secret_clear") }}
-                        </label>
-                        {% if row.secret_broken %}
-                        <p class="text-[12px] text-err-text">{{ t.tr("setting.secret_broken") }}</p>
+                    <p class="mt-0.5 text-[12px] text-ink-3">{{ row.help }}</p>
+
+                    {# The origin an operator has to go and change, and when the
+                       saved value landed. #}
+                    {% if row.env_var.is_some() || row.origin_at.is_some() %}
+                    <div class="nf-prow-sub mt-0.5">
+                        {% if let Some(var) = row.env_var %}
+                        <span class="mono t">{{ var }}</span>
                         {% endif %}
-                        {% else if row.control == "number" %}
-                        {# The unit is rendered here rather than written into the
-                           label, so the label reads on its own. #}
-                        <div class="flex items-center gap-2">
-                            <input class="input mono w-full" type="number" min="0" step="1"
-                                   name="{{ row.key }}" id="field-{{ row.key }}" value="{{ row.value }}">
+                        {% if let Some(ts) = row.origin_at %}
+                        <span class="t">{{ time::ts(ts) }}</span>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    {% if let Some(config_value) = row.config_value %}
+                    <p class="nf-prow-hi text-warn-text">
+                        {{ t.tr("setting.config_superseded") }}
+                        <span class="mono">{{ config_value }}</span>
+                    </p>
+                    {% endif %}
+                </div>
+
+                {# The row's fixed column: the value's one control, and the way
+                   back to the file for a value that came from a save. #}
+                <div class="nf-srow-act">
+                    {% if row.read_only %}
+                    <p class="mono text-[12px] text-ink-2" data-setting-value>
+                        {% if row.control == "secret" %}
+                            {% if row.secret_set %}{{ t.tr("setting.secret_set") }}
+                            {% else if row.secret_broken %}{{ t.tr("setting.secret_broken") }}
+                            {% else %}{{ t.tr("setting.secret_unset") }}{% endif %}
+                        {% else if row.value.is_empty() %}
+                            {# An unset optional value: say so rather than showing nothing. #}
+                            {{ t.tr("setting.value_unset") }}
+                        {% else %}
+                            {{ row.value }}
+                        {% endif %}
+                        {% if let Some(unit) = row.unit %}<span class="text-ink-3"> {{ unit }}</span>{% endif %}
+                    </p>
+                    {% else if row.locked %}
+                    <p class="mono text-[12px] text-ink-2" data-setting-value>{{ row.value }}{% if let Some(unit) = row.unit %}<span class="text-ink-3"> {{ unit }}</span>{% endif %}</p>
+                    <p class="text-[11px] text-ink-3 lg:text-right">{{ t.tr("setting.env_locked") }}</p>
+                    {% else if row.control == "bool" %}
+                    <div class="flex items-center gap-2">
+                        {# A hidden "false" first, then the checkbox: the browser
+                           submits both when it is on, and last-wins folding is
+                           what makes an unchecked box mean false rather than
+                           "leave it alone". #}
+                        <input type="hidden" name="{{ row.key }}" value="false">
+                        <input type="checkbox" name="{{ row.key }}" value="true" id="field-{{ row.key }}"
+                               class="accent-ink" {% if row.checked %}checked{% endif %}>
+                    </div>
+                    {% else if row.control == "enum" %}
+                    <select class="input w-full" name="{{ row.key }}" id="field-{{ row.key }}">
+                        {% for option in row.options %}
+                        <option value="{{ option.value }}" {% if option.selected %}selected{% endif %}>
+                            {{ option.label }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    {% else if row.control == "secret" %}
+                    <input class="input w-full" type="password" name="{{ row.field }}"
+                           id="field-{{ row.key }}" autocomplete="new-password"
+                           placeholder="{% if row.secret_set %}{{ t.tr("setting.secret_keep") }}{% else %}{{ t.tr("setting.secret_unset") }}{% endif %}">
+                    <label class="flex items-center gap-2 text-[12px] text-ink-2">
+                        <input type="checkbox" name="clear:{{ row.key }}" value="on" class="accent-ink">
+                        {{ t.tr("setting.secret_clear") }}
+                    </label>
+                    {% if row.secret_broken %}
+                    <p class="text-[12px] text-err-text lg:text-right">{{ t.tr("setting.secret_broken") }}</p>
+                    {% endif %}
+                    {% else if row.control == "number" %}
+                    {# The unit is rendered here rather than written into the
+                       label, so the label reads on its own. #}
+                    <div class="flex w-full items-center gap-2">
+                        <input class="input mono w-full" type="number" min="0" step="1"
+                               name="{{ row.key }}" id="field-{{ row.key }}" value="{{ row.value }}">
+                        {% if let Some(unit) = row.unit %}
+                        <span class="text-[12px] text-ink-3 whitespace-nowrap">{{ unit }}</span>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <div class="flex w-full flex-col gap-1">
+                        <div class="flex w-full items-center gap-2">
+                            <input class="input w-full {% if row.control == "path" %}mono{% endif %}"
+                                   type="text"
+                                   name="{{ row.key }}" id="field-{{ row.key }}" value="{{ row.value }}"
+                                   {% if row.control == "path" %}spellcheck="false"{% endif %}
+                                   {% if row.control == "list" %}placeholder="{{ t.tr("setting.list_placeholder") }}"{% endif %}>
                             {% if let Some(unit) = row.unit %}
                             <span class="text-[12px] text-ink-3 whitespace-nowrap">{{ unit }}</span>
                             {% endif %}
                         </div>
-                        {% else %}
-                        <div class="flex w-full flex-col gap-1">
-                            <div class="flex items-center gap-2">
-                                <input class="input w-full {% if row.control == "path" %}mono{% endif %}"
-                                       type="text"
-                                       name="{{ row.key }}" id="field-{{ row.key }}" value="{{ row.value }}"
-                                       {% if row.control == "path" %}spellcheck="false"{% endif %}
-                                       {% if row.control == "list" %}placeholder="{{ t.tr("setting.list_placeholder") }}"{% endif %}>
-                                {% if let Some(unit) = row.unit %}
-                                <span class="text-[12px] text-ink-3 whitespace-nowrap">{{ unit }}</span>
-                                {% endif %}
-                            </div>
-                            {% if row.control == "list" %}
-                            <p class="text-[11px] text-ink-3">{{ t.tr("setting.list_hint") }}</p>
-                            {% endif %}
-                        </div>
-                        {% endif %}
-
-                        {% if row.origin == "database" %}
-                        {# Clear the saved value so the config file (or the built-in
-                           default) supplies it again. `formaction` keeps this inside
-                           the one form; a nested form would be invalid HTML. #}
-                        <button type="submit" class="btn btn-line btn-sm"
-                                formaction="/sysadmin/settings/reset/"
-                                name="key" value="{{ row.key }}">
-                            {{ t.tr("setting.reset") }}
-                        </button>
+                        {% if row.control == "list" %}
+                        <p class="text-[11px] text-ink-3">{{ t.tr("setting.list_hint") }}</p>
                         {% endif %}
                     </div>
+                    {% endif %}
+
+                    {% if row.origin == "database" %}
+                    {# Clear the saved value so the config file (or the built-in
+                       default) supplies it again. `formaction` keeps this inside
+                       the one form; a nested form would be invalid HTML. #}
+                    <button type="submit" class="btn btn-line btn-sm"
+                            formaction="/sysadmin/settings/reset/"
+                            name="key" value="{{ row.key }}">
+                        {{ t.tr("setting.reset") }}
+                    </button>
+                    {% endif %}
                 </div>
-                {% endfor %}
-            </section>
+            </div>
             {% endfor %}
-        </div>
+        </section>
+        {% endfor %}
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="section" value="{{ section }}">
 
         {# Saving and re-reading the table stay with the form they act on; the
            restart button is in the page header, because restarting is not a
            save and a silent one would be the wrong side effect for it.
            `pages/sysadmin-settings.js` asks for confirmation first. #}
-        <div class="body mt-2 flex flex-wrap gap-2 border-t border-line pt-4">
+        <div class="nf-srow-foot">
             <button type="submit" class="btn btn-solid">{{ t.tr("common.save") }}</button>
             <button type="submit" class="btn btn-line"
                     formaction="/sysadmin/settings/refresh/">
@@ -406,27 +459,33 @@
        the config file wins. It has no controls, so it sits below the rows rather
        than inside the form. #}
     {% if section == "advanced" %}
-    <section class="nf-form is-flush mt-5">
-        <h2>{{ t.tr("setting.policy_title") }}</h2>
-        <p class="desc">{{ t.tr("setting.policy_desc") }}</p>
-        <div class="body flex flex-col gap-2 text-[13px]">
-            <div class="flex items-center justify-between gap-2">
-                <span class="text-ink-2">{{ t.tr("setting.policy_mode") }}</span>
+    <div class="nf-list mt-5">
+        <div class="nf-sec">
+            <h2>{{ t.tr("setting.policy_title") }}</h2>
+        </div>
+        <div class="nf-prow">
+            <div class="nf-prow-main">
+                <div class="nf-prow-name">{{ t.tr("setting.policy_mode") }}</div>
+                <p class="mt-0.5 text-[12px] text-ink-3">{{ t.tr("setting.policy_desc") }}</p>
+                <p class="nf-prow-sub mt-0.5 mono">
+                    [settings] config_policy = "{{ policy.config_policy }}"
+                    {% if !policy.override_keys.is_empty() %}
+                    · config_override_keys = {{ policy.override_keys.join(", ") }}
+                    {% endif %}
+                </p>
+            </div>
+            <div class="nf-prow-meta">
                 <span class="badge badge-gray">{{ t.tr("setting.policy_bootstrap") }}</span>
             </div>
-            <p class="desc mono">
-                [settings] config_policy = "{{ policy.config_policy }}"
-                {% if !policy.override_keys.is_empty() %}
-                · config_override_keys = {{ policy.override_keys.join(", ") }}
-                {% endif %}
-            </p>
-            <div class="flex items-center justify-between gap-2">
-                <span class="text-ink-2">{{ t.tr("setting.policy_refresh") }}</span>
-                <span class="mono">{{ policy.refresh_interval_secs }}s</span>
-            </div>
-            <p class="desc">{{ t.tr("setting.policy_hint") }}</p>
         </div>
-    </section>
+        <div class="nf-prow">
+            <div class="nf-prow-main">
+                <div class="nf-prow-name">{{ t.tr("setting.policy_refresh") }}</div>
+                <p class="mt-0.5 text-[12px] text-ink-3">{{ t.tr("setting.policy_hint") }}</p>
+            </div>
+            <div class="nf-prow-meta mono">{{ policy.refresh_interval_secs }}s</div>
+        </div>
+    </div>
     {% endif %}
 </div>
 {% endif %}

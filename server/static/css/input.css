@@ -1060,11 +1060,6 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
   .nf-form .desc { @apply mt-0.5 text-[12px] text-ink-3; }
   .nf-form .body { @apply mt-3; }
 
-  /* The system-settings form is the page rather than a panel inside one: its
-     rows line up with the title, the section bar and the filter above them, so
-     it drops the padding and the trailing hairline a panel form carries. */
-  .nf-form.is-flush { @apply px-0 py-0 border-b-0; }
-
   /* A settings page's sections, as panels in a grid: one column until the window
      is wide enough for two, and a section that is a list of rows (which cannot
      be halved) spans both. In the grid a section is its own panel, so the
@@ -1073,22 +1068,27 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
   .nf-cards > .nf-form { @apply rounded-box border border-line bg-panel; }
   .nf-cards > .is-wide { @apply xl:col-span-2; }
 
-  /* A settings page groups its rows under `.nf-sec` headings too, and there the
-     form is not a panel: nothing else draws the band's sides, so a heading whose
-     text sat flush with its edge and whose left and right were open read as a
-     stripe the page cut off rather than as a heading. The band keeps its own
-     inset (14px, 12px under 640px) and draws its own sides; the rows below stay
-     flush with the title, which is the one place on this page that is inset. */
-  .nf-form .nf-sec {
-    border-left: 1px solid var(--color-line);
-    border-right: 1px solid var(--color-line);
+  /* ─── System settings rows ────────────────────────────────────────────────
+     One setting is one row of the panel it lives in: what the setting is, what
+     it does and where its value came from on the left, the control as the row's
+     fixed right-hand column. `flex-wrap` is what drops that column under the
+     text on a phone instead of squeezing both, and the row draws no bottom
+     hairline of its own — see the separator rule below. */
+  .nf-srow { @apply flex-wrap items-start py-3 border-b-0; }
+  .nf-srow-act {
+    @apply flex w-full shrink-0 flex-col items-start gap-2 lg:w-[min(22rem,40%)] lg:items-end;
   }
+  /* A read-only value is a fixed column, so it reads down the page rather than
+     into the label: right-aligned where the column is, broken anywhere so a
+     database URL cannot push the panel wider than the window. */
+  .nf-srow-act [data-setting-value] { @apply break-all lg:text-right; }
+  .nf-srow-foot { @apply flex flex-wrap items-center justify-end gap-2 px-3.5 py-3 border-t border-line; }
 
-  /* The rows are separated by the hairline each one carries, so a hidden row
-     would leave the row under it drawing the line that belonged above the hidden
-     one. Counting the visible neighbours instead keeps the filtered page from
-     growing a stray rule under the heading. */
-  .nf-form [data-setting]:not([hidden]) ~ [data-setting]:not([hidden]) {
+  /* The rows are separated by the hairline the row *below* carries, so a hidden
+     row cannot leave the row under it drawing the line that belonged above the
+     hidden one: the filtered page would grow a stray rule under the heading.
+     Counting the visible neighbours is what keeps the bands honest. */
+  .nf-list [data-setting]:not([hidden]) ~ [data-setting]:not([hidden]) {
     border-top: 1px solid var(--color-line);
   }
 
