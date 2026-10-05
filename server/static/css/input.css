@@ -495,8 +495,11 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
   /* Pins under the toolbar, not over it: `top: 0` would put this row and the
      toolbar at the same offset, and being later in the DOM it would paint on
      top — hiding the sort and view controls while the list scrolls. */
+  /* Its hairline is the rows' own (`--color-line`), not the heavier
+     `--color-line-strong`: the header is one more band of the same grid, and
+     the libraries page mirrors this rule. */
   .nf-row-head {
-    @apply sticky z-sticky h-[30px] bg-panel border-b border-line-strong
+    @apply sticky z-sticky h-[30px] bg-panel border-b border-line
            text-[10.5px] uppercase tracking-[0.07em] text-ink-3 cursor-default;
     top: var(--file-toolbar-h);
   }
@@ -712,9 +715,12 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
   .nf-lib:not(.nf-lib-head):focus-within { @apply bg-raised; }
   /* Pinned under the toolbar while the list scrolls, like the file list's own
      header. `z-[1]` and not `z-sticky`: the sort popover hangs below the
-     toolbar and would be painted over by anything at the toolbar's level. */
+     toolbar and would be painted over by anything at the toolbar's level.
+     The hairline is restated as the rows' own (`--color-line`, the width comes
+     from `.nf-lib`): a header is one more band of the same grid, so it does not
+     get the heavier `--color-line-strong` the two list pages used to draw. */
   .nf-lib-head {
-    @apply sticky z-[1] h-[30px] bg-panel border-line-strong text-[10.5px] uppercase tracking-[0.07em] text-ink-3;
+    @apply sticky z-[1] h-[30px] bg-panel border-line text-[10.5px] uppercase tracking-[0.07em] text-ink-3;
     top: var(--file-toolbar-h);
   }
   .nf-lib-head .r { @apply text-right; }

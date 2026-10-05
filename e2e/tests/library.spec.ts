@@ -117,6 +117,27 @@ test("the list spans the same box as its toolbar", async ({ page }) => {
   expect(box.head).toEqual(box.toolbar);
 });
 
+// The header band is one more row of the same grid, so its hairline is the rows'
+// own `--color-line` — not the heavier `--color-line-strong` it used to draw,
+// which read as a stray dark rule under the toolbar on this page and inside a
+// library. Token-agnostic on purpose: it asserts the two are the same colour,
+// not which one that is.
+test("the column header's hairline matches the rows'", async ({ page }) => {
+  // A second library, because the last row's `border-bottom: 0` shorthand also
+  // drops its colour back to `currentColor` — comparing against that row would
+  // assert the wrong thing whether or not the header regressed.
+  await createRepo(state.baseURL, state.adminToken, `hairline-lib-${Date.now()}`);
+  await openLibraries(page);
+
+  const colors = await page.evaluate(() => {
+    const bottom = (sel: string) =>
+      getComputedStyle(document.querySelector(sel)!).borderBottomColor;
+    return { head: bottom(".nf-lib-head"), row: bottom("#repo-list > li:not(:last-child)") };
+  });
+  expect(colors.row).not.toBe("rgba(0, 0, 0, 0)");
+  expect(colors.head).toBe(colors.row);
+});
+
 // The list used to be sorted only in the browser, so the server's membership
 // order painted first and every row jumped once the bundle ran. The default
 // order is the server's now: nothing moves on load.

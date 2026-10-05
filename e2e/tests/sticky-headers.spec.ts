@@ -53,6 +53,17 @@ test("the column header pins under the toolbar, not over it", async ({ page }) =
   expect(boxes.head.top).toBe(boxes.toolbar.top + boxes.toolbar.h);
   expect(boxes.head.bottom).toBeGreaterThan(boxes.toolbar.bottom);
 
+  // The header's hairline is the rows' own `--color-line`, not the heavier
+  // `--color-line-strong` it used to draw (the libraries page mirrors this).
+  // Token-agnostic: it asserts the two agree, not which colour that is.
+  const hairline = await page.evaluate(() => {
+    const bottom = (sel: string) =>
+      getComputedStyle(document.querySelector(sel)!).borderBottomColor;
+    return { head: bottom(".nf-row-head"), row: bottom(".js-file-list-view .js-entry-row") };
+  });
+  expect(hairline.row).not.toBe("rgba(0, 0, 0, 0)");
+  expect(hairline.head).toBe(hairline.row);
+
   // The controls the header used to cover are reachable: the sort click is
   // intercepted by the header if this regresses, and the order has to change.
   const firstFile = page.locator('.js-file-list-view .js-entry-row[data-type="file"]').first();
