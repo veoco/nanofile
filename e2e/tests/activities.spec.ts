@@ -169,6 +169,53 @@ test("a day heading draws the only line above its group", async ({ page }) => {
   expect(band).not.toBe(row);
 });
 
+// The band's label is inset 14px on every side — the gutter the rows use — and
+// its line box is exactly its font size (`leading-none`). That is what squares
+// its ink against the panel's rounded top-left corner: at the inherited 1.5 the
+// 11px label carried 3.9px of empty leading above the caps against 0.5px beside
+// them, so it read as further from the top than from the left, and the 14px top
+// against 10px bottom that was there to compensate left it 2px low. `leading-none`
+// is also what keeps the band 41px rather than 46.5px.
+test("a day band insets its label evenly and centers it", async ({ page }) => {
+  const repoId = await seedRepo(state.baseURL, state.adminToken, `act-band-${Date.now()}`);
+  await uploadFile(state.baseURL, state.adminToken, repoId, "/", `band-${Date.now()}.txt`, "x");
+  await page.goto("/activities/");
+  await page.waitForSelector("main .nf-prow[data-ts-day]");
+
+  // The first band of a panel draws no top hairline, so the border each side is
+  // measured against has to come off before the two insets can be compared.
+  const read = () =>
+    page.evaluate(() => {
+      const el = document.querySelector("main .nf-list > .nf-sec") as HTMLElement;
+      const label = el.querySelector("h2") as HTMLElement;
+      const b = el.getBoundingClientRect();
+      const h = label.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      return {
+        padLeft: h.left - b.left - parseFloat(cs.borderLeftWidth),
+        padTop: h.top - b.top - parseFloat(cs.borderTopWidth),
+        // Positive when the label sits below the band's middle.
+        drift: h.top + h.height / 2 - (b.top + b.height / 2),
+        height: b.height,
+      };
+    });
+
+  const desktop = await read();
+  expect(Math.round(desktop.padLeft)).toBe(14);
+  expect(Math.abs(desktop.padTop - desktop.padLeft)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(desktop.drift)).toBeLessThanOrEqual(1);
+  // 41px of padding + label + hairlines; the inflated line box would make it 46.5.
+  expect(desktop.height).toBeLessThanOrEqual(42);
+
+  // A phone shrinks the band's horizontal inset with the row gutter, so the
+  // vertical one has to come down with it or the corner is crooked again — the
+  // other way round.
+  await page.setViewportSize({ width: 375, height: 820 });
+  const phone = await read();
+  expect(Math.round(phone.padLeft)).toBe(12);
+  expect(Math.abs(phone.padTop - phone.padLeft)).toBeLessThanOrEqual(0.5);
+});
+
 // A list row sheds its metadata column on a phone. The activity row puts the
 // class straight on the `[data-ts]` span, so the rule that hides it has to beat
 // the `inline-block` a time cell is given — which is why those defaults sit in

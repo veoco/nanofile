@@ -68,6 +68,27 @@ test("a group heading carries its own sides and inset", async ({ page }) => {
   // The label is inset inside the band, so it is no longer against the edge.
   const heading = (await band.locator("h2").boundingBox())!;
   expect(heading.x).toBeGreaterThan(box.x + 10);
+
+  // The band is a 43px separator here, not the 49.5px the inherited line height
+  // would give: this page's heading is 13px (`.nf-form h2`) and the count beside
+  // it is 11px, so both need `leading-none` for the band to shed that height.
+  expect(box.height).toBeLessThanOrEqual(44);
+  const middle = (r: { y: number; height: number }) => r.y + r.height / 2;
+  expect(Math.abs(middle(heading) - middle(box))).toBeLessThanOrEqual(1);
+
+  // The label's four insets are equal here too: the same 14px the band gives its
+  // sides, which is what squares the label's ink in the corner.
+  const pad = await band.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    const b = el.getBoundingClientRect();
+    const h = (el.querySelector("h2") as HTMLElement).getBoundingClientRect();
+    return {
+      left: h.left - b.left - parseFloat(cs.borderLeftWidth),
+      top: h.top - b.top - parseFloat(cs.borderTopWidth),
+    };
+  });
+  expect(Math.round(pad.left)).toBe(14);
+  expect(Math.round(pad.top)).toBe(14);
 });
 
 /**

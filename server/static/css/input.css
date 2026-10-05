@@ -907,13 +907,23 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
   /* Section header inside a panel: one band, whose own two hairlines close the
      group above it and open the one below, with the label and count inside. The
      band is what separates the groups — not a rule beside the label, which
-     stacked against the previous row's border and read as two lines. */
+     stacked against the previous row's border and read as two lines.
+     Equal padding on all four sides — 14px, the gutter `.nf-prow` gives its
+     icons, 12px under 640px where that gutter shrinks — plus `leading-none` on
+     the label and the count. The inherited 1.5 line height left 3.9px of empty
+     leading above an 11px uppercase label against ~0.5px beside it, so the ink
+     read as further from the top than from the left, in a band whose top-left
+     corner the panel's radius rounds. Compensating with 14px on top against 10px
+     below then left the label 2px low. `leading-none` also drops the band from
+     46.5px to 41px. The count needs it too: the band is as tall as its tallest
+     child. Not on `.nf-sec` itself, where the badge a settings band carries would
+     inherit it as well. */
   .nf-sec {
-    @apply flex items-center gap-2.5 px-3.5 pt-3.5 pb-2.5
+    @apply flex items-center gap-2.5 px-3.5 py-3.5
            border-t border-b border-line bg-raised;
   }
-  .nf-sec h2 { @apply text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3; }
-  .nf-sec .n { @apply text-[11px] tabular-nums text-ink-3; }
+  .nf-sec h2 { @apply text-[11px] font-semibold uppercase leading-none tracking-[0.07em] text-ink-3; }
+  .nf-sec .n { @apply text-[11px] leading-none tabular-nums text-ink-3; }
 
   .nf-empty { @apply px-4 py-14 text-center; }
   .nf-empty h3 { @apply mt-3 text-[13px] font-medium text-ink-2; }
@@ -1223,5 +1233,8 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
 @media (max-width: 640px) {
   .nf-prow { gap: 10px; padding-left: 12px; padding-right: 12px; }
   .nf-prow-meta { display: none; }
-  .nf-sec { padding-left: 12px; padding-right: 12px; }
+  /* The band's four insets stay equal on a phone, and its horizontal ones follow
+     the row gutter that shrinks here — a 14px top against 12px sides would be the
+     same crooked corner the desktop rule avoids. */
+  .nf-sec { padding: 12px; }
 }
