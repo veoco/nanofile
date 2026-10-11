@@ -33,6 +33,8 @@ fn the_worker_ran() {
             common::sandbox::configure_real_worker(),
             "this file must be the first to configure the worker"
         );
+        // The bound is what this file needs; the grade is asserted elsewhere.
+        server::sandbox::worker::configure_requirement(common::sandbox::limits_requirement());
     });
 }
 

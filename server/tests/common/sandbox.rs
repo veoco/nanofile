@@ -143,22 +143,41 @@ pub fn windows_container() -> bool {
 
 /// The requirement a probe test measures a *parser* profile under.
 ///
-/// `partial` is what the shipped policy asks for on Linux and macOS, so the
-/// grade assertions there stay what they always were. On Windows it asks for the
-/// files layer as well, which is why the container is attempted only when
-/// `windows_container()` says the runner can give one; otherwise the probe
-/// settles for the plain creation and the report says `files=open`.
+/// `limits`, and that is the point of the model these tests pin: what they assert
+/// is that the child bounds itself and still does its job, which is true on every
+/// platform and is the one item no host may give up. The grade is then whatever
+/// the platform installed — `full` on Linux and macOS, `limits` on a Windows host
+/// that can start neither a container nor a restrained child — and
+/// `the_platform_answer` asserts the mechanism that goes with it.
+///
+/// Asking for `partial` here would have made these tests fail on such a host
+/// before they could report anything: the probe runs under the requirement, and a
+/// requirement the host misses is answered `unavailable`. `windows_container()`
+/// still decides whether the files layer is *asked* for, so a runner that can
+/// give a container measures it.
 pub fn configure_probe_requirement() -> Requirement {
-    Requirement::from_config(true, "partial", windows_container())
+    Requirement::from_config(true, "limits", windows_container())
 }
 
 /// The requirement the *media* probe is measured under.
 ///
-/// `limits`, because the media profile can never reach `partial`: it starts the
-/// helper by copying itself, so it never has the process item, and a `partial`
-/// minimum would refuse it on every host and skip the assertion that matters —
-/// that the confined child still decodes a frame.
+/// The same `limits` as a parser profile, and for the same reason: the media
+/// profile can never reach `partial` — it starts the helper by copying itself, so
+/// it never has the process item — and asking for more than the bound would make
+/// the probe refuse on hosts that give exactly what the assertion is about.
 pub fn configure_media_probe_requirement() -> Requirement {
+    Requirement::from_config(true, "limits", windows_container())
+}
+
+/// The `Requirement` an integration test wants the features to run under.
+///
+/// The resource bound, and the files layer only where the runner can give it.
+/// Every test binary that turns the real worker on calls this before its first
+/// fixture: what those tests are about is the feature doing its job, and the
+/// shipped default (`partial`) would disable the feature on a host that cannot
+/// start a container — which is a policy decision, not a test result. The grades
+/// themselves are asserted in `sandbox_probe_test`.
+pub fn limits_requirement() -> Requirement {
     Requirement::from_config(true, "limits", windows_container())
 }
 

@@ -362,6 +362,12 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
+      # The sandbox requirement and its status cache are process-global, and a
+      # test that sets a requirement reads what it produced through a child
+      # process. Serialising the tests inside a binary keeps a second test from
+      # storing its own requirement in that window; the binaries themselves still
+      # run in parallel.
+      RUST_TEST_THREADS: "1"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable

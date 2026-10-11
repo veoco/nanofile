@@ -2,7 +2,7 @@
 //!
 //! The child confines itself and *then* reads the request, so these tests hand
 //! the real binary hand-written bytes, the way an attacker who reached the
-//! protocol would. `--min-level none` keeps the subject the parser rather than
+//! protocol would. `--min-level limits` keeps the subject the parser rather than
 //! this host, and the constants are spelled here: a wire format is pinned.
 
 use std::io::{Read, Write};
@@ -162,7 +162,7 @@ fn media_head(kind: u8, size: u32, path_len: u16) -> Vec<u8> {
 /// The documents child parses what it is given and nothing else.
 #[test]
 fn a_document_request_is_parsed_or_refused() {
-    let args = ["--profile", "documents", "--min-level", "none"];
+    let args = ["--profile", "documents", "--min-level", "limits"];
 
     // The positive control: the harness reaches a working child, so the
     // refusals below are the parser's doing and not a binary that never ran.
@@ -213,7 +213,7 @@ fn the_child_refuses_to_serve_with_the_sandbox_off() {
             "--profile",
             "documents",
             "--min-level",
-            "none",
+            "limits",
             "--sandbox-off",
         ],
         &document_request(0, b"zebraquartz"),
@@ -236,7 +236,7 @@ fn the_child_refuses_to_serve_with_the_sandbox_off() {
 /// made of — the whole text is what says the request path is intact.
 #[test]
 fn the_child_returns_the_whole_text_of_a_real_document() {
-    let args = ["--profile", "documents", "--min-level", "none"];
+    let args = ["--profile", "documents", "--min-level", "limits"];
     let cases: [(u8, &[u8], &str); 4] = [
         (
             2,
@@ -278,7 +278,7 @@ fn the_child_returns_the_whole_text_of_a_real_document() {
 /// The images child bounds what it will hold and refuses what it does not know.
 #[test]
 fn an_image_request_is_parsed_or_refused() {
-    let args = ["--profile", "images", "--min-level", "none"];
+    let args = ["--profile", "images", "--min-level", "limits"];
 
     // The positive control: a real PNG decodes and comes back as an image,
     // fitted to the box the request names. The source is deliberately not
@@ -324,7 +324,7 @@ fn a_media_request_cannot_name_its_own_source() {
         "--profile",
         "media",
         "--min-level",
-        "none",
+        "limits",
         "--ffmpeg",
         helper,
         "--src",
@@ -368,7 +368,7 @@ fn a_media_request_cannot_name_its_own_source() {
             "--profile",
             "media",
             "--min-level",
-            "none",
+            "limits",
             "--ffmpeg",
             helper,
             "--src",
@@ -393,7 +393,7 @@ fn a_media_request_cannot_name_its_own_source() {
             "--profile",
             "media",
             "--min-level",
-            "none",
+            "limits",
             "--ffmpeg",
             helper,
         ],
@@ -408,7 +408,7 @@ fn a_media_request_cannot_name_its_own_source() {
             "--profile",
             "media",
             "--min-level",
-            "none",
+            "limits",
             "--src",
             granted.to_str().expect("a UTF-8 path"),
         ],
