@@ -253,9 +253,29 @@ pub fn require_level(profile: Profile, minimum: Level) -> Report {
 /// `--probe` is the half the server runs at startup; `helper` is the media
 /// profile's grant, and the other profiles have none. The line is printed as
 /// well as returned: a CI log is where it is read when a runner disagrees.
+///
+/// The requirement travels on this command line rather than being left to the
+/// binary's default, and that is not a detail: `--probe` is a *parent*, so the
+/// requirement it stores is the one it judges the worker child it starts by
+/// (`worker::invocation`), and a binary started with the shipped default would
+/// judge that worker as `partial` however the caller configured itself. A host
+/// that gives only the resource bound would then be answered `unavailable`
+/// before any assertion could see its report.
 pub fn probe(profile: Profile, helper: Option<&str>) -> (Report, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_nanofile"));
-    command.args(["extract-worker", "--probe", "--profile", profile.as_str()]);
+    command.args([
+        "extract-worker",
+        "--probe",
+        "--profile",
+        profile.as_str(),
+        "--min-level",
+        "limits",
+    ]);
+    // Whether the files layer is asked for is the switch under test, so it is
+    // passed the same way the server passes it.
+    if windows_container() {
+        command.arg("--windows-container");
+    }
     if let Some(helper) = helper {
         command.args(["--ffmpeg", helper]);
     }
