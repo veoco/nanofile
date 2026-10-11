@@ -140,9 +140,10 @@ test("every area renders its rows and its section bar", async ({ page }) => {
  */
 test("the sandbox page shows the measured grade and items", async ({ page }) => {
   await page.goto("/sysadmin/settings/sandbox/");
-  // The verdict leads, the strip of four numbers follows it.
+  // The verdict leads, the strip of three numbers follows it: the grade, the
+  // master switch, and whether the features run under it.
   await expect(page.locator("[data-sandbox-verdict-label]")).toBeVisible();
-  await expect(page.locator("[data-sandbox-status] .field-label")).toHaveCount(4);
+  await expect(page.locator("[data-sandbox-status] .field-label")).toHaveCount(3);
   await expect(page.locator("[data-sandbox-grade]")).toBeVisible();
   // One row per protection, in the order the report carries them.
   for (const item of ["limits", "files", "network", "process"]) {
