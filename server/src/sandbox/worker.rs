@@ -113,24 +113,27 @@ const SANDBOX_REFUSAL: &str = "extract-worker: sandbox unavailable";
 
 /// Which creation a child is started with.
 ///
-/// Windows is the only platform with more than one shape, and the distinction is
-/// whether the AppContainer is asked for at all. `Confined` is the container and
-/// the restricted token; `Plain` is the token and the job object without a
-/// container, and it is what a host that will not create one runs — either
-/// because the configuration did not ask for the files layer
-/// ([`Requirement::os_confinement`]) or because the first attempt reported
-/// nothing and the host is not asked twice. There is no rung below `Plain`: it
-/// still carries the job object, which is the one hard bound.
+/// Windows is the only platform with more than one shape, and the three are the
+/// layers it can be given, strongest first: the AppContainer with a restricted
+/// token, the restricted token alone, and neither. Every one of them names the
+/// same job object, which is the resource bound — the item that must be there —
+/// so a host that refuses a layer loses that layer and not the feature.
+///
+/// The container is asked for only when the configuration wants the files layer
+/// ([`Requirement::os_confinement`]); the two below it are what a host falls back
+/// to, each remembered so the launch that was refused is not repeated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Start {
     /// Whatever this host can give: the runner on macOS, and on Windows the
     /// container with the restricted token.
     Confined,
-    /// The restricted token and the job object, with no container. The one
-    /// creation that still bounds memory and CPU on a host whose AppContainer
-    /// cannot be created.
+    /// The restricted token and the job object, with no container.
     #[cfg(windows)]
     Plain,
+    /// The job object alone: this process's own token, which is what a host that
+    /// cannot start a restrained child at all still allows. The bound holds.
+    #[cfg(windows)]
+    Unrestricted,
 }
 
 impl Start {
@@ -140,6 +143,8 @@ impl Start {
             Start::Confined => "with every protection",
             #[cfg(windows)]
             Start::Plain => "with a token and a job and no container",
+            #[cfg(windows)]
+            Start::Unrestricted => "with a job and this process's own token",
         }
     }
 
@@ -154,38 +159,33 @@ impl Start {
         match self {
             Start::Confined => "container",
             Start::Plain => "plain",
+            Start::Unrestricted => "unrestricted",
         }
     }
-}
 
-/// Why the strongest creation was passed over, appended to the report.
-///
-/// A fallback that leaves no trace is the thing this is for: the container is
-/// attempted, its child is created and says nothing, the plain creation answers
-/// — and without this the only surviving fact is that a weaker creation was used,
-/// with no way to tell a container the loader refused from a child that never
-/// came back inside its timeout. Only the summary is kept, whitespace-free and
-/// clipped, because this travels in the same line as the measurement it explains.
-fn with_skipped_container(mut report: Report, skipped: Option<&String>) -> Report {
-    /// Enough to name the failure, not enough for a stderr dump: the line also
-    /// carries the measurement, and the full text is on the warning beside it.
-    const MAX: usize = 240;
-
-    if let Some(why) = skipped {
-        let token: String = why
-            .chars()
-            .map(|character| {
-                if character.is_whitespace() || character == ',' {
-                    '_'
-                } else {
-                    character
+    /// The creation below this one, where the platform has one.
+    ///
+    /// `None` is what ends the walk: it is the last creation this platform can
+    /// start a child with, and the reason it exists is that the alternative to a
+    /// weaker creation is not a stronger one but no child at all.
+    fn weaker(self) -> Option<Self> {
+        match self {
+            Start::Confined => {
+                #[cfg(windows)]
+                {
+                    Some(Start::Plain)
                 }
-            })
-            .take(MAX)
-            .collect();
-        report.detail.push_str(&format!(",skipped0={token}"));
+                #[cfg(not(windows))]
+                {
+                    None
+                }
+            }
+            #[cfg(windows)]
+            Start::Plain => Some(Start::Unrestricted),
+            #[cfg(windows)]
+            Start::Unrestricted => None,
+        }
     }
-    report
 }
 
 /// The facts about one launch that only the parent can see, appended to its report.
@@ -900,6 +900,10 @@ pub fn configure_requirement(requirement: Requirement) {
     if requirement.os_confinement {
         CONTAINER_GIVEN_UP.store(false, std::sync::atomic::Ordering::Relaxed);
     }
+    // The token record is cleared with the container's: both are one process's
+    // memory of a refusal, and a configuration that asks for the layer again is
+    // the operator answering the question.
+    TOKEN_GIVEN_UP.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Drop the cached answers about this host.
@@ -948,6 +952,15 @@ fn requirement_slot() -> &'static Mutex<Requirement> {
 static CONTAINER_GIVEN_UP: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Whether a launch has given up the restricted *token* as well.
+///
+/// The second refusal: a child started with a restricted token is *created* and
+/// then dies in its loader on some hosts (`STATUS_DLL_INIT_FAILED`, before it can
+/// report), which is the same shape as a container that never came back and is
+/// answered the same way — one attempt, then the creation below it. What stays is
+/// the job object.
+static TOKEN_GIVEN_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Whether a launch that wants the files layer may still attempt the container.
 ///
 /// A parameter rather than a read of the process slot: the settings page probes
@@ -971,6 +984,15 @@ fn container_wanted(os_confinement: bool) -> bool {
 /// request that follows never repeats the launch the probe already paid for.
 fn give_up_container() {
     CONTAINER_GIVEN_UP.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Record that this host will not start a child under a restricted token either.
+///
+/// Called from the Windows walk, and read by the test that pins the whole matrix
+/// on every platform — the same reasoning as `container_wanted`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn give_up_token() {
+    TOKEN_GIVEN_UP.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn configured_requirement() -> Requirement {
@@ -1219,6 +1241,8 @@ fn rung(profile: Profile) -> Start {
     #[cfg(windows)]
     let unsettled = if container_wanted(configured_requirement().os_confinement) {
         Start::Confined
+    } else if TOKEN_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed) {
+        Start::Unrestricted
     } else {
         Start::Plain
     };
@@ -1367,69 +1391,82 @@ fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
 
     crate::sandbox::clear_container_shortfall();
 
-    // The container is only attempted where it is wanted, and only once per
-    // process: see `rung` and `give_up_container`.
+    // The creation this launch starts from: the container only where the platform
+    // has one, the configuration wants the files layer, and the host has not
+    // already refused it. Everything below is the walk down from here.
     #[cfg(windows)]
     let first = if container_wanted(requirement.os_confinement) {
         Start::Confined
+    } else if TOKEN_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed) {
+        Start::Unrestricted
     } else {
         Start::Plain
     };
     #[cfg(not(windows))]
     let first = Start::Confined;
-    // The reason a creation was passed over, carried into the report beside the
-    // answer. Always `None` here: this launch is the first one, and the fallback
-    // below builds its own reason when it takes the second.
-    let skipped: Option<String> = None;
 
-    match probe_on(&invocation, profile, grants, first) {
-        Ok(report) => {
-            let report = with_skipped_container(with_parent_facts(report, first), skipped.as_ref());
-            (first, accept(report))
-        }
-        Err(why) => {
-            // Said out loud as well as carried in the report: an operator reading
-            // the log at startup wants the reason the container was passed over,
-            // not only the grade it left behind.
-            tracing::warn!(
-                profile = profile.as_str(),
-                creation = first.label(),
-                reason = why.as_str(),
-                "the sandbox worker did not report on this creation"
-            );
-            // The one fallback: a container that reports nothing is given up for
-            // this process, and the child is started again without one. `Plain`
-            // still carries the job object and the token, which is what the hard
-            // bound is made of.
-            // The one fallback: the container is given up for this process, and
-            // the child is started again without one. `Plain` still carries the
-            // job object and the token, which is what the hard bound is made of.
-            // Only Windows has a second creation to fall back to; the give-up
-            // itself is the same decision everywhere it exists.
-            #[cfg(windows)]
-            let second = (first == Start::Confined).then_some(Start::Plain);
-            #[cfg(not(windows))]
-            let second: Option<Start> = None;
+    let mut creation = first;
+    // One reason per creation that was passed over, carried into the report
+    // beside the answer: a fallback that leaves no trace is how a host ends up
+    // silently running weaker creations than an operator thinks.
+    let mut skipped: Vec<String> = Vec::new();
 
-            if let Some(fallback) = second {
-                give_up_container();
+    loop {
+        match probe_on(&invocation, profile, grants, creation) {
+            Ok(report) => {
+                let mut report = with_parent_facts(report, creation);
+                for (index, why) in skipped.iter().enumerate() {
+                    report.detail.push_str(&format!(",skipped{index}={why}"));
+                }
+                return (creation, accept(report));
+            }
+            Err(why) => {
+                // Said out loud as well as carried in the report: an operator
+                // reading the log at startup wants the reason a creation was
+                // passed over, not only the grade it left behind.
                 tracing::warn!(
                     profile = profile.as_str(),
+                    creation = creation.label(),
                     reason = why.as_str(),
-                    "the AppContainer was given up for this process; the worker runs with its \
-                     job and its token, and the report says files=open"
+                    "the sandbox worker did not report on this creation"
                 );
-                let skipped = format!("{}: {why}", first.label());
-                if let Ok(report) = probe_on(&invocation, profile, grants, fallback) {
-                    let report =
-                        with_skipped_container(with_parent_facts(report, fallback), Some(&skipped));
-                    return (fallback, accept(report));
+                let Some(weaker) = creation.weaker() else {
+                    return (
+                        creation,
+                        Status::Unavailable(format!("{}: {why}", creation.label())),
+                    );
+                };
+                // Each step down is remembered for this process's life: the
+                // refusal is a property of the environment rather than of one
+                // launch, and a request that follows must not pay for a creation
+                // the probe already found dead. The settings hook clears both
+                // records, so a configuration that asks again gets one more try.
+                match creation {
+                    Start::Confined => {
+                        give_up_container();
+                        tracing::warn!(
+                            profile = profile.as_str(),
+                            reason = why.as_str(),
+                            "the AppContainer was given up for this process; the worker runs \
+                             with its job and its token, and the report says files=open"
+                        );
+                    }
+                    #[cfg(windows)]
+                    Start::Plain => {
+                        give_up_token();
+                        tracing::warn!(
+                            profile = profile.as_str(),
+                            reason = why.as_str(),
+                            "the restricted token was given up for this process as well; the \
+                             worker runs in its job under this process's own token"
+                        );
+                    }
+                    #[cfg(windows)]
+                    Start::Unrestricted => {}
                 }
+                skipped.push(format!("{}: {why}", creation.label()));
+                creation = weaker;
             }
-            (
-                first,
-                Status::Unavailable(format!("{}: {why}", first.label())),
-            )
         }
     }
 }
@@ -1908,6 +1945,9 @@ fn spawn_child(
     match start {
         Start::Confined => sandbox::spawn(&invocation.program, &args, profile, grants),
         Start::Plain => sandbox::spawn_token_only(&invocation.program, &args, profile, grants),
+        Start::Unrestricted => {
+            sandbox::spawn_unrestricted(&invocation.program, &args, profile, grants)
+        }
     }
     .map(Child::Windows)
 }
@@ -2305,6 +2345,32 @@ mod tests {
             !container_wanted(false),
             "asking for the layer is the requirement's decision, not the record's"
         );
+
+        // The token record takes the same shape: one refusal, one attempt, and a
+        // settings save clears it. Without it a host that cannot start a child
+        // under a restricted token would have nowhere left to go, because the
+        // creation below that one is the last this platform has.
+        give_up_token();
+        assert!(
+            TOKEN_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed),
+            "a refused token has to be remembered, or every request retries it"
+        );
+        configure_requirement(Requirement::from_config(true, "limits", false));
+        assert!(
+            !TOKEN_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed),
+            "a settings save is worth one more attempt"
+        );
+
+        // The walk itself ends: the last creation has nothing below it, which is
+        // what makes the loop terminate rather than retry forever.
+        #[cfg(windows)]
+        assert_eq!(Start::Unrestricted.weaker(), None);
+        #[cfg(windows)]
+        assert_eq!(Start::Plain.weaker(), Some(Start::Unrestricted));
+        #[cfg(windows)]
+        assert_eq!(Start::Confined.weaker(), Some(Start::Plain));
+        #[cfg(not(windows))]
+        assert_eq!(Start::Confined.weaker(), None);
     }
 
     /// The child is started with the policy the parent resolved and nothing else:

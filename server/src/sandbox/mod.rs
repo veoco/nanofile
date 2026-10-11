@@ -223,10 +223,12 @@ mod windows;
 /// cannot be applied to a running process, so they are part of creation. The
 /// container is asked for only when the configuration wants the files layer
 /// (`sandbox.windows_container`, or a `sandbox.min_level` above `limits`); the
-/// token is applied either way, and a host that refuses the container is
-/// remembered so no later launch retries it.
+/// token is applied either way, and a host that refuses either of them is
+/// remembered so no later launch retries what it refused. All three creations
+/// name the same job object, which is the bound that holds however the process
+/// was started.
 #[cfg(target_os = "windows")]
-pub(super) use windows::{Child as WindowsChild, spawn, spawn_token_only};
+pub(super) use windows::{Child as WindowsChild, spawn, spawn_token_only, spawn_unrestricted};
 
 /// Whether the child runs in a less privileged container, where the platform
 /// has one.
@@ -645,8 +647,10 @@ impl Report {
         // The creation the parent settled for. `container-only` is still read
         // because the media profile's own opt-out retry produces it: it keeps
         // the container and gives the less privileged flavour up, which is a
-        // different fact from never having asked for one.
-        if has("rung=plain") {
+        // different fact from never having asked for one. `unrestricted` is the
+        // step below `plain`, so it carries the same note — the page's sentence
+        // already says "a token without a container, or the server's own token".
+        if has("rung=plain") || has("rung=unrestricted") {
             notes.push("container_plain");
         }
         if has("rung=container-only") {
@@ -2451,6 +2455,7 @@ mod tests {
             ["container_no_token"]
         );
         assert_eq!(report("rung=plain").notes(), ["container_plain"]);
+        assert_eq!(report("rung=unrestricted").notes(), ["container_plain"]);
         assert_eq!(
             report("container_refused=sid-refused").notes(),
             ["container_refused"]

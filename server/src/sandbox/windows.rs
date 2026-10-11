@@ -905,13 +905,13 @@ pub(crate) fn spawn(
 
 /// Start the child with the restricted token, a job and no container.
 ///
-/// This is the creation every Windows launch uses unless the configuration asks
-/// for the files layer: the job object is the resource bound and the token takes
-/// the privileges away, while the container is the only mechanism that could
-/// bound files and the network. A host that cannot create one — a sandbox of its
-/// own that refuses a nested AppContainer, which is the common case for a
-/// development or agent environment — still gets everything that keeps the
-/// server up, and the child's report says `files=open` beside it.
+/// This is the creation a Windows launch uses unless the configuration asks for
+/// the files layer: the job object is the resource bound and the token takes the
+/// privileges away, while the container is the only mechanism that could bound
+/// files and the network. A host that cannot create one — a sandbox of its own
+/// that refuses a nested AppContainer, which is the common case for a development
+/// or agent environment — still gets everything that keeps the server up, and the
+/// child's report says `files=open` beside it.
 pub(crate) fn spawn_token_only(
     program: &OsStr,
     args: &[OsString],
@@ -930,6 +930,36 @@ pub(crate) fn spawn_token_only(
         note_shortfall("token-refused", None);
     }
     start(program, args, token, None, process_slots(profile), false)
+}
+
+/// Start the child with this process's own token, a job and no container.
+///
+/// The last creation on this platform, and still bounded: the job object is named
+/// at creation exactly as it is for every other, so the memory, CPU and process
+/// caps hold whatever the token turned out to be. What is given up is the
+/// restricted token's own narrowing, which some environments refuse outright — a
+/// child started under one is *created*, then dies in its loader with
+/// `STATUS_DLL_INIT_FAILED` before it can report on the confinement it got
+/// ([`crate::sandbox::worker`] decides that, from the child's silence).
+///
+/// It exists because the alternative is not "a better token" but "the feature is
+/// off on the whole machine": a host that can start neither a container nor a
+/// restrained child can still bound one, and the bound is the item that keeps the
+/// server up.
+pub(crate) fn spawn_unrestricted(
+    program: &OsStr,
+    args: &[OsString],
+    profile: Profile,
+    grants: Grants<'_>,
+) -> std::io::Result<Child> {
+    // No container in this creation, so the opt-out is not a decision it makes: a
+    // grant that is only good through `ALL APPLICATION PACKAGES` is good enough
+    // here.
+    let mut opt_out = false;
+    if profile.runs_helper() {
+        grant_helper_access(grants, &mut opt_out);
+    }
+    start(program, args, None, None, process_slots(profile), false)
 }
 
 /// How many processes the job must allow: the worker, plus the helper the media
