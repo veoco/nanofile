@@ -198,7 +198,13 @@ fn the_documents_profile_reports_the_bound_without_a_container() {
         !report.protections.files && !report.protections.network,
         "no container was asked for, so neither of those can be there: {line}"
     );
-    assert_eq!(value(&report, "rung"), "plain", "{line}");
+    // Which creation below the container the host settled for is the host's
+    // business — `plain` where a restrained child starts, `unrestricted` where
+    // even that dies in the loader — and both are reported rather than assumed.
+    assert!(
+        matches!(value(&report, "rung"), "plain" | "unrestricted"),
+        "{line}"
+    );
     // The bound is still the parent's job object, and the child reads it back.
     assert!(value(&report, "job").starts_with("memory"), "{line}");
     // The job the profile exists to do still happens: a bound is not a refusal.
@@ -365,7 +371,7 @@ fn the_platform_answer(profile: Profile, report: &Report) {
 fn the_platform_answer(profile: Profile, report: &Report) {
     let rung = value(report, "rung");
     assert!(
-        matches!(rung, "container" | "plain"),
+        matches!(rung, "container" | "plain" | "unrestricted"),
         "{rung}: {}",
         report.detail
     );
@@ -394,6 +400,15 @@ fn the_platform_answer(profile: Profile, report: &Report) {
         "token={token}: {}",
         report.detail
     );
+    // The rung and the token are one answer: a container is what makes a low-box
+    // token, and the walk only reaches the tokenless creation by giving the token
+    // up.
+    match rung {
+        "container" => assert_eq!(token, "restricted", "{}", report.detail),
+        "plain" => assert_eq!(token, "restricted", "{}", report.detail),
+        "unrestricted" => assert_eq!(token, "unrestricted", "{}", report.detail),
+        other => panic!("unknown creation {other}: {}", report.detail),
+    }
     assert!(
         matches!(value(report, "lpac"), "on" | "off"),
         "{}",
@@ -452,15 +467,23 @@ fn the_platform_answer(profile: Profile, report: &Report) {
                 );
             }
         }
-        "plain" => {
-            // No container was asked for, or the one that was asked for reported
-            // nothing and was given up. The second case says so: a report that
-            // fell back carries the reason as `skipped0=`.
+        "plain" | "unrestricted" => {
+            // No container was asked for, or the one that was asked for (or the
+            // restrained child below it) reported nothing and was given up. Each
+            // step down leaves its reason, so a report that fell back cannot be
+            // read as a host that never tried.
             if windows_container() {
                 assert!(
                     has(report, "skipped0"),
                     "a container that was asked for and not delivered has to leave its \
                      reason in the report: {}",
+                    report.detail
+                );
+            }
+            if rung == "unrestricted" {
+                assert!(
+                    has(report, "skipped1") || windows_container(),
+                    "the walk that gave the token up has to say why: {}",
                     report.detail
                 );
             }

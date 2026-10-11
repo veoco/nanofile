@@ -481,6 +481,15 @@ impl TestServer {
             if bound_only {
                 sandbox_min_level = "limits".to_string();
             }
+            // What the *features* are judged by is the minimum the app was just
+            // given, not the one this probe ran under: `available` reads the
+            // process-global requirement directly, and a slot left at the shipped
+            // default would disable every feature on a host that gives only the
+            // bound, however the config reads. A test that changes the switch is
+            // responsible for putting it back.
+            server::sandbox::worker::configure_requirement(
+                server::sandbox::Requirement::from_config(true, &sandbox_min_level, false),
+            );
         }
 
         // Temp directories are derived from the random port so each server gets
