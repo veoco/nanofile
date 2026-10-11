@@ -136,14 +136,21 @@ enum Start {
 }
 
 impl Start {
-    /// How a creation is named when the log reports that it was passed over.
+    /// How a creation is named in the log, and in the report when it was passed
+    /// over.
+    ///
+    /// One word, and whitespace-free: the name travels into the report's detail,
+    /// which [`Report::line`] flattens into a single line before the parent reads
+    /// it, and the parent's parser does not turn the flattened whitespace back —
+    /// a reason carrying a space would reach the settings page as
+    /// `with_every_protection`.
     fn label(self) -> &'static str {
         match self {
-            Start::Confined => "with every protection",
+            Start::Confined => "confined",
             #[cfg(windows)]
-            Start::Plain => "with a token and a job and no container",
+            Start::Plain => "plain",
             #[cfg(windows)]
-            Start::Unrestricted => "with a job and this process's own token",
+            Start::Unrestricted => "unrestricted",
         }
     }
 
@@ -1323,7 +1330,8 @@ fn source_probe(profile: Profile) -> Option<SourceProbe> {
 /// succeeded: the failure this walks past is a child that is created and then
 /// dies in its loader, which no creation error reports. Only the container is
 /// ever given up — the fallback keeps the job object, which is the one hard
-/// bound — and the reason travels in the report as `skipped0=`.
+/// bound — and the reason travels in the report as `skipped0=<creation>:<reason>`,
+/// one entry per creation that was passed over, in the order the walk tried them.
 ///
 /// The answer is returned rather than recorded here: the caller holds the status
 /// cache's lock, and a helper that took it again would deadlock.
@@ -1372,15 +1380,17 @@ fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
     let mut creation = first;
     // One reason per creation that was passed over, carried into the report
     // beside the answer: a fallback that leaves no trace is how a host ends up
-    // silently running weaker creations than an operator thinks.
+    // silently running weaker creations than an operator thinks. Each entry is
+    // the creation's `label` and the reason it gave, and both are whitespace-free
+    // so the entry stays one field of the report's line.
     let mut skipped: Vec<String> = Vec::new();
 
     loop {
         match probe_on(&invocation, profile, grants, creation) {
             Ok(report) => {
                 let mut report = with_parent_facts(report, creation);
-                for (index, why) in skipped.iter().enumerate() {
-                    report.detail.push_str(&format!(",skipped{index}={why}"));
+                for (index, reason) in skipped.iter().enumerate() {
+                    report.detail.push_str(&format!(",skipped{index}={reason}"));
                 }
                 return (creation, accept(report));
             }

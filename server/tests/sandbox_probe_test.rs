@@ -11,12 +11,15 @@
 //! Linux and macOS the platform installs everything; on Windows the launch asks
 //! for its container and reports what came back.
 //!
-//! It is also where `skipped0`/`skipped1` are read: on Windows each walk step
-//! that was tried and did not report leaves its reason, so a host that fell back
-//! cannot be read as a host that never tried. `skipped1` only exists for a walk
-//! that started at the container, and `skipped0` is the first step that was
-//! passed over — `Start::Plain` where the container was not attempted or was
-//! already given up.
+//! It is also where `skipped0`/`skipped1`/`skipped2` are read: on Windows each
+//! walk step that was tried and did not report leaves its name and its reason, so
+//! a host that fell back cannot be read as a host that never tried. One entry per
+//! creation that was passed over, in the order the walk tried them — `confined`
+//! first, then `plain`, then `unrestricted`. A walk starts wherever this process's
+//! earlier launches left it, so a host that gave the container up before the probe
+//! began would record `plain` first; every test here goes through
+//! `common::sandbox::with_requirement`, which installs the requirement and clears
+//! both records, so what they assert is the whole ladder.
 
 mod common;
 
@@ -442,14 +445,48 @@ fn the_platform_answer(profile: Profile, report: &Report) {
         ),
     }
 
-    // Which creations were passed over, in the order the walk tried them. Nothing
-    // below the container can be reached without the container having been given
-    // up first, so a second reason without a first is a broken record.
-    let skipped0 = fact(report, "skipped0").unwrap_or_default();
-    let skipped1 = fact(report, "skipped1").unwrap_or_default();
+    // Which creations were passed over, in the order the walk tried them. The
+    // report has to hand back a ladder — the walk starts at the container every
+    // time this file probes, because the fixture installs its requirement first —
+    // and each entry has to be a name and a reason: a step that does not say why
+    // it stepped down is a fallback nothing can be read off.
+    let skipped = [
+        fact(report, "skipped0").unwrap_or_default(),
+        fact(report, "skipped1").unwrap_or_default(),
+        fact(report, "skipped2").unwrap_or_default(),
+    ];
+    // The creation an entry names, or the whole entry when it names one wrongly.
+    fn step(entry: &str) -> &str {
+        entry
+            .split_once(':')
+            .map_or(entry, |(creation, _)| creation)
+    }
+    // A run that never reached the walk, a walk that jumped a creation, and a
+    // walk that went below the last creation this platform has all fail here.
+    let tried: Vec<&str> = skipped
+        .iter()
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| step(entry))
+        .collect();
+    let expected = match rung {
+        "container" => &[][..],
+        "plain" => &["confined"][..],
+        _ => &["confined", "plain"][..],
+    };
+    assert_eq!(
+        tried, expected,
+        "the walk steps down one creation at a time: {}",
+        report.detail
+    );
+    // The reason is what the creation said when it did not report, so an entry
+    // that is only a name is a walk that forgot why it stepped down.
     assert!(
-        skipped1.is_empty() || !skipped0.is_empty(),
-        "a walk records its second refusal only after its first: {}",
+        skipped.iter().all(|entry| {
+            entry
+                .split_once(':')
+                .is_none_or(|(_, reason)| !reason.is_empty())
+        }),
+        "a creation that was passed over has to say why: {}",
         report.detail
     );
 
@@ -458,7 +495,7 @@ fn the_platform_answer(profile: Profile, report: &Report) {
             // The container answered, so nothing was passed over to reach it.
             // The refusals of an earlier launch are not carried into this
             // report: they belong to the walk that produced them.
-            assert!(skipped0.is_empty(), "{}", report.detail);
+            assert!(skipped[0].is_empty(), "{}", report.detail);
             assert!(has(report, "container=appcontainer"), "{}", report.detail);
             // The far edge of the files layer: the system tree stays readable
             // through the packages a low-box process is checked against.
@@ -506,26 +543,26 @@ fn the_platform_answer(profile: Profile, report: &Report) {
             // say so: a fallback that leaves no trace is how a host ends up
             // running weaker creations than an operator thinks.
             assert!(
-                !skipped0.is_empty(),
+                !skipped[0].is_empty(),
                 "a container that was attempted and not delivered has to leave its reason in \
                  the report: {}",
                 report.detail
             );
-            assert!(
-                skipped0.contains("every protection"),
-                "only the container can be passed over first: {}",
-                report.detail
-            );
             if rung == "unrestricted" {
+                // The token was given up as well, so the step below the plain
+                // creation has to be in the record too.
                 assert!(
-                    skipped1.contains("token and a job"),
+                    !skipped[1].is_empty(),
                     "the launch that gave the token up has to say why: {}",
                     report.detail
                 );
             } else {
                 // The plain creation answered: nothing below it was tried.
-                assert!(skipped1.is_empty(), "{}", report.detail);
+                assert!(skipped[1].is_empty(), "{}", report.detail);
             }
+            // The tokenless creation is the last this platform can start a child
+            // with, so nothing may have been passed over below it.
+            assert!(skipped[2].is_empty(), "{}", report.detail);
             assert!(!has(report, "container=appcontainer"), "{}", report.detail);
         }
         other => panic!("unknown creation {other}: {}", report.detail),
