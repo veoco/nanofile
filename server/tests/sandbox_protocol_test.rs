@@ -13,6 +13,13 @@
 //! not the bound. The refusal case below runs everywhere, and the parts that need
 //! a bounded child are covered on Windows by `sandbox_probe_test` and the
 //! request-path tests, both of which start it the way the server does.
+//!
+//! The file is unix-only for that reason, with the one refusal case included: a
+//! test binary that starts the worker itself cannot give it the job object on
+//! Windows, and a suite that skipped only the serving cases would still have to
+//! carry their helpers. What Windows loses here is the malformed-request surface,
+//! which `sandbox_probe_test` covers from the side that the server actually uses.
+#![cfg(unix)]
 
 use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -170,7 +177,6 @@ fn media_head(kind: u8, size: u32, path_len: u16) -> Vec<u8> {
 
 /// The documents child parses what it is given and nothing else.
 #[test]
-#[cfg(unix)]
 fn a_document_request_is_parsed_or_refused() {
     let args = ["--profile", "documents", "--min-level", "limits"];
 
@@ -245,7 +251,6 @@ fn the_child_refuses_to_serve_with_the_sandbox_off() {
 /// a limit that cut the text short, still contains the words these fixtures are
 /// made of — the whole text is what says the request path is intact.
 #[test]
-#[cfg(unix)]
 fn the_child_returns_the_whole_text_of_a_real_document() {
     let args = ["--profile", "documents", "--min-level", "limits"];
     let cases: [(u8, &[u8], &str); 4] = [
@@ -288,7 +293,6 @@ fn the_child_returns_the_whole_text_of_a_real_document() {
 
 /// The images child bounds what it will hold and refuses what it does not know.
 #[test]
-#[cfg(unix)]
 fn an_image_request_is_parsed_or_refused() {
     let args = ["--profile", "images", "--min-level", "limits"];
 
@@ -329,7 +333,6 @@ fn an_image_request_is_parsed_or_refused() {
 /// The media child reads the one file it was granted, whatever the request
 /// says.
 #[test]
-#[cfg(unix)]
 fn a_media_request_cannot_name_its_own_source() {
     let helper = env!("CARGO_BIN_EXE_nanofile");
     let granted = std::env::temp_dir().join("nanofile-protocol-granted.bin");
