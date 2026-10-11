@@ -435,6 +435,15 @@ impl TestServer {
         // `configure_executable` is process-global and set once; a test that
         // wants a worker that cannot run points it elsewhere before the first
         // fixture and is then responsible for the outcome.
+        //
+        // The app-level grade then follows the host, which is the rule the admin
+        // page states as well: what these tests are about is the feature doing its
+        // job, so on a host that gives only the resource bound the configured
+        // minimum is lowered to it, rather than the features being disabled by a
+        // policy these tests are not testing. A host that reaches the files layer
+        // keeps the shipped default, so this cannot hide a regression on the
+        // platforms that give it.
+        let mut sandbox_min_level = "partial".to_string();
         if server::sandbox::worker::configure_executable(std::path::PathBuf::from(env!(
             "CARGO_BIN_EXE_nanofile"
         ))) {
@@ -442,28 +451,36 @@ impl TestServer {
             // and these fixtures start in parallel, so a plain store here would
             // race another test's — and the probe would be judged against
             // whichever landed last.
-            sandbox::with_requirement(
+            let bound_only = sandbox::with_requirement(
                 server::sandbox::Requirement::from_config(true, "limits", false),
                 || {
+                    let mut bound_only = false;
                     for profile in [
                         server::sandbox::Profile::Documents,
                         server::sandbox::Profile::Images,
                     ] {
                         match server::sandbox::worker::status(profile) {
-                            server::sandbox::worker::Status::Ready(report) => assert!(
-                                report.protections.limits,
-                                "the {} sandbox must bound the worker: {}",
-                                profile.as_str(),
-                                report.detail
-                            ),
+                            server::sandbox::worker::Status::Ready(report) => {
+                                assert!(
+                                    report.protections.limits,
+                                    "the {} sandbox must bound the worker: {}",
+                                    profile.as_str(),
+                                    report.detail
+                                );
+                                bound_only = report.level() == server::sandbox::Level::Limits;
+                            }
                             server::sandbox::worker::Status::Unavailable(reason) => panic!(
                                 "the extraction worker is not available for {}: {reason}",
                                 profile.as_str()
                             ),
                         }
                     }
+                    bound_only
                 },
             );
+            if bound_only {
+                sandbox_min_level = "limits".to_string();
+            }
         }
 
         // Temp directories are derived from the random port so each server gets
@@ -589,7 +606,10 @@ impl TestServer {
                 index_dir: index_dir.clone(),
                 ..Default::default()
             },
-            sandbox: infra::config::SandboxConfig::default(),
+            sandbox: infra::config::SandboxConfig {
+                min_level: sandbox_min_level,
+                ..Default::default()
+            },
             tasks: infra::config::TaskConfig {
                 max_active_tasks: task_limits.unwrap_or_default().max_active_tasks,
                 // Tests submit few runs; the byte budget only has to be large

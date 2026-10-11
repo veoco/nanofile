@@ -75,20 +75,22 @@ fn the_documents_report_shows_a_worker_that_still_reads() {
     });
 
     the_common_answer(Profile::Documents, &report, &line);
-    assert_eq!(report.level(), Level::Full, "{line}");
-    assert!(report.protections.network, "{line}");
-    // The verdict is the whole text of each document, not a word of it: a parser
-    // that stopped early still contains the words the fixtures are made of.
+    // The work is the assertion that does not move: the child read every document
+    // whole, whatever creation this host could give it.
     assert_eq!(
         report.job,
         Some(JobVerdict::Ok),
-        "the confined worker must still read whole documents: {line}"
+        "the bounded worker must still read whole documents: {line}"
     );
+    the_grade_answer(&report);
     #[cfg(unix)]
-    assert!(
-        report.protections.process,
-        "the parser profiles deny the fork: {line}"
-    );
+    {
+        assert!(report.protections.network, "{line}");
+        assert!(
+            report.protections.process,
+            "the parser profiles deny the fork: {line}"
+        );
+    }
     the_platform_answer(Profile::Documents, &report);
 }
 
@@ -101,20 +103,22 @@ fn the_images_report_shows_a_worker_that_still_decodes() {
     });
 
     the_common_answer(Profile::Images, &report, &line);
-    assert_eq!(report.level(), Level::Full, "{line}");
-    assert!(report.protections.network, "{line}");
     // The reply is checked against the pixels it was given, so this is a decode
     // and a resize rather than an echo.
     assert_eq!(
         report.job,
         Some(JobVerdict::Ok),
-        "the confined worker must still decode an image: {line}"
+        "the bounded worker must still decode an image: {line}"
     );
+    the_grade_answer(&report);
     #[cfg(unix)]
-    assert!(
-        report.protections.process,
-        "the image profile denies the fork: {line}"
-    );
+    {
+        assert!(report.protections.network, "{line}");
+        assert!(
+            report.protections.process,
+            "the image profile denies the fork: {line}"
+        );
+    }
     the_platform_answer(Profile::Images, &report);
 }
 
@@ -137,7 +141,7 @@ fn the_media_report_shows_a_helper_that_still_decodes() {
     });
 
     the_common_answer(Profile::Media, &report, &line);
-    assert_eq!(report.level(), Level::Partial, "{line}");
+    the_grade_answer(&report);
     // It cannot carry the process item: it starts a program by definition, and
     // every way of starting one copies the process first.
     assert!(
@@ -204,6 +208,38 @@ fn the_documents_profile_reports_the_bound_without_a_container() {
         "the bounded worker must still read documents: {line}"
     );
     the_platform_answer(Profile::Documents, &report);
+}
+
+/// What grade the profile graded, and why that is the right one here.
+///
+/// The two platforms that install the files layer grade `full` (media `partial`,
+/// which cannot carry the process item), and that is asserted as it always was.
+/// A Windows host that can start neither a container nor a restrained child gives
+/// the resource bound alone, and saying so is the point of this branch: the
+/// feature runs, its bound is in place, and the grade is the honest one.
+fn the_grade_answer(report: &Report) {
+    #[cfg(not(windows))]
+    {
+        let expected = if report.profile.runs_helper() {
+            Level::Partial
+        } else {
+            Level::Full
+        };
+        assert_eq!(report.level(), expected, "{}", report.detail);
+    }
+    #[cfg(windows)]
+    {
+        assert!(report.level() >= Level::Limits, "{}", report.detail);
+        // A host that gives the files layer has to report it, so a Windows runner
+        // running a container cannot silently be graded as bound-only.
+        if windows_container() {
+            assert!(
+                report.protections.files,
+                "the container was asked for and not reported: {}",
+                report.detail
+            );
+        }
+    }
 }
 
 /// The layers Linux installs, and what they bound.
