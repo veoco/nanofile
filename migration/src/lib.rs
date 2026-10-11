@@ -98,6 +98,7 @@ migrations!(
     m20260924_000001_create_job_runs,
     m20260925_000001_purge_tick_run_history,
     m20260926_000001_drop_retired_settings_keys,
+    m20260927_000001_rename_sandbox_min_level_values,
 );
 
 #[cfg(test)]

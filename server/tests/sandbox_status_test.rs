@@ -102,7 +102,7 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
     // the assertion is about the outcome: a settings change clears the cache,
     // and a stored answer carries the requirement it was measured under so a
     // probe in flight across a change cannot be published under the new one.
-    worker::configure_requirement(Requirement::new(true, Level::Full));
+    worker::configure_requirement(Requirement::new(true, Level::Full, true));
     let Status::Unavailable(why) = worker::status(Profile::Images) else {
         panic!("a partial host must not pass a full minimum");
     };

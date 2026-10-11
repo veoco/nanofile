@@ -866,6 +866,7 @@ mod tests {
             "index.backfill_enabled",
             "sandbox.enabled",
             "sandbox.min_level",
+            "sandbox.windows_container",
             "notification.enabled",
             "notification.private_key",
             "notification.ping_interval",

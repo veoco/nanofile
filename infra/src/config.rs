@@ -1441,11 +1441,12 @@ impl Default for IndexConfig {
     }
 }
 
-/// The sandbox that confines every child process which reads untrusted bytes.
+/// The sandbox that bounds every child process which reads untrusted bytes.
 ///
 /// Documents, images, EXIF and media (ffmpeg) are all parsed or decoded in a
-/// separate, confined process. This section is the master switch over those
-/// features and the grade this host must reach before they run at all.
+/// separate process whose memory and CPU are bounded. This section is the master
+/// switch over those features, the grade this host must reach before they run at
+/// all, and whether Windows should ask for its container.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SandboxConfig {
     /// Master switch over every feature that parses untrusted bytes.
@@ -1459,18 +1460,36 @@ pub struct SandboxConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// The grade this host must reach before those features run: `full`,
-    /// `partial` or `none`.
+    /// `partial` or `limits`.
     ///
-    /// `full` is every protection the platform can give; `partial` is resource
-    /// limits *and* no file access, which is the grade that keeps a parser from
-    /// reading the server user's files. A host below it — a kernel without
-    /// Landlock, a Windows launch with no container — grades `none`, and only
-    /// `none` accepts it. Below the minimum the features are disabled and the
-    /// settings page says which item is missing and what that means.
+    /// Every feature needs the resource bound (memory, CPU, a wall-clock
+    /// timeout), and a host that cannot establish one is refused whatever this
+    /// says. The grade then decides how much *platform* confinement comes with
+    /// it: `full` is every protection the platform can give, `partial` is the
+    /// resource bound plus the files layer, and `limits` is the bound alone —
+    /// the weakest state a feature runs in, and what Windows gives by default.
+    /// Below the minimum the features are disabled and the settings page says
+    /// which item is missing and what that means.
     ///
     /// Env: NANOFILE_SANDBOX_MIN_LEVEL
     #[serde(default = "default_sandbox_min_level")]
     pub min_level: String,
+    /// Whether a Windows launch should ask for the AppContainer.
+    ///
+    /// The container is the only mechanism that gives the files and network
+    /// items on Windows, and creating one needs a registry profile and package
+    /// SIDs on the worker's own image — the operations a host sandbox (a
+    /// development or agent environment confining every command it runs)
+    /// refuses. With this `false` the launch still applies the Job Object, the
+    /// restricted token and the process mitigations, and the child reports
+    /// `files=open`; the feature runs rather than being disabled over a layer
+    /// that does not bound memory or CPU. A `min_level` above `limits` asks for
+    /// the container as well, whichever way this is set. Ignored on every other
+    /// platform.
+    ///
+    /// Env: NANOFILE_SANDBOX_WINDOWS_CONTAINER
+    #[serde(default)]
+    pub windows_container: bool,
 }
 
 fn default_sandbox_min_level() -> String {
@@ -1482,6 +1501,7 @@ impl Default for SandboxConfig {
         Self {
             enabled: true,
             min_level: default_sandbox_min_level(),
+            windows_container: false,
         }
     }
 }

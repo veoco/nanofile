@@ -43,7 +43,7 @@ fn a_process_left_holding_the_pipes_does_not_hold_the_caller() {
     wedge_worker(directory.path());
     // A requirement the fake report satisfies: what is under test is the pipe,
     // not the level.
-    worker::configure_requirement(Requirement::new(true, Level::Partial));
+    worker::configure_requirement(Requirement::new(true, Level::Partial, true));
 
     let started = Instant::now();
     let outcome = worker::extract(Plan::Text, b"irrelevant".to_vec());

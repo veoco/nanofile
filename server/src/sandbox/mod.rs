@@ -1,41 +1,68 @@
-//! Confinement for every child process that reads attacker-chosen bytes.
+//! The resource bound around every child process that reads attacker-chosen
+//! bytes, and the platform confinement that may be layered on top.
 //!
 //! Documents, images and media are all parsed or decoded by a separate process
-//! ([`worker`]) that confines itself before it reads a single byte. The
-//! protections, and what each is for:
+//! ([`worker`]) that bounds itself before it reads a single byte. What a profile
+//! establishes, and what each item is for:
 //!
-//! | Item | What it bounds | Linux | macOS | Windows |
+//! | Item | What it is | Linux | macOS | Windows |
 //! |---|---|---|---|---|
-//! | limits | memory, CPU seconds, and — on unix — descriptors and file size | `RLIMIT_AS` | `setrlimit` (mapped space plus the cap) | Job Object memory and CPU cap |
+//! | limits | committed memory, CPU seconds, and — on unix — descriptors and file size | `RLIMIT_AS` | `setrlimit` (mapped space plus the cap) | Job Object memory and CPU cap |
 //! | files | reading or writing any path | Landlock, zero grants (the helper, its interpreter and the source for media) | Seatbelt profile | AppContainer |
 //! | network | creating a socket | seccomp denylist, Landlock TCP rights | Seatbelt profile | AppContainer with no capabilities |
 //! | process | `exec`, `fork`, extra processes | seccomp denylist (`exec` allowed only for the media helper and its loader) | Seatbelt profile: `exec` only for the media profile, `fork` and `exec` denied for a parser | Job active-process limit, plus the kernel's child-process policy |
 //!
-//! `limits` is the one item whose contents differ by platform under one name.
-//! Linux and macOS state an address-space bound, a CPU bound, a descriptor count
-//! and a file-size bound through `setrlimit`; the Windows Job Object bounds
-//! committed memory and CPU time and has no equivalent of the last two, so a
-//! Windows child is not bounded in how many descriptors it holds or how much it
-//! writes.
+//! # The one hard bound, and the layers that may be missing
+//!
+//! Handling an untrusted upload is what a parser does, and the failure modes that
+//! matter for one are a decompression bomb, an allocation without limit, a stack
+//! overflow and an unbounded loop. Every one of those is a *resource* outcome, so
+//! the bound that answers them is `limits` (with the parent's wall-clock timeout
+//! and the gates that bound how many children exist at once). A child that
+//! cannot establish it is refused by both sides — the parent's `accept` and the
+//! child's own check before it reads a request — whatever the minimum says.
+//! `limits` is therefore a hard invariant rather than a setting, and the guard
+//! against a parser running with no bound at all is code and not policy.
+//!
+//! `files`, `network` and `process` answer a different question: what an
+//! *exploited* parser could reach before the kill. Every parser this module
+//! carries is pure Rust over a memory-safe API (`lopdf`, `office_oxide`, `zip`,
+//! `image`, `kamadak-exif`), and the one external program any profile starts is
+//! the media helper, so these three are deliberate defense in depth rather than
+//! the bound that keeps the server up. They are a policy: where a platform
+//! cannot supply them — a kernel with no Landlock, a container runtime that
+//! denies the syscalls, a Windows host where the AppContainer cannot be created
+//! (see the section below on why that is the default there) — the feature runs
+//! on `limits` alone and the report says so. Below `sandbox.min_level` the
+//! features are disabled and the shortfall is named; the one thing no setting
+//! can do is run a child without `limits`.
+//!
+//! `limits` is the item whose contents differ by platform under one name. Linux
+//! and macOS state an address-space bound, a CPU bound, a descriptor count and a
+//! file-size bound through `setrlimit`; the Windows Job Object bounds committed
+//! memory and CPU time and has no equivalent of the last two, so a Windows child
+//! is not bounded in how many descriptors it holds or how much it writes.
 //!
 //! The process item is the one the media profile cannot have. That profile
 //! exists to start a program — that is what the helper is — and every platform
 //! starts one the same way, by copying the process first, so a media child that
 //! denied both would deny its own job. Its report therefore says the item is
-//! *not* in place, and the grade is `partial`: what bounds the helper is the
-//! files layer and what bounds the copies is the CPU and wall-clock limit the
-//! parent enforces, which is a note and not a fourth protection. The document
-//! and image profiles deny both outright and do grade `full`.
+//! *not* in place, and the grade is `partial` at most: what bounds the helper
+//! is the files layer and what bounds the copies is the CPU and wall-clock limit
+//! the parent enforces, which is a note and not a fourth protection. The
+//! document and image profiles deny both outright and do grade `full`.
 //!
-//! What the files layer means for `exec` differs by platform here. Linux and
-//! macOS decide it per path, and the media grant reaches exactly two files — the
-//! helper and the interpreter the kernel runs before it, never a directory — so
-//! a helper that got loose cannot start a second program the grant does not
-//! name. Windows has no path-level `exec` bound: the container refuses the
-//! user's own files and the network, while the system tree it loads from stays
-//! readable and executable, so a compromised media worker can start any program
-//! the container can read. What bounds it there is the Job Object's process
-//! count and the parent's timeout, not a rule about which image may run.
+//! Where the files layer *is* in place, what it means for `exec` differs by
+//! platform. Linux and macOS decide it per path, and the media grant reaches
+//! exactly two files — the helper and the interpreter the kernel runs before it,
+//! never a directory — so a helper that got loose cannot start a second program
+//! the grant does not name. Windows has no path-level `exec` bound: the
+//! container refuses the user's own files and the network, while the system tree
+//! it loads from stays readable and executable, so a compromised media worker
+//! can start any program the container can read. What bounds it there is the Job
+//! Object's process count and the parent's timeout, not a rule about which image
+//! may run.
+//!
 //!
 //! Memory is the one limit each platform has to be told about differently. Linux
 //! takes the cap as an address-space limit outright; Windows caps committed
@@ -50,16 +77,21 @@
 //!
 //! * [`Level::Full`] (完整) — every protection this platform can provide is in
 //!   place: resource limits, files, network and process.
-//! * [`Level::Partial`] (部分) — resource limits *and* the files layer, with at
-//!   least one of network and process missing; the settings page names which.
-//! * [`Level::None`] (无) — anything less, including a host that denies the
-//!   network and the processes but lets the parser read every path.
+//! * [`Level::Partial`] (部分) — resource limits *and* the files layer; the
+//!   settings page names whichever of network and process is missing.
+//! * [`Level::Limits`] (仅有资源边界) — the resource bound and nothing else. The
+//!   weakest state a feature may run in, and the one Windows runs in by default.
 //!
-//! The files layer is a necessary condition of `partial`, not one of three ways
-//! to reach it: a parser that can read the host's files is the exposure this
-//! module exists to close, and the hosts that end up there — a kernel without
-//! Landlock, a Windows launch that fell back to a token with no container — are
-//! exactly the ones a grade must not call adequate.
+//! `limits` is a necessary condition of every grade, including the last: a child
+//! with no memory and CPU bound is refused by [`Requirement::accepts`] whatever
+//! `sandbox.min_level` says. The files layer is then a necessary condition of
+//! `partial` — a parser that can read the host's files is the exposure the layer
+//! exists to close — but it is a *setting's* condition and not the floor under
+//! the feature. The hosts that land on `limits` alone are a kernel without
+//! Landlock, a container runtime that denies the syscalls, and a Windows host
+//! whose AppContainer cannot be created; the page names the missing item, says
+//! what it would cost, and leaves the decision to raise `sandbox.min_level`
+//! back to `files` or `full` to the admin.
 //!
 //! Two settings govern the sandbox, and both live on the admin's "Sandbox" page:
 //! `sandbox.enabled` is the master switch over every feature that parses
@@ -67,8 +99,33 @@
 //! before those features run at all. When the switch is off, or the host grades
 //! below the minimum, the features are *disabled* — there is no in-process path
 //! to fall back to. [`Requirement`] is the pair, and [`Refusal`] says which of
-//! the two refused. `sandbox.min_level = "none"` is the one value that accepts a
-//! host without the files layer; the page says so in those words.
+//! the two refused. `sandbox.min_level = "limits"` is the one value that accepts
+//! a host without the files layer; the page says so in those words.
+//!
+//! # Why Windows runs without the container by default
+//!
+//! The AppContainer is the only mechanism on that platform that provides the
+//! files and network items, and creating one is a process-creation decision that
+//! also needs a profile in the registry and read access for a package SID on the
+//! worker's own image. Those are exactly the operations a *host* sandbox refuses
+//! — a development or agent environment that confines every command it runs
+//! (DeepSeek Harness's own Windows file sandbox is one: a restricted token plus
+//! ACL grants) will not let a child inside it create a further AppContainer, and
+//! the failure arrives as a loader death with no diagnosis
+//! (`STATUS_DLL_INIT_FAILED`) or as an ACL that cannot be written. While the
+//! files layer was a hard requirement that failure disabled indexing, thumbnails,
+//! EXIF and avatars on the whole machine, which is a large availability cost for
+//! a layer that does not bound memory or CPU at all.
+//!
+//! So on Windows the container is opt-in: `sandbox.windows_container = true`, or
+//! a `sandbox.min_level` that asks for the files layer, is what attempts it.
+//! Everything that bounds the host's resources is still established — the Job
+//! Object, the restricted token and the process mitigations — and the child
+//! reports `files=open` beside them. Nothing about that is silent: the startup
+//! log carries the item list, and the settings page says which protection is
+//! missing and what it would have cost. When the layer *is* attempted and the
+//! container cannot be created, the reason is recorded
+//! ([`container_shortfall`]) and no later launch retries it.
 //!
 //! # What a grade does not say
 //!
@@ -119,7 +176,9 @@
 //! It bounds what a parser can do to the *host* — memory, files, sockets,
 //! processes. It is not a boundary against a kernel vulnerability, nor against
 //! another process running as the same user. Both references below say the same
-//! of their own sandboxes.
+//! of their own sandboxes. It is also not a bound that has to be complete to be
+//! useful: the resource half is what keeps the server up, and the layers a host
+//! cannot supply are reported rather than treated as a reason to stop parsing.
 //!
 //! # References
 //!
@@ -162,12 +221,12 @@ pub(crate) use shebang::interpreter as shebang_interpreter;
 mod windows;
 /// Start the child the way Windows has to: a restricted token and an AppContainer
 /// cannot be applied to a running process, so they are part of creation. The
-/// token-only and unrestricted starts are the weaker creations the probe walks
-/// down to when a stronger one reports nothing.
+/// container is asked for only when the configuration wants the files layer
+/// (`sandbox.windows_container`, or a `sandbox.min_level` above `limits`); the
+/// token is applied either way, and a host that refuses the container is
+/// remembered so no later launch retries it.
 #[cfg(target_os = "windows")]
-pub(super) use windows::{
-    Child as WindowsChild, spawn, spawn_container_only, spawn_token_only, spawn_unrestricted,
-};
+pub(super) use windows::{Child as WindowsChild, spawn, spawn_token_only};
 
 /// Whether the child runs in a less privileged container, where the platform
 /// has one.
@@ -259,9 +318,10 @@ pub fn forget_plain_container() {
 
 /// Forget the reasons the last launch recorded, before the next sequence begins.
 ///
-/// A "sequence" is the ladder the probe walks or the single creation a request
-/// makes — not one rung of it. The caller is the only side that knows where a
-/// sequence starts, which is why this is here and not in the spawn functions.
+/// A "sequence" is everything one probe does — the container it may attempt and
+/// the fallback that follows — and not one creation of it. The caller is the
+/// only side that knows where a sequence starts, which is why this is here and
+/// not in the spawn functions.
 pub(super) fn clear_container_shortfall() {
     #[cfg(target_os = "windows")]
     {
@@ -330,11 +390,17 @@ const NOFILE_LIMIT: u64 = 32;
 const FILE_SIZE_LIMIT: u64 = 16 * 1024 * 1024;
 
 /// How much confinement a child established.
+///
+/// The order is the strength of the grade, and `Limits` is the floor every
+/// feature needs rather than a grade a host may fall below: a child with no
+/// resource bound is refused whatever the settings say (see
+/// [`Requirement::accepts`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
-    /// Resource limits only, or nothing at all.
-    None,
-    /// Resource limits plus the files layer, and not everything else.
+    /// The resource bound and nothing else. Every feature runs here, and it is
+    /// what Windows gives by default.
+    Limits,
+    /// The resource bound plus the files layer, and not everything else.
     Partial,
     /// Every layer this platform can provide.
     Full,
@@ -343,15 +409,23 @@ pub enum Level {
 impl Level {
     pub fn as_str(self) -> &'static str {
         match self {
-            Level::None => "none",
+            Level::Limits => "limits",
             Level::Partial => "partial",
             Level::Full => "full",
         }
     }
 
+    /// The grade a setting names.
+    ///
+    /// The two names this vocabulary replaced are accepted and read as what they
+    /// always meant — `none` was "limits only" and `partial` is unchanged — so a
+    /// `config.toml` or environment variable written before the rename keeps
+    /// working instead of falling back to a default. A saved database value is
+    /// rewritten by the migration; these aliases are for the two layers that are
+    /// not.
     pub fn parse(token: &str) -> Option<Self> {
-        match token {
-            "none" => Some(Level::None),
+        match token.trim().to_ascii_lowercase().as_str() {
+            "limits" | "none" => Some(Level::Limits),
             "partial" => Some(Level::Partial),
             "full" => Some(Level::Full),
             _ => None,
@@ -379,30 +453,28 @@ pub struct Protections {
 impl Protections {
     /// What these items add up to.
     ///
-    /// [`Level::Full`] needs all four. [`Level::Partial`] needs resource limits
-    /// *and* the files layer. Anything else is [`Level::None`].
+    /// [`Level::Full`] needs all four. [`Level::Partial`] needs the resource
+    /// bound *and* the files layer. [`Level::Limits`] is the resource bound
+    /// alone, and a report with no bound at all lands there too — the grade says
+    /// what was established, while [`Requirement::accepts`] is what refuses a
+    /// host that established nothing.
     ///
     /// The files layer is what makes `partial` a grade worth having rather than
     /// the weaker of two grades. What a document parser can do to the host is
     /// bounded by what it can read: a host that confines the network and the
     /// processes but not the paths has a parser that can still read every file
-    /// the server's user can, and that is the exposure this whole module exists
-    /// to close. The two ways a host lands there are both real and both silent —
-    /// a kernel without Landlock (or a container runtime that does not allow the
-    /// syscalls), and a Windows launch that could not produce an AppContainer and
-    /// fell back to a token that bounds nothing about files. So `network` and
-    /// `process` are refinements on top of a files-confined host, never
-    /// substitutes for one, and a host without the files layer grades `none`
-    /// whatever else it denies. `sandbox.min_level` then refuses it by default,
-    /// and `none` is the one setting that accepts it — which is the explicit
-    /// choice, not an accident.
+    /// the server's user can. So `network` and `process` are refinements on top
+    /// of a files-confined host and never substitutes for one, and a host
+    /// without the files layer grades `limits` whatever else it denies — which
+    /// `sandbox.min_level` may still refuse, and which the page calls a
+    /// degradation rather than an outage.
     pub fn level(self) -> Level {
         if self.limits && self.files && self.network && self.process {
             Level::Full
         } else if self.limits && self.files {
             Level::Partial
         } else {
-            Level::None
+            Level::Limits
         }
     }
 
@@ -570,9 +642,11 @@ impl Report {
         } else if has("helper_scope=libs") {
             notes.push("helper_libs");
         }
-        // The creation the parent settled for, when it is weaker than the one
-        // this host can give, and why the strongest one did not work.
-        if has("rung=token") || has("rung=plain") {
+        // The creation the parent settled for. `container-only` is still read
+        // because the media profile's own opt-out retry produces it: it keeps
+        // the container and gives the less privileged flavour up, which is a
+        // different fact from never having asked for one.
+        if has("rung=plain") {
             notes.push("container_plain");
         }
         if has("rung=container-only") {
@@ -726,51 +800,83 @@ fn parse_denial(value: &str) -> Option<bool> {
 
 /// What the child must have before it will read a request.
 ///
-/// The master switch and the minimum grade, as the admin set them. Both live on
-/// the settings page's Sandbox section; the pair crosses the process boundary so
-/// the child can refuse on its own, before it reads a byte, exactly as the
-/// parent refused to start it.
+/// The master switch and the minimum grade, as the admin set them, plus whether
+/// the files layer is wanted at all. All three live on the settings page's
+/// Sandbox section; the pair crosses the process boundary so the child can
+/// refuse on its own, before it reads a byte, exactly as the parent refused to
+/// start it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Requirement {
     /// `sandbox.enabled`: the master switch over every parsing feature.
     pub enabled: bool,
     /// `sandbox.min_level`: the grade the host must reach.
     pub min_level: Level,
+    /// Whether the parent should ask this platform for its files layer.
+    ///
+    /// True when `min_level` is above [`Level::Limits`], or when
+    /// `sandbox.windows_container` asks for it anyway. It is what decides
+    /// whether a Windows launch attempts an AppContainer at all: on a host whose
+    /// own sandbox refuses one, attempting it costs profile work, registry
+    /// writes and a launch that dies in its loader, while everything that bounds
+    /// memory and CPU is established either way.
+    pub os_confinement: bool,
 }
 
 impl Default for Requirement {
-    /// The shipped default: sandbox on, and a host that gives resource limits
-    /// plus the files layer. A host below that has the features disabled rather
-    /// than parsed with the server user's own read access to every path.
+    /// The shipped default: sandbox on, a host that gives the resource bound plus
+    /// the files layer, and therefore a Windows launch that tries its container.
+    /// A host below that has the features disabled rather than parsed with the
+    /// server user's own read access to every path.
     fn default() -> Self {
         Self {
             enabled: true,
             min_level: Level::Partial,
+            os_confinement: true,
         }
     }
 }
 
 impl Requirement {
-    pub fn new(enabled: bool, min_level: Level) -> Self {
-        Self { enabled, min_level }
+    pub fn new(enabled: bool, min_level: Level, os_confinement: bool) -> Self {
+        Self {
+            enabled,
+            min_level,
+            os_confinement,
+        }
     }
 
     /// The requirement the `[sandbox]` section states.
     ///
     /// An unparseable `min_level` falls back to the shipped default rather than
-    /// to "none": a typo must not quietly disable the confinement.
-    pub fn from_config(enabled: bool, min_level: &str) -> Self {
-        Self::new(enabled, Level::parse(min_level).unwrap_or(Level::Partial))
+    /// to `limits`: a typo must not quietly give the files layer up. The files
+    /// layer is wanted when the grade asks for it, or when the platform's own
+    /// switch (`sandbox.windows_container`) asks for it anyway.
+    pub fn from_config(enabled: bool, min_level: &str, windows_container: bool) -> Self {
+        let min_level = Level::parse(min_level).unwrap_or(Level::Partial);
+        Self::new(
+            enabled,
+            min_level,
+            windows_container || min_level > Level::Limits,
+        )
     }
 
-    /// Whether this confinement is enough, and if not, which half refused.
+    /// Whether a report is enough, and if not, which half refused.
     ///
     /// Takes the whole report rather than its level because the answer is about
     /// the report's items on both sides of the process boundary: the parent asks
     /// it once at startup, and the child asks it again before it reads a request.
+    ///
+    /// Two questions, in this order. The resource bound is a hard invariant: a
+    /// child with no memory and CPU limit is refused whatever `min_level` says,
+    /// because a parser with no bound is the failure this module exists to
+    /// prevent and not a grade an admin may choose. The grade is then the
+    /// admin's policy, and it may be higher than what this host gives.
     pub fn accepts(&self, report: &Report) -> Result<(), Refusal> {
         if !self.enabled {
             return Err(Refusal::Disabled);
+        }
+        if !report.protections.limits {
+            return Err(Refusal::Unbounded);
         }
         let got = report.level();
         if got < self.min_level {
@@ -785,19 +891,22 @@ impl Requirement {
 
 /// Why a confinement was refused.
 ///
-/// The two cases are not the same problem: the switch is the admin's own choice
-/// and leaves the work undone, while a host below the minimum is an environment
-/// problem the backfill retries once the host can confine the child.
+/// The three cases are not the same problem: the switch is the admin's own
+/// choice and leaves the work undone, a host below the minimum is a policy
+/// refusal the page explains, and a child that could not bound its own memory is
+/// an environment problem with no safe way to run at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
     /// `sandbox.enabled` is false.
     Disabled,
     /// The host grades below `sandbox.min_level`.
     BelowMinimum { got: Level, min: Level },
+    /// The child established no resource bound at all.
+    Unbounded,
 }
 
 impl Refusal {
-    /// The refusal as a sentence, for a log line or an error.
+    /// The refusal as a sentence, for a log line or a error.
     pub fn reason(self) -> String {
         match self {
             Refusal::Disabled => "the sandbox is switched off (`sandbox.enabled`)".to_string(),
@@ -806,6 +915,9 @@ impl Refusal {
                 got.as_str(),
                 min.as_str()
             ),
+            Refusal::Unbounded => {
+                "this host could not bound the worker's memory and CPU".to_string()
+            }
         }
     }
 }
@@ -1861,15 +1973,15 @@ mod tests {
 
     #[test]
     fn a_level_needs_limits_and_the_files_layer() {
-        assert_eq!(Protections::default().level(), Level::None);
+        assert_eq!(Protections::default().level(), Level::Limits);
         assert_eq!(
             Protections {
                 limits: true,
                 ..Protections::default()
             }
             .level(),
-            Level::None,
-            "resource limits alone are not confinement"
+            Level::Limits,
+            "resource limits alone are the floor, not a files-confined grade"
         );
         assert_eq!(
             Protections {
@@ -1881,10 +1993,11 @@ mod tests {
             Level::Partial,
             "the files layer is enough for partial on its own"
         );
-        // The two hosts that reach the network and process items without the
-        // files layer: a kernel without Landlock, and a Windows launch that fell
-        // back to a token with no container. Neither may be called partial —
-        // each has a parser that can read every path the server user can.
+        // The hosts that reach the network and process items without the files
+        // layer: a kernel without Landlock, and a Windows launch whose container
+        // was not attempted. None may be called partial — each has a parser that
+        // can read every path the server user can — but all of them carry the
+        // resource bound, which is the floor every feature needs.
         for missing_files in [
             Protections {
                 limits: true,
@@ -1907,8 +2020,8 @@ mod tests {
         ] {
             assert_eq!(
                 missing_files.level(),
-                Level::None,
-                "no files layer is no grade: {missing_files:?}"
+                Level::Limits,
+                "no files layer is no confinement grade: {missing_files:?}"
             );
         }
         // Everything but the process item, which is the media profile's shape.
@@ -1938,8 +2051,8 @@ mod tests {
                 ..Protections::default()
             }
             .level(),
-            Level::None,
-            "confinement without resource limits is not a level"
+            Level::Limits,
+            "confinement without resource limits is not a level either"
         );
         // The page lists exactly these items, in this order.
         assert_eq!(
@@ -1960,11 +2073,11 @@ mod tests {
     }
 
     #[test]
-    fn the_requirement_refuses_the_switch_and_the_grades_below_it() {
+    fn the_requirement_refuses_the_switch_the_unbounded_and_the_grades_below_it() {
         /// A report whose items add up to `level`.
         fn report_at(level: Level) -> Report {
             let items = match level {
-                Level::None => Protections {
+                Level::Limits => Protections {
                     limits: true,
                     ..Protections::default()
                 },
@@ -1989,23 +2102,43 @@ mod tests {
         }
 
         let accepts = |enabled, min_level, level| {
-            Requirement::new(enabled, min_level)
+            Requirement::new(enabled, min_level, min_level > Level::Limits)
                 .accepts(&report_at(level))
                 .is_ok()
         };
 
         // The switch refuses whatever the host gives.
-        for level in [Level::None, Level::Partial, Level::Full] {
+        for level in [Level::Limits, Level::Partial, Level::Full] {
             assert_eq!(
-                Requirement::new(false, Level::None).accepts(&report_at(level)),
+                Requirement::new(false, Level::Limits, false).accepts(&report_at(level)),
                 Err(Refusal::Disabled),
                 "the switch is off at {level:?}"
             );
         }
 
+        // The resource bound is refused whatever `min_level` says, including the
+        // minimum that asks for nothing else: no setting may run a parser
+        // unbounded.
+        let unbounded = Report {
+            protections: Protections {
+                files: true,
+                network: true,
+                process: true,
+                ..Protections::default()
+            },
+            ..report_at(Level::Limits)
+        };
+        for min in [Level::Limits, Level::Partial, Level::Full] {
+            assert_eq!(
+                Requirement::new(true, min, true).accepts(&unbounded),
+                Err(Refusal::Unbounded),
+                "no resource bound at min {min:?}"
+            );
+        }
+
         // `min_level` refuses the grades below it and accepts the rest.
-        for min in [Level::None, Level::Partial, Level::Full] {
-            for level in [Level::None, Level::Partial, Level::Full] {
+        for min in [Level::Limits, Level::Partial, Level::Full] {
+            for level in [Level::Limits, Level::Partial, Level::Full] {
                 assert_eq!(
                     accepts(true, min, level),
                     level >= min,
@@ -2014,7 +2147,7 @@ mod tests {
             }
         }
         assert_eq!(
-            Requirement::new(true, Level::Full).accepts(&report_at(Level::Partial)),
+            Requirement::new(true, Level::Full, true).accepts(&report_at(Level::Partial)),
             Err(Refusal::BelowMinimum {
                 got: Level::Partial,
                 min: Level::Full
@@ -2031,13 +2164,37 @@ mod tests {
         assert!(Requirement::default().enabled);
         assert_eq!(Requirement::default().min_level, Level::Partial);
         assert_eq!(
-            Requirement::from_config(true, "typo").min_level,
+            Requirement::from_config(true, "typo", false).min_level,
             Level::Partial,
-            "an unreadable level falls back to the default, never to `none`"
+            "an unreadable level falls back to the default, never to `limits`"
         );
         assert_eq!(
-            Requirement::from_config(true, "full").min_level,
+            Requirement::from_config(true, "full", false).min_level,
             Level::Full
+        );
+        // The old names are what a `config.toml` written before the rename
+        // carries, and they have to mean what they always meant.
+        assert_eq!(
+            Requirement::from_config(true, "none", false).min_level,
+            Level::Limits
+        );
+        assert_eq!(
+            Requirement::from_config(true, "partial", false).min_level,
+            Level::Partial
+        );
+        // The files layer is wanted when the grade asks for it, or when the
+        // platform switch asks for it on a `limits` base.
+        assert!(
+            Requirement::from_config(true, "files", false).os_confinement,
+            "`files` asks for the layer"
+        );
+        assert!(
+            Requirement::from_config(true, "limits", true).os_confinement,
+            "the platform switch asks for the layer"
+        );
+        assert!(
+            !Requirement::from_config(true, "limits", false).os_confinement,
+            "nothing asked for the files layer"
         );
     }
 
@@ -2293,7 +2450,6 @@ mod tests {
             report("rung=container-only").notes(),
             ["container_no_token"]
         );
-        assert_eq!(report("rung=token").notes(), ["container_plain"]);
         assert_eq!(report("rung=plain").notes(), ["container_plain"]);
         assert_eq!(
             report("container_refused=sid-refused").notes(),
@@ -2358,8 +2514,8 @@ mod tests {
         );
         assert_eq!(
             protections.level(),
-            Level::None,
-            "resource limits alone are not confinement"
+            Level::Limits,
+            "resource limits alone are the floor, not a confinement grade"
         );
         assert_eq!(
             appended(detail),

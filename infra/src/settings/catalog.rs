@@ -932,11 +932,31 @@ pub static CATALOG: &[SettingDef] = &[
         "sandbox.min_level",
         Sandbox,
         "NANOFILE_SANDBOX_MIN_LEVEL",
-        Kind::Enum(&["full", "partial", "none"]),
+        Kind::Enum(&["limits", "partial", "full"]),
         Apply::LiveWithHook(Hook::Sandbox),
         |c| c.sandbox.min_level.clone(),
         |c, v| {
-            c.sandbox.min_level = parse_enum(v, &["full", "partial", "none"])?;
+            // The name this vocabulary replaced is accepted where a value is
+            // parsed rather than listed among the options: `none` always meant
+            // "the resource bound and nothing else", so a setting saved before
+            // the rename keeps its meaning instead of being read as a typo.
+            let parsed = parse_enum(v, &["limits", "partial", "full", "none"])?;
+            c.sandbox.min_level = match parsed.as_str() {
+                "none" => "limits".to_string(),
+                other => other.to_string(),
+            };
+            Ok(())
+        }
+    ),
+    setting!(
+        "sandbox.windows_container",
+        Sandbox,
+        "NANOFILE_SANDBOX_WINDOWS_CONTAINER",
+        Kind::Bool,
+        Apply::LiveWithHook(Hook::Sandbox),
+        |c| fmt_bool(c.sandbox.windows_container),
+        |c, v| {
+            c.sandbox.windows_container = parse_bool(v)?;
             Ok(())
         }
     ),
@@ -1708,7 +1728,11 @@ pub static GROUPS: &[GroupDef] = &[
         section: Section::Sandbox,
         id: "sandbox_policy",
         title_key: "setting.group_sandbox_policy",
-        keys: &["sandbox.enabled", "sandbox.min_level"],
+        keys: &[
+            "sandbox.enabled",
+            "sandbox.min_level",
+            "sandbox.windows_container",
+        ],
     },
     GroupDef {
         section: Section::Maintenance,

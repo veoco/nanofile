@@ -146,7 +146,7 @@ async fn the_sandbox_page_shows_the_measured_grade_and_items() {
         "the panel rendered a raw locale key"
     );
     for label in [
-        "Resource limits",
+        "Resource bound",
         "File access",
         "Network access",
         "Starting programs",

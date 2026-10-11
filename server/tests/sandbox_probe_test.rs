@@ -4,13 +4,25 @@
 //! that installed them, and this is the one place either is asserted — on the
 //! path the server walks at startup. No fixture is built, so the worker's
 //! process-global executable is left alone.
+//!
+//! Each test states the requirement it measures under
+//! (`common::sandbox::configure_probe_requirement`): these assertions are about
+//! the mechanisms a host installs, not about the grade the shipped policy asks
+//! for, and the two are separate since a Windows host that never asked for a
+//! container still has to report its bound. On Linux and macOS the platform
+//! installs everything either way, so the grade assertions below are unchanged.
 
 mod common;
 
 #[cfg(windows)]
 use std::time::{Duration, Instant};
 
-use common::sandbox::{fact, has, helper, helper_runs, probe, without_ffmpeg};
+#[cfg(windows)]
+use common::sandbox::windows_container;
+use common::sandbox::{
+    configure_media_probe_requirement, configure_probe_requirement, fact, has, helper, helper_runs,
+    probe, without_ffmpeg,
+};
 use server::sandbox::{JobVerdict, Level, Profile, Report};
 
 /// A fact that has to be there, or a panic carrying the whole line.
@@ -38,12 +50,14 @@ fn is_number(text: &str) -> bool {
 }
 
 /// What every profile on every platform has to say.
+///
+/// The resource bound is the one item with no alternative: a profile that could
+/// not establish it reports `limits=off`, and this is where that is caught
+/// wherever it happens. The other items are asserted on the platform that
+/// installs them.
 fn the_common_answer(profile: Profile, report: &Report, line: &str) {
     assert_eq!(report.profile, profile, "{line}");
-    // The grade needs both: a host that denies the network and multiplies
-    // processes but lets a parser read every path is not confined at all.
     assert!(report.protections.limits, "{line}");
-    assert!(report.protections.files, "{line}");
     // Thread creation is what the fork was said to be needed for, so this is the
     // assertion that decides it: a profile that broke the parsers reports it.
     assert!(has(report, "threads=ok"), "{line}");
@@ -56,6 +70,7 @@ fn the_common_answer(profile: Profile, report: &Report, line: &str) {
 /// The documents profile parses every structured format it carries, whole.
 #[test]
 fn the_documents_report_shows_a_worker_that_still_reads() {
+    configure_probe_requirement();
     let (report, line) = probe(Profile::Documents, None);
 
     the_common_answer(Profile::Documents, &report, &line);
@@ -80,6 +95,7 @@ fn the_documents_report_shows_a_worker_that_still_reads() {
 /// nothing about: it is the other child every thumbnail and avatar runs as.
 #[test]
 fn the_images_report_shows_a_worker_that_still_decodes() {
+    configure_probe_requirement();
     let (report, line) = probe(Profile::Images, None);
 
     the_common_answer(Profile::Images, &report, &line);
@@ -108,6 +124,10 @@ fn the_media_report_shows_a_helper_that_still_decodes() {
         return;
     }
 
+    // The media profile needs its own requirement: it can never reach what the
+    // parser profiles grade, so the shipped minimum would refuse it and skip the
+    // assertion that matters.
+    configure_media_probe_requirement();
     #[cfg(windows)]
     let started = Instant::now();
     let (report, line) = probe(Profile::Media, Some(helper()));
@@ -139,6 +159,46 @@ fn the_media_report_shows_a_helper_that_still_decodes() {
         );
     }
     the_platform_answer(Profile::Media, &report);
+}
+
+/// The shape Windows ships by default: the bound and the token, no container.
+///
+/// This is the case the whole redesign is about. The container is the only
+/// mechanism that can add the files layer on that platform, creating one needs a
+/// registry profile and package access on the worker's own image, and a host
+/// sandbox that confines every command it runs refuses exactly that. The feature
+/// runs anyway — on the Job Object alone, which is what keeps the server up —
+/// and the report says which layer is missing rather than the feature being
+/// disabled over it.
+#[cfg(windows)]
+#[test]
+fn the_documents_profile_reports_the_bound_without_a_container() {
+    use server::sandbox::Requirement;
+
+    // What a host that never asked for the files layer runs with: `limits`, and
+    // no `sandbox.windows_container`. It is a separate probe so the report it
+    // produces is about this decision, not about whatever the rest of the file
+    // configured.
+    server::sandbox::worker::configure_requirement(Requirement::from_config(true, "limits", false));
+    let (report, line) = probe(Profile::Documents, None);
+
+    the_common_answer(Profile::Documents, &report, &line);
+    assert_eq!(report.level(), Level::Limits, "{line}");
+    assert!(report.protections.limits, "{line}");
+    assert!(
+        !report.protections.files && !report.protections.network,
+        "no container was asked for, so neither of those can be there: {line}"
+    );
+    assert_eq!(value(&report, "rung"), "plain", "{line}");
+    // The bound is still the parent's job object, and the child reads it back.
+    assert!(value(&report, "job").starts_with("memory"), "{line}");
+    // The job the profile exists to do still happens: a bound is not a refusal.
+    assert_eq!(
+        report.job,
+        Some(JobVerdict::Ok),
+        "the bounded worker must still read documents: {line}"
+    );
+    the_platform_answer(Profile::Documents, &report);
 }
 
 /// The layers Linux installs, and what they bound.
@@ -250,80 +310,33 @@ fn the_platform_answer(profile: Profile, report: &Report) {
     }
 }
 
-/// The creation the parent settled on, and the token the child read back.
+/// The creation the parent settled on, and what it bought.
+///
+/// Two shapes reach this file on Windows, and which one depends on
+/// `NANOFILE_TEST_WINDOWS_CONTAINER` rather than on the host: a runner that can
+/// create an AppContainer sets it and measures the container creation, and every
+/// other runner measures the plain one — which is what this repository ships,
+/// because a host sandbox that confines every command it runs will not let a
+/// child create a further container. Both shapes have to carry the job object,
+/// the restricted token and the mitigations; only the container adds the files
+/// and network items.
 #[cfg(windows)]
 fn the_platform_answer(profile: Profile, report: &Report) {
-    // The ladder tries the strongest creation first and reports the one it
-    // settled for, so the rung and the token beside it are one answer: a
-    // container with the restricted token and one without are two different
-    // creations, and the grade above is what says a container was reached at
-    // all — a host that fell to the token alone could not have `files` denied.
     let rung = value(report, "rung");
     assert!(
-        matches!(rung, "container" | "container-only" | "token" | "plain"),
+        matches!(rung, "container" | "plain"),
         "{rung}: {}",
         report.detail
     );
-    let token = value(report, "token");
-    match rung {
-        "container" => assert_eq!(token, "restricted", "{}", report.detail),
-        "container-only" => assert_eq!(token, "unrestricted", "{}", report.detail),
-        _ => {}
-    }
-    assert!(has(report, "container=appcontainer"), "{}", report.detail);
+
     // The job is the parent's, named at creation, and the child reads its limits
     // back from it: the value is the memory bound, `,parent` is the mark of that
     // arrangement, and `limits-missing` is what a job without them would report.
+    // This is the item no creation may be without.
     let job = value(report, "job");
     assert!(job.starts_with("memory"), "job={job}");
     assert!(has(report, "parent"), "{}", report.detail);
-    // Which creation was asked for and got: `off` is what Windows 10 answers,
-    // where the attribute does not exist.
-    assert!(
-        matches!(value(report, "lpac"), "on" | "off"),
-        "{}",
-        report.detail
-    );
-    // The opt-out is the profile's own decision, and the media profile makes it
-    // by measuring: a helper that cannot run under the less privileged container
-    // is measured again in the plain one rather than reported as an environment
-    // problem. So a media report that says the helper did not run must not also
-    // claim the opt-out was applied.
-    if profile.runs_helper()
-        && value(report, "lpac") == "on"
-        && let Some(parse) = fact(report, "parse")
-    {
-        assert!(
-            !parse.starts_with("media-unavailable") && !parse.starts_with("media-failed"),
-            "a media report under the opt-out must have been measured in the plain \
-             container first: {}",
-            report.detail
-        );
-    }
-    // Where a write from the container lands: `store` means it resolved into the
-    // container's own redirected store, `user` means it did not.
-    assert!(
-        matches!(
-            value(report, "writes"),
-            "store" | "user" | "denied" | "unmeasured"
-        ),
-        "{}",
-        report.detail
-    );
-    // The integrity level the container sets, asserted as a shape: a label this
-    // side sets is one the token-only fallback cannot survive.
-    assert!(
-        matches!(value(report, "il"), "untrusted" | "low" | "medium"),
-        "{}",
-        report.detail
-    );
-    // The far edge of the files layer: the system tree stays readable through
-    // the packages a low-box process is checked against.
-    assert!(
-        matches!(value(report, "system"), "readable" | "denied" | "absent"),
-        "{}",
-        report.detail
-    );
+
     // The count moves with the Windows build; zero would mean the API is not
     // working at all.
     let mitigations = value(report, "mitigations");
@@ -331,11 +344,87 @@ fn the_platform_answer(profile: Profile, report: &Report) {
         mitigations.parse::<u32>().is_ok_and(|count| count > 0),
         "mitigations={mitigations}"
     );
-    // The near edge: the parent's own file carries no ACE for the package the
-    // container is checked against, and unlike a write a read cannot be
-    // redirected into the container's store.
-    assert!(has(report, "files=measured-denied"), "{}", report.detail);
-    if profile.runs_helper() {
-        assert!(has(report, "helper_scope=libs"), "{}", report.detail);
+
+    // The one fact every launch has to report: which token it got, and what the
+    // container did or did not add.
+    let token = value(report, "token");
+    assert!(
+        matches!(token, "restricted" | "unrestricted"),
+        "token={token}: {}",
+        report.detail
+    );
+    assert!(
+        matches!(value(report, "lpac"), "on" | "off"),
+        "{}",
+        report.detail
+    );
+    assert!(
+        matches!(value(report, "il"), "untrusted" | "low" | "medium"),
+        "{}",
+        report.detail
+    );
+
+    match rung {
+        "container" => {
+            // A container with a token the loader could not initialize is a
+            // creation that never reported, so the two go together.
+            assert_eq!(token, "restricted", "{}", report.detail);
+            assert!(has(report, "container=appcontainer"), "{}", report.detail);
+            // The far edge of the files layer: the system tree stays readable
+            // through the packages a low-box process is checked against.
+            assert!(
+                matches!(value(report, "system"), "readable" | "denied" | "absent"),
+                "{}",
+                report.detail
+            );
+            // Where a write from the container lands: `store` means it resolved
+            // into the container's own redirected store, `user` means it did not.
+            assert!(
+                matches!(
+                    value(report, "writes"),
+                    "store" | "user" | "denied" | "unmeasured"
+                ),
+                "{}",
+                report.detail
+            );
+            // The near edge: the parent's own file carries no ACE for the package
+            // the container is checked against, and unlike a write a read cannot
+            // be redirected into the container's store.
+            assert!(has(report, "files=measured-denied"), "{}", report.detail);
+            if profile.runs_helper() {
+                assert!(has(report, "helper_scope=libs"), "{}", report.detail);
+            }
+            // The opt-out is the profile's own decision, and the media profile
+            // makes it by measuring: a helper that cannot run under the less
+            // privileged container is measured again in the plain one rather
+            // than reported as an environment problem. So a media report that
+            // says the helper did not run must not also claim the opt-out.
+            if profile.runs_helper()
+                && value(report, "lpac") == "on"
+                && let Some(parse) = fact(report, "parse")
+            {
+                assert!(
+                    !parse.starts_with("media-unavailable") && !parse.starts_with("media-failed"),
+                    "a media report under the opt-out must have been measured in the plain \
+                     container first: {}",
+                    report.detail
+                );
+            }
+        }
+        "plain" => {
+            // No container was asked for, or the one that was asked for reported
+            // nothing and was given up. The second case says so: a report that
+            // fell back carries the reason as `skipped0=`.
+            if windows_container() {
+                assert!(
+                    has(report, "skipped0"),
+                    "a container that was asked for and not delivered has to leave its \
+                     reason in the report: {}",
+                    report.detail
+                );
+            }
+            assert!(!has(report, "container=appcontainer"), "{}", report.detail);
+        }
+        other => panic!("unknown creation {other}: {}", report.detail),
     }
 }

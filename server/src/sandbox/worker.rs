@@ -113,81 +113,65 @@ const SANDBOX_REFUSAL: &str = "extract-worker: sandbox unavailable";
 
 /// Which creation a child is started with.
 ///
-/// Windows is the only platform with more than one, and the chain is not a
-/// convenience: a container whose child is *created* and then dies in its loader
-/// reports nothing, so the only way to tell it from a host that cannot confine
-/// the worker at all is to start the next creation and see whether it answers.
-/// The rung that answered is the one requests use; each refusal is recorded, and
-/// the child's own report says what it actually got, which the requirement then
-/// judges. There is no rung below `Plain`, and `Plain` still carries the job.
+/// Windows is the only platform with more than one shape, and the distinction is
+/// whether the AppContainer is asked for at all. `Confined` is the container and
+/// the restricted token; `Plain` is the token and the job object without a
+/// container, and it is what a host that will not create one runs — either
+/// because the configuration did not ask for the files layer
+/// ([`Requirement::os_confinement`]) or because the first attempt reported
+/// nothing and the host is not asked twice. There is no rung below `Plain`: it
+/// still carries the job object, which is the one hard bound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Start {
-    /// Whatever this host can give: the runner on macOS, the container and the
-    /// restricted token on Windows.
+    /// Whatever this host can give: the runner on macOS, and on Windows the
+    /// container with the restricted token.
     Confined,
-    /// The container without the restricted token, on Windows. A host can give
-    /// one and not the other — the two are separate calls, and a child created
-    /// with a token its loader cannot initialize dies with `STATUS_DLL_INIT_FAILED`
-    /// and reports nothing — and this rung is worth having between the two
-    /// because the container is what bounds files and the network, while the
-    /// token only takes privileges away.
-    #[cfg(windows)]
-    ContainerOnly,
-    /// The restricted token without the container, on Windows.
-    #[cfg(windows)]
-    TokenOnly,
-    /// Neither: this process's own token, ideally nothing else.
+    /// The restricted token and the job object, with no container. The one
+    /// creation that still bounds memory and CPU on a host whose AppContainer
+    /// cannot be created.
     #[cfg(windows)]
     Plain,
 }
 
 impl Start {
-    /// How a rung is named when the chain reports which ones failed.
+    /// How a creation is named when the log reports that it was passed over.
     fn label(self) -> &'static str {
         match self {
             Start::Confined => "with every protection",
             #[cfg(windows)]
-            Start::ContainerOnly => "with a container and no restricted token",
-            #[cfg(windows)]
-            Start::TokenOnly => "with a token and no container",
-            #[cfg(windows)]
-            Start::Plain => "without a token or a container",
+            Start::Plain => "with a token and a job and no container",
         }
     }
 
     /// The token the report carries for the creation that answered.
     ///
-    /// Windows is the only platform with a ladder to name, and the only one where
-    /// the name is not already in the child's report: the child measures the
-    /// container for itself (`container=appcontainer`, or `files=open`), but a
-    /// *weaker* creation than the one this host can give is something only this
-    /// side knows it settled for.
+    /// Windows is the only platform with a name to report, and the only one where
+    /// it is not already in the child's report: the child measures the container
+    /// for itself (`container=appcontainer`, or `files=open`), but that the
+    /// parent never asked for one is something only this side knows.
     #[cfg(windows)]
     fn token(self) -> &'static str {
         match self {
             Start::Confined => "container",
-            Start::ContainerOnly => "container-only",
-            Start::TokenOnly => "token",
             Start::Plain => "plain",
         }
     }
 }
 
-/// The rungs the ladder tried and got no report from, appended to the report.
+/// Why the strongest creation was passed over, appended to the report.
 ///
-/// A fallback that leaves no trace is the thing this is for: the strongest
-/// creation is attempted, its child is created and says nothing, the next rung is
-/// tried and answers — and without this the only surviving fact is that a weaker
-/// creation was used, with no way to tell a container the loader refused from a
-/// child that never came back inside its timeout. Only the summary of each
-/// attempt is kept, whitespace-free and clipped, because this travels in the same
-/// line as the measurement it explains.
-fn with_skipped_rungs(mut report: Report, skipped: &[String]) -> Report {
+/// A fallback that leaves no trace is the thing this is for: the container is
+/// attempted, its child is created and says nothing, the plain creation answers
+/// — and without this the only surviving fact is that a weaker creation was used,
+/// with no way to tell a container the loader refused from a child that never
+/// came back inside its timeout. Only the summary is kept, whitespace-free and
+/// clipped, because this travels in the same line as the measurement it explains.
+fn with_skipped_container(mut report: Report, skipped: Option<&String>) -> Report {
     /// Enough to name the failure, not enough for a stderr dump: the line also
     /// carries the measurement, and the full text is on the warning beside it.
     const MAX: usize = 240;
 
-    for (index, why) in skipped.iter().enumerate() {
+    if let Some(why) = skipped {
         let token: String = why
             .chars()
             .map(|character| {
@@ -199,7 +183,7 @@ fn with_skipped_rungs(mut report: Report, skipped: &[String]) -> Report {
             })
             .take(MAX)
             .collect();
-        report.detail.push_str(&format!(",skipped{index}={token}"));
+        report.detail.push_str(&format!(",skipped0={token}"));
     }
     report
 }
@@ -232,26 +216,6 @@ fn with_parent_facts(mut report: Report, start: Start) -> Report {
             .push_str(&format!(",container_refused={reason}"));
     }
     report
-}
-
-/// The creations this platform can start a child with, strongest first.
-///
-/// One everywhere but Windows: the macOS runner and the unix protections are
-/// applied by the child or by the parent without an alternative.
-fn rungs() -> &'static [Start] {
-    #[cfg(windows)]
-    {
-        &[
-            Start::Confined,
-            Start::ContainerOnly,
-            Start::TokenOnly,
-            Start::Plain,
-        ]
-    }
-    #[cfg(not(windows))]
-    {
-        &[Start::Confined]
-    }
 }
 
 /// What the child was asked to do.
@@ -534,10 +498,10 @@ pub fn run_request(
         return RunOutcome::Unavailable("cannot resolve the sandbox worker".to_string());
     };
 
-    // The rung the probe settled on: a request's child is started the way the
-    // one that reported was, and the probe ran before any request could. The
-    // reason record starts here, because a request's creation is a sequence of
-    // its own — one rung, and the grants this request made.
+    // The creation the probe settled on: a request's child is started the way
+    // the one that reported was, and the probe ran before any request could. The
+    // reason record starts here, because a request's launch is a sequence of its
+    // own — one creation, and the grants this request made.
     crate::sandbox::clear_container_shortfall();
     let start = rung(profile);
     let run = match run_child(&invocation, Some(request), timeout, start, profile, grants) {
@@ -606,8 +570,8 @@ pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
 /// where the others may not, so the two reports answer different questions and
 /// one must never stand in for the other.
 ///
-/// The probe runs **without** the cache lock. It starts children and may walk
-/// the whole Windows ladder, and holding the lock across it would block every
+/// The probe runs **without** the cache lock. It starts children and may try a
+/// second creation on Windows, and holding the lock across it would block every
 /// other profile's `status`/`available` call for as long as that takes — a
 /// request path calls this. Two threads that race here both probe and both
 /// store the same answer, which is cheaper than serialising every caller
@@ -666,18 +630,29 @@ pub fn status(profile: Profile) -> Status {
                 // rather than from the record it was built from: the report is
                 // the cached, immutable copy, while the record belongs to the
                 // last launch of any kind and a request may have started since.
-                match sandbox::container_refusal(&report.detail) {
-                    Some(reason) => tracing::warn!(
+                if report.level() >= requirement.min_level {
+                    // The host met the policy and still gave less than the
+                    // platform could: the feature runs, and this says what it
+                    // runs without. Windows without a container is this case.
+                    tracing::warn!(
+                        profile = profile.as_str(),
+                        level = report.level().as_str(),
+                        detail = report.detail.as_str(),
+                        "the sandbox runs with less confinement than this host can give"
+                    );
+                } else if let Some(reason) = sandbox::container_refusal(&report.detail) {
+                    tracing::warn!(
                         profile = profile.as_str(),
                         detail = report.detail.as_str(),
                         container = reason,
                         "the sandbox runs with less confinement than this host can give"
-                    ),
-                    None => tracing::warn!(
+                    );
+                } else {
+                    tracing::warn!(
                         profile = profile.as_str(),
                         detail = report.detail.as_str(),
                         "the sandbox runs with less confinement than this host can give"
-                    ),
+                    );
                 }
             }
             entry.rung = Some(start);
@@ -739,27 +714,52 @@ const PROBE_PENDING: &str = "the extraction sandbox is unavailable (a probe is p
 /// the machine's load, a timeout — says nothing about the host, and caching it
 /// for the process's lifetime would leave the page reporting a host it never
 /// managed to ask.
-pub fn capability(profile: Profile) -> Result<Report, String> {
+/// `os_confinement` is the one setting the probe cannot read from the requirement
+/// it is judged against: whether this platform's container is to be attempted at
+/// all, so the page can say whether turning it on would change anything.
+pub fn capability(profile: Profile, os_confinement: bool) -> Result<Report, String> {
     let cache = CAPABILITY.get_or_init(|| Mutex::new(HashMap::new()));
     {
         let cache = cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match cache.get(&profile) {
-            Some(Measured::Report(report)) => return Ok(report.clone()),
-            Some(Measured::Failed(why, retry_at)) if Instant::now() < *retry_at => {
+            // The answer was measured under *this* confinement setting: a report
+            // taken with the container asked for says nothing about what the host
+            // gives without it, and the other way round.
+            Some(Measured::Report {
+                report,
+                confinement,
+            }) if *confinement == os_confinement => {
+                return Ok(report.clone());
+            }
+            Some(Measured::Failed {
+                why,
+                retry_at,
+                confinement,
+            }) if *confinement == os_confinement && Instant::now() < *retry_at => {
                 return Err(why.clone());
             }
             _ => {}
         }
     }
 
-    // `enabled: true, none` asks the child for its report without refusing it
-    // over a grade: this call is a measurement, not a decision.
-    let measured = measure_capability(profile);
+    // The requirement the probe runs under is not the request path's: it never
+    // refuses over a grade, because this call *is* the measurement. What it does
+    // carry is whether the container is to be attempted, which is a property of
+    // the configuration. The child cannot read that for itself, so it comes in
+    // as an argument.
+    let measured = measure_capability(profile, os_confinement);
     let cached = match &measured {
-        Ok(report) => Measured::Report(report.clone()),
-        Err(why) => Measured::Failed(why.clone(), Instant::now() + UNAVAILABLE_RETRY),
+        Ok(report) => Measured::Report {
+            report: report.clone(),
+            confinement: os_confinement,
+        },
+        Err(why) => Measured::Failed {
+            why: why.clone(),
+            retry_at: Instant::now() + UNAVAILABLE_RETRY,
+            confinement: os_confinement,
+        },
     };
     cache
         .lock()
@@ -771,9 +771,18 @@ pub fn capability(profile: Profile) -> Result<Report, String> {
 /// One profile's cached answer for the settings page.
 enum Measured {
     /// The host answered, and this is what it said.
-    Report(Report),
+    Report {
+        report: Report,
+        /// The confinement setting this answer was measured under.
+        confinement: bool,
+    },
     /// The probe did not produce an answer, and when to ask again.
-    Failed(String, Instant),
+    Failed {
+        why: String,
+        retry_at: Instant,
+        /// The confinement setting this failure was measured under.
+        confinement: bool,
+    },
 }
 
 /// What the settings page shows for one profile: the host's answer, and what the
@@ -802,8 +811,8 @@ pub enum PageAnswer {
 }
 
 /// The page's answer for one profile.
-pub fn page_answer(profile: Profile) -> PageAnswer {
-    match capability(profile) {
+pub fn page_answer(profile: Profile, os_confinement: bool) -> PageAnswer {
+    match capability(profile, os_confinement) {
         Ok(report) => {
             // The profile's own job first: the page leads with whether the
             // features run, and a media profile whose helper cannot decode does
@@ -849,27 +858,16 @@ fn job_refusal(report: &Report) -> Option<String> {
         .then(|| format!("the media profile cannot decode a frame: {}", report.detail))
 }
 
-fn measure_capability(profile: Profile) -> Result<Report, String> {
-    let probe_file = DenyProbe::create();
-    let source_file = source_probe(profile);
-    let grants = probe_grants(profile, source_file.as_ref().map(SourceProbe::path));
-    let Some(invocation) = invocation(
-        Requirement::new(true, Level::None),
-        profile,
-        grants,
-        probe_file.as_ref().map(DenyProbe::path),
-    ) else {
-        return Err("cannot resolve the sandbox worker".to_string());
-    };
-
-    let mut failures: Vec<String> = Vec::new();
-    for &start in rungs() {
-        match probe_on(&invocation, profile, grants, start) {
-            Ok(report) => return Ok(with_parent_facts(report, start)),
-            Err(why) => failures.push(format!("{}: {why}", start.label())),
-        }
+fn measure_capability(profile: Profile, os_confinement: bool) -> Result<Report, String> {
+    // The settings page asks what this host *would* give, so the probe runs
+    // under a requirement that never refuses it over a grade — `limits` is the
+    // floor. Whether the container is asked for is the caller's answer, because
+    // that setting is what is being inspected.
+    let requirement = Requirement::from_config(true, "limits", os_confinement);
+    match probe_under(requirement, profile) {
+        (_, Status::Ready(report)) => Ok(report),
+        (_, Status::Unavailable(why)) => Err(why),
     }
-    Err(failures.join("; "))
 }
 
 /// Point the worker at a specific binary instead of this process's own.
@@ -895,6 +893,14 @@ pub fn configure_requirement(requirement: Requirement) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = requirement;
     invalidate();
+    // A host that gave the container up and then got a configuration that asks
+    // for it again deserves a fresh attempt: the setting is the operator
+    // answering the question, and the give-up is this process's memory of one
+    // refusal, not a verdict about the host.
+    #[cfg(windows)]
+    if requirement.os_confinement {
+        CONTAINER_GIVEN_UP.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// Drop the cached answers about this host.
@@ -922,6 +928,37 @@ pub fn invalidate() {
 /// The process-global requirement, created on first use.
 fn requirement_slot() -> &'static Mutex<Requirement> {
     REQUIREMENT.get_or_init(|| Mutex::new(Requirement::default()))
+}
+
+/// Whether a launch is still to attempt this platform's container.
+///
+/// Windows only, and only ever cleared: a host whose container has been attempted
+/// and reported nothing is not asked again for the life of this process, because
+/// the refusal is a property of the environment (a host sandbox that will not let
+/// a child create a further container) rather than of one launch. The settings
+/// hook clears the record when the configuration asks for the container again —
+/// that is the operator answering the question, and it is worth one more try.
+#[cfg(windows)]
+static CONTAINER_GIVEN_UP: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Whether a launch that wants the files layer may still attempt the container.
+///
+/// A parameter rather than a read of the process slot: the settings page probes
+/// under a requirement of its own, and a probe that asked for the container would
+/// otherwise be answered by whatever the request path is configured with.
+#[cfg(windows)]
+fn container_wanted(os_confinement: bool) -> bool {
+    os_confinement && !CONTAINER_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Record that this host will not start a child in the container.
+///
+/// Called wherever the container was attempted and produced no report, so a
+/// request that follows never repeats the launch the probe already paid for.
+#[cfg(windows)]
+fn give_up_container() {
+    CONTAINER_GIVEN_UP.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn configured_requirement() -> Requirement {
@@ -1146,17 +1183,40 @@ fn probe_grants<'a>(profile: Profile, source: Option<&'a Path>) -> crate::sandbo
 
 /// The creation the probe settled on for `profile`, for the requests that
 /// follow.
+///
+/// Windows answers `Plain` whenever the container is not wanted — the
+/// configuration did not ask for the files layer, or the host was asked once and
+/// refused. Every other platform has one creation, so the question does not
+/// arise and the cached answer is the answer.
 fn rung(profile: Profile) -> Start {
-    let Some(cache) = STATUS.get() else {
-        return Start::Confined;
-    };
-    let cache = cache
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    cache
-        .get(&profile)
-        .and_then(|entry| entry.rung)
-        .unwrap_or(Start::Confined)
+    /// The creation a profile's cached answer was measured in, when the probe
+    /// ran. An entry with no answer never settled anything.
+    fn cached(profile: Profile) -> Option<Start> {
+        STATUS
+            .get()?
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&profile)
+            .and_then(|entry| entry.rung)
+    }
+
+    #[cfg(windows)]
+    {
+        // The probe's own record wins while it exists: a host the container
+        // worked on has to keep using it, and a host that gave it up must not be
+        // asked again even for a profile the probe never reached.
+        cached(profile).unwrap_or_else(|| {
+            if container_wanted() {
+                Start::Confined
+            } else {
+                Start::Plain
+            }
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        cached(profile).unwrap_or(Start::Confined)
+    }
 }
 
 /// A private file the files layer's measurement must refuse to read.
@@ -1256,16 +1316,33 @@ fn source_probe(profile: Profile) -> Option<SourceProbe> {
     }
 }
 
-/// Run the child once per creation, strongest first, and read the first report.
+/// Start the child in the creation this configuration wants, falling back once
+/// on Windows when the container reports nothing.
+///
+/// A creation is accepted by the *child's own report*, never by the launch having
+/// succeeded: the failure this walks past is a child that is created and then
+/// dies in its loader, which no creation error reports. Only the container is
+/// ever given up — the fallback keeps the job object, which is the one hard
+/// bound — and the reason travels in the report as `skipped0=`.
 ///
 /// The answer is returned rather than recorded here: the caller holds the status
 /// cache's lock, and a helper that took it again would deadlock.
 fn probe(profile: Profile) -> (Start, Status) {
+    probe_under(configured_requirement(), profile)
+}
+
+/// One probe under a stated requirement.
+///
+/// The requirement is a parameter rather than read from the process slot so the
+/// settings page can ask what a *different* configuration would give — the
+/// container it has switched off, or the files layer it is thinking about asking
+/// for — without changing what the request path is judged by.
+fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
     let probe_file = DenyProbe::create();
     let source_file = source_probe(profile);
     let grants = probe_grants(profile, source_file.as_ref().map(SourceProbe::path));
     let Some(invocation) = invocation(
-        configured_requirement(),
+        requirement,
         profile,
         grants,
         probe_file.as_ref().map(DenyProbe::path),
@@ -1276,40 +1353,69 @@ fn probe(profile: Profile) -> (Start, Status) {
         );
     };
 
-    // A rung is accepted by the *child's own report*, never by the launch having
-    // succeeded: the failure this walks past is a child that is created and then
-    // dies in its loader, which no creation error reports. The reasons the
-    // strongest creations gave are collected across the whole walk, so the
-    // record is cleared once here rather than at each rung.
     crate::sandbox::clear_container_shortfall();
-    let mut failures: Vec<String> = Vec::new();
-    for &start in rungs() {
-        match probe_on(&invocation, profile, grants, start) {
-            Ok(report) => {
-                return (
-                    start,
-                    accept(with_skipped_rungs(
-                        with_parent_facts(report, start),
-                        &failures,
-                    )),
-                );
-            }
-            Err(why) => {
-                // Said out loud as well as carried in the report: an operator
-                // reading the log at startup wants the reason the strongest
-                // creation was passed over, not only the grade it left behind.
+
+    // The container is only attempted where it is wanted, and only once per
+    // process: see `rung` and `give_up_container`.
+    #[cfg(windows)]
+    let first = if container_wanted(requirement.os_confinement) {
+        Start::Confined
+    } else {
+        Start::Plain
+    };
+    #[cfg(not(windows))]
+    let first = Start::Confined;
+    // The reason the container was passed over, carried into the report beside
+    // the answer. Windows only: no other platform has a second creation to fall
+    // back to, so nothing is ever skipped there.
+    #[cfg(windows)]
+    let mut skipped: Option<String> = None;
+    #[cfg(not(windows))]
+    let skipped: Option<String> = None;
+
+    match probe_on(&invocation, profile, grants, first) {
+        Ok(report) => {
+            let report = with_skipped_container(with_parent_facts(report, first), skipped.as_ref());
+            (first, accept(report))
+        }
+        Err(why) => {
+            // Said out loud as well as carried in the report: an operator reading
+            // the log at startup wants the reason the container was passed over,
+            // not only the grade it left behind.
+            tracing::warn!(
+                profile = profile.as_str(),
+                creation = first.label(),
+                reason = why.as_str(),
+                "the sandbox worker did not report on this creation"
+            );
+            // The one fallback: a container that reports nothing is given up for
+            // this process, and the child is started again without one. `Plain`
+            // still carries the job object and the token, which is what the hard
+            // bound is made of.
+            #[cfg(windows)]
+            if first == Start::Confined {
+                give_up_container();
                 tracing::warn!(
                     profile = profile.as_str(),
-                    rung = start.label(),
                     reason = why.as_str(),
-                    "the sandbox worker did not report on this creation; trying the next"
+                    "the AppContainer was given up for this process; the worker runs with its \
+                     job and its token, and the report says files=open"
                 );
-                failures.push(format!("{}: {why}", start.label()));
+                let skipped = format!("{}: {why}", first.label());
+                if let Ok(second) = probe_on(&invocation, profile, grants, Start::Plain) {
+                    let report = with_skipped_container(
+                        with_parent_facts(second, Start::Plain),
+                        Some(&skipped),
+                    );
+                    return (Start::Plain, accept(report));
+                }
             }
+            (
+                first,
+                Status::Unavailable(format!("{}: {why}", first.label())),
+            )
         }
     }
-
-    (Start::Confined, Status::Unavailable(failures.join("; ")))
 }
 
 /// The one launch's answer, or why it did not give one.
@@ -1362,12 +1468,12 @@ fn probe_on(
 
 /// Why one creation produced no report at all.
 struct NoReport {
-    /// The reason, for the log and the rung's summary.
+    /// The reason, for the log and the summary the report carries.
     why: String,
     /// Whether the failure is the shape a container the opt-out makes unreadable
     /// leaves behind, and therefore worth a second creation without it. Only the
-    /// Windows ladder has a second creation to try, so the field is part of the
-    /// record everywhere and read in one place.
+    /// Windows media profile takes that second creation, so the field is part of
+    /// the record everywhere and read in one place.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     opt_out_suspect: bool,
 }
@@ -1468,8 +1574,8 @@ fn probe_once(
     if let Verdict::Unavailable(why) = verdict(run.exit_code, &run.stdout, &run.stderr) {
         // The summary rides along: a child that dies in its loader writes nothing
         // on either stream, and its exit code is then the only thing that says
-        // which failure this was. Without it, every such rung reads as the same
-        // sentence with no way to tell them apart.
+        // which failure this was. Without it, every such launch reads as the
+        // same sentence with no way to tell them apart.
         return Err(NoReport {
             why: format!("{why} [{}]", run.summary()),
             opt_out_suspect: opt_out_suspect(&run),
@@ -1565,6 +1671,13 @@ fn invocation(
     ];
     if !requirement.enabled {
         args.push(OsString::from("--sandbox-off"));
+    }
+    // Whether this launch may ask for the platform's container is the parent's
+    // decision (`Requirement::os_confinement`), and the child has no
+    // configuration of its own to read it from: without this the report it
+    // judges itself by would be the shipped default rather than the setting.
+    if requirement.os_confinement {
+        args.push(OsString::from("--windows-container"));
     }
     // The child needs the granted paths on its own command line: Landlock and
     // Seatbelt rules have to be installed before the request is read, so they
@@ -1759,7 +1872,8 @@ fn spawn_child(
     command.spawn().map(Child::Standard)
 }
 
-/// Start the child in its container, its job and its restricted token.
+/// Start the child in its container, its job and its restricted token, or in the
+/// job and the token alone when the container is not wanted or was given up.
 ///
 /// The environment, the working directory and the handle inheritance are all
 /// part of the creation call on Windows, so they are set inside `sandbox`.
@@ -1777,11 +1891,7 @@ fn spawn_child(
     }
     match start {
         Start::Confined => sandbox::spawn(&invocation.program, &args, profile, grants),
-        Start::ContainerOnly => {
-            sandbox::spawn_container_only(&invocation.program, &args, profile, grants)
-        }
-        Start::TokenOnly => sandbox::spawn_token_only(&invocation.program, &args, profile, grants),
-        Start::Plain => sandbox::spawn_unrestricted(&invocation.program, &args, profile, grants),
+        Start::Plain => sandbox::spawn_token_only(&invocation.program, &args, profile, grants),
     }
     .map(Child::Windows)
 }
@@ -2129,6 +2239,50 @@ mod tests {
         }
     }
 
+    /// The platform switch reaches the one decision it is about.
+    ///
+    /// Windows only, because the answer is: a requirement that does not want the
+    /// files layer must not attempt the AppContainer, and a refused host must not
+    /// be asked again. That is why a Windows launch inside a host sandbox — which
+    /// will not let a child create a further container — gets its bound and its
+    /// token instead of dying in a loader. The settings hook clears the give-up
+    /// record, so turning the container on later is one more attempt and not a
+    /// permanent verdict.
+    #[cfg(windows)]
+    #[test]
+    fn only_a_requirement_that_wants_the_layer_asks_for_the_container() {
+        assert!(
+            !container_wanted(false),
+            "a requirement that never asked for the files layer must not attempt a container"
+        );
+        assert!(
+            container_wanted(true),
+            "a requirement that asks for it is the one the container is for"
+        );
+
+        // One refusal is this process's answer for every launch that follows,
+        // until a settings save asks again.
+        give_up_container();
+        assert!(
+            !container_wanted(true),
+            "a container the host refused must not be asked for again"
+        );
+
+        configure_requirement(Requirement::from_config(true, "partial", true));
+        assert!(
+            container_wanted(true),
+            "a settings save that asks for the layer is worth one more attempt"
+        );
+
+        // A requirement that never asks is never a container attempt, whatever
+        // the process has done before.
+        give_up_container();
+        assert!(
+            !container_wanted(false),
+            "asking for the layer is the requirement's decision, not the record's"
+        );
+    }
+
     /// The child is started with the policy the parent resolved and nothing else:
     /// every flag is one the parent decided, and each is named exactly when it
     /// has something to say. A flag that leaked in unconditionally would change
@@ -2137,7 +2291,7 @@ mod tests {
     #[test]
     fn the_child_is_started_with_the_policy_the_parent_resolved() {
         let launched = launched(
-            Requirement::new(true, Level::Full),
+            Requirement::new(true, Level::Full, true),
             Profile::Documents,
             sandbox::Grants::default(),
             None,
@@ -2159,21 +2313,42 @@ mod tests {
     }
 
     /// The switch reaches the child as well as the parent that decides not to
-    /// spawn one, and the minimum travels beside it.
+    /// spawn one, the minimum travels beside it, and the files-layer decision
+    /// travels with it too: the child has to judge its own report by the same
+    /// rule the parent used.
     #[test]
-    fn the_switch_and_the_minimum_travel_to_the_child() {
-        let launched = launched(
-            Requirement::new(false, Level::None),
+    fn the_switch_the_minimum_and_the_layer_travel_to_the_child() {
+        let plain = launched(
+            Requirement::new(false, Level::Limits, false),
             Profile::Documents,
             sandbox::Grants::default(),
             None,
         );
-        let child = launched.child();
-        assert_eq!(&child[1..3], ["--min-level", "none"]);
+        let child = plain.child();
+        assert_eq!(&child[1..3], ["--min-level", "limits"]);
+        let flags = plain.flags();
         assert!(
-            launched.flags().contains(&"--sandbox-off"),
-            "the child has to know the switch is off: {:?}",
-            launched.flags()
+            flags.contains(&"--sandbox-off"),
+            "the child has to know the switch is off: {flags:?}"
+        );
+        assert!(
+            !flags.contains(&"--windows-container"),
+            "nothing asked for the files layer: {flags:?}"
+        );
+
+        // A requirement that wants the layer says so, whatever the minimum is:
+        // this is what makes `sandbox.windows_container = true` on a `limits`
+        // base reach a Windows launch.
+        let hardened = launched(
+            Requirement::new(true, Level::Limits, true),
+            Profile::Documents,
+            sandbox::Grants::default(),
+            None,
+        );
+        assert!(
+            hardened.flags().contains(&"--windows-container"),
+            "the platform switch is the parent's to pass on: {:?}",
+            hardened.flags()
         );
     }
 
@@ -2187,7 +2362,7 @@ mod tests {
         let source = Path::new("/var/tmp/nanofile/scratch.bin");
         let probe = Path::new("/var/tmp/nanofile/probe");
         let launched = launched(
-            Requirement::new(true, Level::Partial),
+            Requirement::new(true, Level::Partial, true),
             Profile::Media,
             sandbox::Grants {
                 helper: Some(helper),
@@ -2222,7 +2397,7 @@ mod tests {
     #[test]
     fn only_the_platform_with_a_runner_wraps_the_child() {
         let launched = launched(
-            Requirement::new(true, Level::Partial),
+            Requirement::new(true, Level::Partial, true),
             Profile::Documents,
             sandbox::Grants::default(),
             None,
@@ -2615,10 +2790,11 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(
                 Profile::Images,
-                Measured::Failed(
-                    "seeded".to_string(),
-                    Instant::now() + Duration::from_secs(60),
-                ),
+                Measured::Failed {
+                    why: "seeded".to_string(),
+                    retry_at: Instant::now() + Duration::from_secs(60),
+                    confinement: false,
+                },
             );
 
         invalidate();

@@ -425,15 +425,19 @@ async fn render(
                     .unwrap_or_else(|| "partial".to_string());
                 let min_level = crate::sandbox::Level::parse(&min_level)
                     .unwrap_or(crate::sandbox::Level::Partial);
+                let windows_container = service
+                    .resolved_one("sandbox.windows_container")
+                    .map(|entry| entry.value == "true")
+                    .unwrap_or(false);
                 // The probe spawns a child per profile, so it belongs on a
                 // blocking thread: the rest of the page must not wait on it, and
                 // an executor thread must not be parked on a process.
                 Some(
-                    tokio::task::spawn_blocking(move || sandbox_view(t, enabled, min_level))
-                        .await
-                        .map_err(|e| {
-                            AppError::internal(format!("the sandbox probe panicked: {e}"))
-                        })?,
+                    tokio::task::spawn_blocking(move || {
+                        sandbox_view(t, enabled, min_level, windows_container)
+                    })
+                    .await
+                    .map_err(|e| AppError::internal(format!("the sandbox probe panicked: {e}")))?,
                 )
             }
             _ => None,
@@ -465,12 +469,21 @@ fn settings_url(section: Section, action: &str) -> String {
 /// Synchronous, and it spawns children: every value on the panel comes from a
 /// probe this call runs once per profile, so the caller hands it to
 /// `spawn_blocking` rather than blocking the runtime's thread on a child process.
-/// The two settings it needs are resolved by the caller for the same reason —
-/// the settings service cannot cross into the blocking task.
-fn sandbox_view(t: &'static I18n, enabled: bool, min_level: crate::sandbox::Level) -> SandboxView {
+/// The settings it needs are resolved by the caller for the same reason — the
+/// settings service cannot cross into the blocking task.
+///
+/// `windows_container` is the one setting the *probe* does not read for itself:
+/// it decides whether a diagnostic Windows launch may try the AppContainer, so
+/// the page can show whether turning it on would change anything.
+fn sandbox_view(
+    t: &'static I18n,
+    enabled: bool,
+    min_level: crate::sandbox::Level,
+    windows_container: bool,
+) -> SandboxView {
     use crate::sandbox::{Profile, worker};
 
-    let answer = worker::page_answer(Profile::Documents);
+    let answer = worker::page_answer(Profile::Documents, windows_container);
     let (grade, grade_class, items, detail, host_level, decision) = match &answer {
         worker::PageAnswer::Measured {
             report,
@@ -535,7 +548,7 @@ fn sandbox_view(t: &'static I18n, enabled: bool, min_level: crate::sandbox::Leve
     // the helper where nothing else may, so it is shown on its own line — with
     // its own grade, because it is the profile that cannot have the process item
     // and therefore grades below the one above it on every platform.
-    let media_answer = worker::page_answer(Profile::Media);
+    let media_answer = worker::page_answer(Profile::Media, windows_container);
     let mut media_level = None;
     let mut media = match &media_answer {
         worker::PageAnswer::Measured { report, .. } => {
@@ -605,10 +618,11 @@ fn sandbox_view(t: &'static I18n, enabled: bool, min_level: crate::sandbox::Leve
 /// Ordered by what an admin has to do first, and phrased as a verdict rather
 /// than as a warning: "this host is missing a protection" and "the policy you
 /// set accepts a host that lets a parser read your files" are different
-/// sentences, and only the second is a decision the admin made. The files item
-/// is what separates them — it is the one whose absence the shipped default
-/// refuses, so seeing it missing means `sandbox.min_level` was lowered past the
-/// point where the feature is safe.
+/// sentences, and only the second is a decision the admin made. The resource
+/// bound is the one item no policy may give up, so its absence is the only
+/// missing-protection case; the files layer is what the shipped default asks
+/// for, and running without it is a *degradation* the page names rather than an
+/// outage — which is exactly what a Windows host without a container looks like.
 fn sandbox_verdict(
     t: &I18n,
     enabled: bool,
@@ -663,7 +677,7 @@ fn sandbox_verdict(
         );
     }
     if !decision.running {
-        // The host can confine the worker; the settings refuse what it gives.
+        // The host can bound the worker; the settings refuse what it gives.
         return verdict(
             t.tr("sandbox.verdict_refused"),
             Tone::Bad,
@@ -671,12 +685,13 @@ fn sandbox_verdict(
         );
     }
     if missing("sandbox.item_files") {
-        // Only reachable by lowering `min_level`: the default refuses this host,
-        // so the admin chose to run without the one layer that keeps a parser out
-        // of the server user's files.
+        // The feature runs, and the one layer that keeps a parser out of the
+        // server user's files is not there. Two ways to be here — the operator
+        // lowered `min_level` to `limits`, or Windows could not create its
+        // container — and the detail has to serve both.
         return verdict(
             t.tr("sandbox.verdict_unsafe"),
-            Tone::Bad,
+            Tone::Weak,
             Some(t.tr("sandbox.verdict_unsafe_detail").to_string()),
         );
     }
@@ -738,7 +753,7 @@ fn level_label(level: crate::sandbox::Level) -> &'static str {
     match level {
         crate::sandbox::Level::Full => "sandbox.grade_full",
         crate::sandbox::Level::Partial => "sandbox.grade_partial",
-        crate::sandbox::Level::None => "sandbox.grade_none",
+        crate::sandbox::Level::Limits => "sandbox.grade_limits",
     }
 }
 
@@ -746,7 +761,7 @@ fn level_class(level: crate::sandbox::Level) -> &'static str {
     match level {
         crate::sandbox::Level::Full => "badge-green",
         crate::sandbox::Level::Partial => "badge-gray",
-        crate::sandbox::Level::None => "badge-red",
+        crate::sandbox::Level::Limits => "badge-red",
     }
 }
 
@@ -807,7 +822,7 @@ fn min_level_label(level: crate::sandbox::Level) -> &'static str {
     match level {
         crate::sandbox::Level::Full => "setting.sandbox_min_level_option_full",
         crate::sandbox::Level::Partial => "setting.sandbox_min_level_option_partial",
-        crate::sandbox::Level::None => "setting.sandbox_min_level_option_none",
+        crate::sandbox::Level::Limits => "setting.sandbox_min_level_option_limits",
     }
 }
 
@@ -1342,7 +1357,7 @@ mod tests {
             label: String::new(),
             reason: (!running).then(|| "below the minimum".to_string()),
         };
-        let level = crate::sandbox::Level::None;
+        let level = crate::sandbox::Level::Limits;
 
         // Running, but without the files layer: only a lowered minimum gets
         // here, and the verdict says so.

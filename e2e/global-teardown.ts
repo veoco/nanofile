@@ -16,7 +16,11 @@ export default async function globalTeardown() {
   try {
     const info = JSON.parse(fs.readFileSync(p, "utf-8")) as { pid: number; tmpRoot: string };
     try {
-      process.kill(info.pid, "SIGTERM");
+      // Every platform, one spelling: `SIGTERM` is a real signal only on unix,
+      // and Node rejects the name on Windows, where this is `TerminateProcess`
+      // either way. The teardown cannot make its own kill graceful, so it does
+      // not pretend to.
+      process.kill(info.pid);
       await waitForExit(info.pid);
     } catch {
       // process already gone
@@ -26,12 +30,13 @@ export default async function globalTeardown() {
     // nothing to clean up
   }
 
-  assertNoUnclassifiedRoutes(path.join(resultsDir, "server.log"));
+  assertNoUnclassifiedRoutes(resultsDir);
 }
 
 /**
- * Wait for a process to disappear. `globalSetup` truncates the log, so it holds
- * only this run — but the last writes still have to land before it is read.
+ * Wait for a process to disappear. Each instance's log is truncated (or, for
+ * the isolated specs, freshly created) at startup, so the audit below reads only
+ * this run — but the last writes still have to land before the logs are read.
  */
 async function waitForExit(pid: number, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -45,18 +50,28 @@ async function waitForExit(pid: number, timeoutMs = 10_000): Promise<void> {
   }
 }
 
-function assertNoUnclassifiedRoutes(logPath: string): void {
-  let log: string;
-  try {
-    log = fs.readFileSync(logPath, "utf-8");
-  } catch {
+/**
+ * Audit every server instance's log, not just the shared one.
+ *
+ * Three specs spawn their own isolated server, so a single path here would miss
+ * whatever they reached — and the gap this gate looks for is exactly the kind
+ * that only one spec would hit. Each instance logs into
+ * `test-results/<tmpRoot>/server.log` (see `helpers/server.ts`).
+ */
+function assertNoUnclassifiedRoutes(resultsDir: string): void {
+  const logs = serverLogs(resultsDir);
+  if (logs.length === 0) {
     return; // no log to audit
   }
 
-  const hits = log
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.includes(UNCLASSIFIED_ROUTE_WARNING));
+  const hits: string[] = [];
+  for (const log of logs) {
+    const lines = log
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.includes(UNCLASSIFIED_ROUTE_WARNING));
+    hits.push(...lines);
+  }
 
   if (hits.length > 0) {
     throw new Error(
@@ -66,4 +81,26 @@ function assertNoUnclassifiedRoutes(logPath: string): void {
         `answers 403 to everyone:\n  ${hits.join("\n  ")}`,
     );
   }
+}
+
+/** Every `server.log` an instance of this run wrote, oldest directory first. */
+function serverLogs(resultsDir: string): string[] {
+  const logs: string[] = [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(resultsDir, { withFileTypes: true });
+  } catch {
+    return logs;
+  }
+  for (const entry of entries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("nanofile-e2e-"))
+    .sort((a, b) => a.name.localeCompare(b.name))) {
+    const log = path.join(resultsDir, entry.name, "server.log");
+    try {
+      logs.push(fs.readFileSync(log, "utf-8"));
+    } catch {
+      // this instance wrote no log, which is its own problem and not this one
+    }
+  }
+  return logs;
 }

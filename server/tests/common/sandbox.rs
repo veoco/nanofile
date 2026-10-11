@@ -13,7 +13,7 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use server::sandbox::worker::{self, Status};
-use server::sandbox::{Level, Profile, Report};
+use server::sandbox::{Level, Profile, Report, Requirement};
 
 /// The helper the media profile is granted, and the one that writes the clips.
 ///
@@ -127,6 +127,47 @@ pub fn generate_large_clip(path: &Path, faststart: bool) -> bool {
 /// whatever the first one configured.
 pub fn configure_real_worker() -> bool {
     worker::configure_executable(PathBuf::from(env!("CARGO_BIN_EXE_nanofile")))
+}
+
+/// Whether `sandbox.windows_container` is to be set for this test binary.
+///
+/// `NANOFILE_TEST_WINDOWS_CONTAINER=1` (or `true`) asks for it. Windows CI sets
+/// neither and therefore measures what a Windows host with no container gives —
+/// the limits shape, which is the one this repository ships by default. A
+/// runner that *can* create an AppContainer sets the variable to exercise the
+/// opt-in path as well.
+pub fn windows_container() -> bool {
+    std::env::var("NANOFILE_TEST_WINDOWS_CONTAINER")
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+/// The requirement a probe test measures a *parser* profile under.
+///
+/// `partial` is what the shipped policy asks for on Linux and macOS, so the
+/// grade assertions there stay what they always were. On Windows it asks for the
+/// files layer as well, which is why the container is attempted only when
+/// `windows_container()` says the runner can give one; otherwise the probe
+/// settles for the plain creation and the report says `files=open`.
+pub fn configure_probe_requirement() {
+    worker::configure_requirement(Requirement::from_config(
+        true,
+        "partial",
+        windows_container(),
+    ));
+}
+
+/// The requirement the *media* probe is measured under.
+///
+/// `limits`, because the media profile can never reach `partial`: it starts the
+/// helper by copying itself, so it never has the process item, and a `partial`
+/// minimum would refuse it on every host and skip the assertion that matters —
+/// that the confined child still decodes a frame.
+pub fn configure_media_probe_requirement() {
+    worker::configure_requirement(Requirement::from_config(
+        true,
+        "limits",
+        windows_container(),
+    ));
 }
 
 /// The report for `profile`, or a panic naming what the host gave instead.

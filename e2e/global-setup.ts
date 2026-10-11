@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   startServer,
   stopServer,
+  resolveBinary,
   BASE_URL,
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
@@ -14,7 +15,10 @@ import { startMailServer } from "./helpers/mailbox";
 
 function ensureBinary(): string {
   const repoRoot = path.resolve(process.cwd(), "..");
-  const binary = path.join(repoRoot, "target", "debug", "nanofile");
+  // One resolver for the whole suite: the name is platform-specific, and a
+  // second copy of the path here is how Windows silently stopped working — the
+  // build below would run and the path it returned would still be wrong.
+  const binary = resolveBinary();
   if (fs.existsSync(binary)) return binary;
   execFileSync("cargo", ["build"], { cwd: repoRoot, stdio: "inherit" });
   return binary;
@@ -23,11 +27,17 @@ function ensureBinary(): string {
 export default async function globalSetup() {
   const binary = ensureBinary();
 
-  // Truncate the shared server log before the first server starts. It is
-  // opened in append mode (a spec may spawn its own isolated instance), so
-  // without this the teardown audit would also read earlier runs.
+  // Clear the previous run's artifacts. Each instance logs into its own
+  // directory named after its temp root (see `helpers/server.ts`), because a
+  // single shared file is truncated by whichever instance starts last — which
+  // is what left the teardown audit reading only the last server's lines.
   const resultsDir = path.join(process.cwd(), "test-results");
   fs.mkdirSync(resultsDir, { recursive: true });
+  for (const entry of fs.readdirSync(resultsDir, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name.startsWith("nanofile-e2e-")) {
+      fs.rmSync(path.join(resultsDir, entry.name), { recursive: true, force: true });
+    }
+  }
   fs.rmSync(path.join(resultsDir, "server.log"), { force: true });
 
   // The SMTP stub comes first: the server reads its mail settings at startup,

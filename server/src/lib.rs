@@ -332,6 +332,7 @@ impl AppState {
         crate::sandbox::worker::configure_requirement(crate::sandbox::Requirement::from_config(
             config.sandbox.enabled,
             &config.sandbox.min_level,
+            config.sandbox.windows_container,
         ));
         // Called even when the setting is empty, because empty is how an
         // administrator says there is no helper: skipping the call would leave
@@ -502,6 +503,7 @@ impl AppState {
                         crate::sandbox::Requirement::from_config(
                             config.sandbox.enabled,
                             &config.sandbox.min_level,
+                            config.sandbox.windows_container,
                         ),
                     );
                     // The media profile's grant names a file, and this hook also

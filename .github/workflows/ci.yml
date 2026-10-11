@@ -243,7 +243,7 @@ jobs:
           name: e2e-failure-artifacts
           path: |
             e2e/playwright-report/
-            e2e/test-results/server.log
+            e2e/test-results/**/server.log
 
   # ── Dependency advisories ───────────────────────────────────────────
   audit:
@@ -337,6 +337,13 @@ jobs:
   # The cache keys are the same as the other Rust jobs on purpose: rust-cache
   # keys on `CARGO*`, so a per-platform job that set its own would keep a second
   # copy of the same dependency graph.
+  #
+  # `NANOFILE_TEST_WINDOWS_CONTAINER` is deliberately *not* set here, and that is
+  # a statement rather than an omission: the sandbox tests then measure what a
+  # Windows host with no AppContainer gives — the resource bound, a restricted
+  # token and the mitigations, with `files=open` — which is the shape this
+  # repository ships. Set it to exercise the container creation as well on a
+  # runner that can give one (`common::sandbox::windows_container`).
   tests:
     name: Tests (${{ matrix.label }})
     runs-on: ${{ matrix.os }}

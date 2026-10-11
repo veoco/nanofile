@@ -1,6 +1,5 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs";
-import path from "node:path";
 import { signInAs } from "../helpers/users";
 import {
   startServer,
@@ -96,10 +95,10 @@ test("the restart button applies a saved restart-only setting", async ({ browser
     ).toHaveValue("7");
 
     // The log is where an operator would look, so the restart has to be in it.
-    const log = fs.readFileSync(
-      path.join(process.cwd(), "test-results", "server.log"),
-      "utf-8",
-    );
+    // The path comes from the handle: each instance logs into its own directory
+    // (see `helpers/server.ts`), so a hard-coded shared path here would read a
+    // file this instance never wrote.
+    const log = fs.readFileSync(handle.logPath, "utf-8");
     expect(log).toContain("Restart requested from the admin UI");
     expect(log).toContain("Restarting the server in place");
   } finally {

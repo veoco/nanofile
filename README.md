@@ -114,25 +114,33 @@ Sections: `[server]` networking and feature switches; `[database]` connection; `
 
 ## Sandbox
 
-Everything that parses content a user supplied runs in a separate, confined
-process, never inside the server: document text extraction for the search
-index, image thumbnails, media thumbnails (through `ffmpeg`), EXIF and avatar
-processing. The child confines itself before it reads a request and prints what
-it established; the server decides from that report rather than from what it
-asked for.
+Everything that parses content a user supplied runs in a separate process with a
+memory bound, a CPU bound and a wall-clock timeout, never inside the server:
+document text extraction for the search index, image thumbnails, media thumbnails
+(through `ffmpeg`), EXIF and avatar processing. The child bounds and confines
+itself before it reads a request and prints what it established; the server
+decides from that report rather than from what it asked for.
+
+The resource bound is the one item no setting may give up: a child that cannot
+establish it is refused by both sides, because a parser bomb or an unbounded loop
+is the failure this exists to prevent. Everything these features parse is pure
+Rust (`lopdf`, `office_oxide`, `zip`, `image`, `kamadak-exif`), and the one
+external program any profile starts is the media helper, so the file, network and
+process layers are deliberate defense in depth against a parser bug rather than
+the bound that keeps the server up.
 
 The admin's **Sandbox** page shows the grade this host actually gives:
 
-- **Full** — every protection the platform can provide: resource limits (memory
-  and CPU everywhere, plus descriptors and file size on Linux and macOS), no
-  access to the server user's own files, no network, and no way to start another
-  program.
-- **Partial** — resource limits **and** no file access, with the network or the
-  process bound missing; the missing item is named. The files layer is what makes
-  this grade worth having: a host that denies the network and the processes but
-  lets the parser read every path is not Partial, it is None.
-- **None** — anything less than limits plus the files layer, including a kernel
-  without Landlock and a Windows launch that could not produce a container.
+- **Full** — every protection the platform can provide: the resource bound
+  (memory and CPU everywhere, plus descriptors and file size on Linux and macOS),
+  no access to the server user's own files, no network, and no way to start
+  another program.
+- **Partial** — the resource bound **and** no file access, with the network or
+  the process bound missing; the missing item is named. The files layer is what
+  makes this grade worth having: a host that denies the network and the processes
+  but lets the parser read every path is not Partial, it is Resource bound only.
+- **Resource bound only** — the bound and nothing else. The weakest state a
+  feature runs in, and what Windows gives by default (see below).
 
 Each item is listed with how much it matters and what its absence opens, beside
 the platform's own residuals: macOS's parser profiles deny the fork outright and
@@ -169,11 +177,25 @@ none of those features run, and nothing falls back to parsing inside the server
 process. A document skipped while the switch is off is recorded as a retryable
 failure rather than a verdict on its bytes, so turning the switch back on
 re-indexes it. `sandbox.min_level` is the grade the host must reach — `full`,
-`partial` (the default) or `none`; below it the features are disabled and the
-page says why, naming the item and what its absence means. A host that reaches
-Partial but not Full still runs them, with a warning; a host that does not reach
-Partial runs them only if an admin sets `min_level = "none"`, which the page
-marks as unsafe and explains.
+`partial` (the default) or `limits`; below it the features are disabled and the
+page says why, naming the item and what its absence means. Every grade includes
+the resource bound, so nothing here is a way to run a parser unbounded. A host
+that reaches Partial but not Full still runs them, with a warning; a host that
+reaches only the bound runs them when an admin sets `min_level = "limits"`, which
+the page explains as a degradation — and on Windows that is the default shape.
+
+**On Windows the container is opt-in.** The AppContainer is the only mechanism
+that adds the files and network items there, and creating one needs a registry
+profile and package access on the worker's own image. A host that confines every
+command it runs — a development or agent environment — refuses exactly that, and
+the child dies in its loader with nothing to diagnose. While the files layer was a
+hard requirement that failure disabled indexing, thumbnails, EXIF and avatars on
+the whole machine, at a large availability cost for a layer that does not bound
+memory or CPU at all. So a Windows launch applies the Job Object, the restricted
+token and the process mitigations and reports `files=open`; set
+`sandbox.windows_container = true`, or a `min_level` above `limits`, to attempt
+the container instead. The page names what is missing either way, and a container
+the host refuses is not asked for again.
 
 `storage.ffmpeg_path` names the helper the media profile may execute. Saving it
 re-resolves the grant through the same hook as the two settings above, so the

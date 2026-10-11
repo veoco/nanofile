@@ -36,15 +36,33 @@ export interface StartServerOptions {
 }
 
 /** Resolve the debug nanofile binary path (used by global-setup and specs that
- * spawn their own isolated instance). */
+ * spawn their own isolated instance).
+ *
+ * The suffix is platform-specific: Windows builds the file as `nanofile.exe`,
+ * and a hard-coded `nanofile` is a path that never exists there — every spec
+ * then fails in `spawn` with `ENOENT` rather than in an assertion. */
 export function resolveBinary(): string {
-  return path.resolve(process.cwd(), "..", "target", "debug", "nanofile");
+  const name = process.platform === "win32" ? "nanofile.exe" : "nanofile";
+  return path.resolve(process.cwd(), "..", "target", "debug", name);
+}
+
+/**
+ * The directory one server instance's log lives in.
+ *
+ * Per instance rather than one shared file: three specs spawn their own isolated
+ * server, and a shared log opened by whichever of them started last would hide
+ * the shared instance's lines from the teardown audit. The directory is named
+ * after the instance's temp root, which is unique per run.
+ */
+function logDirFor(tmpRoot: string): string {
+  return path.join(process.cwd(), "test-results", path.basename(tmpRoot));
 }
 
 /**
  * Spawn the nanofile binary with an isolated temp SQLite DB + storage dirs.
- * stdout/stderr are appended to test-results/server.log so backend logs are
- * preserved for debugging failures.
+ * stdout/stderr are appended to this instance's log under `test-results/`, so
+ * backend logs are preserved for debugging failures — and so the teardown audit
+ * reads every instance rather than only the last one to start.
  */
 export async function startServer(
   binaryPath: string,
@@ -58,7 +76,7 @@ export async function startServer(
   fs.mkdirSync(blockDir, { recursive: true });
   fs.mkdirSync(tempDir, { recursive: true });
 
-  const logPath = path.join(process.cwd(), "test-results", "server.log");
+  const logPath = path.join(logDirFor(tmpRoot), "server.log");
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
   const logStream = fs.createWriteStream(logPath, { flags: "a" });
 
@@ -135,11 +153,21 @@ async function waitForHealth(baseURL: string, timeoutMs = 30_000): Promise<void>
   throw new Error(`Server did not become healthy at ${baseURL}`);
 }
 
+/**
+ * Stop one instance and remove its temp tree.
+ *
+ * `SIGTERM` is named only where it means something: the server installs a
+ * `SIGTERM` handler on unix and drains before it exits, but Windows has no
+ * signals at all — `child.kill("SIGTERM")` there is `TerminateProcess`, and
+ * naming `SIGKILL` for the fallback would be a second spelling of the same
+ * call. So the first attempt names the signal on unix and asks for a plain
+ * termination elsewhere, and the fallback is always a plain kill.
+ */
 export async function stopServer(handle: ServerHandle): Promise<void> {
-  handle.child.kill("SIGTERM");
+  handle.child.kill(process.platform === "win32" ? undefined : "SIGTERM");
   await new Promise((r) => setTimeout(r, 500));
   if (handle.child.exitCode === null) {
-    handle.child.kill("SIGKILL");
+    handle.child.kill();
   }
   fs.rmSync(handle.tmpRoot, { recursive: true, force: true });
 }

@@ -67,12 +67,27 @@
 //! container's SID before the first launch (see [`grant_image_access`]).
 //!
 //! With the container in place, all four protections are the platform's own and
-//! the grade is `full`. Without it — a host that refuses the token, or the
-//! container, or the launch — the child still runs, and reports what it has
-//! rather than what was asked for. The probe walks the weaker creations this
-//! module also starts (container only, token only, neither) when a stronger one
-//! answers nothing, and the requirement decides whether the creation that
-//! answered is enough.
+//! the grade is `full`. Without it the child still runs in the job, under the
+//! restricted token and with the mitigations, and reports `files=open` beside
+//! them: the resource bound is what keeps the server up, and the container is the
+//! only mechanism that could add the files and network items. The container is
+//! attempted when the configuration asks for the files layer
+//! (`Requirement::os_confinement`), and a host that refuses it is not asked
+//! twice — see the section below on why that is the default on this platform.
+//!
+//! # Why the container is not attempted by default
+//!
+//! Creating one is a registry profile plus package-SID access on the worker's own
+//! image, and a *host* sandbox that confines every command it runs — a
+//! development or agent environment, DeepSeek Harness's own Windows file sandbox
+//! among them — refuses exactly those operations. The failure then arrives as a
+//! child that dies in its loader with no diagnosis, or as an ACL that cannot be
+//! written. While the files layer was a hard requirement that disabled indexing,
+//! thumbnails, EXIF and avatars on the whole machine, which is a large
+//! availability cost for a layer that bounds neither memory nor CPU. So a launch
+//! attempts the container only when `sandbox.windows_container` asks for it or
+//! `sandbox.min_level` asks for the files layer, and reports the missing item
+//! otherwise.
 //!
 //! # The less privileged container
 //!
@@ -888,12 +903,16 @@ pub(crate) fn spawn(
     )
 }
 
-/// Start the child with this process's own token and no container.
+/// Start the child with the restricted token, a job and no container.
 ///
-/// The last creation the probe tries, and still confined by the job: a host
-/// where neither the container nor the token works runs the worker under a
-/// process limit rather than not at all, and the report says so.
-pub(crate) fn spawn_unrestricted(
+/// This is the creation every Windows launch uses unless the configuration asks
+/// for the files layer: the job object is the resource bound and the token takes
+/// the privileges away, while the container is the only mechanism that could
+/// bound files and the network. A host that cannot create one — a sandbox of its
+/// own that refuses a nested AppContainer, which is the common case for a
+/// development or agent environment — still gets everything that keeps the
+/// server up, and the child's report says `files=open` beside it.
+pub(crate) fn spawn_token_only(
     program: &OsStr,
     args: &[OsString],
     profile: Profile,
@@ -902,50 +921,6 @@ pub(crate) fn spawn_unrestricted(
     // No container in this creation: the opt-out is not a decision it makes, so a
     // grant that is only good through `ALL APPLICATION PACKAGES` is good enough
     // here.
-    let mut opt_out = false;
-    if profile.runs_helper() {
-        grant_helper_access(grants, &mut opt_out);
-    }
-    start(program, args, None, None, process_slots(profile), false)
-}
-
-/// Start the child with its own token and no container.
-///
-/// The rung below [`spawn`] and above [`spawn_token_only`]: the container is what
-/// bounds files and the network, and the restricted token only takes privileges
-/// away, so a host that will not start a child under the token still has
-/// something worth giving. Which of the two a host refuses is not something the
-/// parent can ask in advance — a token the loader cannot initialize is accepted
-/// by `CreateRestrictedToken` and then kills the child with
-/// `STATUS_DLL_INIT_FAILED`, before it can report — so the ladder has to try.
-pub(crate) fn spawn_container_only(
-    program: &OsStr,
-    args: &[OsString],
-    profile: Profile,
-    grants: Grants<'_>,
-) -> std::io::Result<Child> {
-    let mut opt_out = want_lpac(profile);
-    let container = app_container(program, &mut opt_out);
-    if profile.runs_helper() {
-        grant_helper_access(grants, &mut opt_out);
-    }
-    start(
-        program,
-        args,
-        None,
-        container.as_ref(),
-        process_slots(profile),
-        opt_out,
-    )
-}
-
-/// Start the child with the restricted token and no container.
-pub(crate) fn spawn_token_only(
-    program: &OsStr,
-    args: &[OsString],
-    profile: Profile,
-    grants: Grants<'_>,
-) -> std::io::Result<Child> {
     let mut opt_out = false;
     if profile.runs_helper() {
         grant_helper_access(grants, &mut opt_out);

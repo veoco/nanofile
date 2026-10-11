@@ -31,7 +31,7 @@ async fn a_document_skipped_while_the_sandbox_is_off_is_reindexed_when_it_return
     assert_eq!(resp.status(), 200, "upload should succeed");
 
     // The master switch, off: nothing is parsed, in the child or here.
-    worker::configure_requirement(Requirement::new(false, Level::None));
+    worker::configure_requirement(Requirement::new(false, Level::Limits, false));
 
     let resp = f
         .client
@@ -71,7 +71,11 @@ async fn a_document_skipped_while_the_sandbox_is_off_is_reindexed_when_it_return
 
     // The switch back on: the same bytes are extracted for real. The level is
     // the shipped default, and this host is expected to reach it.
-    worker::configure_requirement(Requirement::new(true, server::sandbox::Level::Partial));
+    worker::configure_requirement(Requirement::new(
+        true,
+        server::sandbox::Level::Partial,
+        true,
+    ));
 
     let resp = f
         .client

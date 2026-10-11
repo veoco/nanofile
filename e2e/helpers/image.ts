@@ -3,8 +3,9 @@
  *
  * BMP on purpose: the format is a 54-byte header followed by raw BGR rows, so a
  * fixture needs neither zlib nor a CRC table and the suite stays free of image
- * tooling. The server decodes it through the same in-process pipeline as a
- * photo, so it exercises the real thumbnail path.
+ * tooling. The server decodes it through the same pipeline as a photo — a
+ * confined child process with a memory and CPU bound (`sandbox::jobs::images`,
+ * started by `sandbox::worker`) — so it exercises the real thumbnail path.
  */
 export function bmpFixture(width: number, height: number): Buffer {
   const clamp = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v);
