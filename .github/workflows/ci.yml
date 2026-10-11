@@ -338,12 +338,12 @@ jobs:
   # keys on `CARGO*`, so a per-platform job that set its own would keep a second
   # copy of the same dependency graph.
   #
-  # `NANOFILE_TEST_WINDOWS_CONTAINER` is deliberately *not* set here, and that is
-  # a statement rather than an omission: the sandbox tests then measure what a
-  # Windows host with no AppContainer gives — the resource bound, a restricted
-  # token and the mitigations, with `files=open` — which is the shape this
-  # repository ships. Set it to exercise the container creation as well on a
-  # runner that can give one (`common::sandbox::windows_container`).
+  # No test-side switch decides whether a launch asks for the AppContainer: it
+  # always does, and the runner's own answer is what the sandbox tests assert.
+  # On GitHub's Windows runners that answer has been the bound under the job
+  # object with `files=open`, which is the shape a host sandbox that refuses a
+  # nested container produces; a runner that can create one is asserted through
+  # the container branch instead.
   tests:
     name: Tests (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
@@ -410,7 +410,9 @@ jobs:
           # The `find`s below are allowed to come up empty: the step runs with
           # `-e -o pipefail`, and a package directory that is not there (or a
           # `head` that closes the pipe) would otherwise abort it before the next
-          # installer is tried.
+          # installer is tried. Every location a package manager on this image is
+          # known to use is searched, and `PATH` is the last resort: a miss here
+          # means the media assertions silently stop being measured.
           FFMPEG=""
           if command -v winget >/dev/null 2>&1; then
             echo "installing ffmpeg with winget"
@@ -420,12 +422,28 @@ jobs:
               -name ffmpeg.exe 2>/dev/null | head -1 || true)"
           fi
           if [ -z "$FFMPEG" ]; then
-            echo "no winget on this image; installing ffmpeg with Chocolatey"
+            echo "no winget result; installing ffmpeg with Chocolatey"
             choco install ffmpeg -y --no-progress
-            FFMPEG="$(find /c/ProgramData/chocolatey/lib/ffmpeg/tools -name ffmpeg.exe \
-              -type f 2>/dev/null | head -1 || true)"
+            # Chocolatey puts the binary either in the package's `tools` directory
+            # or in the shim directory beside it, and the layout has moved between
+            # image releases.
+            FFMPEG="$(find /c/ProgramData/chocolatey/lib/ffmpeg/tools \
+              /c/ProgramData/chocolatey/bin \
+              -name ffmpeg.exe -type f 2>/dev/null | head -1 || true)"
           fi
           if [ -z "$FFMPEG" ]; then
+            FFMPEG="$(command -v ffmpeg || true)"
+          fi
+          if [ -z "$FFMPEG" ]; then
+            # Say where the packages did land, so the next run can be fixed
+            # without another guessing round.
+            for directory in /c/ProgramData/chocolatey/lib \
+              "$(cygpath -u "$LOCALAPPDATA")/Microsoft/WinGet/Packages"; do
+              if [ -d "$directory" ]; then
+                echo "--- $directory"
+                find "$directory" -maxdepth 3 -iname 'ffmpeg*' 2>/dev/null | head -20
+              fi
+            done
             echo "::error::ffmpeg could not be installed; the media tests need a real helper"
             exit 1
           fi
