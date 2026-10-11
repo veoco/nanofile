@@ -22,8 +22,8 @@ async fn the_media_profile_confines_itself() {
     match server::sandbox::worker::status(server::sandbox::Profile::Media) {
         server::sandbox::worker::Status::Ready(report) => {
             assert!(
-                report.level() >= server::sandbox::Level::Partial,
-                "the media worker must be confined: {}",
+                report.protections.limits,
+                "the media worker must bound itself: {}",
                 report.detail
             );
             assert!(

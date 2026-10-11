@@ -148,12 +148,8 @@ pub fn windows_container() -> bool {
 /// files layer as well, which is why the container is attempted only when
 /// `windows_container()` says the runner can give one; otherwise the probe
 /// settles for the plain creation and the report says `files=open`.
-pub fn configure_probe_requirement() {
-    worker::configure_requirement(Requirement::from_config(
-        true,
-        "partial",
-        windows_container(),
-    ));
+pub fn configure_probe_requirement() -> Requirement {
+    Requirement::from_config(true, "partial", windows_container())
 }
 
 /// The requirement the *media* probe is measured under.
@@ -162,12 +158,39 @@ pub fn configure_probe_requirement() {
 /// helper by copying itself, so it never has the process item, and a `partial`
 /// minimum would refuse it on every host and skip the assertion that matters —
 /// that the confined child still decodes a frame.
-pub fn configure_media_probe_requirement() {
-    worker::configure_requirement(Requirement::from_config(
-        true,
-        "limits",
-        windows_container(),
-    ));
+pub fn configure_media_probe_requirement() -> Requirement {
+    Requirement::from_config(true, "limits", windows_container())
+}
+
+/// Serialises a requirement change with the probe that reads it.
+///
+/// The requirement is process-global and the tests in one binary run in
+/// parallel, so a test that stored its requirement and then probed could have
+/// another test's store land in between — and the child would then be started
+/// under a *different* requirement than the one the caller asked about, with the
+/// report judged against it. That is what a Windows run showed: a probe whose
+/// caller wanted no container came back with the container creation's label.
+///
+/// One lock for the whole binary, and everything that both stores a requirement
+/// and reads what it produced goes through [`with_requirement`].
+pub fn requirement_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+/// Store `requirement`, run `probe`, and put the lock back.
+///
+/// The mutex is held across both, which is the point: a probe is the only reader
+/// of the requirement that spans a process boundary, and the store only matters
+/// because of it.
+pub fn with_requirement<T>(requirement: Requirement, probe: impl FnOnce() -> T) -> T {
+    let guard = requirement_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    worker::configure_requirement(requirement);
+    let result = probe();
+    drop(guard);
+    result
 }
 
 /// The report for `profile`, or a panic naming what the host gave instead.
@@ -181,7 +204,20 @@ pub fn status(profile: Profile) -> Report {
 }
 
 /// The report for `profile`, which has to grade at least `minimum`.
+///
+/// The requirement is set here, because a caller that has to *reach* a level is
+/// also the caller that knows which level it wants: leaving the process-global
+/// requirement at the shipped default would make the host's own grade decide
+/// whether the probe is judged at all, and a Windows host that gives the
+/// resource bound without a container would come back `unavailable` before the
+/// assertion could say why. `windows_container()` still decides whether the
+/// files layer is asked for, so a runner that can give a container measures it.
 pub fn require_level(profile: Profile, minimum: Level) -> Report {
+    worker::configure_requirement(Requirement::from_config(
+        true,
+        minimum.as_str(),
+        windows_container() || minimum > Level::Limits,
+    ));
     let report = status(profile);
     assert!(
         report.level() >= minimum,

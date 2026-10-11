@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use common::sandbox::windows_container;
 use common::sandbox::{
     configure_media_probe_requirement, configure_probe_requirement, fact, has, helper, helper_runs,
-    probe, without_ffmpeg,
+    probe, with_requirement, without_ffmpeg,
 };
 use server::sandbox::{JobVerdict, Level, Profile, Report};
 
@@ -70,8 +70,9 @@ fn the_common_answer(profile: Profile, report: &Report, line: &str) {
 /// The documents profile parses every structured format it carries, whole.
 #[test]
 fn the_documents_report_shows_a_worker_that_still_reads() {
-    configure_probe_requirement();
-    let (report, line) = probe(Profile::Documents, None);
+    let (report, line) = with_requirement(configure_probe_requirement(), || {
+        probe(Profile::Documents, None)
+    });
 
     the_common_answer(Profile::Documents, &report, &line);
     assert_eq!(report.level(), Level::Full, "{line}");
@@ -95,8 +96,9 @@ fn the_documents_report_shows_a_worker_that_still_reads() {
 /// nothing about: it is the other child every thumbnail and avatar runs as.
 #[test]
 fn the_images_report_shows_a_worker_that_still_decodes() {
-    configure_probe_requirement();
-    let (report, line) = probe(Profile::Images, None);
+    let (report, line) = with_requirement(configure_probe_requirement(), || {
+        probe(Profile::Images, None)
+    });
 
     the_common_answer(Profile::Images, &report, &line);
     assert_eq!(report.level(), Level::Full, "{line}");
@@ -127,10 +129,12 @@ fn the_media_report_shows_a_helper_that_still_decodes() {
     // The media profile needs its own requirement: it can never reach what the
     // parser profiles grade, so the shipped minimum would refuse it and skip the
     // assertion that matters.
-    configure_media_probe_requirement();
+    let helper = helper();
     #[cfg(windows)]
     let started = Instant::now();
-    let (report, line) = probe(Profile::Media, Some(helper()));
+    let (report, line) = with_requirement(configure_media_probe_requirement(), || {
+        probe(Profile::Media, Some(helper))
+    });
 
     the_common_answer(Profile::Media, &report, &line);
     assert_eq!(report.level(), Level::Partial, "{line}");
@@ -179,8 +183,9 @@ fn the_documents_profile_reports_the_bound_without_a_container() {
     // no `sandbox.windows_container`. It is a separate probe so the report it
     // produces is about this decision, not about whatever the rest of the file
     // configured.
-    server::sandbox::worker::configure_requirement(Requirement::from_config(true, "limits", false));
-    let (report, line) = probe(Profile::Documents, None);
+    let (report, line) = with_requirement(Requirement::from_config(true, "limits", false), || {
+        probe(Profile::Documents, None)
+    });
 
     the_common_answer(Profile::Documents, &report, &line);
     assert_eq!(report.level(), Level::Limits, "{line}");

@@ -415,14 +415,22 @@ impl TestServer {
         // server cannot re-execute itself and has to be told where the binary is.
         // Setting it here means every document test goes through the real
         // confined child, and the self-test below fails in one place — with the
-        // reason — if this host cannot confine it, instead of letting each
-        // document test fail on its own.
+        // reason — if this host cannot bound it, instead of letting each document
+        // test fail on its own.
         //
         // The image profile is measured beside it: avatars, EXIF and the image
         // thumbnails are the other three paths that decode bytes a user chose,
-        // each of them through this one profile. A host that confines documents
+        // each of them through this one profile. A host that bounds documents
         // and not images would otherwise pass every test in this file and fail
         // only in the three that ask for an image.
+        //
+        // What the *policy* asks for is a separate question, and these tests are
+        // not about it: `min_level` is set to `limits` so the check below is the
+        // one invariant — the child bounds itself — and a host that gives the
+        // resource bound without the files layer runs the suite instead of
+        // panicking in every fixture. The per-platform grades are asserted where
+        // they belong, in `sandbox_probe_test`; the policy itself in
+        // `sandbox_policy_test`.
         //
         // `configure_executable` is process-global and set once; a test that
         // wants a worker that cannot run points it elsewhere before the first
@@ -430,23 +438,32 @@ impl TestServer {
         if server::sandbox::worker::configure_executable(std::path::PathBuf::from(env!(
             "CARGO_BIN_EXE_nanofile"
         ))) {
-            for profile in [
-                server::sandbox::Profile::Documents,
-                server::sandbox::Profile::Images,
-            ] {
-                match server::sandbox::worker::status(profile) {
-                    server::sandbox::worker::Status::Ready(report) => assert!(
-                        report.level() >= server::sandbox::Level::Partial,
-                        "the {} sandbox must confine the worker: {}",
-                        profile.as_str(),
-                        report.detail
-                    ),
-                    server::sandbox::worker::Status::Unavailable(reason) => panic!(
-                        "the extraction worker is not available for {}: {reason}",
-                        profile.as_str()
-                    ),
-                }
-            }
+            // Stored and read under one lock: the requirement is process-global
+            // and these fixtures start in parallel, so a plain store here would
+            // race another test's — and the probe would be judged against
+            // whichever landed last.
+            sandbox::with_requirement(
+                server::sandbox::Requirement::from_config(true, "limits", false),
+                || {
+                    for profile in [
+                        server::sandbox::Profile::Documents,
+                        server::sandbox::Profile::Images,
+                    ] {
+                        match server::sandbox::worker::status(profile) {
+                            server::sandbox::worker::Status::Ready(report) => assert!(
+                                report.protections.limits,
+                                "the {} sandbox must bound the worker: {}",
+                                profile.as_str(),
+                                report.detail
+                            ),
+                            server::sandbox::worker::Status::Unavailable(reason) => panic!(
+                                "the extraction worker is not available for {}: {reason}",
+                                profile.as_str()
+                            ),
+                        }
+                    }
+                },
+            );
         }
 
         // Temp directories are derived from the random port so each server gets

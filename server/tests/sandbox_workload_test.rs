@@ -36,10 +36,14 @@ fn the_worker_ran() {
     });
 }
 
-/// The child has to confine itself on this host, and the failure has to say
-/// what the host gave instead.
+/// The child has to run with its resource bound on this host, and the failure
+/// has to say what the host gave instead.
+///
+/// `limits`, not `partial`: what the policy asks for above the bound is asserted
+/// where it belongs (`sandbox_probe_test`), and a Windows host whose container
+/// cannot be created is exactly the host that gives the bound alone.
 fn require_confinement() {
-    common::sandbox::require_level(Profile::Documents, Level::Partial);
+    common::sandbox::require_level(Profile::Documents, Level::Limits);
 }
 
 /// A PDF whose one text object draws `text`.
