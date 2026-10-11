@@ -2,8 +2,9 @@
 //!
 //! The child confines itself and *then* reads the request, so these tests hand
 //! the real binary hand-written bytes, the way an attacker who reached the
-//! protocol would. `--min-level limits` keeps the subject the parser rather than
-//! this host, and the constants are spelled here: a wire format is pinned.
+//! protocol would. The requirement is the master switch alone, which keeps the
+//! subject the parser rather than this host; the constants are spelled here: a
+//! wire format is pinned.
 //!
 //! The cases that need the child to *serve* are unix-only. On Windows the
 //! memory and CPU bound is a Job Object the parent names at creation, and the one
@@ -178,7 +179,7 @@ fn media_head(kind: u8, size: u32, path_len: u16) -> Vec<u8> {
 /// The documents child parses what it is given and nothing else.
 #[test]
 fn a_document_request_is_parsed_or_refused() {
-    let args = ["--profile", "documents", "--min-level", "limits"];
+    let args = ["--profile", "documents"];
 
     // The positive control: the harness reaches a working child, so the
     // refusals below are the parser's doing and not a binary that never ran.
@@ -225,13 +226,7 @@ fn a_document_request_is_parsed_or_refused() {
 #[test]
 fn the_child_refuses_to_serve_with_the_sandbox_off() {
     let answer = run_worker(
-        &[
-            "--profile",
-            "documents",
-            "--min-level",
-            "limits",
-            "--sandbox-off",
-        ],
+        &["--profile", "documents", "--sandbox-off"],
         &document_request(0, b"zebraquartz"),
     );
     answer.finished("the switch off");
@@ -252,7 +247,7 @@ fn the_child_refuses_to_serve_with_the_sandbox_off() {
 /// made of — the whole text is what says the request path is intact.
 #[test]
 fn the_child_returns_the_whole_text_of_a_real_document() {
-    let args = ["--profile", "documents", "--min-level", "limits"];
+    let args = ["--profile", "documents"];
     let cases: [(u8, &[u8], &str); 4] = [
         (
             2,
@@ -294,7 +289,7 @@ fn the_child_returns_the_whole_text_of_a_real_document() {
 /// The images child bounds what it will hold and refuses what it does not know.
 #[test]
 fn an_image_request_is_parsed_or_refused() {
-    let args = ["--profile", "images", "--min-level", "limits"];
+    let args = ["--profile", "images"];
 
     // The positive control: a real PNG decodes and comes back as an image,
     // fitted to the box the request names. The source is deliberately not
@@ -339,8 +334,6 @@ fn a_media_request_cannot_name_its_own_source() {
     let args = [
         "--profile",
         "media",
-        "--min-level",
-        "limits",
         "--ffmpeg",
         helper,
         "--src",
@@ -383,8 +376,6 @@ fn a_media_request_cannot_name_its_own_source() {
         &[
             "--profile",
             "media",
-            "--min-level",
-            "limits",
             "--ffmpeg",
             helper,
             "--src",
@@ -405,14 +396,7 @@ fn a_media_request_cannot_name_its_own_source() {
 
     // No source grant at all: nothing can be read, so nothing is decoded.
     let answer = run_worker(
-        &[
-            "--profile",
-            "media",
-            "--min-level",
-            "limits",
-            "--ffmpeg",
-            helper,
-        ],
+        &["--profile", "media", "--ffmpeg", helper],
         &media_request(b'V', 48, b"/tmp/anything.bin"),
     );
     answer.finished("a media request with no source grant");
@@ -423,8 +407,6 @@ fn a_media_request_cannot_name_its_own_source() {
         &[
             "--profile",
             "media",
-            "--min-level",
-            "limits",
             "--src",
             granted.to_str().expect("a UTF-8 path"),
         ],

@@ -1,9 +1,9 @@
 //! What the Sandbox page says about the host it runs on.
 //!
 //! The page probes the worker, so this process points it at its own binary
-//! before the first fixture, and both tests below move `sandbox.min_level` and
-//! put it back. The executable and the requirement are process-global and set
-//! once, which is why this is a binary of its own.
+//! before the first fixture, and the one test below that moves the master switch
+//! puts it back. The executable and the switch are process-global and set once,
+//! which is why this is a binary of its own.
 
 mod common;
 
@@ -71,7 +71,7 @@ fn page_content(html: &str) -> &str {
 /// cannot advertise protection this host does not have.
 #[tokio::test]
 async fn the_sandbox_page_shows_the_measured_grade_and_items() {
-    let _ = common::sandbox::configure_real_worker();
+    common::sandbox::enable_real_worker();
     let server = TestServer::start().await;
     common::create_test_admin(&server.db, "root@example.com", "password123").await;
     let admin = ui_login(&server, "root@example.com", "password123").await;
@@ -155,12 +155,12 @@ async fn the_sandbox_page_shows_the_measured_grade_and_items() {
     }
 }
 
-/// The media profile grades below the document profile on every platform, so a
-/// minimum of `full` refuses it — and the page has to say that, rather than
-/// showing a row that looks fine next to a setting that stopped it.
+/// Switching the sandbox off is the only thing that disables the features, and
+/// the page has to say so rather than leaving a row that looks fine next to a
+/// switch that stopped it.
 #[tokio::test]
-async fn a_full_minimum_disables_the_media_worker_and_says_so() {
-    let _ = common::sandbox::configure_real_worker();
+async fn the_switch_off_disables_the_workers_and_the_page_says_so() {
+    common::sandbox::enable_real_worker();
     let server = TestServer::start().await;
     common::create_test_admin(&server.db, "root@example.com", "password123").await;
     let admin = ui_login(&server, "root@example.com", "password123").await;
@@ -170,34 +170,38 @@ async fn a_full_minimum_disables_the_media_worker_and_says_so() {
         .settings
         .save(
             Section::Sandbox,
-            &form(&[("sandbox.min_level", "full")]),
+            &form(&[("sandbox.enabled", "false")]),
             None,
         )
         .await
-        .expect("raise the minimum");
+        .expect("switch the sandbox off");
 
     let (status, html) = page(&server, &admin, "/sysadmin/settings/sandbox/").await;
     assert_eq!(status, 200);
     assert!(
-        html.contains("Disabled by the minimum grade"),
-        "the media row does not say why it is off: {html}"
+        html.contains("data-sandbox-decision-reason"),
+        "the decision row has to say why the features do not run: {html}"
     );
     assert!(
         html.contains("data-sandbox-media-reason"),
         "the media row carries no reason"
     );
+    assert!(
+        html.contains("data-sandbox-verdict-label"),
+        "the verdict has no label"
+    );
 
-    // Leave the process-global requirement where the fixture put it: this test
-    // is about the page, and a minimum of `full` would follow the rest of this
+    // Leave the process-global switch where the fixture put it: the page is what
+    // this test is about, and an off switch would follow the rest of this
     // binary's tests around.
     server
         .state
         .settings
         .save(
             Section::Sandbox,
-            &form(&[("sandbox.min_level", "partial")]),
+            &form(&[("sandbox.enabled", "true")]),
             None,
         )
         .await
-        .expect("restore the minimum");
+        .expect("switch it back on");
 }

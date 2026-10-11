@@ -96,24 +96,24 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
     assert_eq!(grade(Profile::Images), Some(Level::Partial));
     assert_eq!(starts(&asked), 3);
 
-    // An answer belongs to the requirement it was measured under. A new
-    // minimum makes the stored one unusable, so the host is asked again — and
-    // this time the answer does not meet it. Two mechanisms enforce that and
-    // the assertion is about the outcome: a settings change clears the cache,
-    // and a stored answer carries the requirement it was measured under so a
-    // probe in flight across a change cannot be published under the new one.
-    worker::configure_requirement(Requirement::new(true, Level::Full, true));
+    // An answer belongs to the requirement it was measured under. Flipping the
+    // switch makes the stored one unusable, so the host is asked again — and this
+    // time the answer is refused. Two mechanisms enforce that and the assertion is
+    // about the outcome: a settings change clears the cache, and a stored answer
+    // carries the requirement it was measured under so a probe in flight across a
+    // change cannot be published under the new one.
+    worker::configure_requirement(Requirement::new(false));
     let Status::Unavailable(why) = worker::status(Profile::Images) else {
-        panic!("a partial host must not pass a full minimum");
+        panic!("a switched-off sandbox must refuse whatever the host gives");
     };
     assert!(
-        why.contains("partial") && why.contains("full"),
-        "the reason has to name what the host gave and what was asked: {why}"
+        why.contains("switched off"),
+        "the reason has to name the switch: {why}"
     );
     assert_eq!(starts(&asked), 4, "a new requirement has to re-probe");
 
-    // The shortfall is not asked about again inside the retry window: the next
-    // call answers from the record without starting a child.
+    // The refusal is not asked about again inside the retry window: the next call
+    // answers from the record without starting a child.
     let Status::Unavailable(why) = worker::status(Profile::Images) else {
         panic!("the retry window must answer unavailable");
     };
@@ -127,8 +127,10 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
         "the retry window must not spawn a child per caller"
     );
 
-    // Under the stricter requirement the documents answer is measured again —
-    // its stored one was taken under the old requirement — and meets it.
+    // Under the switch back on, both answers are measured again — their stored
+    // ones were taken under the previous requirement.
+    worker::configure_requirement(Requirement::new(true));
+    assert_eq!(grade(Profile::Images), Some(Level::Partial));
     assert_eq!(grade(Profile::Documents), Some(Level::Full));
-    assert_eq!(starts(&asked), 5);
+    assert_eq!(starts(&asked), 6);
 }

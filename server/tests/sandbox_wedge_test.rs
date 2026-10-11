@@ -11,8 +11,8 @@ mod common;
 use std::time::{Duration, Instant};
 
 use server::indexer::extract::Plan;
+use server::sandbox::Requirement;
 use server::sandbox::worker::{self, Outcome};
-use server::sandbox::{Level, Requirement};
 
 /// Write a shell script that answers the startup self-test like a confined
 /// worker and then exits while a background process holds the pipes.
@@ -43,7 +43,7 @@ fn a_process_left_holding_the_pipes_does_not_hold_the_caller() {
     wedge_worker(directory.path());
     // A requirement the fake report satisfies: what is under test is the pipe,
     // not the level.
-    worker::configure_requirement(Requirement::new(true, Level::Partial, true));
+    worker::configure_requirement(Requirement::new(true));
 
     let started = Instant::now();
     let outcome = worker::extract(Plan::Text, b"irrelevant".to_vec());

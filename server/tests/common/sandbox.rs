@@ -129,56 +129,67 @@ pub fn configure_real_worker() -> bool {
     worker::configure_executable(PathBuf::from(env!("CARGO_BIN_EXE_nanofile")))
 }
 
-/// Whether `sandbox.windows_container` is to be set for this test binary.
+/// Turn the real worker on, once per test binary, and leave it on.
 ///
-/// `NANOFILE_TEST_WINDOWS_CONTAINER=1` (or `true`) asks for it. Windows CI sets
-/// neither and therefore measures what a Windows host with no container gives —
-/// the limits shape, which is the one this repository ships by default. A
-/// runner that *can* create an AppContainer sets the variable to exercise the
-/// opt-in path as well.
-pub fn windows_container() -> bool {
-    std::env::var("NANOFILE_TEST_WINDOWS_CONTAINER")
-        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+/// Every fixture calls this before it starts a server, and two things are
+/// process-global: the executable the children are started from, and the
+/// requirement. Both are set once here, and a test that points the worker
+/// somewhere else *before* its first fixture keeps its own path — the check is
+/// what makes that order-insensitive. Re-storing the switch on every fixture
+/// would also undo a test's own setting, because `configure_requirement` clears
+/// the container give-up records with it.
+pub fn enable_real_worker() {
+    static ENABLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    ENABLED.get_or_init(|| {
+        // A test that has already named a binary owns that decision: pointing the
+        // worker at something that cannot run is how the unavailable path is
+        // reached, and overwriting it here would make that test measure the real
+        // worker instead.
+        if !worker::executable_is_configured() {
+            configure_real_worker();
+        }
+        worker::configure_requirement(requirement());
+    });
+}
+
+/// The requirement every test that runs the real worker measures under.
+///
+/// The master switch, and nothing else, because that is all the model has: what
+/// the child established is read back from its own report rather than demanded
+/// by a setting. The grade is therefore whatever the platform installed — `full`
+/// on Linux and macOS, `limits` on a Windows host that cannot create an
+/// AppContainer — and `the_platform_answer` asserts the mechanism that goes with
+/// it.
+pub fn requirement() -> Requirement {
+    Requirement::new(true)
 }
 
 /// The requirement a probe test measures a *parser* profile under.
 ///
-/// `limits`, and that is the point of the model these tests pin: what they assert
-/// is that the child bounds itself and still does its job, which is true on every
-/// platform and is the one item no host may give up. The grade is then whatever
-/// the platform installed — `full` on Linux and macOS, `limits` on a Windows host
-/// that can start neither a container nor a restrained child — and
-/// `the_platform_answer` asserts the mechanism that goes with it.
-///
-/// Asking for `partial` here would have made these tests fail on such a host
-/// before they could report anything: the probe runs under the requirement, and a
-/// requirement the host misses is answered `unavailable`. `windows_container()`
-/// still decides whether the files layer is *asked* for, so a runner that can
-/// give a container measures it.
+/// The same switch: what these tests assert is that the child bounds itself and
+/// still does its job, which is true on every platform and is the one item no
+/// host may give up.
 pub fn configure_probe_requirement() -> Requirement {
-    Requirement::from_config(true, "limits", windows_container())
+    requirement()
 }
 
 /// The requirement the *media* probe is measured under.
 ///
-/// The same `limits` as a parser profile, and for the same reason: the media
-/// profile can never reach `partial` — it starts the helper by copying itself, so
-/// it never has the process item — and asking for more than the bound would make
-/// the probe refuse on hosts that give exactly what the assertion is about.
+/// The same one: the media profile can never carry the process item — it starts
+/// the helper by copying itself — and that is now reported rather than refused,
+/// so a parser test and a media test measure under the same rule.
 pub fn configure_media_probe_requirement() -> Requirement {
-    Requirement::from_config(true, "limits", windows_container())
+    requirement()
 }
 
 /// The `Requirement` an integration test wants the features to run under.
 ///
-/// The resource bound, and the files layer only where the runner can give it.
 /// Every test binary that turns the real worker on calls this before its first
 /// fixture: what those tests are about is the feature doing its job, and the
-/// shipped default (`partial`) would disable the feature on a host that cannot
-/// start a container — which is a policy decision, not a test result. The grades
-/// themselves are asserted in `sandbox_probe_test`.
+/// layers above the resource bound are the platform's answer rather than a test
+/// result. The grades themselves are asserted in `sandbox_probe_test`.
 pub fn limits_requirement() -> Requirement {
-    Requirement::from_config(true, "limits", windows_container())
+    requirement()
 }
 
 /// Serialises a requirement change with the probe that reads it.
@@ -224,19 +235,12 @@ pub fn status(profile: Profile) -> Report {
 
 /// The report for `profile`, which has to grade at least `minimum`.
 ///
-/// The requirement is set here, because a caller that has to *reach* a level is
-/// also the caller that knows which level it wants: leaving the process-global
-/// requirement at the shipped default would make the host's own grade decide
-/// whether the probe is judged at all, and a Windows host that gives the
-/// resource bound without a container would come back `unavailable` before the
-/// assertion could say why. `windows_container()` still decides whether the
-/// files layer is asked for, so a runner that can give a container measures it.
+/// The requirement is set here, because a caller that has to *reach* a grade is
+/// also the caller that knows which one it wants: a Windows host that gives the
+/// resource bound without a container has to be able to reach `limits` without
+/// the process-global switch deciding the question first.
 pub fn require_level(profile: Profile, minimum: Level) -> Report {
-    worker::configure_requirement(Requirement::from_config(
-        true,
-        minimum.as_str(),
-        windows_container() || minimum > Level::Limits,
-    ));
+    worker::configure_requirement(requirement());
     let report = status(profile);
     assert!(
         report.level() >= minimum,
@@ -254,28 +258,12 @@ pub fn require_level(profile: Profile, minimum: Level) -> Report {
 /// profile's grant, and the other profiles have none. The line is printed as
 /// well as returned: a CI log is where it is read when a runner disagrees.
 ///
-/// The requirement travels on this command line rather than being left to the
-/// binary's default, and that is not a detail: `--probe` is a *parent*, so the
-/// requirement it stores is the one it judges the worker child it starts by
-/// (`worker::invocation`), and a binary started with the shipped default would
-/// judge that worker as `partial` however the caller configured itself. A host
-/// that gives only the resource bound would then be answered `unavailable`
-/// before any assertion could see its report.
+/// `--probe` is a *parent*: the switch it stores is the one it judges the worker
+/// child it starts by, and the child's report is accepted on the resource bound
+/// alone, so this binary measures the same host the server does.
 pub fn probe(profile: Profile, helper: Option<&str>) -> (Report, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_nanofile"));
-    command.args([
-        "extract-worker",
-        "--probe",
-        "--profile",
-        profile.as_str(),
-        "--min-level",
-        "limits",
-    ]);
-    // Whether the files layer is asked for is the switch under test, so it is
-    // passed the same way the server passes it.
-    if windows_container() {
-        command.arg("--windows-container");
-    }
+    command.args(["extract-worker", "--probe", "--profile", profile.as_str()]);
     if let Some(helper) = helper {
         command.args(["--ffmpeg", helper]);
     }

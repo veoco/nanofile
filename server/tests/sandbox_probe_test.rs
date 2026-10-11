@@ -5,20 +5,24 @@
 //! path the server walks at startup. No fixture is built, so the worker's
 //! process-global executable is left alone.
 //!
-//! Each test states the requirement it measures under
+//! The probe measures under the master switch alone
 //! (`common::sandbox::configure_probe_requirement`): these assertions are about
-//! the mechanisms a host installs, not about the grade the shipped policy asks
-//! for, and the two are separate since a Windows host that never asked for a
-//! container still has to report its bound. On Linux and macOS the platform
-//! installs everything either way, so the grade assertions below are unchanged.
+//! the mechanisms a host installs, not about a grade some setting asked for. On
+//! Linux and macOS the platform installs everything; on Windows the launch asks
+//! for its container and reports what came back.
+//!
+//! It is also where `skipped0`/`skipped1` are read: on Windows each walk step
+//! that was tried and did not report leaves its reason, so a host that fell back
+//! cannot be read as a host that never tried. `skipped1` only exists for a walk
+//! that started at the container, and `skipped0` is the first step that was
+//! passed over — `Start::Plain` where the container was not attempted or was
+//! already given up.
 
 mod common;
 
 #[cfg(windows)]
 use std::time::{Duration, Instant};
 
-#[cfg(windows)]
-use common::sandbox::windows_container;
 use common::sandbox::{
     configure_media_probe_requirement, configure_probe_requirement, fact, has, helper, helper_runs,
     probe, with_requirement, without_ffmpeg,
@@ -169,7 +173,7 @@ fn the_media_report_shows_a_helper_that_still_decodes() {
     the_platform_answer(Profile::Media, &report);
 }
 
-/// The shape Windows ships by default: the bound and the token, no container.
+/// The shape a host that refuses the container produces: the bound and the token.
 ///
 /// This is the case the whole redesign is about. The container is the only
 /// mechanism that can add the files layer on that platform, creating one needs a
@@ -178,25 +182,31 @@ fn the_media_report_shows_a_helper_that_still_decodes() {
 /// runs anyway — on the Job Object alone, which is what keeps the server up —
 /// and the report says which layer is missing rather than the feature being
 /// disabled over it.
+///
+/// Which of the two shapes a runner produces is the runner's answer, so this
+/// asserts the one that is not the container's when that is what came back, and
+/// leaves the container's own assertions to the other cases.
 #[cfg(windows)]
 #[test]
 fn the_documents_profile_reports_the_bound_without_a_container() {
-    use server::sandbox::Requirement;
-
-    // What a host that never asked for the files layer runs with: `limits`, and
-    // no `sandbox.windows_container`. It is a separate probe so the report it
-    // produces is about this decision, not about whatever the rest of the file
-    // configured.
-    let (report, line) = with_requirement(Requirement::from_config(true, "limits", false), || {
+    let (report, line) = with_requirement(common::sandbox::configure_probe_requirement(), || {
         probe(Profile::Documents, None)
     });
 
     the_common_answer(Profile::Documents, &report, &line);
-    assert_eq!(report.level(), Level::Limits, "{line}");
     assert!(report.protections.limits, "{line}");
+    if has(&report, "container=appcontainer") {
+        // This host gave a container. Every launch asks for one, so this is the
+        // shape a runner that *can* create it produces, and the platform answer
+        // is where it is checked.
+        the_platform_answer(Profile::Documents, &report);
+        return;
+    }
+
+    assert_eq!(report.level(), Level::Limits, "{line}");
     assert!(
         !report.protections.files && !report.protections.network,
-        "no container was asked for, so neither of those can be there: {line}"
+        "the container was refused, so neither of those can be there: {line}"
     );
     // Which creation below the container the host settled for is the host's
     // business — `plain` where a restrained child starts, `unrestricted` where
@@ -236,15 +246,15 @@ fn the_grade_answer(report: &Report) {
     #[cfg(windows)]
     {
         assert!(report.level() >= Level::Limits, "{}", report.detail);
-        // A host that gives the files layer has to report it, so a Windows runner
-        // running a container cannot silently be graded as bound-only.
-        if windows_container() {
-            assert!(
-                report.protections.files,
-                "the container was asked for and not reported: {}",
-                report.detail
-            );
-        }
+        // The two go together: the files layer is the container's, and a report
+        // that claims it without one would have the page advertise a protection
+        // this host does not have.
+        assert_eq!(
+            report.protections.files,
+            has(report, "container=appcontainer"),
+            "{}",
+            report.detail
+        );
     }
 }
 
@@ -359,14 +369,13 @@ fn the_platform_answer(profile: Profile, report: &Report) {
 
 /// The creation the parent settled on, and what it bought.
 ///
-/// Two shapes reach this file on Windows, and which one depends on
-/// `NANOFILE_TEST_WINDOWS_CONTAINER` rather than on the host: a runner that can
-/// create an AppContainer sets it and measures the container creation, and every
-/// other runner measures the plain one — which is what this repository ships,
-/// because a host sandbox that confines every command it runs will not let a
-/// child create a further container. Both shapes have to carry the job object,
-/// the restricted token and the mitigations; only the container adds the files
-/// and network items.
+/// Two shapes reach this file on Windows, and which one is the host's answer:
+/// the container where one could be created, and the bound under the job alone
+/// where it could not — which is what a host sandbox that confines every command
+/// it runs produces, and what this repository's CI runner gives. Both shapes have
+/// to carry the job object, the restricted token or the tokenless creation it
+/// fell back to, and the mitigations; only the container adds the files and
+/// network items.
 #[cfg(windows)]
 fn the_platform_answer(profile: Profile, report: &Report) {
     let rung = value(report, "rung");
@@ -414,17 +423,42 @@ fn the_platform_answer(profile: Profile, report: &Report) {
         "{}",
         report.detail
     );
+    // The integrity level is a property of the token, not a second opinion about
+    // the rung: a launch that kept this process's own token runs at the level the
+    // server runs at, and only a token the container or the restriction lowered
+    // grades below it. `high` is therefore the honest value for the tokenless
+    // creation, and it is checked against the token rather than listed beside it.
+    let il = value(report, "il");
+    match token {
+        "unrestricted" => assert!(
+            matches!(il, "medium" | "high"),
+            "il={il} with this process's own token: {}",
+            report.detail
+        ),
+        _ => assert!(
+            matches!(il, "untrusted" | "low" | "medium"),
+            "il={il} with a restricted token: {}",
+            report.detail
+        ),
+    }
+
+    // Which creations were passed over, in the order the walk tried them. Nothing
+    // below the container can be reached without the container having been given
+    // up first, so a second reason without a first is a broken record.
+    let skipped0 = fact(report, "skipped0").unwrap_or_default();
+    let skipped1 = fact(report, "skipped1").unwrap_or_default();
     assert!(
-        matches!(value(report, "il"), "untrusted" | "low" | "medium"),
-        "{}",
+        skipped1.is_empty() || !skipped0.is_empty(),
+        "a walk records its second refusal only after its first: {}",
         report.detail
     );
 
     match rung {
         "container" => {
-            // A container with a token the loader could not initialize is a
-            // creation that never reported, so the two go together.
-            assert_eq!(token, "restricted", "{}", report.detail);
+            // The container answered, so nothing was passed over to reach it.
+            // The refusals of an earlier launch are not carried into this
+            // report: they belong to the walk that produced them.
+            assert!(skipped0.is_empty(), "{}", report.detail);
             assert!(has(report, "container=appcontainer"), "{}", report.detail);
             // The far edge of the files layer: the system tree stays readable
             // through the packages a low-box process is checked against.
@@ -468,24 +502,29 @@ fn the_platform_answer(profile: Profile, report: &Report) {
             }
         }
         "plain" | "unrestricted" => {
-            // No container was asked for, or the one that was asked for (or the
-            // restrained child below it) reported nothing and was given up. Each
-            // step down leaves its reason, so a report that fell back cannot be
-            // read as a host that never tried.
-            if windows_container() {
-                assert!(
-                    has(report, "skipped0"),
-                    "a container that was asked for and not delivered has to leave its \
-                     reason in the report: {}",
-                    report.detail
-                );
-            }
+            // No container was delivered. What was tried and passed over has to
+            // say so: a fallback that leaves no trace is how a host ends up
+            // running weaker creations than an operator thinks.
+            assert!(
+                !skipped0.is_empty(),
+                "a container that was attempted and not delivered has to leave its reason in \
+                 the report: {}",
+                report.detail
+            );
+            assert!(
+                skipped0.contains("every protection"),
+                "only the container can be passed over first: {}",
+                report.detail
+            );
             if rung == "unrestricted" {
                 assert!(
-                    has(report, "skipped1") || windows_container(),
-                    "the walk that gave the token up has to say why: {}",
+                    skipped1.contains("token and a job"),
+                    "the launch that gave the token up has to say why: {}",
                     report.detail
                 );
+            } else {
+                // The plain creation answered: nothing below it was tried.
+                assert!(skipped1.is_empty(), "{}", report.detail);
             }
             assert!(!has(report, "container=appcontainer"), "{}", report.detail);
         }

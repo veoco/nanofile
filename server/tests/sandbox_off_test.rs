@@ -1,14 +1,14 @@
 //! What a document gets while `sandbox.enabled` is off, and when it is back on.
 //!
-//! Its own binary because the requirement is process-global and the fixture sets
-//! it: this file changes it after the fixture is built. The switch has to be
-//! reversible — a document skipped while it is off is *retryable*, or nothing
-//! would re-index it when it returns.
+//! Its own binary because the requirement is process-global and the fixture
+//! turns it on once: this file changes it after the fixture is built. The switch
+//! has to be reversible — a document skipped while it is off is *retryable*, or
+//! nothing would re-index it when it returns.
 
 mod common;
 
 use server::indexer::DocStatus;
-use server::sandbox::{Level, Requirement, worker};
+use server::sandbox::{Requirement, worker};
 
 /// A document that meets the switched-off sandbox is a retryable failure, and
 /// the same document is indexed once the sandbox is back.
@@ -31,7 +31,7 @@ async fn a_document_skipped_while_the_sandbox_is_off_is_reindexed_when_it_return
     assert_eq!(resp.status(), 200, "upload should succeed");
 
     // The master switch, off: nothing is parsed, in the child or here.
-    worker::configure_requirement(Requirement::new(false, Level::Limits, false));
+    worker::configure_requirement(Requirement::new(false));
 
     let resp = f
         .client
@@ -69,13 +69,9 @@ async fn a_document_skipped_while_the_sandbox_is_off_is_reindexed_when_it_return
         "the switched-off sandbox must leave a retryable state, not `Skipped`"
     );
 
-    // The switch back on: the same bytes are extracted for real. The level is
-    // the shipped default, and this host is expected to reach it.
-    worker::configure_requirement(Requirement::new(
-        true,
-        server::sandbox::Level::Partial,
-        true,
-    ));
+    // The switch back on: the same bytes are extracted for real, at whatever
+    // grade this host gives.
+    worker::configure_requirement(Requirement::new(true));
 
     let resp = f
         .client

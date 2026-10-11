@@ -1,9 +1,13 @@
-//! What happens when the host cannot give what `sandbox.min_level` asks for.
+//! What happens when the host cannot bound a child at all.
 //!
 //! Its own binary because the worker's executable and the requirement are
 //! process-global; Linux only because the worker here is a shell script, and
 //! macOS applies the real Seatbelt profile to it — which grants the child's own
 //! image, not the `/bin/sh` its shebang needs. The decision's *place* is the test.
+//!
+//! The grade a host reaches is not a policy any more: a bound host runs the
+//! features at whatever layers it has, and the only refusal left is a host that
+//! established no memory or CPU bound. That is what these cases pin.
 //!
 //! Every case lives in one `#[test]` because the fixture is process-global: the
 //! fake worker is installed once per binary, so each report this file measures
@@ -64,54 +68,23 @@ fn set_mode(mode: &Path, value: &str) {
 }
 
 #[test]
-fn the_minimum_decides_and_the_resource_bound_is_an_invariant() {
+fn the_resource_bound_is_an_invariant() {
     let directory = tempfile::tempdir().expect("temp dir");
     let (mode, marker) = scripted_worker(directory.path());
     let profile = Profile::Documents;
 
-    // ── A host below the minimum is refused before any child ──────────────
+    // ── A bound host without the files layer runs the feature ─────────────
     //
-    // The script's default report is `partial`: the resource bound and no files
-    // layer, which is what a Windows host without a container gives.
-    set_mode(&mode, "");
-    worker::configure_requirement(Requirement::new(true, Level::Full, true));
-
-    let status = worker::status(profile);
-    let Status::Unavailable(reason) = &status else {
-        panic!("a `full` minimum must not accept partial confinement: {status:?}");
-    };
-    assert!(
-        reason.contains("full") && reason.contains("partial"),
-        "the reason has to name the minimum and what the host gave: {reason}"
-    );
-
-    // The document is not indexed, and — the point — no child was started to
-    // find that out.
-    let started = Instant::now();
-    let outcome = worker::extract(Plan::Text, b"irrelevant".to_vec());
-    assert!(
-        matches!(outcome, Outcome::Unavailable(_)),
-        "a host below the minimum is an environment problem, not a verdict: {outcome:?}"
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "the refusal is decided from the cached probe, not from a spawn"
-    );
-    assert!(
-        !marker.exists(),
-        "the parent must not hand a request to a worker the requirement refuses"
-    );
-
-    // ── A bound host without the files layer is a policy answer ───────────
-    //
-    // The same host, with the minimum lowered to the bound: the feature runs
-    // rather than being disabled over a layer that does not bound memory or CPU.
+    // The script reports `limits`: the resource bound and no files layer, which
+    // is what a Windows host that cannot create its container gives. Nothing
+    // asks for more than the bound, so the feature runs rather than being
+    // disabled over a layer that does not bound memory or CPU.
     set_mode(&mode, "limits");
-    worker::configure_requirement(Requirement::new(true, Level::Limits, false));
+    worker::configure_requirement(Requirement::new(true));
 
     let status = worker::status(profile);
     let Status::Ready(report) = &status else {
-        panic!("`limits` must accept a host that gives the resource bound: {status:?}");
+        panic!("the resource bound alone must be enough to run: {status:?}");
     };
     assert_eq!(report.level(), Level::Limits);
     assert!(
@@ -137,15 +110,34 @@ fn the_minimum_decides_and_the_resource_bound_is_an_invariant() {
         marker.exists(),
         "the accepted request has to reach the child"
     );
+    fs::remove_file(&marker).expect("clear the request mark");
 
-    // ── No bound at all is refused whatever the minimum says ──────────────
+    // ── A host that gives more still runs it ──────────────────────────────
+    //
+    // The default report is `partial`: the bound and the files layer. More
+    // confinement is never a reason to refuse the feature.
+    set_mode(&mode, "");
+    worker::configure_requirement(Requirement::new(true));
+
+    let status = worker::status(profile);
+    let Status::Ready(report) = &status else {
+        panic!("a files-confined host must be accepted: {status:?}");
+    };
+    assert_eq!(report.level(), Level::Partial);
+    assert!(
+        report.protections.limits && report.protections.files,
+        "the fixture is the bound with the layer: {}",
+        report.detail
+    );
+
+    // ── No bound at all is refused ────────────────────────────────────────
     //
     // Every confinement layer in place and no memory or CPU limit: the one shape
-    // no setting may run, because a parser with no bound is the failure this
-    // module exists to prevent.
-    fs::remove_file(&marker).expect("clear the request mark");
+    // nothing may run, because a parser with no bound is the failure this module
+    // exists to prevent.
+    fs::remove_file(&marker).ok();
     set_mode(&mode, "unbounded");
-    worker::configure_requirement(Requirement::new(true, Level::Limits, false));
+    worker::configure_requirement(Requirement::new(true));
 
     let status = worker::status(profile);
     let Status::Unavailable(reason) = &status else {
@@ -169,5 +161,22 @@ fn the_minimum_decides_and_the_resource_bound_is_an_invariant() {
     assert!(
         !marker.exists(),
         "no request may reach a worker that established no bound"
+    );
+
+    // ── The switch refuses whatever the host gives ────────────────────────
+    set_mode(&mode, "limits");
+    worker::configure_requirement(Requirement::new(false));
+
+    let status = worker::status(profile);
+    let Status::Unavailable(reason) = &status else {
+        panic!("a switched-off sandbox must never be accepted: {status:?}");
+    };
+    assert!(
+        reason.contains("switched off"),
+        "the reason has to name the switch: {reason}"
+    );
+    assert!(
+        !marker.exists(),
+        "no request may reach a worker while the switch is off"
     );
 }

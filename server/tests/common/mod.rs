@@ -424,73 +424,16 @@ impl TestServer {
         // and not images would otherwise pass every test in this file and fail
         // only in the three that ask for an image.
         //
-        // What the *policy* asks for is a separate question, and these tests are
-        // not about it: `min_level` is set to `limits` so the check below is the
-        // one invariant — the child bounds itself — and a host that gives the
-        // resource bound without the files layer runs the suite instead of
-        // panicking in every fixture. The per-platform grades are asserted where
-        // they belong, in `sandbox_probe_test`; the policy itself in
-        // `sandbox_policy_test`.
+        // What the sandbox may run is one question and not a policy these tests
+        // are about: the master switch goes on once per process, and the host's
+        // own answer — the grade, whether the container could be created — is
+        // asserted where it belongs, in `sandbox_probe_test`. A test that changes
+        // the switch puts it back.
         //
         // `configure_executable` is process-global and set once; a test that
         // wants a worker that cannot run points it elsewhere before the first
         // fixture and is then responsible for the outcome.
-        //
-        // The app-level grade then follows the host, which is the rule the admin
-        // page states as well: what these tests are about is the feature doing its
-        // job, so on a host that gives only the resource bound the configured
-        // minimum is lowered to it, rather than the features being disabled by a
-        // policy these tests are not testing. A host that reaches the files layer
-        // keeps the shipped default, so this cannot hide a regression on the
-        // platforms that give it.
-        let mut sandbox_min_level = "partial".to_string();
-        if server::sandbox::worker::configure_executable(std::path::PathBuf::from(env!(
-            "CARGO_BIN_EXE_nanofile"
-        ))) {
-            // Stored and read under one lock: the requirement is process-global
-            // and these fixtures start in parallel, so a plain store here would
-            // race another test's — and the probe would be judged against
-            // whichever landed last.
-            let bound_only = sandbox::with_requirement(
-                server::sandbox::Requirement::from_config(true, "limits", false),
-                || {
-                    let mut bound_only = false;
-                    for profile in [
-                        server::sandbox::Profile::Documents,
-                        server::sandbox::Profile::Images,
-                    ] {
-                        match server::sandbox::worker::status(profile) {
-                            server::sandbox::worker::Status::Ready(report) => {
-                                assert!(
-                                    report.protections.limits,
-                                    "the {} sandbox must bound the worker: {}",
-                                    profile.as_str(),
-                                    report.detail
-                                );
-                                bound_only = report.level() == server::sandbox::Level::Limits;
-                            }
-                            server::sandbox::worker::Status::Unavailable(reason) => panic!(
-                                "the extraction worker is not available for {}: {reason}",
-                                profile.as_str()
-                            ),
-                        }
-                    }
-                    bound_only
-                },
-            );
-            if bound_only {
-                sandbox_min_level = "limits".to_string();
-            }
-            // What the *features* are judged by is the minimum the app was just
-            // given, not the one this probe ran under: `available` reads the
-            // process-global requirement directly, and a slot left at the shipped
-            // default would disable every feature on a host that gives only the
-            // bound, however the config reads. A test that changes the switch is
-            // responsible for putting it back.
-            server::sandbox::worker::configure_requirement(
-                server::sandbox::Requirement::from_config(true, &sandbox_min_level, false),
-            );
-        }
+        sandbox::enable_real_worker();
 
         // Temp directories are derived from the random port so each server gets
         // a unique path; they are cleaned up in `Drop for TestServer`.
@@ -615,10 +558,7 @@ impl TestServer {
                 index_dir: index_dir.clone(),
                 ..Default::default()
             },
-            sandbox: infra::config::SandboxConfig {
-                min_level: sandbox_min_level,
-                ..Default::default()
-            },
+            sandbox: infra::config::SandboxConfig::default(),
             tasks: infra::config::TaskConfig {
                 max_active_tasks: task_limits.unwrap_or_default().max_active_tasks,
                 // Tests submit few runs; the byte budget only has to be large
