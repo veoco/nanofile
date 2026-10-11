@@ -514,18 +514,18 @@ backfill_enabled = true
 [sandbox]
 # Environment variables:
 #   NANOFILE_SANDBOX_ENABLED
-#   NANOFILE_SANDBOX_MIN_LEVEL
-#   NANOFILE_SANDBOX_WINDOWS_CONTAINER
 # Every feature that parses content a user supplied runs in a separate process
 # with a memory bound, a CPU bound and a wall-clock timeout, and — where the
 # platform can supply them — a file, network and process confinement. That
 # covers document text extraction for the search index, image and media
 # thumbnails (including ffmpeg), EXIF, and avatar processing.
 #
-# The resource bound is a hard invariant, not a grade: a host that cannot
-# establish it has those features refused whatever `min_level` says. Everything
-# they parse is pure Rust, so the confinement layers are defense in depth
-# against a parser bug rather than the bound that keeps the server up.
+# The resource bound is a hard invariant: a host that cannot establish it has
+# those features refused. Everything above it — file access, the network, the
+# process bound, and the Windows AppContainer — is what this platform can add,
+# so it is measured and reported on the settings page rather than configured.
+# All of the parsers are pure Rust, so those layers are defense in depth against
+# a parser bug rather than the bound that keeps the server up.
 #
 # `false` disables all of those features. Nothing is parsed inside the server
 # process — there is no unconfined path — so a document is simply not indexed
@@ -533,32 +533,6 @@ backfill_enabled = true
 # is off is recorded as a retryable failure, not as a verdict on its bytes, so
 # turning the switch back on re-indexes it. Env: NANOFILE_SANDBOX_ENABLED
 enabled = true
-# The grade this host must reach before those features run. Every grade includes
-# the resource bound; the name says which confinement layers come with it:
-#   "full" (完整)     every protection this platform can provide
-#   "partial" (部分)  the resource bound and the files layer
-#   "limits" (仅有资源边界) the resource bound alone
-# Below the setting the features are disabled. A container may need the Landlock
-# syscalls allowed (`landlock_create_ruleset`, `landlock_add_rule`,
-# `landlock_restrict_self`) for "full" to hold. The media profile is "partial"
-# on every platform by design — it exists to start the helper. The macOS parser
-# profiles deny both the fork and the exec, so documents and images grade "full"
-# there as they do on Linux. `none` is still accepted and means `limits`.
-# Env: NANOFILE_SANDBOX_MIN_LEVEL
-min_level = "partial"
-# Windows only: whether a worker launch should create an AppContainer, which is
-# the only mechanism that gives the file and network items on that platform.
-# Creating one needs a registry profile and package access on the worker's own
-# image, which a host sandbox that confines every command it runs (a
-# development or agent environment) refuses — the launch then dies in its
-# loader, and while the files layer was a hard requirement that disabled
-# indexing, thumbnails, EXIF and avatars on the whole machine. With this off
-# the child still runs under the Job Object, the restricted token and the
-# process mitigations, and reports `files=open`. A `min_level` above "limits"
-# asks for the container regardless, so turn this on only when you want the
-# layer on a host that grades "limits" by choice. Ignored elsewhere.
-# Env: NANOFILE_SANDBOX_WINDOWS_CONTAINER
-windows_container = false
 
 [notification]
 # Environment variables:

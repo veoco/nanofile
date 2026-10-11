@@ -130,7 +130,7 @@
         {% endif %}
     </div>
 
-    <div class="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-box border border-line bg-line sm:grid-cols-4"
+    <div class="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-box border border-line bg-line sm:grid-cols-3"
          data-sandbox-status role="group" aria-label="{{ t.tr("sandbox.status_label") }}">
         <div class="bg-panel px-3.5 py-3">
             <p class="field-label">{{ t.tr("sandbox.status_grade") }}</p>
@@ -144,14 +144,10 @@
                 </span>
             </p>
         </div>
-        <div class="bg-panel px-3.5 py-3">
-            <p class="field-label">{{ t.tr("sandbox.status_min") }}</p>
-            <p class="mt-1.5 text-[13px] text-ink">{{ sandbox.min_level }}</p>
-        </div>
-        {# Whether the features actually run under the policy the admin set.
-           Distinct from the grade, which says what the host could give: a red
-           item with a green decision is a host that is safe enough for the
-           settings, and a green item with a red decision is not. #}
+        {# Whether the features actually run under the master switch. Distinct
+           from the grade, which says what the host could give: a red item with a
+           green decision is a host that is safe enough for the settings, and a
+           green item with a red decision is not. #}
         <div class="bg-panel px-3.5 py-3" data-sandbox-decision>
             <p class="field-label">{{ t.tr("sandbox.status_running") }}</p>
             <p class="mt-1.5"><span class="badge {{ sandbox.decision.class }}" data-sandbox-decision-state>{{ sandbox.decision.label }}</span></p>

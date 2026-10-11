@@ -196,9 +196,8 @@ pub enum Hook {
     /// The outbound-mail drainer: its scheduler task is registered
     /// unconditionally and checks the live switch itself.
     MailDrain,
-    /// The process-wide sandbox requirement (`sandbox.enabled` and
-    /// `sandbox.min_level`), which every confined child is told before it reads
-    /// a request.
+    /// The process-wide sandbox switch (`sandbox.enabled`), which every confined
+    /// child is told before it reads a request.
     Sandbox,
 }
 
@@ -865,8 +864,6 @@ mod tests {
             "index.index_dir",
             "index.backfill_enabled",
             "sandbox.enabled",
-            "sandbox.min_level",
-            "sandbox.windows_container",
             "notification.enabled",
             "notification.private_key",
             "notification.ping_interval",

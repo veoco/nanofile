@@ -177,14 +177,11 @@ pub struct SystemSettingsTemplate {
 /// The grade is the one number an admin acts on; the items say which protection
 /// is missing and what its absence means, the notes say what the platform still
 /// leaves open, and the decision says whether the features run at all under the
-/// policy the admin set. None of it is a claim: every value comes from the report
-/// a confined child printed, plus the one question only this side can answer —
-/// whether `sandbox.min_level` accepts it.
+/// master switch. None of it is a claim: every value comes from the report a
+/// confined child printed.
 pub struct SandboxView {
     /// The effective value of `sandbox.enabled`.
     pub enabled: bool,
-    /// The effective `sandbox.min_level`, already translated.
-    pub min_level: String,
     /// The grade label, already translated.
     pub grade: String,
     /// `badge-green` when every protection is there, `badge-red` when the files
@@ -206,9 +203,9 @@ pub struct SandboxView {
 /// Whether the policy lets the document and image profiles run.
 ///
 /// The grade above says what the host *could* give; this says what the settings
-/// made of it. They differ whenever `sandbox.min_level` refuses a host, and an
-/// admin looking at a red item needs to know which of the two they are reading
-/// before they change either.
+/// made of it. They differ whenever the switch is off, or the host could not
+/// bound a child at all, and an admin looking at a red item needs to know which
+/// of the two they are reading before they change anything.
 pub struct SandboxDecisionView {
     /// Whether the features run.
     pub running: bool,
@@ -413,31 +410,21 @@ async fn render(
         restart_error: crate::restart::failure(),
         sandbox: match section {
             Section::Sandbox => {
-                // The two settings the panel needs, resolved here because the
-                // service cannot move into the blocking task.
+                // The switch the panel needs, resolved here because the service
+                // cannot move into the blocking task.
                 let enabled = service
                     .resolved_one("sandbox.enabled")
                     .map(|entry| entry.value == "true")
                     .unwrap_or(true);
-                let min_level = service
-                    .resolved_one("sandbox.min_level")
-                    .map(|entry| entry.value)
-                    .unwrap_or_else(|| "partial".to_string());
-                let min_level = crate::sandbox::Level::parse(&min_level)
-                    .unwrap_or(crate::sandbox::Level::Partial);
-                let windows_container = service
-                    .resolved_one("sandbox.windows_container")
-                    .map(|entry| entry.value == "true")
-                    .unwrap_or(false);
                 // The probe spawns a child per profile, so it belongs on a
                 // blocking thread: the rest of the page must not wait on it, and
                 // an executor thread must not be parked on a process.
                 Some(
-                    tokio::task::spawn_blocking(move || {
-                        sandbox_view(t, enabled, min_level, windows_container)
-                    })
-                    .await
-                    .map_err(|e| AppError::internal(format!("the sandbox probe panicked: {e}")))?,
+                    tokio::task::spawn_blocking(move || sandbox_view(t, enabled))
+                        .await
+                        .map_err(|e| {
+                            AppError::internal(format!("the sandbox probe panicked: {e}"))
+                        })?,
                 )
             }
             _ => None,
@@ -464,32 +451,19 @@ fn settings_url(section: Section, action: &str) -> String {
 /// itself and printed what took. The items say which protection is missing and
 /// the notes say what the platform still leaves open, so an admin can tell "this
 /// host cannot do better" from "something here is broken".
-/// Build the Sandbox panel from what the host measured.
 ///
 /// Synchronous, and it spawns children: every value on the panel comes from a
 /// probe this call runs once per profile, so the caller hands it to
 /// `spawn_blocking` rather than blocking the runtime's thread on a child process.
-/// The settings it needs are resolved by the caller for the same reason — the
-/// settings service cannot cross into the blocking task.
-///
-/// `windows_container` is the one setting the *probe* does not read for itself:
-/// it decides whether a diagnostic Windows launch may try the AppContainer, so
-/// the page can show whether turning it on would change anything.
-fn sandbox_view(
-    t: &'static I18n,
-    enabled: bool,
-    min_level: crate::sandbox::Level,
-    windows_container: bool,
-) -> SandboxView {
+/// The one setting it needs — the master switch — is resolved by the caller for
+/// the same reason, because the settings service cannot cross into the blocking
+/// task.
+fn sandbox_view(t: &'static I18n, enabled: bool) -> SandboxView {
     use crate::sandbox::{Profile, worker};
 
-    let answer = worker::page_answer(Profile::Documents, windows_container);
-    let (grade, grade_class, items, detail, host_level, decision) = match &answer {
-        worker::PageAnswer::Measured {
-            report,
-            running,
-            reason,
-        } => {
+    let answer = worker::page_answer(Profile::Documents);
+    let (grade, grade_class, items, detail, host_level) = match &answer {
+        worker::PageAnswer::Measured { report, .. } => {
             let level = report.level();
             let notes = report.notes();
             (
@@ -515,18 +489,6 @@ fn sandbox_view(
                     .collect(),
                 report.detail.clone(),
                 Some(level),
-                SandboxDecisionView {
-                    running: *running,
-                    class: if *running { "badge-green" } else { "badge-red" },
-                    label: t
-                        .tr(if *running {
-                            "sandbox.decision_running"
-                        } else {
-                            "sandbox.decision_disabled"
-                        })
-                        .to_string(),
-                    reason: reason.clone(),
-                },
             )
         }
         worker::PageAnswer::Unavailable(why) => (
@@ -535,24 +497,54 @@ fn sandbox_view(
             Vec::new(),
             why.clone(),
             None,
-            SandboxDecisionView {
-                running: false,
-                class: "badge-red",
-                label: t.tr("sandbox.decision_disabled").to_string(),
-                reason: Some(why.clone()),
-            },
         ),
+    };
+
+    // Whether the features run is decided here rather than read off the probe, and
+    // the switch is the first word in it: the switch row above is rendered from
+    // the same value, so a row that says "Running" beside a switch that says
+    // "Off" is not a state this panel can produce. A host that cannot bound a
+    // child at all is the other way these features do not run.
+    let refusal = match &answer {
+        worker::PageAnswer::Unavailable(why) => Some(why.clone()),
+        worker::PageAnswer::Measured { report, .. } => crate::sandbox::Requirement::new(true)
+            .accepts(report)
+            .err()
+            .map(|refusal| refusal.reason()),
+    };
+    let decision = if !enabled {
+        SandboxDecisionView {
+            running: false,
+            class: "badge-red",
+            label: t.tr("sandbox.decision_disabled").to_string(),
+            reason: Some(t.tr("sandbox.warning_disabled").to_string()),
+        }
+    } else if let Some(why) = &refusal {
+        SandboxDecisionView {
+            running: false,
+            class: "badge-red",
+            label: t.tr("sandbox.decision_disabled").to_string(),
+            reason: Some(why.clone()),
+        }
+    } else {
+        SandboxDecisionView {
+            running: true,
+            class: "badge-green",
+            label: t.tr("sandbox.decision_running").to_string(),
+            reason: None,
+        }
     };
 
     // The media profile is a second child with its own report: it may execute
     // the helper where nothing else may, so it is shown on its own line — with
     // its own grade, because it is the profile that cannot have the process item
     // and therefore grades below the one above it on every platform.
-    let media_answer = worker::page_answer(Profile::Media, windows_container);
-    let mut media_level = None;
+    //
+    // The switch comes first here too: a page whose top row says the sandbox is
+    // off cannot have a media row that reads as if a probe were running.
+    let media_answer = worker::page_answer(Profile::Media);
     let mut media = match &media_answer {
         worker::PageAnswer::Measured { report, .. } => {
-            media_level = Some(report.level());
             let (label, class) = if report.detail.contains("media-ok") {
                 (t.tr("sandbox.media_ok"), "badge-green")
             } else if report.detail.contains("media-no-helper") {
@@ -586,23 +578,16 @@ fn sandbox_view(
             detail: why.clone(),
         },
     };
-    // A minimum the media profile can never reach is not a fault to hunt: the
-    // profile starts a program by definition, so with `sandbox.min_level` above
-    // what it grades, every media request is refused. Saying so here is the
-    // difference between "media thumbnails are off" and "media thumbnails are
-    // off and here is the setting that did it".
-    let media_refused_by_min = enabled && media_level.is_some_and(|level| level < min_level);
-    if media_refused_by_min {
-        media.label = t.tr("sandbox.media_below_min").to_string();
+    if !enabled {
+        media.label = t.tr("sandbox.decision_disabled").to_string();
         media.class = "badge-red";
-        media.reason = Some(t.tr("sandbox.media_below_min_reason").to_string());
+        media.reason = Some(t.tr("sandbox.warning_disabled").to_string());
     }
 
     let verdict = sandbox_verdict(t, enabled, &decision, &items, host_level);
 
     SandboxView {
         enabled,
-        min_level: t.tr(min_level_label(min_level)).to_string(),
         grade,
         grade_class,
         decision,
@@ -616,13 +601,12 @@ fn sandbox_view(
 /// The one line the page leads with.
 ///
 /// Ordered by what an admin has to do first, and phrased as a verdict rather
-/// than as a warning: "this host is missing a protection" and "the policy you
-/// set accepts a host that lets a parser read your files" are different
-/// sentences, and only the second is a decision the admin made. The resource
-/// bound is the one item no policy may give up, so its absence is the only
-/// missing-protection case; the files layer is what the shipped default asks
-/// for, and running without it is a *degradation* the page names rather than an
-/// outage — which is exactly what a Windows host without a container looks like.
+/// than as a warning: "this host is missing a protection" and "the sandbox is
+/// switched off" are different sentences, and only the second is a decision the
+/// admin made. The resource bound is the one item nothing may give up, so its
+/// absence is the outage; the files layer is defense in depth, and running
+/// without it is a *degradation* the page names rather than a fault — which is
+/// exactly what a Windows host without a container looks like.
 fn sandbox_verdict(
     t: &I18n,
     enabled: bool,
@@ -669,26 +653,20 @@ fn sandbox_verdict(
             Some(t.tr("sandbox.warning_disabled").to_string()),
         );
     }
-    if host_level.is_none() {
+    if host_level.is_none() || !decision.running {
+        // The host cannot bound a child at all: the one state in which these
+        // features do not run while the switch is on.
         return verdict(
             t.tr("sandbox.verdict_unavailable"),
             Tone::Bad,
             decision.reason.clone(),
         );
     }
-    if !decision.running {
-        // The host can bound the worker; the settings refuse what it gives.
-        return verdict(
-            t.tr("sandbox.verdict_refused"),
-            Tone::Bad,
-            Some(t.tr("sandbox.warning_below_min").to_string()),
-        );
-    }
     if missing("sandbox.item_files") {
         // The feature runs, and the one layer that keeps a parser out of the
-        // server user's files is not there. Two ways to be here — the operator
-        // lowered `min_level` to `limits`, or Windows could not create its
-        // container — and the detail has to serve both.
+        // server user's files is not there. On every platform but Linux and
+        // macOS that is the platform's own answer rather than a setting: the
+        // Windows container could not be created.
         return verdict(
             t.tr("sandbox.verdict_unsafe"),
             Tone::Weak,
@@ -815,14 +793,6 @@ fn media_note_label(note: &str) -> &'static str {
     match note {
         "fork" => "sandbox.note_media_fork",
         other => note_label(other),
-    }
-}
-
-fn min_level_label(level: crate::sandbox::Level) -> &'static str {
-    match level {
-        crate::sandbox::Level::Full => "setting.sandbox_min_level_option_full",
-        crate::sandbox::Level::Partial => "setting.sandbox_min_level_option_partial",
-        crate::sandbox::Level::Limits => "setting.sandbox_min_level_option_limits",
     }
 }
 
@@ -1332,12 +1302,13 @@ mod tests {
         }
     }
 
-    /// The verdict is what tells an admin whether the *policy* they chose is
-    /// safe, which is a different question from how strong the host is. The case
-    /// that matters most is the one the shipped default refuses and a lowered
-    /// minimum accepts: a host whose files layer is missing.
+    /// The verdict leads with what an admin has to act on, and the files layer is
+    /// the case that matters most: it is the one protection this platform can give
+    /// that can be missing while the features still run, which is the shape a
+    /// Windows host without a container and a Linux host without Landlock both
+    /// produce.
     #[test]
-    fn the_verdict_separates_an_unsafe_policy_from_a_weak_host() {
+    fn the_verdict_separates_a_weak_host_from_a_disabled_one() {
         let t = I18n::get(Some("en"));
         /// The files item, present or not — the one the verdict turns on.
         fn files_item(present: bool) -> SandboxItemView {
@@ -1355,21 +1326,21 @@ mod tests {
             running,
             class: if running { "badge-green" } else { "badge-red" },
             label: String::new(),
-            reason: (!running).then(|| "below the minimum".to_string()),
+            reason: (!running).then(|| "the host gives no bound".to_string()),
         };
         let level = crate::sandbox::Level::Limits;
 
-        // Running, but without the files layer: only a lowered minimum gets
-        // here, and the verdict says so.
+        // Running, but without the files layer: the feature runs at whatever this
+        // host gives, and the verdict names the item that is missing.
         let unsafe_verdict =
             sandbox_verdict(t, true, &decision(true), &[files_item(false)], Some(level));
         assert_eq!(unsafe_verdict.label, t.tr("sandbox.verdict_unsafe"));
         assert!(unsafe_verdict.detail.is_some());
 
-        // The same host with the shipped default: the policy refuses it, and
-        // that is a different verdict with a different remedy.
+        // The same host with nothing running: the host gave no bound at all.
         let refused = sandbox_verdict(t, true, &decision(false), &[files_item(false)], Some(level));
-        assert_eq!(refused.label, t.tr("sandbox.verdict_refused"));
+        assert_eq!(refused.label, t.tr("sandbox.verdict_unavailable"));
+        assert!(refused.detail.is_some());
 
         // Files in place and everything else too: nothing to explain.
         let safe = sandbox_verdict(
@@ -1381,6 +1352,10 @@ mod tests {
         );
         assert_eq!(safe.label, t.tr("sandbox.verdict_safe"));
         assert!(safe.detail.is_none());
+
+        // The switch is its own verdict, whatever the host can do.
+        let off = sandbox_verdict(t, false, &decision(false), &[files_item(true)], Some(level));
+        assert_eq!(off.label, t.tr("sandbox.verdict_disabled"));
     }
 
     #[test]
