@@ -897,7 +897,6 @@ pub fn configure_requirement(requirement: Requirement) {
     // for it again deserves a fresh attempt: the setting is the operator
     // answering the question, and the give-up is this process's memory of one
     // refusal, not a verdict about the host.
-    #[cfg(windows)]
     if requirement.os_confinement {
         CONTAINER_GIVEN_UP.store(false, std::sync::atomic::Ordering::Relaxed);
     }
@@ -932,13 +931,20 @@ fn requirement_slot() -> &'static Mutex<Requirement> {
 
 /// Whether a launch is still to attempt this platform's container.
 ///
-/// Windows only, and only ever cleared: a host whose container has been attempted
-/// and reported nothing is not asked again for the life of this process, because
-/// the refusal is a property of the environment (a host sandbox that will not let
-/// a child create a further container) rather than of one launch. The settings
-/// hook clears the record when the configuration asks for the container again —
-/// that is the operator answering the question, and it is worth one more try.
-#[cfg(windows)]
+/// Only ever set, and by the one platform that has a container: a host whose
+/// container has been attempted and reported nothing is not asked again for the
+/// life of this process, because the refusal is a property of the environment (a
+/// host sandbox that will not let a child create a further container) rather than
+/// of one launch. The settings hook clears the record when the configuration asks
+/// for the container again — that is the operator answering the question, and it
+/// is worth one more try.
+///
+/// Not `#[cfg(windows)]`, deliberately. What the flag *means* is a decision and
+/// nothing else, and a decision that only compiles on one platform is a decision
+/// only that platform's CI can catch a mistake in. Keeping it compiled everywhere
+/// costs a relaxed atomic load nothing; it is what lets
+/// `only_a_requirement_that_wants_the_layer_asks_for_the_container` run on every
+/// runner instead of only on the Windows one.
 static CONTAINER_GIVEN_UP: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -947,7 +953,14 @@ static CONTAINER_GIVEN_UP: std::sync::atomic::AtomicBool =
 /// A parameter rather than a read of the process slot: the settings page probes
 /// under a requirement of its own, and a probe that asked for the container would
 /// otherwise be answered by whatever the request path is configured with.
-#[cfg(windows)]
+///
+/// Only the Windows request path *calls* it, while its test runs everywhere: the
+/// decision is one rule and not two, and compiling it on every platform is what
+/// keeps a mistake in it from hiding behind `#[cfg]` and reaching CI.
+// `allow` rather than `expect`: with `--all-targets` the unit test below is what
+// keeps it used, so an expectation would be unfulfilled in exactly the build CI
+// lints.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn container_wanted(os_confinement: bool) -> bool {
     os_confinement && !CONTAINER_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -956,7 +969,6 @@ fn container_wanted(os_confinement: bool) -> bool {
 ///
 /// Called wherever the container was attempted and produced no report, so a
 /// request that follows never repeats the launch the probe already paid for.
-#[cfg(windows)]
 fn give_up_container() {
     CONTAINER_GIVEN_UP.store(true, std::sync::atomic::Ordering::Relaxed);
 }
@@ -1200,23 +1212,23 @@ fn rung(profile: Profile) -> Start {
             .and_then(|entry| entry.rung)
     }
 
+    // The creation a request falls back to when the probe never settled one: the
+    // container only where the platform has one *and* the configuration still
+    // wants it. Everywhere else there is one creation, so the question does not
+    // arise.
     #[cfg(windows)]
-    {
-        // The probe's own record wins while it exists: a host the container
-        // worked on has to keep using it, and a host that gave it up must not be
-        // asked again even for a profile the probe never reached.
-        cached(profile).unwrap_or_else(|| {
-            if container_wanted() {
-                Start::Confined
-            } else {
-                Start::Plain
-            }
-        })
-    }
+    let unsettled = if container_wanted(configured_requirement().os_confinement) {
+        Start::Confined
+    } else {
+        Start::Plain
+    };
     #[cfg(not(windows))]
-    {
-        cached(profile).unwrap_or(Start::Confined)
-    }
+    let unsettled = Start::Confined;
+
+    // The probe's own record wins while it exists: a host the container worked
+    // on has to keep using it, and a host that gave it up must not be asked again
+    // even for a profile the probe never reached.
+    cached(profile).unwrap_or(unsettled)
 }
 
 /// A private file the files layer's measurement must refuse to read.
@@ -1365,12 +1377,9 @@ fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
     };
     #[cfg(not(windows))]
     let first = Start::Confined;
-    // The reason the container was passed over, carried into the report beside
-    // the answer. Windows only: no other platform has a second creation to fall
-    // back to, so nothing is ever skipped there.
-    #[cfg(windows)]
-    let mut skipped: Option<String> = None;
-    #[cfg(not(windows))]
+    // The reason a creation was passed over, carried into the report beside the
+    // answer. Always `None` here: this launch is the first one, and the fallback
+    // below builds its own reason when it takes the second.
     let skipped: Option<String> = None;
 
     match probe_on(&invocation, profile, grants, first) {
@@ -1392,8 +1401,17 @@ fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
             // this process, and the child is started again without one. `Plain`
             // still carries the job object and the token, which is what the hard
             // bound is made of.
+            // The one fallback: the container is given up for this process, and
+            // the child is started again without one. `Plain` still carries the
+            // job object and the token, which is what the hard bound is made of.
+            // Only Windows has a second creation to fall back to; the give-up
+            // itself is the same decision everywhere it exists.
             #[cfg(windows)]
-            if first == Start::Confined {
+            let second = (first == Start::Confined).then_some(Start::Plain);
+            #[cfg(not(windows))]
+            let second: Option<Start> = None;
+
+            if let Some(fallback) = second {
                 give_up_container();
                 tracing::warn!(
                     profile = profile.as_str(),
@@ -1402,12 +1420,10 @@ fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
                      job and its token, and the report says files=open"
                 );
                 let skipped = format!("{}: {why}", first.label());
-                if let Ok(second) = probe_on(&invocation, profile, grants, Start::Plain) {
-                    let report = with_skipped_container(
-                        with_parent_facts(second, Start::Plain),
-                        Some(&skipped),
-                    );
-                    return (Start::Plain, accept(report));
+                if let Ok(report) = probe_on(&invocation, profile, grants, fallback) {
+                    let report =
+                        with_skipped_container(with_parent_facts(report, fallback), Some(&skipped));
+                    return (fallback, accept(report));
                 }
             }
             (
@@ -2248,7 +2264,15 @@ mod tests {
     /// token instead of dying in a loader. The settings hook clears the give-up
     /// record, so turning the container on later is one more attempt and not a
     /// permanent verdict.
-    #[cfg(windows)]
+    /// The migration this release is about: whether a launch asks for the
+    /// container at all, and when a host that refused it is asked again.
+    ///
+    /// Compiled and run on every platform on purpose. The flag is a decision and
+    /// not a platform detail, and a decision that only compiles on Windows is one
+    /// only the Windows runner can catch a mistake in — which is exactly how a
+    /// call site left behind by a signature change reached CI once. Only the
+    /// *outcome* is Windows-specific, and that part is asserted where it belongs:
+    /// in the probe test, under `#[cfg(windows)]`.
     #[test]
     fn only_a_requirement_that_wants_the_layer_asks_for_the_container() {
         assert!(
