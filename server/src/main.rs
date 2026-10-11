@@ -145,16 +145,6 @@ enum Command {
             default_value = "documents"
         )]
         profile: String,
-        /// The grade `sandbox.min_level` requires of this host.
-        #[arg(long, value_name = "limits|partial|full", default_value = "partial")]
-        min_level: String,
-        /// `sandbox.windows_container`: the parent wants this platform's
-        /// container (the Windows AppContainer) even when the grade does not ask
-        /// for the files layer. The child cannot read the setting itself — it
-        /// has no configuration file — so the parent repeats it here, exactly as
-        /// it does the minimum grade.
-        #[arg(long, default_value_t = false)]
-        windows_container: bool,
         /// `sandbox.enabled` is false: refuse before reading a request.
         #[arg(long, default_value_t = false)]
         sandbox_off: bool,
@@ -249,8 +239,6 @@ fn main() -> anyhow::Result<()> {
         selftest,
         probe,
         profile,
-        min_level,
-        windows_container,
         sandbox_off,
         ffmpeg,
         src,
@@ -259,18 +247,10 @@ fn main() -> anyhow::Result<()> {
     {
         let profile =
             server::sandbox::Profile::parse(profile).unwrap_or(server::sandbox::Profile::Documents);
-        let min_level =
-            server::sandbox::Level::parse(min_level).unwrap_or(server::sandbox::Level::Partial);
-        // The requirement the child judges itself by. It refuses without the
-        // resource bound whatever the minimum says, and it refuses below the
-        // minimum the parent named; the confinement half is the parent's
-        // decision, repeated here so the child's own report is judged by the
-        // same rule that judged it at startup.
-        let requirement = server::sandbox::Requirement::new(
-            !sandbox_off,
-            min_level,
-            *windows_container || min_level > server::sandbox::Level::Limits,
-        );
+        // The requirement the child judges itself by: the master switch, and
+        // nothing else. The resource bound it refuses without is read back from
+        // its own report, so the parent's rule and the child's are the same rule.
+        let requirement = server::sandbox::Requirement::new(!sandbox_off);
         // What the media profile may reach. The paths come from the parent on
         // this command line because the rules they become have to be installed
         // before the request is read; the request only names the source so the

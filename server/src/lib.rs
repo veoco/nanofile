@@ -329,10 +329,8 @@ impl AppState {
         // when an admin saves a change on the Sandbox page. Both are set here
         // rather than inside the indexer branch: thumbnails are generated
         // whether or not the index is enabled.
-        crate::sandbox::worker::configure_requirement(crate::sandbox::Requirement::from_config(
+        crate::sandbox::worker::configure_requirement(crate::sandbox::Requirement::new(
             config.sandbox.enabled,
-            &config.sandbox.min_level,
-            config.sandbox.windows_container,
         ));
         // Called even when the setting is empty, because empty is how an
         // administrator says there is no helper: skipping the call would leave
@@ -500,11 +498,7 @@ impl AppState {
                 Hook::MailDrain => {}
                 Hook::Sandbox => {
                     crate::sandbox::worker::configure_requirement(
-                        crate::sandbox::Requirement::from_config(
-                            config.sandbox.enabled,
-                            &config.sandbox.min_level,
-                            config.sandbox.windows_container,
-                        ),
+                        crate::sandbox::Requirement::new(config.sandbox.enabled),
                     );
                     // The media profile's grant names a file, and this hook also
                     // fires when `storage.ffmpeg_path` is saved: re-resolve it so

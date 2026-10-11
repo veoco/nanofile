@@ -70,12 +70,11 @@
 //! the grade is `full`. Without it the child still runs in the job, under the
 //! restricted token and with the mitigations, and reports `files=open` beside
 //! them: the resource bound is what keeps the server up, and the container is the
-//! only mechanism that could add the files and network items. The container is
-//! attempted when the configuration asks for the files layer
-//! (`Requirement::os_confinement`), and a host that refuses it is not asked
-//! twice — see the section below on why that is the default on this platform.
+//! only mechanism that could add the files and network items. Every launch
+//! attempts it, and a host that refuses one is not asked twice — see the section
+//! below.
 //!
-//! # Why the container is not attempted by default
+//! # Why a host may end up without the container
 //!
 //! Creating one is a registry profile plus package-SID access on the worker's own
 //! image, and a *host* sandbox that confines every command it runs — a
@@ -85,9 +84,8 @@
 //! written. While the files layer was a hard requirement that disabled indexing,
 //! thumbnails, EXIF and avatars on the whole machine, which is a large
 //! availability cost for a layer that bounds neither memory nor CPU. So a launch
-//! attempts the container only when `sandbox.windows_container` asks for it or
-//! `sandbox.min_level` asks for the files layer, and reports the missing item
-//! otherwise.
+//! attempts the container first, and a host that refuses it is not asked twice:
+//! the walk falls back to the job object and reports the missing item.
 //!
 //! # The less privileged container
 //!

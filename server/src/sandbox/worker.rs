@@ -119,9 +119,8 @@ const SANDBOX_REFUSAL: &str = "extract-worker: sandbox unavailable";
 /// same job object, which is the resource bound — the item that must be there —
 /// so a host that refuses a layer loses that layer and not the feature.
 ///
-/// The container is asked for only when the configuration wants the files layer
-/// ([`Requirement::os_confinement`]); the two below it are what a host falls back
-/// to, each remembered so the launch that was refused is not repeated.
+/// The container is asked for first, and the two below it are what a host falls
+/// back to, each remembered so the launch that was refused is not repeated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Start {
     /// Whatever this host can give: the runner on macOS, and on Windows the
@@ -630,17 +629,10 @@ pub fn status(profile: Profile) -> Status {
                 // rather than from the record it was built from: the report is
                 // the cached, immutable copy, while the record belongs to the
                 // last launch of any kind and a request may have started since.
-                if report.level() >= requirement.min_level {
-                    // The host met the policy and still gave less than the
-                    // platform could: the feature runs, and this says what it
-                    // runs without. Windows without a container is this case.
-                    tracing::warn!(
-                        profile = profile.as_str(),
-                        level = report.level().as_str(),
-                        detail = report.detail.as_str(),
-                        "the sandbox runs with less confinement than this host can give"
-                    );
-                } else if let Some(reason) = sandbox::container_refusal(&report.detail) {
+                //
+                // The feature runs either way: the layers are what this platform
+                // could add, and the bound that keeps the server up is in place.
+                if let Some(reason) = sandbox::container_refusal(&report.detail) {
                     tracing::warn!(
                         profile = profile.as_str(),
                         detail = report.detail.as_str(),
@@ -665,8 +657,7 @@ pub fn status(profile: Profile) -> Status {
                 reason = reason.as_str(),
                 "the sandbox is not available; this feature will not run. Check the log line \
                  above, and see the Sandbox settings page: `sandbox.enabled` is the switch over \
-                 these features, `sandbox.min_level` is the grade this host must reach, and a \
-                 container may need the Landlock syscalls allowed."
+                 these features, and a container may need the Landlock syscalls allowed."
             );
             entry.retry_at = Some(Instant::now() + UNAVAILABLE_RETRY);
         }
@@ -703,62 +694,41 @@ const PROBE_PENDING: &str = "the extraction sandbox is unavailable (a probe is p
 
 /// The report a profile can produce on this host, whatever the settings say.
 ///
-/// For the settings page: an admin who has switched the sandbox off, or set a
-/// minimum this host misses, still needs to see what the host *would* give —
-/// that is what decides whether switching it back on, or lowering the minimum,
-/// changes anything. The answer is measured once and cached: it is a property of
-/// the host, not of a request.
+/// For the settings page: an admin who has switched the sandbox off still needs
+/// to see what the host *would* give, because that is what decides whether
+/// switching it back on changes anything. The answer is measured once and
+/// cached: it is a property of the host, not of a request.
 ///
 /// A *failure* is cached only for [`UNAVAILABLE_RETRY`], the same window the
 /// request path uses. A probe that could not run — a child that lost a race with
 /// the machine's load, a timeout — says nothing about the host, and caching it
 /// for the process's lifetime would leave the page reporting a host it never
 /// managed to ask.
-/// `os_confinement` is the one setting the probe cannot read from the requirement
-/// it is judged against: whether this platform's container is to be attempted at
-/// all, so the page can say whether turning it on would change anything.
-pub fn capability(profile: Profile, os_confinement: bool) -> Result<Report, String> {
+pub fn capability(profile: Profile) -> Result<Report, String> {
     let cache = CAPABILITY.get_or_init(|| Mutex::new(HashMap::new()));
     {
         let cache = cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match cache.get(&profile) {
-            // The answer was measured under *this* confinement setting: a report
-            // taken with the container asked for says nothing about what the host
-            // gives without it, and the other way round.
-            Some(Measured::Report {
-                report,
-                confinement,
-            }) if *confinement == os_confinement => {
-                return Ok(report.clone());
-            }
-            Some(Measured::Failed {
-                why,
-                retry_at,
-                confinement,
-            }) if *confinement == os_confinement && Instant::now() < *retry_at => {
+            Some(Measured::Report { report }) => return Ok(report.clone()),
+            Some(Measured::Failed { why, retry_at }) if Instant::now() < *retry_at => {
                 return Err(why.clone());
             }
             _ => {}
         }
     }
 
-    // The requirement the probe runs under is not the request path's: it never
-    // refuses over a grade, because this call *is* the measurement. What it does
-    // carry is whether the container is to be attempted, which is a property of
-    // the configuration. The child cannot read that for itself, so it comes in
-    // as an argument.
-    let measured = measure_capability(profile, os_confinement);
+    // The requirement the probe runs under is not the request path's: the switch
+    // is what the page is asking *about*, so the measurement runs with it on.
+    let measured = measure_capability(profile);
     let cached = match &measured {
         Ok(report) => Measured::Report {
             report: report.clone(),
-            confinement: os_confinement,
         },
         Err(why) => Measured::Failed {
             why: why.clone(),
             retry_at: Instant::now() + UNAVAILABLE_RETRY,
-            confinement: os_confinement,
         },
     };
     cache
@@ -771,18 +741,9 @@ pub fn capability(profile: Profile, os_confinement: bool) -> Result<Report, Stri
 /// One profile's cached answer for the settings page.
 enum Measured {
     /// The host answered, and this is what it said.
-    Report {
-        report: Report,
-        /// The confinement setting this answer was measured under.
-        confinement: bool,
-    },
+    Report { report: Report },
     /// The probe did not produce an answer, and when to ask again.
-    Failed {
-        why: String,
-        retry_at: Instant,
-        /// The confinement setting this failure was measured under.
-        confinement: bool,
-    },
+    Failed { why: String, retry_at: Instant },
 }
 
 /// What the settings page shows for one profile: the host's answer, and what the
@@ -811,8 +772,8 @@ pub enum PageAnswer {
 }
 
 /// The page's answer for one profile.
-pub fn page_answer(profile: Profile, os_confinement: bool) -> PageAnswer {
-    match capability(profile, os_confinement) {
+pub fn page_answer(profile: Profile) -> PageAnswer {
+    match capability(profile) {
         Ok(report) => {
             // The profile's own job first: the page leads with whether the
             // features run, and a media profile whose helper cannot decode does
@@ -858,12 +819,11 @@ fn job_refusal(report: &Report) -> Option<String> {
         .then(|| format!("the media profile cannot decode a frame: {}", report.detail))
 }
 
-fn measure_capability(profile: Profile, os_confinement: bool) -> Result<Report, String> {
-    // The settings page asks what this host *would* give, so the probe runs
-    // under a requirement that never refuses it over a grade — `limits` is the
-    // floor. Whether the container is asked for is the caller's answer, because
-    // that setting is what is being inspected.
-    let requirement = Requirement::from_config(true, "limits", os_confinement);
+fn measure_capability(profile: Profile) -> Result<Report, String> {
+    // The settings page asks what this host *would* give, so the probe runs with
+    // the switch on and no layer demanded: `limits` is the floor, and every
+    // layer above it is measured as it is refused or established.
+    let requirement = Requirement::new(true);
     match probe_under(requirement, profile) {
         (_, Status::Ready(report)) => Ok(report),
         (_, Status::Unavailable(why)) => Err(why),
@@ -881,38 +841,43 @@ pub fn configure_executable(path: PathBuf) -> bool {
     EXECUTABLE.set(path).is_ok()
 }
 
+/// Whether a worker binary has already been named.
+///
+/// For a test harness that has to install its own path without stepping on one
+/// another test put there first: the value is process-global and set once, so
+/// the caller that must win is the caller that went first.
+pub fn executable_is_configured() -> bool {
+    EXECUTABLE.get().is_some()
+}
+
 /// Set the sandbox requirement the server resolved from `[sandbox]`.
 ///
 /// Called at startup and again whenever an admin saves a change on the Sandbox
 /// page (the `Hook::Sandbox` hook), so the value is mutable rather than set
-/// once. A change to the switch or the minimum changes what a probe *means*, so
-/// the cached answers are dropped with it: the next request re-probes instead of
-/// being told what the previous setting decided.
+/// once. A change to the switch changes what a probe *means*, so the cached
+/// answers are dropped with it: the next request re-probes instead of being told
+/// what the previous setting decided.
 pub fn configure_requirement(requirement: Requirement) {
     *requirement_slot()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = requirement;
     invalidate();
-    // A host that gave the container up and then got a configuration that asks
-    // for it again deserves a fresh attempt: the setting is the operator
-    // answering the question, and the give-up is this process's memory of one
-    // refusal, not a verdict about the host.
-    if requirement.os_confinement {
-        CONTAINER_GIVEN_UP.store(false, std::sync::atomic::Ordering::Relaxed);
-    }
+    // A host that gave a creation up and then got a fresh configuration deserves
+    // a fresh attempt: the save is the operator answering the question, and the
+    // give-up is this process's memory of one refusal, not a verdict about the
+    // host.
+    CONTAINER_GIVEN_UP.store(false, std::sync::atomic::Ordering::Relaxed);
     // The token record is cleared with the container's: both are one process's
-    // memory of a refusal, and a configuration that asks for the layer again is
-    // the operator answering the question.
+    // memory of a refusal.
     TOKEN_GIVEN_UP.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Drop the cached answers about this host.
 ///
-/// Both are answers to questions whose inputs can change: the requirement (the
-/// switch and the minimum grade) and the helper a media grant names. A caller
-/// that changes either calls this, so the next request and the next visit to the
-/// Sandbox page see a fresh measurement rather than the previous setting's
-/// conclusion.
+/// Both are answers to questions whose inputs can change: the master switch and
+/// the helper a media grant names. A caller that changes either calls this, so
+/// the next request and the next visit to the Sandbox page see a fresh
+/// measurement rather than the previous setting's conclusion.
 pub fn invalidate() {
     if let Some(cache) = STATUS.get() {
         cache
@@ -961,21 +926,20 @@ static CONTAINER_GIVEN_UP: std::sync::atomic::AtomicBool =
 /// the job object.
 static TOKEN_GIVEN_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Whether a launch that wants the files layer may still attempt the container.
+/// Whether a launch may still attempt this platform's container.
 ///
-/// A parameter rather than a read of the process slot: the settings page probes
-/// under a requirement of its own, and a probe that asked for the container would
-/// otherwise be answered by whatever the request path is configured with.
-///
-/// Only the Windows request path *calls* it, while its test runs everywhere: the
-/// decision is one rule and not two, and compiling it on every platform is what
-/// keeps a mistake in it from hiding behind `#[cfg]` and reaching CI.
+/// The container is what the parent asks for first on Windows, and the one
+/// process-global record is what keeps a host that refused it from being asked
+/// again on every launch. Only the Windows request path *calls* it, while its
+/// test runs everywhere: the decision is one rule and not two, and compiling it
+/// on every platform is what keeps a mistake in it from hiding behind `#[cfg]`
+/// and reaching CI.
 // `allow` rather than `expect`: with `--all-targets` the unit test below is what
 // keeps it used, so an expectation would be unfulfilled in exactly the build CI
 // lints.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn container_wanted(os_confinement: bool) -> bool {
-    os_confinement && !CONTAINER_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed)
+fn container_wanted() -> bool {
+    !CONTAINER_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Record that this host will not start a child in the container.
@@ -1004,7 +968,7 @@ fn configured_requirement() -> Requirement {
 #[derive(Default)]
 struct Cache {
     /// The requirement this answer was measured under. `Requirement::default`
-    /// is the shipped policy, which is also what a `Default` entry carries
+    /// is the shipped setting, which is also what a `Default` entry carries
     /// before anything has been stored.
     requirement: Requirement,
     status: Option<Status>,
@@ -1239,7 +1203,7 @@ fn rung(profile: Profile) -> Start {
     // wants it. Everywhere else there is one creation, so the question does not
     // arise.
     #[cfg(windows)]
-    let unsettled = if container_wanted(configured_requirement().os_confinement) {
+    let unsettled = if container_wanted() {
         Start::Confined
     } else if TOKEN_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed) {
         Start::Unrestricted
@@ -1391,11 +1355,11 @@ fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
 
     crate::sandbox::clear_container_shortfall();
 
-    // The creation this launch starts from: the container only where the platform
-    // has one, the configuration wants the files layer, and the host has not
-    // already refused it. Everything below is the walk down from here.
+    // The creation this launch starts from: the container where the platform has
+    // one and the host has not already refused it. Everything below is the walk
+    // down from here.
     #[cfg(windows)]
-    let first = if container_wanted(requirement.os_confinement) {
+    let first = if container_wanted() {
         Start::Confined
     } else if TOKEN_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed) {
         Start::Unrestricted
@@ -1717,20 +1681,11 @@ fn invocation(
 
     let mut args: Vec<OsString> = vec![
         OsString::from(SUBCOMMAND),
-        OsString::from("--min-level"),
-        OsString::from(requirement.min_level.as_str()),
         OsString::from("--profile"),
         OsString::from(profile.as_str()),
     ];
     if !requirement.enabled {
         args.push(OsString::from("--sandbox-off"));
-    }
-    // Whether this launch may ask for the platform's container is the parent's
-    // decision (`Requirement::os_confinement`), and the child has no
-    // configuration of its own to read it from: without this the report it
-    // judges itself by would be the shipped default rather than the setting.
-    if requirement.os_confinement {
-        args.push(OsString::from("--windows-container"));
     }
     // The child needs the granted paths on its own command line: Landlock and
     // Seatbelt rules have to be installed before the request is read, so they
@@ -2297,15 +2252,12 @@ mod tests {
 
     /// The platform switch reaches the one decision it is about.
     ///
-    /// Windows only, because the answer is: a requirement that does not want the
-    /// files layer must not attempt the AppContainer, and a refused host must not
-    /// be asked again. That is why a Windows launch inside a host sandbox — which
-    /// will not let a child create a further container — gets its bound and its
-    /// token instead of dying in a loader. The settings hook clears the give-up
-    /// record, so turning the container on later is one more attempt and not a
-    /// permanent verdict.
-    /// The migration this release is about: whether a launch asks for the
-    /// container at all, and when a host that refused it is asked again.
+    /// Windows only in outcome, because the answer is: a launch asks for the
+    /// AppContainer first, and a host that refused it is not asked again. That is
+    /// why a Windows launch inside a host sandbox — which will not let a child
+    /// create a further container — gets its bound and its token instead of dying
+    /// in a loader on every request. A settings save clears the give-up record,
+    /// so it is one more attempt and not a permanent verdict.
     ///
     /// Compiled and run on every platform on purpose. The flag is a decision and
     /// not a platform detail, and a decision that only compiles on Windows is one
@@ -2314,36 +2266,24 @@ mod tests {
     /// *outcome* is Windows-specific, and that part is asserted where it belongs:
     /// in the probe test, under `#[cfg(windows)]`.
     #[test]
-    fn only_a_requirement_that_wants_the_layer_asks_for_the_container() {
+    fn only_a_host_that_refused_the_container_is_spared_a_second_attempt() {
         assert!(
-            !container_wanted(false),
-            "a requirement that never asked for the files layer must not attempt a container"
-        );
-        assert!(
-            container_wanted(true),
-            "a requirement that asks for it is the one the container is for"
+            container_wanted(),
+            "a launch asks for the container until the host refuses it"
         );
 
         // One refusal is this process's answer for every launch that follows,
         // until a settings save asks again.
         give_up_container();
         assert!(
-            !container_wanted(true),
+            !container_wanted(),
             "a container the host refused must not be asked for again"
         );
 
-        configure_requirement(Requirement::from_config(true, "partial", true));
+        configure_requirement(Requirement::new(true));
         assert!(
-            container_wanted(true),
-            "a settings save that asks for the layer is worth one more attempt"
-        );
-
-        // A requirement that never asks is never a container attempt, whatever
-        // the process has done before.
-        give_up_container();
-        assert!(
-            !container_wanted(false),
-            "asking for the layer is the requirement's decision, not the record's"
+            container_wanted(),
+            "a settings save is worth one more attempt"
         );
 
         // The token record takes the same shape: one refusal, one attempt, and a
@@ -2355,7 +2295,7 @@ mod tests {
             TOKEN_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed),
             "a refused token has to be remembered, or every request retries it"
         );
-        configure_requirement(Requirement::from_config(true, "limits", false));
+        configure_requirement(Requirement::new(true));
         assert!(
             !TOKEN_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed),
             "a settings save is worth one more attempt"
@@ -2381,20 +2321,24 @@ mod tests {
     #[test]
     fn the_child_is_started_with_the_policy_the_parent_resolved() {
         let launched = launched(
-            Requirement::new(true, Level::Full, true),
+            Requirement::new(true),
             Profile::Documents,
             sandbox::Grants::default(),
             None,
         );
         let child = launched.child();
         assert_eq!(child[0], SUBCOMMAND);
-        assert_eq!(
-            &child[1..5],
-            ["--min-level", "full", "--profile", "documents"]
-        );
+        assert_eq!(&child[1..3], ["--profile", "documents"]);
         let flags = launched.flags();
-        assert!(flags.contains(&"--min-level") && flags.contains(&"--profile"));
-        for absent in ["--ffmpeg", "--src", "--probe-path", "--sandbox-off"] {
+        assert!(flags.contains(&"--profile"));
+        for absent in [
+            "--ffmpeg",
+            "--src",
+            "--probe-path",
+            "--sandbox-off",
+            "--min-level",
+            "--windows-container",
+        ] {
             assert!(
                 !flags.contains(&absent),
                 "{absent} names nothing here: {flags:?}"
@@ -2403,19 +2347,18 @@ mod tests {
     }
 
     /// The switch reaches the child as well as the parent that decides not to
-    /// spawn one, the minimum travels beside it, and the files-layer decision
-    /// travels with it too: the child has to judge its own report by the same
-    /// rule the parent used.
+    /// spawn one: the child has to judge its own report by the same rule the
+    /// parent used, and the switch is the whole of that rule.
     #[test]
-    fn the_switch_the_minimum_and_the_layer_travel_to_the_child() {
+    fn the_switch_travels_to_the_child() {
         let plain = launched(
-            Requirement::new(false, Level::Limits, false),
+            Requirement::new(false),
             Profile::Documents,
             sandbox::Grants::default(),
             None,
         );
         let child = plain.child();
-        assert_eq!(&child[1..3], ["--min-level", "limits"]);
+        assert_eq!(&child[1..3], ["--profile", "documents"]);
         let flags = plain.flags();
         assert!(
             flags.contains(&"--sandbox-off"),
@@ -2423,22 +2366,7 @@ mod tests {
         );
         assert!(
             !flags.contains(&"--windows-container"),
-            "nothing asked for the files layer: {flags:?}"
-        );
-
-        // A requirement that wants the layer says so, whatever the minimum is:
-        // this is what makes `sandbox.windows_container = true` on a `limits`
-        // base reach a Windows launch.
-        let hardened = launched(
-            Requirement::new(true, Level::Limits, true),
-            Profile::Documents,
-            sandbox::Grants::default(),
-            None,
-        );
-        assert!(
-            hardened.flags().contains(&"--windows-container"),
-            "the platform switch is the parent's to pass on: {:?}",
-            hardened.flags()
+            "the container is a platform decision now, not a flag: {flags:?}"
         );
     }
 
@@ -2452,7 +2380,7 @@ mod tests {
         let source = Path::new("/var/tmp/nanofile/scratch.bin");
         let probe = Path::new("/var/tmp/nanofile/probe");
         let launched = launched(
-            Requirement::new(true, Level::Partial, true),
+            Requirement::new(true),
             Profile::Media,
             sandbox::Grants {
                 helper: Some(helper),
@@ -2487,7 +2415,7 @@ mod tests {
     #[test]
     fn only_the_platform_with_a_runner_wraps_the_child() {
         let launched = launched(
-            Requirement::new(true, Level::Partial, true),
+            Requirement::new(true),
             Profile::Documents,
             sandbox::Grants::default(),
             None,
@@ -2883,7 +2811,6 @@ mod tests {
                 Measured::Failed {
                     why: "seeded".to_string(),
                     retry_at: Instant::now() + Duration::from_secs(60),
-                    confinement: false,
                 },
             );
 

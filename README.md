@@ -158,8 +158,7 @@ limits, which bound the copies. On Linux and macOS the file layer decides `exec`
 per path — the helper and the interpreter the kernel runs before it, never a
 directory — while on Windows the container does not restrict which readable
 program may run, so only the Job Object's process count and the timeout bound a
-compromised helper. Raising `sandbox.min_level` to `full` therefore disables
-media thumbnails, and the page says so.
+compromised helper.
 
 Its file item carries its own notes, because a helper is a program with
 libraries: it may read the libraries beside it (one file at a time), the system
@@ -172,30 +171,30 @@ those calls, so a copy can leave that group and the only bound left is the CPU
 limit each copy carries and the parent's timeout — not the number of copies. The
 page says that too rather than leaving it to be inferred.
 
-Two settings govern it. `sandbox.enabled` is the master switch: with it off,
-none of those features run, and nothing falls back to parsing inside the server
+One setting governs it. `sandbox.enabled` is the master switch: with it off, none
+of those features run, and nothing falls back to parsing inside the server
 process. A document skipped while the switch is off is recorded as a retryable
 failure rather than a verdict on its bytes, so turning the switch back on
-re-indexes it. `sandbox.min_level` is the grade the host must reach — `full`,
-`partial` (the default) or `limits`; below it the features are disabled and the
-page says why, naming the item and what its absence means. Every grade includes
-the resource bound, so nothing here is a way to run a parser unbounded. A host
-that reaches Partial but not Full still runs them, with a warning; a host that
-reaches only the bound runs them when an admin sets `min_level = "limits"`, which
-the page explains as a degradation — and on Windows that is the default shape.
+re-indexes it.
 
-**On Windows the container is opt-in.** The AppContainer is the only mechanism
-that adds the files and network items there, and creating one needs a registry
-profile and package access on the worker's own image. A host that confines every
-command it runs — a development or agent environment — refuses exactly that, and
-the child dies in its loader with nothing to diagnose. While the files layer was a
-hard requirement that failure disabled indexing, thumbnails, EXIF and avatars on
-the whole machine, at a large availability cost for a layer that does not bound
-memory or CPU at all. So a Windows launch applies the Job Object, the restricted
-token and the process mitigations and reports `files=open`; set
-`sandbox.windows_container = true`, or a `min_level` above `limits`, to attempt
-the container instead. The page names what is missing either way, and a container
-the host refuses is not asked for again.
+Everything above the resource bound is the platform's answer rather than a
+setting. The grade the page reports is measured from a confined child: `full`
+where this platform supplies every layer (Linux with Landlock and seccomp, macOS
+with a Seatbelt profile), `partial` where the files layer came with it but not
+the rest, and `limits` where the bound is all this host can establish — and the
+page names each item that is missing and what its absence means. A host that
+cannot establish the bound at all runs none of these features: that item is
+required, and no setting may run a parser unbounded.
+
+**On Windows the container is attempted, and a host that refuses it falls back to
+the bound.** The AppContainer is the only mechanism that adds the files and
+network items there, and creating one needs a registry profile and package access
+on the worker's own image. A host that confines every command it runs — a
+development or agent environment — refuses exactly that, and the child dies in
+its loader with nothing to diagnose. So a Windows launch that cannot create one
+applies the Job Object, the restricted token and the process mitigations and
+reports `files=open`, and the container is not asked for again in that process.
+The page names what is missing either way.
 
 `storage.ffmpeg_path` names the helper the media profile may execute. Saving it
 re-resolves the grant through the same hook as the two settings above, so the
