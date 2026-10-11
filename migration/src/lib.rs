@@ -1,5 +1,13 @@
 pub use sea_orm_migration::prelude::*;
 
+/// A connection helper for this crate's tests, in-src and integration alike.
+///
+/// Public because an integration test compiles as its own crate and cannot see
+/// an item behind `#[cfg(test)]`; hidden because it is not part of the migrator
+/// any caller should use. Nothing in the shipping server touches it.
+#[doc(hidden)]
+pub mod tests_support;
+
 /// Declare each migration module once and register it in `Migrator`,
 /// so adding a new migration touches a single list.
 macro_rules! migrations {
@@ -98,7 +106,7 @@ migrations!(
     m20260924_000001_create_job_runs,
     m20260925_000001_purge_tick_run_history,
     m20260926_000001_drop_retired_settings_keys,
-    m20260927_000001_rename_sandbox_min_level_values,
+    m20260927_000002_retire_sandbox_grade_settings,
 );
 
 #[cfg(test)]
@@ -115,11 +123,9 @@ mod tests {
     #[tokio::test]
     async fn migrates_fresh_database_from_scratch() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let db_path = dir.path().join("test.db");
         let db =
-            sea_orm::Database::connect(format!("sqlite://{}?mode=rwc", db_path.display()).as_str())
-                .await
-                .expect("connect sqlite");
+            crate::tests_support::connect(&crate::tests_support::file_uri(dir.path(), "test.db"))
+                .await;
 
         Migrator::up(&db, None).await.expect("run all migrations");
 
