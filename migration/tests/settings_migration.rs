@@ -6,7 +6,7 @@
 //! administrator never has to retype it.
 
 use migration::{Migrator, MigratorTrait};
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 
 /// The migration under test.
 const MOVE: &str = "m20260922_000001_create_settings";
@@ -52,10 +52,11 @@ async fn table_exists(db: &DatabaseConnection, name: &str) -> bool {
 #[tokio::test]
 async fn the_email_settings_row_becomes_settings_keys() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let db_path = dir.path().join("migration.db");
-    let db = Database::connect(format!("sqlite://{}?mode=rwc", db_path.display()).as_str())
-        .await
-        .expect("connect");
+    let db = migration::tests_support::connect(&migration::tests_support::file_uri(
+        dir.path(),
+        "migration.db",
+    ))
+    .await;
 
     Migrator::up(&db, Some(steps_before(MOVE)))
         .await
@@ -123,10 +124,11 @@ async fn the_email_settings_row_becomes_settings_keys() {
 #[tokio::test]
 async fn a_database_without_an_email_row_just_gets_the_table() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let db_path = dir.path().join("migration.db");
-    let db = Database::connect(format!("sqlite://{}?mode=rwc", db_path.display()).as_str())
-        .await
-        .expect("connect");
+    let db = migration::tests_support::connect(&migration::tests_support::file_uri(
+        dir.path(),
+        "migration.db",
+    ))
+    .await;
 
     Migrator::up(&db, None).await.expect("migrate everything");
 

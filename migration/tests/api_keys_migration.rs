@@ -6,7 +6,7 @@
 //! still cannot reach `/api2`.
 
 use migration::{Migrator, MigratorTrait};
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 
 /// The migration that performs the move under test.
 const MOVE: &str = "m20260912_000001_migrate_webdav_keys_into_api_keys";
@@ -45,10 +45,11 @@ async fn table_exists(db: &DatabaseConnection, name: &str) -> bool {
 #[tokio::test]
 async fn legacy_webdav_keys_become_unified_keys() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let db_path = dir.path().join("migration.db");
-    let db = Database::connect(format!("sqlite://{}?mode=rwc", db_path.display()).as_str())
-        .await
-        .expect("connect");
+    let db = migration::tests_support::connect(&migration::tests_support::file_uri(
+        dir.path(),
+        "migration.db",
+    ))
+    .await;
 
     // Stop immediately before the move. The index is looked up by name rather
     // than assumed to be the last migration, so adding a later one cannot
@@ -182,10 +183,11 @@ async fn legacy_webdav_keys_become_unified_keys() {
 #[tokio::test]
 async fn orphaned_webdav_keys_are_dropped() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let db_path = dir.path().join("migration.db");
-    let db = Database::connect(format!("sqlite://{}?mode=rwc", db_path.display()).as_str())
-        .await
-        .expect("connect");
+    let db = migration::tests_support::connect(&migration::tests_support::file_uri(
+        dir.path(),
+        "migration.db",
+    ))
+    .await;
 
     Migrator::up(&db, Some(steps_before(MOVE)))
         .await
@@ -242,10 +244,11 @@ async fn orphaned_webdav_keys_are_dropped() {
 #[tokio::test]
 async fn rerun_after_partial_failure_succeeds() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let db_path = dir.path().join("migration.db");
-    let db = Database::connect(format!("sqlite://{}?mode=rwc", db_path.display()).as_str())
-        .await
-        .expect("connect");
+    let db = migration::tests_support::connect(&migration::tests_support::file_uri(
+        dir.path(),
+        "migration.db",
+    ))
+    .await;
 
     Migrator::up(&db, Some(steps_before(MOVE)))
         .await
@@ -307,10 +310,11 @@ async fn rerun_after_partial_failure_succeeds() {
 #[tokio::test]
 async fn duplicate_digest_across_libraries_merges_into_one_key() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let db_path = dir.path().join("migration.db");
-    let db = Database::connect(format!("sqlite://{}?mode=rwc", db_path.display()).as_str())
-        .await
-        .expect("connect");
+    let db = migration::tests_support::connect(&migration::tests_support::file_uri(
+        dir.path(),
+        "migration.db",
+    ))
+    .await;
 
     Migrator::up(&db, Some(steps_before(MOVE)))
         .await

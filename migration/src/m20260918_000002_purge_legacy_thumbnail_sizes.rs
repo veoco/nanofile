@@ -42,7 +42,7 @@ impl MigrationTrait for Migration {
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
+    use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
     use sea_orm_migration::MigratorTrait;
 
     /// A database migrated up to — but not including — this migration.
@@ -52,10 +52,11 @@ mod tests {
     /// as soon as another migration is appended after it.
     async fn before_this_migration() -> (tempfile::TempDir, DatabaseConnection) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("test.db");
-        let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
-            .await
-            .expect("connect sqlite");
+        let db = crate::tests_support::connect(&crate::tests_support::file_uri(
+            dir.path(),
+            "test.db",
+        ))
+        .await;
         let steps = crate::migration_names()
             .iter()
             .position(|name| *name == "m20260918_000002_purge_legacy_thumbnail_sizes")

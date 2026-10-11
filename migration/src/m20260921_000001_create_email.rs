@@ -236,7 +236,7 @@ enum EmailMessages {
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
+    use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
     use sea_orm_migration::MigratorTrait;
 
     /// The number of migrations that run before this one.
@@ -256,10 +256,11 @@ mod tests {
     /// two tables really are created by the code under test.
     async fn before_this_migration() -> (tempfile::TempDir, DatabaseConnection) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("test.db");
-        let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
-            .await
-            .expect("connect sqlite");
+        let db = crate::tests_support::connect(&crate::tests_support::file_uri(
+            dir.path(),
+            "test.db",
+        ))
+        .await;
         crate::Migrator::up(&db, Some(steps_before_this_migration()))
             .await
             .expect("run prior migrations");

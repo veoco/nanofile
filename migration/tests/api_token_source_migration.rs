@@ -8,7 +8,7 @@
 //! the direction that matters.
 
 use migration::{Migrator, MigratorTrait};
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 
 /// The migration under test.
 const ADD_SOURCE: &str = "m20260913_000001_add_source_and_user_agent_to_api_tokens";
@@ -37,10 +37,11 @@ async fn source_of(db: &DatabaseConnection, id: i32) -> String {
 #[tokio::test]
 async fn existing_tokens_are_classified_from_platform() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let db_path = dir.path().join("migration.db");
-    let db = Database::connect(format!("sqlite://{}?mode=rwc", db_path.display()).as_str())
-        .await
-        .expect("connect");
+    let db = migration::tests_support::connect(&migration::tests_support::file_uri(
+        dir.path(),
+        "migration.db",
+    ))
+    .await;
 
     // Stop immediately before the column is added. Looked up by name so a
     // later migration cannot silently move this starting point.
