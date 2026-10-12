@@ -703,6 +703,13 @@ const PROBE_PENDING: &str = "the extraction sandbox is unavailable (a probe is p
 /// switching it back on changes anything. The answer is measured once and
 /// cached: it is a property of the host, not of a request.
 ///
+/// **Measured, not judged**: the caller decides what the report means, and
+/// [`page_answer`] is the caller. A profile whose items are all in place and
+/// whose own job still failed has answered this question — with a report the page
+/// has to show, because the items are how an admin tells "the host cannot confine
+/// this" from "the helper cannot run". Judging here would throw that answer away
+/// and leave the page with nothing but a refusal sentence.
+///
 /// A *failure* is cached only for [`UNAVAILABLE_RETRY`], the same window the
 /// request path uses. A probe that could not run — a child that lost a race with
 /// the machine's load, a timeout — says nothing about the host, and caching it
@@ -726,6 +733,8 @@ pub fn capability(profile: Profile) -> Result<Report, String> {
     // The requirement the probe runs under is not the request path's: the switch
     // is what the page is asking *about*, so the measurement runs with it on.
     let measured = measure_capability(profile);
+    // Nothing below this line judges the report: a measured answer is cached for
+    // the process's life even when the profile would not run on it.
     let cached = match &measured {
         Ok(report) => Measured::Report {
             report: report.clone(),
@@ -760,6 +769,11 @@ enum Measured {
 /// [`Requirement::accepts`] applied with the switch *on* plus the profile's own
 /// job verdict, which is the same call the request path makes — so putting them
 /// on the page costs no second child.
+///
+/// The judgement lives *here* rather than in the probe, so a measured report
+/// survives it: a profile the host refuses is a band with four rows and a reason,
+/// not a band with nothing to read. Only [`PageAnswer::Unavailable`] — a probe
+/// that never answered — has no items to show.
 ///
 /// The two fields are measured with the switch out of the picture on purpose: an
 /// admin who has switched the sandbox off still needs to see what the host would
@@ -835,15 +849,15 @@ fn job_refusal(report: &Report) -> Option<String> {
         .then(|| format!("the media profile cannot decode a frame: {}", report.detail))
 }
 
+/// The report this host gives one profile, with no judgement of it.
+///
+/// The settings page asks what this host *would* give, so the probe runs with the
+/// switch on: `limits` is the floor and every layer above it is measured as it is
+/// refused or established. What the answer *means* — whether the profile would
+/// run on it — is [`page_answer`]'s question, and asking it here is what used to
+/// cost the page its rows.
 fn measure_capability(profile: Profile) -> Result<Report, String> {
-    // The settings page asks what this host *would* give, so the probe runs with
-    // the switch on and no layer demanded: `limits` is the floor, and every
-    // layer above it is measured as it is refused or established.
-    let requirement = Requirement::new(true);
-    match probe_under(requirement, profile) {
-        (_, Status::Ready(report)) => Ok(report),
-        (_, Status::Unavailable(why)) => Err(why),
-    }
+    probe_raw(Requirement::new(true), profile).1
 }
 
 /// Point the worker at a specific binary instead of this process's own.
@@ -1348,13 +1362,27 @@ fn probe(profile: Profile) -> (Start, Status) {
     probe_under(configured_requirement(), profile)
 }
 
-/// One probe under a stated requirement.
+/// One probe under a stated requirement, judged the way the request path judges
+/// it.
 ///
 /// The requirement is a parameter rather than read from the process slot so the
 /// settings page can ask what a *different* configuration would give — the
 /// container it has switched off, or the files layer it is thinking about asking
 /// for — without changing what the request path is judged by.
 fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
+    match probe_raw(requirement, profile) {
+        (start, Ok(report)) => (start, accept(report, requirement)),
+        (start, Err(why)) => (start, Status::Unavailable(why)),
+    }
+}
+
+/// One probe under a stated requirement, with no judgement of the report.
+///
+/// The walk down the creations is the same one [`probe_under`] takes; the answer
+/// is the report itself, so a caller that has its own question to ask — the
+/// settings page asks what the host gives, not whether the profile would run —
+/// can ask it about the measurement instead of about a refusal.
+fn probe_raw(requirement: Requirement, profile: Profile) -> (Start, Result<Report, String>) {
     let probe_file = DenyProbe::create();
     let source_file = source_probe(profile);
     let grants = probe_grants(profile, source_file.as_ref().map(SourceProbe::path));
@@ -1366,7 +1394,7 @@ fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
     ) else {
         return (
             Start::Confined,
-            Status::Unavailable("cannot resolve the sandbox worker".to_string()),
+            Err("cannot resolve the sandbox worker".to_string()),
         );
     };
 
@@ -1401,7 +1429,7 @@ fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
                 for (index, reason) in skipped.iter().enumerate() {
                     report.detail.push_str(&format!(",skipped{index}={reason}"));
                 }
-                return (creation, accept(report, requirement));
+                return (creation, Ok(report));
             }
             Err(why) => {
                 // Said out loud as well as carried in the report: an operator
@@ -1414,10 +1442,7 @@ fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
                     "the sandbox worker did not report on this creation"
                 );
                 let Some(weaker) = creation.weaker() else {
-                    return (
-                        creation,
-                        Status::Unavailable(format!("{}: {why}", creation.label())),
-                    );
+                    return (creation, Err(format!("{}: {why}", creation.label())));
                 };
                 // Each step down is remembered for this process's life: the
                 // refusal is a property of the environment rather than of one
@@ -1657,12 +1682,13 @@ fn probe_once(
 /// check before it reads a request; this is the half that makes the shortfall
 /// visible and stops the spawns.
 ///
-/// The requirement is the caller's rather than the configured one on purpose.
-/// The request path asks [`probe`], which hands over
-/// [`configured_requirement`] — but the settings page asks [`capability`], which
-/// measures with the switch *on* to answer what this host would give, and judging
-/// that answer by the switch it is asking about would make the page go blank
-/// exactly when an administrator had switched the sandbox off.
+/// This is the *request path's* judgement, and the settings page deliberately
+/// does not go through it: the page asks [`capability`], which measures with the
+/// switch *on* to answer what this host would give, and a page that asked this
+/// function about its own answer would go blank exactly when an administrator had
+/// switched the sandbox off — or when the media helper could not decode, which is
+/// a fact about the helper rather than about the four items the page exists to
+/// report. [`host_verdict`] is the page's half of the same decision.
 fn accept(report: Report, requirement: Requirement) -> Status {
     if let Some(why) = job_refusal(&report) {
         return Status::Unavailable(why);

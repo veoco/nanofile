@@ -199,6 +199,13 @@ pub struct SandboxProfileView {
     /// One line naming what the profile serves, already translated.
     pub uses: String,
     pub icon: &'static str,
+    /// Whether the host answered for this profile at all.
+    ///
+    /// Not the same question as the state, which says whether it runs. A probe
+    /// that never reported leaves the band with a state and nothing under it, and
+    /// the page has to be read as "this host was never asked" rather than as "this
+    /// profile has no protections".
+    pub measured: bool,
     pub state: SandboxStateView,
     /// The four items, in the order the report carries them.
     pub items: Vec<SandboxItemView>,
@@ -500,16 +507,21 @@ fn sandbox_view(t: &'static I18n, inputs: SandboxInputs) -> SandboxView {
 /// The notes are attached to the item they weaken rather than listed under the
 /// profile, because that is what they are: a note on the item whose name it
 /// narrows, not a fourth protection.
+///
+/// The four rows and "this host answered" are the same fact here, so they are
+/// decided together: an answer that was measured always yields all four items,
+/// whether or not the profile would run on it, and a probe that never answered
+/// yields none. A band with two rows would be a report nobody measured.
 fn profile_view(
     t: &I18n,
     profile: crate::sandbox::Profile,
     answer: &worker::PageAnswer,
     state: SandboxStateView,
 ) -> SandboxProfileView {
-    let items = match answer {
+    let (measured, items) = match answer {
         worker::PageAnswer::Measured { report, .. } => {
             let notes = report.notes();
-            report
+            let items = report
                 .protections
                 .items()
                 .into_iter()
@@ -542,9 +554,10 @@ fn profile_view(
                             .collect(),
                     }
                 })
-                .collect()
+                .collect();
+            (true, items)
         }
-        worker::PageAnswer::Unavailable(_) => Vec::new(),
+        worker::PageAnswer::Unavailable(_) => (false, Vec::new()),
     };
 
     SandboxProfileView {
@@ -552,6 +565,7 @@ fn profile_view(
         title_key: profile_title(profile),
         uses: t.tr(profile_uses(profile)).to_string(),
         icon: profile_icon(profile),
+        measured,
         state,
         items,
     }
@@ -1504,6 +1518,66 @@ mod tests {
         assert_eq!(item_severity("files"), "sandbox.severity_critical");
         assert_eq!(item_severity("network"), "sandbox.severity_important");
         assert_eq!(item_severity("process"), "sandbox.severity_advisory");
+    }
+
+    /// A band's four rows exist exactly when the host answered for it.
+    ///
+    /// The state and the rows are two questions, and this is the seam between
+    /// them: a profile the host refuses is still a *measured* band — the items are
+    /// how an admin tells "this host cannot confine the profile" from "the
+    /// program the profile runs cannot decode" — while a probe that never
+    /// reported has nothing to show, and saying "measured" there would put four
+    /// rows of nothing on the page.
+    #[test]
+    fn a_band_has_four_rows_exactly_when_the_host_answered_for_it() {
+        let t = I18n::get(Some("en"));
+        let every_item = Protections {
+            limits: true,
+            files: true,
+            network: true,
+            process: true,
+        };
+
+        // Measured, and not running: the rows are the answer, so they stay.
+        let refused = media_report(
+            every_item,
+            Some(crate::sandbox::JobVerdict::Failed),
+            false,
+            Some("the media profile cannot decode a frame"),
+        );
+        let band = media_profile(t, &refused, true);
+        assert!(band.measured);
+        assert_eq!(band.items.len(), 4);
+        assert_eq!(
+            band.items.iter().map(|item| item.key).collect::<Vec<_>>(),
+            ["limits", "files", "network", "process"]
+        );
+
+        // Never answered: a state with a reason, and no rows to misread.
+        let unmeasured = documents_profile(
+            t,
+            &worker::PageAnswer::Unavailable("no worker binary".to_string()),
+            &SandboxInputs {
+                enabled: true,
+                index_enabled: true,
+            },
+        );
+        assert!(!unmeasured.measured);
+        assert!(unmeasured.items.is_empty());
+
+        // The switch does not change either half: a switched-off profile was still
+        // measured, which is the whole point of measuring it with the switch out of
+        // the picture.
+        let off = documents_profile(
+            t,
+            &measured(every_item, true, None),
+            &SandboxInputs {
+                enabled: false,
+                index_enabled: true,
+            },
+        );
+        assert!(off.measured);
+        assert_eq!(off.items.len(), 4);
     }
 
     #[test]

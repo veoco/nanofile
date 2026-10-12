@@ -91,6 +91,12 @@ fn count(html: &str, needle: &str) -> usize {
 /// this host actually gives, one band per profile and one row per protection, and
 /// warns when that is not the whole set. The values come from a confined child's
 /// own report, so the page cannot advertise protection this host does not have.
+///
+/// What the host gives is not this test's to decide, so the row count is derived
+/// from the bands that were measured rather than assumed to be both of them.
+/// Whether a host can start a confined child at all is `sandbox_probe_test`'s
+/// subject; what is asserted here is that a band which *was* measured always
+/// carries the whole set of four, never a partial one.
 #[tokio::test]
 async fn the_sandbox_page_shows_the_measured_items_per_profile() {
     common::sandbox::enable_real_worker();
@@ -114,17 +120,27 @@ async fn the_sandbox_page_shows_the_measured_items_per_profile() {
         2,
         "a band without a state"
     );
-    // One row per protection per band, in the order the report carries them.
+    // The parser band needs no helper, so it is the one band every host that can
+    // run the worker at all measures. A host that cannot start one is the probe
+    // suite's subject; this is the floor the counts below are read against.
+    assert!(
+        html.contains("data-sandbox-profile=\"documents\" data-sandbox-measured=\"true\""),
+        "the documents band was not measured"
+    );
+    // One row per protection per measured band, in the order the report carries
+    // them. A band whose probe never answered has no rows and says so with its
+    // state, which is why the count is derived rather than fixed at eight.
+    let measured = count(&html, "data-sandbox-measured=\"true\"");
     assert_eq!(
         count(&html, "data-sandbox-item=\""),
-        8,
-        "not four rows per band"
+        4 * measured,
+        "not four rows per measured band"
     );
     for item in ["limits", "files", "network", "process"] {
         assert_eq!(
             count(&html, &format!("data-sandbox-item=\"{item}\"")),
-            2,
-            "the {item} protection is not shown once per band"
+            measured,
+            "the {item} protection is not shown once per measured band"
         );
     }
 
@@ -164,14 +180,18 @@ async fn the_sandbox_page_shows_the_measured_items_per_profile() {
     // The media profile's process item cannot exist, and the row says so instead
     // of leaving the reader to infer it from a missing badge. The sentence behind
     // it is the longest on the page, so it stays inside the row's disclosure.
-    assert!(
-        html.contains("data-sandbox-media-process"),
-        "the media row does not say the process item does not apply"
-    );
-    assert!(
-        html.contains("Not applicable"),
-        "no item is marked as not applying to its profile"
-    );
+    // Read inside the band being measured: an unmeasured media band has no rows at
+    // all, and the sentence belongs to the row rather than to the panel.
+    if html.contains("data-sandbox-profile=\"media\" data-sandbox-measured=\"true\"") {
+        assert!(
+            html.contains("data-sandbox-media-process"),
+            "the media row does not say the process item does not apply"
+        );
+        assert!(
+            html.contains("Not applicable"),
+            "no item is marked as not applying to its profile"
+        );
+    }
 
     // Each item carries how much it is worth, and its name is a locale key rather
     // than a rendered key: the grade key is never an attribute value, so its raw
@@ -247,7 +267,11 @@ async fn the_switch_off_disables_the_workers_and_the_page_says_so() {
     // deciding whether to switch back on needs to know what they would get. This
     // is the one case a probe judged by the *configured* requirement gets wrong —
     // it would refuse the very host it was asked about and leave the page blank.
-    assert_eq!(count(&html, "data-sandbox-item=\""), 8);
+    // Same derived count as the switch-on case: the switch is not what decides
+    // whether a profile was measured.
+    let measured = count(&html, "data-sandbox-measured=\"true\"");
+    assert!(measured >= 1, "the switch-off page measured no band");
+    assert_eq!(count(&html, "data-sandbox-item=\""), 4 * measured);
 
     // Leave the process-global switch where the fixture put it: the page is what
     // this test is about, and an off switch would follow the rest of this

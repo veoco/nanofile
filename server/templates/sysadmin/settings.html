@@ -116,7 +116,11 @@
 
     {# The measured sandbox, on its own page, above the one setting it belongs to:
        one panel, one band per profile, each with its own state and its own four
-       protections. There is no verdict above them — a sentence summarising the
+       protections. The state says whether the profile runs; the four rows say what
+       the host gives it — a profile the host refuses still shows its rows, because
+       those are how an admin tells a weak host from a program that cannot run.
+       Only a host that never answered leaves a band with nothing under it, and the
+       band says so. There is no verdict above them — a sentence summarising the
        bands would only repeat what the state badge and the item rows already say
        — and no block heading either, because the caption below already says what
        the panel is. The grade the items add up to is likewise not shown: it *is*
@@ -130,7 +134,12 @@
 
     <div class="nf-list mt-2">
         {% for profile in sandbox.profiles %}
-        <section data-sandbox-profile="{{ profile.id }}">
+        {# Whether this band was measured at all: a probe that never answered
+           leaves a state and nothing under it, and the page has to be read as
+           "this host was never asked" rather than as a profile with no
+           protections. A measured band always carries all four rows, whether or
+           not the profile would run on it. #}
+        <section data-sandbox-profile="{{ profile.id }}" data-sandbox-measured="{% if profile.measured %}true{% else %}false{% endif %}">
             {# The band carries the profile's state: whether it runs is a question
                about the profile, and the items under it are a question about the
                host. Keeping those apart is what lets a green item sit under a

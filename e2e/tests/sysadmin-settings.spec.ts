@@ -153,10 +153,22 @@ test("the sandbox page shows one band per profile and one row per protection", a
   await expect(page.locator("[data-sandbox-grade]")).toHaveCount(0);
   await expect(page.locator("[data-sandbox-status]")).toHaveCount(0);
 
-  // One row per protection per band, in the order the report carries them.
+  // Whether this host can start a confined child is not this test's to decide, so
+  // the count comes from the bands that were measured. The parser band needs no
+  // helper, so it is the floor every host reads against.
+  await expect(
+    page.locator('[data-sandbox-profile="documents"][data-sandbox-measured="true"]'),
+  ).toHaveCount(1);
+  const measured = await page.locator('[data-sandbox-measured="true"]').count();
+  expect(measured, "no band was measured").toBeGreaterThan(0);
+
+  // One row per protection per measured band, in the order the report carries
+  // them. A band whose probe never answered has no rows at all and says so with
+  // its state, so it can never contribute a partial set.
   for (const item of ["limits", "files", "network", "process"]) {
-    await expect(page.locator(`[data-sandbox-item="${item}"]`)).toHaveCount(2);
+    await expect(page.locator(`[data-sandbox-item="${item}"]`)).toHaveCount(measured);
   }
+  await expect(page.locator("[data-sandbox-item]")).toHaveCount(measured * 4);
 
   // The master switch is a control and it appears exactly once: in the form.
   await expect(page.locator("[data-sandbox-switch]")).toHaveCount(1);
@@ -177,17 +189,30 @@ test("the sandbox page shows one band per profile and one row per protection", a
  */
 test("the sandbox page keeps its technical details in disclosures", async ({ page }) => {
   await page.goto("/sysadmin/settings/sandbox/");
-  // The process note is the longest sentence on the page: it must not be in the
-  // flow of it. It lives in the media band's own process row, which cannot exist
-  // for that profile and says so.
-  const processRow = page.locator(
-    '[data-sandbox-profile="media"] [data-sandbox-item="process"]',
+
+  // The process row is the one whose note is the longest sentence on the page, so
+  // it must not be in the flow of it. The media band says the item cannot exist
+  // for that profile; a host that could not measure it leaves the documents band's
+  // own process row, whose fork note is the one behind the same disclosure.
+  const mediaBand = page.locator(
+    '[data-sandbox-profile="media"][data-sandbox-measured="true"]',
   );
-  const process = processRow.locator("[data-sandbox-media-process]");
-  await expect(process).toBeHidden();
+  const processRow = (await mediaBand.count())
+    ? mediaBand.locator('[data-sandbox-item="process"]')
+    : page.locator(
+        '[data-sandbox-profile="documents"][data-sandbox-measured="true"] [data-sandbox-item="process"]',
+      );
+  const note = processRow.locator("details p").first();
+  await expect(note).toBeHidden();
 
   await processRow.locator("details summary").click();
-  await expect(process).toBeVisible();
+  await expect(note).toBeVisible();
+
+  // The sentence about a profile that cannot have the item is only there when
+  // that profile was measured.
+  if (await mediaBand.count()) {
+    await expect(processRow.locator("[data-sandbox-media-process]")).toBeVisible();
+  }
 
   // A missing protection keeps its consequence in the row: hiding that would
   // leave the reader to infer it from a grey badge.
