@@ -26,7 +26,7 @@ fn wedge_worker(directory: &std::path::Path) {
         r#"#!/bin/sh
 case "$*" in
   *--selftest*)
-    printf '%s\n' "NFS2-sandbox profile=documents level=full limits=on files=denied network=denied process=denied detail=fake text_chars=8388608"
+    printf '%s\n' "NFS2-sandbox profile=documents limits=on files=denied network=denied process=denied detail=fake text_chars=8388608"
     exit 0
     ;;
 esac

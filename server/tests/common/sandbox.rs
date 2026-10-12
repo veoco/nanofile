@@ -13,7 +13,7 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use server::sandbox::worker::{self, Status};
-use server::sandbox::{Level, Profile, Report, Requirement};
+use server::sandbox::{Profile, Protections, Report, Requirement};
 
 /// The helper the media profile is granted, and the one that writes the clips.
 ///
@@ -233,20 +233,21 @@ pub fn status(profile: Profile) -> Report {
     }
 }
 
-/// The report for `profile`, which has to grade at least `minimum`.
+/// The report for `profile`, which has to have its resource bound in place.
 ///
-/// The requirement is set here, because a caller that has to *reach* a grade is
-/// also the caller that knows which one it wants: a Windows host that gives the
-/// resource bound without a container has to be able to reach `limits` without
-/// the process-global switch deciding the question first.
-pub fn require_level(profile: Profile, minimum: Level) -> Report {
+/// The requirement is set here, because a caller that needs a *bounded* child is
+/// also the caller that knows the question: a Windows host that gives the bound
+/// without a container has to be able to reach it without the process-global
+/// switch deciding first. The bound is the one item every feature needs, and the
+/// only one whose absence refuses a child — the layers above it are what the
+/// platform could add, and each caller asserts the ones it needs.
+pub fn require_bound(profile: Profile) -> Report {
     worker::configure_requirement(requirement());
     let report = status(profile);
     assert!(
-        report.level() >= minimum,
-        "the {} sandbox must reach {}: {}",
+        report.protections.get(Protections::REQUIRED) == Some(true),
+        "the {} sandbox must be bounded: {}",
         profile.as_str(),
-        minimum.as_str(),
         report.detail
     );
     report

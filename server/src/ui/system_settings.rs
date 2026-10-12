@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
+use crate::sandbox::{JobVerdict, Profile, Protections, worker};
 use crate::settings::SecretState;
 use base::error::AppError;
 use infra::settings::{Apply, Kind, Origin, Section, SettingDef};
@@ -174,104 +175,95 @@ pub struct SystemSettingsTemplate {
 
 /// What this host actually gives, for the Sandbox page.
 ///
-/// The grade is the one number an admin acts on; the items say which protection
-/// is missing and what its absence means, the notes say what the platform still
-/// leaves open, and the decision says whether the features run at all under the
-/// master switch. None of it is a claim: every value comes from the report a
-/// confined child printed.
+/// One band per profile the page measured, each with its own state and its own
+/// four items. Every value comes from the report a confined child printed, so the
+/// page cannot claim protection the host does not provide, and the master switch
+/// is the page's *other* input rather than the thing the measurement was taken
+/// under.
+///
+/// There is no verdict above the bands: a sentence summarising them would only
+/// repeat what each band's state badge and each item's row already say, which is
+/// the duplication this page exists without.
 pub struct SandboxView {
-    /// The effective value of `sandbox.enabled`.
-    pub enabled: bool,
-    /// The grade label, already translated.
-    pub grade: String,
-    /// `badge-green` when every protection is there, `badge-red` when the files
-    /// layer is missing or nothing beyond resource limits is, `badge-gray`
-    /// otherwise.
-    pub grade_class: &'static str,
-    /// Whether the features run, and why not when they do not.
-    pub decision: SandboxDecisionView,
-    /// The four items, in the order the page lists them.
-    pub items: Vec<SandboxItemView>,
-    /// The media profile's own line.
-    pub media: SandboxMediaView,
-    /// The one verdict the page leads with.
-    pub verdict: SandboxVerdictView,
-    /// The raw detail a probe printed, for the disclosure.
-    pub detail: String,
+    /// The profiles the page measured, in the order it lists them.
+    pub profiles: Vec<SandboxProfileView>,
+    /// The raw reports, one per profile, so the disclosure can label them.
+    pub raw: Vec<SandboxRawView>,
 }
 
-/// Whether the policy lets the document and image profiles run.
+/// One profile's own band: what it is for, whether it runs, and its protections.
+pub struct SandboxProfileView {
+    /// Stable identifier: `documents` or `media`.
+    pub id: &'static str,
+    pub title_key: &'static str,
+    /// One line naming what the profile serves, already translated.
+    pub uses: String,
+    pub icon: &'static str,
+    pub state: SandboxStateView,
+    /// The four items, in the order the report carries them.
+    pub items: Vec<SandboxItemView>,
+}
+
+/// Whether one profile runs, and why not when it does not.
 ///
-/// The grade above says what the host *could* give; this says what the settings
-/// made of it. They differ whenever the switch is off, or the host could not
-/// bound a child at all, and an admin looking at a red item needs to know which
-/// of the two they are reading before they change anything.
-pub struct SandboxDecisionView {
-    /// Whether the features run.
-    pub running: bool,
-    /// `badge-green` when the features run, `badge-red` when they do not.
-    pub class: &'static str,
+/// The state is not the same question as an item: a profile can have every
+/// protection and still not run — because an administrator switched it off, or
+/// because the one feature it serves has a switch of its own — and a profile can
+/// run while an item is missing, which is what the items below say.
+pub struct SandboxStateView {
     pub label: String,
-    /// Why they do not run, when they do not.
+    /// `badge-green` when it runs, `badge-red` when the host cannot, `badge-gray`
+    /// when a setting or a missing helper is the reason.
+    pub class: &'static str,
+    /// Why it does not run, when it does not.
     pub reason: Option<String>,
+    /// Where to go to fix it, when the fix is a setting on another page.
+    pub action: Option<SandboxActionView>,
+}
+
+/// A link to the page that owns the setting a state names.
+pub struct SandboxActionView {
+    pub href: &'static str,
+    pub label_key: &'static str,
 }
 
 /// One protection: whether it is in place, how much it matters, and what its
 /// absence means.
 pub struct SandboxItemView {
+    /// The report's own token: `limits`, `files`, `network` or `process`.
+    pub key: &'static str,
     pub label_key: &'static str,
     /// The mark the row leads with, named rather than inlined so the template
     /// picks the glyph and the item keeps choosing what it means.
     pub icon: &'static str,
     pub present: bool,
+    /// Whether the item applies to this profile at all. The media profile exists
+    /// to start a program, so its process item is not a gap.
+    pub applicable: bool,
+    /// The one item no profile may run without, so the page says which task is a
+    /// requirement rather than a matter of how much is left.
+    pub required: bool,
     /// `badge-red` for a critical item that is missing, `badge-gray` otherwise.
     pub class: &'static str,
     /// 关键 / 重要 / 建议 — how much the item is worth, so that a host missing
     /// the files layer does not read like a host missing the process bound.
+    /// Shown only when the item is missing.
     pub severity: String,
+    pub show_severity: bool,
     /// One sentence on what the absence opens, shown only when it is absent.
     pub impact: Option<String>,
+    /// The profile's own explanation that the item cannot exist for it, shown in
+    /// the row's disclosure.
+    pub note: Option<String>,
     /// The residuals that weaken this item, already translated.
     pub notes: Vec<String>,
 }
 
-/// The media profile's line: it is a second child with its own report.
-pub struct SandboxMediaView {
-    /// What the media worker is doing, already translated.
-    pub label: String,
-    pub class: &'static str,
-    /// The media profile's own grade, when it reported one.
-    ///
-    /// Its own because it is its own child: this is the profile that starts a
-    /// program by definition, so it grades below the document profile on every
-    /// platform, and saying so is the point of the row.
-    pub grade: Option<String>,
-    /// `badge-*` for [`SandboxMediaView::grade`].
-    pub grade_class: &'static str,
-    /// The notes on the media report, already translated.
-    pub notes: Vec<String>,
-    /// Why the media profile is not available, when it is not. Shown beside the
-    /// row rather than only inside the raw report: a min-level that the media
-    /// profile can never reach is the common cause, and it is not a fault.
-    pub reason: Option<String>,
-    /// That the process item does not apply to this profile, and what bounds the
-    /// copies instead. Always present for media: the item cannot exist here, and
-    /// leaving the row without it would read as an item that was overlooked.
-    pub process_note: String,
+/// One raw probe report, labelled so the two lines can be told apart.
+pub struct SandboxRawView {
+    pub id: &'static str,
+    pub title_key: &'static str,
     pub detail: String,
-}
-
-/// The one line the page leads with: is this configuration safe?
-pub struct SandboxVerdictView {
-    pub label: String,
-    /// `badge-*` for the tone of the verdict.
-    pub class: &'static str,
-    /// `is-ok` / `is-warn` / `is-err` — the banner behind it. Separate from the
-    /// badge because the page reads them at different sizes: a weak verdict is a
-    /// grey badge in a soft banner, and an unsafe one is red in a loud one.
-    pub banner: &'static str,
-    /// The explanation, when the verdict is not simply "safe".
-    pub detail: Option<String>,
 }
 
 /// Query parameters of a settings page.
@@ -410,17 +402,26 @@ async fn render(
         restart_error: crate::restart::failure(),
         sandbox: match section {
             Section::Sandbox => {
-                // The switch the panel needs, resolved here because the service
-                // cannot move into the blocking task.
-                let enabled = service
-                    .resolved_one("sandbox.enabled")
-                    .map(|entry| entry.value == "true")
-                    .unwrap_or(true);
+                // The two settings the panel needs, resolved here because the
+                // service cannot move into the blocking task. The index switch is
+                // the profile's own question: document extraction exists for the
+                // search index, which has a page of its own, and a band that read
+                // "running" while nothing indexes anything would be a lie.
+                let resolved = |key: &str| {
+                    service
+                        .resolved_one(key)
+                        .map(|entry| entry.value == "true")
+                        .unwrap_or(true)
+                };
+                let inputs = SandboxInputs {
+                    enabled: resolved("sandbox.enabled"),
+                    index_enabled: resolved("index.enabled"),
+                };
                 // The probe spawns a child per profile, so it belongs on a
                 // blocking thread: the rest of the page must not wait on it, and
                 // an executor thread must not be parked on a process.
                 Some(
-                    tokio::task::spawn_blocking(move || sandbox_view(t, enabled))
+                    tokio::task::spawn_blocking(move || sandbox_view(t, inputs))
                         .await
                         .map_err(|e| {
                             AppError::internal(format!("the sandbox probe panicked: {e}"))
@@ -445,250 +446,285 @@ fn settings_url(section: Section, action: &str) -> String {
     }
 }
 
+/// The settings the Sandbox page needs before it can render the measurement.
+///
+/// Resolved by the caller, because the settings service cannot cross into the
+/// blocking task the probe runs on: the master switch, and the one feature switch
+/// that decides whether a profile that is otherwise ready has anything to do.
+pub struct SandboxInputs {
+    pub enabled: bool,
+    /// The effective value of `index.enabled`, which owns document extraction.
+    pub index_enabled: bool,
+}
+
 /// What this host actually gives, for the Sandbox page.
 ///
-/// The grade is measured, not asserted: it comes from a child that confined
-/// itself and printed what took. The items say which protection is missing and
-/// the notes say what the platform still leaves open, so an admin can tell "this
-/// host cannot do better" from "something here is broken".
+/// Every value is measured, not asserted: it comes from children that confined
+/// themselves and printed what took. The items say which protection is in place
+/// and the notes say what the platform still leaves open, so an admin can tell
+/// "this host cannot do better" from "something here is broken". The master switch
+/// is separate: it decides whether the work runs, not what the host can give, and
+/// the page keeps the two questions apart.
 ///
 /// Synchronous, and it spawns children: every value on the panel comes from a
 /// probe this call runs once per profile, so the caller hands it to
 /// `spawn_blocking` rather than blocking the runtime's thread on a child process.
-/// The one setting it needs — the master switch — is resolved by the caller for
-/// the same reason, because the settings service cannot cross into the blocking
-/// task.
-fn sandbox_view(t: &'static I18n, enabled: bool) -> SandboxView {
-    use crate::sandbox::{Profile, worker};
+/// The answers are cached per profile, so a second visit to the page spawns
+/// nothing.
+fn sandbox_view(t: &'static I18n, inputs: SandboxInputs) -> SandboxView {
+    let documents = worker::page_answer(Profile::Documents);
+    let media = worker::page_answer(Profile::Media);
 
-    let answer = worker::page_answer(Profile::Documents);
-    let (grade, grade_class, items, detail, host_level) = match &answer {
+    let profiles = vec![
+        documents_profile(t, &documents, &inputs),
+        media_profile(t, &media, inputs.enabled),
+    ];
+    let raw = vec![
+        SandboxRawView {
+            id: "documents",
+            title_key: "sandbox.profile_documents",
+            detail: report_detail(&documents),
+        },
+        SandboxRawView {
+            id: "media",
+            title_key: "sandbox.profile_media",
+            detail: report_detail(&media),
+        },
+    ];
+
+    SandboxView { profiles, raw }
+}
+
+/// One profile's band: its state, its items, and the notes on each item.
+///
+/// The notes are attached to the item they weaken rather than listed under the
+/// profile, because that is what they are: a note on the item whose name it
+/// narrows, not a fourth protection.
+fn profile_view(
+    t: &I18n,
+    profile: crate::sandbox::Profile,
+    answer: &worker::PageAnswer,
+    state: SandboxStateView,
+) -> SandboxProfileView {
+    let items = match answer {
         worker::PageAnswer::Measured { report, .. } => {
-            let level = report.level();
             let notes = report.notes();
-            (
-                t.tr(level_label(level)).to_string(),
-                level_class(level),
-                report
-                    .protections
-                    .items()
-                    .into_iter()
-                    .map(|(item, present)| SandboxItemView {
+            report
+                .protections
+                .items()
+                .into_iter()
+                .map(|(item, present)| {
+                    let applicable = item_applicable(profile, item);
+                    SandboxItemView {
+                        key: item,
                         label_key: item_label(item),
                         icon: item_icon(item),
                         present,
-                        class: item_class(item, present),
+                        applicable,
+                        required: Protections::required(item),
+                        class: item_class(item, present, applicable),
                         severity: t.tr(item_severity(item)).to_string(),
-                        impact: (!present).then(|| t.tr(item_impact(item)).to_string()),
+                        show_severity: applicable && !present,
+                        impact: (applicable && !present)
+                            .then(|| t.tr(item_impact(item)).to_string()),
+                        note: (!applicable).then(|| t.tr("sandbox.media_process_na").to_string()),
                         notes: notes
                             .iter()
                             .filter(|note| note_belongs(note, item))
-                            .map(|note| t.tr(note_label(note)).to_string())
+                            .map(|note| {
+                                let key = if profile.runs_helper() {
+                                    media_note_label(note)
+                                } else {
+                                    note_label(note)
+                                };
+                                t.tr(key).to_string()
+                            })
                             .collect(),
-                    })
-                    .collect(),
-                report.detail.clone(),
-                Some(level),
-            )
+                    }
+                })
+                .collect()
         }
-        worker::PageAnswer::Unavailable(why) => (
-            t.tr("sandbox.grade_unavailable").to_string(),
-            "badge-red",
-            Vec::new(),
-            why.clone(),
-            None,
-        ),
+        worker::PageAnswer::Unavailable(_) => Vec::new(),
     };
 
-    // Whether the features run is decided here rather than read off the probe, and
-    // the switch is the first word in it: the switch row above is rendered from
-    // the same value, so a row that says "Running" beside a switch that says
-    // "Off" is not a state this panel can produce. A host that cannot bound a
-    // child at all is the other way these features do not run.
-    let refusal = match &answer {
-        worker::PageAnswer::Unavailable(why) => Some(why.clone()),
-        worker::PageAnswer::Measured { report, .. } => crate::sandbox::Requirement::new(true)
-            .accepts(report)
-            .err()
-            .map(|refusal| refusal.reason()),
-    };
-    let decision = if !enabled {
-        SandboxDecisionView {
-            running: false,
-            class: "badge-red",
-            label: t.tr("sandbox.decision_disabled").to_string(),
-            reason: Some(t.tr("sandbox.warning_disabled").to_string()),
-        }
-    } else if let Some(why) = &refusal {
-        SandboxDecisionView {
-            running: false,
-            class: "badge-red",
-            label: t.tr("sandbox.decision_disabled").to_string(),
-            reason: Some(why.clone()),
-        }
-    } else {
-        SandboxDecisionView {
-            running: true,
-            class: "badge-green",
-            label: t.tr("sandbox.decision_running").to_string(),
-            reason: None,
-        }
-    };
-
-    // The media profile is a second child with its own report: it may execute
-    // the helper where nothing else may, so it is shown on its own line — with
-    // its own grade, because it is the profile that cannot have the process item
-    // and therefore grades below the one above it on every platform.
-    //
-    // The switch comes first here too: a page whose top row says the sandbox is
-    // off cannot have a media row that reads as if a probe were running.
-    let media_answer = worker::page_answer(Profile::Media);
-    let mut media = match &media_answer {
-        worker::PageAnswer::Measured { report, .. } => {
-            let (label, class) = if report.detail.contains("media-ok") {
-                (t.tr("sandbox.media_ok"), "badge-green")
-            } else if report.detail.contains("media-no-helper") {
-                (t.tr("sandbox.media_no_helper"), "badge-gray")
-            } else {
-                (t.tr("sandbox.media_failed"), "badge-red")
-            };
-            SandboxMediaView {
-                label: label.to_string(),
-                class,
-                grade: Some(t.tr(level_label(report.level())).to_string()),
-                grade_class: level_class(report.level()),
-                notes: report
-                    .notes()
-                    .into_iter()
-                    .map(|note| t.tr(media_note_label(note)).to_string())
-                    .collect(),
-                reason: None,
-                process_note: t.tr("sandbox.media_process_na").to_string(),
-                detail: report.detail.clone(),
-            }
-        }
-        worker::PageAnswer::Unavailable(why) => SandboxMediaView {
-            label: t.tr("sandbox.media_unavailable").to_string(),
-            class: "badge-red",
-            grade: None,
-            grade_class: "badge-red",
-            notes: Vec::new(),
-            reason: Some(why.clone()),
-            process_note: t.tr("sandbox.media_process_na").to_string(),
-            detail: why.clone(),
-        },
-    };
-    if !enabled {
-        media.label = t.tr("sandbox.decision_disabled").to_string();
-        media.class = "badge-red";
-        media.reason = Some(t.tr("sandbox.warning_disabled").to_string());
-    }
-
-    let verdict = sandbox_verdict(t, enabled, &decision, &items, host_level);
-
-    SandboxView {
-        enabled,
-        grade,
-        grade_class,
-        decision,
+    SandboxProfileView {
+        id: profile.as_str(),
+        title_key: profile_title(profile),
+        uses: t.tr(profile_uses(profile)).to_string(),
+        icon: profile_icon(profile),
+        state,
         items,
-        media,
-        verdict,
-        detail,
     }
 }
 
-/// The one line the page leads with.
+/// The parser profiles' band: documents and images.
 ///
-/// Ordered by what an admin has to do first, and phrased as a verdict rather
-/// than as a warning: "this host is missing a protection" and "the sandbox is
-/// switched off" are different sentences, and only the second is a decision the
-/// admin made. The resource bound is the one item nothing may give up, so its
-/// absence is the outage; the files layer is defense in depth, and running
-/// without it is a *degradation* the page names rather than a fault — which is
-/// exactly what a Windows host without a container looks like.
-fn sandbox_verdict(
+/// One band for two profiles because they install the same protections: both are
+/// confined by the same call with the same grants, and `sandbox_probe_test`
+/// asserts the item list of each. The image profile is still probed by the
+/// server on its own; this page would have nothing different to say.
+fn documents_profile(
     t: &I18n,
-    enabled: bool,
-    decision: &SandboxDecisionView,
-    items: &[SandboxItemView],
-    host_level: Option<crate::sandbox::Level>,
-) -> SandboxVerdictView {
-    use crate::sandbox::Level;
-
-    /// The three tones the verdict can be read in, which decide both the badge
-    /// beside it and the banner behind it. `Err` is the one that means something
-    /// is wrong now rather than something being weaker than it could be.
-    enum Tone {
-        Ok,
-        Weak,
-        Bad,
-    }
-    let verdict = |label: &str, tone: Tone, detail: Option<String>| SandboxVerdictView {
-        label: label.to_string(),
-        class: match tone {
-            Tone::Ok => "badge-green",
-            Tone::Weak => "badge-gray",
-            Tone::Bad => "badge-red",
-        },
-        banner: match tone {
-            Tone::Ok => "is-ok",
-            Tone::Weak => "is-warn",
-            Tone::Bad => "is-err",
-        },
-        detail,
+    answer: &worker::PageAnswer,
+    inputs: &SandboxInputs,
+) -> SandboxProfileView {
+    let state = if !inputs.enabled {
+        disabled_state(t)
+    } else if !inputs.index_enabled {
+        // The work this profile exists for has a switch of its own, on another
+        // page: a document is not extracted for an index that is off, and this
+        // band would otherwise read "running" while nothing indexes anything.
+        SandboxStateView {
+            label: t.tr("sandbox.state_index_off").to_string(),
+            class: "badge-gray",
+            reason: None,
+            action: Some(SandboxActionView {
+                href: "/sysadmin/settings/maintenance/",
+                label_key: "sandbox.action_index",
+            }),
+        }
+    } else {
+        match answer {
+            worker::PageAnswer::Measured {
+                host_runs: true, ..
+            } => running_state(t),
+            worker::PageAnswer::Measured {
+                host_runs: false,
+                host_reason,
+                ..
+            } => unavailable_state(t, host_reason.clone().unwrap_or_default()),
+            worker::PageAnswer::Unavailable(why) => unavailable_state(t, why.clone()),
+        }
     };
 
-    let missing = |name: &str| {
-        items
-            .iter()
-            .find(|item| item.label_key == name)
-            .is_some_and(|item| !item.present)
+    profile_view(t, Profile::Documents, answer, state)
+}
+
+/// The media profile's band: the one child that may start the configured helper.
+///
+/// Its state is its own question, because the profile's own job comes first: a
+/// host can confine it perfectly and the helper still not decode, and an
+/// administrator who has configured no helper is in neither case.
+fn media_profile(t: &I18n, answer: &worker::PageAnswer, enabled: bool) -> SandboxProfileView {
+    let state = if !enabled {
+        disabled_state(t)
+    } else {
+        match answer {
+            worker::PageAnswer::Measured {
+                report,
+                host_runs,
+                host_reason,
+            } => {
+                if report.job == Some(JobVerdict::Failed) {
+                    SandboxStateView {
+                        label: t.tr("sandbox.state_media_failed").to_string(),
+                        class: "badge-red",
+                        reason: Some(host_reason.clone().unwrap_or_else(|| report.detail.clone())),
+                        action: None,
+                    }
+                } else if !host_runs {
+                    unavailable_state(t, host_reason.clone().unwrap_or_default())
+                } else if report.job == Some(JobVerdict::NoHelper) {
+                    // A state an administrator chose, not a fault: the fix is the
+                    // helper path on the storage page, and the row says where.
+                    SandboxStateView {
+                        label: t.tr("sandbox.state_no_helper").to_string(),
+                        class: "badge-gray",
+                        reason: None,
+                        action: Some(SandboxActionView {
+                            href: "/sysadmin/settings/storage/",
+                            label_key: "sandbox.action_storage",
+                        }),
+                    }
+                } else {
+                    running_state(t)
+                }
+            }
+            worker::PageAnswer::Unavailable(why) => unavailable_state(t, why.clone()),
+        }
     };
 
-    if !enabled {
-        return verdict(
-            t.tr("sandbox.verdict_disabled"),
-            Tone::Weak,
-            Some(t.tr("sandbox.warning_disabled").to_string()),
-        );
+    profile_view(t, Profile::Media, answer, state)
+}
+
+fn running_state(t: &I18n) -> SandboxStateView {
+    SandboxStateView {
+        label: t.tr("sandbox.state_running").to_string(),
+        class: "badge-green",
+        reason: None,
+        action: None,
     }
-    if host_level.is_none() || !decision.running {
-        // The host cannot bound a child at all: the one state in which these
-        // features do not run while the switch is on.
-        return verdict(
-            t.tr("sandbox.verdict_unavailable"),
-            Tone::Bad,
-            decision.reason.clone(),
-        );
+}
+
+/// A profile the master switch stopped.
+///
+/// No reason of its own: the switch's own row carries the sentence about what
+/// switching off costs, and repeating it under both bands would be the same
+/// paragraph three times on one page.
+fn disabled_state(t: &I18n) -> SandboxStateView {
+    SandboxStateView {
+        label: t.tr("sandbox.state_disabled").to_string(),
+        class: "badge-gray",
+        reason: None,
+        action: None,
     }
-    if missing("sandbox.item_files") {
-        // The feature runs, and the one layer that keeps a parser out of the
-        // server user's files is not there. On every platform but Linux and
-        // macOS that is the platform's own answer rather than a setting: the
-        // Windows container could not be created.
-        return verdict(
-            t.tr("sandbox.verdict_unsafe"),
-            Tone::Weak,
-            Some(t.tr("sandbox.verdict_unsafe_detail").to_string()),
-        );
+}
+
+fn unavailable_state(t: &I18n, why: String) -> SandboxStateView {
+    SandboxStateView {
+        label: t.tr("sandbox.state_unavailable").to_string(),
+        class: "badge-red",
+        reason: Some(why),
+        action: None,
     }
-    match host_level {
-        Some(Level::Full) => verdict(t.tr("sandbox.verdict_safe"), Tone::Ok, None),
-        _ => verdict(
-            t.tr("sandbox.verdict_degraded"),
-            Tone::Weak,
-            Some(t.tr("sandbox.warning_incomplete").to_string()),
-        ),
+}
+
+/// The raw line one profile printed, or why it printed nothing.
+fn report_detail(answer: &worker::PageAnswer) -> String {
+    match answer {
+        worker::PageAnswer::Measured { report, .. } => report.detail.clone(),
+        worker::PageAnswer::Unavailable(why) => why.clone(),
     }
 }
 
 /// `badge-*` for one item: red only when a critical one is missing.
-fn item_class(item: &str, present: bool) -> &'static str {
-    match (item, present) {
-        (_, true) => "badge-green",
-        ("limits" | "files", false) => "badge-red",
+fn item_class(item: &str, present: bool, applicable: bool) -> &'static str {
+    match (applicable, item, present) {
+        (false, _, _) => "badge-gray",
+        (_, _, true) => "badge-green",
+        (_, "limits" | "files", false) => "badge-red",
         _ => "badge-gray",
+    }
+}
+
+/// Whether one item is a question at all for one profile.
+///
+/// The media profile starts the helper and the copy that leads to it by
+/// definition, so the process item cannot exist there and the row says so rather
+/// than reporting a gap.
+fn item_applicable(profile: Profile, item: &str) -> bool {
+    !(profile.runs_helper() && item == "process")
+}
+
+/// Which band a profile belongs to, and what it serves.
+fn profile_title(profile: Profile) -> &'static str {
+    match profile {
+        Profile::Media => "sandbox.profile_media",
+        _ => "sandbox.profile_documents",
+    }
+}
+
+fn profile_uses(profile: Profile) -> &'static str {
+    match profile {
+        Profile::Media => "sandbox.uses_media",
+        _ => "sandbox.uses_documents",
+    }
+}
+
+fn profile_icon(profile: Profile) -> &'static str {
+    match profile {
+        Profile::Media => "camera",
+        _ => "file_text",
     }
 }
 
@@ -724,22 +760,6 @@ fn item_icon(item: &str) -> &'static str {
         "files" => "lock",
         "network" => "share",
         _ => "cog",
-    }
-}
-
-fn level_label(level: crate::sandbox::Level) -> &'static str {
-    match level {
-        crate::sandbox::Level::Full => "sandbox.grade_full",
-        crate::sandbox::Level::Partial => "sandbox.grade_partial",
-        crate::sandbox::Level::Limits => "sandbox.grade_limits",
-    }
-}
-
-fn level_class(level: crate::sandbox::Level) -> &'static str {
-    match level {
-        crate::sandbox::Level::Full => "badge-green",
-        crate::sandbox::Level::Partial => "badge-gray",
-        crate::sandbox::Level::Limits => "badge-red",
     }
 }
 
@@ -1302,60 +1322,188 @@ mod tests {
         }
     }
 
-    /// The verdict leads with what an admin has to act on, and the files layer is
-    /// the case that matters most: it is the one protection this platform can give
-    /// that can be missing while the features still run, which is the shape a
-    /// Windows host without a container and a Linux host without Landlock both
-    /// produce.
+    /// Each band's state answers its own question, and it is where the one
+    /// sentence the page used to lead with now lives: a profile that runs, one
+    /// the switch stopped, one whose own feature switch is off, one the host
+    /// cannot run, and one that failed at its own job.
     #[test]
-    fn the_verdict_separates_a_weak_host_from_a_disabled_one() {
+    fn a_band_state_says_whether_that_profile_runs_and_why_not() {
         let t = I18n::get(Some("en"));
-        /// The files item, present or not — the one the verdict turns on.
-        fn files_item(present: bool) -> SandboxItemView {
-            SandboxItemView {
-                label_key: "sandbox.item_files",
-                icon: "lock",
-                present,
-                class: if present { "badge-green" } else { "badge-red" },
-                severity: String::new(),
-                impact: None,
-                notes: Vec::new(),
-            }
-        }
-        let decision = |running: bool| SandboxDecisionView {
-            running,
-            class: if running { "badge-green" } else { "badge-red" },
-            label: String::new(),
-            reason: (!running).then(|| "the host gives no bound".to_string()),
+        let every_item = Protections {
+            limits: true,
+            files: true,
+            network: true,
+            process: true,
         };
-        let level = crate::sandbox::Level::Limits;
+        let inputs = |enabled: bool, index_enabled: bool| SandboxInputs {
+            enabled,
+            index_enabled,
+        };
+        let documents = |answer: &worker::PageAnswer, inputs: &SandboxInputs| {
+            documents_profile(t, answer, inputs).state
+        };
+        let media =
+            |answer: &worker::PageAnswer, enabled: bool| media_profile(t, answer, enabled).state;
 
-        // Running, but without the files layer: the feature runs at whatever this
-        // host gives, and the verdict names the item that is missing.
-        let unsafe_verdict =
-            sandbox_verdict(t, true, &decision(true), &[files_item(false)], Some(level));
-        assert_eq!(unsafe_verdict.label, t.tr("sandbox.verdict_unsafe"));
-        assert!(unsafe_verdict.detail.is_some());
+        // A host with every item in place, switch on: running.
+        let running = documents(&measured(every_item, true, None), &inputs(true, true));
+        assert_eq!(running.label, t.tr("sandbox.state_running"));
+        assert_eq!(running.class, "badge-green");
+        assert!(running.reason.is_none() && running.action.is_none());
 
-        // The same host with nothing running: the host gave no bound at all.
-        let refused = sandbox_verdict(t, true, &decision(false), &[files_item(false)], Some(level));
-        assert_eq!(refused.label, t.tr("sandbox.verdict_unavailable"));
-        assert!(refused.detail.is_some());
+        // The switch is its own reason, and it is not repeated under the band:
+        // the switch's own row carries the cost, which is a setting's sentence
+        // rather than a measurement's.
+        let off = documents(&measured(every_item, true, None), &inputs(false, true));
+        assert_eq!(off.label, t.tr("sandbox.state_disabled"));
+        assert_eq!(off.class, "badge-gray");
+        assert!(off.reason.is_none());
 
-        // Files in place and everything else too: nothing to explain.
-        let safe = sandbox_verdict(
-            t,
-            true,
-            &decision(true),
-            &[files_item(true)],
-            Some(crate::sandbox::Level::Full),
+        // The feature this profile serves has a switch of its own, on another
+        // page: the band says so and points at it, rather than reading "running"
+        // while nothing indexes anything.
+        let no_index = documents(&measured(every_item, true, None), &inputs(true, false));
+        assert_eq!(no_index.label, t.tr("sandbox.state_index_off"));
+        assert_eq!(
+            no_index.action.as_ref().map(|action| action.href),
+            Some("/sysadmin/settings/maintenance/")
         );
-        assert_eq!(safe.label, t.tr("sandbox.verdict_safe"));
-        assert!(safe.detail.is_none());
 
-        // The switch is its own verdict, whatever the host can do.
-        let off = sandbox_verdict(t, false, &decision(false), &[files_item(true)], Some(level));
-        assert_eq!(off.label, t.tr("sandbox.verdict_disabled"));
+        // A host that cannot establish the one required item: the reason is the
+        // refusal, not a sentence of the page's own.
+        let unbounded = documents(
+            &measured(
+                Protections::default(),
+                false,
+                Some("this host could not bound the worker's memory and CPU"),
+            ),
+            &inputs(true, true),
+        );
+        assert_eq!(unbounded.label, t.tr("sandbox.state_unavailable"));
+        assert_eq!(unbounded.class, "badge-red");
+        assert_eq!(
+            unbounded.reason.as_deref(),
+            Some("this host could not bound the worker's memory and CPU")
+        );
+
+        // A probe that could not run at all says so rather than blaming an item.
+        let unavailable = documents(
+            &worker::PageAnswer::Unavailable("no worker binary".to_string()),
+            &inputs(true, true),
+        );
+        assert_eq!(unavailable.label, t.tr("sandbox.state_unavailable"));
+        assert_eq!(unavailable.reason.as_deref(), Some("no worker binary"));
+
+        // The media profile has a job of its own: a helper that cannot decode is
+        // neither "running" nor "the host cannot bound a child", and no helper
+        // configured is a state to fix in the settings rather than a fault.
+        let failed = media(
+            &media_report(
+                every_item,
+                Some(crate::sandbox::JobVerdict::Failed),
+                false,
+                Some("the media profile cannot decode a frame"),
+            ),
+            true,
+        );
+        assert_eq!(failed.label, t.tr("sandbox.state_media_failed"));
+        assert_eq!(failed.class, "badge-red");
+        assert_eq!(
+            failed.reason.as_deref(),
+            Some("the media profile cannot decode a frame")
+        );
+
+        let no_helper = media(
+            &media_report(
+                every_item,
+                Some(crate::sandbox::JobVerdict::NoHelper),
+                true,
+                None,
+            ),
+            true,
+        );
+        assert_eq!(no_helper.label, t.tr("sandbox.state_no_helper"));
+        assert_eq!(no_helper.class, "badge-gray");
+        assert_eq!(
+            no_helper.action.as_ref().map(|action| action.href),
+            Some("/sysadmin/settings/storage/")
+        );
+
+        // The switch comes first for the media band too.
+        let media_off = media(&media_report(every_item, None, true, None), false);
+        assert_eq!(media_off.label, t.tr("sandbox.state_disabled"));
+    }
+
+    /// A report whose items are `protections`, for the state and item tests.
+    fn measured(
+        protections: Protections,
+        host_runs: bool,
+        host_reason: Option<&str>,
+    ) -> worker::PageAnswer {
+        worker::PageAnswer::Measured {
+            report: crate::sandbox::Report {
+                profile: Profile::Documents,
+                protections,
+                job: None,
+                detail: "landlock_abi=6".to_string(),
+            },
+            host_runs,
+            host_reason: host_reason.map(|why| why.to_string()),
+        }
+    }
+
+    /// The same, for the media profile, whose job verdict is part of its state.
+    fn media_report(
+        protections: Protections,
+        job: Option<crate::sandbox::JobVerdict>,
+        host_runs: bool,
+        host_reason: Option<&str>,
+    ) -> worker::PageAnswer {
+        worker::PageAnswer::Measured {
+            report: crate::sandbox::Report {
+                profile: Profile::Media,
+                protections,
+                job,
+                detail: "parse=media-ok(1)".to_string(),
+            },
+            host_runs,
+            host_reason: host_reason.map(|why| why.to_string()),
+        }
+    }
+
+    /// The item rows say which task is a requirement, how much a missing one
+    /// matters — and only then, so a healthy page carries no triage badges — and
+    /// what does not apply to a profile at all.
+    #[test]
+    fn an_item_row_marks_the_required_one_and_explains_only_what_is_missing() {
+        assert_eq!(Protections::REQUIRED, "limits");
+        assert!(Protections::required("limits"));
+        for item in ["files", "network", "process"] {
+            assert!(!Protections::required(item), "{item} is best-effort");
+        }
+
+        // Present is green, and a missing critical item is red, whatever else is
+        // in place.
+        assert_eq!(item_class("limits", true, true), "badge-green");
+        assert_eq!(item_class("limits", false, true), "badge-red");
+        assert_eq!(item_class("files", false, true), "badge-red");
+        assert_eq!(item_class("network", false, true), "badge-gray");
+        assert_eq!(item_class("process", false, true), "badge-gray");
+
+        // The media profile starts the helper by definition, so its process item
+        // is not a gap.
+        assert!(item_applicable(Profile::Documents, "process"));
+        assert!(item_applicable(Profile::Images, "process"));
+        assert!(!item_applicable(Profile::Media, "process"));
+        assert!(item_applicable(Profile::Media, "files"));
+        assert_eq!(item_class("process", false, false), "badge-gray");
+
+        // How much an item is worth is the shared table, and it is what tells the
+        // reader where to look first.
+        assert_eq!(item_severity("limits"), "sandbox.severity_critical");
+        assert_eq!(item_severity("files"), "sandbox.severity_critical");
+        assert_eq!(item_severity("network"), "sandbox.severity_important");
+        assert_eq!(item_severity("process"), "sandbox.severity_advisory");
     }
 
     #[test]

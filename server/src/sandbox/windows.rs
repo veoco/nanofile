@@ -66,8 +66,8 @@
 //! a per-user install does not carry that ACE on, so the parent grants it to the
 //! container's SID before the first launch (see [`grant_image_access`]).
 //!
-//! With the container in place, all four protections are the platform's own and
-//! the grade is `full`. Without it the child still runs in the job, under the
+//! With the container in place, all four items are the platform's own. Without
+//! it the child still runs in the job, under the
 //! restricted token and with the mitigations, and reports `files=open` beside
 //! them: the resource bound is what keeps the server up, and the container is the
 //! only mechanism that could add the files and network items. Every launch

@@ -114,145 +114,148 @@
     </div>
     {% endif %}
 
-    {# The measured sandbox, on its own page. The page leads with the verdict,
-       because that is the one sentence an admin came for; the numbers an admin
-       acts on follow as one strip; what each protection is and what its
-       absence opens is a row apiece, in the same panel shape as every other
-       list in the app. Every value comes from a child that confined itself and
+    {# The measured sandbox, on its own page, above the one setting it belongs to:
+       one panel, one band per profile, each with its own state and its own four
+       protections. There is no verdict above them — a sentence summarising the
+       bands would only repeat what the state badge and the item rows already say
+       — and no block heading either, because the caption below already says what
+       the panel is. The grade the items add up to is likewise not shown: it *is*
+       the items. The master switch appears exactly once, in the form below, where
+       it can be changed. Every value comes from a child that confined itself and
        printed what took, so the page cannot claim protection the host does not
-       provide — and the platform's own residuals are one disclosure away rather
+       provide, and the platform's own residuals are one disclosure away rather
        than prose every reader has to walk past. #}
     {% if let Some(sandbox) = sandbox %}
-    <div class="nf-banner {{ sandbox.verdict.banner }} mt-5" data-sandbox-verdict="{{ sandbox.verdict.class }}">
-        <p class="font-semibold" data-sandbox-verdict-label>{{ sandbox.verdict.label }}</p>
-        {% if let Some(detail) = sandbox.verdict.detail %}
-        <p class="mt-0.5 text-[12px]">{{ detail }}</p>
-        {% endif %}
-    </div>
+    <p class="mt-5 text-[12px] text-ink-3">{{ t.tr("sandbox.measured_note") }}</p>
 
-    <div class="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-box border border-line bg-line sm:grid-cols-3"
-         data-sandbox-status role="group" aria-label="{{ t.tr("sandbox.status_label") }}">
-        <div class="bg-panel px-3.5 py-3">
-            <p class="field-label">{{ t.tr("sandbox.status_grade") }}</p>
-            <p class="mt-1.5"><span class="badge {{ sandbox.grade_class }}" data-sandbox-grade>{{ sandbox.grade }}</span></p>
-        </div>
-        <div class="bg-panel px-3.5 py-3">
-            <p class="field-label">{{ t.tr("sandbox.status_switch") }}</p>
-            <p class="mt-1.5">
-                <span class="badge {% if sandbox.enabled %}badge-green{% else %}badge-red{% endif %}">
-                    {% if sandbox.enabled %}{{ t.tr("sandbox.status_on") }}{% else %}{{ t.tr("sandbox.status_off") }}{% endif %}
+    <div class="nf-list mt-2">
+        {% for profile in sandbox.profiles %}
+        <section data-sandbox-profile="{{ profile.id }}">
+            {# The band carries the profile's state: whether it runs is a question
+               about the profile, and the items under it are a question about the
+               host. Keeping those apart is what lets a green item sit under a
+               "switched off" state without either of them lying. #}
+            <div class="nf-sec">
+                <h2>{{ t.tr(profile.title_key) }}</h2>
+                <span class="badge {{ profile.state.class }} ml-auto shrink-0" data-sandbox-state>{{ profile.state.label }}</span>
+            </div>
+            <div class="nf-prow">
+                <span class="nf-prow-ic">
+                    {% if profile.icon == "camera" %}{{ icons::icon_camera("w-[15px] h-[15px]") }}
+                    {% else %}{{ icons::icon_file_text("w-[15px] h-[15px]") }}{% endif %}
                 </span>
-            </p>
-        </div>
-        {# Whether the features actually run under the master switch. Distinct
-           from the grade, which says what the host could give: a red item with a
-           green decision is a host that is safe enough for the settings, and a
-           green item with a red decision is not. #}
-        <div class="bg-panel px-3.5 py-3" data-sandbox-decision>
-            <p class="field-label">{{ t.tr("sandbox.status_running") }}</p>
-            <p class="mt-1.5"><span class="badge {{ sandbox.decision.class }}" data-sandbox-decision-state>{{ sandbox.decision.label }}</span></p>
-            {% if let Some(reason) = sandbox.decision.reason %}
-            <p class="mt-1.5 text-[11.5px] text-ink-3" data-sandbox-decision-reason>{{ reason }}</p>
-            {% endif %}
-        </div>
-    </div>
-
-    <div class="nf-list mt-4">
-        <div class="nf-sec">
-            <h2>{{ t.tr("sandbox.items_title") }}</h2>
-        </div>
-        {% for item in sandbox.items %}
-        <div class="nf-prow" data-sandbox-item="{{ item.label_key }}" data-sandbox-severity="{{ item.severity }}">
-            <span class="nf-prow-ic">
-                {% if item.icon == "clock" %}{{ icons::icon_clock("w-[15px] h-[15px]") }}
-                {% else if item.icon == "lock" %}{{ icons::icon_lock("w-[15px] h-[15px]") }}
-                {% else if item.icon == "share" %}{{ icons::icon_share("w-[15px] h-[15px]") }}
-                {% else %}{{ icons::icon_cog("w-[15px] h-[15px]") }}{% endif %}
-            </span>
-            <div class="nf-prow-main">
-                <div class="nf-prow-name flex-wrap">
-                    <span class="base">{{ t.tr(item.label_key) }}</span>
-                    <span class="badge badge-gray shrink-0">{{ item.severity }}</span>
-                    <span class="badge {{ item.class }} shrink-0">
-                        {% if item.present %}{{ t.tr("sandbox.item_present") }}{% else %}{{ t.tr("sandbox.item_missing") }}{% endif %}
-                    </span>
+                <div class="nf-prow-main">
+                    <p class="text-[12px] text-ink-3">{{ profile.uses }}</p>
+                    {% if let Some(reason) = profile.state.reason %}
+                    <p class="mt-0.5 text-[12px] text-ink-3" data-sandbox-state-reason>{{ reason }}</p>
+                    {% endif %}
                 </div>
-                {# What its absence opens, in the operator's terms, rather than a
-                   restatement of the item's name. #}
-                {% if let Some(impact) = item.impact %}
-                <p class="mt-0.5 text-[12px] text-ink-3" data-sandbox-impact>{{ impact }}</p>
-                {% endif %}
-                {% if !item.notes.is_empty() %}
-                <details class="mt-1.5">
-                    <summary class="nf-toggle">
-                        {{ icons::icon_arrow_right("w-3 h-3") }}
-                        {{ t.tr("sandbox.details_show") }}
-                    </summary>
-                    <div class="nf-expand flex flex-col gap-1">
-                        {% for note in item.notes %}
-                        <p class="text-[12px] text-ink-3">{{ note }}</p>
-                        {% endfor %}
-                    </div>
-                </details>
+                {# The fix for a state a setting caused, on the page that owns that
+                   setting: a profile's own switches are elsewhere, and naming them
+                   here is what makes the coupling visible. #}
+                {% if let Some(action) = profile.state.action %}
+                <div class="nf-prow-act">
+                    <a class="btn btn-line btn-sm" href="{{ action.href }}">{{ t.tr(action.label_key) }}</a>
+                </div>
                 {% endif %}
             </div>
-        </div>
+            {% for item in profile.items %}
+            <div class="nf-prow" data-sandbox-item="{{ item.key }}" data-sandbox-severity="{{ item.severity }}">
+                <span class="nf-prow-ic">
+                    {% if item.icon == "clock" %}{{ icons::icon_clock("w-[15px] h-[15px]") }}
+                    {% else if item.icon == "lock" %}{{ icons::icon_lock("w-[15px] h-[15px]") }}
+                    {% else if item.icon == "share" %}{{ icons::icon_share("w-[15px] h-[15px]") }}
+                    {% else %}{{ icons::icon_cog("w-[15px] h-[15px]") }}{% endif %}
+                </span>
+                <div class="nf-prow-main">
+                    <div class="nf-prow-name flex-wrap">
+                        <span class="base">{{ t.tr(item.label_key) }}</span>
+                        {# Which item is a requirement rather than a matter of how
+                           much is left, so a page with a gap is read in the right
+                           order. #}
+                        {% if item.required %}
+                        <span class="badge badge-brand shrink-0">{{ t.tr("sandbox.item_required") }}</span>
+                        {% endif %}
+                        {# How much a missing item matters, and only when it is
+                           missing: a host with every item in place shows no triage
+                           badges at all. #}
+                        {% if item.show_severity %}
+                        <span class="badge badge-gray shrink-0" data-sandbox-severity-badge>{{ item.severity }}</span>
+                        {% endif %}
+                        <span class="badge {{ item.class }} shrink-0" data-sandbox-item-state>
+                            {% if !item.applicable %}{{ t.tr("sandbox.item_not_applicable") }}
+                            {% else if item.present %}{{ t.tr("sandbox.item_present") }}
+                            {% else %}{{ t.tr("sandbox.item_missing") }}{% endif %}
+                        </span>
+                    </div>
+                    {# What its absence opens, in the operator's terms, rather than a
+                       restatement of the item's name. #}
+                    {% if let Some(impact) = item.impact %}
+                    <p class="mt-0.5 text-[12px] text-ink-3" data-sandbox-impact>{{ impact }}</p>
+                    {% endif %}
+                    {% if item.note.is_some() || !item.notes.is_empty() %}
+                    <details class="mt-1.5">
+                        <summary class="nf-toggle">
+                            {{ icons::icon_arrow_right("w-3 h-3") }}
+                            {{ t.tr("sandbox.details_show") }}
+                        </summary>
+                        <div class="nf-expand flex flex-col gap-1">
+                            {# Why the item cannot exist for this profile: the
+                               longest sentence on the page, and therefore a
+                               disclosure rather than a paragraph in the flow. #}
+                            {% if let Some(note) = item.note %}
+                            <p class="text-[12px] text-ink-3" {% if item.key == "process" %}data-sandbox-media-process{% else %}data-sandbox-item-note{% endif %}>{{ note }}</p>
+                            {% endif %}
+                            {% for note in item.notes %}
+                            <p class="text-[12px] text-ink-3" data-sandbox-note>{{ note }}</p>
+                            {% endfor %}
+                        </div>
+                    </details>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </section>
         {% endfor %}
 
-        {# The media worker is a second child with its own report: its own grade,
-           because it starts a program by definition and so grades below the
-           document profile on every platform. #}
-        <div class="nf-sec">
-            <h2>{{ t.tr("sandbox.status_media") }}</h2>
-        </div>
-        <div class="nf-prow" data-sandbox-media>
-            <span class="nf-prow-ic">{{ icons::icon_camera("w-[15px] h-[15px]") }}</span>
-            <div class="nf-prow-main">
-                <div class="nf-prow-name flex-wrap">
-                    <span class="base">{{ t.tr("sandbox.media_worker") }}</span>
-                    {% if let Some(grade) = sandbox.media.grade %}
-                    <span class="badge {{ sandbox.media.grade_class }} shrink-0" data-sandbox-media-grade>{{ grade }}</span>
-                    {% endif %}
-                    <span class="badge {{ sandbox.media.class }} shrink-0" data-sandbox-media-state>{{ sandbox.media.label }}</span>
+        {# The raw report, one disclosure away: an operator filing a bug has the
+           whole measurement without the page shouting it at every reader, and
+           each line names the profile it came from so the two can be told
+           apart. #}
+        <details>
+            <summary class="nf-toggle m-3">
+                {{ icons::icon_arrow_right("w-3 h-3") }}
+                {{ t.tr("sandbox.detail_title") }}
+            </summary>
+            <div class="px-3.5 pb-3 flex flex-col gap-2">
+                {% for raw in sandbox.raw %}
+                <div>
+                    <p class="text-[10.5px] font-medium uppercase tracking-[0.07em] text-ink-3">{{ t.tr(raw.title_key) }}</p>
+                    <p class="mono text-[11px] break-all mt-1" data-sandbox-detail="{{ raw.id }}">{{ raw.detail }}</p>
                 </div>
-                {% if let Some(reason) = sandbox.media.reason %}
-                <p class="mt-0.5 text-[12px] text-ink-3" data-sandbox-media-reason>{{ reason }}</p>
-                {% endif %}
-                {# Always a disclosure, even when there is no note: the process
-                   item cannot exist for this profile, and that sentence is the
-                   longest one on the page. #}
-                <details class="mt-1.5">
-                    <summary class="nf-toggle">
-                        {{ icons::icon_arrow_right("w-3 h-3") }}
-                        {{ t.tr("sandbox.details_show") }}
-                    </summary>
-                    <div class="nf-expand flex flex-col gap-1">
-                        <p class="text-[12px] text-ink-3" data-sandbox-media-process>{{ sandbox.media.process_note }}</p>
-                        {% for note in sandbox.media.notes %}
-                        <p class="text-[12px] text-ink-3" data-sandbox-media-note>{{ note }}</p>
-                        {% endfor %}
-                    </div>
-                </details>
+                {% endfor %}
             </div>
-        </div>
+        </details>
     </div>
 
-    {# The raw report, one disclosure away: an operator filing a bug has the
-       whole measurement without the page shouting it at every reader. #}
-    <details class="mt-4">
-        <summary class="nf-toggle">
-            {{ icons::icon_arrow_right("w-3 h-3") }}
-            {{ t.tr("sandbox.detail_title") }}
-        </summary>
-        <p class="mono text-[11px] break-all mt-2">{{ sandbox.detail }}</p>
-        <p class="mono text-[11px] break-all mt-1">{{ sandbox.media.detail }}</p>
-    </details>
+    {# The one setting this page owns governs every feature in the panel above,
+       and two of those features have switches of their own on other pages.
+       Saying where they are is cheaper than letting an operator find out from a
+       missing thumbnail. #}
+    <p class="mt-3 text-[12px] text-ink-3">
+        {{ t.tr("sandbox.related_intro") }}
+        <a class="underline underline-offset-2" href="/sysadmin/settings/maintenance/">{{ t.tr("setting.group_maintenance_index") }}</a>
+        <span class="text-line-strong">·</span>
+        <a class="underline underline-offset-2" href="/sysadmin/settings/storage/">{{ t.tr("setting.group_storage_media") }}</a>
+    </p>
     {% endif %}
 
-    {# The catalog is over a hundred settings across ten pages, so the page can
-       be filtered. The box sits outside the form: a search field inside it would
-       submit the settings on Enter. Without scripting it stays inert and the
-       page is what it always was. #}
+    {# The catalog is over a hundred settings across ten pages, so a page that
+       holds more than one row can be filtered. The box sits outside the form: a
+       search field inside it would submit the settings on Enter. A page with a
+       single row gets no box, because there is nothing to narrow. Without
+       scripting it stays inert and the page is what it always was. #}
+    {% if row_count > 1 %}
     <div class="mt-5 flex flex-wrap items-center gap-3">
         <label class="nf-find w-[300px] max-w-[40vw] shrink-0">
             {{ icons::icon_search("w-[13px] h-[13px] shrink-0") }}
@@ -263,6 +266,7 @@
         <span class="nf-libcount" data-settings-count role="status">{{ t.trf("setting.filter_total", [("n", row_count.to_string())]) }}</span>
         <p class="text-[12px] text-ink-3" data-settings-empty hidden>{{ t.tr("setting.filter_empty") }}</p>
     </div>
+    {% endif %}
 
     {# The panel is the form. The two `hidden` inputs come after the groups so
        that the first group's `<section>` is the panel's own first child — the
@@ -290,6 +294,7 @@
                per-row class, because the filter hides rows and a hidden row must
                not leave the next one carrying a line for a row nobody sees. #}
             <div data-setting="{{ row.key }}" data-setting-search="{{ row.search_text }}"
+                 {% if row.key == "sandbox.enabled" %}data-sandbox-switch{% endif %}
                  class="nf-prow nf-srow">
                 <div class="nf-prow-main">
                     <div class="nf-prow-name flex-wrap">

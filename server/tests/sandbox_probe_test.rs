@@ -30,7 +30,7 @@ use common::sandbox::{
     configure_media_probe_requirement, configure_probe_requirement, fact, has, helper, helper_runs,
     probe, with_requirement, without_ffmpeg,
 };
-use server::sandbox::{JobVerdict, Level, Profile, Report};
+use server::sandbox::{JobVerdict, Profile, Report};
 
 /// A fact that has to be there, or a panic carrying the whole line.
 fn value<'a>(report: &'a Report, key: &str) -> &'a str {
@@ -89,7 +89,7 @@ fn the_documents_report_shows_a_worker_that_still_reads() {
         Some(JobVerdict::Ok),
         "the bounded worker must still read whole documents: {line}"
     );
-    the_grade_answer(&report);
+    the_items_answer(&report);
     #[cfg(unix)]
     {
         assert!(report.protections.network, "{line}");
@@ -117,7 +117,7 @@ fn the_images_report_shows_a_worker_that_still_decodes() {
         Some(JobVerdict::Ok),
         "the bounded worker must still decode an image: {line}"
     );
-    the_grade_answer(&report);
+    the_items_answer(&report);
     #[cfg(unix)]
     {
         assert!(report.protections.network, "{line}");
@@ -148,7 +148,7 @@ fn the_media_report_shows_a_helper_that_still_decodes() {
     });
 
     the_common_answer(Profile::Media, &report, &line);
-    the_grade_answer(&report);
+    the_items_answer(&report);
     // It cannot carry the process item: it starts a program by definition, and
     // every way of starting one copies the process first.
     assert!(
@@ -206,7 +206,7 @@ fn the_documents_profile_reports_the_bound_without_a_container() {
         return;
     }
 
-    assert_eq!(report.level(), Level::Limits, "{line}");
+    assert!(report.protections.limits, "{line}");
     assert!(
         !report.protections.files && !report.protections.network,
         "the container was refused, so neither of those can be there: {line}"
@@ -229,26 +229,31 @@ fn the_documents_profile_reports_the_bound_without_a_container() {
     the_platform_answer(Profile::Documents, &report);
 }
 
-/// What grade the profile graded, and why that is the right one here.
+/// The items the profile has, and why those are the right ones here.
 ///
-/// The two platforms that install the files layer grade `full` (media `partial`,
-/// which cannot carry the process item), and that is asserted as it always was.
-/// A Windows host that can start neither a container nor a restrained child gives
-/// the resource bound alone, and saying so is the point of this branch: the
-/// feature runs, its bound is in place, and the grade is the honest one.
-fn the_grade_answer(report: &Report) {
+/// The two platforms that install the files layer have every item for the parser
+/// profiles, and the media profile has all but `process`, which it cannot carry:
+/// it starts the helper by copying the process, and the item's definition is that
+/// processes cannot be multiplied. A Windows host that can start neither a
+/// container nor a restrained child gives the resource bound alone, and saying so
+/// is the point of this branch: the feature runs, its bound is in place, and the
+/// item list is the honest one.
+fn the_items_answer(report: &Report) {
     #[cfg(not(windows))]
     {
-        let expected = if report.profile.runs_helper() {
-            Level::Partial
-        } else {
-            Level::Full
-        };
-        assert_eq!(report.level(), expected, "{}", report.detail);
+        assert!(report.protections.limits, "{}", report.detail);
+        assert!(report.protections.files, "{}", report.detail);
+        assert!(report.protections.network, "{}", report.detail);
+        assert_eq!(
+            report.protections.process,
+            !report.profile.runs_helper(),
+            "the media profile starts the helper by definition: {}",
+            report.detail
+        );
     }
     #[cfg(windows)]
     {
-        assert!(report.level() >= Level::Limits, "{}", report.detail);
+        assert!(report.protections.limits, "{}", report.detail);
         // The two go together: the files layer is the container's, and a report
         // that claims it without one would have the page advertise a protection
         // this host does not have.

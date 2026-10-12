@@ -11,7 +11,7 @@ mod common;
 use std::path::Path;
 
 use server::sandbox::worker::{self, Status};
-use server::sandbox::{Level, Profile, Requirement};
+use server::sandbox::{Profile, Protections, Requirement};
 
 /// A worker that reports one profile's confinement, records every start, and
 /// answers the media probe with the *documents* report.
@@ -29,15 +29,15 @@ case "$*" in
 esac
 case "$*" in
   *--profile\ images*)
-    printf '%s\n' "NFS2-sandbox profile=images level=partial limits=on files=denied network=open process=open detail=fake"
+    printf '%s\n' "NFS2-sandbox profile=images limits=on files=denied network=open process=open detail=fake"
     ;;
   *--profile\ media*)
     # The wrong profile on purpose: this probe asked for media and the child
     # answers for documents.
-    printf '%s\n' "NFS2-sandbox profile=documents level=full limits=on files=denied network=denied process=denied detail=fake"
+    printf '%s\n' "NFS2-sandbox profile=documents limits=on files=denied network=denied process=denied detail=fake"
     ;;
   *)
-    printf '%s\n' "NFS2-sandbox profile=documents level=full limits=on files=denied network=denied process=denied detail=fake"
+    printf '%s\n' "NFS2-sandbox profile=documents limits=on files=denied network=denied process=denied detail=fake"
     ;;
 esac
 exit 0
@@ -53,11 +53,31 @@ fn starts(asked: &Path) -> usize {
     common::sandbox::lines(asked)
 }
 
-/// The grade one profile's cached answer holds, or `None` when it holds none.
-fn grade(profile: Profile) -> Option<Level> {
+/// The items one profile's cached answer holds, or `None` when it holds none.
+fn items(profile: Profile) -> Option<Protections> {
     match worker::status(profile) {
-        Status::Ready(report) => Some(report.level()),
+        Status::Ready(report) => Some(report.protections),
         Status::Unavailable(_) => None,
+    }
+}
+
+/// The four items in place: the shape the documents fixture answers with.
+fn every_item() -> Protections {
+    Protections {
+        limits: true,
+        files: true,
+        network: true,
+        process: true,
+    }
+}
+
+/// The shape the images fixture answers with: the bound, the files layer, and no
+/// network or process item.
+fn files_confined() -> Protections {
+    Protections {
+        limits: true,
+        files: true,
+        ..Protections::default()
     }
 }
 
@@ -67,9 +87,9 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
     let (_worker, asked) = script(directory.path());
 
     // A ready answer is cached: the host is asked once, not once per caller.
-    assert_eq!(grade(Profile::Documents), Some(Level::Full));
+    assert_eq!(items(Profile::Documents), Some(every_item()));
     assert_eq!(starts(&asked), 1, "the first call probes");
-    assert_eq!(grade(Profile::Documents), Some(Level::Full));
+    assert_eq!(items(Profile::Documents), Some(every_item()));
     assert_eq!(starts(&asked), 1, "a second call is the cached answer");
 
     // A report for another profile is not this profile's answer.
@@ -84,7 +104,7 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
 
     // ... and it did not land in the documents slot, which is still the answer
     // its own probe gave.
-    assert_eq!(grade(Profile::Documents), Some(Level::Full));
+    assert_eq!(items(Profile::Documents), Some(every_item()));
     assert_eq!(
         starts(&asked),
         2,
@@ -93,7 +113,7 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
 
     // The profiles hold different powers, so their answers are kept apart: a
     // shared entry would have answered `full` here.
-    assert_eq!(grade(Profile::Images), Some(Level::Partial));
+    assert_eq!(items(Profile::Images), Some(files_confined()));
     assert_eq!(starts(&asked), 3);
 
     // An answer belongs to the requirement it was measured under. Flipping the
@@ -130,7 +150,7 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
     // Under the switch back on, both answers are measured again — their stored
     // ones were taken under the previous requirement.
     worker::configure_requirement(Requirement::new(true));
-    assert_eq!(grade(Profile::Images), Some(Level::Partial));
-    assert_eq!(grade(Profile::Documents), Some(Level::Full));
+    assert_eq!(items(Profile::Images), Some(files_confined()));
+    assert_eq!(items(Profile::Documents), Some(every_item()));
     assert_eq!(starts(&asked), 6);
 }

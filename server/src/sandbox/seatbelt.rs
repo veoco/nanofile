@@ -18,11 +18,11 @@
 //! copies of this process. Each copy inherits the profile and the resource
 //! limits — the address-space limit with them — so the copies are confined, but
 //! nothing bounds how many there are. The child says so (`fork=` in its report),
-//! and the grade follows it: this is why media is `partial` on every platform.
+//! and the process item follows it: this is why media never has that item.
 //!
 //! The documents and images profiles deny the fork outright: nothing they do
-//! needs to copy the process, so their process item is real and they grade
-//! `full` here as they do on Linux. The parsers' own thread is the thing that
+//! needs to copy the process, so their process item is real here as it is on
+//! Linux. The parsers' own thread is the thing that
 //! was once thought to need it — Seatbelt charges a thread to `process-fork` —
 //! so that is a measured claim rather than an assumed one: the probe reports
 //! `threads=` beside `parse=`, and a profile that broke thread creation shows up

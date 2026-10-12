@@ -129,36 +129,38 @@ external program any profile starts is the media helper, so the file, network an
 process layers are deliberate defense in depth against a parser bug rather than
 the bound that keeps the server up.
 
-The admin's **Sandbox** page shows the grade this host actually gives:
+The admin's **Sandbox** page lists what this host actually gives: one band per
+profile it measured, one row per protection, and a state badge on each band saying
+whether that profile runs. Nothing is summarised above them — no grade, and no
+verdict sentence either, because both would only restate what the badges and the
+rows already say. Each row says what the item is, whether it is in place, how much it matters
+and what its absence opens:
 
-- **Full** — every protection the platform can provide: the resource bound
-  (memory and CPU everywhere, plus descriptors and file size on Linux and macOS),
-  no access to the server user's own files, no network, and no way to start
-  another program.
-- **Partial** — the resource bound **and** no file access, with the network or
-  the process bound missing; the missing item is named. The files layer is what
-  makes this grade worth having: a host that denies the network and the processes
-  but lets the parser read every path is not Partial, it is Resource bound only.
-- **Resource bound only** — the bound and nothing else. The weakest state a
-  feature runs in, and what Windows gives by default (see below).
+- **Resource bound** (memory and CPU everywhere, plus descriptors and file size on
+  Linux and macOS) — the one item no feature may run without, and the page marks
+  it as required.
+- **File access** — paths cannot be read or written. The item that keeps a parser
+  out of the server user's data, and the one whose absence the page names rather
+  than treating the other layers as substitutes for it.
+- **Network access** and **starting programs** — refinements on top of a
+  files-confined host, never replacements for one.
 
-Each item is listed with how much it matters and what its absence opens, beside
-the platform's own residuals: macOS's parser profiles deny the fork outright and
-narrow the exec to the child's own image, so documents and images grade Full
-there as they do on Linux; the Windows container reads the system tree it loads
-from, and its Job Object bounds memory and CPU time where it has no descriptor or
-file-size bound; and the media worker is granted the libraries it needs as well
-as the helper itself.
+The platform's own residuals are listed beside the item they weaken: macOS's
+parser profiles deny the fork outright and narrow the exec to the child's own
+image; the Windows container reads the system tree it loads from, and its Job
+Object bounds memory and CPU time where it has no descriptor or file-size bound;
+and the media worker is granted the libraries it needs as well as the helper
+itself.
 
-The media worker is graded on its own line, and it is **Partial** on every
-platform by design: it exists to start a program, and every way of starting one
-copies the process first, so it cannot carry the process item the document and
-image profiles carry. What bounds it instead is the file layer and the time
-limits, which bound the copies. On Linux and macOS the file layer decides `exec`
-per path — the helper and the interpreter the kernel runs before it, never a
-directory — while on Windows the container does not restrict which readable
-program may run, so only the Job Object's process count and the timeout bound a
-compromised helper.
+The media worker has a band of its own, and it is the one whose list is incomplete
+by design: it exists to start a program, and every way of starting one copies the
+process first, so its process item cannot exist and the page says **Not
+applicable** rather than reporting a gap. What bounds it instead is the file layer
+and the time limits, which bound the copies. On Linux and macOS the file layer
+decides `exec` per path — the helper and the interpreter the kernel runs before
+it, never a directory — while on Windows the container does not restrict which
+readable program may run, so only the Job Object's process count and the timeout
+bound a compromised helper.
 
 Its file item carries its own notes, because a helper is a program with
 libraries: it may read the libraries beside it (one file at a time), the system
@@ -178,13 +180,12 @@ failure rather than a verdict on its bytes, so turning the switch back on
 re-indexes it.
 
 Everything above the resource bound is the platform's answer rather than a
-setting. The grade the page reports is measured from a confined child: `full`
-where this platform supplies every layer (Linux with Landlock and seccomp, macOS
-with a Seatbelt profile), `partial` where the files layer came with it but not
-the rest, and `limits` where the bound is all this host can establish — and the
-page names each item that is missing and what its absence means. A host that
-cannot establish the bound at all runs none of these features: that item is
-required, and no setting may run a parser unbounded.
+setting, and the page's rows are measured from confined children, so it cannot
+advertise a layer this host does not have. Each profile's band carries its own
+state — running, switched off, or unavailable on this host — and each item that is
+missing is named with what its absence means. A host that cannot establish the
+bound at all runs none of these features: that item is required, and no setting
+may run a parser unbounded.
 
 **On Windows the container is attempted, and a host that refuses it falls back to
 the bound.** The AppContainer is the only mechanism that adds the files and
@@ -197,7 +198,7 @@ reports `files=open`, and the container is not asked for again in that process.
 The page names what is missing either way.
 
 `storage.ffmpeg_path` names the helper the media profile may execute. Saving it
-re-resolves the grant through the same hook as the two settings above, so the
+re-resolves the grant through the same hook as the master switch above, so the
 next media request runs the binary that was just configured. On Windows the
 container is granted the helper's file *and the libraries beside it*, never a
 directory: its token keeps `SeChangeNotifyPrivilege`, so the walk to the file is
@@ -208,18 +209,18 @@ would read as "the helper cannot run". A helper that can only run in the plain
 container — its read access coming from `ALL APPLICATION PACKAGES`, which the
 less privileged container makes the check ignore — is run there instead: the
 opt-out is given up (`lpac=off` in the report and on the page) and the container
-kept. A container may need the Landlock syscalls allowed for the grade to be Full.
+kept. A container may need the Landlock syscalls allowed for every item to be in place.
 
 The confinement is tested where it is used, not only where it is described. Every
 platform this project ships runs the whole Rust suite on every push — Linux x86_64
 and arm64, macOS arm64, Windows amd64 — and the four Linux targets with no runner
 (two musl, two loongarch64) are compiled on every push as well. Each profile's
 report is asserted in one place, `server/tests/sandbox_probe_test.rs`: the items
-and the grade from the typed report, and the platform's own mechanism tokens
-beside them. The report is not the whole answer: each profile also has to do its
-job under the confinement it claims, judged by its product rather than by a
-process that started. The probe parses every structured format it carries and
-compares the **whole** text each parser returns, the images child's reply is
+from the typed report, and the platform's own mechanism tokens beside them. The
+report is not the whole answer: each profile also has to do its job under the
+confinement it claims, judged by its product rather than by a process that
+started. The probe parses every structured format it carries and compares the
+**whole** text each parser returns, the images child's reply is
 checked against the pixels it was given, and the media child reads a file the
 parent wrote, decodes a frame from it and hands back the encoded thumbnail. That
 media pipeline — upload, scratch file, confined child, thumbnail — is run end to

@@ -39,7 +39,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::indexer::extract::{Extracted, MAX_INDEXED_CONTENT_BYTES, Plan, reason};
-use crate::sandbox::{self, JobVerdict, Level, Profile, Report, Requirement};
+use crate::sandbox::{self, JobVerdict, Profile, Report, Requirement};
 
 /// The subcommand that turns this binary into the worker.
 pub const SUBCOMMAND: &str = "extract-worker";
@@ -263,15 +263,6 @@ pub enum Status {
     /// The child could not be run, or reported less confinement than the
     /// policy accepts. The string is what to log.
     Unavailable(String),
-}
-
-impl Status {
-    pub fn level(&self) -> Option<Level> {
-        match self {
-            Status::Ready(report) => Some(report.level()),
-            Status::Unavailable(_) => None,
-        }
-    }
 }
 
 /// Run the child side of the protocol and exit.
@@ -622,13 +613,19 @@ pub fn status(profile: Profile) -> Status {
     entry.requirement = requirement;
     match &status {
         Status::Ready(report) => {
+            // The items are logged one field apiece rather than summed up: a
+            // log reader greps for the layer that is missing, and a grade would
+            // have to be translated back into one.
             tracing::info!(
                 profile = profile.as_str(),
-                level = report.level().as_str(),
+                limits = report.protections.limits,
+                files = report.protections.files,
+                network = report.protections.network,
+                process = report.protections.process,
                 detail = report.detail.as_str(),
                 "sandbox confinement"
             );
-            if report.level() < Level::Full {
+            if !report.protections.complete() {
                 // Why the protection is missing, where the parent is the only
                 // one that can say: a child whose token is not an AppContainer's
                 // reports `files=open`, and the reason the launch produced no
@@ -754,58 +751,70 @@ enum Measured {
 }
 
 /// What the settings page shows for one profile: the host's answer, and what the
-/// configured policy makes of it.
+/// host itself makes of it.
 ///
-/// The two are different questions and the page needs both. "This host grades
-/// files as missing" is a fact about the machine; "documents are therefore not
-/// parsed" is a fact about the settings, and an admin reading the page has to be
-/// able to tell which of the two they are looking at before they change
-/// anything.
+/// The two are different questions and the page needs both. "This host and this
+/// profile cannot run the work" is a fact about the machine; "and the master
+/// switch is therefore irrelevant" is a fact about the settings. Both come from
+/// the one probe [`capability`] already ran — the host half is
+/// [`Requirement::accepts`] applied with the switch *on* plus the profile's own
+/// job verdict, which is the same call the request path makes — so putting them
+/// on the page costs no second child.
 ///
-/// Both come from the one probe [`capability`] already ran — the decision is
-/// [`Requirement::accepts`] applied to that report, which is the same call the
-/// request path makes — so putting them on the page costs no second child.
+/// The two fields are measured with the switch out of the picture on purpose: an
+/// admin who has switched the sandbox off still needs to see what the host would
+/// give, and the page is where the two facts are put back together. A caller that
+/// wants the decision the request path makes asks [`status`] instead.
 pub enum PageAnswer {
-    /// The host answered, and the requirement accepted or refused it.
+    /// The host answered, and this is what it gives with the switch on.
     Measured {
         report: Report,
-        /// Whether the features that use this profile run.
-        running: bool,
-        /// Why they do not, when they do not.
-        reason: Option<String>,
+        /// Whether this profile would run if the master switch were on.
+        host_runs: bool,
+        /// Why it would not, when the host is the reason.
+        host_reason: Option<String>,
     },
     /// The probe could not run at all, so there is nothing to decide on.
     Unavailable(String),
 }
 
 /// The page's answer for one profile.
+///
+/// Measured under `Requirement::new(true)`: the switch is the page's other input,
+/// and a host that is only switched off has not been measured otherwise. The
+/// profile's own job comes first — a media profile whose helper cannot decode
+/// would not run the work however well the host confines it.
 pub fn page_answer(profile: Profile) -> PageAnswer {
     match capability(profile) {
-        Ok(report) => {
-            // The profile's own job first: the page leads with whether the
-            // features run, and a media profile whose helper cannot decode does
-            // not run them however well the host confines it.
-            if let Some(why) = job_refusal(&report) {
-                return PageAnswer::Measured {
-                    report,
-                    running: false,
-                    reason: Some(why),
-                };
-            }
-            match configured_requirement().accepts(&report) {
-                Ok(()) => PageAnswer::Measured {
-                    report,
-                    running: true,
-                    reason: None,
-                },
-                Err(refusal) => PageAnswer::Measured {
-                    report,
-                    running: false,
-                    reason: Some(refusal.reason()),
-                },
-            }
-        }
+        Ok(report) => match host_verdict(&report) {
+            Ok(()) => PageAnswer::Measured {
+                report,
+                host_runs: true,
+                host_reason: None,
+            },
+            Err(why) => PageAnswer::Measured {
+                report,
+                host_runs: false,
+                host_reason: Some(why),
+            },
+        },
         Err(why) => PageAnswer::Unavailable(why),
+    }
+}
+
+/// Whether the host alone can run one profile, and why not when it cannot.
+///
+/// The master switch is left out: this is the half of the decision that belongs
+/// to the machine. The other half is the switch, and the page is where the two are
+/// combined — which is why the answer is not [`Requirement::accepts`] with the
+/// configured requirement.
+fn host_verdict(report: &Report) -> Result<(), String> {
+    if let Some(why) = job_refusal(report) {
+        return Err(why);
+    }
+    match Requirement::new(true).accepts(report) {
+        Ok(()) => Ok(()),
+        Err(refusal) => Err(refusal.reason()),
     }
 }
 
@@ -1392,12 +1401,12 @@ fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
                 for (index, reason) in skipped.iter().enumerate() {
                     report.detail.push_str(&format!(",skipped{index}={reason}"));
                 }
-                return (creation, accept(report));
+                return (creation, accept(report, requirement));
             }
             Err(why) => {
                 // Said out loud as well as carried in the report: an operator
                 // reading the log at startup wants the reason a creation was
-                // passed over, not only the grade it left behind.
+                // passed over, not only the layer it left behind.
                 tracing::warn!(
                     profile = profile.as_str(),
                     creation = creation.label(),
@@ -1639,7 +1648,7 @@ fn probe_once(
     Ok(report)
 }
 
-/// Whether the report the probe got is one the requirement accepts.
+/// Whether the report the probe got is one `requirement` accepts.
 ///
 /// Decided once, here, rather than left to each child: a host that cannot give
 /// what the settings ask for is an environment problem the operator has to see
@@ -1647,16 +1656,23 @@ fn probe_once(
 /// ends in exit 125 and a warning nothing aggregates. The child keeps the same
 /// check before it reads a request; this is the half that makes the shortfall
 /// visible and stops the spawns.
-fn accept(report: Report) -> Status {
+///
+/// The requirement is the caller's rather than the configured one on purpose.
+/// The request path asks [`probe`], which hands over
+/// [`configured_requirement`] — but the settings page asks [`capability`], which
+/// measures with the switch *on* to answer what this host would give, and judging
+/// that answer by the switch it is asking about would make the page go blank
+/// exactly when an administrator had switched the sandbox off.
+fn accept(report: Report, requirement: Requirement) -> Status {
     if let Some(why) = job_refusal(&report) {
         return Status::Unavailable(why);
     }
-    match configured_requirement().accepts(&report) {
+    match requirement.accepts(&report) {
         Ok(()) => Status::Ready(report),
         Err(refusal) => Status::Unavailable(format!(
-            "the sandbox refused: {} — this host gives `{}` confinement: {}",
+            "the sandbox refused: {} — this host gives {}: {}",
             refusal.reason(),
-            report.level().as_str(),
+            report.protections.summary(),
             report.detail
         )),
     }
@@ -2577,7 +2593,7 @@ mod tests {
             detail: "landlock_abi=6,seccomp=on".to_string(),
         });
         let report = Report::parse(&line).expect("the parent parses it");
-        assert_eq!(report.level(), Level::Full);
+        assert!(report.protections.complete());
         assert!(
             line.contains(&format!("text_chars={MAX_INDEXED_CONTENT_BYTES}")),
             "{line}"
@@ -2714,7 +2730,10 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    accept(media(Some(JobVerdict::Failed), detail)),
+                    accept(
+                        media(Some(JobVerdict::Failed), detail),
+                        Requirement::new(true)
+                    ),
                     Status::Unavailable(_)
                 ),
                 "{detail} must not be ready"
@@ -2724,25 +2743,31 @@ mod tests {
         // No helper configured: the page says so, and requests have nothing to
         // spawn rather than a broken helper to spawn.
         assert!(matches!(
-            accept(media(Some(JobVerdict::Nothing), "parse=media-no-helper")),
+            accept(
+                media(Some(JobVerdict::NoHelper), "parse=media-no-helper"),
+                Requirement::new(true),
+            ),
             Status::Ready(_)
         ));
         assert!(matches!(
-            accept(media(Some(JobVerdict::Ok), "parse=media-ok(2333)")),
+            accept(
+                media(Some(JobVerdict::Ok), "parse=media-ok(2333)"),
+                Requirement::new(true),
+            ),
             Status::Ready(_)
         ));
 
         let mut documents = media(Some(JobVerdict::Failed), "parse=pdf-failed,docx-ok");
         documents.profile = Profile::Documents;
         assert!(
-            matches!(accept(documents), Status::Ready(_)),
+            matches!(accept(documents, Requirement::new(true)), Status::Ready(_)),
             "a document's verdict is recorded per file, not by refusing the profile"
         );
     }
 
     #[test]
     fn an_unreadable_report_line_is_not_a_status() {
-        assert!(Report::parse("NFX1-sandbox level=full").is_none());
+        assert!(Report::parse("NFX1-sandbox limits=on").is_none());
         assert!(Report::parse("something else entirely").is_none());
     }
 
@@ -2937,7 +2962,7 @@ mod tests {
         assert!(!opt_out_suspect(&finished(
             Some(EXIT_SANDBOX_UNAVAILABLE),
             b"",
-            &format!("{SANDBOX_REFUSAL}: the host grades below the minimum"),
+            &format!("{SANDBOX_REFUSAL}: this host cannot bound a child"),
             false,
         )));
         // Lines the parent could not read: the child still ran.
@@ -2950,7 +2975,7 @@ mod tests {
         // A child that reported and then died: nothing to re-ask.
         assert!(!opt_out_suspect(&finished(
             Some(1),
-            b"NFS2-sandbox profile=media level=partial limits=on files=denied \
+            b"NFS2-sandbox profile=media limits=on files=denied \
               network=denied process=open detail=x",
             "",
             false,
@@ -2996,6 +3021,7 @@ mod tests {
         for job in [
             None,
             Some(JobVerdict::Ok),
+            Some(JobVerdict::NoHelper),
             Some(JobVerdict::Nothing),
             Some(JobVerdict::Empty),
             Some(JobVerdict::Different),

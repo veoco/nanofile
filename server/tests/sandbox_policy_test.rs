@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use server::indexer::extract::Plan;
 use server::sandbox::worker::{self, Outcome, Status};
-use server::sandbox::{Level, Profile, Requirement};
+use server::sandbox::{Profile, Requirement};
 
 /// A worker whose report is chosen by the mode file, and which leaves a mark
 /// behind whenever it is started for a request rather than for a probe.
@@ -40,13 +40,13 @@ case "$*" in
   *--selftest*)
     case "$(cat "{mode}" 2>/dev/null)" in
       limits)
-        printf '%s\n' "NFS2-sandbox profile=documents level=limits limits=on files=open network=open process=denied detail=fake"
+        printf '%s\n' "NFS2-sandbox profile=documents limits=on files=open network=open process=denied detail=fake"
         ;;
       unbounded)
-        printf '%s\n' "NFS2-sandbox profile=documents level=limits limits=off files=denied network=denied process=denied detail=fake"
+        printf '%s\n' "NFS2-sandbox profile=documents limits=off files=denied network=denied process=denied detail=fake"
         ;;
       *)
-        printf '%s\n' "NFS2-sandbox profile=documents level=partial limits=on files=denied network=open process=open detail=fake"
+        printf '%s\n' "NFS2-sandbox profile=documents limits=on files=denied network=open process=open detail=fake"
         ;;
     esac
     exit 0
@@ -86,7 +86,6 @@ fn the_resource_bound_is_an_invariant() {
     let Status::Ready(report) = &status else {
         panic!("the resource bound alone must be enough to run: {status:?}");
     };
-    assert_eq!(report.level(), Level::Limits);
     assert!(
         report.protections.limits && !report.protections.files,
         "the fixture is the bound without the layer: {}",
@@ -123,7 +122,6 @@ fn the_resource_bound_is_an_invariant() {
     let Status::Ready(report) = &status else {
         panic!("a files-confined host must be accepted: {status:?}");
     };
-    assert_eq!(report.level(), Level::Partial);
     assert!(
         report.protections.limits && report.protections.files,
         "the fixture is the bound with the layer: {}",

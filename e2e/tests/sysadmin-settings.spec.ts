@@ -135,30 +135,38 @@ test("every area renders its rows and its section bar", async ({ page }) => {
 
 /**
  * The Sandbox page is the one page whose subject is a measurement rather than a
- * setting: it says what this host actually gives, one protection at a time, and
- * warns when that is not the whole set.
+ * setting: it says what this host actually gives, one band per profile and one
+ * row per protection, and warns when that is not the whole set.
  */
-test("the sandbox page shows the measured grade and items", async ({ page }) => {
+test("the sandbox page shows one band per profile and one row per protection", async ({
+  page,
+}) => {
   await page.goto("/sysadmin/settings/sandbox/");
-  // The verdict leads, the strip of three numbers follows it: the grade, the
-  // master switch, and whether the features run under it.
-  await expect(page.locator("[data-sandbox-verdict-label]")).toBeVisible();
-  await expect(page.locator("[data-sandbox-status] .field-label")).toHaveCount(3);
-  await expect(page.locator("[data-sandbox-grade]")).toBeVisible();
-  // One row per protection, in the order the report carries them.
+
+  // One band per measured profile, each with its own state — and no verdict
+  // above them: a sentence summarising the bands would only repeat what the
+  // state badges and the item rows already say. The grade the items add up to is
+  // not on the page either, and neither is the strip of numbers that carried it.
+  await expect(page.locator("[data-sandbox-verdict]")).toHaveCount(0);
+  await expect(page.locator("[data-sandbox-profile]")).toHaveCount(2);
+  await expect(page.locator("[data-sandbox-state]")).toHaveCount(2);
+  await expect(page.locator("[data-sandbox-grade]")).toHaveCount(0);
+  await expect(page.locator("[data-sandbox-status]")).toHaveCount(0);
+
+  // One row per protection per band, in the order the report carries them.
   for (const item of ["limits", "files", "network", "process"]) {
-    await expect(
-      page.locator(`[data-sandbox-item="sandbox.item_${item}"]`),
-    ).toBeVisible();
+    await expect(page.locator(`[data-sandbox-item="${item}"]`)).toHaveCount(2);
   }
-  // The media worker is its own child with its own grade: the profile that
-  // cannot have the process item says so on its own row.
-  await expect(page.locator("[data-sandbox-media]")).toBeVisible();
-  await expect(page.locator("[data-sandbox-media-state]")).toBeVisible();
-  // The panel names a grade and an item state rather than a locale key.
-  const body = (await page.locator("[data-sandbox-status]").innerText()).trim();
-  expect(body).not.toContain("sandbox.grade_");
-  expect(body).not.toContain("sandbox.item_");
+
+  // The master switch is a control and it appears exactly once: in the form.
+  await expect(page.locator("[data-sandbox-switch]")).toHaveCount(1);
+  await expect(
+    page.locator('input[type="checkbox"][name="sandbox.enabled"]'),
+  ).toHaveCount(1);
+
+  // The panel names its states and items rather than a locale key.
+  const body = (await page.locator("main").innerText()).trim();
+  expect(body).not.toContain("sandbox.");
 });
 
 /**
@@ -170,11 +178,15 @@ test("the sandbox page shows the measured grade and items", async ({ page }) => 
 test("the sandbox page keeps its technical details in disclosures", async ({ page }) => {
   await page.goto("/sysadmin/settings/sandbox/");
   // The process note is the longest sentence on the page: it must not be in the
-  // flow of it.
-  const process = page.locator("[data-sandbox-media-process]");
+  // flow of it. It lives in the media band's own process row, which cannot exist
+  // for that profile and says so.
+  const processRow = page.locator(
+    '[data-sandbox-profile="media"] [data-sandbox-item="process"]',
+  );
+  const process = processRow.locator("[data-sandbox-media-process]");
   await expect(process).toBeHidden();
 
-  await page.locator("[data-sandbox-media] details summary").click();
+  await processRow.locator("details summary").click();
   await expect(process).toBeVisible();
 
   // A missing protection keeps its consequence in the row: hiding that would

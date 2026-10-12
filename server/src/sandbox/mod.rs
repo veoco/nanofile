@@ -46,10 +46,11 @@
 //! exists to start a program — that is what the helper is — and every platform
 //! starts one the same way, by copying the process first, so a media child that
 //! denied both would deny its own job. Its report therefore says the item is
-//! *not* in place, and the grade is `partial` at most: what bounds the helper
-//! is the files layer and what bounds the copies is the CPU and wall-clock limit
-//! the parent enforces, which is a note and not a fourth protection. The
-//! document and image profiles deny both outright and do grade `full`.
+//! *not* in place, and the settings page says the item does not apply rather than
+//! calling it a gap: what bounds the helper is the files layer, and what bounds
+//! the copies is the CPU and wall-clock limit the parent enforces, which is a note
+//! and not a fourth protection. The document and image profiles deny both
+//! outright.
 //!
 //! Where the files layer *is* in place, what it means for `exec` differs by
 //! platform. Linux and macOS decide it per path, and the media grant reaches
@@ -70,27 +71,28 @@
 //! bound, stated from where the process already is. The report says which of
 //! them took rather than which were attempted.
 //!
-//! # Levels, items and the one setting
+//! # Items and the one setting
 //!
-//! There are exactly three grades, and an admin sees them by name:
+//! Four items, each one reported by a child that established it and never summed
+//! up into a policy of their own. An admin sees them by name, and the one question
+//! the module answers from them is whether a child may run at all:
 //!
-//! * [`Level::Full`] (完整) — every protection this platform can provide is in
-//!   place: resource limits, files, network and process.
-//! * [`Level::Partial`] (部分) — resource limits *and* the files layer; the
-//!   settings page names whichever of network and process is missing.
-//! * [`Level::Limits`] (仅有资源边界) — the resource bound and nothing else. The
-//!   weakest state a feature may run in, and the one a Windows host that cannot
-//!   create an AppContainer runs in.
+//! * `limits` — the resource bound and nothing else is still enough to run, and it
+//!   is the one item nothing may give up (a Windows host that cannot create an
+//!   AppContainer runs here).
+//! * `files` — paths cannot be read or written. The exposure the layers above
+//!   exist to close.
+//! * `network` and `process` — refinements on top of a files-confined host, never
+//!   substitutes for one.
 //!
-//! `limits` is a necessary condition of every grade, including the last: a child
-//! with no memory and CPU bound is refused by [`Requirement::accepts`]. The files
-//! layer is what separates the first two grades from the last — a parser that can
-//! read the host's files is the exposure the layer exists to close — but it is
-//! not a condition of running the feature. The hosts that land on `limits` alone
-//! are a kernel without Landlock, a container runtime that denies the syscalls,
-//! and a Windows host whose AppContainer cannot be created; the page names the
-//! missing item and what it would cost, and the feature runs at what this host
-//! gives.
+//! `limits` is a necessary condition of every run: a child with no memory and CPU
+//! bound is refused by [`Requirement::accepts`]. The files layer is what makes the
+//! next two worth anything — a parser that can read the host's files is the
+//! exposure the layer exists to close — but it is not a condition of running the
+//! feature. The hosts that have `limits` alone are a kernel without Landlock, a
+//! container runtime that denies the syscalls, and a Windows host whose
+//! AppContainer cannot be created; the page names the missing item and what it
+//! would cost, and the feature runs at what this host gives.
 //!
 //! One setting governs the sandbox, and it lives on the admin's "Sandbox" page:
 //! `sandbox.enabled` is the master switch over every feature that parses
@@ -121,21 +123,21 @@
 //! missing and what it would have cost. When the container cannot be created, the
 //! reason is recorded ([`container_shortfall`]) and no later launch retries it.
 //!
-//! # What a grade does not say
+//! # What a full item list does not say
 //!
-//! [`Level::Full`] means "every protection this platform can provide", and the
-//! three platforms provide materially different things under that name: Linux
+//! All four items in place means "every protection this platform can provide", and
+//! the three platforms provide materially different things under that name: Linux
 //! denies every path and every socket through Landlock and seccomp, the Windows
 //! container denies the user's own files and the network but reads the system
 //! tree it loads from, and macOS's profile is a deny-by-default text whose
 //! parser profiles deny both the fork and the exec. The remaining residuals
 //! [`Report::notes`] carries — `fork=`, `helper=`, `system=`, `writes=`,
 //! `metadata=`, `ll_gaps=`, `token_unrestricted` — are *notes on the item they
-//! weaken*, not a fourth grade. A profile whose `fork` is open cannot claim the
+//! weaken*, not a fourth item. A profile whose `fork` is open cannot claim the
 //! process item at all — the item's definition is that processes cannot be
-//! multiplied — and that is why the media profile is `partial` everywhere: it
-//! starts the helper by copying the process, so it is the one profile that
-//! cannot make the claim.
+//! multiplied — and that is why the media profile never has it: it starts the
+//! helper by copying the process, so it is the one profile that cannot make the
+//! claim.
 //!
 //! # Claims are measured
 //!
@@ -228,7 +230,7 @@ pub(super) use windows::{Child as WindowsChild, spawn, spawn_token_only, spawn_u
 /// Windows 11 can opt a container out of `ALL APPLICATION PACKAGES` with the
 /// `WIN://NOALLAPPPKG` security attribute, and the answer here is what the last
 /// launch actually got — `false` on Windows 10, where the attribute does not
-/// exist. It is a fact about the launch, not a grade: the system tree stays
+/// exist. It is a fact about the launch, not an item: the system tree stays
 /// readable either way, because the files a low-box process loads carry ACEs for
 /// `ALL RESTRICTED APPLICATION PACKAGES` as well. That is a property of the
 /// Windows build rather than a documented invariant, which is why the note is
@@ -383,33 +385,6 @@ const NOFILE_LIMIT: u64 = 32;
 #[cfg(unix)]
 const FILE_SIZE_LIMIT: u64 = 16 * 1024 * 1024;
 
-/// How much confinement a child established.
-///
-/// A *report*, not a policy: nothing is configured with it and nothing is
-/// refused by it. The floor every feature needs is the resource bound, which
-/// [`Requirement::accepts`] checks as an item rather than as a grade; this name
-/// is how the items add up, for a log line and for the settings page.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Level {
-    /// The resource bound and nothing else. Every feature runs here, and it is
-    /// what a Windows host that cannot create an AppContainer gives.
-    Limits,
-    /// The resource bound plus the files layer, and not everything else.
-    Partial,
-    /// Every layer this platform can provide.
-    Full,
-}
-
-impl Level {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Level::Limits => "limits",
-            Level::Partial => "partial",
-            Level::Full => "full",
-        }
-    }
-}
-
 /// The protections actually in force, one flag per item the admin page lists.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Protections {
@@ -428,30 +403,59 @@ pub struct Protections {
 }
 
 impl Protections {
-    /// What these items add up to.
+    /// The one item no child may run without.
     ///
-    /// [`Level::Full`] needs all four. [`Level::Partial`] needs the resource
-    /// bound *and* the files layer. [`Level::Limits`] is the resource bound
-    /// alone, and a report with no bound at all lands there too — the grade says
-    /// what was established, while [`Requirement::accepts`] is what refuses a
-    /// host that established nothing.
+    /// Memory and CPU are what a parser bomb or an unbounded loop takes, so this
+    /// is the bound the module exists to keep and [`Requirement::accepts`] is what
+    /// enforces it. Every other item is what the platform *could* add, and a host
+    /// that gives none of them still runs the features here. Naming it once is
+    /// what keeps the refusal, the settings page's "required" tag and this
+    /// sentence from drifting apart.
+    pub const REQUIRED: &'static str = "limits";
+
+    /// Whether one item is the required one, by the token [`Protections::items`]
+    /// carries.
+    pub fn required(item: &str) -> bool {
+        item == Self::REQUIRED
+    }
+
+    /// One item by its token, or `None` for a name this build does not know.
+    pub fn get(self, item: &str) -> Option<bool> {
+        self.items()
+            .into_iter()
+            .find(|(name, _)| *name == item)
+            .map(|(_, present)| present)
+    }
+
+    /// Whether every item is in place.
     ///
-    /// The files layer is what makes `partial` worth reporting rather than a
-    /// weaker `limits`. What a document parser can do to the host is bounded by
-    /// what it can read: a host that confines the network and the processes but
-    /// not the paths has a parser that can still read every file the server's
-    /// user can. So `network` and `process` are refinements on top of a
-    /// files-confined host and never substitutes for one, and a host without the
-    /// files layer grades `limits` whatever else it denies — which the features
-    /// run under, and which the page calls a degradation rather than an outage.
-    pub fn level(self) -> Level {
-        if self.limits && self.files && self.network && self.process {
-            Level::Full
-        } else if self.limits && self.files {
-            Level::Partial
-        } else {
-            Level::Limits
-        }
+    /// The condition a log line and a "less confinement than this host can give"
+    /// warning turn on. Not a policy: it says what was established, while
+    /// [`Requirement::accepts`] is what refuses a host that established nothing.
+    pub fn complete(self) -> bool {
+        self.limits && self.files && self.network && self.process
+    }
+
+    /// The four items as one line, for a log or a refusal reason.
+    ///
+    /// The tokens are the report line's own — `on|off` for the required item,
+    /// which the line reads with `parse_switch`, and `denied|open` for the three
+    /// denials — so a log entry and a raw report read the same way, and no value
+    /// is ever reported under a name the wire does not carry.
+    pub fn summary(self) -> String {
+        self.items()
+            .into_iter()
+            .map(|(item, present)| {
+                let token = match (present, item == Self::REQUIRED) {
+                    (true, true) => "on",
+                    (true, false) => "denied",
+                    (false, true) => "off",
+                    (false, false) => "open",
+                };
+                format!("{item}={token}")
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// Every item, in the order the settings page lists them.
@@ -526,8 +530,12 @@ impl Profile {
 pub enum JobVerdict {
     /// The work came out as the input says it should.
     Ok,
-    /// There was nothing to work with — no helper configured, no file to read.
-    /// A state, not a failure.
+    /// The profile has no helper configured, so there was nothing to run. An
+    /// administrator's own choice rather than a fault, and a different fact from
+    /// [`JobVerdict::Nothing`]: the page names it as a state to fix in the
+    /// settings, not as a failure to investigate.
+    NoHelper,
+    /// There was nothing to work with — no file to read. A state, not a failure.
     Nothing,
     /// The work produced no text at all.
     Empty,
@@ -559,17 +567,13 @@ pub struct Report {
 }
 
 impl Report {
-    pub fn level(&self) -> Level {
-        self.protections.level()
-    }
-
     /// The residuals the detail carries, as note keys for the settings page.
     ///
     /// Derived from the detail rather than carried as claims of their own: every
     /// token is a fact this process (or the parent) measured, and a token no
-    /// backend emits simply produces no note. They are *notes* — the grade is
-    /// decided from [`Protections`] alone, so a wording change here can never
-    /// weaken a decision.
+    /// backend emits simply produces no note. They are *notes* — every decision is
+    /// made from [`Protections`] alone, so a wording change here can never weaken
+    /// one.
     ///
     /// The list is what the page has to say beyond "which item is missing". An
     /// item can be in place and still be narrower than its name suggests — the
@@ -604,7 +608,7 @@ impl Report {
         // A child in the container without the restricted token: files and the
         // network are still bounded by the container, but the privileges the
         // token's flags would have removed are still in it. Reported rather than
-        // graded — an AppContainer token is already stripped to roughly
+        // decided on — an AppContainer token is already stripped to roughly
         // `SeChangeNotifyPrivilege` — so an operator can see which creation the
         // launch settled for.
         if has("token=unrestricted") {
@@ -659,9 +663,8 @@ impl Report {
         let yes = |on: bool| if on { "denied" } else { "open" };
         let detail = self.detail.replace([' ', '\t', '\n'], "_");
         format!(
-            "NFS2-sandbox profile={} level={} limits={} files={} network={} process={} detail={}",
+            "NFS2-sandbox profile={} limits={} files={} network={} process={} detail={}",
             self.profile.as_str(),
-            self.level().as_str(),
             if self.protections.limits { "on" } else { "off" },
             yes(self.protections.files),
             yes(self.protections.network),
@@ -672,26 +675,48 @@ impl Report {
 
     /// Parse a line produced by [`Report::line`].
     ///
-    /// Returns `None` for anything that is not one — including a line from
-    /// before the profile existed — which is what makes a truncated or foreign
-    /// line a failure rather than a wrong level.
+    /// Returns `None` for anything that is not one — including a line from before
+    /// the profile existed — which is what makes a truncated or foreign line a
+    /// failure rather than a wrong report.
+    ///
+    /// Every item field has to be present: they are the decision, and a line that
+    /// lost one to truncation would otherwise read as a protection that is not
+    /// there. The direction of that refusal is worth keeping in mind if the shape
+    /// changes again — a line cut before `limits` reads as unbounded and is
+    /// refused, and one cut after it under-claims the layers, never over-claims
+    /// them.
+    ///
+    /// The line used to carry a redundant `level=` token, and a line whose halves
+    /// disagreed was rejected as not ours. The field is gone; a line that still
+    /// carries it parses, because an unknown name is not an error.
     pub fn parse(line: &str) -> Option<Self> {
         let line = line.trim();
         let mut fields = line.strip_prefix("NFS2-sandbox ")?.split(' ');
         let mut profile = None;
         let mut protections = Protections::default();
-        let mut level = None;
+        let mut items = 0u8;
         let mut detail = String::new();
 
         for field in fields.by_ref() {
             let (key, value) = field.split_once('=')?;
             match key {
                 "profile" => profile = Profile::parse(value),
-                "level" => level = Some(value.to_string()),
-                "limits" => protections.limits = parse_switch(value)?,
-                "files" => protections.files = parse_denial(value)?,
-                "network" => protections.network = parse_denial(value)?,
-                "process" => protections.process = parse_denial(value)?,
+                "limits" => {
+                    protections.limits = parse_switch(value)?;
+                    items += 1;
+                }
+                "files" => {
+                    protections.files = parse_denial(value)?;
+                    items += 1;
+                }
+                "network" => {
+                    protections.network = parse_denial(value)?;
+                    items += 1;
+                }
+                "process" => {
+                    protections.process = parse_denial(value)?;
+                    items += 1;
+                }
                 "detail" => {
                     detail = value.to_string();
                 }
@@ -702,16 +727,19 @@ impl Report {
             }
         }
 
-        // The level is redundant with the items, so a line whose halves disagree
-        // is not one of ours.
+        // All four, exactly once: a field the line lost, or one it repeated, is
+        // not a report this build knows how to read.
+        if items != 4 {
+            return None;
+        }
+
         let job = job_verdict(&detail);
-        let report = Report {
+        Some(Report {
             profile: profile?,
             protections,
             job,
             detail,
-        };
-        (level.as_deref() == Some(report.level().as_str())).then_some(report)
+        })
     }
 }
 
@@ -752,7 +780,8 @@ fn item_verdict(item: &str) -> Option<JobVerdict> {
     Some(match verdict {
         "ok" => JobVerdict::Ok,
         "no-text" => JobVerdict::Empty,
-        "no-helper" | "no-source" => JobVerdict::Nothing,
+        "no-helper" => JobVerdict::NoHelper,
+        "no-source" => JobVerdict::Nothing,
         "text-differs" => JobVerdict::Different,
         "unsupported" => JobVerdict::Unsupported,
         "failed" | "unavailable" => JobVerdict::Failed,
@@ -780,7 +809,7 @@ fn parse_denial(value: &str) -> Option<bool> {
 ///
 /// The master switch, and nothing else: the resource bound is the one thing a
 /// host must establish, and it is read back from the child's own report as an
-/// item rather than configured as a grade. Every layer above it — files, the
+/// item rather than configured. Every layer above it — files, the
 /// network, process creation, and the Windows container — is platform
 /// best-effort, so it is reported and never demanded.
 ///
@@ -808,7 +837,7 @@ impl Requirement {
 
     /// Whether a report is enough, and if not, why not.
     ///
-    /// Takes the whole report rather than its grade because the answer is about
+    /// Takes the whole report rather than one item because the answer is about
     /// the report's items on both sides of the process boundary: the parent asks
     /// it once at startup, and the child asks it again before it reads a request.
     ///
@@ -817,12 +846,16 @@ impl Requirement {
     /// the configuration says, because a parser with no bound is the failure this
     /// module exists to prevent. Nothing else is asked for — the files, network
     /// and process layers are what the platform could add, and a host that gave
-    /// none of them still runs the features at [`Level::Limits`].
+    /// none of them still runs the features.
     pub fn accepts(&self, report: &Report) -> Result<(), Refusal> {
         if !self.enabled {
             return Err(Refusal::Disabled);
         }
-        if !report.protections.limits {
+        if !report
+            .protections
+            .get(Protections::REQUIRED)
+            .unwrap_or(false)
+        {
             return Err(Refusal::Unbounded);
         }
         Ok(())
@@ -968,7 +1001,7 @@ impl Grants<'_> {
 /// which is what a request's child and a hand-run self-test get.
 ///
 /// The measurement and the decision are two functions: [`measure_facts`] runs
-/// the effect probes this tier can afford, and [`protect`] decides the grade
+/// the effect probes this tier can afford, and [`protect`] decides the items
 /// from what they answered. The split is what makes every branch of the
 /// decision — including the ones a correctly confining host never takes —
 /// reachable from a test without applying real confinement.
@@ -1005,7 +1038,7 @@ pub fn confine(
 /// wrapped this process in a profile it says governs files, the network and
 /// process creation, and none of that is visible from in here. Each of the three
 /// is still put to its probe, which is what makes "a wrapper that did nothing
-/// drops the level" true rather than a claim with nothing behind it.
+/// drops the item" true rather than a claim with nothing behind it.
 fn claimed_by_mechanism(installed: Protections, external: External) -> Protections {
     if external.runner {
         Protections {
@@ -1123,7 +1156,7 @@ fn measure_facts(
     facts
 }
 
-/// Decide the grade from the claims and the measurements.
+/// Decide the items from the claims and the measurements.
 ///
 /// This is the fail-closed half of the report: a layer a mechanism claimed is
 /// cleared when the probe says the effect is not there, and a claim no probe
@@ -1189,8 +1222,8 @@ fn protect(
             // whatever it denies about starting programs: the item's own
             // definition is that processes cannot be multiplied, and `fork=open`
             // says they can. The media profile is the one that keeps the fork —
-            // it starts the helper — so its grade stays `partial` and the `fork`
-            // note beside the missing item is the reason. A profile that *does*
+            // it starts the helper — so the item stays missing and the `fork`
+            // note beside it is the reason. A profile that *does*
             // deny the fork is measured by the exec it can then try; when the
             // fork itself is refused there is no copy to try `execve` in, and
             // the claim stands unmeasured rather than being cleared by a
@@ -1220,8 +1253,8 @@ fn protect(
     // The item is cleared whatever the platform installed. This profile starts
     // a program by definition, and every way of starting one copies the process
     // first, so it cannot claim what the document and image profiles claim; the
-    // grade that follows is `partial`, and the settings page says which item is
-    // missing rather than implying a bound the profile cannot have. The `fork`
+    // settings page says the item does not apply rather than implying a bound the
+    // profile cannot have. The `fork`
     // fact the tier above measured is the note that goes with it.
     //
     // The helper is a *fact* rather than a protection: the grant took unless a
@@ -1903,90 +1936,10 @@ mod tests {
         assert_eq!(took(false, "as", "1073741824"), "as=refused");
     }
 
+    /// The page lists exactly the items the report carries, in the order it
+    /// carries them, under the names the report line uses.
     #[test]
-    fn a_level_needs_limits_and_the_files_layer() {
-        assert_eq!(Protections::default().level(), Level::Limits);
-        assert_eq!(
-            Protections {
-                limits: true,
-                ..Protections::default()
-            }
-            .level(),
-            Level::Limits,
-            "resource limits alone are the floor, not a files-confined grade"
-        );
-        assert_eq!(
-            Protections {
-                limits: true,
-                files: true,
-                ..Protections::default()
-            }
-            .level(),
-            Level::Partial,
-            "the files layer is enough for partial on its own"
-        );
-        // The hosts that reach the network and process items without the files
-        // layer: a kernel without Landlock, and a Windows launch whose container
-        // was not attempted. None may be called partial — each has a parser that
-        // can read every path the server user can — but all of them carry the
-        // resource bound, which is the floor every feature needs.
-        for missing_files in [
-            Protections {
-                limits: true,
-                files: false,
-                network: true,
-                process: true,
-            },
-            Protections {
-                limits: true,
-                files: false,
-                network: true,
-                process: false,
-            },
-            Protections {
-                limits: true,
-                files: false,
-                network: false,
-                process: true,
-            },
-        ] {
-            assert_eq!(
-                missing_files.level(),
-                Level::Limits,
-                "no files layer is no confinement grade: {missing_files:?}"
-            );
-        }
-        // Everything but the process item, which is the media profile's shape.
-        assert_eq!(
-            Protections {
-                limits: true,
-                files: true,
-                network: true,
-                process: false,
-            }
-            .level(),
-            Level::Partial
-        );
-        assert_eq!(
-            Protections {
-                limits: true,
-                files: true,
-                network: true,
-                process: true,
-            }
-            .level(),
-            Level::Full
-        );
-        assert_eq!(
-            Protections {
-                files: true,
-                ..Protections::default()
-            }
-            .level(),
-            Level::Limits,
-            "confinement without resource limits is not a level either"
-        );
-        // The page lists exactly these items, in this order.
+    fn the_page_lists_the_items_in_the_report_order() {
         assert_eq!(
             Protections {
                 limits: true,
@@ -2006,62 +1959,71 @@ mod tests {
 
     #[test]
     fn the_requirement_refuses_the_switch_and_the_unbounded_and_nothing_else() {
-        /// A report whose items add up to `level`.
-        fn report_at(level: Level) -> Report {
-            let items = match level {
-                Level::Limits => Protections {
-                    limits: true,
-                    ..Protections::default()
-                },
-                Level::Partial => Protections {
-                    limits: true,
-                    files: true,
-                    ..Protections::default()
-                },
-                Level::Full => Protections {
-                    limits: true,
-                    files: true,
-                    network: true,
-                    process: true,
-                },
-            };
+        /// A report whose items are `protections`.
+        fn report_with(protections: Protections) -> Report {
             Report {
                 profile: Profile::Documents,
-                protections: items,
+                protections,
                 job: None,
                 detail: String::new(),
             }
         }
 
+        /// The shapes a host can report, from the floor up: the resource bound
+        /// alone, plus the files layer, plus everything but the process item (the
+        /// media profile's shape), and every item in place.
+        fn host_shapes() -> [Protections; 4] {
+            [
+                Protections {
+                    limits: true,
+                    ..Protections::default()
+                },
+                Protections {
+                    limits: true,
+                    files: true,
+                    ..Protections::default()
+                },
+                Protections {
+                    limits: true,
+                    files: true,
+                    network: true,
+                    process: false,
+                },
+                Protections {
+                    limits: true,
+                    files: true,
+                    network: true,
+                    process: true,
+                },
+            ]
+        }
+
         // The switch refuses whatever the host gives.
-        for level in [Level::Limits, Level::Partial, Level::Full] {
+        for items in host_shapes() {
             assert_eq!(
-                Requirement::new(false).accepts(&report_at(level)),
+                Requirement::new(false).accepts(&report_with(items)),
                 Err(Refusal::Disabled),
-                "the switch is off at {level:?}"
+                "the switch is off at {items:?}"
             );
         }
 
-        // Every grade above the floor is accepted: the layers are what the
+        // Every shape above the floor is accepted: the layers are what the
         // platform could add, not a condition of running the feature.
-        for level in [Level::Limits, Level::Partial, Level::Full] {
+        for items in host_shapes() {
             assert!(
-                Requirement::new(true).accepts(&report_at(level)).is_ok(),
-                "a bounded host at {level:?} must be accepted"
+                Requirement::new(true).accepts(&report_with(items)).is_ok(),
+                "a bounded host at {items:?} must be accepted"
             );
         }
 
         // The resource bound is the one refusal left: a report with no bound is
         // refused however many other items it carries.
-        let unbounded = Report {
-            protections: Protections {
-                files: true,
-                network: true,
-                process: true,
-                ..Protections::default()
-            },
-            ..report_at(Level::Limits)
-        };
+        let unbounded = report_with(Protections {
+            files: true,
+            network: true,
+            process: true,
+            ..Protections::default()
+        });
         assert_eq!(
             Requirement::new(true).accepts(&unbounded),
             Err(Refusal::Unbounded),
@@ -2069,8 +2031,13 @@ mod tests {
         );
 
         // A residual in the detail never changes the decision: it is a note on
-        // an item, not a grade.
-        let mut full = report_at(Level::Full);
+        // an item, not an item of its own.
+        let mut full = report_with(Protections {
+            limits: true,
+            files: true,
+            network: true,
+            process: true,
+        });
         assert!(Requirement::default().accepts(&full).is_ok());
         full.detail = "system=readable,fork=open".to_string();
         assert!(Requirement::default().accepts(&full).is_ok());
@@ -2093,17 +2060,19 @@ mod tests {
         };
         let line = report.line();
         assert!(
-            line.starts_with("NFS2-sandbox profile=documents level=full "),
+            line.starts_with(
+                "NFS2-sandbox profile=documents limits=on files=denied \
+                 network=denied process=denied detail="
+            ),
             "{line}"
         );
         let parsed = Report::parse(&line).expect("parses");
         assert_eq!(parsed.profile, Profile::Documents);
         assert_eq!(parsed.protections, report.protections);
-        assert_eq!(parsed.level(), Level::Full);
         assert_eq!(parsed.detail, report.detail);
 
         // The media profile's shape: the process item is the one it cannot have,
-        // so its line says `open` and grades `partial`, and it still round-trips.
+        // so its line says `open`, and it still round-trips.
         let media = Report {
             profile: Profile::Media,
             protections: Protections {
@@ -2118,14 +2087,13 @@ mod tests {
         let line = media.line();
         assert!(
             line.starts_with(
-                "NFS2-sandbox profile=media level=partial limits=on files=denied \
+                "NFS2-sandbox profile=media limits=on files=denied \
                  network=denied process=open detail="
             ),
             "{line}"
         );
         let parsed = Report::parse(&line).expect("parses");
         assert_eq!(parsed.protections, media.protections);
-        assert_eq!(parsed.level(), Level::Partial);
         assert_eq!(parsed.notes(), ["fork", "helper"]);
     }
 
@@ -2135,7 +2103,7 @@ mod tests {
     fn the_job_verdict_is_read_from_the_parse_token() {
         let job = |detail: &str| {
             Report::parse(&format!(
-                "NFS2-sandbox profile=media level=partial limits=on files=denied \
+                "NFS2-sandbox profile=media limits=on files=denied \
                  network=denied process=open detail={detail}"
             ))
             .expect("a media line parses")
@@ -2143,7 +2111,7 @@ mod tests {
         };
 
         assert_eq!(job("parse=media-ok(2333)"), Some(JobVerdict::Ok));
-        assert_eq!(job("parse=media-no-helper"), Some(JobVerdict::Nothing));
+        assert_eq!(job("parse=media-no-helper"), Some(JobVerdict::NoHelper));
         assert_eq!(job("parse=media-no-source"), Some(JobVerdict::Nothing));
         assert_eq!(
             job("parse=media-failed(exit_status:_1)"),
@@ -2230,25 +2198,73 @@ mod tests {
         ));
     }
 
+    /// A line is a report only when it is one: the profile, and every item. A
+    /// field the line lost — to truncation, or to a build that wrote another
+    /// shape — is not a protection that is absent, so the line is refused rather
+    /// than read as a host with less confinement than it has.
     #[test]
-    fn a_line_that_disagrees_with_itself_is_refused() {
+    fn a_line_that_is_not_a_whole_report_is_refused() {
         assert!(Report::parse("").is_none());
         assert!(Report::parse("level=full limits=on").is_none());
+
+        // No profile.
         assert!(
             Report::parse(
-                "NFS2-sandbox profile=documents level=full limits=on files=open network=open \
-                 process=open detail=x"
-            )
-            .is_none(),
-            "the level token must match the items"
-        );
-        assert!(
-            Report::parse(
-                "NFS2-sandbox profile=documents level=none limits=maybe files=open network=open \
-                 process=open detail=x"
+                "NFS2-sandbox limits=on files=denied network=denied process=denied detail=x"
             )
             .is_none()
         );
+        // A line from the format before the profile existed.
+        assert!(
+            Report::parse(
+                "NFX1-sandbox limits=on files=denied network=denied process=denied detail=x"
+            )
+            .is_none(),
+            "a line from before the profile existed is not a report"
+        );
+
+        // One item missing, whichever it is: the line cannot say what the host
+        // gave, and defaulting the field would silently report a layer as absent.
+        let fields = [
+            ("profile", "documents"),
+            ("limits", "on"),
+            ("files", "denied"),
+            ("network", "denied"),
+            ("process", "denied"),
+            ("detail", "x"),
+        ];
+        for missing in ["limits", "files", "network", "process"] {
+            let line = fields
+                .iter()
+                .filter(|(key, _)| *key != missing)
+                .map(|(key, value)| format!("{key}={value}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                Report::parse(&format!("NFS2-sandbox {line}")).is_none(),
+                "a line without {missing} is not a report"
+            );
+        }
+
+        // A value this build does not know is refused rather than guessed at, and
+        // so is a profile name it does not know.
+        assert!(
+            Report::parse(
+                "NFS2-sandbox profile=documents limits=maybe files=open network=open process=open \
+                 detail=x"
+            )
+            .is_none()
+        );
+        assert!(
+            Report::parse(
+                "NFS2-sandbox profile=elsewhere limits=off files=open network=open process=open \
+                 detail=x"
+            )
+            .is_none()
+        );
+
+        // A whole line is one, and the redundant `level=` token a build before
+        // this one printed is ignored: the items are the decision.
         assert!(
             Report::parse(
                 "NFS2-sandbox profile=documents level=full limits=on files=denied network=denied \
@@ -2256,28 +2272,10 @@ mod tests {
             )
             .is_some()
         );
-        // A profile is what every report names now, so a line without one — and
-        // a line from the format before it — is not a report.
-        assert!(
-            Report::parse(
-                "NFS2-sandbox level=full limits=on files=denied network=denied process=denied \
-                 detail=x"
-            )
-            .is_none()
-        );
-        assert!(
-            Report::parse(
-                "NFX1-sandbox level=full limits=on files=denied network=denied process=denied \
-                 detail=x"
-            )
-            .is_none(),
-            "a line from before the profile existed is not a report"
-        );
-        assert!(Report::parse("NFS2-sandbox profile=elsewhere level=none limits=off files=open network=open process=open detail=x").is_none());
     }
 
-    /// The residuals are notes on the items they weaken, never a grade: each
-    /// known token produces its note and an unknown one produces none.
+    /// The residuals are notes on the items they weaken, never items themselves:
+    /// each known token produces its note and an unknown one produces none.
     #[test]
     fn the_residuals_are_notes_on_the_items() {
         let report = |detail: &str| Report {
@@ -2307,7 +2305,7 @@ mod tests {
         assert_eq!(report("helper=allowed").notes(), ["helper"]);
         // A container child whose token is not restricted: the container bounds
         // files and the network, but the flags that strip privileges did not
-        // apply, and the page says so rather than letting the grade imply it.
+        // apply, and the page says so rather than letting the item imply it.
         assert_eq!(
             report("token=restricted,helper=allowed").notes(),
             ["helper"]
@@ -2337,8 +2335,8 @@ mod tests {
             ["container_refused"]
         );
         assert_eq!(report("lpac=off").notes(), ["lpac_off"]);
-        // The notes never touch the grade.
-        assert_eq!(report("system=readable,fork=open").level(), Level::Full);
+        // The notes never touch the items.
+        assert!(report("system=readable,fork=open").protections.complete());
         // A token this build does not know is not a note.
         assert!(report("something=else").notes().is_empty());
     }
@@ -2365,8 +2363,7 @@ mod tests {
 
     /// The runner's claim is the one the parent asserts rather than measures, so
     /// it is the one a liar could make. Every layer it claims has to be put to a
-    /// probe, and a probe that answers "open" has to drop the layer and the
-    /// grade with it.
+    /// probe, and a probe that answers "open" has to drop the item with it.
     #[test]
     fn a_claim_the_probe_does_not_back_up_is_cleared() {
         let (protections, detail) = claimed(true, true, true);
@@ -2393,10 +2390,9 @@ mod tests {
             !protections.files && !protections.network && !protections.process,
             "a wrapper that did nothing may not keep a layer: {protections:?}"
         );
-        assert_eq!(
-            protections.level(),
-            Level::Limits,
-            "resource limits alone are the floor, not a confinement grade"
+        assert!(
+            !protections.complete(),
+            "resource limits alone are the floor, not every item"
         );
         assert_eq!(
             appended(detail),
@@ -2524,7 +2520,7 @@ mod tests {
             &facts,
         );
 
-        assert_eq!(protections.level(), Level::Full);
+        assert!(protections.complete());
         assert_eq!(
             appended(detail),
             [
@@ -2567,7 +2563,7 @@ mod tests {
             Measure::Thorough,
             &facts,
         );
-        assert_eq!(protections.level(), Level::Full);
+        assert!(protections.complete());
         assert_eq!(
             appended(detail),
             [
@@ -2639,7 +2635,10 @@ mod tests {
             !protections.process,
             "a profile that starts a helper cannot bound process creation"
         );
-        assert_eq!(protections.level(), Level::Partial);
+        assert!(
+            protections.limits && protections.files && protections.network,
+            "the bound, the files and the network are still established: {protections:?}"
+        );
         let tokens = appended(detail);
         assert!(tokens.contains(&"fork=open".to_string()), "{tokens:?}");
         assert!(

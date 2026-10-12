@@ -11,8 +11,8 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use server::indexer::extract::{Document, Extracted, MAX_INDEXED_CONTENT_BYTES, Plan};
+use server::sandbox::Profile;
 use server::sandbox::worker::{self, Outcome};
-use server::sandbox::{Level, Profile};
 
 /// How much text the large document carries.
 ///
@@ -33,7 +33,7 @@ fn the_worker_ran() {
             common::sandbox::configure_real_worker(),
             "this file must be the first to configure the worker"
         );
-        // The bound is what this file needs; the grade is asserted elsewhere.
+        // The bound is what this file needs; the layers are asserted elsewhere.
         server::sandbox::worker::configure_requirement(common::sandbox::limits_requirement());
     });
 }
@@ -45,7 +45,7 @@ fn the_worker_ran() {
 /// where it belongs (`sandbox_probe_test`), and a Windows host whose container
 /// cannot be created is exactly the host that gives the bound alone.
 fn require_confinement() {
-    common::sandbox::require_level(Profile::Documents, Level::Limits);
+    common::sandbox::require_bound(Profile::Documents);
 }
 
 /// A PDF whose one text object draws `text`.

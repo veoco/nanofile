@@ -52,7 +52,7 @@ case "$*" in
   *--selftest*)
     profile=documents
     case "$*" in *--profile\ images*) profile=images;; esac
-    printf 'NFS2-sandbox profile=%s level=full limits=on files=denied network=denied process=denied detail=fake\n' "$profile"
+    printf 'NFS2-sandbox profile=%s limits=on files=denied network=denied process=denied detail=fake\n' "$profile"
     exit 0
     ;;
 esac
