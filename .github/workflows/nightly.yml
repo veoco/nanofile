@@ -189,7 +189,9 @@ jobs:
         run: |
           BIN="target/release/nanofile${{ matrix.ext }}"
           "$BIN" extract-worker --probe | tee probe.txt
-          grep -q 'level=full' probe.txt
+          # `limits=on` is the hard invariant; `level=` left the probe line in
+          # `d1ec10d`, so a grep for it only ever waits for a failure.
+          grep -q 'limits=on' probe.txt
           grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' probe.txt
           "$BIN" extract-worker --probe --profile images | tee images.txt
           grep -q 'parse=image-ok(' images.txt
@@ -276,5 +278,7 @@ jobs:
         run: |
           IMAGE="ghcr.io/${{ github.repository }}:sha-${{ github.sha }}"
           docker run --rm "$IMAGE" extract-worker --probe | tee /tmp/probe.txt
-          grep -q 'level=full' /tmp/probe.txt
+          # `limits=on` is the hard invariant; `level=` left the probe line in
+          # `d1ec10d`, so a grep for it only ever waits for a failure.
+          grep -q 'limits=on' /tmp/probe.txt
           grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' /tmp/probe.txt
