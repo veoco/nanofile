@@ -118,6 +118,25 @@ jobs:
             echo "::error::Replace audit-item markers with the invariant they refer to."
             exit 1
           fi
+      # An unused direct dependency, and a dependency that comes back as a side
+      # effect of some default feature, are both invisible to rustc: AWS-LC
+      # returned once through `reqwest`'s TLS, and the ravif/rav1e AV1 encoder
+      # through `image`'s default formats. These two checks are what would have
+      # caught either of them.
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2
+        with:
+          tool: cargo-machete
+      - name: Reject unused and deliberately avoided dependencies
+        run: |
+          cargo machete
+          # `cargo tree` failing must fail the step too, so its output is taken
+          # with an assignment rather than piped straight into `grep`.
+          tree="$(cargo tree --workspace --prefix none)"
+          if printf '%s\n' "$tree" | grep -E '^(aws-lc-rs|aws-lc-sys|rav1e|ravif) v'; then
+            echo "::error::A default feature pulled back in a dependency this project avoids; see the note on server/Cargo.toml's dev-dependencies."
+            exit 1
+          fi
 
   # ── Linting off Linux ───────────────────────────────────────────────
   # `#[cfg(windows)]` and `#[cfg(target_os = "macos")]` code is not compiled on
@@ -310,8 +329,11 @@ jobs:
           echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz" | sha256sum -c -
           tar xf /tmp/zig.tar.xz -C /tmp
           echo "/tmp/zig-x86_64-linux-0.16.0" >> $GITHUB_PATH
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked --version 0.23.4
+      # Prebuilt from GitHub Releases instead of `cargo install`: same version
+      # pin (0.23.4), without compiling the installer on every row.
+      - uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2
+        with:
+          tool: cargo-zigbuild@0.23.4
       # clippy-driver as the workspace wrapper runs clippy's lints inside the same
       # `cargo zigbuild` pass: no second compile, and the zig CC/linker wiring
       # cargo-zigbuild already sets up is reused instead of re-derived (`cargo

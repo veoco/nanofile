@@ -151,9 +151,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
 
-      - name: Install cargo-zigbuild
+      # Prebuilt from GitHub Releases instead of `cargo install`: same version
+      # pin (0.23.4), without compiling the installer on every cross row.
+      - uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2
         if: matrix.cross
-        run: cargo install cargo-zigbuild --locked --version 0.23.4
+        with:
+          tool: cargo-zigbuild@0.23.4
 
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
 
@@ -180,7 +183,11 @@ jobs:
         run: |
           BIN="target/release/nanofile${{ matrix.ext }}"
           "$BIN" extract-worker --probe | tee probe.txt
-          grep -q 'level=full' probe.txt
+          # `limits=on` is the hard invariant every profile owes, and the one
+          # token that holds on all three native platforms. The line no longer
+          # carries a `level=`: it was derived from the items and dropped in
+          # `d1ec10d`, which left this step grepping for a token nothing prints.
+          grep -q 'limits=on' probe.txt
           grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' probe.txt
           "$BIN" extract-worker --probe --profile images | tee images.txt
           grep -q 'parse=image-ok(' images.txt

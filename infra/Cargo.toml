@@ -11,48 +11,49 @@ workspace = true
 [dependencies]
 base = { path = "../base", features = ["with-sea-orm"] }
 
-async-trait = "0.1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_urlencoded = "0.7"
-tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["io"] }
-tracing = "0.1"
-anyhow = "1"
-thiserror = "2"
-toml = "1.1"
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_urlencoded = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
 toml_edit = "0.25"
 dotenvy = "0.15"
 
+# `runtime-tokio`, not `runtime-tokio-rustls`: this deployment only ever opens
+# SQLite, so sqlx needs no TLS at all. The TLS the binary does speak is SMTP,
+# and that comes from `lettre` (rustls/ring) in `server`.
 sea-orm = { version = "2", features = [
     "sqlx-sqlite",
-    "runtime-tokio-rustls",
+    "runtime-tokio",
     "macros",
     "with-chrono",
     "with-uuid",
     "serde",
 ] }
 
-aes = "0.9"
-cbc = "0.2"
+aes = { workspace = true }
+cbc = { workspace = true }
 aes-gcm-siv = "0.12"
 hkdf = "0.13"
-sha1 = "0.11"
-sha2 = "0.11"
-pbkdf2 = { version = "0.13", features = ["hmac"] }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+pbkdf2 = { workspace = true }
 # Only `hash_password_into` is used, which needs nothing but `alloc`; the
 # default features would additionally pull `password-hash`/`getrandom`/`phc`.
 argon2 = { version = "0.6", default-features = false, features = ["alloc"] }
-cipher = { version = "0.5", features = ["block-padding", "alloc"] }
-rand = "0.10"
-hex = "0.4"
-subtle = "2"
+rand = { workspace = true }
+hex = { workspace = true }
+subtle = { workspace = true }
 
-flate2 = "1.1"
-uuid = { version = "1", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
+flate2 = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
 zeroize = "1"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 

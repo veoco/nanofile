@@ -32,12 +32,17 @@ tray = [
     "dep:sys-locale",
 ]
 
+# `kamadak-exif`'s library is named `exif`, which a static scan cannot see
+# through: `server/src/service/fs/exif.rs` uses `exif::Reader` and `exif::Tag`.
+[package.metadata.cargo-machete]
+ignored = ["kamadak-exif"]
+
 [dependencies]
 base = { path = "../base", features = ["with-axum"] }
 infra = { path = "../infra" }
 migration = { path = "../migration" }
 
-async-trait = "0.1"
+async-trait = { workspace = true }
 axum = { version = "0.8.9", features = ["multipart", "ws"] }
 axum-extra = { version = "0.12.6", features = ["typed-header"] }
 tower-http = { version = "0.7.0", features = ["cors", "trace", "limit", "normalize-path", "timeout"] }
@@ -53,9 +58,9 @@ hyper-util = { version = "0.1", features = [
     "tokio",
 ] }
 tower = "0.5"
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["io", "compat"] }
-async_zip = { version = "0.0", features = ["tokio", "deflate"] }
+async_zip = { version = "0.0.19", features = ["tokio", "deflate"] }
 futures-util = "0.3"
 bytes = "1"
 futures = "0.3"
@@ -66,7 +71,7 @@ ipnet = "2"
 
 sea-orm = { version = "2", features = [
     "sqlx-sqlite",
-    "runtime-tokio-rustls",
+    "runtime-tokio",
     "macros",
     "with-chrono",
     "with-uuid",
@@ -74,12 +79,12 @@ sea-orm = { version = "2", features = [
 ] }
 sea-orm-migration = { version = "2", features = [
     "sqlx-sqlite",
-    "runtime-tokio-rustls",
+    "runtime-tokio",
 ] }
 
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "1.1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
 quick-xml = { version = "0.42", features = ["serialize"] }
 
 # Outbound email (settings, notifications, password reset). Rustls rather than
@@ -95,22 +100,21 @@ lettre = { version = "0.11", default-features = false, features = [
     "tracing",
 ] }
 
-rand = "0.10"
-sha1 = "0.11"
-sha2 = "0.11"
-aes = "0.9"
-cbc = "0.2"
-cipher = { version = "0.5", features = ["block-padding", "alloc"] }
+rand = { workspace = true }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+aes = { workspace = true }
+cbc = { workspace = true }
 hmac = "0.13"
-pbkdf2 = { version = "0.13", features = ["hmac"] }
-subtle = "2"
-hex = "0.4"
+pbkdf2 = { workspace = true }
+subtle = { workspace = true }
+hex = { workspace = true }
 base64 = "0.23"
-uuid = { version = "1", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-tracing = "0.1"
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-anyhow = "1"
+anyhow = { workspace = true }
 totp-rs = { version = "6", features = ["gen_secret", "otpauth"] }
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
@@ -120,8 +124,12 @@ clap = { version = "4", features = ["derive"] }
 rpassword = "7"
 askama = { version = "0.16", features = ["serde_json", "urlencode"] }
 rust-embed = "8"
-serde_urlencoded = "0.7"
-jsonwebtoken = { version = "11", features = ["rust_crypto"] }
+serde_urlencoded = { workspace = true }
+# Only HS256 with `from_secret`/`DecodingKey::from_secret` is used, so the
+# default `use_pem` feature (which would add `pem`, `simple_asn1` and
+# `num-bigint` for PEM-encoded RSA/EC keys) is off. `rust_crypto` stays: it is
+# what the only-JSON, no-OpenSSL property rests on.
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
 multer = "3.1"
 
 # Full-text search
@@ -222,26 +230,34 @@ gtk = { version = "0.18", optional = true }
 libc = "0.2"
 
 [dev-dependencies]
-reqwest = { version = "0.13", features = ["json", "multipart", "cookies", "form"] }
-image = { version = "0.25", features = ["tiff"] }
-tempfile = "3"
+# Tests only ever speak `http://127.0.0.1:<port>`. Leaving the default TLS on
+# (`default-tls` -> rustls -> aws-lc-rs) is what used to compile AWS-LC's C
+# sources into every `--all-targets` build on every platform. The server's own
+# TLS is SMTP, and that lives in `lettre` (rustls/ring); add a TLS feature back
+# here only if a test really needs https, and record why in this comment.
+reqwest = { version = "0.13", default-features = false, features = ["json", "multipart", "cookies", "form"] }
+# `image` is deliberately absent: the normal dependency above already enables
+# every codec the tests use, and an entry here would re-enable its default
+# features (`default-formats`, including avif, plus `rayon`) — which pulls the
+# whole ravif/rav1e AV1 encoder into the test graph for nothing.
+tempfile = { workspace = true }
 tokio-tungstenite = "0.29"
 # Building the adversarial fixtures: a Flate stream that expands past the
 # per-stream cap (see `indexer::extract::pdf`). Compressing is all the tests
 # need it for; the decoder side is lopdf's own flate2.
-flate2 = "1"
+flate2 = { workspace = true }
 # `test-util` gives the task-system tests a paused clock (`start_paused`), so a
 # timeout policy is exercised deterministically instead of by sleeping. It is a
 # dev-dependency on purpose: `full` does not include it, and the production
 # build must not pay for it.
-tokio = { version = "1", features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
 
 [[bin]]
 name = "nanofile"
 path = "src/main.rs"
 
 [build-dependencies]
-sha2 = "0.11"
+sha2 = { workspace = true }
 # Tray feature build-time dependencies: rasterize static/img/favicon.svg into
 # the tray icon RGBA (all platforms) and the Windows exe icon (via winresource).
 # The mark is a path, not text, so the text / system-fonts features are off: the

@@ -7,6 +7,40 @@ members = [
     "migration",
 ]
 
+# Versions and features every member must agree on: two manifests declaring
+# `sha2` or `rand` separately is how the same crypto crate ends up in the graph
+# at two versions. Feature-sensitive crates (`sea-orm`, `image`, `lettre`,
+# `axum`, `resvg`, `lopdf`, `zip`, `argon2`, `tray-icon`) stay in their own
+# manifest on purpose: cargo refuses a member's `default-features = false`
+# unless the workspace entry already declares it, so a shared entry there would
+# have to pick one member's needs over another's.
+
+[workspace.dependencies]
+anyhow = "1"
+async-trait = "0.1"
+aes = "0.9"
+# `alloc` carries `cipher/alloc`, which the padded-vec block mode helpers in
+# `infra::crypto` and `server::service::repo` need; `block-padding` is already
+# `cbc`'s default. `cipher` itself is only reached through `aes::cipher`.
+cbc = { version = "0.2", features = ["alloc"] }
+chrono = { version = "0.4", features = ["serde"] }
+flate2 = "1.1"
+hex = "0.4"
+pbkdf2 = { version = "0.13", features = ["hmac"] }
+rand = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_urlencoded = "0.7"
+sha1 = "0.11"
+sha2 = "0.11"
+subtle = "2"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+toml = "1.1"
+tracing = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+
 # Unused code is an error in every build, not only where `ci.yml` runs clippy:
 # this is what reaches the targets with no runner and the release builds.
 [workspace.lints.rust]
