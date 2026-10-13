@@ -96,15 +96,26 @@ fn apply_security_headers(
         header::HeaderName::from_static("cross-origin-resource-policy"),
         HeaderValue::from_static("same-origin"),
     );
+    // A user-uploaded SVG is the one file format this server hands to the
+    // browser as a *document*: navigated to directly, the browser parses it and
+    // runs it in this origin, so a `<script>` in an uploaded file would be
+    // same-origin code. `sandbox` moves it to an opaque one — no scripts, no
+    // same-origin reads, no forms, no top-level navigation. It is keyed off the
+    // response's own content type so that every path serving an SVG inherits the
+    // rule, and the page policy is deliberately not sent with it: nothing in an
+    // uploaded file is a document of this application.
+    let uploaded_svg = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("image/svg+xml"));
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; \
-             style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
-             font-src 'self'; connect-src 'self'; \
-             object-src 'none'; frame-ancestors 'none'; base-uri 'self'; \
-             form-action 'self'",
-        ),
+        HeaderValue::from_static(if uploaded_svg {
+            "sandbox"
+        } else {
+            BASELINE_CSP
+        }),
     );
     if secure {
         // `includeSubDomains` is opt-in: a deployment may serve unrelated
@@ -119,6 +130,13 @@ fn apply_security_headers(
         );
     }
 }
+
+/// The policy the application's own pages are written against.
+const BASELINE_CSP: &str = "default-src 'self'; script-src 'self'; \
+     style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+     font-src 'self'; connect-src 'self'; \
+     object-src 'none'; frame-ancestors 'none'; base-uri 'self'; \
+     form-action 'self'";
 
 /// Enforce CSRF protection for a state-changing handler registered on `GET`.
 ///
@@ -360,6 +378,50 @@ mod security_header_tests {
             .expect("script-src directive");
         assert_eq!(script_src.trim(), "script-src 'self'");
         assert!(!csp.contains("script-src 'self' 'unsafe-inline'"));
+    }
+
+    /// A user-uploaded SVG is parsed as a document when navigated to directly, so
+    /// `sandbox` — not the page policy — is what keeps it out of this origin. The
+    /// page policy is no substitute: it allows same-origin scripts, which is the
+    /// only kind an uploaded file could reach.
+    #[test]
+    fn an_uploaded_svg_is_sandboxed() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("image/svg+xml"),
+        );
+        apply_security_headers(&mut headers, false, false);
+        assert_eq!(headers.get("content-security-policy").unwrap(), "sandbox");
+        assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+    }
+
+    /// Everything else keeps the policy the app is written against, including a
+    /// `Content-Type` that merely starts the same way.
+    #[test]
+    fn a_non_svg_response_keeps_the_baseline_policy() {
+        for content_type in [
+            "text/html; charset=utf-8",
+            "image/png",
+            "image/svg+xml-compressed",
+            "application/pdf",
+        ] {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_str(content_type).unwrap(),
+            );
+            apply_security_headers(&mut headers, false, false);
+            let csp = headers
+                .get("content-security-policy")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert!(
+                csp.contains("default-src 'self'"),
+                "{content_type} lost the baseline policy: {csp}"
+            );
+        }
     }
 }
 

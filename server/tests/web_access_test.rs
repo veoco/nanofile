@@ -33,6 +33,79 @@ async fn test_repo_files_download() {
     assert_eq!(&body[..], b"hello web");
 }
 
+/// E.1.5c — the content type of a previewable file.
+///
+/// The preview page asks for these bytes with an `<img>`, and every response
+/// carries `X-Content-Type-Options: nosniff`: a previewable image served as
+/// `application/octet-stream` is a picture the browser refuses to decode, which
+/// is what webp/bmp/svg/tiff/heic/avif used to be. An uploaded SVG goes further —
+/// navigated to directly the browser parses it as a document in this origin — so
+/// it is sandboxed rather than served under the page policy.
+#[tokio::test]
+async fn test_repo_files_content_types_cover_the_previewable_formats() {
+    let f = TestFixture::new().await;
+    let cases: &[(&str, &[u8], &str)] = &[
+        (
+            "photo.bmp",
+            b"BM\x00\x00\x00\x00\x00\x00\x00\x00",
+            "image/bmp",
+        ),
+        ("photo.webp", b"RIFF\x00\x00\x00\x00WEBP", "image/webp"),
+        ("photo.avif", b"\x00\x00\x00 ftypavif", "image/avif"),
+        (
+            "logo.svg",
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>",
+            "image/svg+xml",
+        ),
+        ("notes.log", b"one line\n", "text/plain; charset=utf-8"),
+        ("sheet.csv", b"a,b\n", "text/plain; charset=utf-8"),
+        // Markup keeps its text type: an uploaded document must not become a
+        // document in this origin.
+        ("page.html", b"<h1>hi</h1>", "text/plain; charset=utf-8"),
+    ];
+
+    for &(name, bytes, expected) in cases {
+        let up = f
+            .client
+            .upload_file(&f.api_token, &f.repo_id, "/", name, bytes)
+            .await;
+        assert!(up.status().is_success(), "upload {name} failed");
+
+        let resp = f
+            .client
+            .get(
+                &format!("/repos/{}/files/{}", f.repo_id, name),
+                Some(&f.api_token),
+            )
+            .await;
+        assert_eq!(resp.status(), 200, "{name}");
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            expected,
+            "{name} arrived with the wrong content type"
+        );
+
+        let policy = resp
+            .headers()
+            .get("content-security-policy")
+            .expect("every response carries a policy")
+            .to_str()
+            .unwrap();
+        if name.ends_with(".svg") {
+            assert_eq!(policy, "sandbox", "an uploaded SVG must leave this origin");
+        } else {
+            assert!(
+                policy.contains("default-src 'self'"),
+                "{name} lost the baseline policy: {policy}"
+            );
+        }
+    }
+}
+
 /// E.1.5b — malformed paths on `/repos/{repo_id}/files/{*path}` are rejected
 /// by the shared sanitizer instead of being passed through raw.
 ///

@@ -492,66 +492,133 @@ fn is_thumbnail_image(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Every extension the Web UI opens in its image preview.
+///
+/// An image preview is an `<img>`, and every response carries
+/// `X-Content-Type-Options: nosniff`: the content type alone decides whether the
+/// picture paints. The client decides "image" a second time (see
+/// `QUICK_PREVIEW_IMAGE_EXTS` in `frontend/core/file-meta.js`), so this list,
+/// `MIME_BY_EXT` and that one are three statements of one fact — the unit tests
+/// below hold them together.
+const PREVIEW_IMAGE_EXTS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "tiff", "tif", "heic", "heif", "avif",
+];
+
+/// Extension → content type: the one place a served file's type comes from.
+///
+/// A missing row is not a cosmetic header. Before `webp`, `bmp` and `svg` had
+/// one, the preview page asked for them and the browser refused to decode
+/// `application/octet-stream` next to `nosniff`, so those previews never
+/// painted. `mime_guess` serves both `/repos/…` and WebDAV, so a row here is the
+/// type every client sees.
+///
+/// `.html` and the other markup formats are `text/plain` on purpose: an uploaded
+/// document must never be served as a document in this origin. `.svg` is the one
+/// exception — it *is* an image type — which is why the response policy for it is
+/// `sandbox` (see `middleware::apply_security_headers`).
+const MIME_BY_EXT: &[(&str, &str)] = &[
+    // Images — the preview set above, plus the favicon's own type.
+    ("png", "image/png"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+    ("bmp", "image/bmp"),
+    ("svg", "image/svg+xml"),
+    ("ico", "image/x-icon"),
+    ("tiff", "image/tiff"),
+    ("tif", "image/tiff"),
+    ("heic", "image/heic"),
+    ("heif", "image/heif"),
+    ("avif", "image/avif"),
+    // Video and audio — the sets `thumbnail_util::is_video_ext` /
+    // `is_audio_ext` name.
+    ("mp4", "video/mp4"),
+    ("webm", "video/webm"),
+    ("mov", "video/quicktime"),
+    ("3gp", "video/3gpp"),
+    ("mkv", "video/x-matroska"),
+    ("avi", "video/x-msvideo"),
+    ("wmv", "video/x-ms-wmv"),
+    ("flv", "video/x-flv"),
+    ("mp3", "audio/mpeg"),
+    ("flac", "audio/flac"),
+    ("wav", "audio/wav"),
+    ("ogg", "audio/ogg"),
+    ("opus", "audio/ogg"),
+    ("m4a", "audio/mp4"),
+    ("aac", "audio/aac"),
+    ("wma", "audio/x-ms-wma"),
+    ("pdf", "application/pdf"),
+    // Text and code — every extension the code-block preview shows. Markup is
+    // served as plain text so the browser never treats an upload as a document.
+    ("txt", "text/plain; charset=utf-8"),
+    ("md", "text/plain; charset=utf-8"),
+    ("rs", "text/plain; charset=utf-8"),
+    ("py", "text/plain; charset=utf-8"),
+    ("js", "text/plain; charset=utf-8"),
+    ("ts", "text/plain; charset=utf-8"),
+    ("html", "text/plain; charset=utf-8"),
+    ("css", "text/plain; charset=utf-8"),
+    ("go", "text/plain; charset=utf-8"),
+    ("java", "text/plain; charset=utf-8"),
+    ("c", "text/plain; charset=utf-8"),
+    ("cpp", "text/plain; charset=utf-8"),
+    ("h", "text/plain; charset=utf-8"),
+    ("rb", "text/plain; charset=utf-8"),
+    ("php", "text/plain; charset=utf-8"),
+    ("sh", "text/plain; charset=utf-8"),
+    ("toml", "text/plain; charset=utf-8"),
+    ("json", "text/plain; charset=utf-8"),
+    ("yaml", "text/plain; charset=utf-8"),
+    ("yml", "text/plain; charset=utf-8"),
+    ("csv", "text/plain; charset=utf-8"),
+    ("xml", "text/plain; charset=utf-8"),
+    ("sql", "text/plain; charset=utf-8"),
+    ("conf", "text/plain; charset=utf-8"),
+    ("ini", "text/plain; charset=utf-8"),
+    ("log", "text/plain; charset=utf-8"),
+];
+
+const OCTET_STREAM: &str = "application/octet-stream";
+
+/// The extension a name carries, or `None` when it has none.
+fn ext_of(name: &str) -> Option<&str> {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+}
+
+/// A lookup, case-insensitively: a camera writes `IMG_0001.SVG` as readily as
+/// `.svg`. `None` for anything unmapped.
+fn mime_of(ext: &str) -> Option<&'static str> {
+    MIME_BY_EXT
+        .iter()
+        .find(|(known, _)| known.eq_ignore_ascii_case(ext))
+        .map(|(_, mime)| *mime)
+}
+
 /// Returns true if the file is a still image the browser can render in the
 /// full-page preview. Includes SVG (browser-native, no thumbnail) plus the
 /// ffmpeg-only formats (HEIC/HEIF/AVIF). Case-insensitive.
 fn is_preview_image_file(name: &str) -> bool {
-    std::path::Path::new(name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| {
-            matches!(
-                e.to_lowercase().as_str(),
-                "png"
-                    | "jpg"
-                    | "jpeg"
-                    | "gif"
-                    | "webp"
-                    | "bmp"
-                    | "svg"
-                    | "tiff"
-                    | "tif"
-                    | "heic"
-                    | "heif"
-                    | "avif"
-            )
-        })
-        .unwrap_or(false)
+    ext_of(name).is_some_and(|ext| {
+        PREVIEW_IMAGE_EXTS
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(ext))
+    })
 }
 
+/// Whether the file browser opens a file in the code block (or the image
+/// preview) instead of handing the bytes to the browser.
+///
+/// Serving a file as text is exactly what makes the code block able to show it,
+/// so this is one fact read off `MIME_BY_EXT`, not a second hand-written list
+/// that can drift out of step with it. Note that a hidden file with no extension
+/// of its own (`.txt`) is not previewable: every predicate here, like
+/// `is_video_file`/`is_audio_file`, reads the extension, not the name's suffix.
 pub fn is_previewable_file(name: &str) -> bool {
-    let name = &name.to_ascii_lowercase();
-    // Images
-    if is_preview_image_file(name) {
-        return true;
-    }
-    // Text / code
-    name.ends_with(".txt")
-        || name.ends_with(".md")
-        || name.ends_with(".rs")
-        || name.ends_with(".py")
-        || name.ends_with(".js")
-        || name.ends_with(".ts")
-        || name.ends_with(".html")
-        || name.ends_with(".css")
-        || name.ends_with(".go")
-        || name.ends_with(".java")
-        || name.ends_with(".c")
-        || name.ends_with(".cpp")
-        || name.ends_with(".h")
-        || name.ends_with(".rb")
-        || name.ends_with(".php")
-        || name.ends_with(".sh")
-        || name.ends_with(".toml")
-        || name.ends_with(".json")
-        || name.ends_with(".yaml")
-        || name.ends_with(".yml")
-        || name.ends_with(".csv")
-        || name.ends_with(".xml")
-        || name.ends_with(".sql")
-        || name.ends_with(".conf")
-        || name.ends_with(".ini")
-        || name.ends_with(".log")
+    is_preview_image_file(name) || mime_guess(name).starts_with("text/")
 }
 
 /// Colour class for the file-type badge.
@@ -1237,67 +1304,14 @@ async fn get_file_size(
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
+/// The content type a served file is sent with.
+///
+/// A lookup in [`MIME_BY_EXT`], case-insensitively: a phone camera writes
+/// `IMG_0001.MOV` as readily as `.mp4`, and matching the raw name served those
+/// as `application/octet-stream` — a header that tells every client the bytes
+/// are neither media nor text, and that sits next to `nosniff`.
 pub(crate) fn mime_guess(filename: &str) -> &'static str {
-    // Case-insensitive: a phone camera writes `IMG_0001.MOV` as readily as
-    // `.mp4`, and matching the raw name served those as
-    // `application/octet-stream` — a header that tells every client the bytes
-    // are neither media nor text, and that sits next to `nosniff`.
-    let filename = filename.to_ascii_lowercase();
-    let filename = filename.as_str();
-    if filename.ends_with(".txt")
-        || filename.ends_with(".md")
-        || filename.ends_with(".rs")
-        || filename.ends_with(".py")
-        || filename.ends_with(".js")
-        || filename.ends_with(".html")
-        || filename.ends_with(".css")
-        || filename.ends_with(".json")
-        || filename.ends_with(".toml")
-        || filename.ends_with(".yaml")
-        || filename.ends_with(".yml")
-    {
-        "text/plain; charset=utf-8"
-    } else if filename.ends_with(".png") {
-        "image/png"
-    } else if filename.ends_with(".jpg") || filename.ends_with(".jpeg") {
-        "image/jpeg"
-    } else if filename.ends_with(".gif") {
-        "image/gif"
-    } else if filename.ends_with(".mp4") {
-        "video/mp4"
-    } else if filename.ends_with(".webm") {
-        "video/webm"
-    } else if filename.ends_with(".mov") {
-        "video/quicktime"
-    } else if filename.ends_with(".3gp") {
-        "video/3gpp"
-    } else if filename.ends_with(".mkv") {
-        "video/x-matroska"
-    } else if filename.ends_with(".avi") {
-        "video/x-msvideo"
-    } else if filename.ends_with(".wmv") {
-        "video/x-ms-wmv"
-    } else if filename.ends_with(".flv") {
-        "video/x-flv"
-    } else if filename.ends_with(".mp3") {
-        "audio/mpeg"
-    } else if filename.ends_with(".flac") {
-        "audio/flac"
-    } else if filename.ends_with(".wav") {
-        "audio/wav"
-    } else if filename.ends_with(".ogg") || filename.ends_with(".opus") {
-        "audio/ogg"
-    } else if filename.ends_with(".m4a") {
-        "audio/mp4"
-    } else if filename.ends_with(".aac") {
-        "audio/aac"
-    } else if filename.ends_with(".wma") {
-        "audio/x-ms-wma"
-    } else if filename.ends_with(".pdf") {
-        "application/pdf"
-    } else {
-        "application/octet-stream"
-    }
+    ext_of(filename).and_then(mime_of).unwrap_or(OCTET_STREAM)
 }
 
 /// Percent-encode a URL path segment for use in query parameters.
@@ -1318,9 +1332,91 @@ mod tests {
         assert_eq!(mime_guess("CLIP.MP4"), "video/mp4");
         assert_eq!(mime_guess("IMG_0001.MOV"), "video/quicktime");
         assert_eq!(mime_guess("PHOTO.JPG"), "image/jpeg");
+        assert_eq!(mime_guess("logo.SVG"), "image/svg+xml");
+        assert_eq!(mime_guess("scan.BMP"), "image/bmp");
+        assert_eq!(mime_guess("shot.WEBP"), "image/webp");
         assert_eq!(mime_guess("notes.TXT"), "text/plain; charset=utf-8");
         // Unknown stays unknown rather than being guessed at.
         assert_eq!(mime_guess("archive.bin"), "application/octet-stream");
+    }
+
+    /// A previewable image must arrive as an image: the preview is an `<img>`
+    /// and `nosniff` makes the content type the only thing that lets it paint.
+    /// This is the guard for the formats that used to be served as
+    /// `application/octet-stream` (webp, bmp, svg, tiff, heic/heif, avif) and so
+    /// never rendered.
+    #[test]
+    fn every_preview_image_has_an_image_type() {
+        for ext in PREVIEW_IMAGE_EXTS {
+            let upper = ext.to_uppercase();
+            for name in [format!("photo.{ext}"), format!("PHOTO.{upper}")] {
+                let mime = mime_guess(&name);
+                assert!(mime.starts_with("image/"), "{name} is served as {mime}");
+            }
+        }
+        // Named, so a regression names the reported formats rather than a list.
+        assert_eq!(mime_guess("logo.svg"), "image/svg+xml");
+        assert_eq!(mime_guess("scan.bmp"), "image/bmp");
+        assert_eq!(mime_guess("shot.webp"), "image/webp");
+    }
+
+    /// The table is the only map, so one extension must not carry two answers.
+    #[test]
+    fn the_mime_table_has_no_duplicate_extension() {
+        let mut seen = std::collections::BTreeSet::new();
+        for (ext, _) in MIME_BY_EXT {
+            assert!(seen.insert(*ext), "{ext} is listed twice");
+        }
+    }
+
+    /// An uploaded document is never served as a document: that is the row that
+    /// would turn a stored file into same-origin markup.
+    #[test]
+    fn markup_is_served_as_text() {
+        assert_eq!(mime_guess("page.html"), "text/plain; charset=utf-8");
+        assert_eq!(mime_guess("feed.xml"), "text/plain; charset=utf-8");
+        assert_eq!(mime_guess("script.js"), "text/plain; charset=utf-8");
+    }
+
+    /// Text is previewable because it is served as text — the two are one fact,
+    /// not two lists. The formats the code block shows keep their row, and a
+    /// file with no extension of its own does not gain one.
+    #[test]
+    fn previewable_text_is_the_text_the_server_serves() {
+        for name in ["notes.log", "data.csv", "main.go", "app.ts", "pkg.ini"] {
+            assert!(
+                is_previewable_file(name),
+                "{name} should open the code block"
+            );
+        }
+        for name in ["archive.bin", "report.pdf", "icon.ico", "noext", ".txt"] {
+            assert!(
+                !is_previewable_file(name),
+                "{name} has no previewable extension"
+            );
+        }
+    }
+
+    /// The quick-preview dialog decides "image" a second time in JavaScript and
+    /// points `<img src>` at the same endpoint, so a format added on one side must
+    /// not silently skip the other. Read from the source rather than duplicated.
+    #[test]
+    fn the_quick_preview_image_list_matches() {
+        let js = include_str!("../../frontend/core/file-meta.js");
+        let line = js
+            .lines()
+            .find(|line| line.contains("QUICK_PREVIEW_IMAGE_EXTS = ["))
+            .expect("file-meta.js no longer declares QUICK_PREVIEW_IMAGE_EXTS");
+        let list: Vec<&str> = line
+            .split_once('[')
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .expect("the declaration is not a single-line array")
+            .0
+            .split(',')
+            .map(|item| item.trim().trim_matches('"'))
+            .filter(|item| !item.is_empty())
+            .collect();
+        assert_eq!(list.as_slice(), PREVIEW_IMAGE_EXTS);
     }
 
     /// The trail is shared by the browser (a directory) and the full-page

@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo, uploadFile } from "../helpers/api";
-import { pngFixture } from "../helpers/image";
+import { bmpFixture, pngFixture } from "../helpers/image";
 import { tinyMp4 } from "../helpers/video";
 
 let state: ReturnType<typeof readState>;
@@ -31,6 +31,13 @@ function minimalWav(): Buffer {
   return b;
 }
 
+// A real SVG the browser paints through an `<img>`: the content endpoint serves
+// it as `image/svg+xml`, which is also the type whose response policy is
+// `sandbox`.
+const LOGO_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">' +
+  '<rect width="120" height="80" fill="#444"/><circle cx="60" cy="40" r="20" fill="#ccc"/></svg>';
+
 test.beforeAll(async () => {
   state = readState();
   repoId = await seedRepo(state.baseURL, state.adminToken, "preview-repo");
@@ -39,6 +46,10 @@ test.beforeAll(async () => {
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "clip.mp4", Buffer.from("not really a video"));
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "plays.mp4", tinyMp4());
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "note.xyz", "unrecognized\n");
+  // A real BMP and a real SVG: the two formats whose previews used to be a
+  // fallback message because the bytes arrived as `application/octet-stream`.
+  await uploadFile(state.baseURL, state.adminToken, repoId, "/", "photo.bmp", bmpFixture(64, 48));
+  await uploadFile(state.baseURL, state.adminToken, repoId, "/", "logo.svg", LOGO_SVG);
   // Bigger than the preview stage at the suite's viewport, and long enough that
   // the code block has to scroll: the two fixtures the frame assertions need.
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "big.png", pngFixture(1600, 1200));
@@ -243,6 +254,41 @@ test("a picture larger than the stage is contained by it", async ({ page }) => {
   expect(img.height).toBeLessThanOrEqual(stage.height + 1);
   // …and it did not collapse to the replaced element's 300x150 default.
   expect(Math.max(img.width, img.height)).toBeGreaterThan(200);
+});
+
+// The preview is an `<img>` and every response carries `nosniff`, so a format
+// served as `application/octet-stream` is a picture that never paints. BMP and
+// SVG were exactly that.
+test("a bmp and an svg preview as pictures", async ({ page }) => {
+  await openFullPreview(page, "photo.bmp");
+  const bmp = page.locator(".nf-preview-image");
+  await expect(bmp).toHaveAttribute("src", new RegExp(`^/repos/${repoId}/files/photo\\.bmp`));
+  await expect.poll(async () => bmp.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(64);
+
+  await openFullPreview(page, "logo.svg");
+  const svg = page.locator(".nf-preview-image");
+  await expect.poll(async () => svg.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(120);
+});
+
+// An uploaded SVG opened directly is parsed as a document in this origin, so the
+// rule that keeps it from being a script host is its own response policy.
+test("an uploaded svg is not a script host", async ({ page }) => {
+  await uploadFile(
+    state.baseURL,
+    state.adminToken,
+    repoId,
+    "/",
+    "probe.svg",
+    '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">' +
+      "<script>window.__ran = true;</script></svg>",
+  );
+
+  const resp = await page.request.get(`/repos/${repoId}/files/probe.svg`);
+  expect(resp.headers()["content-type"]).toBe("image/svg+xml");
+  expect(resp.headers()["content-security-policy"]).toBe("sandbox");
+
+  await page.goto(`/repos/${repoId}/files/probe.svg`);
+  expect(await page.evaluate(() => (window as any).__ran === true)).toBe(false);
 });
 
 test("the media preview uses a native player and a short stage for audio", async ({ page }) => {

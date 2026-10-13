@@ -9,11 +9,10 @@ import zlib from "node:zlib";
  * confined child process with a memory and CPU bound (`sandbox::jobs::images`,
  * started by `sandbox::worker`) — so it exercises the real thumbnail path.
  *
- * PNG where the *browser* has to size the fixture: the preview's content
- * endpoint serves a BMP as `application/octet-stream` (see `files::mime_guess`),
- * which an `<img>` will not render, so the full-page preview tests need bytes
- * with a `image/png` content type. Deflating raw scanlines is all the encoder
- * `pngFixture` needs — no image tooling, no dependency.
+ * PNG where the fixture has to be big and stay cheap to upload: a 1600×1200 BMP
+ * carries 5.7 MB of raw rows, and the full-page preview's containment test only
+ * needs a picture larger than the stage. Deflating raw scanlines is all the
+ * encoder `pngFixture` needs — no image tooling, no dependency.
  */
 export function bmpFixture(width: number, height: number): Buffer {
   const clamp = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v);
