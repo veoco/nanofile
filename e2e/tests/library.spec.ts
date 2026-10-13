@@ -187,6 +187,18 @@ test("the list filters and sorts without a round trip", async ({ page }) => {
   const total = await rows.count();
   expect(total).toBeGreaterThan(1);
 
+  // This filter is the one underlined search control left in the app — the
+  // sidebar's library filter beside it and every other search box are the boxed
+  // `.nf-search`. Only the bottom edge draws a hairline, and the top edge
+  // drawing none is what pins that exception.
+  const toolbarFilter = page.locator(".nf-toolbar label.nf-find");
+  await expect(toolbarFilter).toHaveCount(1);
+  const edges = await toolbarFilter.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { top: s.borderTopWidth, bottom: s.borderBottomWidth };
+  });
+  expect(edges).toEqual({ top: "0px", bottom: "1px" });
+
   // Filter: only rows whose name or description matches survive, and the count
   // label follows.
   await page.locator("#repo-filter").fill(name);

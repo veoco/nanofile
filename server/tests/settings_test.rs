@@ -649,6 +649,17 @@ async fn a_row_carries_the_text_the_filter_matches_on() {
         html.contains("data-settings-empty"),
         "and a note for a query that matches nothing"
     );
+    // The box is the app's shared search field, not the library list's
+    // underlined one: the class is what keeps an operator's filter from reading
+    // as the library page's toolbar.
+    assert!(
+        html.contains("nf-search"),
+        "the filter is the shared boxed field"
+    );
+    assert!(
+        !html.contains("nf-find"),
+        "and not the library page's underline"
+    );
 
     let row = row_of(&html, "server.max_upload_size_mb");
     let search = row

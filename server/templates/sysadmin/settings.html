@@ -263,11 +263,15 @@
        holds more than one row can be filtered. The box sits outside the form: a
        search field inside it would submit the settings on Enter. A page with a
        single row gets no box, because there is nothing to narrow. Without
-       scripting it stays inert and the page is what it always was. #}
+       scripting it stays inert and the page is what it always was.
+       The field is the app's boxed `.nf-search`, not the library list's
+       underline: this is a page-level search box like the topbar's and the
+       trash page's, and underlining it made an operator-facing filter look like
+       the library toolbar's own. #}
     {% if row_count > 1 %}
     <div class="mt-5 flex flex-wrap items-center gap-3">
-        <label class="nf-find w-[300px] max-w-[40vw] shrink-0">
-            {{ icons::icon_search("w-[13px] h-[13px] shrink-0") }}
+        <label class="nf-search w-[300px] max-w-[40vw] shrink-0">
+            {{ icons::icon_search("w-3.5 h-3.5 flex-shrink-0") }}
             <input type="search" autocomplete="off" data-settings-filter
                    placeholder="{{ t.tr("setting.filter_placeholder") }}"
                    aria-label="{{ t.tr("setting.filter_placeholder") }}">

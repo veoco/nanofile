@@ -42,12 +42,21 @@ test("the panel lines up with the page header and the filter", async ({ page }) 
   await page.goto("/sysadmin/settings/server/");
   const title = (await page.locator("main .page-title").boundingBox())!;
   // The filter's own box: the input inside it starts after the search glyph, so
-  // the control whose left edge is meant to line up is the label.
-  const filter = (await page.locator("label.nf-find").boundingBox())!;
+  // the control whose left edge is meant to line up is the label. The page also
+  // carries the topbar's and the sidebar's own boxed fields, so the box is
+  // reached through the filter input it wraps.
+  const field = page.locator("label.nf-search:has([data-settings-filter])");
+  await expect(field).toHaveCount(1);
+  const filter = (await field.boundingBox())!;
   const panel = (await page.locator("form.nf-list").boundingBox())!;
   for (const box of [filter, panel]) {
     expect(Math.abs(box.x - title.x)).toBeLessThan(1);
   }
+
+  // This is the app's boxed search field, not the library list's underlined one:
+  // a border on all four sides is what separates a page-level search box from
+  // the library toolbar's own filter.
+  expect(await field.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("1px");
 
   // A row's text starts one border plus one row padding inside the panel, and
   // its control column ends the same distance from the other edge.

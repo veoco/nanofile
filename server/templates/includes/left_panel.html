@@ -15,10 +15,14 @@
            over the same set (the one that survives below `lg`, where the rail is
            hidden). The two filter their own lists and are not linked, but they
            are the same control, so they share `repo.search_placeholder`: a
-           separately worded placeholder was only drift. #}
-        <label class="flex items-center gap-1.5 h-7 px-2 rounded-ctl border border-line-ctrl text-ink-3">
+           separately worded placeholder was only drift.
+           The rail's filter is the app's boxed `.nf-search`; on /libraries/ it
+           sits beside the page's own filter, which is the underlined one. The
+           two filter the same set and are meant to look different — one narrows
+           the rail, the other is the catalog's toolbar. #}
+        <label class="nf-search">
             {{ icons::icon_search("w-3.5 h-3.5 flex-shrink-0") }}
-            <input type="text" class="js-repo-filter flex-1 min-w-0 border-0 bg-transparent outline-none text-ink text-[12.5px] placeholder-ink-3"
+            <input type="text" class="js-repo-filter"
                    placeholder="{{ t.tr("repo.search_placeholder") }}"
                    aria-label="{{ t.tr("repo.search_placeholder") }}">
         </label>

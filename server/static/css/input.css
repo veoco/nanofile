@@ -422,8 +422,10 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
   .nf-search kbd {
     @apply shrink-0 text-[10.5px] leading-none px-[5px] py-[3px] border border-line rounded-[4px] text-ink-3 font-sans;
   }
-  /* Toolbar filter: the underline is the whole control, unlike the boxed
-     `.nf-search` the topbar and the form pages use. */
+  /* Toolbar filter: the underline is the whole control. Only the library page's
+     own toolbar uses it — every other search box in the app is the boxed
+     `.nf-search` above (the topbar, the search and trash pages, the system
+     settings pages, the sidebar's library filter). */
   .nf-find {
     @apply flex items-center gap-2 min-w-0 border-b border-line text-ink-3;
     height: var(--ctl-h);
