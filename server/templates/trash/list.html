@@ -60,7 +60,11 @@
                    placeholder="{{ t.tr("trash.search_placeholder") }}"
                    aria-label="{{ t.tr("trash.search_placeholder") }}">
         </label>
-        <button type="submit" class="btn btn-line">{{ t.tr("nav.search") }}</button>
+        {# The submit is the filled button every other field-plus-submit pair in
+           the app uses (`/search/`, the API-key copy box, the drawer tag box):
+           an outlined button here drew a lighter hairline than the field it
+           belongs to and read as a second control beside it. #}
+        <button type="submit" class="btn btn-solid">{{ t.tr("nav.search") }}</button>
         {% if !query.is_empty() %}
         <a href="/trash/" class="btn btn-quiet">{{ t.tr("common.clear") }}</a>
         {% endif %}

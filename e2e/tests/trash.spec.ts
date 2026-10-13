@@ -46,6 +46,31 @@ test("trash search filters to matching entries", async ({ page }) => {
   await expect(trashRow(page, "alpha.txt")).toHaveCount(0);
 });
 
+/**
+ * The filter bar is the search page's control. The field is the app's boxed
+ * search box and the submit is the filled button every other field-plus-submit
+ * pair uses (`/search/`, the API-key copy box, the drawer tag box). An outlined
+ * button drew a lighter hairline than the field it belongs to, which read as a
+ * second control rather than as the field's own submit.
+ */
+test("the trash search is the app's page-level search control", async ({ page }) => {
+  await page.goto("/trash/");
+  const form = page.locator("#tab-files .nf-filterbar form");
+  const field = form.locator("label.nf-search");
+  await expect(field).toHaveCount(1);
+  const submit = form.locator('button[type="submit"].btn-solid');
+  await expect(submit).toHaveCount(1);
+  // The button carries no border to disagree with the field's, and the two sit
+  // on one line at the shared control height.
+  const button = await submit.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { border: s.borderTopColor, height: el.getBoundingClientRect().height };
+  });
+  const box = await field.evaluate((el) => el.getBoundingClientRect().height);
+  expect(button.border).toBe("rgba(0, 0, 0, 0)");
+  expect(button.height).toBe(box);
+});
+
 test("restore brings a deleted file back", async ({ page }) => {
   const { repoId, name } = await deleteAndOpenTrash(page, "restore");
   await trashRow(page, name).locator(".js-restore-form button[type='submit']").click();
