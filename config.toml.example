@@ -1,597 +1,90 @@
+# Nanofile configuration.
+#
+# Every key has a built-in default, and the web interface ("System Settings")
+# manages every key except the file-only ones marked below. A value here is a
+# bootstrap: it supplies a key with no saved value, and stops mattering for that
+# key once an administrator saves one. The environment (NANOFILE_*) always wins
+# and is never written back.
+#
+# So this file holds only (1) what the interface cannot store at all — the master
+# secret, the database URL, the at-rest encryption mode, the first-start admin,
+# the log file, each marked "file-only" — and (2) the values that have to be
+# decided before the interface is reachable: external URL, listener, state
+# directories, language. Everything else is edited at Settings → System Settings,
+# where every row also names the NANOFILE_* variable that overrides it.
+
 [server]
-# Environment variables:
-#   NANOFILE_SERVER_ADDR
-#   NANOFILE_SERVER_PORT
-#   NANOFILE_SERVER_VERSION
-#   NANOFILE_SERVER_SITE_URL
-#   NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB
-#   NANOFILE_SERVER_MAX_CHUNK_SIZE_MB
-#   NANOFILE_SERVER_REQUEST_TIMEOUT_SECS
-#   NANOFILE_CORS_ALLOWED_ORIGINS           (comma-separated)
-#   NANOFILE_CORS_MAX_AGE_SECS
-#   NANOFILE_SERVER_WEBDAV_ENABLED
-#   NANOFILE_SERVER_SSO_ENABLED
-#   NANOFILE_SERVER_FILE_SEARCH_ENABLED
-#   NANOFILE_SERVER_DESKTOP_CUSTOM_BRAND
-#   NANOFILE_SERVER_DESKTOP_CUSTOM_LOGO
-#   NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_ALGO
-#   NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS
-#   NANOFILE_SERVER_TRAY
-addr = "0.0.0.0"
-# Seafile-compatible version advertised to clients via /api2/server-info/.
-# Clients parse the major/minor/patch numbers to gate feature availability.
-version = "8.0.0"
-port = 8082
-# External URL used for download links and CORS defaults.
-# IMPORTANT: download links are built from this address (like seahub's
-# FILE_SERVER_ROOT), so when clients reach this server through a reverse
-# proxy / TLS terminator, set it to the address clients actually use,
-# e.g. "https://your-domain.com". Otherwise the port gets appended to the
-# request Host, and downloads may hang on clients.
-site_url = "http://127.0.0.1:8082"
-max_upload_size_mb = 4096
-# Cap for JSON/Form request bodies (MiB). Applied app-wide; upload routes use
-# max_upload_size_mb instead, so a single JSON request cannot buffer gigabytes
-# into memory. Env: NANOFILE_SERVER_MAX_JSON_BODY_MB
-max_json_body_mb = 64
-# Per-chunk cap for resumable (Content-Range) uploads. Enforced before the chunk
-# body is read: an oversized chunk is rejected from the header alone, and the
-# bytes actually read are also capped, so one request can never buffer more than
-# this amount (0 disables the cap).
-max_chunk_size_mb = 256
-# Total time a request handler (including reading its body) may run before the
-# connection is answered with 408.
-request_timeout_secs = 600
-# How long a client may take to send the request headers. Without this a client
-# that dribbles headers can hold a connection open indefinitely (0 disables it).
-header_read_timeout_secs = 30
-# Optional extra deadline for sending the request body (0 = only bounded by
-# request_timeout_secs above).
-body_timeout_secs = 0
-cors_allowed_origins = []
-cors_max_age_secs = 86400
-webdav_enabled = true
-# SSO local-browser login flow (client-sso-via-local-browser feature).
-sso_enabled = true
-# Advertise the `file-search` feature (gates the desktop client's search tab
-# and mobile search). The backend has a search API either way.
-file_search_enabled = true
-# Whether anonymous share links and upload links are allowed at all. When false,
-# creating new share/upload links is rejected, existing links (/f/, /d/, /u/)
-# become inaccessible, minting an upload token from an existing upload link is
-# refused, and uploads through an already-minted link token are refused too. The
-# `share-link-disabled` feature is advertised so clients hide sharing. Manage
-# pages still let admins view/delete existing links.
-share_link_enabled = true
-# Optional desktop-client customization — only advertised in /api2/server-info/
-# when set:
-# desktop_custom_brand = "My Company"
-# desktop_custom_logo = "custom/logo.png"   # relative to server root; the client joins it onto the server URL
-# Encrypted-library version advertised in /api2/server-info/ as
-# `encrypted_library_version` (seahub's ENCRYPTED_LIBRARY_VERSION). Official
-# clients take it verbatim as the `enc_version` of a library they create, so it
-# must be a version this server can actually decrypt: 2 (fixed salt) or 4
-# (per-library salt). Seafile's version 3 wraps the library key with
-# AES-128-ECB, which this server rejects. It is also the version used when a
-# client creates an encrypted library by sending only a `passwd` (the Android
-# client does exactly that; the server then generates magic/random_key/salt).
-# Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_VERSION
-encrypted_library_version = 2
-# Encrypted-library password-hash config (seahub's
-# ENCRYPTED_LIBRARY_PWD_HASH_ALGO / ENCRYPTED_LIBRARY_PWD_HASH_PARAMS).
-# Advertised in /api2/server-info/ and honoured end to end: the desktop client
-# generates a pwd_hash instead of a magic when it sees the algorithm, and when a
-# client sends only a `passwd` (Android, the web UI) the server hashes it with
-# this algorithm. Leave both unset to keep the legacy magic/random_key flow,
-# which is upstream's default.
-#
-# The algorithm is compared verbatim by the clients, so it must be lowercase and
-# spelled exactly like this: "pbkdf2_sha256" or "argon2id". Any other value
-# aborts startup.
-#
-# `params` format depends on the algorithm: an iteration count for
-# "pbkdf2_sha256" (default 1000), or "time_cost,memory_cost,parallelism" for
-# "argon2id" (default "2,102400,8"). Unset means those defaults. Note the
-# desktop client cannot read this key (it looks for a misspelled variant), so
-# client-created libraries always use the defaults; the configured value applies
-# when the server hashes the password itself.
-# Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_ALGO
-#      NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS
-# encrypted_library_pwd_hash_algo = "pbkdf2_sha256"
-# encrypted_library_pwd_hash_params = "1000"
-# Trusted reverse proxies (comma-separated). Forwarded client-address headers
-# (CF-Connecting-IP, X-Forwarded-For) are only honored for rate limiting when
-# the TCP peer is one of these; otherwise the raw peer address is used. Keep
-# empty when the server is exposed directly.
-#
-# Each entry is an exact IP, a CIDR range (e.g. 172.16.0.0/12, fd00::/8), or a
-# keyword: loopback, private, link-local, unique-local.
-#
-# Behind a Cloudflare Tunnel (cloudflared) the origin sees connections from a
-# loopback or private address and Cloudflare sets CF-Connecting-IP to the real
-# visitor. To restore correct client IPs set this to private AND bind the origin
-# to 127.0.0.1 (or isolate it on the Docker network) so only the tunnel can
-# reach it — otherwise a LAN peer could forge the header.
-# trusted_proxies = ["private"]
-trusted_proxies = []
-# Hosts allowed in generated absolute URLs (download / block links) while
-# `site_url` above is still the built-in default. In that state the request
-# Host header is echoed into those URLs so LAN clients get a reachable address,
-# but a Host the server did not choose is attacker-influenced (DNS rebinding,
-# wildcard vhost) and a client following the URL would send its token there.
-# When this list is non-empty only these values are accepted; anything else
-# falls back to `site_url`. Simplest alternative: set `site_url` to the address
-# clients actually use. Env: NANOFILE_SERVER_ALLOWED_HOSTS
-allowed_hosts = []
-# Whether to honour a request Host header when `site_url` is still the built-in
-# default (LAN convenience). Only a **literal address** (`192.168.1.20`,
-# `[fe80::1]`, `localhost`) is echoed while `allowed_hosts` is empty, because the
-# URLs built from it carry a capability token and a DNS name is
-# attacker-influenceable (DNS rebinding, wildcard vhost, proxy forwarding).
-# List a name in `allowed_hosts` to have it echoed. Set to false to always use
-# `site_url` — recommended behind a proxy.
-# Env: NANOFILE_SERVER_TRUST_REQUEST_HOST
-trust_request_host = true
-# Maximum resources one WebDAV PROPFIND may return (0 = unlimited). An absent
-# Depth header means "infinity" per RFC 4918, so this bounds the in-memory
-# multistatus document; over the cap the request is answered 507 and the client
-# should retry with Depth: 1.
-# Env: NANOFILE_SERVER_MAX_PROPFIND_ENTRIES
-max_propfind_entries = 100000
-# Add `includeSubDomains` to the HSTS header (HTTPS deployments only). Off by
-# default, so sibling host names are not pinned.
-# Env: NANOFILE_SERVER_HSTS_INCLUDE_SUBDOMAINS
-hsts_include_subdomains = false
-# System tray icon (only exists in binaries built with `--features tray`;
-# plain builds have no tray code at all). Set to false (or NANOFILE_SERVER_TRAY=false)
-# to run headless even in a desktop session — e.g. for an auto-started instance
-# that should stay invisible.
-#
-# On Windows the tray menu can also register Nanofile as a service
-# (`nanofile service install`, administrator rights required): a service starts
-# at boot with no login, which is what the per-user "start at login" entry cannot
-# do. It runs as the per-service virtual account NT SERVICE\Nanofile unless
-# `--account system` (LocalSystem), `--account network`, or a named account is
-# given, and the install grants that account write access to the state
-# directories, the log directory and this config file. This value is read before
-# the tray comes up, so changing it needs a full process restart (the in-app
-# restart button cannot apply it). Note that both registrations record absolute
-# paths: a config file named with --config/NANOFILE_CONFIG that has been moved
-# away is a refused start, not a quiet fall back to built-in defaults.
-tray = true
-#   NANOFILE_SERVER_SECRET_KEY               (generate with: openssl rand -hex 32)
-# IMPORTANT: Generate a unique secret key for production:
+# External URL used for download and share links, and for the Secure cookie
+# attribute and HSTS. Behind a proxy or TLS terminator set the address clients
+# actually use, e.g. "https://your-domain.com".
+#site_url = "http://127.0.0.1:8082"
+# Listener address and port. Changing either needs a restart.
+#addr = "0.0.0.0"
+#port = 8082
+# System tray icon; false runs headless (only in `--features tray` builds).
+#tray = true
+# file-only — master key: sessions, CSRF/notification tokens, sync-token
+# encryption and (unless set separately) the at-rest block key are derived from
+# it. A release build refuses to start without a strong value; generate one with
 #   openssl rand -hex 32
+# and keep this file private (chmod 600). Env: NANOFILE_SERVER_SECRET_KEY
 secret_key = ""
-# ^ Debug builds auto-generate one on startup when empty. Release builds
-#   REQUIRE an explicit value (at least 32 bytes / 64 hex chars) and refuse to
-#   start otherwise, because the storage encryption master key and the
-#   sync-token encryption key are derived from it.
-#   This is the single master key. The notification private key and
-#   CSRF signing key are derived from it automatically.
-#   For production, set NANOFILE_SERVER_SECRET_KEY to persist across restarts.
 
 [database]
-# Environment variables:
-#   NANOFILE_DATABASE_URL
-#   NANOFILE_DATABASE_MAX_CONNECTIONS
-# A relative path here — and in [storage] / [index] — resolves against the
-# directory of the running binary, never the working directory: a desktop
-# instance started at login has a working directory that says nothing about the
-# installation, so `data/nanofile.db` would otherwise be looked up inside
-# `C:\Windows\System32`. The directory is created if it does not exist yet. When
-# an existing installation's relative paths already exist under its working
-# directory they are kept exactly as configured, so upgrading never moves its
-# state.
-url = "sqlite:data/nanofile.db?mode=rwc"
-# Pooled SQLite connections. WAL allows concurrent readers (single writer), so
-# this mainly improves read throughput. Kept modest because `mmap_size` and
-# `cache_size` are per-connection overhead.
-max_connections = 5
+# file-only — SQLite URL. A relative path resolves against the binary's
+# directory (created if missing), never the working directory.
+#url = "sqlite:data/nanofile.db?mode=rwc"
+# file-only — pooled connections (WAL readers); kept modest on purpose.
+#max_connections = 5
 
-[storage]
-# Environment variables:
-#   NANOFILE_STORAGE_BLOCK_DIR
-#   NANOFILE_STORAGE_TEMP_DIR
-#   NANOFILE_STORAGE_THUMBNAIL_DIR
-#   NANOFILE_STORAGE_AVATAR_DIR
-#   NANOFILE_STORAGE_MAX_STORAGE_BYTES
-#   NANOFILE_STORAGE_FFMPEG_PATH
-#   NANOFILE_STORAGE_MAX_TEMP_UPLOADS
-#   NANOFILE_STORAGE_MAX_TEMP_UPLOAD_BYTES
-#   NANOFILE_STORAGE_TEMP_UPLOAD_TTL_HOURS
-#   NANOFILE_STORAGE_MAX_ZIP_ENTRIES
-#   NANOFILE_STORAGE_MAX_ZIP_BYTES
-#   NANOFILE_STORAGE_BLOCK_ENCRYPTION_MODE
-#   NANOFILE_STORAGE_ENCRYPTION_KEY        (discouraged: visible in process listings)
-#   NANOFILE_STORAGE_ENCRYPTION_KEY_FILE   (read key from file, safer)
-# Block storage root. Blocks are namespaced per library:
-#   {block_dir}/repos/<sha1(repo_id)>/<2hex>/<block_id>
-# so a block id only grants access through a library the caller owns.
-# A relative path resolves against the binary's directory, like `[database] url`.
-# Upgrading from a build that used the old flat layout
-# ({block_dir}/<2hex>/<block_id>): the migration runs automatically at startup,
-# before the first request is served — it copies every referenced block into its
-# library's directory and then removes the old tree. Run
-# `nanofile migrate-blocks --dry-run` first to see how much would be copied;
-# `nanofile migrate-blocks` runs it explicitly with the server stopped. Back up
-# this directory before upgrading if you want a rollback path. Deduplication is
-# per library, so content duplicated across libraries is stored once per library.
-block_dir = "data/blocks"
-temp_dir = "data/temp"
-# Thumbnail cache directory.
-thumbnail_dir = "data/thumbnails"
-# Avatar storage directory.
-avatar_dir = "data/avatars"
-# Global cap on total stored bytes across all libraries (0 = unlimited; per-user
-# quotas in the admin UI are the usual way to bound usage).
-max_storage_bytes = 0
-# ffmpeg binary used to generate video thumbnails. Video files keep showing a
-# play-icon placeholder when this binary isn't installed. Playback works without it.
-# The sandbox worker is what executes it: the media profile may run this file and
-# the loader the kernel starts it with, and nothing else. Saving a new value from
-# the admin UI re-resolves that grant, so the next request uses the new binary.
-ffmpeg_path = "ffmpeg"
-# Max concurrent in-flight resumable (Content-Range) uploads tracked by the temp
-# manager (0 = unlimited). Prevents abandoned chunked uploads from exhausting memory.
-max_temp_uploads = 1000
-# Max total declared bytes across active temp uploads (0 = unlimited; the
-# example sets a finite 32 GiB so a busy or abusive client cannot fill the disk).
-max_temp_upload_bytes = 34359738368
-# Hours an abandoned resumable-upload temp file is retained before cleanup (0 = disable).
-temp_upload_ttl_hours = 24
-# Max files in a single zip archive download (0 = unlimited).
-max_zip_entries = 10000
-# Max total uncompressed bytes in a single zip archive (0 = unlimited; the
-# example sets a finite 8 GiB so one "download as zip" cannot exhaust memory).
-max_zip_bytes = 8589934592
-# Byte budget for all unconsumed zip-download tokens held in memory (0 =
-# unlimited). A token keeps the whole entry list, including every file's block
-# ids, so this — not the number of tokens — decides how much memory a flood of
-# zip requests can pin. Oldest tokens are evicted first; an archive whose
-# listing alone exceeds the budget is refused with 429.
-max_zip_task_bytes = 33554432
-# Server-side transparent at-rest encryption for file blocks:
-#   "off"  - blocks are stored exactly as received (legacy plaintext).
-#   "on"   - every new write is encrypted, every read is decrypted; requires encryption_key.
-#   "lazy" - new writes are encrypted, reads accept both encrypted and legacy plaintext
-#            blocks — the migration window.
-# The block id (sha1 of logical bytes) is unchanged in every mode, so Seafile clients
-# and the existing content-addressed dedup keep working.
-#
-# Ciphertext written by earlier releases has no `NFE1` header (tag only, 16 bytes
-# over the plaintext); the current format adds a 6-byte header. Reads accept both,
-# and a block's logical size — the value `block-map` and range/resume offsets are
-# derived from — follows its stored format. `nanofile verify-blocks` reports blocks
-# whose bytes do not hash to their id, and file objects whose blocks do not add up
-# to the size they declare.
-block_encryption_mode = "off"
-# Master key for block at-rest encryption. When block_encryption_mode is not "off" and
-# this is unset, it's auto-derived from [server] secret_key. Set explicitly via
-# NANOFILE_STORAGE_ENCRYPTION_KEY_FILE for a dedicated key.
-# encryption_key = ...
+# [storage]
+# State directories, relative to the binary's directory. Decide these before the
+# first start: changing one afterwards does not move existing data.
+#block_dir = "data/blocks"
+#temp_dir = "data/temp"
+#thumbnail_dir = "data/thumbnails"
+#avatar_dir = "data/avatars"
+# file-only — at-rest encryption of stored blocks: "off" / "on" / "lazy".
+# Cannot be stored from the interface: it decides how existing ciphertext is
+# read. "lazy" encrypts new writes while still reading legacy plaintext.
+#block_encryption_mode = "off"
+# file-only — dedicated key for at-rest encryption; unset derives it from
+# [server] secret_key (prefer NANOFILE_STORAGE_ENCRYPTION_KEY_FILE).
+#encryption_key = ...
 
-[sync]
-# Environment variables:
-#   NANOFILE_SYNC_VERIFY_FS_OBJECTS
-#   NANOFILE_SYNC_MAX_TREE_DEPTH
-#   NANOFILE_SYNC_MAX_TREE_VISITS
-# Verify that each received FS object's id equals sha1(uncompressed JSON):
-#   "strict" (default) rejects mismatches with 400; "log" accepts but warns;
-#   "off" skips the check. The official server does not verify, but every
-#   legitimate repo-v1 client sends a matching id.
-verify_fs_objects = "strict"
-# Cycle/DoS guard for directory-tree walks: maximum BFS depth and
-# total nodes visited per walk. Defaults are far above any real tree.
-max_tree_depth = 512
-max_tree_visits = 1000000
+# [index]
+# Search index directory, relative to the binary's directory.
+#index_dir = "data/index"
 
-[auth]
-# Environment variables:
-#   NANOFILE_AUTH_PASSWORD_HASH_ITERATIONS
-#   NANOFILE_AUTH_API_TOKEN_TTL_DAYS
-#   NANOFILE_AUTH_SYNC_TOKEN_TTL_DAYS
-#   NANOFILE_AUTH_API_KEY_TTL_PRESETS_DAYS    (comma-separated list)
-#   NANOFILE_AUTH_API_KEY_MAX_TTL_DAYS
-#   NANOFILE_AUTH_MAX_LOGIN_ATTEMPTS
-#   NANOFILE_AUTH_LOCKOUT_DURATION_SECS
-#   NANOFILE_AUTH_MAX_DISTINCT_USERNAMES_PER_IP
-#   NANOFILE_AUTH_ENABLE_INVITATIONS
-#   NANOFILE_AUTH_ENABLE_PASSWORD_RESET
-#   NANOFILE_AUTH_PASSWORD_MIN_LENGTH
-#   NANOFILE_AUTH_REQUIRE_STRONG_PASSWORD
-password_hash_iterations = 600000
-# Lifetime of API/session and sync tokens, in days. NOTE: 0 means the token
-# NEVER expires on the API login path (the web-UI path reads 0 as "expire
-# immediately"), so a 0 here is a permanent bearer credential.
-api_token_ttl_days = 180
-sync_token_ttl_days = 365
-# Lifetimes offered as presets when creating a unified API key. Presentation
-# only: any lifetime up to api_key_max_ttl_days is accepted.
-api_key_ttl_presets_days = [7, 30, 90, 180, 365]
-# Upper bound on an API key's lifetime, in days. 0 (the default) permits keys
-# that never expire; a non-zero value rejects both "never" and any longer
-# lifetime, which is what a deployment with a credential-rotation policy wants.
-api_key_max_ttl_days = 0
-# Max failed logins per client address before it is locked out, and how long
-# the lockout (and failure window) lasts. 0 disables the lockout entirely.
-max_login_attempts = 5
-lockout_duration_secs = 900
-# Max distinct accounts one client address may fail to log in to within
-# lockout_duration_secs before that address is blocked (0 = unlimited).
-# This counter is NOT reset by a successful login, so an attacker holding one
-# valid account cannot spray forever by logging into it between guesses.
-max_distinct_usernames_per_ip = 20
-# Whether invitation-code-based registration is allowed at all. When false the
-# login page hides the "Create Account" link AND `/accounts/register/` (GET and
-# POST) answers 404, so a valid or leaked invitation code cannot create an
-# account.
-# Env: NANOFILE_AUTH_ENABLE_INVITATIONS
-enable_invitations = true
-# Whether the password-reset flow is served at all. It additionally needs a
-# usable email backend: `[email] enabled` must be true *and* the SMTP settings
-# saved at /sysadmin/settings/email/ must be complete, otherwise the "Forgot password?"
-# link is hidden, `/accounts/password/reset/` answers 404 and no token is
-# minted (the startup log warns about exactly this combination).
-# Env: NANOFILE_AUTH_ENABLE_PASSWORD_RESET
-enable_password_reset = true
-# Max anonymous SSO link creations per IP per hour (0 = unlimited).
-# `POST /api2/client-sso-link/` is anonymous by protocol and writes a row per
-# call.
-# Env: NANOFILE_AUTH_SSO_LINK_MAX_PER_HOUR
-sso_link_max_per_hour = 30
-password_min_length = 8
-require_strong_password = false
-# Max password reset requests per IP per hour (0 = unlimited)
-password_reset_max_per_hour = 5
-# Max registration attempts per IP per hour (0 = unlimited)
-registration_max_per_hour = 5
-# Max TOTP verification attempts per user per 5 minutes (0 = unlimited)
-totp_max_attempts = 5
-# Max password attempts for password-protected share/upload links per IP per hour (0 = unlimited)
-link_password_max_per_hour = 5
-# Max failed encrypted-library password checks per (user, library) per hour
-# (0 = unlimited). The library KDF iteration count is fixed by the Seafile wire
-# protocol, so this throttling is the control against online guessing.
-repo_password_max_per_hour = 5
-# Max anonymous share-link downloads per IP per minute (0 = unlimited)
-share_download_max_per_minute = 30
-# Max failed WebDAV authentications per IP per 5 minutes (0 = unlimited).
-# Successful requests are never counted, so a working client is unaffected.
-webdav_max_failures_per_5min = 30
-reindex_max_per_hour = 5
-# Max search requests per user per minute (0 = unlimited)
-search_max_per_minute = 60
+# [admin_init]
+# file-only — create the first administrator on a start that finds no accounts
+# (`nanofile adduser` is the alternative). Prefer the *_FILE variables
+# (NANOFILE_ADMIN_INIT_PASSWORD_FILE) over these; they are not in a process list.
+#email = "admin@example.com"
+#password = "secret123"
 
-[ui]
-# Environment variables:
-#   NANOFILE_UI_DEFAULT_LANGUAGE
-#   NANOFILE_UI_TRAY_LANGUAGE
-# Fallback UI language when the user hasn't set a preference and the browser's
-# Accept-Language doesn't match a supported language. Supported: "en", "zh".
-default_language = "en"
-# Language of the system tray menu (desktop builds): "auto" follows the OS
-# locale (falling back to default_language), "en"/"zh" force a language.
-# Read when the tray is created, so a change needs a full process restart.
-tray_language = "auto"
+# [ui]
+# Fallback interface language when a visitor has no preference: "en" or "zh".
+#default_language = "en"
 
-[email]
-# Environment variables:
-#   NANOFILE_EMAIL_ENABLED
-#   NANOFILE_EMAIL_HOST
-#   NANOFILE_EMAIL_PORT
-#   NANOFILE_EMAIL_TLS
-#   NANOFILE_EMAIL_USERNAME
-#   NANOFILE_EMAIL_PASSWORD
-#   NANOFILE_EMAIL_PASSWORD_FILE   (read password from a file, safer)
-#   NANOFILE_EMAIL_FROM_ADDRESS
-#   NANOFILE_EMAIL_FROM_NAME
-#   NANOFILE_EMAIL_TIMEOUT_SECS
-#   NANOFILE_EMAIL_MAX_ATTEMPTS
-#   NANOFILE_EMAIL_PAUSED
-#   NANOFILE_EMAIL_NOTIFY_NEW_DEVICE
-#   NANOFILE_EMAIL_NOTIFY_API_KEY_CREATED
-#   NANOFILE_EMAIL_NOTIFY_NEW_LOGIN
-#
-# Master switch for outbound mail. This page still works, but from this release
-# on it is one of the settings managed at /sysadmin/settings/email/ (or via the
-# environment variable above, which always wins). While it is false the
-# password-reset flow mints no token and no notification is queued.
-#
-# Every value below is a *bootstrap* value: it supplies the setting until an
-# administrator saves one at /sysadmin/settings/email/, and from then on the
-# saved value is the source of truth unless `[settings] config_override_keys`
-# names the key. The startup log warns when the two disagree. Password reset
-# links are only ever delivered to the account owner's inbox; the server never
-# returns a reset link in an HTTP response, since echoing it back would allow
-# account takeover.
-enabled = false
-# host = "smtp.example.com"
-# port = 587
-# "starttls" (587), "tls" (implicit TLS, usually 465) or "none" (plaintext —
-# only for a relay on the same machine).
-# tls = "starttls"
-# username = "nanofile@example.com"
-# password = "secret"        # prefer NANOFILE_EMAIL_PASSWORD_FILE
-# from_address = "nanofile@example.com"
-# from_name = "Nanofile"
-# timeout_secs = 10
-# max_attempts = 5
-# paused = false
-# notify_new_device = true
-# notify_api_key_created = true
-# notify_new_login = true
-
-[admin_init]
-# Environment variables:
-#   NANOFILE_ADMIN_INIT_EMAIL
-#   NANOFILE_ADMIN_INIT_PASSWORD
-#   NANOFILE_ADMIN_INIT_PASSWORD_FILE   (read password from a file, safer)
-# email = "admin@example.com"
-# password = "secret123"
-
-[logging]
-# Environment variables:
-#   NANOFILE_LOG_LEVEL
-#   NANOFILE_LOG_FILE_ENABLED
-#   NANOFILE_LOG_FILE
-# Log level: "trace"/"debug"/"info"/"warn"/"error" (or an EnvFilter expression).
-level = "info"
-# Send logs to a size-capped, rotating file instead of stdout. Unset = auto:
-# desktop (tray) runs log to a file, headless runs (servers, Docker) log to
-# stdout. Set true/false to force either.
+# [logging]
+# file-only — send logs to a size-capped rotating file instead of stdout. Unset
+# chooses automatically: desktop (tray) runs log to a file, headless to stdout.
 #file_enabled = true
-# Log file path. Unset: resolved to "nanofile.log" next to the nanofile binary
-# in file-logging mode and written back here (absolute path), so a
-# login-started instance always uses the same file. A relative path resolves
-# against the binary's directory, never the working directory.
 #file = "nanofile.log"
-# Per-file size cap (MB) before rotation; at most max_backups older files
-# (nanofile.log.1, nanofile.log.2, ...) are kept. max_backups = 0 truncates
-# the log in place instead of keeping backups.
-max_file_size_mb = 10
-max_backups = 3
-
-[gc]
-# Environment variables:
-#   NANOFILE_GC_ENABLED
-#   NANOFILE_GC_INTERVAL_HOURS
-#   NANOFILE_GC_MIN_BLOCK_AGE_SECS
-# Reclaims blocks and FS objects that no commit references (an upload abandoned
-# before its final chunk, a sync whose branch update failed) and prunes history
-# past the per-repo limits. Per-user quota is enforced independently of this
-# setting, so leaving it off does not allow a quota bypass — it only means total
-# disk usage never shrinks. The server logs a warning at startup in that case.
-enabled = false
-interval_hours = 24
-# Blocks younger than this are never deleted. An upload writes its blocks before
-# the commit that references them, so without a grace window a pass that started
-# just before that commit would delete live data. Raise it for clients that stay
-# offline for a long time between uploading blocks and committing them; 0
-# disables the window.
-min_block_age_secs = 3600
-
-[tasks]
-# Environment variables:
-#   NANOFILE_TASKS_MAX_ACTIVE
-#   NANOFILE_TASKS_MAX_ACTIVE_PER_USER
-#   NANOFILE_TASKS_MAX_RETAINED_BYTES
-#   NANOFILE_TASKS_LOAD_AWARE
-#   NANOFILE_TASKS_LOAD_SAMPLE_INTERVAL_SECS
-# Max async copy/move tasks in Pending or Processing state (0 = unlimited).
-# New tasks beyond the cap are rejected with HTTP 429, preventing authenticated
-# users from exhausting the server with unbounded background copy tasks.
-max_active_tasks = 100
-# Max runs one user may have active at once, across every job (0 = unlimited).
-# The cap above is server-wide, so without this one account can take every slot
-# and every other user gets a 429.
-max_active_per_user = 8
-# Byte budget for retained job runs (0 = unlimited). A run keeps the request
-# that submitted it, so a count cap alone would not bound memory.
-max_retained_bytes = 8388608
-# Let heavy background jobs (garbage collection, block conversion) wait for a
-# quiet server and slow down while it is busy. Off by default: the thresholds it
-# acts on need real traffic to calibrate, and the task page shows the
-# measurements in the meantime. Only jobs that declare a checkpoint can defer.
-load_aware = false
-# Seconds between load samples (minimum 1).
-load_sample_interval_secs = 5
-
-[index]
-# Environment variables:
-#   NANOFILE_INDEX_ENABLED
-#   NANOFILE_INDEX_INDEX_DIR
-#   NANOFILE_INDEX_BACKFILL_ENABLED
-enabled = true
-# Relative paths resolve against the binary's directory, like `[database] url`.
-index_dir = "data/index"
-# Index files the index has never seen (and files an extractor gained support
-# for) while the server is quiet. Load-aware deferral also needs
-# `tasks.load_aware = true`; without it the pass runs in small increments
-# regardless of load.
-backfill_enabled = true
-
-[sandbox]
-# Environment variables:
-#   NANOFILE_SANDBOX_ENABLED
-# Every feature that parses content a user supplied runs in a separate process
-# with a memory bound, a CPU bound and a wall-clock timeout, and — where the
-# platform can supply them — a file, network and process confinement. That
-# covers document text extraction for the search index, image and media
-# thumbnails (including ffmpeg), EXIF, and avatar processing.
-#
-# The resource bound is a hard invariant: a host that cannot establish it has
-# those features refused. Everything above it — file access, the network, the
-# process bound, and the Windows AppContainer — is what this platform can add,
-# so it is measured and reported on the settings page rather than configured.
-# All of the parsers are pure Rust, so those layers are defense in depth against
-# a parser bug rather than the bound that keeps the server up.
-#
-# `false` disables all of those features. Nothing is parsed inside the server
-# process — there is no unconfined path — so a document is simply not indexed
-# and a thumbnail is not generated. A document that is skipped while the switch
-# is off is recorded as a retryable failure, not as a verdict on its bytes, so
-# turning the switch back on re-indexes it. Env: NANOFILE_SANDBOX_ENABLED
-enabled = true
-
-[notification]
-# Environment variables:
-#   NANOFILE_NOTIFICATION_ENABLED
-#   NANOFILE_NOTIFICATION_PRIVATE_KEY
-#   NANOFILE_NOTIFICATION_PING_INTERVAL
-#   NANOFILE_NOTIFICATION_CLIENT_TIMEOUT
-#   NANOFILE_NOTIFICATION_MAX_CONNECTIONS
-#   NANOFILE_NOTIFICATION_MAX_CONNECTIONS_PER_IP
-#   NANOFILE_NOTIFICATION_SUBSCRIBE_TIMEOUT_SECS
-enabled = true
-private_key = ""
-# ^ When empty, derived from [server] secret_key automatically.
-#   Set explicitly if you need a different key for notification JWTs
-#   (e.g., when notification events are posted by external services).
-# Subscription tokens (handed to every library member) and event tokens
-# (which may publish to any library) are signed with separate subkeys derived
-# from the value above, so a member's token is never accepted by
-# /notification/events. Set to true only to keep an external publisher that
-# still signs event tokens with the undivided key working.
-accept_legacy_event_tokens = false
-# Seconds between WebSocket Ping frames (0 = disable keepalive).
-ping_interval = 30
-# Seconds without a Pong after which the connection is dropped.
-client_timeout = 90
-# Max concurrent WebSocket connections (0 = unlimited). Prevents connection-exhaustion DoS.
-max_connections = 1024
-# Max concurrent WebSocket connections per client IP (0 = unlimited).
-max_connections_per_ip = 64
-# Seconds a connection may stay unauthenticated before the server drops it (0 = disabled).
-subscribe_timeout_secs = 60
 
 [settings]
-# Environment variables:
-#   NANOFILE_SETTINGS_CONFIG_POLICY
-#   NANOFILE_SETTINGS_CONFIG_OVERRIDE_KEYS   (comma-separated)
-#   NANOFILE_SETTINGS_REFRESH_INTERVAL_SECS
-#
-# How the config file and the settings saved at /sysadmin/settings/ layer with
-# each other. This section is deliberately not editable from the admin UI: it
-# decides what a saved setting means, so it has to come from outside the layer
-# the UI writes to.
-#
-# The order is always, highest first:
-#
-#   1. an environment variable (NANOFILE_*, e.g. NANOFILE_SERVER_PORT)
+# How this file and the saved settings layer with each other. Not editable from
+# the interface: it decides what a saved setting means. Order, highest first:
+#   1. an environment variable (NANOFILE_*)
 #   2. this file, for the keys named below
-#   3. the database row saved from /sysadmin/settings/
+#   3. the value saved at "System Settings"
 #   4. the built-in default
-#
-# "bootstrap" (the default) makes this file a first-start seed: a key with no
-# saved row takes its value from here, and stops mattering for that key once an
-# administrator saves one. The startup log lists the keys where the file and the
-# saved value disagree and the saved value is winning.
+# "bootstrap" (the default) makes this file a first-start seed; "override" makes
+# it win for every key it sets.
 config_policy = "bootstrap"
-# Under "bootstrap", these keys still take the value from this file. Use it to
-# force a deployment-managed value back, e.g. ["server.site_url"].
-# config_override_keys = []
-# Seconds between re-reads of the saved settings, so a change made on another
-# instance (or restored from a backup) is picked up without a restart.
-# 0 disables the periodic read.
-# refresh_interval_secs = 30
+# Keys this file still wins for under "bootstrap", e.g. ["server.site_url"].
+#config_override_keys = []
+# Seconds between re-reads of the saved settings, so a change made elsewhere (or
+# restored from a backup) is picked up without a restart. 0 disables it.
+#refresh_interval_secs = 30

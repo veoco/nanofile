@@ -21,6 +21,7 @@ Build from source:
 npm install                       # frontend bundler (esbuild is required)
 cargo build --release -p server   # binary is `nanofile`, not `server`
 cp config.toml.example config.toml
+chmod 600 config.toml             # it holds the master secret
 ./target/release/nanofile
 ```
 
@@ -93,7 +94,12 @@ docker run -d --name nanofile \
 
 ## Configuration
 
-Settings come from `config.toml` in the working directory (copy `config.toml.example`; each key's comment gives its environment-variable name) or from `NANOFILE_*` environment variables, which take precedence and are never written back to the file. Container deployments rely on the environment variables.
+Settings have built-in defaults, and there are two places to change one:
+
+- **The web interface**: "System Settings → Settings" renders every setting — the file-only ones as a value with no control — one page per area (Server, Security, Authentication, Rate limits, Storage, Encryption, Maintenance, Sandbox, Email, Notifications, Advanced), filterable in the browser by name, config key, description or `NANOFILE_*` variable.
+- **`config.toml` and `NANOFILE_*` environment variables**: copy `config.toml.example`. The template deliberately holds only what a page cannot store at all (the master secret, the database URL, the at-rest encryption mode, the first-start admin, the log file) plus the few values that have to be decided before the interface is reachable (external URL, listener, state directories, language). Environment variables always win and are never written back to the file, so container deployments rely on them.
+
+Layering, highest first: an environment variable, the config file, the value saved at "System Settings", the built-in default.
 
 Frequently changed keys:
 
@@ -101,16 +107,17 @@ Frequently changed keys:
 - Bind address and port (`[server]` `addr` / `port`): default `0.0.0.0:8082`.
 - Storage directories (`[storage]`): default under `data/` in the binary's directory. Relative paths resolve against the binary's directory; absolute paths place state elsewhere.
 - `secret_key`: the master key (see **Deploy with Docker**).
+- Storage caps: the open resumable uploads may declare 32 GiB in total and one archive may build 8 GiB by default; `0` on the Storage page (or in `[storage]`) removes either cap.
 
-Most settings apply immediately; the listener, transfer limits and cache directories apply at the next start. Some runtime settings are also editable at "System Settings → Settings" in the web interface, where a saved value overrides the same key in the config file. Those pages are Server, Security, Authentication, Rate limits, Storage, Encryption, Maintenance, Email, Notifications and Advanced, each grouped under headings and filterable in the browser by name, config key or description; every row says where its value came from and whether changing it needs a restart.
+Most settings apply immediately; the listener, transfer limits and cache directories apply at the next start. Every row of the settings pages says where its value came from, which `NANOFILE_*` variable overrides it — the pages are also the reference for the variable names — and whether changing it needs a restart.
 
 "System Settings → Task Management" is two pages. **Task list** puts the server's load measurements first — requests in flight, jobs running, queued tasks, database connections, workers busy and live tasks — because they are what explains a run that is waiting, and then the runs themselves: what is running now, and what the server actually did. The finished list holds the runs with something to report — a failure, or work that was done — so a cleanup pass that finds nothing to do does not bury them; it can be narrowed to one job and to what succeeded or failed, and each filter keeps the other. Each run row names the job and its verdict, the account that submitted it, and right-aligned columns for when it finished and how long it took; a failed run carries the job's own error on the row, and the run id, the job's own summary and the full error are one disclosure away. How long history is kept is stated above the list. **Registered tasks** lists every job and long-lived service this server has registered, grouped by how each one comes to run; each row says when it runs and what it does in words, and carries the same right-aligned columns for the job's last run — read back from the history, so a restart does not make every job look like it has never run. Opening a row shows its lifetime counters, which count every tick including the ones that found nothing to do, and the policies it runs under — its priority, concurrency cap, timeout, retry, whether it waits for a quiet server, how finely it can be interrupted, and what a crash leaves behind. A job or service whose subsystem is switched off is named there with the switch that would bring it back, and a run can be triggered by hand from its row where that means something.
 
 The **Restart server** button in the settings page's header restarts the server in place: the process, the tray icon and the listening port stay the same, but the settings table, database connections, caches and background tasks are all rebuilt, so every "needs a restart" row takes effect immediately (and the administrator's session survives). The log level and file caps, and whether the desktop tray exists and in which language, are decided before the process starts: those are marked "needs a full process restart" and are only applied by stopping and starting the process.
 
-On upgrade, a changed config format is migrated in place with comments preserved, and the previous file is kept as `config.toml.bak`.
+On load, a key missing from `config.toml` is filled in with its built-in default and written back to the file (comments preserved); the previous file is kept as `config.toml.bak`.
 
-Sections: `[server]` networking and feature switches; `[database]` connection; `[storage]` directories and quotas; `[auth]` login, password and rate limits; `[ui]` language; `[email]` mail; `[admin_init]` first-start admin; `[logging]` logs; `[gc]` garbage collection; `[index]` search; `[sandbox]` the confinement over untrusted parsing; `[notification]` notifications; `[tasks]` background tasks. Exact keys are listed in `config.toml.example`.
+Sections: `[server]` networking and feature switches; `[database]` connection; `[storage]` directories and quotas; `[auth]` login, password and rate limits; `[ui]` language; `[email]` mail; `[admin_init]` first-start admin; `[logging]` logs; `[gc]` garbage collection; `[index]` search; `[sandbox]` the confinement over untrusted parsing; `[notification]` notifications; `[tasks]` background tasks; `[settings]` how the file and the saved settings layer. The template lists only the keys a settings page cannot store, or that have to be decided before it is reachable; every other key, its `NANOFILE_*` variable and where its value came from are on "System Settings → Settings".
 
 ## Sandbox
 
