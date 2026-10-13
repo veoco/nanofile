@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo, uploadFile } from "../helpers/api";
+import { pngFixture } from "../helpers/image";
 import { tinyMp4 } from "../helpers/video";
 
 let state: ReturnType<typeof readState>;
@@ -38,6 +39,17 @@ test.beforeAll(async () => {
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "clip.mp4", Buffer.from("not really a video"));
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "plays.mp4", tinyMp4());
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "note.xyz", "unrecognized\n");
+  // Bigger than the preview stage at the suite's viewport, and long enough that
+  // the code block has to scroll: the two fixtures the frame assertions need.
+  await uploadFile(state.baseURL, state.adminToken, repoId, "/", "big.png", pngFixture(1600, 1200));
+  await uploadFile(
+    state.baseURL,
+    state.adminToken,
+    repoId,
+    "/",
+    "long.txt",
+    Array.from({ length: 400 }, (_, i) => `line ${i}`).join("\n"),
+  );
 });
 
 test.beforeEach(async ({ page }) => {
@@ -133,40 +145,72 @@ test("full-page text preview renders the file content", async ({ page }) => {
 
 // ─── Full-page previews: the other half of the file manager ─────────────────
 // Clicking a file *name* (as opposed to double-clicking the row, which opens the
-// quick-preview modal above) opens the full-page preview. It was the last page
-// in the file-manager flow still on the legacy layout — old breadcrumb, `.card`,
-// `gray-*` panels — so these pin the redesigned chrome.
+// quick-preview modal above) opens the full-page preview. It renders in the file
+// manager's own column — `.content` -> `.topline` -> viewer, the same frame as
+// `files/browser.html` — so these pin that frame: the topline carries the trail
+// and the actions, the viewer is the column's remainder, and it is the only
+// scroller on the page.
 
 /** Open the full-page preview of `name` through the file list, as a user does. */
 async function openFullPreview(page: import("@playwright/test").Page, name: string) {
   await page.goto(`/libraries/${repoId}/files/`);
   await page.waitForSelector(".js-entry-row");
   await page.locator(`.js-file-list-view .js-entry-row[data-name="${name}"] a.base`).click();
-  await page.waitForSelector(".nf-preview");
+  await page.waitForSelector(".topline .nf-preview-meta");
 }
 
-test("a file name opens the preview panel, not the legacy card", async ({ page }) => {
+const boxOf = async (page: import("@playwright/test").Page, selector: string) =>
+  (await page.locator(selector).boundingBox())!;
+
+test("the preview renders in the file manager's own column", async ({ page }) => {
+  // The file list is the reference frame: the preview's topline has to sit at the
+  // same x and span the same width, or the content edge jumps when a name is
+  // clicked.
+  await page.goto(`/libraries/${repoId}/files/`);
+  await page.waitForSelector(".js-entry-row");
+  const listTopline = await boxOf(page, "main > .topline");
+
   await openFullPreview(page, "photo.png");
 
-  // The shared breadcrumb, ending at the file itself (non-link current page).
+  // The shared breadcrumb, ending at the file itself (non-link current page), and
+  // the whole name on hover now that no title row carries it.
   await expect(page.locator(".crumbs")).toHaveCount(1);
   await expect(page.locator(".crumbs .cur")).toHaveText("photo.png");
-  // …and none of the legacy markup survives.
+  await expect(page.locator(".crumbs .cur")).toHaveAttribute("title", "photo.png");
+  // …and neither the legacy markup nor the old card shell survives.
+  await expect(page.locator(".nf-preview")).toHaveCount(0);
   await expect(page.locator(".card")).toHaveCount(0);
   await expect(page.locator("nav.flex.mb-4")).toHaveCount(0);
 
-  // Header: the name, a size, and real buttons the same height as the toolbar's.
-  await expect(page.locator(".nf-preview-title")).toHaveText("photo.png");
-  await expect(page.locator(".nf-preview-meta")).toHaveText(/\d/);
-  const download = page.locator(".nf-preview-head .btn", { hasText: "Download" });
+  await expect(page.locator("main")).toHaveCSS("padding-left", "0px");
+  const previewTopline = await boxOf(page, "main > .topline");
+  expect(previewTopline.x).toBeCloseTo(listTopline.x, 0);
+  expect(previewTopline.width).toBeCloseTo(listTopline.width, 0);
+
+  // Size and actions: a size, and real buttons the same height as the toolbar's,
+  // all in the topline band.
+  await expect(page.locator(".topline .nf-preview-meta")).toHaveText(/\d/);
+  const download = page.locator(".topline .btn", { hasText: "Download" });
   await expect(download).toHaveAttribute("href", /\?dl=1$/);
   await expect(download).toHaveCSS("height", "28px");
-  await expect(
-    page.locator(".nf-preview-head .btn", { hasText: "Back to folder" }),
-  ).toHaveAttribute("href", `/libraries/${repoId}/files/`);
+  await expect(page.locator(".topline .btn", { hasText: "Back to folder" })).toHaveAttribute(
+    "href",
+    `/libraries/${repoId}/files/`,
+  );
+});
 
-  // The panel is on the shared surface tokens, not an unstyled default.
-  await expect(page.locator(".nf-preview")).toHaveCSS("background-color", "rgb(249, 249, 249)");
+// The spacing bug the redesign fixes: the crumbs sat on the padded page and the
+// viewer in a card below them, so the two bands had no relation to each other.
+test("the viewer sits flush under the topline", async ({ page }) => {
+  for (const [name, viewer] of [
+    ["photo.png", ".nf-preview-stage"],
+    ["alpha.txt", ".nf-preview-text"],
+  ]) {
+    await openFullPreview(page, name);
+    const topline = await boxOf(page, "main > .topline");
+    const box = await boxOf(page, viewer);
+    expect(box.y).toBeCloseTo(topline.y + topline.height, 0);
+  }
 });
 
 test("the image preview loads from the content endpoint", async ({ page }) => {
@@ -177,7 +221,28 @@ test("the image preview loads from the content endpoint", async ({ page }) => {
   await expect(img).toHaveAttribute("src", new RegExp(`^/repos/${repoId}/files/photo\\.png`));
   await expect(img).toHaveAttribute("data-download-url", /\?dl=1$/);
   await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(1);
-  await expect(page.locator(".nf-preview-stage")).toHaveCount(1);
+
+  // The stage is the raised media surface the tiles use, and it is exactly the
+  // column's remainder — nothing under it, no page-level scroll.
+  const stage = page.locator(".nf-preview-stage");
+  await expect(stage).toHaveCount(1);
+  await expect(stage).toHaveCSS("background-color", "rgb(240, 240, 240)");
+  const stageBox = await boxOf(page, ".nf-preview-stage");
+  const mainBox = await boxOf(page, "main");
+  expect(stageBox.y + stageBox.height).toBeCloseTo(mainBox.y + mainBox.height, 0);
+});
+
+// The old rule was a `calc(100dvh - 16rem)` guess at the page chrome, so an image
+// bigger than the stage decided the page's height instead of being contained.
+test("a picture larger than the stage is contained by it", async ({ page }) => {
+  await openFullPreview(page, "big.png");
+
+  const stage = await boxOf(page, ".nf-preview-stage");
+  const img = await boxOf(page, ".nf-preview-image");
+  expect(img.width).toBeLessThanOrEqual(stage.width + 1);
+  expect(img.height).toBeLessThanOrEqual(stage.height + 1);
+  // …and it did not collapse to the replaced element's 300x150 default.
+  expect(Math.max(img.width, img.height)).toBeGreaterThan(200);
 });
 
 test("the media preview uses a native player and a short stage for audio", async ({ page }) => {
@@ -187,7 +252,7 @@ test("the media preview uses a native player and a short stage for audio", async
   await expect(video).toHaveAttribute("src", new RegExp(`^/repos/${repoId}/files/clip\\.mp4`));
 
   await openFullPreview(page, "song.wav");
-  await expect(page.locator(".nf-preview-stage audio[controls]")).toHaveCount(1);
+  await expect(page.locator(".nf-preview-stage.is-audio audio[controls]")).toHaveCount(1);
   await expect(page.locator(".nf-preview-video")).toHaveCount(0);
   // Audio gets the shorter stage: a wide empty band around a control strip
   // reads as a mistake.
@@ -197,7 +262,7 @@ test("the media preview uses a native player and a short stage for audio", async
   expect(stage).toBeLessThan(200);
 });
 
-test("the text preview renders inside the panel in monospace", async ({ page }) => {
+test("the text preview renders in the column in monospace", async ({ page }) => {
   await openFullPreview(page, "alpha.txt");
   const pre = page.locator(".nf-preview-text");
   await expect(pre).toContainText("content of alpha.txt");
@@ -205,21 +270,52 @@ test("the text preview renders inside the panel in monospace", async ({ page }) 
   await expect(page.locator(".nf-preview-stage")).toHaveCount(0);
 });
 
-test("the preview panel follows the theme", async ({ page }) => {
+// The column and the code block both scrolled before; the block is the only
+// scroller now, so the topline can never be pushed off screen by the text.
+test("a long text preview scrolls in the code block, not the column", async ({ page }) => {
+  await openFullPreview(page, "long.txt");
+  expect(await page.locator("main").evaluate((el) => el.scrollHeight - el.clientHeight)).toBe(0);
+  expect(
+    await page.locator(".nf-preview-text").evaluate((el) => el.scrollHeight - el.clientHeight),
+  ).toBeGreaterThan(0);
+});
+
+// The mobile bottom nav is fixed over the column's last 5rem. The viewer keeps
+// the same clearance `.nf-scroll` gives the list, so the final line of a long
+// file can be scrolled clear of the nav instead of hiding under it.
+test("the viewer keeps clear of the mobile bottom nav", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFullPreview(page, "long.txt");
+
+  await page.locator(".nf-preview-text").evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  const lastLine = await page.evaluate(() => {
+    const code = document.querySelector(".nf-preview-text code")!;
+    const range = document.createRange();
+    range.selectNodeContents(code);
+    const rects = range.getClientRects();
+    return rects[rects.length - 1].bottom;
+  });
+  const nav = await boxOf(page, "body > nav");
+  expect(lastLine).toBeLessThanOrEqual(nav.y);
+});
+
+test("the viewer follows the theme", async ({ page }) => {
   await page.goto(`/libraries/${repoId}/files/`);
   await page.evaluate(() => localStorage.removeItem("darkMode"));
   await openFullPreview(page, "photo.png");
   const light = await page
-    .locator(".nf-preview")
+    .locator(".nf-preview-stage")
     .evaluate((el) => getComputedStyle(el).backgroundColor);
 
   await page.evaluate(() => localStorage.setItem("darkMode", "true"));
   await openFullPreview(page, "photo.png");
   const dark = await page
-    .locator(".nf-preview")
+    .locator(".nf-preview-stage")
     .evaluate((el) => getComputedStyle(el).backgroundColor);
 
-  expect(light).toBe("rgb(249, 249, 249)");
-  expect(dark).toBe("rgb(25, 25, 25)");
+  expect(light).toBe("rgb(240, 240, 240)");
+  expect(dark).toBe("rgb(35, 35, 35)");
 });
 

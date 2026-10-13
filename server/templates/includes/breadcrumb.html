@@ -5,7 +5,9 @@
     {% for crumb in breadcrumbs %}
     <span class="sep flex-shrink-0">/</span>
     {% if loop.last %}
-    <span class="cur truncate max-w-[200px] sm:max-w-xs">{{ crumb.label }}</span>
+    {# Long segments are truncated; the title keeps the whole name readable on
+       hover, which is the only copy a preview page has of it. #}
+    <span class="cur truncate max-w-[200px] sm:max-w-xs" title="{{ crumb.label }}">{{ crumb.label }}</span>
     {% else %}
     <a href="/libraries/{{ repo_id }}/files/{{ crumb.path|urlencode }}" class="truncate max-w-[120px] sm:max-w-[200px]">{{ crumb.label }}</a>
     {% endif %}

@@ -657,31 +657,41 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
   html[data-view="gallery"] .nf-gal-summary { @apply flex; }
 
   /* ─── Full-page file preview (image / media / text) ──────────────────────
-     Reached by clicking a name in the file list. One hairline panel with the
-     same surfaces as the list and the drawer: a header row (name, size,
-     actions) over a stage that holds the picture, the player or the code. */
-  .nf-preview { @apply rounded-box border border-line bg-panel overflow-hidden; }
-  .nf-preview-head {
-    @apply flex flex-wrap items-center gap-x-2.5 gap-y-2 px-3.5 py-2 border-b border-line min-h-12;
-  }
-  .nf-preview-title { @apply text-[13px] font-medium text-ink truncate; }
-  .nf-preview-meta { @apply text-[11.5px] text-ink-3; }
+     Reached by clicking a name in the file list, so it is the file manager's
+     own column: the same `.content` -> `.topline` -> viewer frame as
+     `files/browser.html` and `repos/list.html`. The crumb trail already ends at
+     the file and the topline carries the size and the two actions, so there is
+     no second title row; the viewer is the column's remainder and the page's
+     only scroller — the picture is contained by the stage's own height instead
+     of a `100dvh` minus a guessed chrome constant. */
+  .nf-preview-meta { @apply text-[12px] text-ink-3 tabular-nums; }
+
+  /* Image and video share one stage: raised, because that is the media surface
+     the tiles and the drawer's thumbnail already use. `flex-1` takes the
+     column's remainder, `min-h-0` lets it shrink below the media's intrinsic
+     size, and `overflow-auto` is the fallback for something wider than the
+     viewport. */
   .nf-preview-stage {
-    @apply flex items-center justify-center p-4 bg-raised;
-    min-height: 12rem;
+    @apply flex flex-1 min-h-0 items-center justify-center overflow-auto bg-raised p-4;
   }
-  .nf-preview-stage.is-audio { min-height: 8rem; }
-  /* Leave room for the page chrome (breadcrumb + header + the mobile bottom
-     nav), so a tall picture never pushes the actions off screen. */
+  /* Audio is a control strip, not a picture: a full-height stage around it is an
+     empty band, so it keeps a short band at the top of the column. */
+  .nf-preview-stage.is-audio { @apply flex-none; min-height: 8rem; }
+
   .nf-preview-image,
-  .nf-preview-video {
-    @apply max-w-full object-contain rounded-ctl;
-    max-height: calc(100dvh - 16rem);
-  }
+  .nf-preview-video { @apply max-w-full max-h-full object-contain rounded-ctl; }
+
+  /* Text is the viewer too, but on the canvas: a raised band behind a few
+     hundred lines fights the words, and there is nothing to centre. */
   .nf-preview-text {
-    @apply overflow-auto p-4 text-[12.5px] leading-[1.65] text-ink-2 font-mono;
-    max-height: calc(100dvh - 16rem);
+    @apply flex-1 min-h-0 overflow-auto p-4 text-[12.5px] leading-[1.65] text-ink-2 font-mono;
   }
+
+  /* The mobile bottom nav is fixed over the column's last 5rem; the viewer
+     reserves it the way `.nf-scroll` does for the list, dropped from `lg` up
+     where the nav is hidden. Not on the audio band, which never reaches it. */
+  .nf-preview-stage:not(.is-audio),
+  .nf-preview-text { padding-bottom: 5rem; }
 
   /* ─── Row action menu (singleton, mounted on <body>) ─────────────────── */
   .nf-menu {
@@ -1215,10 +1225,13 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
   .nf-details { bottom: 4rem; }
 }
 /* From `lg` up there is no bottom nav to clear, so the scroller's reserve comes
-   back to just the drawer — and only while that drawer is open. */
+   back to just the drawer — and only while that drawer is open. The preview
+   viewer drops its nav reserve for the same reason and keeps its own inset. */
 @media (min-width: 64rem) {
   .nf-scroll { padding-bottom: 0; }
   .content.drawer-open .nf-scroll { padding-bottom: var(--drawer-h, 84px); }
+  .nf-preview-stage:not(.is-audio),
+  .nf-preview-text { @apply pb-4; }
 }
 @media (max-width: 720px) {
   .d-row { flex-wrap: wrap; gap: 12px; }
