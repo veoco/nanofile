@@ -670,6 +670,12 @@ async fn a_row_carries_the_text_the_filter_matches_on() {
     assert!(search.contains("server.max_upload_size_mb"), "{search}");
     assert!(search.contains("Max upload size"), "{search}");
     assert!(search.contains("transport cap"), "{search}");
+    // The variable is in the haystack too: an operator configuring a container
+    // searches for the name they are about to export, not for the label.
+    assert!(
+        search.contains("NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB"),
+        "{search}"
+    );
 }
 
 /// The text a reader sees in a fragment: the markup removed, so a key that only
@@ -773,11 +779,52 @@ async fn a_row_keeps_its_key_out_of_the_text() {
     }
 
     // The config file's key is in the origin badge's tooltip, not in the row's
-    // text; the environment's variable is the one thing that is printed, because
-    // it is the one an operator has to change.
+    // text; the environment's variable stands in for it, because it is the one
+    // an operator has to change.
     let row = row_of(&html, "server.addr");
     assert!(row.contains(r#"title="config.toml: server.addr""#), "{row}");
     assert!(!text_of(row).contains("config.toml"), "{}", text_of(row));
+}
+
+/// An environment variable is printed on every row, exactly once: the one that
+/// owns the value when the environment does, and otherwise the one that would
+/// override it. These pages are the reference an operator with a container and
+/// no other documentation has to work from.
+#[tokio::test]
+async fn every_row_names_its_environment_variable_once() {
+    let server = TestServer::start().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    // One editable row, one read-only row, one secret: the variable is on all
+    // three, because it is how each of them is set outside the page.
+    let cases = [
+        (
+            "/sysadmin/settings/server/",
+            "server.max_upload_size_mb",
+            "NANOFILE_SERVER_MAX_UPLOAD_SIZE_MB",
+        ),
+        (
+            "/sysadmin/settings/advanced/",
+            "database.url",
+            "NANOFILE_DATABASE_URL",
+        ),
+        (
+            "/sysadmin/settings/security/",
+            "server.secret_key",
+            "NANOFILE_SERVER_SECRET_KEY",
+        ),
+    ];
+    for (path, key, var) in cases {
+        let (_, html) = page(&server, &admin, path).await;
+        let row = row_of(&html, key);
+        let text = text_of(row);
+        assert_eq!(
+            text.matches(var).count(),
+            1,
+            "{key} on {path} must name {var} exactly once: {text}"
+        );
+    }
 }
 
 /// A numeric value carries its unit beside the field, not inside its label:

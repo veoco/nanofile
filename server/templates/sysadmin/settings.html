@@ -21,8 +21,9 @@
    exactly the rows the panel shows.
 
    A row's internal key is a `data-` hook and the label's tooltip, not text: the
-   page prints the environment variable when one owns the value, because that is
-   the only piece of provenance an operator has to go and change.
+   row prints the `NANOFILE_*` variable instead, once per row — the one that owns
+   the value when the environment does, otherwise the one that would override it.
+   So the pages are also where an operator looks a variable name up.
 
    A secret never renders back: the field starts empty and the switch below it
    says whether something is stored, so the three states an operator has —
@@ -339,18 +340,22 @@
 
                     <p class="mt-0.5 text-[12px] text-ink-3">{{ row.help }}</p>
 
-                    {# The origin an operator has to go and change, and when the
-                       saved value landed. #}
-                    {% if row.env_var.is_some() || row.origin_at.is_some() %}
+                    {# The provenance an operator can act on, printed exactly once:
+                       the variable that owns the value (with the badge saying
+                       so), or else the variable that would override it. The
+                       second form is what makes these pages the reference for
+                       the NANOFILE_* names — a container has nowhere else to
+                       look one up. #}
                     <div class="nf-prow-sub mt-0.5">
                         {% if let Some(var) = row.env_var %}
                         <span class="mono t">{{ var }}</span>
+                        {% else if let Some(var) = row.env_name %}
+                        <span class="t">{{ t.tr("setting.env_var_hint") }} <span class="mono">{{ var }}</span></span>
                         {% endif %}
                         {% if let Some(ts) = row.origin_at %}
                         <span class="t">{{ time::ts(ts) }}</span>
                         {% endif %}
                     </div>
-                    {% endif %}
 
                     {% if let Some(config_value) = row.config_value %}
                     <p class="nf-prow-hi text-warn-text">

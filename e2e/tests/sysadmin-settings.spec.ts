@@ -302,6 +302,23 @@ test("an environment-owned row names its variable once", async ({ page }) => {
   expect(text.match(/NANOFILE_SERVER_PORT/g)).toHaveLength(1);
 });
 
+test("a row the environment does not own still names its variable", async ({ page }) => {
+  // The pages are the NANOFILE_* reference: a container has no other place to
+  // look a name up, so even a row whose value came from a default (or a save)
+  // has to print the variable that would override it.
+  await page.goto("/sysadmin/settings/server/");
+  const row = page.locator('[data-setting="server.max_json_body_mb"]');
+  await expect(row.locator("span.badge", { hasText: "Environment" })).toHaveCount(0);
+  const text = await row.innerText();
+  expect(text).toContain("NANOFILE_SERVER_MAX_JSON_BODY_MB");
+  expect(text.match(/NANOFILE_SERVER_MAX_JSON_BODY_MB/g)).toHaveLength(1);
+
+  // A read-only row names its variable too.
+  await page.goto("/sysadmin/settings/advanced/");
+  const locked = page.locator('[data-setting="database.url"]');
+  expect(await locked.innerText()).toContain("NANOFILE_DATABASE_URL");
+});
+
 test("a read-only value is shown but has no control", async ({ page }) => {
   await page.goto("/sysadmin/settings/advanced/");
   const row = page.locator('[data-setting="database.url"]');

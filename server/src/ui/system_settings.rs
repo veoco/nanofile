@@ -72,6 +72,12 @@ pub struct SettingRow {
     /// it. This is the one piece of provenance a row prints as text: it is also
     /// the only one an operator has to go and change.
     pub env_var: Option<String>,
+    /// The `NANOFILE_*` variable that would override this setting, whether or
+    /// not it currently owns the value. Printed on every row, so the pages are
+    /// also the environment-variable reference — an operator reaching a
+    /// container has no other place to look one up. The template renders this
+    /// only when [`Self::env_var`] did not, so a variable is named exactly once.
+    pub env_name: Option<String>,
     /// Unix seconds of the last save, for a database-sourced value.
     pub origin_at: Option<i64>,
     /// The value in the config file, when a saved value is superseding it —
@@ -983,7 +989,13 @@ fn build_row(
     // outlive the temporaries.
     let label = t.tr(&def.label_key()).to_string();
     let help = t.tr(&def.help_key()).to_string();
-    let search_text = format!("{} {label} {help}", def.key);
+    // The variable name joins the filter's haystack: an operator who knows how
+    // a container sets a value searches for `NANOFILE_`, not for its label.
+    let env_name = def.env.map(str::to_string);
+    let search_text = match &env_name {
+        Some(var) => format!("{} {label} {help} {var}", def.key),
+        None => format!("{} {label} {help}", def.key),
+    };
     SettingRow {
         key: def.key.to_string(),
         search_text,
@@ -1010,6 +1022,7 @@ fn build_row(
         origin: origin_id,
         origin_title,
         env_var,
+        env_name,
         origin_at,
         config_value,
         state_badge,
@@ -1695,6 +1708,7 @@ mod tests {
             origin: "default",
             origin_title: String::new(),
             env_var: None,
+            env_name: None,
             origin_at: None,
             config_value: None,
             state_badge: None,
