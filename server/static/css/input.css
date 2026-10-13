@@ -687,6 +687,16 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
     @apply flex-1 min-h-0 overflow-auto p-4 text-[12.5px] leading-[1.65] text-ink-2 font-mono;
   }
 
+  /* What a preview says when the bytes cannot be rendered: the reason, then the
+     way out. Built in JavaScript by both preview surfaces — the full-page
+     viewer and the quick-preview dialog — so it is a component class rather
+     than utilities: Tailwind only emits a class it can read in a source file,
+     and this markup exists at runtime. */
+  .nf-preview-fallback {
+    @apply flex flex-col items-center gap-2 px-4 py-8 text-center text-[13px] text-ink-3;
+  }
+  .nf-preview-fallback a { @apply text-ink underline underline-offset-2; }
+
   /* The mobile bottom nav is fixed over the column's last 5rem; the viewer
      reserves it the way `.nf-scroll` does for the list, dropped from `lg` up
      where the nav is hidden. Not on the audio band, which never reaches it. */

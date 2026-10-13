@@ -46,6 +46,10 @@ test.beforeAll(async () => {
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "clip.mp4", Buffer.from("not really a video"));
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "plays.mp4", tinyMp4());
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "note.xyz", "unrecognized\n");
+  // The two files neither preview surface can render: a container no browser
+  // demuxes, and an image whose bytes are not a picture.
+  await uploadFile(state.baseURL, state.adminToken, repoId, "/", "sample.wmv", Buffer.from("not a wmv"));
+  await uploadFile(state.baseURL, state.adminToken, repoId, "/", "broken.tiff", Buffer.from("not a tiff"));
   // A real BMP and a real SVG: the two formats whose previews used to be a
   // fallback message because the bytes arrived as `application/octet-stream`.
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "photo.bmp", bmpFixture(64, 48));
@@ -291,11 +295,14 @@ test("an uploaded svg is not a script host", async ({ page }) => {
   expect(await page.evaluate(() => (window as any).__ran === true)).toBe(false);
 });
 
+// A decodable clip, not the deliberately broken one: a file the browser cannot
+// play is replaced by the failure sentence (asserted with the dialog below), so
+// this case has to be one whose player is still there to inspect.
 test("the media preview uses a native player and a short stage for audio", async ({ page }) => {
-  await openFullPreview(page, "clip.mp4");
+  await openFullPreview(page, "plays.mp4");
   const video = page.locator(".nf-preview-video");
   await expect(video).toHaveAttribute("controls", "");
-  await expect(video).toHaveAttribute("src", new RegExp(`^/repos/${repoId}/files/clip\\.mp4`));
+  await expect(video).toHaveAttribute("src", new RegExp(`^/repos/${repoId}/files/plays\\.mp4`));
 
   await openFullPreview(page, "song.wav");
   await expect(page.locator(".nf-preview-stage.is-audio audio[controls]")).toHaveCount(1);
@@ -363,5 +370,45 @@ test("the viewer follows the theme", async ({ page }) => {
 
   expect(light).toBe("rgb(240, 240, 240)");
   expect(dark).toBe("rgb(35, 35, 35)");
+});
+
+// ─── One failure sentence for both surfaces ─────────────────────────────────
+// The page and the dialog are two views of one file, so a file the browser
+// cannot decode has to read the same in both: the same sentence, and the same
+// way out. The page used to show a player that could never start.
+
+test("an unplayable video reads the same on the page and in the dialog", async ({ page }) => {
+  await openFullPreview(page, "sample.wmv");
+  const onPage = page.locator(".nf-preview-fallback");
+  await expect(onPage).toBeVisible();
+  await expect(onPage).toContainText("H.265/HEVC");
+  await expect(onPage.locator("a")).toHaveAttribute(
+    "href",
+    `/repos/${repoId}/files/sample.wmv?dl=1`,
+  );
+  // Removed, not hidden behind the sentence.
+  await expect(page.locator(".nf-preview-video")).toHaveCount(0);
+  const pageText = await onPage.textContent();
+
+  await page.goto(`/libraries/${repoId}/files/`);
+  await page.waitForSelector(".js-entry-row");
+  await dblclickRow(page, "sample.wmv");
+  const inDialog = page.locator(".js-qp-unsupported .nf-preview-fallback");
+  await expect(inDialog).toBeVisible();
+  expect(await inDialog.textContent()).toBe(pageText);
+});
+
+test("an image the browser cannot decode reads the same in both views", async ({ page }) => {
+  await openFullPreview(page, "broken.tiff");
+  const onPage = page.locator(".nf-preview-fallback");
+  await expect(onPage).toContainText("Image failed to load");
+  const pageText = await onPage.textContent();
+
+  await page.goto(`/libraries/${repoId}/files/`);
+  await page.waitForSelector(".js-entry-row");
+  await dblclickRow(page, "broken.tiff");
+  const inDialog = page.locator(".js-qp-unsupported .nf-preview-fallback");
+  await expect(inDialog).toBeVisible();
+  expect(await inDialog.textContent()).toBe(pageText);
 });
 

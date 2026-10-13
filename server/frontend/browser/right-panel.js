@@ -12,6 +12,7 @@ import { apiFetch } from "../core/api.js";
 import { humanType, isQuickPreviewImage, getExifFields } from "../core/file-meta.js";
 import { Toast } from "../core/toast.js";
 import { renderAll } from "../core/local-time.js";
+import { showPreviewFailure } from "../core/preview-failure.js";
 import { refreshFileList } from "./list.js";
 
 // Monotonic id used to discard stale right-panel async responses when the
@@ -659,14 +660,16 @@ export function resetRightPanel() {
 // ─── Quick preview modal (dblclick on a file row) ───────────────────────
 var QUICK_PREVIEW_TEXT_LIMIT = 1024 * 1024; // 1MB
 
-function showQuickPreviewUnsupported(messageKey) {
+// The dialog and the full-page viewer render the same node for the same file
+// (see core/preview-failure.js): one sentence naming the reason, and the ?dl=1
+// escape next to it.
+function showQuickPreviewUnsupported(kind, downloadUrl) {
   var overlay = document.getElementById("quick-preview-overlay");
   if (!overlay) return;
   var unsupported = overlay.querySelector(".js-qp-unsupported");
-  if (unsupported) {
-    unsupported.textContent = __t(messageKey || "fb.preview_failed");
-    unsupported.classList.remove("hidden");
-  }
+  if (!unsupported) return;
+  showPreviewFailure(unsupported, kind, downloadUrl);
+  unsupported.classList.remove("hidden");
 }
 
 function resetQuickPreview() {
@@ -681,6 +684,7 @@ function resetQuickPreview() {
   if (audio) { audio.pause(); audio.removeAttribute("src"); audio.load(); audio.onerror = null; }
   if (img) { img.removeAttribute("src"); img.onerror = null; }
   if (text) text.textContent = "";
+  if (unsupported) unsupported.textContent = "";
   [img, video, audio, text, unsupported].forEach(function (el) {
     if (el) el.classList.add("hidden");
   });
@@ -707,6 +711,10 @@ export function openQuickPreview(row) {
   if (!repoId || !path) return;
 
   var encPath = encodeFilePath(path);
+  // One content URL per open, plus the `?dl=1` alias of it: that alias is what
+  // every failure hands the reader to (the viewer's is server-rendered).
+  var contentUrl = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
+  var downloadUrl = contentUrl + "?dl=1";
   var title = overlay.querySelector(".js-qp-title");
   if (title) title.textContent = name;
 
@@ -723,31 +731,30 @@ export function openQuickPreview(row) {
     // stock Windows Chrome/Edge.
     video.onerror = function () {
       video.classList.add("hidden");
-      showQuickPreviewUnsupported("fb.media_unsupported");
+      showQuickPreviewUnsupported("media", downloadUrl);
     };
-    video.src = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
+    video.src = contentUrl;
     video.classList.remove("hidden");
   } else if (isAudio) {
     audio.onerror = function () {
       audio.classList.add("hidden");
-      showQuickPreviewUnsupported("fb.media_unsupported");
+      showQuickPreviewUnsupported("media", downloadUrl);
     };
-    audio.src = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
+    audio.src = contentUrl;
     audio.classList.remove("hidden");
   } else if (isPreviewable && isQuickPreviewImage(name)) {
-    img.src = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
+    img.src = contentUrl;
     img.onerror = function () {
       img.classList.add("hidden");
-      showQuickPreviewUnsupported();
+      showQuickPreviewUnsupported("image", downloadUrl);
     };
     img.classList.remove("hidden");
   } else if (isPreviewable) {
     // Text / code — fetch the first 1MB via Range; huge files are truncated.
     var fileSize = parseInt(row.dataset.size, 10);
-    var url = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
-    fetch(url, { headers: { Range: "bytes=0-" + (QUICK_PREVIEW_TEXT_LIMIT - 1) } })
+    fetch(contentUrl, { headers: { Range: "bytes=0-" + (QUICK_PREVIEW_TEXT_LIMIT - 1) } })
       .then(function (res) {
-        if (!res.ok) { showQuickPreviewUnsupported(); return null; }
+        if (!res.ok) { showQuickPreviewUnsupported("text", downloadUrl); return null; }
         return res.text();
       })
       .then(function (content) {
@@ -758,9 +765,9 @@ export function openQuickPreview(row) {
         }
         text.classList.remove("hidden");
       })
-      .catch(function () { showQuickPreviewUnsupported(); });
+      .catch(function () { showQuickPreviewUnsupported("text", downloadUrl); });
   } else {
-    showQuickPreviewUnsupported();
+    showQuickPreviewUnsupported("text", downloadUrl);
   }
 
   overlay.classList.remove("hidden");

@@ -244,7 +244,10 @@
             <video class="js-qp-video hidden max-w-full max-h-full object-contain bg-black rounded-ctl" controls playsinline preload="metadata"></video>
             <audio class="js-qp-audio hidden w-full" controls preload="metadata"></audio>
             <pre class="js-qp-text hidden w-full max-h-full overflow-auto whitespace-pre-wrap break-words text-[12px] text-ink-2 bg-panel rounded-ctl p-4"></pre>
-            <div class="js-qp-unsupported hidden text-[13px] text-ink-3"></div>
+            <!-- Filled with the shared `.nf-preview-fallback` node by
+                 right-panel.js, so the dialog and the full-page viewer read the
+                 same for the same file. -->
+            <div class="js-qp-unsupported hidden"></div>
         </div>
     </div>
 </div>

@@ -5,6 +5,7 @@ import { __t } from "./i18n.js";
 import { getCookie } from "./utils.js";
 import { Toast } from "./toast.js";
 import { ConfirmDialog } from "./confirm.js";
+import { showPreviewFailure } from "./preview-failure.js";
 
 // ─── Trash restore (via API) ────────────────────────────────────────────
 document.addEventListener("submit", async function (e) {
@@ -123,24 +124,20 @@ document.addEventListener("click", function (e) {
     if (btn.dataset.copyMsg) Toast.success(__t(btn.dataset.copyMsg));
 });
 
-// ─── Preview image fallback (data-preview-image) ───────────────────────
-// `error` events don't bubble, so capture at the document level. Builds the
-// fallback with DOM APIs (not innerHTML) to keep the download URL inert.
+// ─── Preview fallback (data-preview-image / data-preview-media) ────────
+// `error` events don't bubble, so capture at the document level. A picture or a
+// player the browser cannot decode is replaced by the same sentence — and the
+// same download escape — the quick-preview dialog shows for that file. A media
+// element that cannot decode otherwise just sits there as a black box with a
+// spinner, which is what the full-page viewer used to do.
 document.addEventListener("error", function (e) {
-    var img = e.target;
-    if (!img || img.tagName !== "IMG" || !img.hasAttribute("data-preview-image")) return;
-    var parent = img.parentElement;
-    if (!parent) return;
-    parent.innerHTML = '';
-    var div = document.createElement('div');
-    // Tokens, not the legacy `gray-*`/`brand-*` names the rest of this file
-    // predates: the fallback renders inside the preview panel.
-    div.className = 'text-ink-3 text-[13px] py-8 text-center';
-    div.appendChild(document.createTextNode(__t('fb.image_failed_to_load') + ' '));
-    var a = document.createElement('a');
-    a.href = img.dataset.downloadUrl || '#';
-    a.className = 'text-ink underline underline-offset-2';
-    a.textContent = __t('fb.download_instead');
-    div.appendChild(a);
-    parent.appendChild(div);
+    var el = e.target;
+    if (!el || !el.hasAttribute) return;
+    var kind = el.hasAttribute("data-preview-image") ? "image"
+        : el.hasAttribute("data-preview-media") ? "media" : null;
+    if (!kind || !el.parentElement) return;
+    // `MEDIA_ERR_ABORTED` is what a caller that re-points `src` or calls
+    // `load()` produces; it is not the file failing to decode.
+    if (kind === "media" && el.error && el.error.code === 1) return;
+    showPreviewFailure(el.parentElement, kind, el.getAttribute("data-download-url") || "");
 }, true);

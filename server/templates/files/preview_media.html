@@ -8,9 +8,13 @@
 {% block preview %}
 <div class="nf-preview-stage{% if !is_video %} is-audio{% endif %}">
     {% if is_video %}
-    <video src="{{ content_url }}" controls preload="metadata" class="nf-preview-video"></video>
+    <video src="{{ content_url }}" controls preload="metadata"
+           data-preview-media data-download-url="{{ download_url }}"
+           class="nf-preview-video"></video>
     {% else %}
-    <audio src="{{ content_url }}" controls preload="metadata" class="w-full max-w-xl"></audio>
+    <audio src="{{ content_url }}" controls preload="metadata"
+           data-preview-media data-download-url="{{ download_url }}"
+           class="w-full max-w-xl"></audio>
     {% endif %}
 </div>
 {% endblock %}
