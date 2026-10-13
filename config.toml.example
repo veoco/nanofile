@@ -6,6 +6,9 @@
 # key once an administrator saves one. The environment (NANOFILE_*) always wins
 # and is never written back.
 #
+# The server never rewrites this file: a key it does not mention keeps its
+# built-in default, and an upgrade never adds lines here.
+#
 # So this file holds only (1) what the interface cannot store at all — the master
 # secret, the database URL, the at-rest encryption mode, the first-start admin,
 # the log file, each marked "file-only" — and (2) the values that have to be
@@ -67,9 +70,11 @@ secret_key = ""
 # Fallback interface language when a visitor has no preference: "en" or "zh".
 #default_language = "en"
 
-# [logging]
+[logging]
 # file-only — send logs to a size-capped rotating file instead of stdout. Unset
 # chooses automatically: desktop (tray) runs log to a file, headless to stdout.
+# This is the one section the server writes to: when it resolves the path itself
+# (desktop runs) the result lands here, so every later run uses the same file.
 #file_enabled = true
 #file = "nanofile.log"
 

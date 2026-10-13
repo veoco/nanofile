@@ -1897,11 +1897,11 @@ impl Config {
         Self::load_from_tracked(&path)
     }
 
-    /// Load a config file. Missing fields are filled with built-in defaults and
-    /// written back in place (comments preserved), so an upgrade leaves a
-    /// visible trace of newly added options. A write failure (e.g. a read-only
-    /// mount) only degrades to a warning — the in-memory config is already
-    /// complete.
+    /// Load a config file. A key the file does not mention keeps its built-in
+    /// default in memory; the file itself is never rewritten, so what an
+    /// operator wrote is what stays on disk. Every key is discoverable at
+    /// `/sysadmin/settings/` with its environment variable and its effective
+    /// value, which is what makes a partial file a complete configuration.
     ///
     /// When the file does not exist, falls back to built-in defaults (plus env
     /// overrides) so the server can start with zero config; other I/O errors
@@ -1931,35 +1931,13 @@ impl Config {
             }
         };
 
-        // Deserialize first (missing fields get serde defaults in memory), then
-        // fill the same defaults into the document and write it back if anything
-        // was missing. NANOFILE_* overrides are applied last and never written.
-        // The live config carries the master secret; a permissive mode is worth
-        // an explicit warning (it used to be silently inherited).
+        // Missing fields are serde defaults in memory; the document is left
+        // alone, so a partial file stays the size the operator wrote. The live
+        // config carries the master secret, and a permissive mode is worth an
+        // explicit warning (it used to be silently inherited).
         warn_if_group_or_world_readable(path);
 
         let mut config: Config = toml::from_str(&original)?;
-        let mut doc: toml_edit::DocumentMut = original.parse()?;
-        let defaults = toml::to_string_pretty(&Config::default())?;
-        let defaults_doc: toml_edit::DocumentMut = defaults.parse()?;
-        if fill_missing(doc.as_table_mut(), defaults_doc.as_table()) {
-            let filled = doc.to_string();
-            match persist_with_backup(path, &filled) {
-                Ok(()) => tracing::info!("config.toml filled with missing defaults"),
-                Err(e) => {
-                    tracing::warn!(
-                        "config.toml fill succeeded but write-back failed; \
-                         using in-memory config: {e}"
-                    );
-                    // tracing_subscriber is not initialized yet at load time
-                    // (it needs config.logging.level), so also echo to stderr.
-                    eprintln!(
-                        "[nanofile] WARN: config fill applied in memory but \
-                         could not write back: {e}"
-                    );
-                }
-            }
-        }
         let mut env_keys = EnvKeys::new();
         config.apply_env_overrides(&mut env_keys);
         config.normalize();
@@ -2039,34 +2017,13 @@ impl Config {
     }
 }
 
-/// Recursively insert keys from `src` that are missing in `dst`, leaving
-/// existing keys (and their values/comments) untouched. Returns whether any key
-/// was inserted.
-fn fill_missing(dst: &mut toml_edit::Table, src: &toml_edit::Table) -> bool {
-    let mut changed = false;
-    for (key, value) in src.iter() {
-        match dst.get_mut(key) {
-            None => {
-                dst.insert(key, value.clone());
-                changed = true;
-            }
-            Some(toml_edit::Item::Table(d)) => {
-                if let toml_edit::Item::Table(s) = value {
-                    changed |= fill_missing(d, s);
-                }
-            }
-            Some(_) => {}
-        }
-    }
-    changed
-}
-
 /// Persist a single string value into the config file, preserving comments
-/// and formatting. Creates the section if missing. Used for runtime-resolved
-/// defaults that `fill_missing` cannot know (e.g. the log file path next to
-/// the binary in desktop mode): baking the resolved absolute path into the
-/// config keeps later runs — including login-started instances — on the same
-/// file. An existing value for `key` is overwritten only by this explicit
+/// and formatting. Creates the section if missing. This is the one write the
+/// loader-adjacent code does: a value *resolved* at startup — the log file path
+/// next to the binary in desktop mode — is baked into the config so every later
+/// run, including a login-started instance, reads the same explicit path.
+/// Built-in defaults are never written; a key the file omits keeps its default
+/// in memory. An existing value for `key` is overwritten only by this explicit
 /// call.
 pub fn write_config_value(
     path: impl AsRef<Path>,
@@ -2534,38 +2491,6 @@ request_timeout_secs = 600
     }
 
     #[test]
-    fn fill_missing_inserts_missing_sections_and_fields() {
-        let mut dst: toml_edit::DocumentMut = "[server]\naddr = \"1.2.3.4\"\n".parse().unwrap();
-        let src: toml_edit::DocumentMut = toml::to_string_pretty(&Config::default())
-            .unwrap()
-            .parse()
-            .unwrap();
-
-        let changed = fill_missing(dst.as_table_mut(), src.as_table());
-        assert!(changed);
-
-        let out = dst.to_string();
-        assert!(out.contains("addr = \"1.2.3.4\"")); // 原字段保持
-        assert!(out.contains("port = 8082")); // 缺失字段补默认
-        assert!(out.contains("[database]")); // 缺失 section 补默认
-    }
-
-    #[test]
-    fn fill_missing_keeps_existing_values() {
-        let mut dst: toml_edit::DocumentMut = "[server]\nport = 1234\n".parse().unwrap();
-        let src: toml_edit::DocumentMut = toml::to_string_pretty(&Config::default())
-            .unwrap()
-            .parse()
-            .unwrap();
-
-        let changed = fill_missing(dst.as_table_mut(), src.as_table());
-        assert!(changed);
-
-        let out = dst.to_string();
-        assert!(out.contains("port = 1234")); // 已有字段不被默认值覆盖
-    }
-
-    #[test]
     fn load_complete_config_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -2580,20 +2505,29 @@ request_timeout_secs = 600
         assert!(!std::path::Path::new(&format!("{}.bak", path.display())).exists());
     }
 
+    /// A partial file is a complete configuration: the missing keys keep their
+    /// built-in defaults in memory, and the file is left exactly as written.
+    /// Nothing surfaces a new option in the file — the settings pages do that,
+    /// and a file that grew on its own would hide which values an operator
+    /// actually chose.
     #[test]
-    fn load_incomplete_config_gets_filled() {
+    fn load_incomplete_config_takes_defaults_without_rewriting() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(&path, "[server]\naddr = \"1.2.3.4\"\n").unwrap();
+        let partial = "[server]\naddr = \"1.2.3.4\"\n";
+        std::fs::write(&path, partial).unwrap();
 
         let config = Config::load_from(&path).expect("load incomplete config");
         assert_eq!(config.server.addr, "1.2.3.4");
-        assert_eq!(config.server.port, 8082); // 默认补齐
+        assert_eq!(config.server.port, 8082, "a missing key takes its default");
+        assert_eq!(config.database.url, default_db_url());
 
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("port = 8082")); // 缺失字段写回
-        assert!(written.contains("[database]")); // 缺失 section 写回
-        assert!(std::path::Path::new(&format!("{}.bak", path.display())).exists());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            partial,
+            "the loader must not rewrite what the operator wrote"
+        );
+        assert!(!std::path::Path::new(&format!("{}.bak", path.display())).exists());
     }
 
     #[cfg(unix)]
@@ -2626,7 +2560,8 @@ request_timeout_secs = 600
         }
 
         /// The config file holds the master `secret_key`: a permissive mode must
-        /// be tightened by the write-back path instead of being inherited.
+        /// be tightened by the config write instead of being inherited. The
+        /// loader itself no longer writes, so this is the log-path write.
         #[test]
         fn permissive_config_is_tightened() {
             let dir = tempfile::tempdir().unwrap();
@@ -2882,7 +2817,7 @@ request_timeout_secs = 600
         assert!(error.contains("moved-away.toml"), "{error}");
         assert!(error.contains("--config"), "{error}");
 
-        // An existing one still loads, and still fills missing fields.
+        // An existing one still loads; a key it omits keeps its default.
         let present = dir.path().join("config.toml");
         std::fs::write(&present, "[server]\nport = 1234\n").unwrap();
         let loaded = Config::load_for_start(Some(&present)).unwrap();
@@ -2918,10 +2853,9 @@ request_timeout_secs = 600
     }
 
     #[test]
-    fn logging_section_roundtrips_and_fills_missing() {
-        // An old config with only `[logging] level` gains the new keys on
-        // load (written back by fill_missing), and None-valued options stay
-        // absent from the document.
+    fn logging_section_takes_defaults_for_keys_it_omits() {
+        // An old config with only `[logging] level` keeps that value and reads
+        // the rest from the built-in defaults; the file is not extended.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "[logging]\nlevel = \"debug\"\n").unwrap();
@@ -2931,14 +2865,11 @@ request_timeout_secs = 600
         assert_eq!(config.logging.file_enabled, None);
         assert_eq!(config.logging.file, None);
         assert_eq!(config.logging.max_file_size_mb, 10);
+        assert_eq!(config.logging.max_backups, 3);
 
-        let filled = std::fs::read_to_string(&path).unwrap();
-        assert!(filled.contains("level = \"debug\""));
-        assert!(filled.contains("max_file_size_mb = 10"));
-        assert!(filled.contains("max_backups = 3"));
-        assert!(
-            !filled.contains("file_enabled"),
-            "None options are not written"
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[logging]\nlevel = \"debug\"\n"
         );
     }
 
@@ -2985,9 +2916,10 @@ request_timeout_secs = 600
     }
 
     #[test]
-    fn email_section_roundtrips_and_fills_missing() {
-        // A config with only the switch gains the new keys on load, and the
-        // optional password stays absent rather than being written as empty.
+    fn email_section_roundtrips_and_leaves_the_file_alone() {
+        // A config with only the switch reads every other email key from its
+        // default, and the file keeps exactly what the operator wrote: a
+        // `password` line is never invented, not even an empty one.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "[email]\nenabled = true\n").unwrap();
@@ -3000,17 +2932,10 @@ request_timeout_secs = 600
         assert_eq!(config.email.timeout_secs, 10);
         assert!(config.email.password.is_none());
 
-        let filled = std::fs::read_to_string(&path).unwrap();
-        assert!(filled.contains("enabled = true"));
-        assert!(filled.contains("port = 587"));
-        // The email section gains the defaults but no `password` line: a
-        // `None` is absent from the document rather than written as empty.
-        let email_section = filled
-            .split("[email]")
-            .nth(1)
-            .and_then(|rest| rest.split("\n[").next())
-            .expect("an [email] section");
-        assert!(!email_section.contains("password"), "{email_section}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[email]\nenabled = true\n"
+        );
     }
 
     #[test]
