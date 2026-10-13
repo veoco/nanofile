@@ -1016,9 +1016,11 @@ pub struct StorageConfig {
     /// disk. Env: NANOFILE_STORAGE_MAX_TEMP_UPLOADS
     #[serde(default = "default_max_temp_uploads")]
     pub max_temp_uploads: u64,
-    /// Max total declared bytes across active temp uploads (0 = unlimited).
+    /// Max total declared bytes across active temp uploads. Defaults to 32 GiB
+    /// so a client cannot declare a disk-filling set of resumable uploads;
+    /// 0 = unlimited.
     /// Env: NANOFILE_STORAGE_MAX_TEMP_UPLOAD_BYTES
-    #[serde(default)]
+    #[serde(default = "default_max_temp_upload_bytes")]
     pub max_temp_upload_bytes: u64,
     /// Hours an abandoned resumable-upload temp file is retained before the
     /// periodic cleanup task removes it (0 = disable the cleanup task).
@@ -1031,9 +1033,10 @@ pub struct StorageConfig {
     /// Env: NANOFILE_STORAGE_MAX_ZIP_ENTRIES
     #[serde(default = "default_max_zip_entries")]
     pub max_zip_entries: u64,
-    /// Max total uncompressed bytes in a single zip archive (0 = unlimited).
+    /// Max total uncompressed bytes in a single zip archive. Defaults to 8 GiB
+    /// so one "download as zip" cannot exhaust the disk; 0 = unlimited.
     /// Env: NANOFILE_STORAGE_MAX_ZIP_BYTES
-    #[serde(default)]
+    #[serde(default = "default_max_zip_bytes")]
     pub max_zip_bytes: u64,
     /// Byte budget for all unconsumed zip-download tokens held in memory
     /// (0 = unlimited). A token carries the full entry list including every
@@ -1086,11 +1089,21 @@ fn default_ffmpeg_path() -> String {
 fn default_max_temp_uploads() -> u64 {
     1000
 }
+/// 32 GiB: a busy client's declared in-flight resumable uploads, without
+/// letting a flood of them fill the disk.
+fn default_max_temp_upload_bytes() -> u64 {
+    32 * 1024 * 1024 * 1024
+}
 fn default_temp_upload_ttl_hours() -> u64 {
     24
 }
 fn default_max_zip_entries() -> u64 {
     10000
+}
+/// 8 GiB: larger than any archive a browser download can usefully stream, so
+/// the cap only ever refuses the pathological one.
+fn default_max_zip_bytes() -> u64 {
+    8 * 1024 * 1024 * 1024
 }
 
 /// 32 MiB: roughly a 10k-file listing with a handful of blocks each, times a
@@ -1133,10 +1146,10 @@ impl Default for StorageConfig {
             max_storage_bytes: 0,
             ffmpeg_path: default_ffmpeg_path(),
             max_temp_uploads: default_max_temp_uploads(),
-            max_temp_upload_bytes: 0,
+            max_temp_upload_bytes: default_max_temp_upload_bytes(),
             temp_upload_ttl_hours: default_temp_upload_ttl_hours(),
             max_zip_entries: default_max_zip_entries(),
-            max_zip_bytes: 0,
+            max_zip_bytes: default_max_zip_bytes(),
             max_zip_task_bytes: default_max_zip_task_bytes(),
             thumbnail_dir: default_thumbnail_dir(),
             avatar_dir: default_avatar_dir(),
@@ -2885,6 +2898,23 @@ request_timeout_secs = 600
         assert_eq!(c.file, None);
         assert_eq!(c.max_file_size_mb, 10);
         assert_eq!(c.max_backups, 3);
+    }
+
+    /// The two byte caps that bound what one client can make the server buffer
+    /// are finite by default: an unset value used to mean "unlimited", which is
+    /// not a posture a default should pick. Both are deliberately generous, so
+    /// the pair is pinned as constants rather than as "non-zero".
+    #[test]
+    fn storage_byte_caps_default_to_finite_limits() {
+        let c = StorageConfig::default();
+        assert_eq!(c.max_temp_upload_bytes, 32 * 1024 * 1024 * 1024);
+        assert_eq!(c.max_zip_bytes, 8 * 1024 * 1024 * 1024);
+
+        // The serde default and the struct default must agree: a config file
+        // that omits the key has to get the same value as a fresh `Config`.
+        let parsed: StorageConfig = toml::from_str("").unwrap();
+        assert_eq!(parsed.max_temp_upload_bytes, c.max_temp_upload_bytes);
+        assert_eq!(parsed.max_zip_bytes, c.max_zip_bytes);
     }
 
     #[test]
