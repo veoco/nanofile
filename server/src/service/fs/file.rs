@@ -298,15 +298,19 @@ pub(crate) async fn move_entry(
 
     // Destination directory object:
     //
-    // * A move within the entry's own parent directory (`/a/b` → `/a`) needs a
-    //   fresh read: phase 1 rewrote that very directory object, so the
-    //   pre-removal id still lists the entry.
+    // * A destination on the path from the root down to the entry's own parent
+    //   — the entry's current directory (`/a/b` → `/a`), or an ancestor of it
+    //   (`/a/b/f` → `/a`) — was rewritten by phase 1: the removal updated the
+    //   entry's parent and then every ancestor's dirent along the way. The
+    //   pre-removal id is stale there and still points at the subtree *with* the
+    //   entry, so phase 2 would copy that stale subtree back and leave the
+    //   entry at both the old and the new path.
     // * Every other destination is untouched by removing the source (the guard
     //   above rules out a destination inside the moved subtree), so reuse the
-    //   id resolved before the removal. Re-resolving from the new HEAD — what
-    //   this used to do unconditionally — is exactly what failed once the
+    //   id resolved before the removal. Re-resolving *those* from the new HEAD —
+    //   what this used to do unconditionally — is exactly what failed once the
     //   removal was already durable, losing the subtree from HEAD.
-    let new_dst_fs_id = if new_parent_path == parent_path {
+    let new_dst_fs_id = if crate::domain::fs::is_self_or_subpath(&new_parent_path, parent_path) {
         let new_head_root = get_head_root_id(db, repo_id).await?;
         crate::fs::core::resolve_fs_id(repos, repo_id, &new_head_root, &new_parent_path)
             .await

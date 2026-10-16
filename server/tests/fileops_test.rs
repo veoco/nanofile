@@ -477,3 +477,90 @@ async fn copy_directory_into_its_own_subtree_is_rejected() {
     assert_eq!(resp.status(), 200, "a legitimate copy must still work");
     assert_eq!(dir_entry_count(&f, "/c").await, 1);
 }
+
+// ======================================================================
+// Move / rename: destination and entry identity
+// ======================================================================
+
+/// Names of the entries in a directory, sorted (handles both the v2.1 array and
+/// the wrapped `dirent_list` shape).
+async fn dir_names(f: &TestFixture, path: &str) -> Vec<String> {
+    let resp = f.client.list_dir(&f.api_token, &f.repo_id, path).await;
+    assert_eq!(resp.status(), 200, "list {path} failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let arr = match body.as_array() {
+        Some(a) => a.clone(),
+        None => body
+            .get("dirent_list")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default(),
+    };
+    let mut names: Vec<String> = arr
+        .iter()
+        .filter_map(|e| e["name"].as_str().map(str::to_string))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Moving a file into an ancestor of its own directory used to reuse the
+/// destination object read before the removal. That object still pointed at the
+/// subtree containing the file, so phase 2 copied the pre-removal subtree back
+/// and the entry ended up at both paths.
+#[tokio::test]
+async fn moving_a_file_into_an_ancestor_keeps_one_copy() {
+    let f = TestFixture::new().await;
+
+    create_subdir(&f, "/a").await;
+    create_subdir(&f, "/a/b").await;
+    create_subdir(&f, "/a/b/c").await;
+    upload_test_file(&f, "f.txt", b"payload", "/a/b/c").await;
+
+    let resp = f
+        .client
+        .move_file(&f.api_token, &f.repo_id, "/a/b/c/f.txt", &f.repo_id, "/a")
+        .await;
+    assert_eq!(resp.status(), 200, "move failed: {:?}", resp.text().await);
+
+    assert_eq!(dir_names(&f, "/a").await, vec!["b", "f.txt"]);
+    assert_eq!(
+        dir_names(&f, "/a/b/c").await,
+        Vec::<String>::new(),
+        "the old path must not keep a copy"
+    );
+    assert_eq!(dir_names(&f, "/a/b").await, vec!["c"]);
+
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/a/f.txt")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().to_vec(), b"payload");
+}
+
+/// The same bug applied to a directory: the moved subtree stayed behind at its
+/// old path as well.
+#[tokio::test]
+async fn moving_a_directory_into_an_ancestor_keeps_its_subtree_once() {
+    let f = TestFixture::new().await;
+
+    create_subdir(&f, "/a").await;
+    create_subdir(&f, "/a/b").await;
+    create_subdir(&f, "/a/b/c").await;
+    upload_test_file(&f, "f.txt", b"payload", "/a/b/c").await;
+
+    let resp = f
+        .client
+        .move_file(&f.api_token, &f.repo_id, "/a/b/c", &f.repo_id, "/a")
+        .await;
+    assert_eq!(resp.status(), 200, "move failed: {:?}", resp.text().await);
+
+    assert_eq!(dir_names(&f, "/a").await, vec!["b", "c"]);
+    assert_eq!(
+        dir_names(&f, "/a/b").await,
+        Vec::<String>::new(),
+        "the directory must be gone from its old parent"
+    );
+    assert_eq!(dir_names(&f, "/a/c").await, vec!["f.txt"]);
+}
