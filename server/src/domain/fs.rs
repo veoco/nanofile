@@ -102,10 +102,30 @@ pub fn compute_fs_id(json: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Sort directory entries into seafile's canonical order: descending by name,
+/// i.e. upstream's `compare_dirents()` (`strcmp(b, a)` in `common/fs-mgr.c`).
+///
+/// This is the order every official client writes (`daemon/vc-utils.c`
+/// "Sort dirents in descending order"), and since `fs_id` is the SHA-1 of the
+/// serialized object, the order *is* the identity: a directory stored in any
+/// other order has an id no client can reproduce. nanofile's own write paths
+/// (REST, WebDAV, the Web UI, system commits) build `dirents` in insertion
+/// order, so they must call this before `compute_dir()` (see
+/// `fs::core::store::store_fs_dir_object`). The merge sorts its inputs and
+/// output through the same function.
+pub fn sort_dirents_desc(dirents: &mut [DirEntryData]) {
+    dirents.sort_by(|a, b| b.name.cmp(&a.name));
+}
+
 /// Compute the fs_id and JSON for a directory.
 ///
 /// Returns `None` for empty directories: their id is the `EMPTY_SHA1` sentinel
 /// and no object is persisted (`seaf_dir_save()` skips them).
+///
+/// Serialization is byte-for-byte faithful to the order the caller passes:
+/// stored objects are hashed exactly as they arrived, so re-sorting here would
+/// silently change the id of an object already on disk. Callers that build
+/// entries themselves go through [`sort_dirents_desc`] first.
 pub fn compute_dir(data: &FsDirData) -> Option<(String, String)> {
     if data.dirents.is_empty() {
         return None;

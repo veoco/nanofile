@@ -6,6 +6,12 @@ use base::error::AppError;
 
 /// Compute fs_id, serialize, and INSERT OR IGNORE into fs_objects.
 /// Returns the fs_id (or `EMPTY_SHA1` for empty directories).
+///
+/// Entries are sorted into seafile's canonical (descending) order first:
+/// `fs_id` is the SHA-1 of the serialized object, so a directory written in any
+/// other order carries an id no official client can reproduce. This is the one
+/// funnel every server-side directory write goes through, including the REST,
+/// WebDAV and Web UI paths, which append entries in insertion order.
 pub async fn store_fs_dir_object(
     db: &DatabaseConnection,
     repo_id: &str,
@@ -14,7 +20,9 @@ pub async fn store_fs_dir_object(
     if data.dirents.is_empty() {
         return Ok(EMPTY_SHA1.to_string());
     }
-    let (fs_id, json) = domain::fs::compute_dir(data).expect("non-empty directory");
+    let mut data = data.clone();
+    domain::fs::sort_dirents_desc(&mut data.dirents);
+    let (fs_id, json) = domain::fs::compute_dir(&data).expect("non-empty directory");
     let _ = db
         .execute_raw(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,

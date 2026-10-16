@@ -20,6 +20,10 @@
 //!   REST paths, where nothing guarantees the order. Sorting the *inputs* is
 //!   safe because a directory object's id is the hash of its serialized form —
 //!   re-sorting a loaded object and writing it back would produce a different id.
+//!   Server-side writers now canonicalize before storing
+//!   (`store_fs_dir_object`); the sorts here stay because an input can be a
+//!   historical object stored before that, and because the id of the *input*
+//!   must not be recomputed.
 //! * `threeway_merge()` renames the remote entry **in place** and
 //!   `merge_directories()` then sees the renamed slot. The order of the two
 //!   phases and the in-place rename are reproduced here because a D/F conflict
@@ -32,6 +36,7 @@ use std::collections::HashMap;
 
 use sea_orm::DatabaseConnection;
 
+use crate::domain::fs::sort_dirents_desc;
 use crate::fs::core::store::store_fs_dir_object;
 use crate::fs::core::traversal::{TreeGuard, max_tree_depth};
 use crate::fs::core::tree::read_fs_dir_data;
@@ -336,12 +341,6 @@ fn merge_directories_action(slots: &[Option<DirEntryData>; 3]) -> Result<DirActi
         _ => return Err(AppError::Internal("merge: invalid dir group".into())),
     };
     Ok(action)
-}
-
-/// Descending name order, i.e. upstream's `compare_dirents()` = `strcmp(b, a)`
-/// and the order directory entries are serialized in.
-fn sort_dirents_desc(dirents: &mut [DirEntryData]) {
-    dirents.sort_by(|a, b| b.name.cmp(&a.name));
 }
 
 /// `gen_conflict_path()` (`common/vc-common.c:584`).
