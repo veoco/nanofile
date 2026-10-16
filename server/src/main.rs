@@ -106,6 +106,26 @@ enum Command {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// Verify that every directory object reachable from a library's HEAD is
+    /// stored in seafile's canonical (descending by name) order, which is what
+    /// makes its `fs_id` reproducible by an official client. Read-only unless
+    /// `--repair` is given.
+    VerifyDirOrder {
+        /// Report only (the default); rejects `--repair`.
+        #[arg(long, default_value_t = false, conflicts_with = "repair")]
+        dry_run: bool,
+        /// Append one normalizing commit per affected library. History is not
+        /// rewritten and no object is deleted, so clients pick the fix up as an
+        /// ordinary update.
+        #[arg(long, default_value_t = false)]
+        repair: bool,
+        /// Restrict the check to one library.
+        #[arg(long, value_name = "REPO_ID")]
+        repo: Option<String>,
+        /// Machine-readable report on stdout.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// Windows service control. `run` is what the registered service's binary
     /// path calls; `install`/`uninstall` need administrator rights.
     #[cfg(target_os = "windows")]
@@ -649,6 +669,28 @@ fn main() -> anyhow::Result<()> {
                     repair,
                 )
                 .await?;
+                report.print(json);
+                if report.has_findings() {
+                    // Non-zero so a monitoring wrapper notices without parsing
+                    // the report.
+                    std::process::exit(1);
+                }
+                anyhow::Ok(())
+            })
+        }
+        Command::VerifyDirOrder {
+            dry_run: _,
+            repair,
+            repo,
+            json,
+        } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async move {
+                let db = establish_connection(&config.database).await?;
+                migration::Migrator::up(&db, None).await?;
+                let report =
+                    server::fs::core::dir_order::DirOrder::run(&db, repo.as_deref(), repair)
+                        .await?;
                 report.print(json);
                 if report.has_findings() {
                     // Non-zero so a monitoring wrapper notices without parsing

@@ -7,6 +7,7 @@
 pub mod block_encryption_convert;
 pub mod block_migration;
 pub mod block_verify;
+pub mod dir_order;
 pub mod download;
 pub mod file_ops;
 pub mod gc;
