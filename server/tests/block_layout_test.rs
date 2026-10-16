@@ -70,15 +70,20 @@ async fn legacy_layout_migrates_and_downloads_keep_working() {
     // committed when the body starts streaming, so the failure shows up as a
     // truncated body rather than a 404 — what matters here is that the content
     // is not available.
-    let resp = f
+    let before_migration = match f
         .client
-        .download_file(&f.api_token, &f.repo_id, "/migrate.txt")
-        .await;
-    let before_migration = match resp.bytes().await {
-        Ok(bytes) => bytes.to_vec(),
-        // The response declared a Content-Length it can no longer satisfy, so
-        // reqwest reports an incomplete body. Either way the content is not
-        // available to the client.
+        .try_download_file(&f.api_token, &f.repo_id, "/migrate.txt")
+        .await
+    {
+        Ok(resp) => match resp.bytes().await {
+            Ok(bytes) => bytes.to_vec(),
+            // The response declared a Content-Length it can no longer satisfy,
+            // so reqwest reports an incomplete body.
+            Err(_) => Vec::new(),
+        },
+        // macOS can lose that same body's already-received head to the reset
+        // that ends it, which reqwest reports as a transport error instead.
+        // Either way the content is not available to the client.
         Err(_) => Vec::new(),
     };
     assert_ne!(

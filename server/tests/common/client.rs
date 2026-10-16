@@ -616,8 +616,11 @@ impl TestClient {
             .unwrap()
     }
 
-    pub async fn download_file(&self, token: &str, repo_id: &str, path: &str) -> reqwest::Response {
-        // Step A: get the download URL (now returns a JSON-quoted URL string)
+    /// Step A of the download flow: the token URL that serves the raw bytes.
+    ///
+    /// This endpoint only reads the file object, so it answers for a file whose
+    /// blocks are not servable — which is what the layout tests rely on.
+    async fn download_url(&self, token: &str, repo_id: &str, path: &str) -> String {
         let link_resp = self
             .client
             .get(format!(
@@ -634,9 +637,30 @@ impl TestClient {
             url_str.starts_with("http"),
             "download URL should start with http, got: {url_str}"
         );
+        url_str
+    }
 
+    pub async fn download_file(&self, token: &str, repo_id: &str, path: &str) -> reqwest::Response {
+        let url_str = self.download_url(token, repo_id, path).await;
         // Step B: follow the download URL to get the raw file bytes
         self.client.get(&url_str).send().await.unwrap()
+    }
+
+    /// The same download, for a caller that has to see a transport error.
+    ///
+    /// A response whose body the server abandons mid-stream ends when that
+    /// connection is reset, and on macOS the reset also drops the head the
+    /// client had already received: the truncation then surfaces as a transport
+    /// error here instead of as a short body. A case that asserts the bytes are
+    /// *not* served needs both halves of that answer.
+    pub async fn try_download_file(
+        &self,
+        token: &str,
+        repo_id: &str,
+        path: &str,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        let url_str = self.download_url(token, repo_id, path).await;
+        self.client.get(&url_str).send().await
     }
 
     pub async fn list_dir(&self, token: &str, repo_id: &str, path: &str) -> reqwest::Response {
