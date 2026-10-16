@@ -5,7 +5,7 @@ use base::error::AppError;
 use futures::StreamExt;
 use infra::crypto::fs_id::sha1_hex;
 use infra::crypto::random_key::encrypt_block;
-use infra::entity::{commit, repo};
+use infra::entity::commit;
 use infra::events;
 use infra::storage::DynBlockStorage;
 use sea_orm::DatabaseConnection;
@@ -358,7 +358,7 @@ impl FileOps {
             repo_id: sea_orm::Set(repo_id.to_string()),
             commit_id: sea_orm::Set(commit_id.clone()),
             root_id: sea_orm::Set(root_fs_id),
-            parent_id: sea_orm::Set(parent_commit_id),
+            parent_id: sea_orm::Set(parent_commit_id.clone()),
             second_parent_id: sea_orm::NotSet,
             creator_name: sea_orm::Set(modifier.to_string()),
             creator: sea_orm::Set(EMPTY_SHA1.to_string()),
@@ -370,11 +370,22 @@ impl FileOps {
         };
         repos.commit.insert(commit_model).await?;
 
-        let repo = repo_model.ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-        let mut repo_active: repo::ActiveModel = repo.into();
-        repo_active.head_commit_id = sea_orm::Set(Some(commit_id.clone()));
-        repo_active.updated_at = sea_orm::Set(now);
-        repos.repo.update(repo_active).await?;
+        if repo_model.is_none() {
+            return Err(AppError::NotFound("repo not found".into()));
+        }
+
+        // Same compare-and-swap as `create_commit`: the per-repo lock above
+        // serializes REST writes only, so a client upload can have advanced HEAD
+        // since it was read. Overwriting it would drop that upload silently.
+        if !repos
+            .repo
+            .test_and_update_head_commit(repo_id, parent_commit_id.as_deref(), &commit_id)
+            .await?
+        {
+            return Err(AppError::Conflict(format!(
+                "HEAD of {repo_id} advanced while this upload was being committed"
+            )));
+        }
 
         // Fire repo-update notification through the global broadcast channel.
         // Without this, the Seafile client won't know about the new file until
@@ -719,7 +730,7 @@ impl FileOps {
             repo_id: sea_orm::Set(repo_id.to_string()),
             commit_id: sea_orm::Set(commit_id.clone()),
             root_id: sea_orm::Set(root_fs_id.to_string()),
-            parent_id: sea_orm::Set(parent_commit_id),
+            parent_id: sea_orm::Set(parent_commit_id.clone()),
             second_parent_id: sea_orm::NotSet,
             creator_name: sea_orm::Set(creator_name.to_string()),
             creator: sea_orm::Set(EMPTY_SHA1.to_string()),
@@ -731,12 +742,27 @@ impl FileOps {
         };
         repos.commit.insert(commit_model).await?;
 
-        let repo = repo_model.ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-        let mut repo_active: repo::ActiveModel = repo.into();
+        if repo_model.is_none() {
+            return Err(AppError::NotFound("repo not found".into()));
+        }
         let commit_id_clone = commit_id.clone();
-        repo_active.head_commit_id = sea_orm::Set(Some(commit_id));
-        repo_active.updated_at = sea_orm::Set(now);
-        repos.repo.update(repo_active).await?;
+
+        // Move HEAD only while it is still the commit this tree was computed
+        // from. A client upload (the sync path does read-modify-CAS itself) or
+        // another REST request can advance HEAD between the read at the top of
+        // this function and this write; overwriting it would silently drop
+        // whatever that writer committed. Report the race instead — the tree
+        // here was built from the old HEAD, so re-committing it as-is is not an
+        // option, and the caller can re-read and retry.
+        if !repos
+            .repo
+            .test_and_update_head_commit(repo_id, parent_commit_id.as_deref(), &commit_id_clone)
+            .await?
+        {
+            return Err(AppError::Conflict(format!(
+                "HEAD of {repo_id} advanced while this change was being committed"
+            )));
+        }
 
         // Fire repo-update notification through the global broadcast channel.
         events::publish_repo_update(repo_id, commit_id_clone);
