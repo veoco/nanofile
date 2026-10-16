@@ -956,9 +956,29 @@ impl SyncService {
                     // An id naming an object the database does not hold is
                     // *unknown*, not empty: skipping the pair neither adds nor
                     // subtracts bytes it cannot account for.
+                    //
+                    // An object that only the *new* side references is different:
+                    // this upload introduced it, so if the database does not hold
+                    // it the client's own object upload did not land. Accepting
+                    // the commit would leave every client with a tree it cannot
+                    // check out, so the upload is rejected with 446 and the
+                    // client re-sends what it still has. (An object the base side
+                    // also references may have been pruned by GC — that is not
+                    // this upload's business, and stays unknown.)
                     if (frame.base_fs_id.is_some() && base_dir.is_none())
                         || (frame.new_fs_id.is_some() && new_dir.is_none())
                     {
+                        if frame.new_fs_id.is_some()
+                            && new_dir.is_none()
+                            && frame.base_fs_id.is_none()
+                        {
+                            tracing::warn!(
+                                "sync: upload for {repo_id} references a missing directory object at \
+                                 {}",
+                                frame.prefix
+                            );
+                            return Err(AppError::BlockMissing);
+                        }
                         continue;
                     }
 
@@ -1144,6 +1164,19 @@ impl SyncService {
 
                     for (fs_id, path) in &pending_files {
                         let Some(file_data) = file_map.get(fs_id) else {
+                            // `EMPTY_SHA1` is a zero-byte file's id and has no
+                            // object. Every other id here was added or changed by
+                            // this upload (see the arms that push into
+                            // `pending_files`), so a missing object means the
+                            // upload did not land: reject it the same way a
+                            // missing block is rejected, and the client re-sends.
+                            if fs_id != EMPTY_SHA1 {
+                                tracing::warn!(
+                                    "sync: upload for {repo_id} references a missing file object at \
+                                     {path} ({fs_id})"
+                                );
+                                return Err(AppError::BlockMissing);
+                            }
                             continue;
                         };
                         if file_data
@@ -1205,6 +1238,23 @@ impl SyncService {
 
             for frame in &frontier {
                 let Some(obj) = obj_map.get(&frame.fs_id) else {
+                    // `EMPTY_SHA1` frames never reach the map: they are the
+                    // empty-directory / zero-byte-file sentinel, not objects.
+                    // Anything else the tree references has to exist, because
+                    // this walk has no base to compare against: the whole tree
+                    // came with this upload (the repository had no HEAD, or the
+                    // commit's parent is the sentinel). A hole here would leave
+                    // every client with a tree it cannot check out, so the
+                    // upload is rejected with 446 and the client re-sends.
+                    if frame.fs_id != EMPTY_SHA1 {
+                        tracing::warn!(
+                            "sync: first upload for {repo_id} references a missing object at {} \
+                             ({})",
+                            frame.path,
+                            frame.fs_id
+                        );
+                        return Err(AppError::BlockMissing);
+                    }
                     continue;
                 };
                 if obj.obj_type == 1 {

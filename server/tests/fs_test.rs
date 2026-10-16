@@ -367,16 +367,27 @@ async fn test_fs_id_list_with_server_head() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
 
+    // A real (zero-byte) file object: the commit has to reference objects the
+    // server holds — a hole in the tree is rejected with 446 — and a zero-byte
+    // file needs no block, so it passes the block check as well.
+    let file_data = make_file_fs_data(vec![], 0);
+    let (file_fs_id, file_rc) = make_fs_entry(&file_data);
     let root_dir = make_dir_fs_data(vec![DirEntryData {
-        id: random_hex_id(),
+        id: file_fs_id.clone(),
         mode: 33188,
         modifier: "test@example.com".to_string(),
         mtime: chrono::Utc::now().timestamp(),
         name: "file.txt".to_string(),
-        size: 100,
+        size: 0,
     }]);
     let (root_fs_id, _rc) = make_fs_entry(&root_dir);
-    upload_fs_objects(&client, &sync_token, &repo_id, &[(root_fs_id.clone(), _rc)]).await;
+    upload_fs_objects(
+        &client,
+        &sync_token,
+        &repo_id,
+        &[(root_fs_id.clone(), _rc), (file_fs_id, file_rc)],
+    )
+    .await;
 
     let commit_id = push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
@@ -416,6 +427,11 @@ async fn test_fs_id_list_dir_only_returns_only_dirs() {
 
     let sub_dir = make_dir_fs_data(vec![]);
     let (sub_fs_id, sub_rc) = make_fs_entry(&sub_dir);
+    // The file entry has to point at an object the server holds (a commit with
+    // a hole in it is rejected with 446) — and a zero-byte file needs no block,
+    // so the block check below the tree walk has nothing to report either.
+    let file_data = make_file_fs_data(vec![], 0);
+    let (file_fs_id, file_rc) = make_fs_entry(&file_data);
 
     let root_dir = make_dir_fs_data(vec![
         DirEntryData {
@@ -427,12 +443,12 @@ async fn test_fs_id_list_dir_only_returns_only_dirs() {
             size: 0,
         },
         DirEntryData {
-            id: random_hex_id(),
+            id: file_fs_id.clone(),
             mode: 33188, // S_IFREG
             modifier: "test@example.com".to_string(),
             mtime: chrono::Utc::now().timestamp(),
             name: "file.txt".to_string(),
-            size: 100,
+            size: 0,
         },
     ]);
     let (root_fs_id, root_rc) = make_fs_entry(&root_dir);
@@ -441,7 +457,11 @@ async fn test_fs_id_list_dir_only_returns_only_dirs() {
         &client,
         &sync_token,
         &repo_id,
-        &[(sub_fs_id.clone(), sub_rc), (root_fs_id.clone(), root_rc)],
+        &[
+            (sub_fs_id.clone(), sub_rc),
+            (root_fs_id.clone(), root_rc),
+            (file_fs_id, file_rc),
+        ],
     )
     .await;
 

@@ -913,3 +913,141 @@ async fn merge_keeps_a_renamed_directory_and_marks_the_activity() {
         "exactly the paths the merge kept are marked as merge-produced: {items:?}"
     );
 }
+
+/// A directory entry, for the planted trees below.
+fn planted_dir_entry(name: &str, id: &str) -> DirEntryData {
+    DirEntryData {
+        id: id.to_string(),
+        mode: 0o40000,
+        modifier: String::new(),
+        mtime: chrono::Utc::now().timestamp(),
+        name: name.to_string(),
+        size: 0,
+    }
+}
+
+/// Upload one directory object, upload a commit claiming it as root, and try to
+/// move the branch to that commit. Returns the branch-update response.
+async fn upload_root_commit(
+    f: &TestFixture,
+    root: &FsDirData,
+    parent: Option<&str>,
+    description: &str,
+) -> reqwest::Response {
+    let root_json = serde_json::to_string(root).unwrap();
+    let root_id = common::fs_object_id(root_json.as_bytes());
+    let resp = f
+        .client
+        .recv_fs(
+            &f.sync_token,
+            &f.repo_id,
+            pack_fs_objects(&[(root_id.clone(), root_json)]),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "recv_fs for the planted root failed");
+
+    let commit_id = random_hex_id();
+    let body = serde_json::to_string(&json!({
+        "commit_id": commit_id,
+        "repo_id": f.repo_id,
+        "root_id": root_id,
+        "creator_name": "test@example.com",
+        "creator": ZERO_SHA1,
+        "description": description,
+        "ctime": chrono::Utc::now().timestamp(),
+        "parent_id": parent,
+        "second_parent_id": null,
+        "version": 1,
+    }))
+    .unwrap()
+    .into_bytes();
+    let resp = f
+        .client
+        .put_commit(&f.sync_token, &f.repo_id, &commit_id, body)
+        .await;
+    assert_eq!(resp.status(), 200, "put_commit failed");
+
+    f.client
+        .update_branch(&f.sync_token, &f.repo_id, &commit_id)
+        .await
+}
+
+/// A library's first upload has no base to compare against, so every object it
+/// references must exist. Accepting one with a hole would give every client a
+/// tree it cannot check out; 446 makes the client re-send.
+#[tokio::test]
+async fn first_upload_referencing_a_missing_object_is_446() {
+    let f = TestFixture::new().await;
+    let before = head(&f).await;
+
+    let root = FsDirData {
+        dirents: vec![planted_dir_entry("x", &"d".repeat(40))],
+        obj_type: 3,
+        version: 1,
+    };
+    let resp = upload_root_commit(&f, &root, None, "first upload with a missing object").await;
+    assert_eq!(resp.status(), 446, "a missing object must not be accepted");
+    assert_eq!(head(&f).await, before, "HEAD must not move");
+}
+
+/// Same rule for an upload on top of an existing tree: a *new* directory object
+/// the upload references has to be there. (An object only the base side
+/// references may have been pruned by GC and stays unknown.)
+#[tokio::test]
+async fn upload_adding_a_missing_directory_is_446() {
+    let f = TestFixture::new().await;
+    let base = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("keep.txt", b"keep", REG)],
+        &[],
+        None,
+    )
+    .await;
+
+    let root = FsDirData {
+        dirents: vec![planted_dir_entry("x", &"e".repeat(40))],
+        obj_type: 3,
+        version: 1,
+    };
+    let resp = upload_root_commit(&f, &root, Some(&base), "adds a missing directory").await;
+    assert_eq!(
+        resp.status(),
+        446,
+        "a missing new-side object must be rejected"
+    );
+    assert_eq!(head(&f).await, base, "HEAD must not move");
+}
+
+/// And for a *file* object: the entry is added by this upload, so the server has
+/// to hold its object.
+#[tokio::test]
+async fn upload_adding_a_missing_file_is_446() {
+    let f = TestFixture::new().await;
+    let base = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("keep.txt", b"keep", REG)],
+        &[],
+        None,
+    )
+    .await;
+
+    let root = FsDirData {
+        dirents: vec![DirEntryData {
+            id: "f".repeat(40),
+            mode: REG,
+            modifier: "test@example.com".to_string(),
+            mtime: chrono::Utc::now().timestamp(),
+            name: "gone.txt".to_string(),
+            size: 12,
+        }],
+        obj_type: 3,
+        version: 1,
+    };
+    let resp = upload_root_commit(&f, &root, Some(&base), "adds a missing file").await;
+    assert_eq!(resp.status(), 446, "a missing file object must be rejected");
+    assert_eq!(head(&f).await, base, "HEAD must not move");
+}
