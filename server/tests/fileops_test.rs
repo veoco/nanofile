@@ -504,6 +504,32 @@ async fn dir_names(f: &TestFixture, path: &str) -> Vec<String> {
     names
 }
 
+/// `(name, type)` of every entry of a directory, sorted by name.
+async fn dir_entries(f: &TestFixture, path: &str) -> Vec<(String, String)> {
+    let resp = f.client.list_dir(&f.api_token, &f.repo_id, path).await;
+    assert_eq!(resp.status(), 200, "list {path} failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let arr = match body.as_array() {
+        Some(a) => a.clone(),
+        None => body
+            .get("dirent_list")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default(),
+    };
+    let mut entries: Vec<(String, String)> = arr
+        .iter()
+        .filter_map(|e| {
+            Some((
+                e["name"].as_str()?.to_string(),
+                e["type"].as_str().unwrap_or_default().to_string(),
+            ))
+        })
+        .collect();
+    entries.sort();
+    entries
+}
+
 /// Moving a file into an ancestor of its own directory used to reuse the
 /// destination object read before the removal. That object still pointed at the
 /// subtree containing the file, so phase 2 copied the pre-removal subtree back
@@ -563,4 +589,50 @@ async fn moving_a_directory_into_an_ancestor_keeps_its_subtree_once() {
         "the directory must be gone from its old parent"
     );
     assert_eq!(dir_names(&f, "/a/c").await, vec!["f.txt"]);
+}
+
+/// `rename_entry` used to find the entry to rename by object id. `EMPTY_SHA1` is
+/// the id of every empty directory *and* every zero-byte file, so a directory
+/// holding both could rename the wrong sibling. The empty directory is named so
+/// that it comes first in the stored (descending) order, and the assertion is on
+/// the *type* of each entry, because renaming either one yields the same name set.
+#[tokio::test]
+async fn renaming_a_zero_byte_file_next_to_an_empty_directory_renames_the_file() {
+    let f = TestFixture::new().await;
+
+    create_subdir(&f, "/d").await;
+    create_subdir(&f, "/d/zzz").await;
+    // A zero-byte file, created through the v2.1 endpoint (the upload route
+    // stores no object for an empty file, its id is the `EMPTY_SHA1` sentinel).
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api/v2.1/repos/{}/file/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({"p": "/d/zero.txt"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "create failed: {:?}", resp.text().await);
+    assert_eq!(
+        dir_entries(&f, "/d").await,
+        vec![
+            ("zero.txt".to_string(), "file".to_string()),
+            ("zzz".to_string(), "dir".to_string()),
+        ]
+    );
+
+    let resp = f
+        .client
+        .rename_file(&f.api_token, &f.repo_id, "/d/zero.txt", "renamed.txt")
+        .await;
+    assert_eq!(resp.status(), 200, "rename failed: {:?}", resp.text().await);
+
+    assert_eq!(
+        dir_entries(&f, "/d").await,
+        vec![
+            ("renamed.txt".to_string(), "file".to_string()),
+            ("zzz".to_string(), "dir".to_string()),
+        ],
+        "the file must be renamed and the empty directory left alone"
+    );
 }

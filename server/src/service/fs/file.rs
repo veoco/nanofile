@@ -75,7 +75,11 @@ pub(crate) async fn rename_entry(
         },
         crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
-            if let Some(d) = dirents.iter_mut().find(|d| d.id == child_id) {
+            // Match on the name, not on `child_id`: `EMPTY_SHA1` is the id of
+            // every empty directory *and* every zero-byte file, so an id match
+            // can rename a sibling that shares it. Names are unique within a
+            // directory, and `old_name` is the entry the caller asked for.
+            if let Some(d) = dirents.iter_mut().find(|d| d.name == old_name) {
                 d.name = new_name.to_string();
             }
             Ok(())
