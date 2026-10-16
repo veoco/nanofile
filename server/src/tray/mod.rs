@@ -370,7 +370,7 @@ fn create_tray(
         quit_tx,
     });
 
-    TrayIconBuilder::new()
+    let builder = TrayIconBuilder::new()
         .with_id("nanofile")
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
@@ -380,15 +380,20 @@ fn create_tray(
             lang().tr("tray.client_mode_tooltip")
         } else {
             lang().tr("tray.tooltip")
-        })
-        // macOS menu-bar icons are template images: the system inverts the
-        // glyph for the light/dark menu bar and for the highlighted state, so
-        // the glyph is rendered bare and ON TOP of that inversion. Elsewhere
-        // the flag is ignored and the raster already carries the tile colour.
-        .with_icon_as_template(cfg!(target_os = "macos"))
-        .with_icon(icon::tray_icon())
-        .build()
-        .context("failed to create tray icon")
+        });
+
+    // macOS menu-bar icons are template images: the system inverts the glyph
+    // for the light/dark menu bar and for the highlighted state, so the glyph
+    // is rendered bare and ON TOP of that inversion. `with_icon_templated`
+    // hands the icon over already marked, which is the only supported way to
+    // ask for that since tray-icon 0.26; elsewhere the raster already carries
+    // the tile colour and the plain setter is what exists.
+    #[cfg(target_os = "macos")]
+    let builder = builder.with_icon_templated(icon::tray_icon());
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.with_icon(icon::tray_icon());
+
+    builder.build().context("failed to create tray icon")
 }
 
 /// Whether writing the login entry may proceed.

@@ -19,13 +19,16 @@ tray = [
     # do not use, which would add a libxdo system dependency); the Linux GTK
     # backend is re-enabled explicitly below.
     "dep:tray-icon",
-    "tray-icon/gtk",
+    # tray-icon renamed the feature when it grew a pure-Rust `ksni` backend:
+    # `libappindicator` is the GTK3 + ayatana path this build uses.
+    "tray-icon/libappindicator",
     "dep:open",
     "dep:notify-rust",
     "dep:objc2",
     "dep:objc2-app-kit",
     "dep:gtk",
     "dep:resvg",
+    "dep:usvg",
     "dep:tiny-skia",
     "dep:winresource",
     # OS locale detection for the tray menu language (tray.quit etc.).
@@ -163,7 +166,7 @@ zip = { version = "9.0", default-features = false, features = ["deflate"] }
 # ── Optional system tray dependencies (enabled by the `tray` feature) ───────
 # NOTE: keep these target-specific tables LAST — everything after a
 # `[target.*.dependencies]` header belongs to that target only.
-tray-icon = { version = "0.24", optional = true, default-features = false }
+tray-icon = { version = "0.26", optional = true, default-features = false }
 open = { version = "5", optional = true }
 # OS locale detection (zero transitive dependencies) for the tray language.
 sys-locale = { version = "0.3", optional = true }
@@ -263,7 +266,10 @@ sha2 = { workspace = true }
 # Tray feature build-time dependencies: rasterize static/img/favicon.svg into
 # the tray icon RGBA (all platforms) and the Windows exe icon (via winresource).
 # The mark is a path, not text, so the text / system-fonts features are off: the
-# raster cannot change with the fonts installed on the build machine.
-resvg = { version = "0.45", optional = true, default-features = false }
-tiny-skia = { version = "0.11", optional = true }
+# raster cannot change with the fonts installed on the build machine. `resvg`
+# stopped re-exporting `usvg` in 0.46, so the SVG tree type is its own entry —
+# with the same `default-features = false` resvg itself asks for.
+resvg = { version = "0.48", optional = true, default-features = false }
+usvg = { version = "0.48", optional = true, default-features = false }
+tiny-skia = { version = "0.12", optional = true }
 winresource = { version = "0.1", optional = true }

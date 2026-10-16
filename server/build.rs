@@ -290,10 +290,10 @@ fn build_tray_icons() {}
 /// carry the colours they want.
 #[cfg(feature = "tray")]
 fn rasterize_svg(svg: &[u8], size: u32) -> tiny_skia::Pixmap {
-    let options = resvg::usvg::Options::default();
+    let options = usvg::Options::default();
 
-    let tree = resvg::usvg::Tree::from_data(svg, &options)
-        .expect("tray: failed to parse static/img/favicon.svg");
+    let tree =
+        usvg::Tree::from_data(svg, &options).expect("tray: failed to parse static/img/favicon.svg");
     let svg_size = tree.size();
     let scale = (size as f32 / svg_size.width()).min(size as f32 / svg_size.height());
     let dx = (size as f32 - svg_size.width() * scale) / 2.0;
