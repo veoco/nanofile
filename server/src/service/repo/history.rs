@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::fs::core::file_ops::FileOps;
 use crate::fs::core::{
-    read_fs_dir_data_batch, read_fs_file_data, read_fs_file_data_batch, resolve_fs_id,
-    resolve_fs_ids_batch,
+    read_fs_dir_data_batch, read_fs_file_data, read_fs_file_data_batch, resolve_dir_fs_id,
+    resolve_fs_id, resolve_fs_ids_batch,
 };
 use crate::repository::Repositories;
 use base::common::{EMPTY_SHA1, FsFileData};
@@ -343,7 +343,7 @@ impl HistoryService {
             .to_string();
         let parent_path = parent_path_from(path);
         let head_root_id = get_head_root_id(db, repo_id).await?;
-        let parent_fs_id = resolve_fs_id(repos, repo_id, &head_root_id, parent_path).await?;
+        let parent_fs_id = resolve_dir_fs_id(repos, repo_id, &head_root_id, parent_path).await?;
 
         let now = chrono::Utc::now().timestamp();
         let target_size = target_file.size;

@@ -544,6 +544,16 @@ impl FileOps {
                 .ok_or_else(|| {
                     AppError::NotFound(format!("path component '{}' not found in '{}'", part, path))
                 })?;
+            // Every component of a *directory* path has to be a directory: a
+            // zero-byte file's id is `EMPTY_SHA1`, which `read_fs_dir_data`
+            // reads back as an empty directory, so without this check a file
+            // name in the middle (or at the end) of the path would resolve.
+            if !crate::fs::core::tree::is_dir_mode(found.mode) {
+                return Err(AppError::NotFound(format!(
+                    "not a directory: '{}' in '{}'",
+                    part, path
+                )));
+            }
             current_fs_id = found.id.clone();
             chain.push((accumulated.clone(), current_fs_id.clone()));
         }

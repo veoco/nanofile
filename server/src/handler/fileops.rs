@@ -51,7 +51,7 @@ async fn list_dir_from_fs_tree(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-    let dir_id = crate::fs::core::resolve_fs_id(repos, repo_id, &head.root_id, path)
+    let dir_id = crate::fs::core::resolve_dir_fs_id(repos, repo_id, &head.root_id, path)
         .await
         .map_err(|e| AppError::internal(format!("resolve_fs_id failed: {e}")))?;
 

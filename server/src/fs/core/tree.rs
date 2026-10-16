@@ -7,7 +7,24 @@ use infra::common::EMPTY_SHA1;
 use infra::entity::fs_object;
 use infra::serialization::S_IFDIR;
 
+/// `S_IFMT` / `S_IFDIR` type bits, used like C's `S_ISDIR()`.
+/// `infra::serialization::S_IFDIR` is the bare type (`0o40000`) and cannot be
+/// used as a mask because a dirent may carry permission bits.
+const S_IFMT: i32 = 0o170000;
+const S_IFDIR_TYPE: i32 = 0o040000;
+
+/// Whether a dirent's mode names a directory.
+pub(crate) fn is_dir_mode(mode: i32) -> bool {
+    mode & S_IFMT == S_IFDIR_TYPE
+}
+
 /// Read and parse a directory fs_object (FsDirData) from the database.
+///
+/// `EMPTY_SHA1` is read as an empty directory, which is what it means for an
+/// empty directory — but the same id is also the id of every **zero-byte file**
+/// (`seaf_fs_manager_index_blocks()`), so a caller that got the id from a
+/// dirent must check the entry's mode before descending through it. The path
+/// resolvers below do; see [`resolve_fs_id`].
 pub async fn read_fs_dir_data(
     repos: &Repositories,
     repo_id: &str,
@@ -186,15 +203,62 @@ pub async fn resolve_fs_id(
 
     let mut current_fs_id = root_fs_id.to_string();
 
-    for segment in segments {
+    for (i, segment) in segments.iter().enumerate() {
         let dir_data = read_fs_dir_data(repos, repo_id, &current_fs_id).await?;
 
         let entry = dir_data
             .dirents
             .iter()
-            .find(|d| d.name == segment)
+            .find(|d| d.name == *segment)
             .ok_or_else(|| AppError::NotFound(format!("path segment not found: {segment}")))?;
 
+        // A segment that is not the last one has to be a directory: without
+        // this, `/dir/empty.txt/anything` would resolve, because the zero-byte
+        // file's id is `EMPTY_SHA1` and reading it yields an empty directory.
+        if i + 1 < segments.len() && !is_dir_mode(entry.mode) {
+            return Err(AppError::NotFound(format!("not a directory: {segment}")));
+        }
+
+        current_fs_id = entry.id.clone();
+    }
+
+    Ok(current_fs_id)
+}
+
+/// Resolve a path whose **every** component must be a directory: a parent
+/// directory a write goes into, or a directory to descend into.
+///
+/// [`resolve_fs_id`] cannot check the last component, because callers that want
+/// a file's id resolve the same way. The distinction is load-bearing:
+/// `EMPTY_SHA1` is the id of an empty directory *and* of a zero-byte file, so a
+/// write "into" a zero-byte file would otherwise read the sentinel as an empty
+/// directory and rewrite the file's own dirent into a directory.
+pub async fn resolve_dir_fs_id(
+    repos: &Repositories,
+    repo_id: &str,
+    root_fs_id: &str,
+    path: &str,
+) -> Result<String, AppError> {
+    let segments: Vec<&str> = path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    if segments.is_empty() {
+        return Ok(root_fs_id.to_string());
+    }
+
+    let mut current_fs_id = root_fs_id.to_string();
+    for segment in segments {
+        let dir_data = read_fs_dir_data(repos, repo_id, &current_fs_id).await?;
+        let entry = dir_data
+            .dirents
+            .iter()
+            .find(|d| d.name == segment)
+            .ok_or_else(|| AppError::NotFound(format!("path segment not found: {segment}")))?;
+        if !is_dir_mode(entry.mode) {
+            return Err(AppError::NotFound(format!("not a directory: {segment}")));
+        }
         current_fs_id = entry.id.clone();
     }
 

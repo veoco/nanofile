@@ -636,3 +636,38 @@ async fn renaming_a_zero_byte_file_next_to_an_empty_directory_renames_the_file()
         "the file must be renamed and the empty directory left alone"
     );
 }
+
+/// `EMPTY_SHA1` is the id of an empty directory *and* of a zero-byte file, so
+/// descending a path has to check each entry's mode: a path inside a zero-byte
+/// file does not exist, while a path inside an empty directory does.
+#[tokio::test]
+async fn a_path_inside_a_zero_byte_file_does_not_resolve() {
+    let f = TestFixture::new().await;
+
+    // Zero-byte file at the root: its dirent id is the `EMPTY_SHA1` sentinel.
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api/v2.1/repos/{}/file/", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({"p": "/zero.txt"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "create failed: {:?}", resp.text().await);
+
+    let resp = f
+        .client
+        .create_dir(&f.api_token, &f.repo_id, "/zero.txt/sub")
+        .await;
+    assert_eq!(
+        resp.status(),
+        404,
+        "a zero-byte file has no children: {:?}",
+        resp.text().await
+    );
+
+    // Positive control: an empty directory still accepts children.
+    create_subdir(&f, "/empty").await;
+    create_subdir(&f, "/empty/sub").await;
+    assert_eq!(dir_names(&f, "/empty").await, vec!["sub"]);
+}

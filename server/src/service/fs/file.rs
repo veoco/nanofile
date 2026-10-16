@@ -41,9 +41,10 @@ pub(crate) async fn rename_entry(
     let old_name = basename(path);
 
     let head_root_id = get_head_root_id(db, repo_id).await?;
-    let parent_fs_id = crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, parent_path)
-        .await
-        .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+    let parent_fs_id =
+        crate::fs::core::resolve_dir_fs_id(repos, repo_id, &head_root_id, parent_path)
+            .await
+            .map_err(|e| crate::service::fs::resolve_parent_error(e, "resolve parent failed"))?;
 
     let parent_data = crate::fs::core::read_fs_dir_data(repos, repo_id, &parent_fs_id)
         .await
@@ -223,9 +224,11 @@ pub(crate) async fn move_entry(
     let parent_path = parent_path_from(path);
 
     let old_parent_fs_id =
-        crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, parent_path)
+        crate::fs::core::resolve_dir_fs_id(repos, repo_id, &head_root_id, parent_path)
             .await
-            .map_err(|e| AppError::Internal(format!("resolve old parent failed: {e}")))?;
+            .map_err(|e| {
+                crate::service::fs::resolve_parent_error(e, "resolve old parent failed")
+            })?;
 
     let old_parent_data = crate::fs::core::read_fs_dir_data(repos, repo_id, &old_parent_fs_id)
         .await
@@ -267,7 +270,7 @@ pub(crate) async fn move_entry(
     }
 
     let pre_removal_dst_fs_id =
-        crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, &new_parent_path)
+        crate::fs::core::resolve_dir_fs_id(repos, repo_id, &head_root_id, &new_parent_path)
             .await
             .map_err(|_| AppError::BadRequest("destination directory not found".into()))?;
 
@@ -316,7 +319,7 @@ pub(crate) async fn move_entry(
     //   removal was already durable, losing the subtree from HEAD.
     let new_dst_fs_id = if crate::domain::fs::is_self_or_subpath(&new_parent_path, parent_path) {
         let new_head_root = get_head_root_id(db, repo_id).await?;
-        crate::fs::core::resolve_fs_id(repos, repo_id, &new_head_root, &new_parent_path)
+        crate::fs::core::resolve_dir_fs_id(repos, repo_id, &new_head_root, &new_parent_path)
             .await
             .map_err(|e| {
                 AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
@@ -802,9 +805,11 @@ impl FileService {
 
         let head_root_id = get_head_root_id(db, repo_id).await?;
         let parent_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
+            crate::fs::core::resolve_dir_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
                 .await
-                .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+                .map_err(|e| {
+                    crate::service::fs::resolve_parent_error(e, "resolve parent failed")
+                })?;
 
         // Resolve the entry size from the parent dirents (files O(1);
         // directories walk their subtree once) instead of re-resolving the path.
@@ -932,9 +937,11 @@ impl FileService {
         let file_name = basename(path);
 
         let parent_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
+            crate::fs::core::resolve_dir_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
                 .await
-                .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+                .map_err(|e| {
+                    crate::service::fs::resolve_parent_error(e, "resolve parent failed")
+                })?;
         let parent_data = crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
             .await
             .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
@@ -1260,9 +1267,9 @@ impl FileService {
             let head_root_id = get_head_root_id_opt(db, repo_id)
                 .await?
                 .ok_or_else(|| AppError::NotFound("repo has no commits".into()))?;
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
+            crate::fs::core::resolve_dir_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
                 .await
-                .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?
+                .map_err(|e| crate::service::fs::resolve_parent_error(e, "resolve parent failed"))?
         };
 
         let email_clone = email.to_string();

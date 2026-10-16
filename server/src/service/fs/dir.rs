@@ -282,9 +282,9 @@ pub(crate) async fn create_dir_by_path(
         }
     } else {
         let head_root_id = get_head_root_id(db, repo_id).await?;
-        crate::fs::core::resolve_fs_id(repos, repo_id, &head_root_id, &parent_path)
+        crate::fs::core::resolve_dir_fs_id(repos, repo_id, &head_root_id, &parent_path)
             .await
-            .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?
+            .map_err(|e| crate::service::fs::resolve_parent_error(e, "resolve parent failed"))?
     };
 
     let email_clone = email.to_string();
@@ -448,9 +448,11 @@ impl DirService {
 
         let head_root_id = get_head_root_id(db, repo_id).await?;
         let parent_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
+            crate::fs::core::resolve_dir_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
                 .await
-                .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+                .map_err(|e| {
+                    crate::service::fs::resolve_parent_error(e, "resolve parent failed")
+                })?;
 
         // Record deleted entry to trash before tree update
         crate::fs::core::trash::record_deleted_entry(
@@ -564,7 +566,7 @@ impl DirService {
         let db = self.db();
         let head_root_id = get_head_root_id(db, repo_id).await?;
         let source_dir_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, path)
+            crate::fs::core::resolve_dir_fs_id(&self.repos, repo_id, &head_root_id, path)
                 .await
                 .map_err(|_| AppError::NotFound("directory not found".into()))?;
 
@@ -706,7 +708,9 @@ impl DirService {
         let parent_fs_id =
             crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_commit.root_id, parent_path)
                 .await
-                .map_err(|e| AppError::Internal(format!("resolve parent failed: {e}")))?;
+                .map_err(|e| {
+                    crate::service::fs::resolve_parent_error(e, "resolve parent failed")
+                })?;
 
         let parent_dir_data =
             crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
