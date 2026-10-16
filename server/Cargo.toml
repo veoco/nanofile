@@ -176,10 +176,10 @@ notify-rust = { version = "4", optional = true }
 # Not optional: the login entry (`HKCU\…\Run`) is read and written by every
 # Windows build, not only the tray one — `nanofile service install` retires it,
 # so the service and the login entry can never both start Nanofile.
-winreg = "0.55"
+winreg = "0.56"
 # Not optional: `nanofile service …` (the Service Control Manager front-end the
 # tray menu drives) exists in every Windows build, not only the tray one.
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     # ShellExecuteExW with the "runas" verb: the elevated install/uninstall.
