@@ -140,7 +140,8 @@ mod tests {
     use std::io::Write;
 
     /// The offset of the uncompressed-size field inside a central directory
-    /// header (`PK\x01\x02`), which is what the archive reader trusts.
+    /// header (`PK\x01\x02`). The archive reader compares it against what the
+    /// part actually decodes to.
     const CENTRAL_UNCOMPRESSED_SIZE: usize = 24;
 
     #[test]
@@ -161,17 +162,51 @@ mod tests {
         );
     }
 
-    /// The declaration can lie: the parts are then counted as they decode, and
-    /// the refusal comes from the counted total.
+    /// The declaration can lie, but the reader refuses to deliver the part: the
+    /// bytes never reach the count — and office_oxide reads the package through
+    /// the same reader, so it cannot reach those bytes either.
     #[test]
-    fn a_lying_declaration_does_not_get_past_the_budget() {
+    fn a_lying_declaration_delivers_nothing() {
         let mut package = package(&[("word/document.xml", 64 * 1024)]);
         patch_declared_size(&mut package, 16);
 
         assert_eq!(
             within_budget(&package, 4 * 1024, 10),
+            Ok(()),
+            "a part that delivers nothing must contribute nothing to the count"
+        );
+
+        let mut archive =
+            ZipArchive::new(Cursor::new(package.as_slice())).expect("the package is a valid zip");
+        let mut part = archive.by_index(0).expect("the entry is indexed");
+        let mut scratch = vec![0u8; 4096];
+        let mut decoded = 0usize;
+        loop {
+            match part.read(&mut scratch) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => decoded += read,
+            }
+        }
+        assert_eq!(
+            decoded, 0,
+            "a part whose declared size lies must not deliver its 64 KiB"
+        );
+    }
+
+    /// Parts that each fit the budget on their own still have to be counted as
+    /// they decode: the total is what refuses the package.
+    #[test]
+    fn the_decoded_total_refuses_a_sum_of_small_parts() {
+        let package = package(&[
+            ("word/one.xml", 2048),
+            ("word/two.xml", 2048),
+            ("word/three.xml", 2048),
+        ]);
+
+        assert_eq!(
+            within_budget(&package, 4 * 1024, 10),
             Err(reason::BUDGET),
-            "the decoded total must be what refuses it"
+            "each part fits, the decoded total does not"
         );
     }
 

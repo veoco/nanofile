@@ -55,13 +55,19 @@ fn parse_zip(data: &[u8]) -> (Vec<String>, std::collections::HashMap<String, Vec
     let mut archive =
         zip::ZipArchive::new(std::io::Cursor::new(data)).expect("should be a valid zip archive");
 
-    let mut names: Vec<String> = archive.file_names().map(|n| n.to_string()).collect();
+    let mut names: Vec<String> = archive
+        .file_names()
+        .map(|n| n.expect("zip entry name must decode").to_string())
+        .collect();
     names.sort();
 
     let mut files = std::collections::HashMap::new();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).unwrap();
-        let name = entry.name().to_string();
+        let name = entry
+            .name()
+            .expect("zip entry name must decode")
+            .to_string();
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf).unwrap();
         files.insert(name, buf);
