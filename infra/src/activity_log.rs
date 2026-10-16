@@ -218,6 +218,14 @@ pub struct ActivityItem {
     pub old_path: Option<String>,
     pub size: Option<i64>,
     pub obj_id: Option<String>,
+    /// The change came out of a server-side merge (the upload's parent was no
+    /// longer HEAD) rather than from a device writing this path. Stored as
+    /// `detail.merge` so the activity page can say the server produced it.
+    pub merged: bool,
+    /// The merge kept a path one side had deleted or renamed while the other
+    /// side changed it: no device ever saved anything to this path. Stored as
+    /// `detail.merge_kept`.
+    pub merge_kept: bool,
 }
 
 /// Build the `detail` JSON object for a single item (mirrors `log_activity`).
@@ -238,6 +246,12 @@ fn build_detail_map(
     }
     if let Some(op) = &item.old_path {
         detail_map.insert("old_path".to_string(), serde_json::json!(op));
+    }
+    if item.merged {
+        detail_map.insert("merge".to_string(), serde_json::json!(true));
+    }
+    if item.merge_kept {
+        detail_map.insert("merge_kept".to_string(), serde_json::json!(true));
     }
     detail_map
 }
@@ -274,13 +288,15 @@ fn parse_detail_array(detail: &str) -> Vec<serde_json::Value> {
     match serde_json::from_str::<serde_json::Value>(detail) {
         Ok(serde_json::Value::Array(arr)) => arr,
         Ok(serde_json::Value::Object(obj)) => {
-            let allowed_keys: [&str; 6] = [
+            let allowed_keys: [&str; 8] = [
                 "obj_id",
                 "size",
                 "old_path",
                 "repo_name",
                 "old_repo_name",
                 "path",
+                "merge",
+                "merge_kept",
             ];
             let filtered: serde_json::Value = allowed_keys
                 .iter()

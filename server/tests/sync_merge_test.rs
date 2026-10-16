@@ -786,3 +786,130 @@ async fn test_merge_output_dirents_are_sorted_descending() {
         "the merged object id must hash its serialized form"
     );
 }
+
+/// A device renames a directory while the other device, still based on the
+/// pre-rename commit, edits a file inside it. Upstream's `merge_directories()`
+/// keeps the old name for whatever the other side changed (`dir_mask` 5), so the
+/// same file ends up at both paths — the shape reported as "it uploaded
+/// 20261014.m4a into a directory I never saved to".
+///
+/// nanofile keeps that upstream result (nothing may be dropped), but the
+/// activity rows have to say the server put the copy there, not a device.
+#[tokio::test]
+async fn merge_keeps_a_renamed_directory_and_marks_the_activity() {
+    let f = TestFixture::new().await;
+
+    let base = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[],
+        &[(
+            "d",
+            &[
+                ("office.docx", b"v1".as_slice(), REG),
+                ("20261014.m4a", b"audio-1".as_slice(), REG),
+            ],
+        )],
+        None,
+    )
+    .await;
+
+    // Device A renames the directory.
+    sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[],
+        &[(
+            "e",
+            &[
+                ("office.docx", b"v1".as_slice(), REG),
+                ("20261014.m4a", b"audio-1".as_slice(), REG),
+            ],
+        )],
+        Some(&base),
+    )
+    .await;
+
+    // Device B, still based on `base`, edits the Office file and re-encodes the
+    // recording, then uploads: not a fast-forward, so the server merges.
+    let b = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[],
+        &[(
+            "d",
+            &[
+                ("office.docx", b"v2".as_slice(), REG),
+                ("20261014.m4a", b"audio-2".as_slice(), REG),
+            ],
+        )],
+        Some(&base),
+    )
+    .await;
+
+    let merged = head(&f).await;
+    assert_ne!(
+        merged, b,
+        "the upload must have been merged, not fast-forwarded"
+    );
+    let commit = commit_json(&f, &merged).await;
+    assert_eq!(commit["new_merge"].as_i64().unwrap(), 1);
+    assert_eq!(commit["second_parent_id"].as_str().unwrap(), b);
+
+    // Both names survive, and the entries under the old one are B's versions:
+    // that is upstream's "deleted in head and changed in remote" keep.
+    assert_eq!(names(&f, "/").await, vec!["d", "e"]);
+    assert_eq!(names(&f, "/d").await, vec!["20261014.m4a", "office.docx"]);
+    assert_eq!(names(&f, "/e").await, vec!["20261014.m4a", "office.docx"]);
+    assert_ne!(
+        entry(&f, "/d", "20261014.m4a").await.0,
+        entry(&f, "/e", "20261014.m4a").await.0,
+        "the two copies hold B's and A's content respectively"
+    );
+
+    // The rows describe exactly what the merge put back, and say so. Reads are
+    // per detail item: batch aggregation appends to an existing `create` row and
+    // keeps that row's commit id, so filtering by commit would miss them.
+    let rows = infra::entity::activity::Entity::find()
+        .filter(infra::entity::activity::Column::RepoId.eq(&f.repo_id))
+        .all(f.server.db.as_ref())
+        .await
+        .unwrap();
+    let mut items: Vec<(String, bool, bool)> = Vec::new();
+    for row in &rows {
+        let detail: Value = serde_json::from_str(&row.detail).unwrap_or(Value::Null);
+        let entries: Vec<&Value> = match &detail {
+            Value::Array(arr) => arr.iter().collect(),
+            Value::Object(_) => vec![&detail],
+            _ => Vec::new(),
+        };
+        for entry in entries {
+            let Some(path) = entry["path"].as_str() else {
+                continue;
+            };
+            let flag = |key: &str| entry[key].as_bool().unwrap_or(false);
+            items.push((path.to_string(), flag("merge"), flag("merge_kept")));
+        }
+    }
+    // Only the merge's own items carry the marker; the base commit's rows for
+    // `/d*` (and A's rename row for `/e`) stay unmarked, which is what makes the
+    // marker worth having.
+    let mut marked: Vec<(String, bool)> = items
+        .iter()
+        .filter(|(_, merged, _)| *merged)
+        .map(|(path, _, kept)| (path.clone(), *kept))
+        .collect();
+    marked.sort();
+    assert_eq!(
+        marked,
+        vec![
+            ("/d".to_string(), true),
+            ("/d/20261014.m4a".to_string(), true),
+            ("/d/office.docx".to_string(), true),
+        ],
+        "exactly the paths the merge kept are marked as merge-produced: {items:?}"
+    );
+}

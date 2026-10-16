@@ -722,7 +722,7 @@ impl SyncService {
         new_commit: &infra::entity::commit::Model,
         current_head: Option<&str>,
         base_root_id: Option<&str>,
-    ) -> Result<(String, String, Option<String>, i64), AppError> {
+    ) -> Result<(String, String, Option<String>, i64, bool), AppError> {
         let head_id =
             current_head.ok_or_else(|| AppError::Internal("merge without HEAD".into()))?;
         let head_commit = self
@@ -778,6 +778,7 @@ impl SyncService {
             outcome.merged_root,
             Some(head_commit.root_id),
             delta,
+            outcome.kept_deleted,
         ))
     }
 
@@ -1142,11 +1143,13 @@ impl SyncService {
                     };
 
                     for (fs_id, path) in &pending_files {
-                        if let Some(file_data) = file_map.get(fs_id)
-                            && file_data
-                                .block_ids
-                                .iter()
-                                .any(|bid| missing_ids.contains(bid.as_str()))
+                        let Some(file_data) = file_map.get(fs_id) else {
+                            continue;
+                        };
+                        if file_data
+                            .block_ids
+                            .iter()
+                            .any(|bid| missing_ids.contains(bid.as_str()))
                         {
                             missing.push(path.clone());
                         }
@@ -1384,24 +1387,29 @@ impl SyncService {
                 (Some(parent), Some(head)) if parent == head
             );
 
-            let (target_head, target_root, diff_base_root, delta) =
-                if current_head.is_none() || parent_matches_head {
-                    (
-                        new_head.to_string(),
-                        new_commit.root_id.clone(),
-                        base_root_id.clone(),
-                        size_delta,
-                    )
-                } else {
-                    self.merge_branch(
-                        repo_id,
-                        &repo_model,
-                        &new_commit,
-                        current_head.as_deref(),
-                        base_root_id.as_deref(),
-                    )
-                    .await?
-                };
+            // A merge is an upload whose parent was no longer HEAD: the server,
+            // not the device, produced the tree (see `merge_branch`).
+            let is_merge = current_head.is_some() && !parent_matches_head;
+
+            let (target_head, target_root, diff_base_root, delta, merge_kept_deleted) = if !is_merge
+            {
+                (
+                    new_head.to_string(),
+                    new_commit.root_id.clone(),
+                    base_root_id.clone(),
+                    size_delta,
+                    false,
+                )
+            } else {
+                self.merge_branch(
+                    repo_id,
+                    &repo_model,
+                    &new_commit,
+                    current_head.as_deref(),
+                    base_root_id.as_deref(),
+                )
+                .await?
+            };
 
             if !self
                 .repos
@@ -1447,6 +1455,42 @@ impl SyncService {
             let is_reverted =
                 commit_desc.starts_with("Reverted") || commit_desc.starts_with("Recovered");
 
+            // A merge that kept a path one side had deleted (`kept_deleted`)
+            // puts back paths the merged-with HEAD no longer had. Those rows
+            // must not read as a device saving a file there. The paths in
+            // question are exactly the ones the head side removed relative to
+            // the uploading client's base, i.e. the deletes of `diff(base,
+            // head)` — computed only in that rare case.
+            let kept_paths: Vec<(String, bool)> = if is_merge && merge_kept_deleted {
+                match (base_root_id.as_deref(), diff_base_root.as_deref()) {
+                    (Some(base), Some(head)) => {
+                        tree_diff::diff_trees(&self.repos, repo_id, Some(base), head)
+                            .await
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|c| c.op_type == "delete")
+                            .map(|c| (c.path, c.obj_type == "dir"))
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
+            let merge_kept_path = |path: &str| {
+                kept_paths.iter().any(|(p, is_dir)| {
+                    if path == p {
+                        true
+                    } else {
+                        // A kept directory stands for every path under it.
+                        *is_dir
+                            && path
+                                .strip_prefix(p)
+                                .is_some_and(|rest| rest.starts_with('/'))
+                    }
+                })
+            };
+
             // Collect activity items up-front so the batch write below
             // runs one repo lookup (already done above) plus one query per
             // (op_type, obj_type) group, instead of ~3 per change.
@@ -1482,6 +1526,8 @@ impl SyncService {
                         old_path: c.old_path.clone(),
                         size: Some(c.size),
                         obj_id: Some(c.obj_id.clone()),
+                        merged: is_merge,
+                        merge_kept: is_merge && merge_kept_path(&c.path),
                     })
                 })
                 .collect();

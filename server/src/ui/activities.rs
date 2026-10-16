@@ -184,8 +184,10 @@ pub async fn activities_page(
 
         let old_path_display = e.old_path.as_deref().unwrap_or("").to_string();
 
-        // Parse detail JSON for batch item names and repo rename info.
-        let (batch_count, detail_items, old_repo_name) =
+        // Parse detail JSON for batch item names, repo rename info, and the
+        // merge markers a server-side merge writes (see `ActivityItem`). A row
+        // the server merged in must not read as a device saving this path.
+        let (batch_count, detail_items, old_repo_name, merged, merge_kept) =
             match serde_json::from_str::<serde_json::Value>(&e.detail) {
                 Ok(serde_json::Value::Array(arr)) => {
                     let items: Vec<String> = arr
@@ -203,16 +205,21 @@ pub async fn activities_page(
                         .and_then(|d| d.get("old_repo_name"))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
-                    (count, items, orn)
+                    let flag = |key: &str| {
+                        arr.iter()
+                            .any(|d| d.get(key).and_then(|v| v.as_bool()).unwrap_or(false))
+                    };
+                    (count, items, orn, flag("merge"), flag("merge_kept"))
                 }
                 Ok(serde_json::Value::Object(obj)) => {
                     let orn = obj
                         .get("old_repo_name")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
-                    (1, vec![], orn)
+                    let flag = |key: &str| obj.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
+                    (1, vec![], orn, flag("merge"), flag("merge_kept"))
                 }
-                _ => (1, vec![], None),
+                _ => (1, vec![], None, false, false),
             };
 
         let old_name = e
@@ -221,6 +228,18 @@ pub async fn activities_page(
             .and_then(|p| p.rsplit_once('/').map(|(_, n)| n.to_string()));
 
         let operation_label = operation_label(t, &e.op_type, &e.obj_type, batch_count);
+        // Say who produced the row when it was not a device saving this path.
+        let operation_label = if merge_kept {
+            format!("{} · {}", operation_label, t.tr("activity.merge_kept_path"))
+        } else if merged {
+            format!(
+                "{} · {}",
+                operation_label,
+                t.tr("activity.merged_by_server")
+            )
+        } else {
+            operation_label
+        };
 
         activities.push(ActivityView {
             op_type: e.op_type.clone(),

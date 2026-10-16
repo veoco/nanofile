@@ -67,6 +67,14 @@ pub struct MergeOutcome {
     /// Whether the merge had to rename a conflicting entry, i.e. upstream's
     /// `opt.conflict` and the `conflict` flag of the merge commit.
     pub conflict: bool,
+    /// Whether the merge kept an entry one side had *deleted or renamed* while
+    /// the other side changed it (`threeway_merge()`'s "deleted in head and
+    /// changed in remote → keep remote's version", and its mirror; the mask 3 /
+    /// 5 directory recursions that keep the old name). Upstream records no flag
+    /// for these, but the kept copy sits at a path the deleting device never
+    /// saved to: the commit may be a plain auto-merge with `conflict` unset and
+    /// still contain such a path, so the merge result has to say so on its own.
+    pub kept_deleted: bool,
     /// Number of directories the merge walked (upstream's `opt.visit_dirs`,
     /// which it logs for debugging).
     pub visit_dirs: usize,
@@ -100,6 +108,7 @@ pub async fn merge_trees(
         remote_root,
         remote_creator_name,
         conflict: false,
+        kept_deleted: false,
         visit_dirs: 0,
         guard: TreeGuard::new(),
         nicknames: HashMap::new(),
@@ -123,6 +132,7 @@ pub async fn merge_trees(
     Ok(MergeOutcome {
         merged_root,
         conflict: ctx.conflict,
+        kept_deleted: ctx.kept_deleted,
         visit_dirs: ctx.visit_dirs,
     })
 }
@@ -142,6 +152,7 @@ struct MergeCtx<'a> {
     remote_root: &'a str,
     remote_creator_name: &'a str,
     conflict: bool,
+    kept_deleted: bool,
     visit_dirs: usize,
     guard: TreeGuard,
     /// modifier email → nickname, cached for the whole merge (upstream keeps the
@@ -524,7 +535,19 @@ async fn merge_dir(
 
         // Merge the file slots of this level.
         if n_files > 0 {
-            match threeway_merge_files(&slots) {
+            let action = threeway_merge_files(&slots);
+            // "Deleted in head and changed in remote → keep remote's version"
+            // and its mirror emit an entry the other side had deleted (or
+            // renamed away). Upstream records no flag for that, yet the entry
+            // lands at a path the deleting device never saved to, so the caller
+            // needs to know (see `MergeOutcome::kept_deleted`).
+            if matches!(action, FileAction::Emit(_))
+                && slots[0].is_some()
+                && (slots[1].is_none() != slots[2].is_none())
+            {
+                ctx.kept_deleted = true;
+            }
+            match action {
                 FileAction::Nothing => {}
                 FileAction::Emit(entries) => merged.extend(entries),
                 FileAction::ConflictFile { keep, remote } => {
@@ -556,11 +579,27 @@ async fn merge_dir(
             match merge_directories_action(&slots)? {
                 DirAction::Delete => {}
                 DirAction::Emit(slot) => {
+                    // `mask 2` / `mask 4` with a base entry on the other side:
+                    // one device deleted or replaced the directory while this
+                    // one kept a directory at the name. Same class as the file
+                    // case above.
+                    let other = if slot == 1 { 2 } else { 1 };
+                    if slots[0].is_some() && slots[other].is_none() {
+                        ctx.kept_deleted = true;
+                    }
                     if let Some(dent) = &slots[slot] {
                         merged.push(dent.clone());
                     }
                 }
                 DirAction::Recurse { emit_slot } => {
+                    // `mask 3` / `mask 5` recursion: the recursion runs with the
+                    // other side's slot empty, so the merged directory keeps the
+                    // old name with whatever the surviving side changed inside
+                    // it — a whole directory a device had deleted or renamed.
+                    let other = if emit_slot == 1 { 2 } else { 1 };
+                    if slots[other].is_none() {
+                        ctx.kept_deleted = true;
+                    }
                     // Upstream takes the last directory slot's name as the
                     // child prefix; every slot here shares the same name, but a
                     // slot renamed above is the one that ends up in the result.
