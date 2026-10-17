@@ -1,24 +1,11 @@
 //! The one place a job's tunables are written down.
 //!
-//! Every policy decision about every job — how often it runs, how many may run
-//! at once, how long its record is kept, whether it may be deferred, whether it
-//! may be replayed after a crash — lives in [`policy`] below. Reading this file
-//! answers "what does the task system actually do" without grepping for magic
-//! constants; changing a job's behaviour means changing one entry here.
-//!
-//! The bodies live in `tasks::setup`, paired with these policies at startup.
-//! The split is deliberate: a policy is process-lifetime and static, while a
-//! body captures the current server generation's resources.
-//!
-//! Two questions decide what belongs here. **How often**: an interval is a
-//! reaction time, not a schedule — how long the server may take to notice
-//! something — and a job that fires more often than it has work should be asking
-//! whether something else can tell it when to run instead. The index committer
-//! is the worked example: the indexer commits a debounced write within 100ms on
-//! its own, so the timer is a backstop for a failed commit, and it fires every
-//! two minutes rather than every thirty seconds. **What is worth remembering**:
-//! a pass that usually finds nothing is declared with [`notable`], which keeps
-//! its idle ticks out of the run list — see [`History`] for the rule.
+//! Every policy decision about every job — interval, concurrency, retention,
+//! deferral, crash replay — lives in [`policy`] below. A policy is
+//! process-lifetime and static, while the bodies in `tasks::setup` capture the
+//! current server generation's resources. An interval is a reaction time, not a
+//! schedule; a pass that usually finds nothing is declared with `notable`, which
+//! keeps its idle ticks out of the run list — see [`History`] for the rule.
 
 use super::spec::{
     ChunkPolicy, Dedup, Durability, History, JobKey, JobSpec, OverlapPolicy, Priority, QuietPolicy,
@@ -32,13 +19,9 @@ fn fixed_timer(interval_secs: u64) -> Trigger {
     }
 }
 
-/// A pass that fires far more often than it has work, and whose idle ticks are
-/// therefore not history.
-///
-/// The interval of such a job is a reaction time, not a schedule: what it costs
-/// when it fires is a tick, and what it must not do is bury the runs that did
-/// something under rows saying "nothing to do". Its lifetime counters on the
-/// registry page still show every tick.
+/// Marks a pass that fires far more often than it has work: its idle ticks are
+/// not history, so it must not bury the runs that did something. Its lifetime
+/// counters on the registry page still show every tick.
 fn notable(mut spec: JobSpec) -> JobSpec {
     spec.history = History::Notable;
     spec
@@ -47,7 +30,6 @@ fn notable(mut spec: JobSpec) -> JobSpec {
 /// The policy for `key`.
 pub fn policy(key: JobKey) -> JobSpec {
     match key {
-        // ── Request-submitted ────────────────────────────────────────────
         JobKey::Copy => client_job(key, "copy"),
         JobKey::Move => client_job(key, "move"),
         JobKey::Reindex => JobSpec {
@@ -59,13 +41,10 @@ pub fn policy(key: JobKey) -> JobSpec {
                 no_progress_for_secs: Some(300),
                 max_total_secs: None,
             },
-            // Replaces the hand-rolled per-repo "reindex already in progress"
-            // map, and its 409.
             dedup: Dedup::ByParams("repo_id"),
             visibility: Visibility::OwnerOrAdmin,
             // Idempotent — a full rebuild converges on the same index — so this
-            // is the one job safe to replay after a crash. Everything else is
-            // either destructive or not worth resuming.
+            // is the one job safe to replay after a crash.
             durability: Durability::Durable,
             resumable: true,
             cancellable: true,
@@ -77,14 +56,10 @@ pub fn policy(key: JobKey) -> JobSpec {
             idempotent: true,
             ..client_job(key, "reindex")
         },
-        // Indexing the files a mutation produced. One run carries a batch, so
-        // a sync of thousands of files is a handful of runs rather than
-        // thousands of active runs the store may not evict.
-        //
-        // `Memory` and `EveryRun`: nobody polls this run, and a run that found
-        // nothing to do (a binary upload) is dropped at completion because its
-        // origin is the schedule rather than a caller. Redoing a file is
-        // idempotent, which makes the job safely cancellable.
+        // Indexing the files a mutation produced, one bounded batch per run, so
+        // a mass sync is a handful of runs rather than thousands of active ones.
+        // Nobody polls this run, and redoing a file is idempotent, which is what
+        // makes it safely cancellable.
         JobKey::IndexFiles => JobSpec {
             key,
             name: "index files",
@@ -111,13 +86,12 @@ pub fn policy(key: JobKey) -> JobSpec {
                 unit: "file",
             }),
             force_safe: false,
-            // An upload is waiting for the file to be searchable. Deferring
-            // this behind idle time is what the backfill is for.
+            // An upload is waiting for the file to be searchable, so this is
+            // never deferred; the backfill is the pass that waits for idle.
             quiet: None,
             idempotent: true,
         },
 
-        // ── Housekeeping ─────────────────────────────────────────────────
         JobKey::TokenExpiryCheck => {
             notable(housekeeping(key, "token expiry check", fixed_timer(3600)))
         }
@@ -130,19 +104,14 @@ pub fn policy(key: JobKey) -> JobSpec {
             notable(housekeeping(key, "expired data cleanup", fixed_timer(3600)))
         }
         // A backstop, not the commit path: the indexer commits a debounced
-        // write within 100ms on its own, and this pass only has something to do
-        // when that commit failed. Two minutes is short enough that such a
-        // failure cannot leave much uncommitted, and long enough that the pass
-        // stops being most of what the run list holds.
+        // write within 100ms on its own, so this pass only has work when that
+        // commit failed, and two minutes is short enough that such a failure
+        // cannot leave much uncommitted.
         JobKey::IndexCommit => notable(housekeeping(key, "index commit", fixed_timer(120))),
         // The low-load pass that catches up with pre-existing files and with
         // files an extractor gained support for since they were last seen.
-        //
-        // Optional work nobody waits for, so the deferral cap is zero — never
-        // forced. It yields rather than throttles: a pass that is half-done is
-        // resumable by construction (the next tick continues from its cursor),
-        // and the checkpoint it parks at is a file boundary, so nothing is
-        // torn.
+        // Yields rather than throttles: a half-done pass is resumable from its
+        // cursor, and the checkpoint is a file boundary.
         JobKey::IndexBackfill => JobSpec {
             key,
             name: "index backfill",
@@ -158,9 +127,8 @@ pub fn policy(key: JobKey) -> JobSpec {
             retry: RetryPolicy::Never,
             dedup: Dedup::None,
             visibility: Visibility::OwnerOrAdmin,
-            // Audited rather than durable: the run is idempotent, but replaying
-            // a pass after a crash buys nothing the next tick does not do.
-            // `Notable` keeps a tick that found nothing out of the run list.
+            // Audited rather than durable: replaying a pass after a crash buys
+            // nothing the next tick does not do.
             durability: Durability::Audit,
             history: History::Notable,
             resumable: true,
@@ -192,10 +160,9 @@ pub fn policy(key: JobKey) -> JobSpec {
                 no_progress_for_secs: Some(1800),
                 max_total_secs: None,
             },
-            // Deferrable because a pass is a walk over repositories, so it can
-            // be interrupted at a repository boundary. `force_safe` is false:
-            // running GC while an upload is mid-flight races the commit that is
-            // about to reference the blocks it would delete, so a deferral that
+            // Deferrable because a pass can be interrupted at a repository
+            // boundary. `force_safe` is false: GC racing an in-flight upload
+            // deletes blocks a commit is about to reference, so a deferral that
             // drags on must be reported rather than forced.
             chunkable: Some(ChunkPolicy {
                 max_chunk_ms: 500,
@@ -216,13 +183,11 @@ pub fn policy(key: JobKey) -> JobSpec {
                 no_progress_for_secs: Some(1800),
                 max_total_secs: None,
             },
-            // Already batched, with the batch size an argument today: the
-            // cheapest job to make adaptive.
             chunkable: Some(ChunkPolicy {
                 max_chunk_ms: 500,
                 unit: "batch",
             }),
-            // Optional work. It may wait indefinitely, so the deferral cap is
+            // Optional work: it may wait indefinitely, so the deferral cap is
             // zero — never force it.
             quiet: Some(QuietPolicy {
                 min_idle_for_secs: 30,
@@ -241,10 +206,9 @@ pub fn all() -> Vec<JobSpec> {
 
 /// A job whose run is submitted by a request and polled by the same client.
 ///
-/// Copy and move are reference operations: the new directory entry points at
-/// the source's fs object, so no blocks are touched and the work is one tree
-/// update plus one commit. They are jobs because the desktop client polls a
-/// task id, not because they are long.
+/// Copy and move are reference operations — no blocks are touched, one tree
+/// update plus one commit — and are jobs only because the desktop client polls
+/// a task id.
 fn client_job(key: JobKey, name: &'static str) -> JobSpec {
     JobSpec {
         key,
@@ -254,8 +218,7 @@ fn client_job(key: JobKey, name: &'static str) -> JobSpec {
         resource: Resource::DbWrite,
         max_concurrent: 8,
         queue_depth: 0,
-        // One tree mutation plus a commit, so a wall-clock cap is enough:
-        // there is no inner loop to checkpoint.
+        // One tree mutation plus a commit: a wall-clock cap is enough.
         timeout: TimeoutPolicy {
             no_progress_for_secs: None,
             max_total_secs: Some(300),
@@ -264,14 +227,13 @@ fn client_job(key: JobKey, name: &'static str) -> JobSpec {
         // generating a unique one, so a rerun would leave a duplicate behind.
         retry: RetryPolicy::Never,
         dedup: Dedup::None,
-        // Owner-only with no administrator override, matching the long-standing
-        // 404-for-everyone-else on the copy/move progress endpoint.
+        // Owner-only with no administrator override: everyone else gets a 404
+        // from the copy/move progress endpoint.
         visibility: Visibility::Owner,
         durability: Durability::Memory,
         history: History::EveryRun,
-        // A move is two commits; interrupting between them loses the entry from
-        // HEAD, and a copy has nothing to resume. Neither can be interrupted
-        // safely, so neither is cancellable.
+        // A move is two commits, and interrupting between them loses the entry
+        // from HEAD; a copy has nothing to resume. Neither is cancellable.
         resumable: false,
         cancellable: false,
         chunkable: None,
@@ -298,18 +260,16 @@ fn housekeeping(key: JobKey, name: &'static str, trigger: Trigger) -> JobSpec {
         retry: RetryPolicy::Never,
         dedup: Dedup::None,
         visibility: Visibility::OwnerOrAdmin,
-        // Audited: recording a cleanup pass is useful history and needs no
-        // idempotency, but replaying it buys nothing, so it is not `Durable`.
-        // `Notable` jobs narrow this further, to the passes worth reporting.
+        // Audited rather than durable: replaying a cleanup pass buys nothing,
+        // though recording it is useful history.
         durability: Durability::Audit,
         history: History::EveryRun,
         resumable: true,
         cancellable: false,
         chunkable: None,
         force_safe: false,
-        // Index commits and mail delivery are latency sensitive and must never
-        // be gated on idle; the rest are cheap enough that gating them would
-        // not pay for itself.
+        // Latency-sensitive jobs must never be gated on idle; the rest are
+        // cheap enough that gating would not pay for itself.
         quiet: None,
         idempotent: true,
     }
@@ -319,9 +279,8 @@ fn housekeeping(key: JobKey, name: &'static str, trigger: Trigger) -> JobSpec {
 mod tests {
     use super::*;
 
-    /// Every key must have a policy, and every policy must satisfy the
-    /// invariants the registry enforces — so a mis-declared job is caught by
-    /// `cargo test` rather than at server start.
+    /// Every key must have a policy that satisfies the registry's invariants, so
+    /// a mis-declared job fails `cargo test` rather than server start.
     #[test]
     fn every_job_key_has_a_valid_policy() {
         for key in JobKey::ALL {
@@ -346,8 +305,8 @@ mod tests {
         }
     }
 
-    /// The guard that keeps a destructive job out of crash recovery, asserted
-    /// against the real catalog rather than a synthetic spec.
+    /// Keeps a destructive job out of crash recovery, asserted against the real
+    /// catalog rather than a synthetic spec.
     #[test]
     fn destructive_jobs_are_never_durable_retried_or_interrupted() {
         for key in [JobKey::Copy, JobKey::Move] {
@@ -381,9 +340,7 @@ mod tests {
         }
     }
 
-    /// A job whose lateness has a cost must never be gated on idle. The index
-    /// commit is the one left: the outbox is a service now, and it decides for
-    /// itself when to look at the queue.
+    /// A job whose lateness has a cost must never be gated on idle.
     #[test]
     fn latency_sensitive_jobs_are_never_deferred() {
         let key = JobKey::IndexCommit;
@@ -393,8 +350,8 @@ mod tests {
         );
     }
 
-    /// A deferral cap of zero means "may never run", which is only honest for
-    /// work nobody is waiting for.
+    /// A deferral cap of zero means "may never run": only honest for work nobody
+    /// is waiting for.
     #[test]
     fn a_zero_deferral_cap_implies_the_job_is_never_forced() {
         for key in JobKey::ALL {
@@ -426,8 +383,6 @@ mod tests {
         assert_eq!(policy(JobKey::Reindex).visibility, Visibility::OwnerOrAdmin);
     }
 
-    /// The per-job caps replace the three ad-hoc global semaphores and the
-    /// server-wide copy/move cap.
     #[test]
     fn concurrency_caps_are_declared_per_job() {
         assert_eq!(policy(JobKey::Copy).max_concurrent, 8);
@@ -436,9 +391,8 @@ mod tests {
         assert_eq!(policy(JobKey::GarbageCollection).max_concurrent, 1);
     }
 
-    /// The interval is a reaction time, so it is pinned here rather than left to
-    /// whatever a later edit happens to type: a job that fires every 30 seconds
-    /// also decides how much of the run list is about it.
+    /// The interval is a reaction time, so it is pinned here: a job that fires
+    /// every 30 seconds also decides how much of the run list is about it.
     #[test]
     fn the_intervals_are_the_ones_this_catalog_argues_for() {
         let interval = |key| match policy(key).trigger {

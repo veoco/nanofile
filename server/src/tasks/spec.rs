@@ -1,9 +1,6 @@
 //! What a job is: how it is triggered, how hard it may push, how long its
-//! record is kept, and what an administrator is allowed to see.
-//!
-//! Every job's tunables live in one [`JobSpec`] declared in
-//! [`super::catalog`]. That table is the only place a job's concurrency, retry
-//! and retention are written down; the executor reads it and nothing else does.
+//! record is kept, and what an administrator is allowed to see. Every tunable
+//! lives in one [`JobSpec`] in [`super::catalog`], which the executor reads.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -12,28 +9,21 @@ use std::sync::Arc;
 use super::context::JobContext;
 use super::run::{JobFailure, Outcome, Params};
 
-/// Stable identity of a job, independent of its display name.
-///
-/// Used as the map key, the log field and the administrator URL, so renaming a
-/// job for display never orphans a stored run.
+/// Stable identity of a job, independent of its display name: the map key, the
+/// log field and the administrator URL, so renaming never orphans a stored run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum JobKey {
-    // ── Request-submitted jobs ───────────────────────────────────────────
     Copy,
     Move,
     Reindex,
-    /// Index a batch of files a file mutation just produced (an upload, a sync
-    /// commit, a rename). Submitting a run per *batch* rather than per file is
-    /// deliberate: active runs are never evicted from the run table, so one run
-    /// per file would grow it without bound on a mass sync.
+    /// Index a batch of files a mutation produced (an upload, a sync commit, a
+    /// rename). One run per *batch* is deliberate: active runs are never evicted
+    /// from the run table, so one per file would grow it without bound on a sync.
     IndexFiles,
-    // ── Housekeeping ─────────────────────────────────────────────────────
     TokenExpiryCheck,
     PasswordCacheCleanup,
     /// One pass for everything whose only record is an expiry date: tokens,
-    /// share links, upload links and abandoned temporary uploads. They were
-    /// four jobs with four timers doing the same kind of work, and their
-    /// summaries said nothing a reader could act on.
+    /// share links, upload links and abandoned temporary uploads.
     ExpiredDataCleanup,
     GarbageCollection,
     BlockEncryptionConvert,
@@ -45,7 +35,6 @@ pub enum JobKey {
 }
 
 impl JobKey {
-    /// Every key, for the catalog-coverage test and the admin listing.
     pub const ALL: &'static [JobKey] = &[
         Self::Copy,
         Self::Move,
@@ -66,12 +55,9 @@ impl JobKey {
         Self::ALL.iter().copied().find(|key| key.as_str() == slug)
     }
 
-    /// Locale key of this job's display name.
-    ///
-    /// Derived from the slug rather than tabulated, as the settings catalog
-    /// derives `setting.<key>`: one place decides how a name is spelled, and the
-    /// translation-coverage test walks the declared keys, so a job cannot be
-    /// added without a name in every language.
+    /// Locale key of this job's display name, derived from the slug: one place
+    /// decides the spelling, and the translation-coverage test walks the declared
+    /// keys, so a job cannot be added without a name everywhere.
     pub fn name_key(self) -> String {
         format!("admin.job_{}", self.as_str().replace('-', "_"))
     }
@@ -103,11 +89,9 @@ impl JobKey {
 /// Jobs the catalog no longer declares, with the locale key of the name they
 /// were known by.
 ///
-/// The journal outlives the job set: merging or removing a job leaves rows
-/// carrying a slug nothing resolves any more, and a run list that printed the
-/// slug would show code vocabulary to a person reading history. The names stay
-/// in the dictionary for exactly these rows, and only the name — a retired job
-/// has no description to show, because it is not on the registry page.
+/// The journal outlives the job set, and a run list printing a retired slug
+/// would show code vocabulary. Only the name stays in the dictionary: a retired
+/// job has no description, because it is not on the registry page.
 pub const RETIRED_JOBS: &[(&str, &str)] = &[
     ("expired-token-cleanup", "admin.job_expired_token_cleanup"),
     ("share-link-cleanup", "admin.job_share_link_cleanup"),
@@ -125,27 +109,20 @@ pub fn retired_job_name_key(slug: &str) -> Option<&'static str> {
 
 /// Stable identity of a long-lived service.
 ///
-/// A service is deliberately not a job: it has no owner, no progress and no
-/// terminal state, so it is registered with a lifecycle rather than a run
-/// record. It still needs an identity of its own, so the admin listing can name
-/// it in the reader's language instead of printing the name it was spawned
-/// with.
+/// A service is not a job: it has no owner, no progress and no terminal state.
+/// It still needs an identity of its own so the admin listing can name it in the
+/// reader's language rather than the name it was spawned with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ServiceKey {
     /// Watches for the events that send mail.
     EventListener,
-    /// Delivers the outbox, and retries what could not be delivered.
-    ///
-    /// A service rather than a job because that is what it is: a loop with no
-    /// owner, no progress and no terminal state. As a job it was a 30-second
-    /// poller that mostly found nothing to do and queued mail waited out its
-    /// tick; now a queue insertion wakes it and the timer only paces retries.
+    /// Delivers the outbox, and retries what could not be delivered. A queue
+    /// insertion wakes it; the timer only paces retries.
     MailOutbox,
 }
 
 impl ServiceKey {
-    /// Every key, so the admin listing's translation coverage is a test rather
-    /// than a hope.
+    /// Every key, so the admin listing's translation coverage is a test.
     pub const ALL: &'static [ServiceKey] = &[Self::EventListener, Self::MailOutbox];
 
     /// Stable slug, used in logs and the listing's DOM handle.
@@ -167,12 +144,8 @@ impl ServiceKey {
     }
 }
 
-/// Why a job the catalog declares is not registered on this server.
-///
-/// Jobs whose subsystem is switched off are simply not registered, which is the
-/// right behaviour and also invisible: an administrator looking for garbage
-/// collection cannot tell "this server does not run it" from "this page forgot
-/// it". Recording the reason is what makes the two different.
+/// Why a job the catalog declares is not registered on this server, so an
+/// administrator can tell "not run here" from "this page forgot it".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SkipReason {
     /// No notification manager, so nothing to expire tokens against.
@@ -190,8 +163,7 @@ pub enum SkipReason {
 }
 
 impl SkipReason {
-    /// Every reason, so the admin page's translation coverage is a test rather
-    /// than a hope.
+    /// Every reason, so the admin page's translation coverage is a test.
     pub const ALL: &'static [SkipReason] = &[
         Self::NotificationsOff,
         Self::GcDisabled,
@@ -204,9 +176,8 @@ impl SkipReason {
 
 /// A job or service the catalog declares that this generation did not register.
 ///
-/// Carries the locale key of its name rather than a job key, because the thing
-/// that is missing may be a service: the mail outbox is not a job, and a panel
-/// that could only name missing jobs would have to stay silent about it.
+/// Carries a name key rather than a job key: the thing that is missing may be a
+/// service, and a panel that could only name missing jobs would stay silent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkippedTask {
     /// Stable slug, so the row has a handle that is not its label.
@@ -217,7 +188,6 @@ pub struct SkippedTask {
 }
 
 impl SkippedTask {
-    /// A job this server did not register.
     pub fn job(key: JobKey, reason: SkipReason) -> Self {
         Self {
             slug: key.as_str(),
@@ -226,7 +196,6 @@ impl SkippedTask {
         }
     }
 
-    /// A service this server did not start.
     pub fn service(key: ServiceKey, reason: SkipReason) -> Self {
         Self {
             slug: key.as_str(),
@@ -246,21 +215,17 @@ pub enum Trigger {
     },
     /// Never runs on its own; only when an administrator triggers it.
     Manual,
-    /// Runs once, at startup, as a background job rather than blocking
-    /// `AppState` construction.
+    /// Runs once at startup as a background job, not blocking `AppState` construction.
     StartupOnly,
     /// Submitted by a request. The handler owns admission, not the clock.
     OnDemand,
 }
 
-/// What to do when a periodic tick arrives while the previous run is active.
-///
-/// Checked before a concurrency permit is taken, so a skipped tick costs
-/// nothing.
+/// What to do when a periodic tick arrives while the previous run is active,
+/// checked before a concurrency permit is taken so a skipped tick costs nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum OverlapPolicy {
-    /// Leave the tick unserved. The default: a job that cannot keep up with its
-    /// interval should not pile up behind itself.
+    /// Leave the tick unserved: a job that cannot keep up should not pile up.
     #[default]
     Skip,
     /// Start anyway, bounded by `max_concurrent`.
@@ -269,26 +234,20 @@ pub enum OverlapPolicy {
     Allow,
 }
 
-/// Who a job competes with.
-///
-/// The pools are separate on purpose: a background job that shares a pool with
-/// an interactive one can block it for its whole duration, and tokio cannot
-/// preempt it.
+/// Who a job competes with. The pools are separate because a background job that
+/// shares one with an interactive job can block it for its whole duration, and
+/// tokio cannot preempt it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Priority {
-    /// Request-scoped work whose caller is waiting. Never deferred; overload
-    /// means a rate limit or a 429, not a delay.
+    /// Request-scoped work whose caller is waiting: overload is a 429, not a delay.
     Interactive,
-    /// Ordinary background work.
     Normal,
-    /// Heavy work that may be deferred while the server is busy, and which
-    /// competes for a small dedicated pool.
+    /// Heavy work that may be deferred while the server is busy; a small dedicated pool.
     Background,
 }
 
 impl Priority {
-    /// Whether a `QuietPolicy` may be attached. Deferring an interactive job
-    /// would just be a slower failure for a waiting caller.
+    /// Whether a `QuietPolicy` may be attached; deferring interactive work only delays a failure.
     pub const fn is_deferrable(self) -> bool {
         matches!(self, Self::Background)
     }
@@ -302,21 +261,14 @@ pub enum Resource {
     DbWrite,
 }
 
-/// How finely a job can be interrupted.
-///
-/// Load awareness is a contract, not a scheduler feature: tokio cannot suspend
-/// a running task, so a job only steps aside because it checks a checkpoint.
-/// A job without a `ChunkPolicy` therefore cannot honour a `QuietPolicy`, and
-/// the catalog refuses that combination at startup.
+/// How finely a job can be interrupted: tokio cannot suspend a running task, so
+/// a job only steps aside at a checkpoint, and one without a `ChunkPolicy`
+/// cannot honour a `QuietPolicy` — the catalog refuses that at startup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChunkPolicy {
-    /// Upper bound on how long one indivisible unit may run. This *is* the
-    /// reaction time: the executor can only notice load at a checkpoint.
-    ///
-    /// Enforced at the checkpoint itself, which hands the runtime back once
-    /// this much time has passed since the previous one — so the bound holds
-    /// even while the server is quiet, when a checkpoint has nothing else to
-    /// do. `0` means the job did not bound its unit.
+    /// Upper bound on how long one indivisible unit may run — this *is* the
+    /// reaction time, enforced at the checkpoint even when the server is quiet.
+    /// `0` means the job did not bound its unit.
     pub max_chunk_ms: u64,
     /// Name of one unit, for logs and the admin page.
     pub unit: &'static str,
@@ -325,7 +277,6 @@ pub struct ChunkPolicy {
 /// What to do when load rises around a running job.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SpikePolicy {
-    /// Keep going: the job is not the problem.
     #[default]
     Continue,
     /// Shrink the work unit via [`super::context::JobContext::budget`].
@@ -338,22 +289,17 @@ pub enum SpikePolicy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuietPolicy {
     /// Load must have been below every threshold for this long before the job
-    /// starts. Dwell is what stops a job from starting in a gap between two
-    /// requests and then having to yield immediately.
+    /// starts; dwell keeps it from starting in a gap between two requests.
     pub min_idle_for_secs: u64,
     /// After this long spent deferred, run anyway — unless the job is not
-    /// `force_safe`, in which case report instead. `0` means "never force":
-    /// correct for optional work.
+    /// `force_safe`, then report instead. `0` means never force (optional work).
     pub max_deferral_hours: u64,
     pub on_spike: SpikePolicy,
 }
 
-/// How long a run may take, and how long it may stall.
-///
-/// A single wall-clock timeout is the wrong shape for GC or a block
-/// conversion: either it is short enough to kill healthy long runs, or long
-/// enough to be useless. The progress watchdog catches what actually matters —
-/// a run that has stopped making progress.
+/// How long a run may take, and how long it may stall. A single wall-clock
+/// timeout fits neither a healthy long GC nor a conversion, so the progress
+/// watchdog catches what matters: a run that has stopped making progress.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TimeoutPolicy {
     /// Fail the run when no progress has been reported for this long.
@@ -362,11 +308,8 @@ pub struct TimeoutPolicy {
     pub max_total_secs: Option<u64>,
 }
 
-/// How a failed run is retried.
-///
-/// Retrying is only safe for an idempotent job; the catalog refuses
-/// `Durable` for a job that is not marked idempotent, and a retry policy on a
-/// destructive job is a bug rather than a tuning choice.
+/// How a failed run is retried. Retrying is only safe for an idempotent job: the
+/// catalog refuses a retry policy on anything whose rerun would not be harmless.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum RetryPolicy {
     #[default]
@@ -383,10 +326,8 @@ pub enum RetryPolicy {
 }
 
 impl RetryPolicy {
-    /// Total attempts allowed, including the first.
-    ///
-    /// May be `0` for a mis-declared policy, which [`JobSpec::validate`]
-    /// rejects rather than silently treating as "once".
+    /// Total attempts allowed, including the first; `0` is rejected by
+    /// [`JobSpec::validate`], never treated as "once".
     pub fn attempts(self) -> u32 {
         match self {
             Self::Never => 1,
@@ -418,8 +359,7 @@ impl RetryPolicy {
 pub enum Dedup {
     #[default]
     None,
-    /// Reject a second active run whose `params[name]` is equal. Replaces the
-    /// hand-rolled per-repo reindex lock.
+    /// Reject a second active run whose `params[name]` is equal.
     ByParams(&'static str),
 }
 
@@ -437,37 +377,25 @@ pub enum Durability {
     Durable,
 }
 
-/// How much of a job's run belongs in the history.
-///
-/// The task system records two different kinds of work: what somebody asked
-/// for, and what a timer does on its own. A copy, a move and a reindex are
-/// events — a run happened, and its record is the account of it. A cleanup pass
-/// on a 15-minute timer is a heartbeat: it fires far more often than it has
-/// work, and a row saying "nothing was expired" is noise that buries the rows
-/// that matter. This is where a job says which of the two it is.
+/// How much of a job's run belongs in the history: an event somebody asked for
+/// gets a row per run, a heartbeat on a timer does not, because "nothing was
+/// expired" rows bury the rows that matter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum History {
-    /// A row per run: queued, running, then terminal. For anything somebody
-    /// asked for, and for a pass that runs too seldom for its rows to crowd
-    /// anything out.
+    /// A row per run: queued, running, then terminal — for anything somebody
+    /// asked for, and for a pass too seldom for its rows to crowd anything out.
     #[default]
     EveryRun,
-    /// Only the runs with something to report.
-    ///
-    /// A scheduled run that found nothing to do leaves no row and no run in
-    /// memory — it is still counted in the job's lifetime totals, which is what
-    /// says the job is ticking. A run that failed, or that did work, is always
-    /// recorded, and so is a run somebody asked for by hand: the record is the
-    /// answer to the press.
+    /// Only the runs with something to report: an idle tick leaves no row but is
+    /// still counted in the lifetime totals, while a failure, real work or a
+    /// manual run is always recorded.
     Notable,
 }
 
 impl History {
-    /// Whether a run of this kind is written down before it starts.
-    ///
-    /// Only an `EveryRun` job gets the queued/running rows; a `Notable` one
-    /// writes a single terminal row when it has something to say, which is what
-    /// makes an idle tick cost no database write at all.
+    /// Whether a run of this kind is written down before it starts. A `Notable`
+    /// job writes one terminal row instead, so an idle tick costs no database
+    /// write.
     pub const fn journals_from_the_start(self) -> bool {
         matches!(self, Self::EveryRun)
     }
@@ -484,11 +412,9 @@ pub enum Visibility {
     Admin,
 }
 
-/// A job body: pure with respect to the task system, driven by a [`JobContext`].
-///
-/// Boxed and `'static` because the executor owns it for the life of a run; the
-/// generation's resources are captured by the closure, not threaded through
-/// [`Params`].
+/// A job body: pure with respect to the task system, driven by a [`JobContext`]
+/// the executor owns for the life of a run; the generation's resources are
+/// captured by the closure, not threaded through [`Params`].
 pub type JobRunFn = Arc<
     dyn Fn(JobContext, Params) -> Pin<Box<dyn Future<Output = Result<Outcome, JobFailure>> + Send>>
         + Send
@@ -496,7 +422,6 @@ pub type JobRunFn = Arc<
 >;
 
 /// Everything the executor needs to know about one job, apart from its body.
-///
 /// Declared in [`super::catalog`]; the body is paired with it in `tasks::setup`.
 pub struct JobSpec {
     pub key: JobKey,
@@ -523,9 +448,8 @@ pub struct JobSpec {
     pub cancellable: bool,
     /// `None` means the job cannot honour a `QuietPolicy`.
     pub chunkable: Option<ChunkPolicy>,
-    /// Whether `max_deferral` may force this job to run while the server is
-    /// busy. `false` for anything whose forced execution is unsafe (GC would
-    /// race a concurrent upload).
+    /// Whether `max_deferral` may force this job to run while the server is busy;
+    /// `false` where a forced run is unsafe (GC racing a concurrent upload).
     pub force_safe: bool,
     pub quiet: Option<QuietPolicy>,
     /// Whether re-running is harmless. Gates `Durability::Durable`.
@@ -535,17 +459,14 @@ pub struct JobSpec {
 /// Why a spec was rejected at startup.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SpecError {
-    /// A `QuietPolicy` on a job with no checkpoint. The executor could not make
-    /// it step aside, so the policy would be a lie.
+    /// A `QuietPolicy` on a job with no checkpoint: the policy would be a lie.
     DeferrableWithoutChunks(JobKey),
     /// A `QuietPolicy` on a job that is never deferred.
     QuietOnNonBackground(JobKey),
-    /// `Durable` without idempotency: after a crash the run would be replayed,
-    /// and for a destructive job that is data loss.
+    /// `Durable` without idempotency: a replayed destructive run is data loss.
     DurableWithoutIdempotency(JobKey),
-    /// `Notable` while `Durable`: a run that must be replayed after a crash has
-    /// to have been written down before it started, or there is nothing to
-    /// replay and nothing to report.
+    /// `Notable` while `Durable`: a replayable run must be written down when it
+    /// starts.
     NotableButReplayable(JobKey),
     /// A retry policy on a job whose rerun is not harmless.
     RetryOnNonIdempotent(JobKey),
@@ -589,11 +510,9 @@ impl std::fmt::Display for SpecError {
 }
 
 impl JobSpec {
-    /// The invariants that must hold for every registered job.
-    ///
-    /// Checked once at startup so a mis-declared job fails loudly instead of
-    /// silently doing nothing (a `QuietPolicy` that never fires) or something
-    /// dangerous (a durable, destructive job replayed after a crash).
+    /// The invariants that must hold for every registered job, checked at
+    /// startup so a mis-declared job fails loudly rather than silently or
+    /// dangerously.
     pub fn validate(&self) -> Result<(), SpecError> {
         if self.retry.attempts() == 0 {
             return Err(SpecError::NoAttempts(self.key));
@@ -719,8 +638,7 @@ mod tests {
         );
     }
 
-    /// A run that has to be replayed after a crash must have been written down
-    /// when it started, so `Notable` and `Durable` cannot be declared together.
+    /// A run replayed after a crash must have been written down when it started.
     #[test]
     fn a_notable_job_is_never_replayable() {
         let mut s = spec(JobKey::IndexCommit);

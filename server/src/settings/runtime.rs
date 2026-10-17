@@ -1,19 +1,14 @@
 //! The runtime configuration snapshot.
 //!
-//! `AppState` used to hold an `Arc<Config>`: immutable for the life of the
-//! process, which is exactly why every settings page needed a restart. It now
-//! holds a [`RuntimeConfig`] — a handle whose current snapshot can be replaced —
-//! and every reader goes through [`crate::AppState::config`], so a saved setting
-//! reaches all of them at once.
+//! [`RuntimeConfig`] is a handle whose `Arc<Config>` snapshot can be replaced,
+//! and every reader goes through [`crate::AppState::config`], so a saved
+//! setting reaches all of them at once. Cloning it at the top of a handler (or
+//! a service call) costs one atomic increment.
 //!
-//! The snapshot stays an `Arc<Config>` on purpose: cloning it at the top of a
-//! handler (or of a service call) costs one atomic increment and leaves the code
-//! that reads fields unchanged apart from the accessor.
-//!
-//! Only values read from the snapshot are affected by a replacement. Anything
-//! captured into a long-lived object at startup — the listener, the database
-//! pool, the derived ciphers, the router layers, the rate limiters — is either
-//! pushed explicitly through a hook or marked restart-only in the catalog.
+//! Anything captured into a long-lived object at startup — the listener, the
+//! database pool, the derived ciphers, the router layers, the rate limiters —
+//! is either pushed explicitly through a hook or marked restart-only in the
+//! catalog, so only values read from the snapshot follow a replacement.
 
 use std::sync::{Arc, RwLock};
 
@@ -38,10 +33,8 @@ impl RuntimeConfig {
         }
     }
 
-    /// The current snapshot.
-    ///
-    /// Cheap (an `Arc` clone under a read lock), so callers can take one per
-    /// request and read several fields from the same consistent view.
+    /// The current snapshot: an `Arc` clone under a read lock, so callers can
+    /// take one per request and read several fields from the same consistent view.
     pub fn get(&self) -> Arc<Config> {
         self.inner
             .current
@@ -51,8 +44,7 @@ impl RuntimeConfig {
     }
 
     /// Install a new snapshot. Readers already holding the previous one finish
-    /// against it, which is the point: no request can observe a half-applied
-    /// configuration.
+    /// against it: no request can observe a half-applied configuration.
     pub fn replace(&self, next: Config) {
         let mut current = self
             .inner
@@ -63,9 +55,6 @@ impl RuntimeConfig {
     }
 
     /// Read a field reader-style: `runtime.config(|c| &c.server.addr)`.
-    ///
-    /// Available for the few call sites that would otherwise have to name the
-    /// snapshot twice (e.g. a comparison against a value fetched earlier).
     pub fn with<T>(&self, f: impl FnOnce(&Config) -> T) -> T {
         f(&self.get())
     }
@@ -73,8 +62,7 @@ impl RuntimeConfig {
 
 impl std::fmt::Debug for RuntimeConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `Config` is itself redacted, so this cannot leak; it is spelled out so
-        // a future field cannot start leaking through the handle either.
+        // `Config` is redacted, so this cannot leak; spelled out so no future field leaks through it.
         f.debug_struct("RuntimeConfig").finish_non_exhaustive()
     }
 }

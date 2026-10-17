@@ -1,13 +1,8 @@
 //! The bounded in-memory table of job runs.
 //!
-//! One store replaces the four hand-rolled maps the task code used to keep
-//! (copy/move tasks, the reindex progress map plus its dedup twin, and the zip
-//! token registry). Retention is enforced in one place, by one sweeper, so no
-//! read path has to garbage-collect while holding a lock.
-//!
-//! Two budgets, not one: a count cap alone does not bound memory when a single
-//! run carries a batch of a thousand file names, and a byte cap alone does not
-//! bound the cost of walking the table.
+//! One sweeper enforces retention, so no read path garbage-collects under a lock.
+//! Two budgets, not one: a count cap alone does not bound memory when a run
+//! carries a thousand file names, and a byte cap alone does not bound the scan.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
@@ -18,7 +13,6 @@ use base::error::AppError;
 use super::run::{JobRun, JobState, RunId, Viewer};
 use super::spec::JobKey;
 
-/// How much the store may hold.
 #[derive(Clone, Copy, Debug)]
 pub struct RunLimits {
     /// Maximum number of runs (active runs are never evicted).
@@ -39,21 +33,17 @@ impl Default for RunLimits {
     }
 }
 
-/// Which runs a caller wants to see.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RunFilter {
     pub key: Option<JobKey>,
     pub owner: Option<i32>,
-    /// Include runs that are still active.
     pub include_active: bool,
-    /// Include runs that have finished.
     pub include_terminal: bool,
     /// Newest first, at most this many. `0` means no limit.
     pub limit: usize,
 }
 
 impl RunFilter {
-    /// Everything, newest first.
     pub fn all() -> Self {
         Self {
             include_active: true,
@@ -85,14 +75,13 @@ struct Inner {
     runs: RwLock<HashMap<RunId, JobRun>>,
     /// Maintained alongside `runs` so the byte check is O(1).
     bytes: AtomicUsize,
-    /// Budgets are atomics so a live settings change needs no lock and cannot
-    /// race the reader.
+    /// Budgets are atomics so a live settings change needs no lock.
     max_retained: AtomicUsize,
     max_retained_bytes: AtomicUsize,
     terminal_ttl_secs: AtomicI64,
 }
 
-/// A shared, bounded table of job runs.
+/// A bounded table of job runs, shared behind an `Arc`.
 #[derive(Clone)]
 pub struct RunStore {
     inner: Arc<Inner>,
@@ -167,12 +156,9 @@ impl RunStore {
             .store(limits.terminal_ttl_secs, Ordering::Relaxed);
     }
 
-    /// Store a run, evicting terminal runs oldest-first until both budgets
-    /// hold.
-    ///
-    /// Returns [`AppError::TooManyRequests`] when this single run exceeds the
-    /// byte budget: it can never be stored, so it is a refusal rather than
-    /// something to wait for.
+    /// Store a run, evicting terminal runs oldest-first until both budgets hold.
+    /// [`AppError::TooManyRequests`] when this single run exceeds the byte budget:
+    /// it can never be stored, so it is a refusal, not something to wait for.
     pub fn insert(&self, run: JobRun) -> Result<(), AppError> {
         let size = run.bytes();
         let limits = self.limits();
@@ -217,7 +203,6 @@ impl RunStore {
         self.get(id).filter(|run| run.is_visible_to(viewer))
     }
 
-    /// Runs matching `filter`, newest first.
     pub fn list(&self, filter: &RunFilter) -> Vec<JobRun> {
         let mut out: Vec<JobRun> = self
             .read()
@@ -236,10 +221,8 @@ impl RunStore {
         out
     }
 
-    /// The first active run of `key` whose `params[field]` equals `value`.
-    ///
-    /// Used for [`super::spec::Dedup::ByParams`], which replaces the per-repo
-    /// reindex lock.
+    /// The first active run of `key` whose `params[field]` equals `value`, used
+    /// for [`super::spec::Dedup::ByParams`].
     pub fn find_active_by_param(
         &self,
         key: JobKey,
@@ -272,7 +255,6 @@ impl RunStore {
             .count()
     }
 
-    /// How many runs are active in total, optionally for one owner.
     pub fn count_active_all(&self, owner: Option<i32>) -> usize {
         self.read()
             .values()
@@ -280,12 +262,9 @@ impl RunStore {
             .count()
     }
 
-    /// Drop one run and reclaim its bytes, whatever state it is in.
-    ///
-    /// For a run whose job keeps only what is worth reporting: a pass that
-    /// found nothing to do is finished the moment it is over, and holding it
-    /// for the retention window would only push a run somebody cares about out
-    /// of the budget.
+    /// Drop one run and reclaim its bytes, whatever state it is in: an idle pass
+    /// is finished the moment it is over, and holding it would push a run
+    /// somebody cares about out of the budget.
     pub fn discard(&self, id: &RunId) -> bool {
         let mut runs = self.write();
         let Some(run) = runs.remove(id) else {
@@ -295,10 +274,9 @@ impl RunStore {
         true
     }
 
-    /// Drop expired terminal runs and reclaim their bytes. Returns how many
-    /// were removed.
-    ///
-    /// Called by one periodic sweeper and on insert; never from a read path.
+    /// Drop expired terminal runs and reclaim their bytes, returning how many
+    /// were removed. Called by one periodic sweeper and on insert; never from a
+    /// read path.
     pub fn sweep(&self, now: i64) -> usize {
         let ttl = self.limits().terminal_ttl_secs;
         let mut runs = self.write();
@@ -322,10 +300,9 @@ impl RunStore {
 
     /// Mark every active run as [`JobState::Interrupted`].
     ///
-    /// Called at a generation boundary: the process keeps running but the
-    /// generation's handlers are gone, so a run that has not finished will
-    /// never report again. Recording it is what stops a client polling a
-    /// `task_id` from getting a 404 after an administrator restarts the server.
+    /// At a generation boundary the handlers are gone, so such a run will never
+    /// report again; recording it stops a client polling a `task_id` from getting
+    /// a 404 after an administrator restarts the server.
     pub fn interrupt_active(&self, now: i64) -> usize {
         let mut runs = self.write();
         let mut count = 0usize;
@@ -346,7 +323,6 @@ impl RunStore {
         count
     }
 
-    /// Evict terminal runs, oldest first, until `incoming` more bytes fit.
     fn evict_until_room(&self, runs: &mut HashMap<RunId, JobRun>, incoming: usize) {
         let limits = self.limits();
         loop {
@@ -434,7 +410,6 @@ mod tests {
             s.get_for(&id, Viewer::user(8)).is_none(),
             "another user must not see the run"
         );
-        // Internal callers still get the raw record.
         assert!(s.get(&id).is_some());
     }
 

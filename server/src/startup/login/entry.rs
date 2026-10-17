@@ -1,19 +1,12 @@
 //! The text of a login entry: how it is written, and how it is read back.
 //!
-//! Platform-independent on purpose, so the unit tests for all three formats run
-//! on every platform (and on Linux CI, which is the only place a Windows
-//! `Run`-value test can run at all). Each builder is compiled only where it is
-//! consumed — plus in test builds, so the readers always have something to read.
+//! Platform-independent so the tests for all three formats run on every platform,
+//! including Linux CI.
 
 use std::path::Path;
 
-// ── Reading back what we wrote ───────────────────────────────────────────────
-// The entries are text this crate generates, so the readers below only have to
-// undo that generation.
-
 /// Split one of our command lines back into its arguments — the inverse of the
-/// quoting in `crate::startup::cmdline` and of `exec_arg`: double quotes group,
-/// `\"` and `\\` escape, bare whitespace separates.
+/// quoting in `crate::startup::cmdline` and of `exec_arg`.
 #[cfg(any(target_os = "linux", target_os = "windows", test))]
 pub(crate) fn split_quoted_args(text: &str) -> Vec<String> {
     let mut args = Vec::new();
@@ -24,8 +17,7 @@ pub(crate) fn split_quoted_args(text: &str) -> Vec<String> {
     while let Some(c) = chars.next() {
         match c {
             '\\' => {
-                // Only `\"` and `\\` occur in what we write; anything else keeps
-                // its backslash, which is what a Windows path needs.
+                // Only `\"` and `\\` occur in what we write; anything else keeps its backslash.
                 match chars.next() {
                     Some(next @ ('"' | '\\')) => current.push(next),
                     Some(other) => {
@@ -58,11 +50,9 @@ pub(crate) fn split_quoted_args(text: &str) -> Vec<String> {
     args
 }
 
-/// The executable and config file a recorded argument list names.
-///
-/// `None` when the list does not carry both — a hand-edited or foreign entry is
-/// then left alone rather than "repaired" into something the user did not ask
-/// for.
+/// The executable and config file a recorded argument list names, or `None` when
+/// it does not carry both: a hand-edited or foreign entry is then left alone
+/// rather than "repaired" into something the user did not ask for.
 pub(crate) fn paths_from_args(args: &[String]) -> Option<(String, String)> {
     let mut exe = None;
     let mut config = None;
@@ -77,19 +67,16 @@ pub(crate) fn paths_from_args(args: &[String]) -> Option<(String, String)> {
     Some((exe?, config?))
 }
 
-/// Whether a recorded entry has to be repointed at `current_exe`.
-///
-/// The current config file does not enter into it: a process is only running if
-/// its own config exists (a named one that is missing is now refused at start),
-/// so repointing at the running pair is always the improvement.
+/// Whether a recorded entry has to be repointed at `current_exe`. The current
+/// config file does not enter into it: a process is only running if its own
+/// config exists, so repointing at the running pair is always the improvement.
 pub(crate) fn stale_between(recorded_exe: &str, recorded_config: &str, current_exe: &Path) -> bool {
-    // The copy the entry launches is gone: the folder was moved, renamed or
-    // deleted. The entry would fail invisibly at login.
+    // The copy the entry launches is gone: the folder was moved or deleted, and
+    // the entry would fail invisibly at login.
     if !Path::new(recorded_exe).exists() {
         return true;
     }
-    // The same copy, but the config file it was told to use is gone: that start
-    // would come up against a different setup rather than this one.
+    // The same copy, but its config file is gone: that start would use a different setup.
     same_path(recorded_exe, current_exe) && !Path::new(recorded_config).exists()
 }
 
@@ -140,12 +127,9 @@ fn xml_unescape(s: &str) -> String {
         .replace("&amp;", "&")
 }
 
-// ── Entry text builders ──────────────────────────────────────────────────────
-// Each is consumed by exactly one platform module; the tests below cover all of
-// them on every platform.
+// Each builder is consumed by exactly one platform module; the tests cover all of them.
 
-/// Windows: value data stored under
-/// `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The value itself is
+/// Windows: value data under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
 /// the full command line, so login startup needs no working directory.
 #[cfg(any(target_os = "windows", test))]
 pub(crate) fn run_command_line(exe: &Path, config: &Path) -> String {
@@ -192,8 +176,7 @@ pub(crate) fn launch_agent_plist(label: &str, exe: &Path, config: &Path) -> Stri
     )
 }
 
-/// Linux: XDG autostart entry under `~/.config/autostart`, honored by both
-/// GNOME and KDE.
+/// Linux: XDG autostart entry under `~/.config/autostart`, honored by GNOME and KDE.
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn desktop_entry(exe: &Path, config: &Path) -> String {
     let workdir = exe
@@ -216,8 +199,7 @@ pub(crate) fn desktop_entry(exe: &Path, config: &Path) -> String {
     )
 }
 
-/// Quotes one argument for a Desktop Entry `Exec` value: double quotes with
-/// backslash escaping, per the Desktop Entry Specification.
+/// Quotes one argument for a Desktop Entry `Exec` value, per the Desktop Entry Specification.
 #[cfg(any(target_os = "linux", test))]
 fn exec_arg(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
@@ -296,14 +278,11 @@ mod tests {
         assert!(plist.contains("<key>WorkingDirectory</key>\n  <string>/opt/nanofile</string>"));
     }
 
-    // ── Reading back what we wrote ───────────────────────────────────────
-
     #[test]
     fn a_quoted_command_line_round_trips() {
         let exe = PathBuf::from(r"C:\Apps\Na nofile\nanofile.exe");
         let config = PathBuf::from(r"C:\Apps\Na nofile\config.toml");
 
-        // The Run-key form.
         let line = run_command_line(&exe, &config);
         let args = split_quoted_args(&line);
         assert_eq!(
@@ -324,8 +303,7 @@ mod tests {
             Some(expected.clone())
         );
 
-        // The plist spreads the same arguments over separate <string> elements,
-        // with the label first.
+        // The plist spreads the same arguments over separate <string> elements, label first.
         let plist = launch_agent_plist("com.nanofile.nanofile", &exe, &config);
         let values = plist_strings(&plist);
         assert_eq!(
@@ -347,8 +325,7 @@ mod tests {
 
     #[test]
     fn an_entry_without_a_config_is_left_alone() {
-        // Something a person wrote by hand, or an older format: it names no
-        // config file, so "repairing" it could only guess.
+        // A hand-written or older entry that names no config file: repairing it could only guess.
         assert_eq!(
             paths_from_args(&split_quoted_args(r#""C:\nanofile.exe""#)),
             None

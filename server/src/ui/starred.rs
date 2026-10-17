@@ -32,8 +32,7 @@ pub struct StarredItemView {
     pub path: String,
     pub obj_name: String,
     pub is_dir: bool,
-    /// Unix seconds at which the item was starred — not its mtime. That is what
-    /// the row's date cell shows, which is why it is not called `mtime`.
+    /// Unix seconds when the item was starred (not its mtime); shown in the row's date cell.
     pub starred_at: i64,
     pub deleted: bool,
 }
@@ -95,7 +94,6 @@ pub async fn starred_page(
         }
     }
 
-    // Sort by star time descending (most recently starred first)
     let sort_desc = |a: &StarredItemView, b: &StarredItemView| b.starred_at.cmp(&a.starred_at);
     starred_repos.sort_by(sort_desc);
     starred_folders.sort_by(sort_desc);

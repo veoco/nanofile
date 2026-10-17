@@ -1,6 +1,4 @@
-//! Linux login entry: an XDG autostart entry
-//! (`~/.config/autostart/nanofile.desktop`), honored by GNOME and KDE.
-//! User-level, no admin rights involved.
+//! Linux login entry: an XDG autostart entry, honored by GNOME and KDE; no admin rights.
 
 use std::path::{Path, PathBuf};
 

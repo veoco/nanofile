@@ -25,8 +25,6 @@ pub(super) fn run(
 
     let mtm = MainThreadMarker::new().expect("tray event loop must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
-    // Accessory policy keeps nanofile out of the Dock and the menu bar;
-    // it is a server with a tray icon, not a windowed app.
     let _ = app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     app.run();
     std::process::exit(0);

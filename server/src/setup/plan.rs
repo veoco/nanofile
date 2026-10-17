@@ -1,9 +1,5 @@
-//! What a first run asks for, and what the answers mean.
-//!
-//! Everything here is deliberately free of HTTP and of the database: the form,
-//! the validation and the resulting configuration are plain values, so the rules
-//! that decide what an installation looks like are unit-testable and the page is
-//! only a rendering of them.
+//! What a first run asks for, and what the answers mean, free of HTTP and of the
+//! database: plain values, unit-testable, and the page only renders them.
 
 use std::path::{Path, PathBuf};
 
@@ -11,11 +7,8 @@ use infra::config::{Config, ConfigSection, ConfigValue, USER_CONFIG_DIR_NAME};
 
 use crate::service::auth::password::validate_password;
 
-/// Document text placed above the sections of the file a completed setup writes.
-///
-/// The same reasoning as `config.toml.example`: only what the web interface
-/// cannot store at all, plus the values that have to be decided before it is
-/// reachable.
+/// Document text above the sections a completed setup writes, as in `config.toml.example`:
+/// only what the web interface cannot store, plus values decided before it is reachable.
 pub const CONFIG_HEADER: &str = "\
 Nanofile configuration.
 
@@ -39,24 +32,15 @@ pub struct SetupDefaults {
     pub password_min_length: u32,
     pub require_strong_password: bool,
     pub language: String,
-    /// The configured address could not be bound, so the page is being served on
-    /// a random loopback port. The prefilled port is then known to be taken, and
-    /// the form says so instead of failing on submit.
+    /// The configured address could not be bound: the page is served on a random loopback port.
     pub port_in_use: bool,
-    /// The address the setup listener already holds, which counts as available
-    /// to the submit even though a fresh bind would fail.
+    /// The address the setup listener holds: available to the submit though a bind fails.
     pub held_address: Option<String>,
-    /// Accounts the database in the *prefilled* data directory already holds,
-    /// when that file exists.
     pub existing_accounts: Option<u64>,
 }
 
 impl SetupDefaults {
-    /// The defaults a zero-config start would use.
-    ///
-    /// `config` is the configuration the process loaded, which in this path is
-    /// the built-in defaults: the setup only runs when no file and no
-    /// environment variable supplied anything.
+    /// The defaults a zero-config start would use: `config` holds the built-in defaults.
     pub fn detect(config: &Config) -> Self {
         let data_dir = default_data_dir(
             infra::common::util::exe_dir().as_deref(),
@@ -78,14 +62,9 @@ impl SetupDefaults {
     }
 }
 
-/// The data directory a first run suggests.
-///
-/// Two rules, in order: **never move existing state** — a `data/` next to the
-/// binary is where every deployment before this one kept its blocks, so an
-/// installation whose configuration file was deleted while its data stayed
-/// behind has to keep pointing there, or its accounts and libraries would look
-/// gone — and otherwise keep everything of this installation under the same
-/// per-user directory as its configuration file.
+/// The data directory a first run suggests: **never move existing state**, since a
+/// `data/` next to the binary is where earlier deployments kept their blocks, and a
+/// deleted configuration file must not make an installation look gone.
 pub fn default_data_dir(exe_dir: Option<&Path>, home: Option<&Path>) -> PathBuf {
     if let Some(exe_dir) = exe_dir {
         let legacy = exe_dir.join("data");
@@ -101,11 +80,8 @@ pub fn default_data_dir(exe_dir: Option<&Path>, home: Option<&Path>) -> PathBuf 
         .unwrap_or_else(|| PathBuf::from("data"))
 }
 
-/// The submitted form, as the browser sent it.
-///
-/// `port` is text on purpose: a non-numeric value has to come back as a field
-/// error on the page, not as a rejection from the extractor before any handler
-/// runs.
+/// The submitted form, as the browser sent it: `port` is text on purpose, so a
+/// non-numeric value is a field error on the page, not an extractor rejection.
 #[derive(Clone, Default, serde::Deserialize)]
 pub struct SetupForm {
     #[serde(default)]
@@ -139,12 +115,10 @@ impl SetupError {
     }
 }
 
-/// A validated first run: what to create, and what to write down.
 #[derive(Clone)]
 pub struct SetupPlan {
     pub email: String,
-    /// Only ever held in memory: the account is created directly, so this never
-    /// reaches the configuration file.
+    /// Only ever held in memory: the account is created directly, never written down.
     pub password: String,
     pub secret_key: String,
     pub addr: String,
@@ -154,9 +128,7 @@ pub struct SetupPlan {
     pub encryption: String,
 }
 
-/// The two secrets this value carries (`password`, `secret_key`) are reported as
-/// placeholders: a `{:?}` on a plan must not be able to print either, and the
-/// rest is worth seeing when a test fails.
+/// `password` and `secret_key` print as placeholders, so a `{:?}` cannot leak either.
 impl std::fmt::Debug for SetupPlan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SetupPlan")
@@ -173,11 +145,8 @@ impl std::fmt::Debug for SetupPlan {
 }
 
 impl SetupForm {
-    /// Validate the answers into a plan, or report the first field that is wrong.
-    ///
-    /// The data directory is created here rather than only at submit: a page that
-    /// accepted a directory the server cannot write would move the failure to a
-    /// point where nobody is watching.
+    /// Validate the answers into a plan, or report the first field that is wrong. The
+    /// data directory is created here, so an unwritable one fails while somebody watches.
     pub fn into_plan(&self, defaults: &SetupDefaults) -> Result<SetupPlan, SetupError> {
         let email = self.email.trim();
         if email.is_empty() || !email.contains('@') || email.len() > 254 {
@@ -209,11 +178,9 @@ impl SetupForm {
             .filter(|port| *port != 0)
             .ok_or(SetupError::on("port", "setup.err_port"))?;
 
-        // The address this process already serves the page on is available to
-        // the submit by definition, and so is another interface on that same
-        // *port*: the setup listener owns the port, and it is closed (or handed
-        // over) before the server binds. Everything else has to be bindable
-        // *now*, because the server binds it moments later.
+        // The address this process already serves the page on is available by
+        // definition, and so is another interface on that same *port*: the listener is
+        // closed (or handed over) before the server binds; anything else must bind *now*.
         let address = format!("{addr}:{port}");
         let same_address = defaults.held_address.as_deref() == Some(address.as_str());
         let on_the_held_port = defaults
@@ -268,7 +235,6 @@ impl SetupForm {
 }
 
 impl SetupPlan {
-    /// The address the server this plan describes will listen on.
     pub fn listener_address(&self) -> String {
         format!("{}:{}", self.addr, self.port)
     }
@@ -285,8 +251,7 @@ impl SetupPlan {
         self.data_dir.join("nanofile.log")
     }
 
-    /// Every directory the plan needs, in creation order, named by the setting
-    /// it belongs to so a failure names the field an operator can act on.
+    /// Every directory the plan needs, in creation order, named by its setting.
     pub fn directories(&self) -> Vec<(&'static str, PathBuf)> {
         vec![
             ("data directory", self.data_dir.clone()),
@@ -298,8 +263,7 @@ impl SetupPlan {
         ]
     }
 
-    /// Apply the plan to a configuration in memory — the one the setup uses to
-    /// open the database and create the account, before anything is written.
+    /// Apply the plan to the in-memory configuration used before anything is written.
     pub fn apply_to(&self, config: &mut Config) {
         config.server.addr = self.addr.clone();
         config.server.port = self.port;
@@ -315,15 +279,9 @@ impl SetupPlan {
         config.logging.file = Some(self.log_path());
     }
 
-    /// The sections of the configuration file this plan writes.
-    ///
-    /// Absolute paths throughout: the file lives in the user's home while the
-    /// relative-path base is the binary's directory, and a state directory that
-    /// means two different things depending on how the process was started is
-    /// not something a setup page may leave behind.
-    ///
-    /// Owned rather than borrowing `self`: the paths are derived here, and a
-    /// document that borrowed them would need every one of them to be a field.
+    /// The sections of the configuration file this plan writes, with absolute paths
+    /// throughout: a relative one would resolve against the binary's directory, not
+    /// against the file's location.
     pub fn sections(&self) -> Vec<ConfigSection<'static>> {
         let text = |value: String| ConfigValue::Text(std::borrow::Cow::Owned(value));
         let path = |value: PathBuf| text(value.to_string_lossy().to_string());
@@ -334,8 +292,7 @@ impl SetupPlan {
             ("thumbnail_dir", path(self.data_dir.join("thumbnails"))),
             ("avatar_dir", path(self.data_dir.join("avatars"))),
         ];
-        // Off is the built-in default and is not written: only the choices that
-        // change how bytes already on disk are read have to be named.
+        // Off is the default and is not written: only a mode that changes how bytes are read.
         if self.encryption != "off" {
             storage.push(("block_encryption_mode", text(self.encryption.clone())));
         }
@@ -363,10 +320,7 @@ impl SetupPlan {
             },
             ConfigSection {
                 name: "index",
-                // `enabled` is the one key in this section that has no serde
-                // default, so a `[index]` table without it is a configuration
-                // the loader rejects — the section cannot be written with the
-                // directory alone.
+                // `enabled` has no serde default, so a `[index]` table without it is rejected.
                 comment: "Full-text search index.",
                 entries: vec![
                     ("enabled", ConfigValue::Boolean(true)),
@@ -375,9 +329,7 @@ impl SetupPlan {
             },
             ConfigSection {
                 name: "logging",
-                // Written even though it only takes effect when file logging is
-                // on: a desktop run then puts the log beside the state instead
-                // of wherever the process happened to start.
+                // Written anyway: a desktop run logs beside the state, not where it started.
                 comment: "Only used when logs go to a file (desktop runs).",
                 entries: vec![("file", path(self.log_path()))],
             },
@@ -444,8 +396,7 @@ mod tests {
         );
         assert_eq!(plan.data_dir, dir.path());
         assert_eq!(plan.encryption, "off");
-        // A 64-hex key, which is what the release check demands of a persisted
-        // secret.
+        // A 64-hex key, which is what the release check demands of a persisted secret.
         assert_eq!(plan.secret_key.len(), 64);
         assert!(plan.secret_key.chars().all(|c| c.is_ascii_hexdigit()));
     }
@@ -476,8 +427,6 @@ mod tests {
             SetupError::on("password", "setup.err_password")
         );
 
-        // The policy the form validates against is the configured one, not a
-        // constant: a deployment that raised the minimum has to see it here.
         let mut strict = defaults();
         strict.password_min_length = 32;
         let mut ok = valid_form(dir.path());
@@ -531,9 +480,7 @@ mod tests {
     fn the_address_the_page_is_served_on_counts_as_available() {
         let dir = tempfile::tempdir().unwrap();
 
-        // The setup listener holds this very address: a fresh bind would fail,
-        // and rejecting the submit would make the page unable to accept its own
-        // defaults.
+        // A fresh bind of this address fails, so rejecting it would refuse the page's defaults.
         let mut defaults = defaults();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let held = listener.local_addr().unwrap();
@@ -543,8 +490,6 @@ mod tests {
         form.port = held.port().to_string();
         assert!(form.into_plan(&defaults).is_ok());
 
-        // Somebody else's port is refused rather than reported at the next
-        // start, where nobody is watching.
         let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let taken = taken.local_addr().unwrap();
         let mut form = valid_form(dir.path());
@@ -563,8 +508,6 @@ mod tests {
         let plan = form.into_plan(&defaults()).unwrap();
         assert!(plan.data_dir.is_absolute(), "{:?}", plan.data_dir);
         assert!(plan.data_dir.ends_with("nanofile-setup-test-data"));
-        // The directory is created as proof it is writable; clean it up so the
-        // test leaves nothing next to the test binary.
         let _ = std::fs::remove_dir(&plan.data_dir);
     }
 
@@ -596,9 +539,8 @@ mod tests {
         assert_eq!(parsed.index.index_dir, dir.path().join("index"));
         assert_eq!(parsed.logging.file, Some(plan.log_path()));
 
-        // The plan's own in-memory configuration has to agree with the document:
-        // the account is created through one and every later start reads the
-        // other.
+        // The plan's in-memory configuration has to agree with the document: the
+        // account is created through one and every later start reads the other.
         let mut applied = Config::default();
         plan.apply_to(&mut applied);
         assert_eq!(
@@ -615,15 +557,13 @@ mod tests {
         std::fs::create_dir_all(&exe_dir).unwrap();
         std::fs::create_dir_all(&home).unwrap();
 
-        // No state yet: everything of this installation goes under the per-user
-        // directory that also holds its configuration file.
+        // No state yet: everything goes under the per-user directory holding the config.
         assert_eq!(
             default_data_dir(Some(&exe_dir), Some(&home)),
             home.join(USER_CONFIG_DIR_NAME).join("data")
         );
 
-        // The legacy location exists: it is adopted, because a configuration
-        // file that was deleted must not make an installation's data look gone.
+        // The legacy location exists and is adopted, so a deleted config cannot hide the data.
         std::fs::create_dir_all(exe_dir.join("data")).unwrap();
         assert_eq!(
             default_data_dir(Some(&exe_dir), Some(&home)),

@@ -44,9 +44,7 @@ pub struct UserRow {
     pub last_login_at_ts: Option<i64>,
 }
 
-/// What a POST redirect lands with, so the page can confirm the action. An
-/// unrecognised value — a hand-typed URL, a stale bookmark — renders no banner
-/// rather than echoing the value back into the page.
+/// POST-redirect action; unknown values render no banner instead of echoing back.
 #[derive(Deserialize)]
 pub struct SysAdminQuery {
     pub action: Option<String>,
@@ -79,7 +77,6 @@ pub async fn sysadmin_page(
     }
 }
 
-/// Build and render the user management page, carrying at most one banner.
 async fn render_page(
     state: &Arc<AppState>,
     user: &WebUser,
@@ -139,8 +136,6 @@ async fn render_page(
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Html(html).into_response())
 }
-
-// ─── POST handlers ────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct CreateUserForm {
@@ -278,9 +273,7 @@ pub async fn delete_user(
 }
 
 /// Parse an optional storage quota string.
-/// Empty string → None (use global default)
-/// "0" → Some(0) (unlimited)
-/// Other numeric → Some(parsed)
+/// Empty string → None (use global default); "0" → Some(0) (unlimited).
 fn parse_quota(s: Option<&str>) -> Option<i64> {
     match s {
         None | Some("") => None,
@@ -288,8 +281,7 @@ fn parse_quota(s: Option<&str>) -> Option<i64> {
     }
 }
 
-/// Re-render the user management page with the error banner visible, so a
-/// failed create/update/delete says so instead of silently redirecting back.
+/// Re-render the page with the error banner, so a failed write says so.
 async fn render_sysadmin_error(
     state: &Arc<AppState>,
     user: &WebUser,

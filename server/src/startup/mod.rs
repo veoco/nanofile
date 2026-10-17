@@ -1,26 +1,17 @@
 //! How this installation starts without being launched by hand.
 //!
-//! Two mechanisms exist, and on Windows they are alternatives:
-//!
-//! * **Login entry** ([`login`]) — a per-user registration that starts the
-//!   desktop instance when somebody logs in: `HKCU\…\Run` on Windows, a
-//!   LaunchAgent on macOS, an XDG autostart entry on Linux.
-//! * **Windows service** ([`service`]) — an auto-start Service Control Manager
-//!   entry that runs with no session at all.
-//!
-//! Nothing here knows about the tray: the mechanisms read and write a
-//! registration and report what they found. Confirmations, elevation prompts
-//! and the menu itself live in `crate::tray`.
+//! Login entry (`login`): per-user, `HKCU\…\Run` on Windows, a LaunchAgent on
+//! macOS, an XDG autostart entry on Linux. Windows service (`service`):
+//! an auto-start Service Control Manager entry, with no session. The two are
+//! alternatives on Windows; confirmations and the tray menu live in `crate::tray`.
 
-/// Windows command-line quoting and path normalization, shared by the login
-/// entry and the service registration.
+/// Command-line quoting and path normalization shared by both mechanisms.
 pub(crate) mod cmdline;
 
 /// The per-user login entry.
 ///
 /// Compiled on Windows unconditionally: `nanofile service install` retires the
-/// entry there, with or without the tray. Without the tray only that retirement
-/// is reachable, which is why the rest of the surface is allowed to go unused.
+/// entry there, which without the tray is the only reachable path.
 #[cfg(any(target_os = "windows", feature = "tray"))]
 #[cfg_attr(not(feature = "tray"), allow(dead_code))]
 pub(crate) mod login;
@@ -30,8 +21,8 @@ pub(crate) mod login;
 pub(crate) mod policy;
 
 /// The Windows service registration and control loop. The platform-independent
-/// part (the command line, the `ImagePath` comparison, the probe types) is
-/// compiled everywhere so its tests run on every platform.
+/// part (command line, `ImagePath` comparison, probe types) is compiled
+/// everywhere so its tests run on every platform.
 pub(crate) mod service;
 
 /// Win32 helpers shared by the mechanisms.

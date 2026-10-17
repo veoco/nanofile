@@ -1,11 +1,6 @@
-//! The set of registered jobs: one policy from [`super::catalog`] paired with
-//! the body that implements it for the current server generation.
-//!
-//! Registration binds the two, which is also when the policy invariants are
-//! checked. A mis-declared job — a `QuietPolicy` with no checkpoint to act on, a
-//! durable job that is not idempotent — is refused here, at startup, rather than
-//! discovered later as a job that silently never defers or that corrupts data
-//! after a crash.
+//! The set of registered jobs: one catalog policy paired with the body that
+//! implements it for the current generation. Registration checks the policy
+//! invariants, so a mis-declared job is refused at startup, not found later.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,9 +41,7 @@ impl std::fmt::Debug for RegisteredJob {
 pub enum RegistryError {
     /// The policy violates an invariant.
     Spec(SpecError),
-    /// Two jobs claim the same key. A programming error rather than a runtime
-    /// condition: the old scheduler silently overwrote in one container and
-    /// appended in another, which produced two admin rows for one task.
+    /// Two jobs claim the same key: a programming error, not a runtime condition.
     Duplicate(JobKey),
 }
 
@@ -71,8 +64,7 @@ impl From<SpecError> for RegistryError {
 #[derive(Default)]
 pub struct JobRegistry {
     jobs: HashMap<JobKey, Arc<RegisteredJob>>,
-    /// Registration order, so the admin listing is stable rather than
-    /// hash-ordered.
+    /// Registration order, so the admin listing is stable rather than hash-ordered.
     order: Vec<JobKey>,
 }
 

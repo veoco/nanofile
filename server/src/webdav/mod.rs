@@ -1,8 +1,7 @@
 //! WebDAV protocol endpoint (`/dav/{repo_id}/...`).
 //!
-//! Hand-written WebDAV implementation mapping RFC 4918 methods onto the
-//! existing content-addressed FS services. Authentication uses HTTP Basic
-//! with per-library WebDAV keys (see `auth`).
+//! Hand-written RFC 4918 implementation over the existing content-addressed FS
+//! services; auth is HTTP Basic with per-library WebDAV keys (see `auth`).
 
 pub mod auth;
 pub mod handlers;
@@ -18,12 +17,8 @@ use crate::AppState;
 
 /// Build the WebDAV route tree mounted at `/dav/{repo_id}/...`.
 ///
-/// Three routes are registered because the wildcard route does not match the
-/// bare root (`{*path}` requires a leading `/`):
-/// - `/dav/{repo_id}`
-/// - `/dav/{repo_id}/` (trailing-slash variant — WebDAV clients commonly
-///   request the root with a trailing slash)
-/// - `/dav/{repo_id}/{*path}`
+/// The wildcard route does not match the bare root (`{*path}` needs a leading
+/// `/`), so the root and its trailing-slash variant are registered separately.
 pub fn webdav_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/dav/{repo_id}", any(handlers::dispatch_root))

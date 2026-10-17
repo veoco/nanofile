@@ -1,79 +1,24 @@
 //! Format dispatch: turning a file's bytes into the text the index stores.
 //!
-//! The indexer itself knows nothing about file formats. It asks this module
-//! what a file is ([`plan`]), how much of it to read ([`budget`]), and then
-//! hands the bytes back for extraction ([`extract`]). Adding a format means
-//! adding an arm to [`plan`] (and a parser module), then bumping
-//! [`EXTRACTOR_VERSION`] so the backfill re-runs over files it had previously
-//! recorded as unsupported.
+//! Adding a format means a new [`plan`] arm, a parser module, and a bump of
+//! [`EXTRACTOR_VERSION`]: it is stamped into every index document, and the
+//! backfill treats any other value as stale, so a change to what is extracted
+//! without a bump leaves already-indexed files on their old verdict.
 //!
-//! # Versioning
-//!
-//! [`EXTRACTOR_VERSION`] is stamped into every index document. The backfill
-//! treats a document whose stamped version is not the current one as stale, so
-//! a format that becomes supported does not require a manual full rebuild: the
-//! next quiet pass notices the version difference and picks the file up again.
-//! Any change to what this module extracts — including the text-extraction
-//! details, the format table, and the size caps below — must bump the constant,
-//! or already-indexed files keep their old content (or their old "skipped"
-//! verdict) forever.
-//!
-//! # Three ways to read a file
-//!
-//! A plain-text file is indexed from a prefix: the first [`MAX_INDEXED_BYTES`]
-//! are enough for search, and a prefix is always a valid text extract. A
-//! container format is not — a ZIP's central directory and a PDF's
-//! cross-reference table live at the *end* of the file, so a truncated document
-//! either fails to parse or, worse, parses to nothing at all. Those formats are
-//! read whole, up to [`MAX_STRUCTURED_BYTES`], and a file above that is skipped
-//! without being read.
-//!
-//! # Text Detection
-//!
-//! A file with no known text extension is sniffed by content:
-//! [`text_content_sniff`] accepts the first [`PLAN_SNIFF_BYTES`] when they
-//! contain no NUL bytes and are valid UTF-8.
-//!
-//! # What bounds a document
-//!
-//! Four things, in the order they apply:
-//!
-//! * the read itself — a document is never larger than [`MAX_STRUCTURED_BYTES`],
-//!   and a file above that cap is skipped without being read;
-//! * the parsers' own limits — the PDF reader caps every stream it decodes and
-//!   the page count, and the Office path counts what a package decompresses to
-//!   before the parser sees it;
-//! * this process's per-document text caps — [`MAX_INDEXED_CONTENT_BYTES`] of
-//!   text, which is also what a search result can highlight;
-//! * the extraction worker ([`worker`]) — a separate, confined process with an
-//!   address-space limit, a CPU limit and a wall-clock timeout. That last one
-//!   is not redundant: [`guard`] catches panics, and a stack overflow or a
-//!   failed allocation is not a panic but an abort, which no boundary in this
-//!   process could contain.
-//!
-//! Documents are extracted *only* in that worker. If it cannot be started, or
-//! refuses to run without confinement, the file is failed and retried later;
-//! nothing in the server parses a document itself.
-//!
-//! # Failure Handling
-//!
-//! [`extract`] never fails and never unwinds: a format the pipeline cannot read
-//! comes back as [`Extracted::Unsupported`] with a reason, which the caller
-//! records as a *skipped* document. That distinction matters — a parse error or
-//! a panic is a property of the bytes, so retrying it on a cooldown would be
-//! waste, whereas a failure to *read* the blocks is transient and stays a
-//! failed document the backfill retries.
+//! Text is read as a prefix ([`MAX_INDEXED_BYTES`]); a container is read whole
+//! ([`MAX_STRUCTURED_BYTES`]) because its metadata sits at the *end*, so an
+//! oversized one is skipped unread. Only the confined `worker` process parses;
+//! `extract` returns [`Extracted::Unsupported`] instead of failing, which marks
+//! the file skipped rather than retried.
 
 mod office;
 mod pdf;
 
 /// Version of the extraction pipeline as a whole.
 ///
-/// Bumping this is what makes the backfill re-extract files that were already
-/// processed. `1` is the pre-pipeline arrangement (plain text only, no
-/// per-document version); `2` is the first version that records itself, and
-/// covers everything this module extracts — plain text, PDF and Office
-/// documents.
+/// Bumping this makes the backfill re-extract files it already processed. `1`
+/// was plain text only, with no version recorded; `2` covers text, PDF and
+/// Office.
 pub const EXTRACTOR_VERSION: u32 = 2;
 
 /// How much of a file's content may be read for indexing as plain text.
@@ -89,13 +34,10 @@ pub const MAX_INDEXED_CONTENT_BYTES: usize = 8 * 1024 * 1024;
 
 /// How much of a container format's content may be read.
 ///
-/// A document cannot be indexed from a prefix (see the module docs), so this is
-/// the whole file — and therefore also the point above which a document is
-/// skipped unread. It bounds the parser's input, and with it the memory a
-/// single parse can occupy.
-///
-/// Raising this must bump [`EXTRACTOR_VERSION`], otherwise documents already
-/// recorded as skipped for being too large are never reconsidered.
+/// A document cannot be indexed from a prefix, so this is the whole file — and
+/// the point above which a document is skipped unread. It bounds the parser's
+/// input and memory, and raising it must bump [`EXTRACTOR_VERSION`], or files
+/// already skipped for size stay skipped.
 pub const MAX_STRUCTURED_BYTES: usize = 32 * 1024 * 1024;
 
 /// How much of a file's head is used to decide whether it is text.
@@ -112,9 +54,6 @@ pub enum Extracted {
 }
 
 /// A structured document format this module can parse.
-///
-/// Kept as our own type so the pipeline never has to name the parser crates'
-/// enums at its call sites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Document {
     Pdf,
@@ -123,9 +62,8 @@ pub enum Document {
 
 /// What the pipeline must read for one file, decided from its name alone.
 ///
-/// Deciding before the read is what keeps a container format from being fed a
-/// truncated prefix, and what lets an oversized document be skipped without
-/// costing a block read.
+/// Deciding before the read keeps a container format from being fed a truncated
+/// prefix, and lets an oversized document be skipped without a block read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Plan {
     /// A known text extension: index a prefix of the bytes.
@@ -138,10 +76,7 @@ pub enum Plan {
 
 /// Why the extractor did not index a file.
 ///
-/// Named constants because these reasons cross a process boundary: the worker's
-/// reply carries the text, and [`intern`] maps it back onto one of them so the
-/// caller keeps its `&'static str` and the index records something it can
-/// compare against.
+/// These constants cross a process boundary; `intern` maps the reply back.
 pub mod reason {
     pub const PARSE: &str = "could not parse document";
     pub const ENCRYPTED: &str = "encrypted pdf";
@@ -170,10 +105,8 @@ pub mod reason {
 
     /// Map a reason that crossed the process boundary back onto a constant.
     ///
-    /// Anything unrecognised becomes [`FAILED`]: the point of the table is that
-    /// the caller never has to allocate a reason per document, and a worker
-    /// that says something this process does not know is a failed extraction
-    /// rather than a skipped one with a made-up label.
+    /// Anything unrecognised becomes [`FAILED`]: a worker that says something
+    /// this process does not know is a failed extraction, not a skipped one.
     pub fn intern(value: &str) -> &'static str {
         ALL.iter()
             .copied()
@@ -185,9 +118,7 @@ pub mod reason {
 impl Plan {
     /// The byte that names this plan in the worker protocol.
     ///
-    /// The whole enum is covered rather than only the documents: the parent
-    /// decides what it sends, and a protocol that can already carry every plan
-    /// does not have to change the day a text prefix moves into the child too.
+    /// The whole enum is covered, so the protocol can already carry every plan.
     pub fn tag(self) -> u8 {
         use office_oxide::DocumentFormat;
 
@@ -226,9 +157,9 @@ impl Plan {
 /// Decide from the filename how a file must be read.
 ///
 /// Detection is by extension only. Magic bytes cannot disambiguate the
-/// containers that matter here — `PK\x03\x04` is shared by three Office
-/// formats and `D0CF11E0` by the three legacy ones — and a `.docx` renamed to
-/// `.bin` is no more indexable than any other misnamed file.
+/// containers that matter here — `PK\x03\x04` is shared by three Office formats
+/// and `D0CF11E0` by the three legacy ones — and a `.docx` renamed to `.bin` is
+/// no more indexable than any other misnamed file.
 pub fn plan(filename: &str) -> Plan {
     let ext = extension(filename);
     if let Some(document) = structured_format(&ext) {
@@ -245,12 +176,9 @@ pub(crate) struct ProbeDocument {
     /// The name its verdict is reported under.
     pub(crate) name: &'static str,
     pub(crate) plan: Plan,
-    /// The whole text the parse has to produce, compared after trimming.
-    ///
-    /// The whole text rather than a word from it: a parser that stopped early,
-    /// a limit that truncated it or a filter that changed it still contains the
-    /// word. A verdict here is "the confined child read this document the way
-    /// it should", not "it recognised the file".
+    /// The whole text the parse has to produce, compared after trimming: a
+    /// parser that stopped early, a limit that truncated it or a filter that
+    /// changed it still contains a single expected word.
     pub(crate) expected: &'static str,
     pub(crate) bytes: &'static [u8],
 }
@@ -258,13 +186,9 @@ pub(crate) struct ProbeDocument {
 /// What the self-test parses, and why it is part of the self-test.
 ///
 /// The report says the confinement was installed; this says the confined
-/// process can still do the work it exists for. The two are different failures:
-/// a profile or filter that denies a syscall a parser needs shows up here as
-/// `parse=pdf-unsupported`, instead of as a deployment where every document
-/// quietly becomes a skipped file.
-///
-/// The bytes are the fixtures the test suite parses, carried into the binary
-/// because the child is denied every path — it has nothing to open them from.
+/// process can still do its work — a denied syscall shows up as
+/// `parse=pdf-unsupported` rather than as silently skipped documents. The bytes
+/// are the test fixtures, carried in because the child is denied every path.
 pub(crate) const PROBE_DOCUMENTS: &[ProbeDocument] = &[
     ProbeDocument {
         name: "pdf",
@@ -295,8 +219,7 @@ pub(crate) const PROBE_DOCUMENTS: &[ProbeDocument] = &[
 
 /// How many bytes of a file the plan needs, or why it cannot be indexed.
 ///
-/// The caller reads at most this much; for a document the value is the whole
-/// file, so a short read is an error rather than a partial extract.
+/// For a document the value is the whole file, so a short read is an error.
 pub fn budget(plan: Plan, size: u64) -> Result<usize, &'static str> {
     match plan {
         Plan::Text | Plan::Sniff => Ok(MAX_INDEXED_BYTES),
@@ -312,7 +235,7 @@ pub fn budget(plan: Plan, size: u64) -> Result<usize, &'static str> {
 
 /// Extract the indexable text of a file the caller read according to `plan`.
 ///
-/// Infallible by construction: see the module docs on failure handling.
+/// Infallible by construction: see the module docs.
 pub(crate) fn extract(plan: Plan, data: Vec<u8>) -> Extracted {
     match plan {
         Plan::Text => extract_text(&data),
@@ -331,21 +254,16 @@ pub(crate) fn extract(plan: Plan, data: Vec<u8>) -> Extracted {
 /// Bound the document parser's own per-document text budget.
 ///
 /// `office_oxide` renders a spreadsheet's text *before* this module can cap it,
-/// and the output can dwarf the file: the crate documents a 110 KB `.xlsx`
-/// holding one large shared string referenced from twelve thousand cells
-/// rendering to hundreds of megabytes. Its default budget is 256 Mi characters,
-/// far above anything the index stores, so it is lowered to
-/// [`MAX_INDEXED_CONTENT_BYTES`]: the work then stops roughly where truncation
-/// would have, and a crafted file cannot make the process allocate text nobody
-/// reads. The setting is process-global, so it is applied once at startup.
+/// and the output can dwarf the file (a 110 KB `.xlsx` renders to hundreds of
+/// megabytes). The default budget of 256 Mi characters is well above anything
+/// the index stores, so it is lowered to [`MAX_INDEXED_CONTENT_BYTES`] once at
+/// startup — the setting is process-global.
 pub(crate) fn configure_limits() {
     office_oxide::limits::set_max_text_chars(MAX_INDEXED_CONTENT_BYTES);
 }
 
-/// Whether a file should be indexed as plain text.
-///
-/// A structured document is not text, whatever its bytes look like: it is
-/// parsed, not stored verbatim.
+/// Whether a file should be indexed as plain text: a structured document is
+/// parsed, not stored verbatim, whatever its bytes look like.
 pub fn is_indexable_text(filename: &str, data: &[u8]) -> bool {
     match plan(filename) {
         Plan::Text => true,
@@ -374,12 +292,10 @@ pub fn text_content_sniff(data: &[u8]) -> bool {
 
 /// Filename → structured format, decided by this table.
 ///
-/// Deliberately *not* `DocumentFormat::from_extension`: that table grows with
-/// the crate, and a format the crate claims is a file the pipeline then reads
-/// in full. `office_oxide` 0.1.12 already claims `.pot` (a gettext template
-/// this module lists as text) and `.dot` (Graphviz), so inheriting the table
-/// would quietly repurpose both. Macro-enabled and template extensions are left
-/// out because the pinned readers reject their content types.
+/// Deliberately *not* `DocumentFormat::from_extension`, which grows with the
+/// crate and would claim `.pot` (gettext, text here) and `.dot` (Graphviz);
+/// macro-enabled and template extensions are out because the pinned readers
+/// reject their content types.
 fn structured_format(ext: &str) -> Option<Document> {
     use office_oxide::DocumentFormat;
 
@@ -405,7 +321,6 @@ fn extension(filename: &str) -> String {
 
 /// File extensions considered indexable plain text.
 const TEXT_EXTENSIONS: &[&str] = &[
-    // Code
     "rs", "py", "js", "ts", "jsx", "tsx", "go", "java", "rb", "php", "c", "cpp", "h", "hpp", "cs",
     "swift", "kt", "scala", "dart", "lua", "pl", "pm", "r", "m", "mm", "clj", "cljs", "coffee",
     "groovy", "erl", "hrl", "fs", "fsx", "hs", "lhs", "nim", "zig", "v", "vhdl", "asm", "s", "awk",
@@ -421,16 +336,14 @@ const TEXT_EXTENSIONS: &[&str] = &[
     "tla", "tlx", "tpl", "tpp", "tst", "ttl", "twig", "uc", "udf", "vala", "vbs", "vhd", "vim",
     "vm", "vsh", "w", "wast", "wat", "webidl", "xib", "xl", "xqy", "xquery", "xsd", "xsl", "xslt",
     "xul", "yang", "yaws", "yxx", "yy", "zep", // Scripts / config
-    "sh", "bash", "zsh", "fish", "bat", "cmd", "ps1", "gradle", "cmake", "make", "mk",
-    // Web
-    "html", "htm", "xhtml", "css", "scss", "less", "sass", "vue", "svelte", "ejs", "erb", "hbs",
+    "sh", "bash", "zsh", "fish", "bat", "cmd", "ps1", "gradle", "cmake", "make", "mk", "html",
+    "htm", "xhtml", "css", "scss", "less", "sass", "vue", "svelte", "ejs", "erb", "hbs",
     "mustache", "haml", "slim", "jade", "pug", // Data / markup
     "json", "xml", "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "csv", "tsv", "sql",
     "graphql", // Docs
     "txt", "text", "md", "markdown", "mdown", "mkd", "mkdn", "mdwn", "rst", "rtf", "tex", "bib",
-    "log", "org", "pod", "wiki", "creole", "rest", "asc", "adoc", "asciidoc", "docbook",
-    // Other
-    "diff", "patch", "po", "pot", "spec",
+    "log", "org", "pod", "wiki", "creole", "rest", "asc", "adoc", "asciidoc", "docbook", "diff",
+    "patch", "po", "pot", "spec",
 ];
 
 /// Whether a lowercased extension, without the dot, is a known text format.
@@ -443,8 +356,7 @@ fn extract_text(data: &[u8]) -> Extracted {
     let lossy = String::from_utf8_lossy(data);
     let trimmed = lossy.trim_end_matches('\u{0}');
     let mut text = String::with_capacity(trimmed.len().min(MAX_INDEXED_CONTENT_BYTES));
-    // Drop interior NULs: they carry no meaning in a search index and some
-    // clients render them as a replacement character.
+    // Drop interior NULs: some clients render them as a replacement character.
     for chunk in trimmed.split('\u{0}') {
         text.push_str(chunk);
         if text.len() >= MAX_INDEXED_CONTENT_BYTES {
@@ -457,9 +369,8 @@ fn extract_text(data: &[u8]) -> Extracted {
 
 /// Turn a document parser's output into the index's verdict.
 ///
-/// Shared by the PDF and Office paths: normalises the separators those parsers
-/// emit, caps the length, and treats "parsed successfully but produced nothing"
-/// as not indexable. That last rule is what keeps a scanned PDF from being
+/// Normalises the parsers' separators, caps the length, and treats "parsed but
+/// produced nothing" as not indexable — that keeps a scanned PDF from being
 /// recorded as an indexed document with empty content.
 pub(super) fn finish(text: String) -> Extracted {
     let mut text = text;
@@ -475,15 +386,13 @@ pub(super) fn finish(text: String) -> Extracted {
 ///
 /// Both parser crates panic on some corrupted input (measured: roughly 1 in 600
 /// for PDF), and a panic here would otherwise take down the blocking task and
-/// the batch with it. Catching it keeps the module's contract — [`extract`]
+/// the batch with it. Catching it keeps the module's contract — `extract`
 /// always returns, never unwinds — and turns the file into a skipped document.
 /// `fallback` builds the caller's own verdict from the panic message; the
 /// default panic hook still prints it, which is the diagnostic we want.
 ///
-/// The index pipeline reuses this around the blocking call, so a panic in its
-/// own dispatch cannot fail a whole run either. It catches panics only: a stack
-/// overflow or a failed allocation aborts, which is why documents are parsed in
-/// a separate process (see [`worker`]).
+/// It catches panics only: a stack overflow or a failed allocation aborts,
+/// which is why documents are parsed in a separate process (see `worker`).
 pub(crate) fn guard<T, F>(label: &str, fallback: impl FnOnce(&str) -> T, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -505,9 +414,8 @@ where
 /// Replace the separators a document parser emits with the ones the index
 /// expects: a non-breaking space between words, a form feed between pages.
 ///
-/// Tokenization is unaffected either way — both are non-alphanumeric, so the
-/// tokenizer already splits on them — but the stored content field is what a
-/// client highlights against, and a form feed renders as nothing useful there.
+/// The tokenizer splits on both either way, but the stored content field is what
+/// a client highlights against, and a form feed renders as nothing useful there.
 fn normalize(text: &mut String) {
     if !text.contains(['\u{a0}', '\u{c}', '\u{0}']) {
         return;
@@ -571,20 +479,16 @@ mod tests {
 
     #[test]
     fn test_is_indexable_text_sniffing() {
-        // File with no extension but valid text content.
         assert!(is_indexable_text("README", b"Hello World"));
-        // File with no extension and binary content.
         assert!(!is_indexable_text("data", &[0x00, 0x01, 0x02]));
     }
 
     #[test]
     fn test_is_indexable_text_empty() {
-        // Empty file should be valid.
         assert!(is_indexable_text("notes.txt", b""));
     }
 
-    /// A document is parsed, not stored verbatim, so it is never "text" — even
-    /// when its header happens to be printable ASCII.
+    /// A document is parsed, not stored verbatim, even when its header is printable ASCII.
     #[test]
     fn a_document_is_not_indexable_text() {
         for ext in DOCUMENT_EXTENSIONS {
@@ -597,14 +501,13 @@ mod tests {
         }
     }
 
-    /// The format table is ours, so extensions that mean something else in this
-    /// codebase must not be captured by a document parser.
+    /// The format table is ours, so extensions that mean something else must
+    /// not be captured by a document parser.
     #[test]
     fn formats_owned_by_other_extensions_are_not_documents() {
         // Gettext catalogue: listed as text above.
         assert_eq!(plan("messages.pot"), Plan::Text);
-        // Graphviz source: no text extension, so it is sniffed — but it must
-        // not be handed to the legacy Word parser.
+        // Graphviz source, sniffed rather than handed to the legacy Word parser.
         assert_eq!(plan("graph.dot"), Plan::Sniff);
         // Macro-enabled and template Office files are not in the pinned
         // readers' accepted content types, so they are not claimed either.
@@ -653,8 +556,7 @@ mod tests {
         );
     }
 
-    /// An unsupported file says why, so the index can record it and the
-    /// backfill does not re-read it every pass.
+    /// An unsupported file says why, so the backfill does not re-read it every pass.
     #[test]
     fn an_unknown_binary_is_unsupported_not_an_error() {
         assert_eq!(
@@ -685,8 +587,7 @@ mod tests {
         assert!(text.is_char_boundary(text.len()));
     }
 
-    /// A parser that finds nothing is not an indexed document with empty
-    /// content — that is what keeps a scanned PDF out of the index.
+    /// A parser result with no text is unsupported: that keeps a scanned PDF out.
     #[test]
     fn an_empty_document_result_is_unsupported() {
         assert_eq!(
@@ -742,8 +643,7 @@ mod tests {
         );
     }
 
-    /// The fallback sees the panic's message, which is what lets the caller
-    /// log something more useful than "it failed".
+    /// The fallback sees the panic's message, so the caller can log it.
     #[test]
     fn the_fallback_receives_the_panic_message() {
         let seen = std::cell::RefCell::new(String::new());

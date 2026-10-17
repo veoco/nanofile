@@ -3,17 +3,13 @@ pub mod handler;
 pub mod manager;
 
 /// Domain-separated signing keys derived from `[notification] private_key`.
-///
 /// A **subscription** JWT is handed to every user who can read a repository
 /// (via `/seafhttp/repo/{id}/jwt-token`), while an **event** token authorises
-/// publishing arbitrary notifications to any repository's subscribers. Signing
-/// both with one key meant any user could present their own subscription token
-/// to `/notification/events`, because that endpoint only checks the signature
-/// and `exp`. Deriving a key per purpose separates the two capabilities: a
-/// subscription token can never validate as an event token.
-///
-/// Both keys are derived deterministically from the configured key, so no
-/// migration or key distribution is needed for the server itself.
+/// publishing arbitrary notifications. Signing both with one key let a
+/// subscription token validate at `/notification/events` (it only checks the
+/// signature and `exp`); a key per purpose means one can never validate as the
+/// other. Both derive deterministically from the configured key, so no
+/// migration or key distribution is needed.
 pub mod keys {
     use sha2::{Digest, Sha256};
 
@@ -42,16 +38,12 @@ use crate::AppState;
 
 pub fn notification_routes() -> Router<Arc<AppState>> {
     Router::new()
-        // WebSocket endpoint for clients to subscribe to repo notifications.
-        // NOTE: only register WITHOUT trailing slash because
-        // NormalizePathLayer::trim_trailing_slash() does a 301 redirect
-        // which WebSocket clients cannot follow.
+        // WebSocket endpoint; no trailing-slash variant: trim_trailing_slash()
+        // 301-redirects, which WebSocket clients cannot follow.
         .route("/notification", axum::routing::get(handler::ws_upgrade))
-        // Event submission endpoint (for server-side / external events)
         .route(
             "/notification/events",
             axum::routing::post(handler::post_event),
         )
-        // Health check
         .route("/notification/ping", axum::routing::get(handler::ping))
 }

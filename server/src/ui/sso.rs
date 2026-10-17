@@ -1,9 +1,7 @@
 /// SSO local-browser flow UI handlers.
 ///
-/// `GET /client-sso/{token}/` opens in the browser, records the first visit
-/// and bounces the user through the web login (with `next` set back here).
-/// `GET/POST /client-sso/{token}/complete/` confirm the login against the
-/// logged-in web session and mint the API token the client polls for.
+/// `GET /client-sso/{token}/` records the first visit and bounces through the
+/// web login; `.../complete/` mints the API token the client polls for.
 use askama::Template;
 use axum::extract::{Form, Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -16,26 +14,19 @@ use crate::i18n::I18n;
 use crate::service::auth::csrf;
 use crate::ui::auth_extractor::WebUser;
 
-// ─── Templates ───────────────────────────────────────────────────────────
-
 #[derive(Template)]
 #[template(path = "page/client_login_confirm.html")]
 pub struct ClientLoginConfirmTemplate {
-    /// Pre-computed static asset URLs with cache-busting hashes.
     pub urls: &'static crate::static_assets::TemplateUrls,
     pub t: &'static I18n,
     /// HMAC CSRF token for the hidden form field.
     pub csrf_token: String,
-    /// Absolute path this form POSTs to.
     pub action: String,
     /// Who is asking for the account, when the caller supplied it.
     ///
-    /// The SSO flow is anonymous and asks the signed-in user to hand a client
-    /// full account access. Showing the platform/device the client reported (the
-    /// desktop client sends `shib_platform` / `shib_device_name` /
-    /// `shib_client_version`) is what lets a user notice a link they did not
-    /// start; without it the page is a generic "authorize this device?" prompt
-    /// and the flow is a phishing primitive.
+    /// Showing the reported platform/device (`shib_platform` / `shib_device_name`
+    /// / `shib_client_version`, sent by the desktop client) is what lets a user
+    /// notice a link they did not start; without it this page is a phishing primitive.
     pub requester: Option<String>,
 }
 
@@ -51,8 +42,7 @@ pub struct ClientLoginCompleteTemplate {
 pub struct ClientSsoErrorTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
     pub t: &'static I18n,
-    /// Locale key for the failure, not the text: these pages render inside the
-    /// shared auth shell, so their copy has to go through the same table.
+    /// Locale key for the failure, not the text: these pages share the auth shell.
     pub message_key: &'static str,
 }
 
@@ -61,13 +51,10 @@ pub struct ClientSsoCompleteForm {
     pub csrf_token: Option<String>,
 }
 
-// ─── Handlers ─────────────────────────────────────────────────────────────
-
 /// GET /client-sso/{token}/ — the browser entry point.
 ///
 /// First visit records `accessed_at` (starting the 300s window) and redirects
-/// to the web login page with `next` pointing back to the confirm page.
-/// Subsequent visits show the seahub-compatible "already visited" error.
+/// to the login page; later visits show seahub's "already visited" error.
 pub async fn client_sso(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -144,8 +131,6 @@ pub async fn client_sso_complete(
         t: I18n::from_headers(&headers, &state.config().ui.default_language),
     })
 }
-
-// ─── Helpers ───────────────────────────────────────────────────────────────
 
 fn render<T: Template>(tpl: T) -> Response {
     match tpl.render() {

@@ -1,22 +1,18 @@
 //! Minimal i18n support for the web UI.
 //!
 //! Translations live in `server/locales/{en,zh}.toml` as flat key/value tables,
-//! compiled in at build time via `include_str!`. Each page template carries a
-//! `t: &'static I18n` field and renders strings through
-//! `{{ t.tr("key") }}` / `{{ t.trf("key", &[("name", "value")]) }}`.
-//!
-//! Missing keys fall back to the key itself so untranslated strings are easy to
-//! spot during development.
+//! compiled in via `include_str!`, read through `{{ t.tr("key") }}` /
+//! `{{ t.trf("key", &[("name", "value")]) }}`. Missing keys fall back to the key
+//! itself, so untranslated strings are easy to spot during development.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// Parse a flat locale file into a key/value map.
 ///
-/// `pub(crate)` because the outbound-mail dictionary (`service::mail::i18n`) is
-/// a second, deliberately separate set of strings — mail bodies must not be
-/// shipped to the browser in every page's `window.__T` blob — and both should
-/// be parsed exactly the same way.
+/// `pub(crate)` because the outbound-mail dictionary (`service::mail::i18n`) is a
+/// second, deliberately separate set of strings: mail bodies must not be shipped
+/// to the browser in every page's `window.__T` blob, and both parse identically.
 pub(crate) fn parse_translations(src: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     if let Ok(value) = toml::from_str::<toml::Value>(src) {
@@ -50,9 +46,8 @@ static EN: LazyLock<HashMap<String, String>> =
 static ZH: LazyLock<HashMap<String, String>> =
     LazyLock::new(|| parse_translations(include_str!("../../locales/zh.toml")));
 
-/// Escape a pre-serialized JSON string so it is safe to embed inside an inline
-/// `<script>` block: `<`, `>`, `&` and the U+2028/U+2029 line separators are
-/// escaped so a value cannot break out of the surrounding script element.
+/// Escape a pre-serialized JSON string for an inline `<script>` block: `<`, `>`,
+/// `&` and the U+2028/U+2029 separators, so a value cannot close the element.
 fn escape_inline_script(json: &str) -> String {
     json.replace('<', "\\u003c")
         .replace('>', "\\u003e")
@@ -105,9 +100,8 @@ impl I18n {
         }
     }
 
-    /// Normalize a raw language value to a supported tag ("en" / "zh"),
-    /// or `None` for unsupported languages. Accepts variants such as
-    /// `zh-CN`, `zh-Hant`, `zh_tw` (all map to "zh").
+    /// Normalize a raw language value to a supported tag ("en" / "zh"), or
+    /// `None`. Variants such as `zh-CN`, `zh-Hant`, `zh_tw` map to "zh".
     pub fn normalize_lang(lang: &str) -> Option<&'static str> {
         let trimmed = lang.trim();
         if trimmed.eq_ignore_ascii_case("en") {
@@ -122,10 +116,8 @@ impl I18n {
         }
     }
 
-    /// Resolve the effective language from an Accept-Language header.
-    ///
-    /// Returns the first supported language tag, otherwise `default` if it is a
-    /// supported language, otherwise "en".
+    /// Resolve the effective language from an Accept-Language header: the first
+    /// supported tag, otherwise `default` if supported, otherwise "en".
     pub fn resolve(accept_language: Option<&str>, default: &str) -> &'static str {
         if let Some(header) = accept_language {
             for part in header.split(',') {
@@ -160,8 +152,8 @@ impl I18n {
         Self::resolve(accept, default_lang)
     }
 
-    /// Select the translation table from a request's Accept-Language header
-    /// (used by anonymous pages such as login and public share pages).
+    /// The table for a request's Accept-Language header (anonymous pages such as
+    /// login and public share pages).
     pub fn from_headers(headers: &axum::http::HeaderMap, default_lang: &str) -> &'static I18n {
         Self::get(Some(Self::resolve_from_headers(headers, default_lang)))
     }
@@ -171,19 +163,14 @@ impl I18n {
         (**self.dict).get(key).map(|s| s.as_str()).unwrap_or(key)
     }
 
-    /// Whether a key exists.
-    ///
-    /// Lets a caller choose between rendering the translation and rendering
-    /// nothing — the settings pages use it for each setting's optional help
-    /// text, where the alternative would be printing the raw key.
+    /// Whether a key exists, so a caller can render nothing instead of a raw key
+    /// (the settings pages do this for each setting's optional help text).
     pub fn has(&self, key: &str) -> bool {
         (**self.dict).contains_key(key)
     }
 
-    /// Translate a key and substitute `{name}` placeholders.
-    ///
-    /// `A` is any `AsRef<str>` so callers may pass `&str`, `&String` or
-    /// `String` values freely (templates frequently pass `&x.to_string()`).
+    /// Translate a key and substitute `{name}` placeholders; `A` is any
+    /// `AsRef<str>`, so templates may pass `&x.to_string()` freely.
     pub fn trf<'k, A>(&self, key: &'k str, args: &[(&'k str, A)]) -> String
     where
         A: AsRef<str>,
@@ -195,8 +182,8 @@ impl I18n {
         out
     }
 
-    /// Serialize the whole table as JSON for `window.__T` injection.
-    /// The result is pre-computed per language and cached.
+    /// Serialize the whole table as JSON for `window.__T` injection, pre-computed
+    /// per language and cached.
     pub fn js_dict(&self) -> &str {
         (**self.js).as_str()
     }
@@ -231,8 +218,7 @@ mod tests {
         assert_eq!(en.trf("test.hello", &[("name", "World")]), "Hello, World!");
     }
 
-    /// A TOML error anywhere in a locale file empties the whole dictionary
-    /// (parsing is best-effort), so pin that the source file actually loaded.
+    /// A TOML error empties the whole dictionary (best-effort parse), so pin that the file loaded.
     #[test]
     fn the_source_dictionary_is_not_empty() {
         assert!(
@@ -243,8 +229,7 @@ mod tests {
         );
     }
 
-    /// Both locales carry the same keys, so a new string cannot ship in one
-    /// language only (a missing key renders as its own identifier).
+    /// Both locales carry the same keys, so a string cannot ship in one language only.
     #[test]
     fn locales_define_the_same_keys() {
         let mut missing_in_zh: Vec<&String> =
@@ -302,9 +287,8 @@ mod tests {
         assert!(out.contains("\\u003c/script"));
     }
 
-    /// Every string a settings page renders from the catalog must exist in both
-    /// languages: a page-wide label that fell back to its key would put a raw
-    /// locale id like "setting.server_port_help" in front of an operator.
+    /// Every catalog string must exist in both languages: a fallback would show
+    /// an operator a raw id like "setting.server_port_help".
     #[test]
     fn every_catalog_string_is_translated() {
         let mut missing: Vec<String> = Vec::new();
@@ -358,17 +342,9 @@ mod tests {
         assert!(missing.is_empty(), "untranslated: {missing:?}");
     }
 
-    /// The converse of `every_catalog_string_is_translated`: a key whose only
-    /// reader moved away stays in the dictionary forever, because that guard
-    /// proves the dictionary is complete, never that it is minimal. One
-    /// settings-page move left 31 `admin.email_*` labels behind.
-    ///
-    /// `admin.*` is where that has happened, and the only namespace where a key
-    /// can be built instead of written: the job and service slugs, and the mail
-    /// fields `EmailSettings::missing` reports. Those three are the generators
-    /// below; every other key has to appear whole in the rendering tree.
-    /// `server/tests` is not scanned on purpose — a test naming a key is not a
-    /// reason to keep it, or a dead key could be kept alive by its own test.
+    /// The converse of `every_catalog_string_is_translated`: a key whose reader
+    /// moved away stays forever. `admin.*` is where a key is built at run time;
+    /// `server/tests` is not scanned, or a dead key outlives it in its own test.
     #[test]
     fn no_admin_key_is_unasked_for() {
         let mut covered: HashSet<String> = generated_admin_keys().into_iter().collect();
@@ -395,13 +371,9 @@ mod tests {
 
     /// Every whole `admin.<key>` string in `text`.
     ///
-    /// Whole rather than by substring: the paused-mail key is a prefix of its
-    /// `_on` sibling, so a substring test would let the longer key stand in for
-    /// the shorter one. The leading check does the same for identifiers that
-    /// merely end in `admin`, like `form.is_admin.is_some()`.
-    ///
-    /// A whole key written in a comment is therefore a reference like any other,
-    /// which is why this one names none of them.
+    /// Whole rather than by substring (the paused-mail key prefixes its `_on`
+    /// sibling), and not glued to a preceding identifier (`form.is_admin`). A key
+    /// written in a comment is a reference like any other, hence none here.
     fn admin_keys_in(text: &str) -> Vec<&str> {
         const MARKER: &str = "admin.";
         let mut out = Vec::new();
@@ -423,8 +395,7 @@ mod tests {
         out
     }
 
-    /// The `admin.*` keys no source file can write whole, because the slug or
-    /// the field name is only known at run time.
+    /// The `admin.*` keys no file writes whole: the slug is only known at run time.
     fn generated_admin_keys() -> Vec<String> {
         let mut keys = Vec::new();
         let mut slug_keys = |prefix: &str, slug: &str| {
@@ -438,9 +409,8 @@ mod tests {
         for key in ServiceKey::ALL {
             slug_keys("admin.service_", key.as_str());
         }
-        // A retired job keeps its name and only its name: the journal still
-        // holds rows under that slug, so the label has a reader, but there is no
-        // row on the registry page to describe.
+        // A retired job keeps its name only: the journal still holds rows under
+        // that slug, so the label has a reader, but no registry row to describe.
         for (_, name_key) in crate::tasks::spec::RETIRED_JOBS {
             keys.push((*name_key).to_string());
         }
@@ -458,8 +428,7 @@ mod tests {
     }
 
     /// Append every readable file under `dir` to `out`, so one pass can search a
-    /// whole tree. A path that will not read as UTF-8 (a binary asset) is
-    /// skipped rather than failing the scan.
+    /// whole tree; a path that will not read as UTF-8 is skipped.
     fn collect_text(dir: &Path, out: &mut String) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
@@ -475,8 +444,8 @@ mod tests {
         }
     }
 
-    /// A numeric setting's unit is rendered beside the field, so the label must
-    /// not repeat it: "Max upload size (MB) MB" is what happens when both exist.
+    /// A numeric setting's unit renders beside the field, so the label must not
+    /// repeat it ("Max upload size (MB) MB").
     #[test]
     fn a_unit_is_not_repeated_in_the_label() {
         for def in infra::settings::CATALOG {
@@ -496,8 +465,8 @@ mod tests {
         }
     }
 
-    /// Every tray string must exist in both languages, otherwise the menu
-    /// would show raw keys like "tray.quit" on one language.
+    /// Every tray string must exist in both languages, or the menu shows raw keys
+    /// like "tray.quit".
     #[test]
     fn tray_keys_present_in_all_languages() {
         const KEYS: &[&str] = &[
@@ -535,7 +504,6 @@ mod tests {
                 assert_ne!(t.tr(key), *key, "missing {key} for {}", t.lang);
             }
         }
-        // Locale variants like the OS reporting "zh-CN" resolve to Chinese.
         assert_eq!(I18n::get(Some("zh-CN")).tr("tray.quit"), "退出");
         assert_eq!(I18n::get(Some("en")).tr("tray.quit"), "Quit");
         // The elevated-account dialog substitutes the username.

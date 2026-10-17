@@ -1,34 +1,15 @@
 //! The task system: one registry of jobs, one bounded store of runs, one
 //! executor that owns every state transition.
 //!
-//! Two ways in, and the difference is the point:
+//! [`TaskSystem::submit`] schedules work somebody will ask about later by id and
+//! produces a pollable, cancellable [`JobRun`]; [`TaskSystem::run_inline`] runs
+//! request-scoped work under the same limits but keeps no record. A long-lived
+//! listener has no owner, no progress and no terminal state, so it is a service.
 //!
-//! * [`TaskSystem::submit`] schedules work somebody will ask about later by id.
-//!   It produces a [`JobRun`] that can be polled, and — for a job declared
-//!   `cancellable` — stopped.
-//! * [`TaskSystem::run_inline`] runs request-scoped work under the same
-//!   concurrency limits and timeouts but keeps no record, because no second
-//!   caller will ever look it up.
-//!
-//! What is *not* here is as deliberate: a long-lived event listener has no
-//! owner, no progress and no terminal state, so it is a service rather than a
-//! job and does not belong in the run table.
-//!
-//! # Two kinds of work, two kinds of history
-//!
-//! A copy, a move and a reindex are events: somebody asked for them, a run
-//! happened, and its record is the account of what it did. A cleanup pass on a
-//! timer is a heartbeat, and it fires far more often than it has work — so the
-//! system keeps two histories rather than one. A job declares which it is with
-//! [`History`](spec::History): an `EveryRun` job is written down when it starts
-//! and again when it ends, while a `Notable` one leaves nothing at all for a
-//! tick that found nothing to do. Both are still counted in the job's lifetime
-//! totals, which is what says the job is ticking.
-//!
-//! [`Origin`] is the other half of that rule. An idle run of a timer is not an
-//! event; an idle run somebody asked for by hand is the answer to the press, so
-//! it is recorded whatever the policy says. And a failure is always recorded —
-//! quiet is for ticks, not for bad news.
+//! A job declares its history with [`History`](spec::History): an `EveryRun`
+//! job is written down when it starts and ends, a `Notable` one leaves nothing
+//! for an idle tick, and [`Origin`] decides whether an idle run counts as an
+//! event. Failures are always recorded; quiet is for ticks.
 
 pub mod admission;
 pub mod catalog;
@@ -64,9 +45,7 @@ pub use self::spec::{
 
 /// Lifetime counters for one job, for the administrator's view.
 ///
-/// Process-lifetime, like the task system itself, so the numbers survive an
-/// in-place restart. They are aggregates, not a substitute for the run table:
-/// the run table keeps what happened recently, these keep the totals.
+/// Process-lifetime aggregates, not a substitute for the run table.
 #[derive(Clone, Debug, Default)]
 pub struct JobStats {
     pub run_count: u64,
@@ -81,8 +60,7 @@ pub struct JobStats {
     pub last_state: Option<JobState>,
 }
 
-/// How long a deferrable job has been waiting, and since when the server has
-/// been calm enough to start it.
+/// How long a deferrable job has waited for the server to be calm enough to start it.
 #[derive(Default)]
 struct QuietState {
     tracker: admission::QuietTracker,
@@ -102,11 +80,8 @@ pub struct TaskLimits {
     /// How many runs may be active server-wide, across every job. `0` means
     /// unlimited. The backstop behind the per-user cap.
     pub max_active_total: usize,
-    /// How many runs one user may have active at once, across every job. `0`
+    /// How many runs one user may have active at once, across every job; `0`
     /// means unlimited.
-    ///
-    /// The old cap was only the server-wide number, so one account could take
-    /// every slot and the next user got a 429.
     pub max_active_per_user: usize,
     pub runs: RunLimits,
 }
@@ -130,8 +105,7 @@ struct Inner {
     /// Live runs' cancellation handles, so a caller can stop one.
     cancels: RwLock<HashMap<RunId, CancellationToken>>,
     limits: RwLock<TaskLimits>,
-    /// When this process's task system was built, for the worker-occupancy
-    /// calculation.
+    /// When this process's task system was built, for worker occupancy.
     started_at: std::time::Instant,
     /// The current server generation's cancellation token. Replaced by
     /// [`TaskSystem::install`], because the task system outlives a generation
@@ -139,24 +113,19 @@ struct Inner {
     shutdown: RwLock<CancellationToken>,
     /// Long-lived services of the current generation, for the admin listing.
     services: RwLock<Vec<ServiceKey>>,
-    /// Jobs the catalog declares that this server did not register, with the
-    /// reason, so the admin listing can say why rather than showing nothing.
+    /// Catalog jobs this server did not register, with the reason why.
     skipped: RwLock<Vec<SkippedTask>>,
     /// Lifetime counters per job.
     stats: RwLock<HashMap<JobKey, JobStats>>,
-    /// How busy the server is, for the administrator's view and — once load
-    /// awareness is switched on — for admission.
+    /// How busy the server is, for the admin view and for admission.
     load: LoadGauge,
     /// The gate jobs park at. Shares the gauge with `load`.
     gate: admission::YieldGate,
-    /// Reads the database pool's occupancy. Installed per generation, because
-    /// the pool belongs to the generation.
+    /// Reads the database pool's occupancy; installed with each generation's pool.
     db_probe: RwLock<Option<DbProbe>>,
-    /// Per-job quiet tracking: how long each deferrable job has been waiting,
-    /// and since when it has been calm enough to start.
+    /// Per-job quiet tracking, behind `deferred_since`.
     quiet: RwLock<HashMap<JobKey, QuietState>>,
-    /// Durable history, when the database is available. `None` in a test that
-    /// builds a task system without one.
+    /// Durable history, when the database is available; `None` in a test.
     journal: RwLock<Option<Arc<dyn crate::repository::job_run::JobRunRepository>>>,
     /// Whether jobs may be deferred and throttled by load.
     load_aware: AtomicBool,
@@ -164,7 +133,6 @@ struct Inner {
     sample_interval_secs: AtomicU64,
 }
 
-/// The task system.
 #[derive(Clone)]
 pub struct TaskSystem {
     inner: Arc<Inner>,
@@ -180,13 +148,11 @@ impl std::fmt::Debug for TaskSystem {
 }
 
 impl TaskSystem {
-    /// A new, empty task system.
-    ///
-    /// Process-lifetime: built once, outside the server generation loop, so run
-    /// history and schedule state survive an in-place restart.
+    /// A new, empty task system, built once outside the server generation loop
+    /// so run history and schedule state survive an in-place restart.
     pub fn new(limits: TaskLimits, shutdown: CancellationToken) -> Arc<Self> {
-        // One gauge, shared by the administrator's panel and by the gate jobs
-        // park at: a job must see exactly the numbers the operator sees.
+        // One gauge, shared by the admin panel and the gate: a job sees what
+        // the operator sees.
         let load = LoadGauge::new();
         let gate = admission::YieldGate::new(load.clone(), admission::LoadThresholds::default());
         Arc::new(Self {
@@ -221,15 +187,10 @@ impl TaskSystem {
 
     /// Bind this generation's job set and cancellation token.
     ///
-    /// The task system is process-lifetime so that run history and schedule
-    /// state survive an in-place restart; the *bodies* are not, because they
-    /// capture the generation's database pool, block store and indexer. So each
-    /// generation replaces the whole set here rather than adding to it. The
-    /// policies are identical every time (they come from
-    /// [`catalog`](self::catalog)); only the bodies differ.
-    ///
-    /// Validation happens against the fresh set, so a mis-declared job fails
-    /// before anything is swapped in.
+    /// Process-lifetime system, generation-lifetime bodies: they capture the
+    /// generation's pool, block store and indexer, so each generation replaces
+    /// the whole set while the policies from [`catalog`] stay identical.
+    /// Validation runs against the fresh set before anything is swapped in.
     pub fn install(
         &self,
         jobs: Vec<RegisteredJob>,
@@ -258,9 +219,8 @@ impl TaskSystem {
             .shutdown
             .write()
             .unwrap_or_else(PoisonError::into_inner) = shutdown;
-        // Services are spawned per generation, so the listing is rebuilt with
-        // it rather than accumulating stale names. The skip record is written
-        // after this call, by whoever decided not to register what.
+        // Rebuilt per generation so stale names do not accumulate; the skip
+        // record is written after this call.
         self.inner
             .services
             .write()
@@ -283,8 +243,7 @@ impl TaskSystem {
             .clone()
     }
 
-    /// Register a single job. Used by tests and by anything that adds a job
-    /// outside the standard set.
+    /// Register a single job outside the standard set.
     pub fn register(&self, job: RegisteredJob) -> Result<(), RegistryError> {
         let key = job.key();
         let concurrency = job.spec.max_concurrent;
@@ -335,11 +294,9 @@ impl TaskSystem {
             .unwrap_or_else(PoisonError::into_inner) = limits;
     }
 
-    /// Submit a job for background execution and return the id it can be polled
-    /// with.
+    /// Submit a job for background execution and return a pollable id.
     ///
-    /// The state machine belongs to the executor from here on: the caller
-    /// cannot mark the run done, and cannot forget to.
+    /// The executor owns the state machine from here on.
     pub async fn submit(
         &self,
         key: JobKey,
@@ -360,8 +317,7 @@ impl TaskSystem {
         .await
     }
 
-    /// Submit with small job-specific facts for the wire projection that must
-    /// outlive the params.
+    /// Submit with small job-specific facts that must outlive the params.
     #[allow(clippy::too_many_arguments)]
     pub async fn submit_with_details(
         &self,
@@ -384,12 +340,10 @@ impl TaskSystem {
         .await
     }
 
-    /// Submit work the timer started, or a one-shot pass the server started
-    /// itself.
+    /// Submit work the timer started, or a one-shot pass the server started.
     ///
-    /// Separate from [`TaskSystem::submit`] because who asked decides whether an
-    /// idle run is worth remembering: a timer's tick nobody asked for leaves no
-    /// history, while a run a caller or an administrator asked for always does.
+    /// Who asked decides whether an idle run is remembered: a timer's tick
+    /// nobody asked for leaves no history, a caller's or administrator's does.
     pub(crate) async fn submit_system(
         &self,
         origin: Origin,
@@ -418,8 +372,7 @@ impl TaskSystem {
             .ok_or_else(|| AppError::Internal(format!("job {key:?} is not registered")))?;
         let now = chrono::Utc::now().timestamp();
 
-        // Admission. Checked before the run exists so a refusal leaves no
-        // trace to sweep.
+        // Checked before the run exists, so a refusal leaves no trace to sweep.
         let limits = self.limits();
         if job.spec.queue_depth > 0
             && self.inner.store.count_active(key, owner) >= job.spec.queue_depth
@@ -438,8 +391,7 @@ impl TaskSystem {
             return Err(AppError::TooManyRequests);
         }
 
-        // Deduplication stands in for the per-repo reindex lock that used to be
-        // a second map next to the progress map.
+        // Deduplication serves as the per-repo reindex lock.
         if let Dedup::ByParams(field) = job.spec.dedup
             && let Some(value) = params.get(field)
             && self
@@ -468,16 +420,11 @@ impl TaskSystem {
             run.set_detail(name, value);
         }
         let id = run.id.clone();
-        // Every run whose job keeps a row per run is written down before it
-        // starts, so a crash leaves a row rather than nothing at all. `Audit` is
-        // recorded and, if the process dies, closed by recovery rather than
-        // replayed; `Durable` is resumed. A `Memory` run — the request-scoped
-        // copies and moves — is not recorded anywhere, and neither is a
-        // `Notable` run until it has something to report.
-        //
-        // The condition has to match the one that writes the terminal state
-        // below, or an `Audit` job's finish updates a row that was never
-        // inserted and the journal stays empty.
+        // Written down before it starts so a crash leaves a row: `Audit` is
+        // closed by recovery, `Durable` is resumed, a `Memory` or idle
+        // `Notable` run is not recorded at all. The condition has to match the
+        // terminal write below, or an `Audit` job's finish updates a row that
+        // was never inserted and the journal stays empty.
         let journaled_from_the_start =
             job.spec.durability >= Durability::Audit && job.spec.history.journals_from_the_start();
         if let Some(journal) = self.journal()
@@ -522,7 +469,6 @@ impl TaskSystem {
         Ok(id)
     }
 
-    /// Acquire this job's permit and run its body.
     async fn drive(
         &self,
         job: Arc<RegisteredJob>,
@@ -552,14 +498,11 @@ impl TaskSystem {
         // a running pass cannot defer itself.
         let _background = self.inner.load.background_guard();
         let journal = self.journal();
-        // Whether this job was written down before it started. A job that keeps
-        // only its notable runs has no row yet, and gets one at the end.
+        // Whether this job already has a row from submit, or needs one at the end.
         let journaled_from_the_start =
             job.spec.durability >= Durability::Audit && job.spec.history.journals_from_the_start();
-        // The same set of jobs the submit path recorded a row for: an audited
-        // run is written down when it starts as well as when it ends, so its
-        // row says when it began and does not read as pending work for longer
-        // than the run lasts.
+        // The same jobs the submit path recorded a row for, so an audited run's
+        // row says when it began instead of reading as pending work.
         if let Some(journal) = &journal
             && journaled_from_the_start
         {
@@ -574,12 +517,9 @@ impl TaskSystem {
             executor::execute(&job, &run, params, &self.inner.store, cancel.clone(), gate).await;
         self.record_stats(job.key(), &report, started.elapsed());
 
-        // An idle run of a timer is not an event: nobody asked for it, and its
-        // next tick re-does whatever this one would have done. It is counted in
-        // the job's totals above and then dropped, so the history holds what
-        // happened rather than that time passed. Everything else — any failure,
-        // any run that did work, and any idle run somebody asked for by hand —
-        // is recorded.
+        // An idle run of a timer is not an event: nobody asked, and the next
+        // tick redoes it. Any failure, any run that did work, and any idle run
+        // somebody asked for by hand is recorded.
         let idle = report.state == JobState::Succeeded
             && report.outcome.as_ref().is_some_and(|outcome| outcome.idle);
         let silent = idle && run.origin == Origin::Schedule;
@@ -594,20 +534,17 @@ impl TaskSystem {
             JobState::Interrupted => Some("interrupted by a restart"),
             _ => None,
         };
-        // The job's own account of what it did is what the column is for. A run
-        // that failed before it could report anything keeps the summary its
-        // submitter gave, which is `None` here.
+        // The job's own account is what the column is for; a run that failed
+        // before reporting anything keeps the submitter's summary, `None` here.
         let summary = report
             .outcome
             .as_ref()
             .map(|outcome| outcome.message.as_str())
             .filter(|message| !message.is_empty());
-        // A `Notable` run that failed before it reported anything has no
-        // summary of its own to write; its error is the account, so the summary
-        // column stays empty rather than repeating the job's slug.
+        // A `Notable` run that failed before reporting has no summary of its
+        // own; its error is the account, so the column stays empty.
         let recorded_summary = summary.unwrap_or_default().to_string();
-        // A `Memory` job is not recorded anywhere, whatever its history policy
-        // says: the request-scoped copies and moves leave no trace at all.
+        // A `Memory` job is never recorded, whatever its history policy says.
         let keeps_a_record = job.spec.durability >= Durability::Audit;
         if let Some(journal) = &journal
             && keeps_a_record
@@ -668,9 +605,6 @@ impl TaskSystem {
     }
 
     /// Fold one finished run into the job's lifetime counters.
-    ///
-    /// Aggregates rather than the run table: the table keeps what happened
-    /// recently, these keep the totals an administrator compares over time.
     fn record_stats(
         &self,
         key: JobKey,
@@ -732,12 +666,10 @@ impl TaskSystem {
             .clone()
     }
 
-    /// Re-submit durable runs whose process died before they finished.
-    ///
-    /// Called once at start-up. Only a job that declared `Durable` is replayed:
-    /// the catalog refuses that declaration for anything not marked idempotent,
-    /// so a destructive run is never repeated here. The interrupted attempt is
-    /// recorded rather than quietly dropped.
+    /// Re-submit durable runs whose process died before they finished, once at
+    /// start-up. The catalog only lets an idempotent job declare `Durable`, so
+    /// a destructive run is never repeated; the old attempt is closed as
+    /// interrupted rather than dropped.
     pub async fn recover(&self) {
         let Some(journal) = self.journal() else {
             return;
@@ -824,8 +756,8 @@ impl TaskSystem {
                 .await
             {
                 Ok(_) => {
-                    // The old attempt is closed as interrupted, so it is not
-                    // read as pending work by the next start.
+                    // The old attempt is closed as interrupted, so the next
+                    // start does not read it as pending work.
                     let _ = journal
                         .finish(
                             &row.id,
@@ -856,15 +788,10 @@ impl TaskSystem {
 
     /// Fill the lifetime counters a restart emptied, from the journal.
     ///
-    /// The registry page reports the verdict of each job's last run, and those
-    /// counters live in this process. An in-place restart — the button on the
-    /// settings page — would otherwise read "has not run yet" for every job
-    /// while the journal holds the answer. Only empty entries are filled: a run
-    /// this process has already recorded is the more recent truth.
-    ///
-    /// The window is bounded, because this is a read of recent history rather
-    /// than of the whole journal: a job whose last run is older than the window
-    /// is reported as it was, which is not a lie about this process.
+    /// Only empty entries are filled: a run this process has already recorded is
+    /// the more recent truth. The window is bounded because this reads recent
+    /// history rather than the whole journal, so an older last run is reported as
+    /// it was.
     pub async fn seed_stats_from_journal(&self) {
         const WINDOW: u64 = 500;
         let Some(journal) = self.journal() else {
@@ -884,8 +811,7 @@ impl TaskSystem {
             .unwrap_or_else(PoisonError::into_inner);
         for row in rows {
             let Some(key) = JobKey::from_slug(&row.kind) else {
-                // A retired job's rows are history, not a counter anybody
-                // reads: the registry has no row to show them on.
+                // A retired job's rows are history: no registry row shows them.
                 continue;
             };
             let entry = stats.entry(key).or_default();
@@ -907,11 +833,8 @@ impl TaskSystem {
         }
     }
 
-    /// Drop journal rows past retention. Called by the sweeper.
-    ///
-    /// The journal has a policy of its own rather than the outbound-mail
-    /// queue's: what a run means to keep is not what a delivered message means
-    /// to keep, and the two only looked alike.
+    /// Drop journal rows past retention, under a policy of its own; the sweeper
+    /// calls this.
     pub async fn prune_journal(&self) -> usize {
         let Some(journal) = self.journal() else {
             return 0;
@@ -931,19 +854,15 @@ impl TaskSystem {
         }
     }
 
-    /// The load counters.
     pub fn load(&self) -> &LoadGauge {
         &self.inner.load
     }
 
-    /// How busy the server is right now.
     pub fn load_snapshot(&self) -> LoadSnapshot {
         self.inner.load.snapshot()
     }
 
-    /// Whether a job is currently being deferred, and since when. For the
-    /// administrator's view: a job that is waiting must say so, or the page
-    /// looks like the job is broken.
+    /// Whether a job is being deferred, and since when, for the admin page.
     pub fn deferred_since(&self, key: JobKey) -> Option<i64> {
         self.inner
             .quiet
@@ -953,8 +872,7 @@ impl TaskSystem {
             .and_then(|state| state.deferred_since)
     }
 
-    /// Override the thresholds admission uses. Used by tests; the catalog
-    /// carries the production values implicitly.
+    /// Override the thresholds admission uses; tests call this.
     pub fn set_load_thresholds(&self, thresholds: admission::LoadThresholds) {
         self.inner.gate.set_thresholds(thresholds);
     }
@@ -968,7 +886,6 @@ impl TaskSystem {
             .unwrap_or_else(PoisonError::into_inner) = Some(probe);
     }
 
-    /// Whether deferred and throttled jobs are enabled.
     pub fn load_aware(&self) -> bool {
         self.inner.load_aware.load(Ordering::Relaxed)
     }
@@ -994,8 +911,7 @@ impl TaskSystem {
             let (in_use, max) = probe();
             self.inner.load.set_db(in_use, max);
         }
-        // Stable tokio metrics: everything else about the blocking pool needs
-        // `tokio_unstable`, which is not worth enabling for one number.
+        // Stable tokio metrics only: everything else needs `tokio_unstable`.
         let handle = tokio::runtime::Handle::current();
         let metrics = handle.metrics();
         let workers = metrics.num_workers().max(1);
@@ -1008,9 +924,7 @@ impl TaskSystem {
         let busy_pct = (busy_nanos.saturating_mul(100)
             / (elapsed_nanos.saturating_mul(workers as u64).max(1)))
         .min(100) as u32;
-        // Only the injection queue is exposed on a stable tokio; the
-        // per-worker local queues need `tokio_unstable`, which is not worth
-        // enabling for one number.
+        // Only the injection queue is exposed on a stable tokio.
         self.inner.load.set_runtime(
             busy_pct,
             metrics.global_queue_depth() as u64,
@@ -1031,10 +945,7 @@ impl TaskSystem {
     }
 
     /// Run request-scoped work under a job's concurrency limit, keeping no
-    /// record.
-    ///
-    /// The work is bounded and observable like any other, but there is no run
-    /// to poll because no second caller will look it up.
+    /// record: there is no run to poll because no second caller will look it up.
     pub async fn run_inline<F, Fut, T>(&self, key: JobKey, f: F) -> Result<T, AppError>
     where
         F: FnOnce(JobContext) -> Fut,
@@ -1060,8 +971,7 @@ impl TaskSystem {
             None => None,
         };
 
-        // No record is kept, so the context is a throwaway with a fresh
-        // cancellation token that follows the caller.
+        // No record is kept, so the context is a throwaway that follows the caller.
         let id = RunId::new();
         let tick = context::LivenessTick::default();
         let sink = context::ProgressSink::new(
@@ -1088,11 +998,9 @@ impl TaskSystem {
         })
     }
 
-    /// Ask a run to stop.
-    ///
-    /// Only a job declared `cancellable` honours this; for anything else the
-    /// request is refused rather than silently ignored, because cancelling a
-    /// move between its two commits would lose data.
+    /// Ask a run to stop. Only a job declared `cancellable` honours this; for
+    /// anything else the request is refused, because cancelling a move between
+    /// its two commits would lose data.
     pub fn cancel(&self, id: &RunId, viewer: Viewer) -> Result<(), AppError> {
         let run = self
             .inner
@@ -1134,14 +1042,12 @@ impl TaskSystem {
         self.inner.store.list(filter)
     }
 
-    /// Stop everything this generation started, and record anything that could
-    /// not be stopped.
+    /// Stop everything this generation started.
     ///
-    /// A run that is safely interruptible is cancelled outright; one that is
-    /// not (a move between its two commits) is given `grace` to finish. Either
-    /// way the run ends in a recorded terminal state rather than vanishing,
-    /// which is what stops a client that is polling a task id from getting a
-    /// 404 after an administrator restarts the server.
+    /// An interruptible run is cancelled outright; a move between its two
+    /// commits gets `grace` to finish. Either way it ends in a recorded
+    /// terminal state, so a client polling a task id does not get a 404 after
+    /// an administrator restarts the server.
     pub async fn drain(&self, grace: std::time::Duration) {
         let active = self.inner.store.list(&RunFilter {
             include_active: true,
@@ -1174,10 +1080,9 @@ impl TaskSystem {
             token.cancel();
         }
 
-        // Wait for the active set to empty, whether the runs were cancelled or
-        // must finish on their own: a cancelled run still needs a moment to
-        // reach its checkpoint and record the terminal state, and interrupting
-        // it in that window would report the wrong outcome.
+        // Wait for the active set to empty: a cancelled run still needs a moment
+        // to reach its checkpoint and record the terminal state, and
+        // interrupting it in that window would report the wrong outcome.
         if !grace.is_zero() {
             let deadline = tokio::time::Instant::now() + grace;
             while tokio::time::Instant::now() < deadline {
@@ -1219,11 +1124,8 @@ impl TaskSystem {
         self.shutdown_token().is_cancelled()
     }
 
-    /// Start the interval loops for every periodic job and the single run
-    /// sweeper.
-    ///
-    /// Called once per server generation, after registration. Nothing else
-    /// decides when a periodic job runs.
+    /// Start the interval loops for every periodic job, the load sampler and the
+    /// single run sweeper. Called once per generation, after registration.
     pub fn start_schedules(&self) {
         for job in self.jobs() {
             let Trigger::Periodic {
@@ -1239,9 +1141,8 @@ impl TaskSystem {
                 let mut ticker =
                     tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(1)));
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                // The first tick completes immediately; consume it so a start-up
-                // does not fire every job at once, and so the first run waits a
-                // full interval, as the scheduler it replaces did.
+                // The first tick completes immediately; consume it so start-up
+                // does not fire every job at once.
                 ticker.tick().await;
                 tracing::info!(job = job.name(), interval_secs, "scheduled job started");
                 loop {
@@ -1258,8 +1159,7 @@ impl TaskSystem {
             });
         }
 
-        // One load sampler for the process, so admission reads a cached struct
-        // rather than sampling per decision.
+        // One load sampler for the process, so admission reads a cached struct.
         let system = self.clone();
         let shutdown = self.shutdown_token().child_token();
         let interval = self
@@ -1278,10 +1178,8 @@ impl TaskSystem {
             }
         });
 
-        // One sweeper for the whole run table, rather than each read path
-        // tidying up after itself while holding a lock. The in-memory table is
-        // swept every minute — it is a walk over a map — while the journal, which
-        // is a database round trip per pass, is pruned every fifth.
+        // One sweeper for the whole run table: the in-memory table every minute,
+        // the journal — a database round trip per pass — every fifth.
         let system = self.clone();
         let shutdown = self.shutdown_token().child_token();
         tokio::spawn(async move {
@@ -1300,8 +1198,7 @@ impl TaskSystem {
                             tracing::debug!(dropped, "swept expired job runs");
                         }
                         // Once at startup, then every fifth minute: a journal
-                        // that grew before the restart is tidied promptly, and
-                        // after that the pass is cheap and rarely needed.
+                        // that grew before the restart is tidied promptly.
                         sweeps += 1;
                         if sweeps == 1 || sweeps.is_multiple_of(PRUNE_EVERY) {
                             system.prune_journal().await;
@@ -1313,15 +1210,13 @@ impl TaskSystem {
     }
 
     /// Whether a job may start now, for a job that declared it can wait.
-    ///
-    /// Returns [`Admission::Allow`] for anything without a quiet policy, so this
+    /// Returns `Admission::Allow` for anything without a quiet policy, so this
     /// is safe to call for every job.
     ///
-    /// The starvation valve is `max_deferral_hours`: without it, a server that
-    /// is always busy would never collect its garbage. `force_safe` decides
-    /// what happens at that point — a job whose forced execution is safe runs,
-    /// and one whose is not (GC, which would race a concurrent upload) only
-    /// says so.
+    /// The starvation valve is `max_deferral_hours`, or a permanently busy
+    /// server would never collect its garbage. `force_safe` decides what
+    /// happens at the cap: a job whose forced execution is safe runs, and one
+    /// whose is not (GC, which would race a concurrent upload) only says so.
     fn admit(&self, job: &RegisteredJob, now: i64) -> admission::Admission {
         let Some(policy) = job.spec.quiet else {
             return admission::Admission::Allow;
@@ -1389,9 +1284,8 @@ impl TaskSystem {
             );
             return false;
         }
-        // No summary: the run row already names the job from its slug, and a
-        // timer has nothing to say about a run before it has run. The job's own
-        // report fills the column in when it finishes.
+        // No summary: the run row already names the job from its slug, and the
+        // job's own report fills the column in when it finishes.
         match self
             .submit_system(Origin::Schedule, job.key(), Params::Null, String::new())
             .await
@@ -1405,11 +1299,8 @@ impl TaskSystem {
     }
 
     /// Run a long-lived background service: a loop with no owner, no progress
-    /// and no terminal state.
-    ///
-    /// Deliberately not a job. An event listener has nothing to poll and nothing
-    /// to retry, so a run record would only add noise to the table; what it
-    /// needs is a lifecycle and a cancellation token.
+    /// and no terminal state. Deliberately not a job — nothing to poll and
+    /// nothing to retry — so a run record would only add noise to the table.
     pub fn spawn_service<F, Fut>(&self, key: ServiceKey, task: F)
     where
         F: FnOnce(CancellationToken) -> Fut + Send + 'static,
@@ -1428,10 +1319,8 @@ impl TaskSystem {
         });
     }
 
-    /// Record that a job the catalog declares was not registered, and why.
-    ///
-    /// Called by the setup pass after [`TaskSystem::install`], which clears the
-    /// record along with the service listing.
+    /// Record that a job the catalog declares was not registered, and why. The
+    /// setup pass calls this after [`TaskSystem::install`], which clears it.
     pub fn record_skipped(&self, task: SkippedTask) {
         self.inner
             .skipped
@@ -1440,8 +1329,7 @@ impl TaskSystem {
             .push(task);
     }
 
-    /// Jobs and services this generation did not register, oldest decision
-    /// first.
+    /// Jobs and services this generation did not register, oldest decision first.
     pub fn skipped(&self) -> Vec<SkippedTask> {
         self.inner
             .skipped
@@ -1464,8 +1352,7 @@ impl TaskSystem {
         self.job(key).map(|job| job.spec.priority)
     }
 
-    /// The terminal state a run would show if it were stopped now, for callers
-    /// that need to explain a refusal.
+    /// The terminal state a run would show if it were stopped now.
     pub fn state_of(&self, id: &RunId) -> Option<JobState> {
         self.inner.store.get(id).map(|run| run.state)
     }
@@ -1476,8 +1363,7 @@ impl TaskSystem {
 pub mod test_support {
     use super::*;
 
-    /// A context whose run has already been asked to stop, for asserting that
-    /// a long pass really does check in.
+    /// A context whose run has already been asked to stop, for checking in.
     pub fn cancelled_context() -> context::JobContext {
         let store = RunStore::new(RunLimits::default());
         let run = JobRun::queued(
@@ -1584,13 +1470,11 @@ mod tests {
             .await
             .unwrap();
 
-        // The run exists immediately, before the body has been polled.
         let run = system.store().get(&id).expect("run is recorded");
         assert_eq!(run.owner, Some(1));
         assert_eq!(run.expected_total, Some(2));
         assert_eq!(run.summary, "Copy 2");
 
-        // And reaches a terminal state on its own.
         for _ in 0..100 {
             let run = system.store().get(&id).unwrap();
             if run.state.is_terminal() {
@@ -1798,8 +1682,8 @@ mod tests {
         ));
     }
 
-    /// The bug this replaces: a task submitted before an in-place restart used
-    /// to be unknown to the next generation, so the client polling it got a 404.
+    /// A run must not become unknown across an in-place restart: the client
+    /// polling it would get a 404.
     #[tokio::test]
     async fn drain_records_an_interrupted_run_instead_of_losing_it() {
         let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
@@ -1808,8 +1692,8 @@ mod tests {
                 catalog::policy(JobKey::Move),
                 Arc::new(|ctx, _params| {
                     Box::pin(async move {
-                        // Ignores cancellation: exactly the case a generation
-                        // boundary has to record rather than forget.
+                        // Ignores cancellation: what a generation boundary must
+                        // record rather than forget.
                         ctx.sleep(std::time::Duration::from_secs(3600)).await.ok();
                         Ok(Outcome::ok())
                     })
@@ -1937,8 +1821,7 @@ mod tests {
         ));
     }
 
-    /// The heart of load awareness: a running job parks while the server is
-    /// busy and resumes when it is not, recording that it parked.
+    /// A running job parks while the server is busy and resumes when it is not.
     #[tokio::test]
     async fn a_running_job_yields_while_the_server_is_busy() {
         let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
@@ -1976,7 +1859,6 @@ mod tests {
             .await
             .unwrap();
 
-        // It is parked, not finished, and recorded as such.
         let mut parked = false;
         for _ in 0..200 {
             match system.store().get(&id).unwrap().state {
@@ -1990,7 +1872,6 @@ mod tests {
         }
         assert!(parked, "a busy server must park the job");
 
-        // The server goes quiet and the job finishes on its own.
         drop(busy);
         for _ in 0..400 {
             let state = system.store().get(&id).unwrap().state;
@@ -2048,8 +1929,7 @@ mod tests {
         panic!("the job did not finish");
     }
 
-    /// A deferrable job waits for a quiet server before it starts, and the
-    /// starvation valve eventually lets it through.
+    /// A deferrable job waits for a quiet server; the starvation valve lets it through.
     #[tokio::test]
     async fn a_deferrable_job_waits_for_a_quiet_server() {
         let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
@@ -2070,15 +1950,13 @@ mod tests {
         assert_eq!(system.admit(&gc, now), admission::Admission::Defer);
         drop(_busy);
         system.load().mark_sampled(now);
-        // Calm, but the dwell has only just begun.
         assert_eq!(system.admit(&gc, now), admission::Admission::Defer);
         assert_eq!(
             system.admit(&gc, now + 30),
             admission::Admission::Defer,
             "the dwell has not elapsed"
         );
-        // The sampler would have refreshed by now; a stale sample is never a
-        // reason to start.
+        // The sampler would have refreshed by now.
         system.load().mark_sampled(now + 60);
         assert_eq!(
             system.admit(&gc, now + 60),
@@ -2098,7 +1976,6 @@ mod tests {
         system.configure_load(true, 1);
         let now = 1_000_000;
         system.load().mark_sampled(now);
-        // Let the calm window elapse without the sampler running.
         let late = now + 3600;
         assert_eq!(
             system.admit(&gc, late),
@@ -2107,8 +1984,7 @@ mod tests {
         );
     }
 
-    /// The starvation valve: a permanently busy server must not defer GC for
-    /// ever, and GC must not be forced when forcing it is unsafe.
+    /// The starvation valve: a permanently busy server must not defer GC forever.
     #[tokio::test]
     async fn the_starvation_valve_respects_force_safe() {
         let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
@@ -2128,8 +2004,7 @@ mod tests {
         system.load().mark_sampled(now);
         assert_eq!(system.admit(&gc, now), admission::Admission::Defer);
 
-        // Past the cap, but GC's forced execution is not safe, so it still
-        // waits — and says so rather than running.
+        // Past the cap, but GC's forced execution is not safe, so it still waits.
         let past_cap = now + 25 * 3600;
         system.load().mark_sampled(past_cap);
         assert!(!gc.spec.force_safe);
@@ -2151,9 +2026,8 @@ mod tests {
         drop(busy);
     }
 
-    /// A job that cannot be interrupted is never handed a gate, so a quiet
-    /// policy on it could not do anything — which is why the catalog refuses
-    /// that combination outright.
+    /// A job that cannot be interrupted is never handed a gate, which is why the
+    /// catalog refuses a quiet policy on it outright.
     #[test]
     fn a_job_without_a_checkpoint_gets_no_gate() {
         let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());
@@ -2171,11 +2045,7 @@ mod tests {
     }
 
     /// A finished audited run leaves a row, so a crash is visible rather than
-    /// silent.
-    ///
-    /// The job is a housekeeping pass — `Audit`, not `Durable` — because that
-    /// is the case the terminal write used to update a row nobody had
-    /// inserted, leaving the journal empty for every job but a reindex.
+    /// silent. The job is a housekeeping pass: `Audit`, not `Durable`.
     #[tokio::test]
     async fn an_audited_run_is_recorded_in_the_journal() {
         let (system, repos) = journal_system().await;
@@ -2222,14 +2092,12 @@ mod tests {
         assert!(row.finished_at.is_some());
         assert!(row.lease_until.is_none(), "a finished run holds no lease");
         assert!(row.params.is_none(), "the input is dropped once it is over");
-        // What the job reported is what the record says it did — not the name
-        // its submitter called it.
+        // The record says what the job reported, not what its submitter called it.
         assert_eq!(row.summary, "removed 3 unreferenced blocks");
         assert_eq!(row.processed, Some(3));
     }
 
-    /// A run that failed before it could report anything keeps the summary its
-    /// submitter gave, so the record still says which work it was.
+    /// A run that failed before it could report anything keeps the submitter's summary.
     #[tokio::test]
     async fn a_failed_run_keeps_the_submitters_summary() {
         let (system, repos) = journal_system().await;
@@ -2281,8 +2149,7 @@ mod tests {
         );
     }
 
-    /// A `Notable` job, as the catalog declares it, with a body that reports
-    /// `outcome` when it runs.
+    /// A `Notable` job, as the catalog declares it, reporting `outcome` when it runs.
     fn notable_job(outcome: Outcome) -> RegisteredJob {
         RegisteredJob::new(
             catalog::policy(JobKey::PasswordCacheCleanup),
@@ -2293,7 +2160,7 @@ mod tests {
         )
     }
 
-    /// Wait until a run of `key` has finished, returning nothing.
+    /// Wait until the password-cache cleanup run has finished.
     async fn settle(system: &Arc<TaskSystem>) {
         for _ in 0..400 {
             if system
@@ -2308,9 +2175,8 @@ mod tests {
         panic!("the run never finished");
     }
 
-    /// An idle tick is not an event: it is counted, and then it is gone — from
-    /// the run table as well as from the journal. This is what stops a pass that
-    /// fires every couple of minutes from burying the runs that did something.
+    /// An idle tick is counted, then gone from the run table and the journal, so a
+    /// frequent pass cannot bury the runs that did something.
     #[tokio::test]
     async fn an_idle_tick_leaves_no_run_record() {
         let (system, repos) = journal_system().await;
@@ -2348,8 +2214,7 @@ mod tests {
             "and it leaves no journal row"
         );
 
-        // What it does not lose is the count: the registry page still has to be
-        // able to say the job is ticking.
+        // What it does not lose is the count: the page must say the job is ticking.
         let stats = system.stats(JobKey::PasswordCacheCleanup);
         assert_eq!(stats.run_count, 1);
         assert_eq!(stats.success_count, 1);
@@ -2360,8 +2225,7 @@ mod tests {
         );
     }
 
-    /// The same idle run, asked for by hand, is the answer to the press and is
-    /// therefore written down.
+    /// The same idle run, asked for by hand, is the answer to the press and is recorded.
     #[tokio::test]
     async fn an_idle_run_somebody_asked_for_is_recorded() {
         let (system, repos) = journal_system().await;
@@ -2402,8 +2266,7 @@ mod tests {
         );
     }
 
-    /// A notable job that did work, and one that failed, are both recorded —
-    /// the policy is about idle ticks, not about hiding bad news.
+    /// A notable job that did work, and one that failed, are both recorded.
     #[tokio::test]
     async fn a_notable_run_is_recorded_when_it_did_work_or_failed() {
         let (system, repos) = journal_system().await;
@@ -2467,8 +2330,7 @@ mod tests {
         assert!(rows[0].summary.is_empty(), "the error is the account");
     }
 
-    /// A restart empties the process-lifetime counters but not the journal, so
-    /// the last verdict is read back rather than every job reading as never run.
+    /// A restart empties the counters but not the journal, so verdicts are read back.
     #[tokio::test]
     async fn a_restart_reads_the_last_verdicts_back() {
         let (_, repos) = journal_system().await;
@@ -2561,8 +2423,7 @@ mod tests {
         );
     }
 
-    /// A destructive job is never recorded as replayable, so a crash can never
-    /// repeat it.
+    /// A destructive job is never journalled, so a crash can never repeat it.
     #[tokio::test]
     async fn a_memory_only_run_is_never_journalled() {
         let (system, repos) = journal_system().await;
@@ -2597,8 +2458,7 @@ mod tests {
         );
     }
 
-    /// An audited run the process never finished is closed, never replayed:
-    /// the job was not declared safe to run twice.
+    /// An audited run the process never finished is closed, never replayed.
     #[tokio::test]
     async fn an_unfinished_audited_run_is_closed_rather_than_replayed() {
         let (system, repos) = journal_system().await;
@@ -2635,8 +2495,7 @@ mod tests {
         );
     }
 
-    /// A durable run whose process died is replayed; its interrupted attempt is
-    /// recorded rather than dropped.
+    /// A durable run whose process died is replayed; the abandoned attempt is recorded.
     #[tokio::test]
     async fn a_durable_run_is_recovered_after_a_crash() {
         let (system, repos) = journal_system().await;
@@ -2660,7 +2519,6 @@ mod tests {
 
         system.recover().await;
 
-        // The new attempt ran and was recorded.
         let mut recovered: Vec<crate::repository::job_run::NewJobRun> = Vec::new();
         for _ in 0..200 {
             recovered = repos
@@ -2703,8 +2561,7 @@ mod tests {
         );
     }
 
-    /// A row whose job is gone, or that is not safe to replay, is closed rather
-    /// than left to be retried forever.
+    /// A row whose job is gone, or that is not safe to replay, is closed.
     #[tokio::test]
     async fn recovery_closes_a_row_it_cannot_replay() {
         let (system, repos) = journal_system().await;
@@ -2772,8 +2629,7 @@ mod tests {
         );
     }
 
-    /// A `ChunkPolicy` on the registered job reaches the context, which is what
-    /// makes the deferral contract real rather than declarative.
+    /// A `ChunkPolicy` on the registered job reaches the context.
     #[test]
     fn the_chunk_policy_reaches_the_context() {
         let system = TaskSystem::new(TaskLimits::default(), CancellationToken::new());

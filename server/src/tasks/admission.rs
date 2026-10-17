@@ -1,37 +1,16 @@
 //! Measuring how busy the server is, and deciding whether a job may run.
 //!
-//! # Why this exists
-//!
-//! A background pass like garbage collection competes with the requests that
-//! pay for the server. Running it while someone is syncing makes both slower;
-//! running it never fills the disk. The workable compromise is to run it when
-//! the server is quiet, and to stop making progress when it is not.
-//!
-//! # Why observation alone is not enough
-//!
-//! tokio cannot preempt a running task: nothing outside a job can suspend it,
-//! lower its priority or take its CPU back. So a job only steps aside because it
-//! checks in — see [`JobContext::checkpoint`](super::context::JobContext::checkpoint)
-//! — and only shrinks because it reads
-//! [`JobContext::budget`](super::context::JobContext::budget). This module
-//! supplies the measurements; the contract that makes a job act on them is
-//! declared per job in [`spec::QuietPolicy`](super::spec::QuietPolicy) and
-//! enforced at registration.
-//!
-//! # Keeping a job from blocking itself
-//!
-//! The gauge separates *foreground* load (requests) from *background* load
-//! (jobs). Admission looks only at the foreground: a GC pass raises block I/O
-//! the moment it starts, so counting itself would make it defer forever.
+//! tokio cannot preempt a running task: a job steps aside only because it checks
+//! in at its checkpoints, and only shrinks because it reads its budget. Admission
+//! reads foreground load only — a job's own block I/O would otherwise make it
+//! defer forever.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
-/// What the server looked like at one moment.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LoadSnapshot {
-    /// Requests being served right now.
     pub inflight_requests: u64,
     /// Jobs running right now, which admission deliberately ignores.
     pub background_active: u64,
@@ -40,7 +19,6 @@ pub struct LoadSnapshot {
     pub db_max: u64,
     /// Worker threads busy, as a percentage.
     pub worker_busy_pct: u32,
-    /// Tasks waiting to be polled across the runtime.
     pub queue_depth: u64,
     pub alive_tasks: u64,
     /// Unix time the sample was taken, so a stale sample is visible.
@@ -76,10 +54,8 @@ impl Default for LoadThresholds {
 }
 
 impl LoadThresholds {
-    /// Whether every foreground signal is below its threshold.
-    ///
-    /// `background_active` is not consulted: a job is not a reason for another
-    /// job to wait, and counting it would let a long pass defer itself.
+    /// Whether every foreground signal is below its threshold; `background_active`
+    /// is not consulted, since counting it would let a long pass defer itself.
     pub fn is_calm(&self, snapshot: &LoadSnapshot) -> bool {
         snapshot.inflight_requests <= self.max_inflight_requests
             && snapshot.db_utilization() <= self.max_db_utilization
@@ -96,10 +72,8 @@ pub enum Admission {
     Defer,
 }
 
-/// RAII counter for work that is in flight.
-///
-/// Dropped on every path, including a panic, so a counter cannot leak and make
-/// the gauge read busy forever.
+/// RAII counter for work that is in flight, dropped on every path including a
+/// panic, so a leaked counter cannot make the gauge read busy forever.
 pub struct GaugeGuard {
     counter: Arc<AtomicU64>,
 }
@@ -210,21 +184,17 @@ impl LoadGauge {
         }
     }
 
-    /// Whether a sample is recent enough to act on.
-    ///
-    /// A sampler that stopped running must not look like a quiet server, or a
-    /// stalled gauge would read as permanent permission to run everything.
+    /// Whether a sample is recent enough to act on: a stalled sampler must not
+    /// read as a quiet server, which would be permanent permission to run
+    /// everything.
     pub fn is_fresh(&self, max_age: Duration, now: i64) -> bool {
         let at = self.snapshot().sampled_at;
         at > 0 && now.saturating_sub(at) <= max_age.as_secs() as i64
     }
 }
 
-/// The gate a running job checks at its checkpoints.
-///
-/// Shares the gauge and the switch, so a job's idea of "busy" is the same as
-/// the administrator's panel.
-/// Shared by every job, so the interior mutability is in an `Arc`.
+/// The gate a running job checks at its checkpoints; shared by every job, so
+/// its idea of "busy" is the same as the administrator's panel.
 #[derive(Clone)]
 pub struct YieldGate {
     inner: Arc<GateInner>,
@@ -294,20 +264,16 @@ impl YieldGate {
             .store(poll.as_millis().max(1) as u64, Ordering::Relaxed);
     }
 
-    /// Whether the server is calm enough for a parked job to continue.
-    ///
-    /// This — not the budget — is what a checkpoint tests: the budget is a
-    /// scaling hint and can round to full speed while the server is still over
-    /// a threshold of zero.
+    /// Whether the server is calm enough for a parked job to continue. A
+    /// checkpoint tests this, not the budget, which can round to full speed
+    /// while the server is still over a threshold of zero.
     pub fn is_calm(&self) -> bool {
         self.thresholds().is_calm(&self.inner.gauge.snapshot())
     }
 
-    /// How much of its normal work a job should attempt now.
-    ///
-    /// Full speed when the server is calm or the feature is off; below that it
-    /// scales with how far over the thresholds the worst signal is, down to a
-    /// tenth — enough to keep making progress without competing.
+    /// How much of its normal work a job should attempt now: full speed when the
+    /// server is calm or the feature is off, else scaled by the worst signal down
+    /// to a tenth.
     pub fn budget(&self) -> f32 {
         if !self.is_enabled() {
             return 1.0;
@@ -338,11 +304,9 @@ impl YieldGate {
         }
     }
 
-    /// Wait until the server is calm again, or until the run is cancelled.
-    ///
-    /// Returns `false` when the wait ended because of cancellation, so the
-    /// caller can turn it into a terminal state rather than silently carrying
-    /// on.
+    /// Wait until the server is calm again or the run is cancelled; `false` means
+    /// the wait ended because of cancellation, so the caller can turn it into a
+    /// terminal state.
     pub async fn wait_until_calm(&self, cancel: &tokio_util::sync::CancellationToken) -> bool {
         loop {
             if !self.is_enabled() || self.is_calm() {
@@ -371,10 +335,8 @@ fn ratio(value: u64, threshold: u64) -> f32 {
 }
 
 /// Tracks how long the server has been quiet, so a job starts in a lull rather
-/// than in the gap between two requests.
-///
-/// One tracker per job: the dwell a job wants is part of its own
-/// [`QuietPolicy`](super::spec::QuietPolicy).
+/// than in the gap between two requests. One tracker per job: the dwell a job
+/// wants is part of its own [`QuietPolicy`](super::spec::QuietPolicy).
 #[derive(Debug, Clone, Copy)]
 pub struct QuietTracker {
     /// When the current calm window began, or `None` before the first
@@ -393,10 +355,9 @@ impl QuietTracker {
         Self { calm_since: None }
     }
 
-    /// Whether the server has been calm for at least `min_idle_for_secs`.
-    ///
-    /// Records the observation either way, so a caller may poll this as often
-    /// as it likes.
+    /// Whether the server has been calm for at least `min_idle_for_secs`; the
+    /// observation is recorded either way, so a caller may poll this as often as
+    /// it likes.
     pub fn admits(
         &mut self,
         snapshot: &LoadSnapshot,
@@ -517,7 +478,6 @@ mod tests {
     fn a_job_waits_for_the_dwell_even_on_a_quiet_server() {
         let thresholds = LoadThresholds::default();
         let mut tracker = QuietTracker::new();
-        // The process starts; nothing has been busy yet, so the dwell starts now.
         assert_eq!(
             tracker.admits(&calm(), &thresholds, 30, 1_000),
             Admission::Defer

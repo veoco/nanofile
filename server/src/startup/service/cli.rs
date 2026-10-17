@@ -1,10 +1,8 @@
 //! `nanofile service …`: the command-line front-end for the SCM registration.
 //!
-//! The elevated helper the tray menu starts is this same subcommand, so its
-//! exit code is the tray's only report of what happened, and everything it
-//! prints is invisible in that case (a GUI-subsystem build has no console
-//! attached to it). Failures are therefore also logged and, for a human who
-//! ran it by hand, shown in a message box.
+//! The elevated helper the tray starts is this same subcommand and a
+//! GUI-subsystem build has no console attached, so failures are also logged
+//! and, for a human who ran it by hand, shown in a message box.
 
 use std::path::Path;
 
@@ -17,7 +15,6 @@ use super::windows::{
 use super::{ServiceAction, ServiceProbe};
 use crate::startup::login::{LoginEntry as _, PlatformLogin};
 
-/// `nanofile service …` entry point.
 pub(crate) fn run_cli(
     action: ServiceAction,
     config: &Config,
@@ -37,7 +34,7 @@ pub(crate) fn run_cli(
                 PasswordSource::Inline
             } else {
                 // Only a named account reaches the prompt, so the default
-                // (virtual) account never blocks `service install` on input.
+                // account never blocks `service install` on input.
                 PasswordSource::Prompt
             };
             let account = match super::account::resolve(&account, password, source) {
@@ -49,10 +46,8 @@ pub(crate) fn run_cli(
             };
 
             // The checks the tray runs before it asks for elevation, repeated
-            // here as the installing administrator and *before* the SCM is
-            // touched: a directory this process cannot write is a service that
-            // cannot start, and a registration nobody can use is worse than a
-            // refusal that names the path.
+            // here and *before* the SCM is touched: a registration that cannot
+            // write its own directory is worse than a refusal that names it.
             let input = super::preflight::Input::from_config(config, config_path);
             let preflight = super::preflight::run(&input);
             preflight.log();
@@ -91,10 +86,8 @@ pub(crate) fn run_cli(
             match uninstall(&input) {
                 Ok(()) => {
                     // Deliberately *not* re-creating the login entry: "remove the
-                    // service" means Nanofile no longer starts automatically, and
-                    // writing a startup registration the user did not ask for in
-                    // that command would be worse than starting from an honest
-                    // blank.
+                    // service" means Nanofile no longer starts automatically, and a
+                    // startup registration the user did not ask for is worse.
                     println!(
                         "Nanofile is no longer registered as a Windows service, and no longer \
                          starts automatically: install it again, or enable \"Start at login\" \
@@ -110,7 +103,6 @@ pub(crate) fn run_cli(
         }
         ServiceAction::Status => {
             let state = probe(config_path);
-            // Who it runs as is part of "is it registered the way I want":
             // `LocalSystem` is how the SCM records an absent account name.
             let account = registered_account().unwrap_or_else(|| ServiceAccount::System.label());
             match &state {
@@ -147,11 +139,8 @@ pub(crate) fn run_cli(
 
 /// Remove this installation's login entry: the service has replaced it.
 ///
-/// The tray does the same thing after a successful install; this is what makes
-/// `nanofile service install` mean the same as the menu item. Deliberately
-/// narrow — `retire_ours()` removes the entry only when it names this
-/// executable — because the elevated helper this command may *be* can have a
-/// different administrator's `HKCU` hive.
+/// Deliberately narrow (`retire_ours()` removes it only when it names this
+/// executable): the elevated helper can have a different administrator's `HKCU`.
 fn retire_login_entry(config_path: &Path) {
     let Ok(exe) = std::env::current_exe() else {
         return;

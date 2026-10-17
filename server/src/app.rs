@@ -1,23 +1,14 @@
 //! The HTTP application: which routes exist, and what wraps them.
 //!
-//! This lives in the library rather than in `main.rs` because the integration
-//! tests need it. `tests/` can only link a library target, so while the router
-//! was assembled inside the binary the test harness had to keep its own copy —
-//! and a change to the route tree (a new middleware, a route moved between
-//! groups) left the tests exercising a router the server does not run, with
-//! every test still green. There is one assembly now.
+//! It lives in the library rather than `main.rs` because `tests/` can only link
+//! a library target, and a second assembly inside the binary let the tests
+//! exercise a router the server does not run. There is one assembly now.
 //!
-//! Two entry points, and the difference between them is deliberate:
-//!
-//! * [`app_routes`] — the routing surface: every route, the per-group body
-//!   limits, CORS on the API group, the HTML error pages, the fallback. This is
-//!   what a test that cares about *what a request reaches* should build.
-//! * [`build_app`] — what the binary serves: `app_routes` plus the operational
-//!   layers (global body limits, tracing, the request timeout, security
-//!   headers).
-//!
-//! Neither returns a stated router: the caller applies `.with_state(state)`,
-//! which keeps `Arc<AppState>` out of the signature of every layer.
+//! [`app_routes`] is the routing surface: every route, the per-group body
+//! limits, CORS, the HTML error pages and the fallback. [`build_app`] adds the
+//! operational layers (global body limits, tracing, the request timeout,
+//! security headers). Neither returns a stated router: the caller applies
+//! `.with_state(state)`.
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
@@ -28,12 +19,9 @@ use std::sync::Arc;
 
 use crate::AppState;
 
-/// Path segments immediately preceding a capability token.
-///
-/// Routes such as `/f/{token}`, `/zip/{token}` and `/download-api/{token}` put
-/// the credential itself in the path, so logging the raw URI would write a
-/// usable token into the access log. That token is deliberately not paired with
-/// a session: whoever reads the log can replay it.
+/// Path segments immediately preceding a capability token. Routes such as
+/// `/f/{token}` and `/zip/{token}` carry the credential itself in the path, and
+/// it is deliberately unpaired with a session, so a logged URI is a replay.
 const TOKEN_PATH_PREFIXES: &[&str] = &[
     "f",
     "d",
@@ -52,10 +40,9 @@ const TOKEN_PATH_PREFIXES: &[&str] = &[
     "client-sso-link",
 ];
 
-/// Replace capability-token path segments with `{token}` for logging.
-///
-/// The query string is dropped by the caller; it may carry a share-link
-/// password or other credentials.
+/// Replace capability-token path segments with `{token}` for logging. The query
+/// string is dropped by the caller; it may carry a share-link password or other
+/// credentials.
 pub fn redact_request_path(path: &str) -> String {
     let segs: Vec<&str> = path.split('/').collect();
     let mut out = String::with_capacity(path.len());
@@ -73,14 +60,11 @@ pub fn redact_request_path(path: &str) -> String {
     out
 }
 
-/// `/health` — readiness, used by the container healthcheck and by anything
-/// that needs to wait for the listener without touching the API.
+/// `/health` — readiness, used by the container healthcheck and by anything that
+/// waits for the listener without touching the API.
 ///
 /// The body stays empty; the generation header is what the "restarting" page
-/// watches, because the listening socket survives an in-place restart and a
-/// plain 200 cannot tell the server that is going away from the one that
-/// replaced it. A proxy that strips the header degrades that page to waiting for
-/// any 200.
+/// watches, because a plain 200 cannot tell the old server from the new.
 pub async fn health_check() -> impl axum::response::IntoResponse {
     [(
         axum::http::HeaderName::from_static(crate::restart::GENERATION_HEADER),
@@ -90,15 +74,11 @@ pub async fn health_check() -> impl axum::response::IntoResponse {
 
 /// The route tree and every middleware that decides what a request reaches.
 ///
-/// Order matters in two places, both of them load-bearing:
-///
-/// * CORS is applied to the API group *before* it is merged. Applied to the
-///   finished router it would also wrap WebDAV, and tower-http's `CorsLayer`
-///   answers `OPTIONS` itself — which would shadow the `DAV:`/`Allow:` response
-///   WebDAV clients expect.
-/// * The error middleware wraps the page groups only. The endpoints the
-///   frontend fetches itself must keep answering with the wire protocol, and so
-///   must the API namespaces, sync, WebDAV and the static assets.
+/// Order matters twice: CORS is applied to the API group *before* it is merged,
+/// or it would also wrap WebDAV and `CorsLayer` would answer `OPTIONS` itself,
+/// shadowing the `DAV:`/`Allow:` responses WebDAV clients expect; and the error
+/// middleware wraps the page groups only, since the endpoints the frontend
+/// fetches itself must keep answering with the wire protocol.
 pub fn app_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     // Upload-capable route groups accept bodies up to `max_upload_size_mb`; the
     // global default in `build_app` is the much smaller JSON/Form cap.
@@ -112,10 +92,9 @@ pub fn app_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             crate::handler::web::web_api_routes()
                 .layer(DefaultBodyLimit::max(upload_body_limit))
                 // The upload/download/zip endpoints are fetched directly by the
-                // browser (and by clients on a different origin), so they need
-                // the same CORS handling as the API group — upstream's
-                // fileserver answers OPTIONS and sets
-                // `Access-Control-Allow-Origin` on every response.
+                // browser (and by clients on another origin), so they need the
+                // same CORS handling as the API group: upstream's fileserver
+                // answers OPTIONS and sets `Access-Control-Allow-Origin`.
                 .layer(cors_layer(&state.config().server)),
         )
         .merge(
@@ -134,9 +113,8 @@ pub fn app_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .merge(crate::webdav::webdav_routes().layer(DefaultBodyLimit::max(upload_body_limit)))
         .merge(crate::handler::avatar::image_routes())
         // Count work in flight, for the load gauge. Applied here rather than in
-        // `build_app` so the static-asset route below stays outside it: a page
-        // load fetching a dozen assets is not a busy server, and counting it
-        // would defer background work for no reason.
+        // `build_app` so the static-asset route stays outside it: a page load
+        // fetching a dozen assets is not a busy server.
         .layer(from_fn_with_state(
             state.clone(),
             crate::middleware::load_guard,
@@ -148,23 +126,19 @@ pub fn app_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
 }
 
 /// What the binary serves: [`app_routes`] plus the operational layers.
-///
-/// These are the layers a *deployment* wants rather than a route needs: the
-/// global body limits, request tracing with the path redacted, the whole-request
-/// timeout, and the security headers. They are separable because a test that is
-/// asking "does this request reach this handler" should not have to run on top
-/// of a tracer and a 10-minute timeout to find out.
+/// These are what a *deployment* wants rather than a route needs: the global
+/// body limits, request tracing with the path redacted, the whole-request
+/// timeout and the security headers. Separable so a route test need not run
+/// under a tracer and a 10-minute timeout.
 pub fn build_app(state: Arc<AppState>) -> Router {
     let config = &state.config().server;
 
     let app = app_routes(&state)
-        // The default for every route; the upload-capable groups raised their
-        // own limit in `app_routes`.
+        // The default for every route; upload-capable groups raised their own.
         .layer(DefaultBodyLimit::max(
             (config.max_json_body_mb * 1024 * 1024) as usize,
         ))
-        // A hard cap on what a client may send at all, checked before anything
-        // buffers it.
+        // Hard cap on what a client may send at all, checked before anything buffers it.
         .layer(tower_http::limit::RequestBodyLimitLayer::new(
             (config.max_upload_size_mb * 1024 * 1024) as usize,
         ))
@@ -186,9 +160,8 @@ pub fn build_app(state: Arc<AppState>) -> Router {
             crate::middleware::security_headers,
         ));
 
-    // Optionally bound how long a client may take to send the request body.
-    // Off by default: `request_timeout_secs` already caps the whole handler,
-    // including body reads.
+    // Optionally bound how long a client may take to send the request body. Off
+    // by default: `request_timeout_secs` already caps the whole handler.
     let app = if config.body_timeout_secs > 0 {
         app.layer(tower_http::timeout::RequestBodyTimeoutLayer::new(
             std::time::Duration::from_secs(config.body_timeout_secs),
@@ -201,10 +174,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
 }
 
 /// The `make_span` half of the trace layer: a span named from the request, with
-/// the path redacted.
-///
-/// A named type rather than a closure so the field list reads as one thing, and
-/// so the redaction has somewhere to be tested from.
+/// the path redacted. A named type so the redaction has somewhere to be tested.
 #[derive(Clone, Copy)]
 struct RedactingMakeSpan;
 
@@ -220,11 +190,9 @@ impl<B> tower_http::trace::MakeSpan<B> for RedactingMakeSpan {
     }
 }
 
-/// Build the CORS layer for the REST API.
-///
-/// `cors_origins()` returns `[site_url_origin()]` when the configured list is
-/// empty, so this always allows the same-origin site (and any explicitly
-/// configured origins).
+/// Build the CORS layer for the REST API. `cors_origins()` returns
+/// `[site_url_origin()]` when the configured list is empty, so the same-origin
+/// site is always allowed.
 fn cors_layer(config: &infra::config::ServerConfig) -> tower_http::cors::CorsLayer {
     use tower_http::cors::{AllowOrigin, CorsLayer};
 
@@ -288,8 +256,7 @@ mod tests {
             redact_request_path("/libraries/abc/files/sub/dir"),
             "/libraries/abc/files/sub/dir"
         );
-        // A prefix only counts as a prefix: a segment that merely contains one
-        // is not a token position.
+        // A segment that merely contains a prefix is not a token position.
         assert_eq!(redact_request_path("/files/abc/"), "/files/abc/");
         assert_eq!(redact_request_path("/"), "/");
     }

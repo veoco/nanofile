@@ -1,10 +1,6 @@
 /// Admin Web UI — the task pages: what is running, and what is registered.
-///
-/// Two pages rather than one. The run list is about this moment — what is
-/// running, what finished, how busy the server is — while the registry is about
-/// the jobs themselves, which only change when the server does. They were one
-/// page, and the result mixed a flat list of jobs and services with the history
-/// of their runs and a load panel in between.
+/// Two pages rather than one: the run list is about this moment, the registry
+/// about the jobs themselves, which only change when the server does.
 use askama::Template;
 use axum::{
     extract::{Path, Query, State},
@@ -45,14 +41,12 @@ pub struct RunsTemplate {
     pub runs: Vec<RunRow>,
     /// The job filter buttons: "everything", then the jobs the journal holds.
     pub job_filters: Vec<FilterChip>,
-    /// The verdict filter buttons.
     pub outcome_filters: Vec<FilterChip>,
-    /// Whether a filter is narrowing the list, which decides whether an empty
-    /// list means "nothing has happened" or "nothing matches".
+    /// Whether a filter is narrowing the list: an empty list then means
+    /// "nothing matches" rather than "nothing has happened".
     pub filtered: bool,
-    /// How long a run stays readable, in the reader's words. The journal's own
-    /// policy rather than a per-job setting: one bounded table is what the
-    /// system actually keeps.
+    /// How long a run stays readable, in the reader's words: the journal's
+    /// policy, not a per-job setting.
     pub retention_hint: String,
     pub load: LoadRow,
     pub error: Option<String>,
@@ -118,15 +112,11 @@ impl LoadRow {
     }
 }
 
-/// One run still in flight, from the in-memory run table.
-///
-/// The journal only holds what has finished, so a run that is happening now is
-/// nowhere else: without this the page could not answer "what is the server
-/// doing", which is the question the load panel above it raises.
+/// One run still in flight, from the in-memory run table: the journal only
+/// holds finished runs, so this is the only place a live run appears.
 pub struct ActiveRunRow {
     /// The full id, which is what the log line for this run carries.
     pub id: String,
-    /// The job's name, in the reader's language.
     pub name: String,
     pub state: StateBadge,
     /// The account that submitted it, named. The row's dim line.
@@ -137,7 +127,6 @@ pub struct ActiveRunRow {
     pub time_ts: i64,
     /// `started` or `submitted`: which time that is, as a test hook.
     pub time_key: &'static str,
-    /// That time's label, in the reader's language.
     pub time_label: String,
     /// What the run is doing now, in the job's own words.
     pub message: String,
@@ -157,42 +146,32 @@ pub struct RunRow {
     /// How long it took, when the row recorded both ends: a run whose start
     /// was never written has no duration, which is not a duration of zero.
     pub duration: Option<String>,
-    /// The job's own error, when the run did not succeed. Carried on the row
-    /// rather than only behind the disclosure: a failure is what the list is
-    /// scanned for.
+    /// The job's own error, when the run did not succeed: a failure is what
+    /// the list is scanned for.
     pub error: Option<String>,
     /// Items the run reported it processed, when it reports one.
     pub processed: Option<i64>,
     /// How many attempts the run took. Only more than one is worth a row.
     pub attempt: i32,
-    /// The job's own summary of what it did.
     pub summary: String,
 }
 
-/// The one state a row is in, as a badge.
-///
-/// The class and the label travel together so a state cannot be given a colour
-/// without also being given a name in the reader's language.
+/// The one state a row is in, as a badge: class and label travel together, so
+/// a state cannot get a colour without a name in the reader's language.
 pub struct StateBadge {
     pub class: &'static str,
     pub label: String,
 }
 
-/// One labelled policy of a job, shown in the row's disclosure.
-///
-/// These are the decisions an operator otherwise has to read the catalog to
-/// learn — how hard a job may push, and what happens when it stalls — and they
-/// are behind a disclosure because none of them changes what the list is for.
+/// One labelled policy of a job, shown in the row's disclosure: the decisions
+/// an operator would otherwise have to read the catalog to learn.
 pub struct DetailRow {
     pub label: String,
     pub value: String,
 }
 
-/// The job's own most recent report.
-///
-/// The prose is the job's rather than the page's, so it is shown as written:
-/// it is a diagnostic an operator greps the log for, and translating it would
-/// only make it harder to find there.
+/// The job's own most recent report, shown as written: an operator greps the
+/// log for this prose, and translating it would only make it harder to find.
 pub struct MessageRow {
     /// Whether the last run failed, which is what decides the colour.
     pub failed: bool,
@@ -203,7 +182,6 @@ pub struct MessageRow {
 pub struct RegisteredRow {
     /// Stable slug, used in the trigger URL and as the row's DOM handle.
     pub slug: String,
-    /// Human-readable name, in the reader's language.
     pub name: String,
     /// One sentence on what the row actually does.
     pub desc: String,
@@ -216,32 +194,25 @@ pub struct RegisteredRow {
     /// The verdict of the most recent run. `None` for a job that has never run
     /// and for every service.
     pub state: Option<StateBadge>,
-    /// Whether the row is a job that has never run, which says so instead of
-    /// showing zeroes.
+    /// Whether the row is a job that has never run, so it says so, not zeroes.
     pub never_run: bool,
     /// When the job last ran, as a raw stamp the browser renders. `None` for a
     /// service and for a job that has never run.
     pub last_run_ts: Option<i64>,
-    /// How long the last run took, when it reported a duration.
     pub last_duration: Option<String>,
-    /// Lifetime counters, shown inside the row's disclosure. Empty for a
-    /// service and for a job that has never run: zero and "no such number" must
-    /// not look the same.
+    /// Lifetime counters for the row's disclosure, empty for a service and for
+    /// a never-run job: zero and "no such number" must not look the same.
     pub counters: Vec<DetailRow>,
     /// The policies the job runs under, shown when the row is opened.
     pub details: Vec<DetailRow>,
     /// What the job reported last, if it has ever run.
     pub last_message: Option<MessageRow>,
-    /// Which group of the registry the row belongs to, as an index into
-    /// [`GROUP_ORDER`].
+    /// Which group of the registry the row belongs to, as an index into `GROUP_ORDER`.
     pub group_index: usize,
     /// The interval, when there is one, so the schedule group can be ordered.
     pub interval_secs: Option<u64>,
-    /// The job's translated name as a JSON object, for the confirmation dialog.
-    ///
-    /// Built here rather than interpolated into a JSON literal in the template:
-    /// a name with a quote in it would break that, and the browser decodes the
-    /// attribute back to exactly these bytes.
+    /// The job's translated name as a JSON object, built here because a name
+    /// with a quote in it would break a JSON literal in the template.
     pub confirm_args: String,
     /// Whether a manual trigger has a meaning. An on-demand job needs
     /// parameters a bare button cannot supply, and a service never finishes.
@@ -263,12 +234,8 @@ pub struct TaskGroup {
     pub rows: Vec<RegisteredRow>,
 }
 
-/// The groups the registry renders, in the order they are read.
-///
-/// Grouped by how a job comes to run rather than listed flat: a job a desktop
-/// client submits and a cleanup pass that runs every 30 seconds are not two
-/// rows of one list, and a flat list left the reader to work that out from a
-/// badge.
+/// The groups the registry renders, in the order they are read: grouped by how
+/// a job comes to run, not listed flat.
 const GROUP_ORDER: &[(&str, &str)] = &[
     ("periodic", "admin.task_periodic"),
     ("on_demand", "admin.task_on_demand"),
@@ -277,11 +244,8 @@ const GROUP_ORDER: &[(&str, &str)] = &[
     ("service", "admin.task_service"),
 ];
 
-/// Index of the group a job belongs to, matching [`GROUP_ORDER`].
-///
-/// An index rather than an id so a row cannot name a group that does not
-/// exist; the pairing is pinned by a test, because an index is only as good as
-/// the table it indexes.
+/// Index of the group a job belongs to, matching `GROUP_ORDER`: an index
+/// rather than an id, so a row cannot name a group that does not exist.
 fn trigger_group_index(trigger: Trigger) -> usize {
     match trigger {
         Trigger::Periodic { .. } => 0,
@@ -295,12 +259,8 @@ fn trigger_group_index(trigger: Trigger) -> usize {
 const SERVICE_GROUP_INDEX: usize = 4;
 
 /// A locale key of the form `admin.job_<slug>[_desc]` or
-/// `admin.service_<slug>[_desc]`.
-///
-/// Derived from the stable slug rather than tabulated here, exactly as the
-/// settings catalog derives `setting.<key>`: one place decides how a name is
-/// spelled, and the coverage test walks the declared keys, so a job cannot be
-/// added without a name in every language.
+/// `admin.service_<slug>[_desc]`, derived from the stable slug; the coverage
+/// test walks the declared keys, so a job cannot be added without a name.
 fn job_name_key(key: JobKey) -> String {
     key.name_key()
 }
@@ -317,10 +277,8 @@ fn service_desc_key(key: ServiceKey) -> String {
     key.desc_key()
 }
 
-/// The compact form of an interval: `1h`, `5m`, `30s`.
-///
-/// Deliberately unit-suffixed rather than spelled out, so one string reads the
-/// same in every language and no plural rule is needed.
+/// The compact form of an interval: `1h`, `5m`, `30s`, unit-suffixed so one
+/// string reads the same in every language and no plural rule is needed.
 fn interval_display(secs: u64) -> String {
     if secs >= 3600 {
         format!("{}h", secs / 3600)
@@ -363,11 +321,9 @@ fn trigger_icon(trigger: Trigger) -> &'static str {
     }
 }
 
-/// The verdict of a run, as a badge.
-///
-/// An unknown phase keeps its wire name and the neutral colour rather than
-/// disappearing: a state this page does not know yet is better shown than
-/// silently dropped, and the journal can outlive the phase set that wrote it.
+/// The verdict of a run, as a badge. An unknown phase keeps its wire name and
+/// the neutral colour rather than disappearing, since the journal can outlive
+/// the phase set that wrote it.
 fn state_badge(t: &I18n, phase: &str) -> StateBadge {
     let (class, label) = match phase {
         "queued" => ("badge-gray", t.tr("admin.run_state_queued")),
@@ -489,11 +445,8 @@ fn interrupt_label(t: &I18n, spec: &JobSpec) -> String {
     )
 }
 
-/// The most recent report the job left behind.
-///
-/// Derived from the last state rather than from whichever message is non-empty:
-/// the counters keep the last success and the last failure separately, so after
-/// a failure followed by a success both are set and only one is current.
+/// The most recent report the job left behind: the last state alone decides
+/// which of the kept messages is the current one.
 fn job_message(stats: &JobStats) -> Option<MessageRow> {
     let text = match stats.last_state.as_ref() {
         Some(JobState::Succeeded) => stats.last_success_message.clone(),
@@ -509,12 +462,8 @@ fn job_message(stats: &JobStats) -> Option<MessageRow> {
     })
 }
 
-/// The policies a job runs under.
-///
-/// Deliberately not every field of the spec: the visibility, dedup and
-/// idempotency rules are API and design contracts rather than things an
-/// operator decides anything from, and they stay in the catalog where the
-/// reasoning for them lives.
+/// The policies a job runs under, not every field of the spec: the visibility,
+/// dedup and idempotency rules stay in the catalog with their reasoning.
 fn job_details(spec: &JobSpec, t: &I18n) -> Vec<DetailRow> {
     let detail = |label_key: &str, value: String| DetailRow {
         label: t.tr(label_key).to_string(),
@@ -557,12 +506,8 @@ fn job_details(spec: &JobSpec, t: &I18n) -> Vec<DetailRow> {
     rows
 }
 
-/// The lifetime counters of a job that has run at least once.
-///
-/// Shown inside the row's disclosure rather than on the row: they are reference
-/// data, while the row is scanned for identity, schedule and the last verdict.
-/// A job that has never run has no counters to show, which is not the same as
-/// showing zeroes.
+/// The lifetime counters of a job that has run, shown in the row's disclosure;
+/// a job that never ran has none, which is not the same as showing zeroes.
 fn job_counters(stats: &JobStats, t: &I18n) -> Vec<DetailRow> {
     if stats.run_count == 0 {
         return Vec::new();
@@ -582,11 +527,8 @@ fn job_counters(stats: &JobStats, t: &I18n) -> Vec<DetailRow> {
     counters
 }
 
-/// How long the last run took, when the job reported one.
-///
-/// Zero is the absence of a duration rather than a duration of zero: a job that
-/// has run but reported no time has nothing to say, which the row shows as a
-/// dash so the column keeps its width.
+/// How long the last run took. Zero is the absence of a duration rather than a
+/// duration of zero; the row shows a dash so the column keeps its width.
 fn last_duration(stats: &JobStats) -> Option<String> {
     (stats.last_duration_ms > 0).then(|| format!("{}ms", stats.last_duration_ms))
 }
@@ -620,17 +562,12 @@ fn job_row(job: &RegisteredJob, stats: &JobStats, t: &I18n) -> RegisteredRow {
             Trigger::Periodic { interval_secs, .. } => Some(interval_secs),
             _ => None,
         },
-        // A manual or periodic job can be started with no input; an on-demand
-        // job needs parameters a bare button cannot supply.
         triggerable: matches!(spec.trigger, Trigger::Periodic { .. } | Trigger::Manual),
     }
 }
 
-/// Row for a long-lived service, which has counters of no kind.
-///
-/// Deliberately carries no state, no facts and no schedule beyond "it runs for
-/// as long as the server does": a service never finishes, so a run count and a
-/// last-run time for one would be numbers the system does not have.
+/// Row for a long-lived service: it never finishes, so a run count, a last-run
+/// time or a schedule beyond "while the server runs" would be invented numbers.
 fn service_row(key: ServiceKey, t: &I18n) -> RegisteredRow {
     RegisteredRow {
         slug: key.as_str().to_string(),
@@ -653,11 +590,8 @@ fn service_row(key: ServiceKey, t: &I18n) -> RegisteredRow {
     }
 }
 
-/// Sort rows into their groups, dropping the ones with nothing in them.
-///
-/// The schedule group is ordered by interval, shortest first: what runs every
-/// 30 seconds is what the reader came for, and registration order is the
-/// catalog's order rather than the reader's.
+/// Sort rows into their groups, dropping empty ones. The schedule group is
+/// ordered by interval, shortest first.
 fn build_groups(rows: Vec<RegisteredRow>) -> Vec<TaskGroup> {
     let mut groups: Vec<TaskGroup> = GROUP_ORDER
         .iter()
@@ -680,15 +614,13 @@ fn build_groups(rows: Vec<RegisteredRow>) -> Vec<TaskGroup> {
 }
 
 /// What a POST redirect lands with, so the page can confirm the action. An
-/// unrecognised value — a hand-typed URL, a stale bookmark — renders no banner
-/// rather than echoing the value back into the page.
+/// unrecognised value renders no banner rather than echoing it into the page.
 #[derive(Deserialize)]
 pub struct TasksQuery {
     pub action: Option<String>,
 }
 
-/// What the run list was asked to show. An unrecognised value is ignored, so a
-/// stale bookmark shows the whole list rather than an empty page.
+/// What the run list was asked to show; an unrecognised value shows everything.
 #[derive(Deserialize, Default)]
 pub struct RunsQuery {
     /// A job slug.
@@ -705,11 +637,8 @@ struct RunListChoice {
 }
 
 impl RunListChoice {
-    /// Read the choice out of a query string.
-    ///
-    /// Validated rather than trusted: the slug is checked as a slug and the
-    /// outcome against the two cases, so a hand-typed URL cannot ask the page
-    /// for something that does not exist.
+    /// Read the choice out of a query string, validated rather than trusted: a
+    /// hand-typed URL cannot ask the page for something that does not exist.
     fn from_query(query: &RunsQuery) -> Self {
         let kind = query
             .kind
@@ -730,9 +659,8 @@ impl RunListChoice {
         Self { kind, outcome }
     }
 
-    /// The list's own URL with one of the two choices replaced, keeping the
-    /// other: a page filtered by job and by outcome must be able to change one
-    /// without losing the other.
+    /// The list's own URL with one choice replaced, keeping the other, so a page
+    /// filtered by job and verdict can change one without losing the other.
     fn href(&self, kind: Option<&str>, outcome: Option<&str>) -> String {
         let mut params: Vec<String> = Vec::new();
         if let Some(kind) = kind.filter(|k| !k.is_empty()) {
@@ -749,8 +677,7 @@ impl RunListChoice {
     }
 }
 
-/// One filter button: what clicking it asks for, and whether it is the current
-/// choice.
+/// One filter button: what clicking it asks for, and whether it is current.
 pub struct FilterChip {
     /// The query value, empty for "everything", used as the row's DOM handle.
     pub id: String,
@@ -799,11 +726,8 @@ pub async fn registered_page(
     }
 }
 
-/// The reason a declared job is not registered here.
-///
-/// A match rather than a derived key, because a reason is a sentence rather
-/// than the name of a thing: it reads "notifications are switched off", which
-/// is not a form of words any naming rule would produce.
+/// The reason a declared job is not registered here, as a sentence rather than
+/// a name: no naming rule would produce "notifications are switched off".
 fn skip_reason_key(reason: SkipReason) -> &'static str {
     match reason {
         SkipReason::NotificationsOff => "admin.skip_no_notifications",
@@ -815,12 +739,8 @@ fn skip_reason_key(reason: SkipReason) -> &'static str {
     }
 }
 
-/// The name of the job a run belongs to.
-///
-/// A run outlives the job that wrote it: the journal is kept across upgrades
-/// and a job can be merged away or removed, so the lookup walks three steps —
-/// a job this build still runs, then a slug it retired but still names, then the
-/// slug itself, which is at least the truth about a row nobody can explain.
+/// The name of the job a run belongs to. A run outlives its job, so the lookup
+/// walks: a job this build runs, a retired slug it still names, the slug itself.
 fn run_name(slug: &str, t: &I18n) -> String {
     if let Some(key) = JobKey::from_slug(slug) {
         return t.tr(&job_name_key(key)).to_string();
@@ -832,18 +752,11 @@ fn run_name(slug: &str, t: &I18n) -> String {
 }
 
 /// How many of the newest finished runs are scanned for the jobs a reader can
-/// filter by.
-///
-/// A bounded window rather than a `GROUP BY`: the chips are for a reader
-/// looking at recent runs, and a job whose last run is older than the window is
-/// not something they are looking for here.
+/// filter by: a bounded window, not a `GROUP BY` over the journal.
 const KIND_WINDOW: u64 = 500;
 
-/// The verdict of a chosen filter as a query value.
-///
-/// Written out rather than derived from a wire name, because these are the two
-/// words the query string uses, and they are the same words the state badges
-/// are labelled with.
+/// The verdict of a chosen filter as a query value: written out because these
+/// are the words the query string and the state badges share.
 fn outcome_query(outcome: Option<RunOutcome>) -> Option<&'static str> {
     match outcome {
         Some(RunOutcome::Succeeded) => Some("succeeded"),
@@ -852,12 +765,8 @@ fn outcome_query(outcome: Option<RunOutcome>) -> Option<&'static str> {
     }
 }
 
-/// The job filter buttons: everything, then the jobs the journal actually
-/// holds, newest first.
-///
-/// The two groups are read one after the other, so each one's "everything" says
-/// which dimension it clears: two chips reading "All" side by side left the
-/// reader to work out which was which from where it sat.
+/// The job filter buttons: everything, then the jobs the journal holds, newest
+/// first. Each group's "everything" names the dimension it clears.
 fn kind_filters(choice: &RunListChoice, kinds: &[String], t: &I18n) -> Vec<FilterChip> {
     let mut chips = vec![FilterChip {
         id: String::new(),
@@ -893,10 +802,8 @@ fn outcome_filters(choice: &RunListChoice, t: &I18n) -> Vec<FilterChip> {
     .collect()
 }
 
-/// How far a run has got, as the run itself reports it.
-///
-/// `total` is optional because not every job can say: a reference copy is one
-/// tree update and one commit, so a percentage for it would be invented.
+/// How far a run has got, as the run reports it. `total` is optional: a job
+/// that cannot say would get an invented percentage.
 fn progress_value(run: &JobRun) -> String {
     match run.progress.total {
         Some(total) => format!("{} / {}", run.progress.done, total),
@@ -916,8 +823,7 @@ fn duration_display(secs: i64) -> String {
     }
 }
 
-/// The account behind each owner id, so the page names a submitter instead of
-/// printing a number.
+/// The account behind each owner id, so the page names the submitter.
 async fn owner_emails(state: &Arc<AppState>, ids: &[i32]) -> HashMap<i32, String> {
     if ids.is_empty() {
         return HashMap::new();
@@ -978,8 +884,7 @@ fn journal_row(row: &job_run::Model, owners: &HashMap<i32, String>, t: &I18n) ->
         owner: owner_label(t, owners, row.owner),
         finished_ts: row.finished_at,
         duration,
-        // The column is nullable and the phase is a separate field, so an empty
-        // string and "no error" are the same thing here.
+        // An empty string and "no error" are the same thing here.
         error: row.error.clone().filter(|error| !error.is_empty()),
         processed: row.processed,
         attempt: row.attempt,
@@ -995,17 +900,15 @@ async fn render_runs(
 ) -> Result<Response, AppError> {
     let t = I18n::get(user.language.as_deref());
 
-    // What is happening now, from the in-memory table. Every active run is
-    // shown: they are bounded by each job's own concurrency, not by a page
-    // size, and a truncated list of running work would be a lie.
+    // Every active run is shown: they are bounded by each job's own
+    // concurrency, not by a page size, and a truncated list would be a lie.
     let active_runs = state.tasks.store().list(&RunFilter {
         include_active: true,
         ..RunFilter::default()
     });
 
-    // What happened, from the durable journal. It survives a restart, which the
-    // in-memory table does not, and it holds every job whose subsystem asked to
-    // be remembered — filtered, if the reader asked for a job or a verdict.
+    // The durable journal, which survives a restart, filtered if the reader
+    // asked for a job or a verdict.
     let filter = RunHistoryFilter {
         kind: choice.kind.clone(),
         outcome: choice.outcome,
@@ -1016,9 +919,8 @@ async fn render_runs(
         .recent_matching(20, &filter)
         .await
         .unwrap_or_default();
-    // What the filter can offer is what the journal holds, not every job the
-    // server knows: a chip for a job with no rows would only ever show an empty
-    // page.
+    // What the filter can offer is what the journal holds: a chip for a job
+    // with no rows would only ever show an empty page.
     let kinds = state
         .repos
         .job_run
@@ -1026,8 +928,7 @@ async fn render_runs(
         .await
         .unwrap_or_default();
 
-    // One lookup for both lists, so a page of runs does not become a query per
-    // row.
+    // One lookup for both lists, so a page of runs is not a query per row.
     let mut owner_ids: Vec<i32> = active_runs.iter().filter_map(|run| run.owner).collect();
     owner_ids.extend(journal.iter().filter_map(|row| row.owner));
     owner_ids.sort_unstable();
@@ -1104,9 +1005,8 @@ async fn render_registered(
         .iter()
         .map(|job| job_row(job, &state.tasks.stats(job.spec.key), t))
         .collect();
-    // Services are listed too: they run in the same system and an administrator
-    // looking at this page wants to know they exist. They are not jobs, so they
-    // carry no counters — the row builder is what keeps that true.
+    // Services are listed too, since they run in the same system: they are not
+    // jobs, so they carry no counters — the row builder keeps that true.
     rows.extend(
         state
             .tasks
@@ -1116,10 +1016,8 @@ async fn render_registered(
     );
     let groups = build_groups(rows);
 
-    // A job or service this server does not run is the absence an operator
-    // notices first, so say which ones and why rather than leaving them out
-    // silently. The record carries the locale key of the name, so a missing
-    // service reads as a name like a missing job does.
+    // Say which declared jobs and services this server does not run, and why,
+    // rather than leaving them out silently.
     let skipped = state
         .tasks
         .skipped()
@@ -1154,11 +1052,8 @@ async fn render_registered(
     Ok(Html(html).into_response())
 }
 
-/// POST /sysadmin/tasks/{name}/trigger/ — run a job immediately.
-///
-/// The run is queued, not executed here: the old scheduler ran the whole job
-/// inside this request, so triggering GC meant holding an administrator's HTTP
-/// request open for its entire duration.
+/// POST /sysadmin/tasks/{name}/trigger/ — queue a job to run now: the run is
+/// submitted, not executed inside this request.
 pub async fn trigger_task(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -1175,8 +1070,7 @@ pub async fn trigger_task(
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
 
-    // No job by that slug is registered: re-render the registry with the
-    // reason rather than answering a browser form with the API's JSON error.
+    // No job by that slug: re-render the registry with the reason, not JSON.
     let Some(key) = JobKey::ALL
         .iter()
         .copied()
@@ -1198,8 +1092,7 @@ pub async fn trigger_task(
     }
 
     // Submitted as an operator's run: the record is the answer to the press, so
-    // it is kept even when the job finds nothing to do. No summary — the row
-    // names the job from its slug, and the job's own report says what it did.
+    // it is kept even when the job finds nothing to do. No summary.
     if let Err(e) = state
         .tasks
         .submit_system(
@@ -1236,10 +1129,8 @@ mod tests {
         [I18n::get(None), I18n::get(Some("zh"))]
     }
 
-    /// Every job the catalog declares must have a name, a description and a
-    /// group heading in every language. Derived keys mean a new job silently
-    /// gets no label, and `tr` falls back to the key, so the page would put
-    /// "admin.job_foo" in front of an operator.
+    /// Every job must have a name, a description and a group heading in every
+    /// language: a derived key means a new job would silently get no label.
     #[test]
     fn every_job_is_named_and_described_in_every_language() {
         for key in JobKey::ALL {
@@ -1263,8 +1154,7 @@ mod tests {
         }
     }
 
-    /// A group is named by the same word it is id'd by, so the two cannot drift
-    /// apart, and every heading is translated.
+    /// A group is named by the same word it is id'd by, so the two cannot drift apart.
     #[test]
     fn every_group_is_titled_in_every_language() {
         for (id, title_key) in GROUP_ORDER {
@@ -1275,8 +1165,7 @@ mod tests {
         }
     }
 
-    /// The same for the long-lived services, which are not jobs and so are not
-    /// covered by the catalog walk above.
+    /// The same for the long-lived services, which the catalog walk above misses.
     #[test]
     fn every_service_is_named_and_described_in_every_language() {
         for key in ServiceKey::ALL {
@@ -1294,8 +1183,7 @@ mod tests {
         }
     }
 
-    /// The derived key is the contract between a slug and its label, so pin the
-    /// shape rather than trusting the format string.
+    /// The derived key is the contract between a slug and its label, so pin the shape.
     #[test]
     fn a_slug_becomes_a_flat_locale_key() {
         assert_eq!(job_name_key(JobKey::GarbageCollection), "admin.job_gc");
@@ -1309,8 +1197,7 @@ mod tests {
         );
     }
 
-    /// A startup job used to be filed under "manual", which told the reader it
-    /// never runs on its own while it in fact runs at every start.
+    /// A startup job must not be filed under "manual", which says it never runs alone.
     #[test]
     fn a_startup_job_is_not_filed_under_manual() {
         assert_ne!(
@@ -1341,8 +1228,7 @@ mod tests {
             .collect()
     }
 
-    /// A row must not be dropped or listed twice by the grouping, and the
-    /// groups must come out in the order they are declared.
+    /// A row must not be dropped or listed twice, and the groups stay in order.
     #[test]
     fn every_job_lands_in_exactly_one_group() {
         let rows = all_rows(I18n::get(None));
@@ -1369,8 +1255,7 @@ mod tests {
     }
 
     /// The group index is only as good as the table it indexes, so pin which
-    /// group each trigger lands in — including that the group id is the same
-    /// word as the label key it is spelled from.
+    /// group each trigger lands in.
     #[test]
     fn a_group_index_names_the_group_its_trigger_belongs_to() {
         for trigger in [
@@ -1388,8 +1273,7 @@ mod tests {
         assert_eq!(GROUP_ORDER[SERVICE_GROUP_INDEX].0, "service");
     }
 
-    /// A service never finishes, so a run count or a last-run time for one
-    /// would be a number the system does not have.
+    /// A service never finishes, so a run count or a last-run time would be invented.
     #[test]
     fn a_service_row_carries_no_job_counters() {
         let t = I18n::get(None);
@@ -1406,8 +1290,7 @@ mod tests {
         }
     }
 
-    /// Zero and "no such number" must not look the same: a job that has never
-    /// run has no counters to show, which is not the same as showing zeroes.
+    /// Zero and "no such number" must not look the same.
     #[test]
     fn a_job_that_has_never_run_reports_no_counters() {
         let row = job_row(
@@ -1422,8 +1305,7 @@ mod tests {
         assert!(row.state.is_none());
     }
 
-    /// A job that has run reports labelled numbers in its disclosure, never a
-    /// bare triple — and the row itself carries only the last run.
+    /// A job that has run reports labelled numbers in its disclosure.
     #[test]
     fn a_job_that_has_run_reports_labelled_counters() {
         let stats = JobStats {
@@ -1461,8 +1343,7 @@ mod tests {
         assert_eq!(row.last_run_ts, Some(1_700_000_000));
         assert_eq!(row.last_duration.as_deref(), Some("250ms"));
     }
-    /// The schedule group reads shortest interval first, because that is the
-    /// order a reader looks for a job in.
+    /// The schedule group reads shortest interval first.
     #[test]
     fn the_schedule_group_reads_shortest_interval_first() {
         let t = I18n::get(None);
@@ -1500,21 +1381,19 @@ mod tests {
                 assert_ne!(badge.label, phase, "{phase} rendered its wire name");
                 assert!(badge.class.starts_with("badge-"));
             }
-            // A phase this build does not know keeps its name rather than
-            // disappearing: the journal can outlive the phase that wrote it.
+            // An unknown phase keeps its name rather than disappearing.
             assert_eq!(state_badge(t, "future_phase").label, "future_phase");
         }
     }
 
-    /// A run that outlives its job still has a name to show: the journal is
-    /// kept across upgrades, so a slug can name a job this build does not have.
+    /// A run that outlives its job still has a name to show.
     #[test]
     fn a_run_names_its_job_or_falls_back_to_its_slug() {
         let t = I18n::get(None);
         assert_eq!(run_name("gc", t), "Garbage collection");
         assert_eq!(run_name("retired-job", t), "retired-job");
-        // A slug this build retired still has a name, so the rows the journal
-        // kept under it do not read as code vocabulary.
+        // A slug this build retired still has a name, so its rows do not read
+        // as code vocabulary.
         assert_eq!(run_name("share-link-cleanup", t), "Share link cleanup");
         assert_eq!(
             run_name("temp-upload-cleanup", t),
@@ -1522,8 +1401,7 @@ mod tests {
         );
     }
 
-    /// A stale bookmark must not be able to ask for something that does not
-    /// exist: an unknown slug or verdict shows the whole list.
+    /// A stale bookmark must not ask for a slug or verdict that does not exist.
     #[test]
     fn a_filter_that_makes_no_sense_shows_everything() {
         let choice = RunListChoice::from_query(&RunsQuery {
@@ -1541,8 +1419,7 @@ mod tests {
         assert_eq!(choice.outcome, Some(RunOutcome::Failed));
     }
 
-    /// Each filter keeps the other: narrowing by job must not drop the verdict
-    /// the reader already chose.
+    /// Each filter keeps the other.
     #[test]
     fn a_filter_link_keeps_the_other_choice() {
         let choice = RunListChoice {
@@ -1561,8 +1438,7 @@ mod tests {
         );
     }
 
-    /// The buttons say which one is current, so the list explains why it is
-    /// short.
+    /// The buttons say which one is current.
     #[test]
     fn exactly_one_button_per_filter_is_current() {
         let t = I18n::get(None);
@@ -1573,8 +1449,7 @@ mod tests {
         let jobs = kind_filters(&choice, &["gc".to_string(), "reindex".to_string()], t);
         assert_eq!(jobs.len(), 3, "everything, then the jobs the journal holds");
         assert_eq!(jobs.iter().filter(|chip| chip.active).count(), 1);
-        // Each group's "everything" names the dimension it clears: two chips
-        // reading "All" next to each other were the same word twice.
+        // Each group's "everything" names the dimension it clears.
         assert_eq!(jobs[0].label, "All jobs");
         assert_eq!(jobs[1].label, "Garbage collection");
 
@@ -1591,8 +1466,7 @@ mod tests {
         assert_eq!(outcomes[1].label, "Succeeded");
     }
 
-    /// Every retired slug has a name in every language: its rows are still in
-    /// the journal, and only the name stays in the dictionary for them.
+    /// Every retired slug has a name in every language: its rows stay in the journal.
     #[test]
     fn every_retired_job_is_named_in_every_language() {
         for (slug, name_key) in crate::tasks::spec::RETIRED_JOBS {
@@ -1611,9 +1485,8 @@ mod tests {
         }
     }
 
-    /// A submitted run has no account when the server scheduled it, and an
-    /// account can be deleted while its runs stay in the journal; neither is a
-    /// number the page should print.
+    /// A submitted run has no account, and an account can be deleted while its
+    /// runs stay in the journal; neither should be printed as a number.
     #[test]
     fn a_run_names_its_submitter_or_says_why_it_cannot() {
         let t = I18n::get(None);
@@ -1633,8 +1506,7 @@ mod tests {
         assert_eq!(duration_display(3600), "60m");
     }
 
-    /// A run the job has not started counting for reports what it has done and
-    /// nothing invented about a total.
+    /// A run reports only the total it knows.
     #[test]
     fn progress_reports_only_the_total_the_run_knows() {
         let mut run = JobRun::queued(
@@ -1653,8 +1525,7 @@ mod tests {
         assert_eq!(progress_value(&run), "128 / 512");
     }
 
-    /// Every reason a declared job is missing has to be spelled out, or the
-    /// panel would print the key it looked the reason up by.
+    /// Every skip reason must be spelled out, or the panel prints the key.
     #[test]
     fn every_skip_reason_is_written_in_every_language() {
         for reason in SkipReason::ALL {
@@ -1666,9 +1537,8 @@ mod tests {
         }
     }
 
-    /// A job's counters and policies are written in the reader's language,
-    /// never left as the locale keys they were looked up by — `tr` falls back
-    /// to the key, so a missing string would otherwise be printed verbatim.
+    /// A job's counters and policies are written in the reader's language, never
+    /// left as the locale keys — `tr` falls back to the key.
     #[test]
     fn every_detail_is_written_in_the_reader_language() {
         // A run of everything, so the counters are not the empty case.
@@ -1707,8 +1577,7 @@ mod tests {
         }
     }
 
-    /// A job's policies are behind a disclosure, and a service has none to
-    /// disclose: it never finishes, so it has no timeout, retry or retention.
+    /// A job's policies are behind a disclosure; a service has none to disclose.
     #[test]
     fn a_service_has_no_policies_to_disclose() {
         let t = I18n::get(None);
@@ -1729,8 +1598,7 @@ mod tests {
         assert!(job.last_message.is_none(), "it has never run");
     }
 
-    /// The counters keep the last success and the last failure separately, so
-    /// only the one that matches the current state is the current report.
+    /// Only the message matching the current state is the current report.
     #[test]
     fn the_last_message_follows_the_last_state() {
         let mut stats = JobStats {
@@ -1752,9 +1620,8 @@ mod tests {
         assert_eq!(message.text, "no expired entries");
     }
 
-    /// The confirmation dialog names the job it will run, and the JSON is built
-    /// here rather than interpolated in the template, so a name containing a
-    /// quote cannot break it.
+    /// The JSON is built here rather than interpolated in the template, so a
+    /// name containing a quote cannot break it.
     #[test]
     fn the_confirm_args_are_json_naming_the_job() {
         let row = job_row(

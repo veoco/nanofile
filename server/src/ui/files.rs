@@ -17,12 +17,9 @@ use infra::common::util::{basename, parent_path_from};
 
 use super::auth_extractor::WebUser;
 
-/// Largest page number the file browser accepts. `page * per_page` is used as
-/// a slice offset, so the value must stay far away from `usize` overflow on
-/// 32-bit targets while still being unreachable in practice.
+/// Largest page number the file browser accepts. `page * per_page` is a slice
+/// offset, so it must stay far from `usize` overflow on 32-bit targets.
 const MAX_BROWSER_PAGE: u32 = 10_000;
-
-// ─── Templates ───────────────────────────────────────────────────────────────
 
 #[derive(Template)]
 #[template(path = "files/browser.html")]
@@ -37,35 +34,28 @@ pub struct FileBrowserTemplate {
     pub current_path: String,
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub entries: Vec<FileEntry>,
-    /// Whether the *currently rendered view* has content (drives the folder-level
-    /// empty state). For gallery-only renders `entries` is intentionally empty
-    /// (gallery is built from `gallery_groups`), so the empty state must be
-    /// view-aware instead of gating on `entries.is_empty()`.
+    /// Whether the *rendered view* has content. Gallery-only renders build from
+    /// `gallery_groups`, so `entries` stays empty and must not decide this.
     pub is_empty: bool,
     pub total: i64,
     pub has_more: bool,
-    /// Gallery paginates the media subset independently (mtime-desc), so its
-    /// total/has_more differ from the list/grid all-file counts.
+    /// Gallery paginates media separately (mtime-desc); these counts differ from
+    /// the list/grid all-file counts.
     pub gallery_total: i64,
     pub gallery_has_more: bool,
-    /// Photo/video split for the sort-bar summary shown in gallery mode.
     pub gallery_photo_total: i64,
     pub gallery_video_total: i64,
     pub page: u32,
-    /// "all" = render all three views (full page), "list" = only list,
-    /// "grid" = only grid, "gallery" = only gallery
+    /// "all" renders all three views; "list"/"grid"/"gallery" render only that one.
     pub render_view: &'static str,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
-    /// Maximum upload file size in MB, from server config.
     pub max_upload_size_mb: u64,
     pub sort_field: String,
     pub sort_order: String,
     pub gallery_groups: Vec<GalleryMonthGroup>,
-    /// Distinct tags used in the current folder, for the sort-bar filter.
     pub folder_tags: Vec<TagChip>,
-    /// The currently active tag filter (tag name), if any.
     pub current_tag: Option<String>,
 }
 
@@ -79,31 +69,20 @@ pub struct FileBrowserCoreTemplate {
     pub current_path: String,
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub entries: Vec<FileEntry>,
-    /// Whether the *currently rendered view* has content (drives the folder-level
-    /// empty state). For gallery-only renders `entries` is intentionally empty
-    /// (gallery is built from `gallery_groups`), so the empty state must be
-    /// view-aware instead of gating on `entries.is_empty()`.
     pub is_empty: bool,
     pub total: i64,
     pub has_more: bool,
-    /// Gallery paginates the media subset independently (mtime-desc), so its
-    /// total/has_more differ from the list/grid all-file counts.
     pub gallery_total: i64,
     pub gallery_has_more: bool,
-    /// Photo/video split for the sort-bar summary shown in gallery mode.
     pub gallery_photo_total: i64,
     pub gallery_video_total: i64,
     pub page: u32,
-    /// "all" = render all three views (full page), "list" = only list,
-    /// "grid" = only grid, "gallery" = only gallery
     pub render_view: &'static str,
     pub csrf_token: String,
     pub sort_field: String,
     pub sort_order: String,
     pub gallery_groups: Vec<GalleryMonthGroup>,
-    /// Distinct tags used in the current folder, for the sort-bar filter.
     pub folder_tags: Vec<TagChip>,
-    /// The currently active tag filter (tag name), if any.
     pub current_tag: Option<String>,
 }
 
@@ -120,11 +99,9 @@ pub struct PreviewTextTemplate {
     pub repo_id: String,
     /// Unified `/repos/...` URL the preview embeds (or links to).
     pub content_url: String,
-    /// The same URL with `?dl=1`, for the download action.
     pub download_url: String,
     pub parent_path: String,
-    /// Crumb trail ending at the file itself, for the shared breadcrumb
-    /// include (its last item renders as the non-link current page).
+    /// Crumb trail ending at the file; the last item is the current page, not a link.
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub size_display: String,
     pub active_page: &'static str,
@@ -142,13 +119,9 @@ pub struct PreviewImageTemplate {
     pub repo_name: String,
     pub file_name: String,
     pub repo_id: String,
-    /// Unified `/repos/...` URL the preview embeds (or links to).
     pub content_url: String,
-    /// The same URL with `?dl=1`, for the download action.
     pub download_url: String,
     pub parent_path: String,
-    /// Crumb trail ending at the file itself, for the shared breadcrumb
-    /// include (its last item renders as the non-link current page).
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub size_display: String,
     pub active_page: &'static str,
@@ -156,9 +129,8 @@ pub struct PreviewImageTemplate {
     pub current_repo_id: Option<String>,
 }
 
-/// Video/audio preview page. Embeds an HTML5 `<video>`/`<audio>` whose `src`
-/// points at the unified `/repos/...` content endpoint (Range-capable), so
-/// `/libraries/...` itself never serves media bytes.
+/// Video/audio preview page: the `<video>`/`<audio>` `src` points at the unified
+/// `/repos/...` content endpoint (Range-capable); `/libraries/...` never serves bytes.
 #[derive(Template)]
 #[template(path = "files/preview_media.html")]
 pub struct PreviewMediaTemplate {
@@ -169,13 +141,9 @@ pub struct PreviewMediaTemplate {
     pub repo_name: String,
     pub file_name: String,
     pub repo_id: String,
-    /// Unified `/repos/...` URL the preview embeds (or links to).
     pub content_url: String,
-    /// The same URL with `?dl=1`, for the download action.
     pub download_url: String,
     pub parent_path: String,
-    /// Crumb trail ending at the file itself, for the shared breadcrumb
-    /// include (its last item renders as the non-link current page).
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub size_display: String,
     pub active_page: &'static str,
@@ -183,8 +151,6 @@ pub struct PreviewMediaTemplate {
     pub current_repo_id: Option<String>,
     pub is_video: bool,
 }
-
-// ─── Data types ──────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 pub struct FileEntry {
@@ -194,15 +160,11 @@ pub struct FileEntry {
     pub size_display: String,
     pub mtime: i64,
     pub icon_color: &'static str,
-    /// Relative path for use in URL construction, e.g. "Documents/file.txt"
     pub relative_path: String,
-    /// Whether this file can be previewed inline (text/code/image).
     pub is_previewable: bool,
-    /// Whether this file/directory is starred by the current user.
     pub starred: bool,
     /// File extension in uppercase (e.g. "PDF", "PNG"), None for directories.
     pub extension: Option<String>,
-    /// `name` without its extension, for the two-tone "name + .ext" display.
     pub name_base: String,
     /// Lowercase dotted extension (e.g. ".pdf"), empty when there is none.
     pub ext_display: String,
@@ -213,13 +175,9 @@ pub struct FileEntry {
     pub image_thumbnail_url: Option<String>,
     /// Thumbnail URL for image/audio/video files at grid-view scale (256px), None otherwise.
     pub image_thumbnail_url_large: Option<String>,
-    /// Whether this file is a video (used for gallery/right-panel rendering).
     pub is_video: bool,
-    /// Whether this file is an audio file (inline playback + cover thumbnails).
     pub is_audio: bool,
-    /// Email of the user who last modified this entry.
     pub modifier_email: String,
-    /// Tags attached to this entry (name + color), for rendering tag chips.
     pub tags: Vec<TagChip>,
     /// Metadata record id (hex-encoded path) used by the tag editor APIs.
     pub record_id: String,
@@ -235,14 +193,12 @@ pub struct TagChip {
 /// A group of file entries belonging to the same calendar month, used by gallery view.
 #[derive(Clone)]
 pub struct GalleryMonthGroup {
-    /// Month label like "June 2026"
     pub label: String,
     /// Entries belonging to this month, sorted by mtime descending.
     pub entries: Vec<FileEntry>,
 }
 
-/// Returns true if the file extension indicates a video file.
-/// Used by gallery view to render video placeholders with play icon.
+/// Returns true if the extension is a video one; gallery renders a play placeholder.
 pub fn is_video_file(name: &str) -> bool {
     std::path::Path::new(name)
         .extension()
@@ -251,8 +207,7 @@ pub fn is_video_file(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Returns true if the file extension indicates an audio file.
-/// Used to enable inline playback and cover-art thumbnails.
+/// Returns true if the extension is an audio one; enables inline playback and covers.
 pub fn is_audio_file(name: &str) -> bool {
     std::path::Path::new(name)
         .extension()
@@ -274,8 +229,7 @@ pub fn format_month_label(t: &I18n, timestamp: i64) -> String {
         .unwrap_or_else(|| t.tr("common.unknown").to_string())
 }
 
-/// Group already-sorted (by mtime descending) entries by calendar month.
-/// Returns groups in descending month order (newest first).
+/// Group already-sorted (mtime desc) entries by calendar month, newest first.
 pub fn group_entries_by_month(t: &I18n, entries: Vec<FileEntry>) -> Vec<GalleryMonthGroup> {
     let mut groups: Vec<GalleryMonthGroup> = Vec::new();
     for entry in entries {
@@ -291,11 +245,9 @@ pub fn group_entries_by_month(t: &I18n, entries: Vec<FileEntry>) -> Vec<GalleryM
     groups
 }
 
-/// Sort file entries: directories always first, then by the specified field and order.
-/// Default field is "name", default order is "asc".
+/// Sort entries: directories always first, then by field ("name"/"mtime"/"size").
 pub fn sort_entries(entries: &mut [FileEntry], sort: &str, sort_order: &str) {
     entries.sort_by(|a, b| {
-        // Dirs always before files
         if a.entry_type != b.entry_type {
             return if a.entry_type == "dir" {
                 std::cmp::Ordering::Less
@@ -316,8 +268,6 @@ pub fn sort_entries(entries: &mut [FileEntry], sort: &str, sort_order: &str) {
     });
 }
 
-/// Build the full path (leading `/`) for a directory entry, matching the
-/// handler's prior `FileEntry` construction logic.
 fn entry_full_path(path: &str, name: &str) -> String {
     if path == "/" {
         format!("/{name}")
@@ -326,8 +276,7 @@ fn entry_full_path(path: &str, name: &str) -> String {
     }
 }
 
-/// Sort dirents exactly like `sort_entries` sorts `FileEntry`: directories
-/// always first, then by name/mtime/size with the requested order.
+/// Sort dirents exactly like `sort_entries` sorts `FileEntry`.
 fn sort_dirents(dirents: &mut [DirEntry], sort: &str, sort_order: &str) {
     dirents.sort_by(|a, b| {
         if a.entry_type != b.entry_type {
@@ -350,25 +299,13 @@ fn sort_dirents(dirents: &mut [DirEntry], sort: &str, sort_order: &str) {
     });
 }
 
-/// Thumbnail sizes the file browser asks for — the layout half of the story.
-///
-/// The values and the reasoning behind them live in `thumbnail_util`
-/// (`THUMBNAIL_SIZE_SMALL` / `THUMBNAIL_SIZE_LARGE`), next to
-/// `RETAINED_THUMBNAIL_SIZES`: the cache purge has to agree with this file
-/// about which sizes are still live.
-///
-/// Whether a dirent belongs in the gallery contact sheet.
-///
-/// Audio is deliberately excluded: a photo/video sheet has nothing to show for
-/// a sound file, and it stays reachable in the list and grid views. (The
-/// thumbnail endpoint also 404s for audio without cover art, so an included
-/// `.mp3` would only ever be a grey square with "MP3" on it.)
+/// Whether a dirent belongs in the gallery contact sheet. Audio is deliberately
+/// excluded; it stays reachable in the list and grid views.
 fn is_gallery_media_dirent(e: &DirEntry) -> bool {
     e.entry_type == "file" && (is_video_file(&e.name) || is_thumbnail_image(&e.name))
 }
 
-/// Build the display `FileEntry` for a single dirent (called only on the
-/// current page slice after sorting/pagination, so cost scales with page size).
+/// Build the display `FileEntry` for one dirent; page slice only, so cost stays bounded.
 fn build_file_entry(
     repo_id: &str,
     path: &str,
@@ -391,9 +328,8 @@ fn build_file_entry(
     let is_image_file = e.entry_type == "file" && is_thumbnail_image(&e.name);
     let entry_is_video = e.entry_type == "file" && is_video_file(&e.name);
     let entry_is_audio = e.entry_type == "file" && is_audio_file(&e.name);
-    // Images get in-process thumbnails; audio/video via ffmpeg (frame or
-    // embedded cover art). Audio without cover art falls back to an
-    // extension badge on the client (thumbnail endpoint returns 404).
+    // Images get in-process thumbnails; audio/video via ffmpeg (frame or embedded
+    // cover art). Audio without cover art falls back to a badge: the endpoint 404s.
     let needs_thumb = is_image_file || entry_is_video || entry_is_audio;
     let thumb_url = if needs_thumb {
         Some(format!(
@@ -416,12 +352,8 @@ fn build_file_entry(
         None
     };
     let (name_base, ext_display) = split_display_name(&e.name, &e.entry_type);
-    // How the grid/gallery should draw this entry, decided once here so the
-    // templates stay free of nested `if let` chains:
-    //   "dir"   folder glyph
-    //   "image" real thumbnail
-    //   "video" thumbnail if we have one, plus a play badge
-    //   "doc"   hairline outline box with a glyph + extension
+    // How the grid/gallery draws this entry, decided once so templates stay free
+    // of nested `if let` chains: "dir", "image", "video" or "doc".
     let tile_kind = if e.entry_type == "dir" {
         "dir"
     } else if entry_is_video {
@@ -455,8 +387,6 @@ fn build_file_entry(
     }
 }
 
-/// Group tag details into a per-path chip map plus the distinct tags used in
-/// the folder (for the sort-bar filter).
 fn build_tags_map(
     details: Vec<crate::repository::file_tag::TagOnPath>,
 ) -> (HashMap<String, Vec<TagChip>>, Vec<TagChip>) {
@@ -481,9 +411,7 @@ fn build_tags_map(
     (tags_by_path, folder_tags)
 }
 
-/// Returns true if the file extension is one that the thumbnail service supports
-/// for generating image thumbnails (in-process image formats, plus HEIC/HEIF/AVIF
-/// decoded via ffmpeg).
+/// Whether the thumbnail service decodes the extension: in-process images plus HEIC/HEIF/AVIF.
 fn is_thumbnail_image(name: &str) -> bool {
     std::path::Path::new(name)
         .extension()
@@ -492,32 +420,22 @@ fn is_thumbnail_image(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Every extension the Web UI opens in its image preview.
-///
-/// An image preview is an `<img>`, and every response carries
-/// `X-Content-Type-Options: nosniff`: the content type alone decides whether the
-/// picture paints. The client decides "image" a second time (see
-/// `QUICK_PREVIEW_IMAGE_EXTS` in `frontend/core/file-meta.js`), so this list,
-/// `MIME_BY_EXT` and that one are three statements of one fact — the unit tests
-/// below hold them together.
+/// Every extension the Web UI opens in its image preview. The client decides
+/// "image" a second time (see `QUICK_PREVIEW_IMAGE_EXTS` in `file-meta.js`), so
+/// this list and `MIME_BY_EXT` are one fact, held by the tests below.
 const PREVIEW_IMAGE_EXTS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "tiff", "tif", "heic", "heif", "avif",
 ];
 
-/// Extension → content type: the one place a served file's type comes from.
+/// Extension → content type: the one place a served file's type comes from, used
+/// by both `/repos/…` and WebDAV.
 ///
-/// A missing row is not a cosmetic header. Before `webp`, `bmp` and `svg` had
-/// one, the preview page asked for them and the browser refused to decode
-/// `application/octet-stream` next to `nosniff`, so those previews never
-/// painted. `mime_guess` serves both `/repos/…` and WebDAV, so a row here is the
-/// type every client sees.
-///
-/// `.html` and the other markup formats are `text/plain` on purpose: an uploaded
-/// document must never be served as a document in this origin. `.svg` is the one
-/// exception — it *is* an image type — which is why the response policy for it is
-/// `sandbox` (see `middleware::apply_security_headers`).
+/// A missing row is not cosmetic: `nosniff` makes the content type the only thing
+/// that lets an `<img>` paint. `.html` and the other markup formats are
+/// `text/plain` on purpose — an uploaded document must never be served as a
+/// document in this origin — while `.svg` *is* an image type, which is why its
+/// response policy is `sandbox` (see `middleware::apply_security_headers`).
 const MIME_BY_EXT: &[(&str, &str)] = &[
-    // Images — the preview set above, plus the favicon's own type.
     ("png", "image/png"),
     ("jpg", "image/jpeg"),
     ("jpeg", "image/jpeg"),
@@ -531,8 +449,6 @@ const MIME_BY_EXT: &[(&str, &str)] = &[
     ("heic", "image/heic"),
     ("heif", "image/heif"),
     ("avif", "image/avif"),
-    // Video and audio — the sets `thumbnail_util::is_video_ext` /
-    // `is_audio_ext` name.
     ("mp4", "video/mp4"),
     ("webm", "video/webm"),
     ("mov", "video/quicktime"),
@@ -550,8 +466,6 @@ const MIME_BY_EXT: &[(&str, &str)] = &[
     ("aac", "audio/aac"),
     ("wma", "audio/x-ms-wma"),
     ("pdf", "application/pdf"),
-    // Text and code — every extension the code-block preview shows. Markup is
-    // served as plain text so the browser never treats an upload as a document.
     ("txt", "text/plain; charset=utf-8"),
     ("md", "text/plain; charset=utf-8"),
     ("rs", "text/plain; charset=utf-8"),
@@ -582,7 +496,6 @@ const MIME_BY_EXT: &[(&str, &str)] = &[
 
 const OCTET_STREAM: &str = "application/octet-stream";
 
-/// The extension a name carries, or `None` when it has none.
 fn ext_of(name: &str) -> Option<&str> {
     std::path::Path::new(name)
         .extension()
@@ -598,9 +511,8 @@ fn mime_of(ext: &str) -> Option<&'static str> {
         .map(|(_, mime)| *mime)
 }
 
-/// Returns true if the file is a still image the browser can render in the
-/// full-page preview. Includes SVG (browser-native, no thumbnail) plus the
-/// ffmpeg-only formats (HEIC/HEIF/AVIF). Case-insensitive.
+/// Returns true for still images the browser can render in the full-page preview:
+/// SVG (browser-native, no thumbnail) plus the ffmpeg-only formats. Case-insensitive.
 fn is_preview_image_file(name: &str) -> bool {
     ext_of(name).is_some_and(|ext| {
         PREVIEW_IMAGE_EXTS
@@ -609,33 +521,21 @@ fn is_preview_image_file(name: &str) -> bool {
     })
 }
 
-/// Whether the file browser opens a file in the code block (or the image
-/// preview) instead of handing the bytes to the browser.
-///
-/// Serving a file as text is exactly what makes the code block able to show it,
-/// so this is one fact read off `MIME_BY_EXT`, not a second hand-written list
-/// that can drift out of step with it. Note that a hidden file with no extension
-/// of its own (`.txt`) is not previewable: every predicate here, like
-/// `is_video_file`/`is_audio_file`, reads the extension, not the name's suffix.
+/// Whether the browser opens a file in the code block (or image preview) instead
+/// of handing the bytes over: one fact read off `MIME_BY_EXT`, not a second list
+/// that can drift. A hidden file with no extension of its own is not previewable.
 pub fn is_previewable_file(name: &str) -> bool {
     is_preview_image_file(name) || mime_guess(name).starts_with("text/")
 }
 
-/// Colour class for the file-type badge.
-///
-/// Graphite is a zero-chroma UI: chromatic colour is reserved for semantic
-/// state (ok / warn / err), so file types no longer carry a per-kind hue. The
-/// function is kept because the badge is rendered from Rust-side class strings
-/// (which `build.rs` scans for Tailwind) in several templates.
+/// Colour class for the file-type badge: colour is reserved for semantic state, so
+/// file types carry no per-kind hue; `build.rs` still scans these strings for Tailwind.
 fn file_icon_color(_name: &str) -> &'static str {
     "text-ink-2"
 }
 
-/// Split a display name into its stem and a lowercase dotted suffix.
-///
-/// Mirrors `file_extension`'s rules — no suffix, or a suffix containing `/`, is
-/// not an extension — but additionally keeps dotfiles whole (`.bashrc` is a
-/// name, not a stem plus `.bashrc`).
+/// Split a display name into its stem and a lowercase dotted suffix, keeping
+/// dotfiles whole (`.bashrc` is a name, not a stem); see `file_extension` for the rules.
 fn split_display_name(name: &str, entry_type: &str) -> (String, String) {
     if entry_type != "file" {
         return (name.to_string(), String::new());
@@ -648,7 +548,6 @@ fn split_display_name(name: &str, entry_type: &str) -> (String, String) {
     }
 }
 
-/// Extract the uppercase file extension from a name, or None for no extension.
 fn file_extension(name: &str) -> Option<String> {
     let (_, ext) = name.rsplit_once('.')?;
     if ext.is_empty() || ext.contains('/') {
@@ -667,10 +566,6 @@ pub struct BreadcrumbItem {
 
 /// Crumb trail for a repo path, each item carrying the path up to and including
 /// itself (relative, no leading `/`, so it drops straight into a URL).
-///
-/// Used both for a directory (the browser's trail) and for a file (the preview
-/// page's trail, where the last crumb is the file and renders as the current
-/// page rather than a link).
 pub(crate) fn breadcrumbs_for(path: &str) -> Vec<BreadcrumbItem> {
     let mut breadcrumbs = Vec::new();
     if path == "/" {
@@ -694,8 +589,6 @@ pub(crate) fn breadcrumbs_for(path: &str) -> Vec<BreadcrumbItem> {
     breadcrumbs
 }
 
-// ─── Request types ───────────────────────────────────────────────────────────
-
 #[derive(Clone, Deserialize)]
 pub struct FileBrowserQuery {
     pub partial: Option<String>,
@@ -705,11 +598,8 @@ pub struct FileBrowserQuery {
     pub per_page: Option<u32>,
     pub sort: Option<String>,       // "name" | "mtime" | "size"
     pub sort_order: Option<String>, // "asc" | "desc"
-    /// Filter the current folder to entries carrying this tag name.
     pub tag: Option<String>,
 }
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 async fn verify_repo_access(
     member_repo: &dyn crate::repository::member::MemberRepository,
@@ -719,8 +609,6 @@ async fn verify_repo_access(
     crate::domain::permission::check_repo_read_permission(member_repo, repo_id, user_id).await?;
     Ok(())
 }
-
-// ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// GET /library/{id}/{name}/ — repo file browser (root).
 pub async fn file_browser_root(
@@ -746,12 +634,8 @@ pub async fn file_browser(
 
 /// `GET /library/{id}/{name}/` — seahub-compatible spelling of the library root.
 ///
-/// The desktop client's "view on website" hands this URL to the browser after
-/// auto-login (`seafile-client/src/ui/repo-tree-view.cpp:578` builds
-/// `/library/<repo-id>/<name>/`), and only the repository id is meaningful —
-/// seahub carries the name as a decorative second segment. Redirect to this
-/// server's own path so the address bar, bookmarks and every link rendered on
-/// the page settle on one canonical URL.
+/// The desktop client's "view on website" builds `/library/<repo-id>/<name>/`
+/// (`seafile-client/src/ui/repo-tree-view.cpp:578`) and only the id is meaningful.
 pub async fn library_redirect_root(
     Path((repo_id, _name)): Path<(String, String)>,
 ) -> Result<Redirect, AppError> {
@@ -765,13 +649,12 @@ pub async fn library_redirect_path(
     library_redirect(repo_id, Some(path))
 }
 
-/// Build the `/libraries/{id}/files/…` redirect, refusing anything that could
-/// not have come from a browser navigation.
+/// Build the `/libraries/{id}/files/…` redirect, refusing anything that could not
+/// have come from a browser navigation.
 ///
-/// The repository id and the path are both percent-decoded before they reach
-/// this function, so a `%0d%0a` must not be echoed into `Location`: the id is
-/// restricted to the alphabet repository ids actually use, and the path is
-/// normalized (rejecting `..`, NUL and friends) and re-encoded per segment.
+/// Id and path are both percent-decoded, so a `%0d%0a` must not be echoed into
+/// `Location`: the id is restricted to the alphabet repository ids use, and the
+/// path is normalized (rejecting `..`, NUL) and re-encoded per segment.
 fn library_redirect(repo_id: String, path: Option<String>) -> Result<Redirect, AppError> {
     if repo_id.is_empty()
         || !repo_id
@@ -805,17 +688,14 @@ async fn file_browser_inner(
     let repos = &state.repos;
     verify_repo_access(state.repos.member.as_ref(), user.user_id, &repo_id).await?;
 
-    // Get repo name
     let repo_record = repos
         .repo
         .find_by_id(&repo_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
 
-    // Media / image / text extensions are unambiguously files — serve the
-    // preview page directly instead of first attempting (and failing) a
-    // directory listing. If the name is actually a directory (misleading
-    // extension), the preview errors and we fall back to the listing below.
+    // Media / image / text extensions are unambiguously files: serve the preview page
+    // directly; if the name is a directory the preview errors and we fall back.
     let file_name = path.rsplit('/').next().unwrap_or("");
     if is_video_file(file_name) || is_audio_file(file_name) || is_previewable_file(file_name) {
         match serve_file(
@@ -829,26 +709,20 @@ async fn file_browser_inner(
         {
             Ok(resp) => return Ok(resp.into_response()),
             Err(_) => {
-                // Not actually a file — fall through to the directory listing.
+                // Not a file — fall through to the directory listing.
             }
         }
     }
 
-    // Try to list directory entries from the FS object tree.
-    // If the path points to a file (not a directory), fall through to file serving.
-    // For the root path `/`, treat errors as an empty directory (repo may be empty).
+    // List directory entries from the FS object tree; a path that is a file falls
+    // through to file serving. For root `/`, errors mean an empty repo.
     let entries_result =
         crate::service::fs::dir::list_dir_from_fs_tree(repos, &repo_id, &path).await;
 
     let entries_data = match entries_result {
         Ok(data) => data,
-        Err(_e) if path == "/" => {
-            // Root path listing failed → render empty directory (empty repo).
-            (String::new(), vec![])
-        }
+        Err(_e) if path == "/" => (String::new(), vec![]),
         Err(AppError::NotFound(_)) => {
-            // Path doesn't resolve as a directory — likely points to a file.
-            // Fall through to file serving.
             return serve_file(user, state, repo_id, path, query)
                 .await
                 .map(IntoResponse::into_response);
@@ -859,16 +733,14 @@ async fn file_browser_inner(
         }
     };
 
-    // Pagination / view state must be known before deciding how wide the tag
-    // and star lookups need to be. Both bounds are clamped: `page` is
-    // multiplied by `per_page` below, so an unbounded value is one request away
-    // from an overflow (panic in debug, absurd OFFSET in release).
+    // Pagination state is needed before the tag/star lookup width can be decided.
+    // Both bounds are clamped: `page` is multiplied by `per_page`, so an unbounded
+    // value is one request away from an overflow (panic in debug, huge OFFSET).
     let per_page = query.per_page.unwrap_or(200).clamp(1, 500) as usize;
     let page = query.page.unwrap_or(1).clamp(1, MAX_BROWSER_PAGE) as usize;
 
-    // Full-page loads always render all three views so view switching is a pure
-    // client-side class toggle with no network round-trip. Partial reloads
-    // (pagination / post-mutation refresh) render only the requested view.
+    // Full-page loads render all three views so view switching is a pure client-side
+    // class toggle. Partial reloads (pagination, post-mutation) render only one view.
     let is_partial = query.partial.as_deref() == Some("1");
     let render_view = if is_partial {
         match query.view.as_deref() {
@@ -881,26 +753,19 @@ async fn file_browser_inner(
         "all"
     };
 
-    // Sort: directories first, then by configurable field and order
     let sort_field = query.sort.as_deref().unwrap_or("name");
     let sort_order = query.sort_order.as_deref().unwrap_or("asc");
 
     let has_tag_filter = query.tag.as_deref().map(|t| !t.is_empty()).unwrap_or(false);
 
-    // Tag lookups must cover the whole folder whenever the sort-bar needs the
-    // folder's full tag set (full-page `view=all`) or a tag filter has to scan
-    // the whole folder before paginating. Single-view partial loads (pagination
-    // via load-more) render only the current page, and the client discards the
-    // sort-bar from those responses, so the lookup can be narrowed to the page.
+    // Tag lookups cover the whole folder when the sort-bar needs its full tag set
+    // (`view=all`) or a filter must scan before paginating; partials narrow to the page.
     let needs_full_tags = has_tag_filter || render_view == "all";
 
-    // Sort/filter/paginate on the lightweight dirent level first, then build
-    // `FileEntry` only for the current page slice. This keeps the cost
-    // proportional to the page size instead of the whole folder.
+    // Sort/filter/paginate on lightweight dirents first, then build `FileEntry`
+    // only for the page slice: cost tracks page size, not folder size.
     let mut dirents = entries_data.1;
 
-    // Batch-load tags so each row can render its tag chips and the sort-bar
-    // filter knows which tags exist in the folder.
     let mut tags_by_path: HashMap<String, Vec<TagChip>> = HashMap::new();
     let mut folder_tags: Vec<TagChip> = Vec::new();
     if needs_full_tags {
@@ -929,7 +794,6 @@ async fn file_browser_inner(
 
     let total = dirents.len() as i64;
 
-    // list/grid view: sort dirents, then keep only the current page slice.
     let mut list_slice: Vec<&DirEntry> = Vec::new();
     let has_more: bool = if render_view == "list" || render_view == "grid" || render_view == "all" {
         sort_dirents(&mut dirents, sort_field, sort_order);
@@ -946,9 +810,7 @@ async fn file_browser_inner(
         false
     };
 
-    // Gallery view: media dirents sorted by mtime desc, independently
-    // paginated. Gallery keeps reverse-chronological order regardless of the
-    // configured sort used by list/grid views.
+    // Gallery: media dirents paginate on their own, always mtime-desc.
     let mut gallery_slice: Vec<&DirEntry> = Vec::new();
     let mut gallery_photo_total: i64 = 0;
     let mut gallery_video_total: i64 = 0;
@@ -977,8 +839,7 @@ async fn file_browser_inner(
         0
     };
 
-    // The star lookup always covers only the page; the tag lookup is narrowed
-    // to the page too unless the sort-bar / tag filter needs the whole folder.
+    // The star lookup covers only the page; so does the tag lookup unless it needs the folder.
     let mut page_paths: Vec<String> = Vec::with_capacity(list_slice.len() + gallery_slice.len());
     for d in &list_slice {
         page_paths.push(entry_full_path(&path, &d.name));
@@ -999,7 +860,6 @@ async fn file_browser_inner(
         (tags_by_path, folder_tags) = build_tags_map(tag_details);
     }
 
-    // Query starred entries for the current page slice to stamp the `starred` field.
     let starred_set: HashSet<String> = repos
         .starred
         .find_by_user_repo_and_paths(user.user_id, &repo_id, &page_paths)
@@ -1008,8 +868,6 @@ async fn file_browser_inner(
         .map(|s| s.path.trim_end_matches('/').to_string())
         .collect();
 
-    // Build FileEntry only for the current page (list/grid rows, then the
-    // gallery media slice); both views share the same tag/star maps.
     let entries: Vec<FileEntry> = list_slice
         .iter()
         .map(|d| build_file_entry(&repo_id, &path, d, &starred_set, &tags_by_path))
@@ -1022,19 +880,13 @@ async fn file_browser_inner(
             .collect(),
     );
 
-    // Gallery paginates the media subset independently (mtime-desc); expose
-    // both the all-file counts (list/grid) and the media counts (gallery) to
-    // the template so each view container carries its own pagination state.
+    // Each view container carries its own counts: all-file (list/grid) and media (gallery).
     let gallery_has_more = page * per_page < gallery_total as usize;
 
-    // The folder-level empty state applies to list/grid/all renders. In gallery-only
-    // mode `entries` is intentionally empty (gallery is built from `gallery_groups`),
-    // so gating on `entries.is_empty()` would wrongly show the empty-folder state for
-    // every media folder; the gallery container renders its own "no photos or videos".
+    // The folder-level empty state applies to list/grid/all renders only: in
+    // gallery-only mode `entries` is empty by design.
     let is_empty = render_view != "gallery" && entries.is_empty();
 
-    // Build breadcrumb items from current_path.
-    // Each item's path is relative (no leading /) for use in URL construction.
     let breadcrumbs = breadcrumbs_for(&path);
 
     let csrf_token =
@@ -1116,8 +968,7 @@ const PATH_SAFE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMER
     .remove(b'.')
     .remove(b'~');
 
-/// Build the unified `/repos/{repo}/files/{path}` content URL, percent-encoding
-/// each path segment (matching the browser-side `encodeURIComponent` per segment).
+/// Build the unified `/repos/{repo}/files/{path}` content URL, percent-encoding each segment.
 fn content_url(repo_id: &str, path: &str, dl: bool) -> String {
     let encoded = encode_repo_path(path);
     let mut url = format!("/repos/{repo_id}/files/{encoded}");
@@ -1127,8 +978,7 @@ fn content_url(repo_id: &str, path: &str, dl: bool) -> String {
     url
 }
 
-/// Percent-encode a repository path for use in a URL, keeping the `/`
-/// separators: every segment goes through [`PATH_SAFE`] individually.
+/// Percent-encode a repository path for a URL, keeping the `/` separators.
 fn encode_repo_path(path: &str) -> String {
     path.trim_start_matches('/')
         .split('/')
@@ -1138,7 +988,6 @@ fn encode_repo_path(path: &str) -> String {
 }
 
 /// Serve a file directly from the repo (preview or download).
-/// Called by `file_browser_inner` when the path points to a file, not a directory.
 async fn serve_file(
     user: WebUser,
     state: Arc<AppState>,
@@ -1162,14 +1011,12 @@ async fn serve_file(
     let is_text = is_previewable_file(&file_name);
 
     if !is_video && !is_audio && !is_image && !is_text {
-        // Non-preview binary files — redirect to the unified content endpoint.
-        // The browser inlines/downloads per Content-Type exactly as before, but
-        // /libraries/ itself never serves bytes.
+        // Non-preview binary files redirect to the unified content endpoint: the
+        // browser inlines/downloads per Content-Type, `/libraries/` serves no bytes.
         return Ok(Redirect::to(&content_url(&repo_id, &path, false)).into_response());
     }
 
-    // Everything the three preview pages share. They render inside the normal
-    // app shell (topbar + library tree), so this is only the page body.
+    // Page context shared by the three preview pages, which render inside the app shell.
     let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
     let size_display = get_file_size(&state.db, &state.repos, &repo_id, &path)
         .await
@@ -1185,7 +1032,6 @@ async fn serve_file(
     let parent_path = parent_path_from(&path).trim_start_matches('/').to_string();
     let content = content_url(&repo_id, &path, false);
     let download = content_url(&repo_id, &path, true);
-    // The trail ends at the file, so the last crumb renders as the current page.
     let breadcrumbs = breadcrumbs_for(&path);
     let html = if is_video || is_audio {
         PreviewMediaTemplate {
@@ -1275,7 +1121,6 @@ async fn get_file_size(
     let file_name = basename(path);
 
     if parent_path == "/" {
-        // Root-level file: resolve from root's directory listing
         let dir_data = crate::fs::core::read_fs_dir_data(repos, repo_id, &head_root_id)
             .await
             .map_err(|e| AppError::Internal(format!("read parent failed: {e}")))?;
@@ -1302,21 +1147,13 @@ async fn get_file_size(
         .ok_or_else(|| AppError::NotFound("File not found".to_string()))
 }
 
-// ─── Utilities ───────────────────────────────────────────────────────────────
-
-/// The content type a served file is sent with.
-///
-/// A lookup in [`MIME_BY_EXT`], case-insensitively: a phone camera writes
-/// `IMG_0001.MOV` as readily as `.mp4`, and matching the raw name served those
-/// as `application/octet-stream` — a header that tells every client the bytes
-/// are neither media nor text, and that sits next to `nosniff`.
+/// The content type a served file is sent with: a case-insensitive [`MIME_BY_EXT`]
+/// lookup, falling back to `application/octet-stream` next to `nosniff`.
 pub(crate) fn mime_guess(filename: &str) -> &'static str {
     ext_of(filename).and_then(mime_of).unwrap_or(OCTET_STREAM)
 }
 
-/// Percent-encode a URL path segment for use in query parameters.
 fn urlencode_path(path: &str) -> String {
-    // Encode everything except unreserved characters (RFC 3986)
     percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC).to_string()
 }
 
@@ -1324,8 +1161,6 @@ fn urlencode_path(path: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Extensions arrive in whatever case the camera chose; the content type is
-    /// what tells a client whether the bytes are media, text or a download.
     #[test]
     fn mime_guess_ignores_extension_case() {
         assert_eq!(mime_guess("clip.mp4"), "video/mp4");
@@ -1336,15 +1171,11 @@ mod tests {
         assert_eq!(mime_guess("scan.BMP"), "image/bmp");
         assert_eq!(mime_guess("shot.WEBP"), "image/webp");
         assert_eq!(mime_guess("notes.TXT"), "text/plain; charset=utf-8");
-        // Unknown stays unknown rather than being guessed at.
         assert_eq!(mime_guess("archive.bin"), "application/octet-stream");
     }
 
-    /// A previewable image must arrive as an image: the preview is an `<img>`
-    /// and `nosniff` makes the content type the only thing that lets it paint.
-    /// This is the guard for the formats that used to be served as
-    /// `application/octet-stream` (webp, bmp, svg, tiff, heic/heif, avif) and so
-    /// never rendered.
+    /// A previewable image must arrive as `image/*`: the preview is an `<img>` and
+    /// `nosniff` makes the content type the only thing that lets it paint.
     #[test]
     fn every_preview_image_has_an_image_type() {
         for ext in PREVIEW_IMAGE_EXTS {
@@ -1354,7 +1185,6 @@ mod tests {
                 assert!(mime.starts_with("image/"), "{name} is served as {mime}");
             }
         }
-        // Named, so a regression names the reported formats rather than a list.
         assert_eq!(mime_guess("logo.svg"), "image/svg+xml");
         assert_eq!(mime_guess("scan.bmp"), "image/bmp");
         assert_eq!(mime_guess("shot.webp"), "image/webp");
@@ -1369,8 +1199,7 @@ mod tests {
         }
     }
 
-    /// An uploaded document is never served as a document: that is the row that
-    /// would turn a stored file into same-origin markup.
+    /// An uploaded document is never served as a document — that would be same-origin markup.
     #[test]
     fn markup_is_served_as_text() {
         assert_eq!(mime_guess("page.html"), "text/plain; charset=utf-8");
@@ -1378,9 +1207,7 @@ mod tests {
         assert_eq!(mime_guess("script.js"), "text/plain; charset=utf-8");
     }
 
-    /// Text is previewable because it is served as text — the two are one fact,
-    /// not two lists. The formats the code block shows keep their row, and a
-    /// file with no extension of its own does not gain one.
+    /// Text is previewable because it is served as text — one fact, not two lists.
     #[test]
     fn previewable_text_is_the_text_the_server_serves() {
         for name in ["notes.log", "data.csv", "main.go", "app.ts", "pkg.ini"] {
@@ -1397,9 +1224,7 @@ mod tests {
         }
     }
 
-    /// The quick-preview dialog decides "image" a second time in JavaScript and
-    /// points `<img src>` at the same endpoint, so a format added on one side must
-    /// not silently skip the other. Read from the source rather than duplicated.
+    /// The quick-preview dialog decides "image" a second time in JavaScript: keep both in step.
     #[test]
     fn the_quick_preview_image_list_matches() {
         let js = include_str!("../../frontend/core/file-meta.js");
@@ -1419,9 +1244,7 @@ mod tests {
         assert_eq!(list.as_slice(), PREVIEW_IMAGE_EXTS);
     }
 
-    /// The trail is shared by the browser (a directory) and the full-page
-    /// preview (a file, whose own name is the last crumb): each item carries the
-    /// path up to and including itself, relative and URL-ready.
+    /// Each crumb carries the path up to and including itself; see `breadcrumbs_for`.
     #[test]
     fn breadcrumbs_accumulate_the_path() {
         assert!(breadcrumbs_for("/").is_empty());
@@ -1563,7 +1386,6 @@ mod tests {
         assert_eq!(entries[1].name, "m_dir");
         assert_eq!(entries[2].name, "z_file");
 
-        // Also verify with mtime sort
         sort_entries(&mut entries, "mtime", "desc");
         assert_eq!(entries[0].entry_type, "dir");
         assert_eq!(entries[1].entry_type, "dir");

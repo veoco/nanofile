@@ -1,31 +1,24 @@
 //! Capture and presentation of the `User-Agent` a session was created with.
 //!
-//! A browser session has no `device_name` to identify it, so the login's
-//! `User-Agent` is the only thing that tells the owner *which* session a row in
-//! the inventory is. It is stored raw (bounded and stripped of control
-//! characters) rather than as a parsed label, so improving the parser later
-//! improves every existing row instead of only new ones.
+//! A browser session has no `device_name`, so the raw `User-Agent` (bounded and
+//! stripped of control characters) is what identifies a row to its owner; storing
+//! it raw lets a better parser improve existing rows too.
 
 use axum::http::HeaderMap;
 
-/// Longest `User-Agent` kept. Real ones are well under 200 characters; the
-/// bound stops a client from turning every session row into a large blob.
+/// Longest `User-Agent` kept; the bound stops a client from bloating every session row.
 const MAX_USER_AGENT_LEN: usize = 512;
 
-/// Read the request's `User-Agent`, bounded and stripped of control characters.
-///
-/// Returns `None` when the header is missing, not valid UTF-8, or empty after
-/// cleaning — all of which mean "nothing worth showing".
+/// Read the request's `User-Agent`, bounded and stripped of control characters;
+/// `None` when the header is missing, invalid UTF-8, or empty after cleaning.
 pub fn from_headers(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(axum::http::header::USER_AGENT)?.to_str().ok()?;
     sanitize(raw)
 }
 
-/// Bound the value and remove anything that could break a rendered page.
-///
-/// A stored label is echoed back into HTML by askama, which escapes it, so this
-/// is defence in depth rather than the only guard: control characters would
-/// still corrupt the log line and the layout.
+/// Bound the value and remove control characters, which would corrupt the log
+/// line and the layout. Askama escapes the rendered value, so this is defence in
+/// depth rather than the only guard.
 pub fn sanitize(raw: &str) -> Option<String> {
     let cleaned: String = raw
         .chars()
@@ -43,15 +36,11 @@ pub fn sanitize(raw: &str) -> Option<String> {
 /// Longest raw fallback kept when the browser cannot be recognised.
 const MAX_FALLBACK_LEN: usize = 48;
 
-/// Turn a stored `User-Agent` into something a person can act on.
+/// Turn a stored `User-Agent` into a label naming the browser and platform.
 ///
-/// The point of the label is letting the owner decide "is this me?", so it has
-/// to name the browser and the platform. Ordering matters and is the whole
-/// subtlety of the parser: every Chromium derivative also claims `Chrome/`, and
-/// Chrome on iOS claims `Safari/`, so the most specific token is tested first.
-///
-/// An unrecognised agent falls back to a bounded prefix of the raw value, which
-/// still distinguishes two rows from each other — better than printing nothing.
+/// Ordering is the whole subtlety: every Chromium derivative also claims
+/// `Chrome/`, and Chrome on iOS claims `Safari/`, so the most specific token is
+/// tested first; an unknown agent falls back to a bounded raw prefix.
 pub fn describe(raw: &str) -> String {
     let browser = if raw.contains("Edg/") || raw.contains("EdgA/") {
         "Edge"
@@ -88,7 +77,6 @@ pub fn describe(raw: &str) -> String {
     format!("{browser} · {platform}")
 }
 
-/// A bounded, single-line excerpt for an agent the parser does not know.
 fn fallback(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -177,8 +165,7 @@ mod tests {
         }
     }
 
-    /// A browser or platform the parser does not know must still produce
-    /// something that tells two rows apart.
+    /// An unknown agent must still produce something that tells two rows apart.
     #[test]
     fn unknown_agents_fall_back_to_a_bounded_excerpt() {
         assert_eq!(describe("curl/8.5.0"), "curl/8.5.0");
@@ -193,8 +180,7 @@ mod tests {
         assert_eq!(describe("   "), "");
     }
 
-    /// Chrome on iOS claims both `Safari/` and `Mac OS X`; the specific tokens
-    /// have to win, or every iPhone shows up as desktop Safari.
+    /// Chrome on iOS claims both `Safari/` and `Mac OS X`; the specific tokens must win.
     #[test]
     fn specific_tokens_win_over_the_generic_ones() {
         let ios_chrome = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) \

@@ -13,8 +13,6 @@ use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
-// ─── Query ───────────────────────────────────────────────────────────────
-
 #[derive(serde::Deserialize)]
 pub struct TrashQuery {
     pub page: Option<u32>,
@@ -28,8 +26,6 @@ pub struct TrashQuery {
     pub lib_deleted: Option<bool>,
     pub libs_deleted: Option<bool>,
 }
-
-// ─── Template ────────────────────────────────────────────────────────────
 
 #[derive(Template)]
 #[template(path = "trash/list.html")]
@@ -78,8 +74,6 @@ pub struct DeletedRepoView {
     pub deleted_time_ts: i64,
 }
 
-// ─── Handlers ───────────────────────────────────────────────────────────
-
 /// GET /trash/ — global trash listing across all accessible repos.
 pub async fn trash_list_page(
     user: WebUser,
@@ -110,7 +104,6 @@ pub async fn trash_list_page(
         .await?
     };
 
-    // Format items for display
     let items: Vec<TrashEntryView> = result
         .items
         .into_iter()

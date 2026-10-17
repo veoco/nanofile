@@ -33,9 +33,9 @@ use crate::AppState;
 
 /// Build the web UI route tree.
 ///
-/// Web UI routes serve only GET requests (page browsing, file preview, download).
-/// All mutation operations (rename, delete, upload, etc.) are handled by the
-/// frontend JavaScript calling the Seafile-compatible API (`/api/v2.1/`, `/api2/`).
+/// These routes serve only GET (page browsing, preview, download); mutations
+/// (rename, delete, upload) go through the frontend JavaScript calling the
+/// Seafile-compatible API (`/api/v2.1/`, `/api2/`).
 pub fn ui_routes() -> Router<Arc<AppState>> {
     Router::new()
         // Auth — Seahub path /accounts/login/
@@ -50,7 +50,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/accounts/register/",
             get(auth::register_page).post(auth::register),
         )
-        // Password reset
         .route(
             "/accounts/password/reset/",
             get(auth::password_reset_page).post(auth::password_reset),
@@ -72,19 +71,16 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/client-login/",
             get(client_login::client_token_login).post(client_login::client_token_login_confirm),
         )
-        // SSO local-browser — browser entry + confirm pages
         .route("/client-sso/{token}/", get(sso::client_sso))
         .route(
             "/client-sso/{token}/complete/",
             get(sso::client_sso_complete_page).post(sso::client_sso_complete),
         )
-        // Libraries — root redirect and listing (GET only)
         .route(
             "/",
             get(|| async { axum::response::Redirect::to("/libraries/") }),
         )
         .route("/libraries/", get(repos::list_repos))
-        // Trash — global trash page (GET only)
         .route("/trash/", get(trash::trash_list_page))
         // Library file browser — root and sub-paths (GET only)
         // Both trailing-slash variants are registered explicitly because
@@ -95,16 +91,13 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         .route("/libraries/{id}/files/{*path}", get(files::file_browser))
         // Seahub-compatible library URL: the desktop client's "view on website"
         // opens `/library/<repo-id>/<name>/…` (`repo-tree-view.cpp:578`), so the
-        // singular spelling has to resolve for that flow to work. The id is
-        // authoritative (the name segment is decorative) and both are redirected
-        // to this server's own `/libraries/{id}/files/…` path.
+        // singular spelling has to resolve; the id is authoritative.
         .route("/library/{id}/{name}", get(files::library_redirect_root))
         .route("/library/{id}/{name}/", get(files::library_redirect_root))
         .route(
             "/library/{id}/{name}/{*path}",
             get(files::library_redirect_path),
         )
-        // Shares — page listing (GET only)
         .route("/shares/", get(shares::list_shares))
         .route("/shares/create/", axum::routing::post(shares::create_share))
         .route(
@@ -115,7 +108,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/shares/upload/{token}/delete/",
             axum::routing::post(shares::delete_upload),
         )
-        // Profile / Settings — one shell, entered from any of its pages.
         .route("/settings/", get(settings::settings_page))
         .route("/settings/profile/", get(settings::profile_page))
         .route("/settings/security/", get(settings::security_page))
@@ -164,7 +156,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/settings/language/",
             axum::routing::post(settings::update_language),
         )
-        // Unified API keys
         .route("/settings/api-keys/", get(api_keys::list_page))
         .route(
             "/settings/api-keys/create/",
@@ -178,7 +169,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/settings/api-keys/{id}/revoke/",
             axum::routing::post(api_keys::revoke),
         )
-        // Invitation codes
         .route(
             "/settings/invitations/",
             get(invitations::list_invitations).post(invitations::generate_invitation),
@@ -187,7 +177,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/settings/invitations/{id}/delete/",
             axum::routing::post(invitations::delete_invitation),
         )
-        // Avatar upload (the legacy path stays an alias of the profile one)
         .route(
             "/settings/profile/avatar/",
             axum::routing::post(settings::upload_avatar),
@@ -196,7 +185,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/settings/avatar/",
             axum::routing::post(settings::upload_avatar),
         )
-        // Two-Factor Authentication
         .route("/settings/two-factor/", get(two_factor::setup_page))
         .route(
             "/settings/two-factor/setup/",
@@ -217,11 +205,8 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         // Starred items — page listing only (GET).
         // Star/unstar is handled by JS via /api/v2.1/starred-items/.
         .route("/starred/", get(starred::starred_page))
-        // File activities
         .route("/activities/", get(activities::activities_page))
-        // Search
         .route("/search/", get(search::search_page))
-        // Admin — user management
         .route("/sysadmin/users/", get(sysadmin::sysadmin_page))
         .route(
             "/sysadmin/users/create/",
@@ -235,7 +220,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/sysadmin/users/{user_id}/delete/",
             axum::routing::post(sysadmin::delete_user),
         )
-        // Admin — share management
         .route("/sysadmin/shares/", get(adminshares::list_all_shares))
         .route(
             "/sysadmin/shares/share/{token}/delete/",
@@ -245,7 +229,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/sysadmin/shares/upload/{token}/delete/",
             axum::routing::post(adminshares::delete_upload),
         )
-        // Admin — task pages: what is running, and what is registered.
         .route("/sysadmin/tasks/", get(admintasks::runs_page))
         .route(
             "/sysadmin/tasks/registered/",
@@ -255,8 +238,7 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/sysadmin/tasks/{name}/trigger/",
             axum::routing::post(admintasks::trigger_task),
         )
-        // Admin — system management: every setting that can be managed at
-        // runtime, one page per area. `{section}` is validated against the
+        // Admin — system management. `{section}` is validated against the
         // catalog, so an unknown one lands on the first page rather than 404ing.
         .route("/sysadmin/settings/", get(system_settings::settings_page))
         .route(
@@ -306,8 +288,6 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             axum::routing::post(email::delete_message),
         )
 }
-
-// ── Shared display helpers ─────────────────────────────────────────────
 
 /// Format a byte count as a human-readable size (`B`/`KB`/`MB`/`GB`/`TB`).
 pub use infra::common::util::format_size;

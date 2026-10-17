@@ -1,6 +1,5 @@
-//! Linux tray backend: tray-icon on top of GTK + libayatana-appindicator.
-//! GTK must be initialized on the same thread that creates the tray and runs
-//! its main loop — this is the process' main thread.
+//! Linux tray backend: tray-icon on top of GTK + libayatana-appindicator. GTK
+//! init, tray creation and the main loop all happen on the process' main thread.
 
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -11,8 +10,7 @@ pub(super) fn run(
     quit_tx: UnboundedSender<crate::TrayCommand>,
     client_mode: bool,
 ) -> ! {
-    // A stale DISPLAY (e.g. from an old SSH session) makes GTK init fail —
-    // degrade to headless instead of taking the server down.
+    // A stale DISPLAY (old SSH session) makes GTK init fail; degrade to headless.
     if let Err(e) = gtk::init() {
         tracing::error!("Failed to initialize GTK, running headless: {e}");
         super::park_forever();
@@ -26,9 +24,8 @@ pub(super) fn run(
     };
     super::notify::started(client_mode);
 
-    // Follow the desktop between light and dark while we run. The handlers hold
-    // a clone of the (reference-counted) tray icon, so this binding only has to
-    // cover the case where the theme signals could not be connected.
+    // Follow the desktop between light and dark: the handlers hold a clone of the
+    // reference-counted icon, so the binding below only covers a failed connect.
     super::theme::watch(&tray);
 
     gtk::main();

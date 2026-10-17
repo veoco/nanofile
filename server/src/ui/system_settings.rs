@@ -1,17 +1,12 @@
-//! Admin Web UI — system management: every setting that can be managed at
-//! runtime, on one page per area.
+//! Admin Web UI — system management: every runtime setting, one page per area.
 //!
 //! The page is *data-driven*: it renders the catalog (`infra::settings::CATALOG`)
-//! rather than naming fields, so a setting cannot exist without appearing here.
-//! A page is rendered as its groups (`infra::settings::GROUPS`), and each row
-//! says what the setting does, where its effective value came from — the
-//! environment, the config file, the database, or the built-in default — and the
-//! one state it is in: waiting for a restart, needing one, or read-only.
+//! rather than naming fields, so a setting cannot exist without appearing here,
+//! and each row says what the setting does, where its effective value came from,
+//! and the one state it is in.
 //!
-//! What the page deliberately cannot do is unchanged from the rest of the admin
-//! area: read-only settings (the master secret, the database URL, the state
-//! directories) are shown but not editable, and a secret is never rendered back —
-//! only replaced or cleared.
+//! Read-only settings (the master secret, the database URL, the state
+//! directories) are shown but not editable, and a secret is never rendered.
 
 use askama::Template;
 use axum::{
@@ -33,59 +28,42 @@ use infra::settings::{Apply, Kind, Origin, Section, SettingDef};
 
 use super::auth_extractor::WebUser;
 
-/// One row of the page.
 pub struct SettingRow {
     pub key: String,
-    /// The locale key, so the template renders the label.
     pub label_key: String,
-    /// Everything the filter matches this row against: the key, the label and
-    /// the help sentence, so a half-remembered name, a config key and a word
-    /// from the description all find it.
+    /// Everything the filter matches this row against.
     pub search_text: String,
-    /// The one sentence that says what this setting does. Every catalog entry
-    /// has one in both languages; `every_catalog_string_is_translated` is what
-    /// keeps it that way, because a row with only a label is a row an operator
-    /// has to guess at.
+    /// The one sentence that says what this setting does, in both languages;
+    /// `every_catalog_string_is_translated` keeps it that way.
     pub help: String,
-    /// The unit the value is expressed in, already translated. The label does
-    /// not repeat it.
+    /// The unit the value is expressed in, already translated.
     pub unit: Option<String>,
-    /// The form control: `bool`, `number`, `text`, `enum`, `list`, `path`,
-    /// `secret`.
+    /// The form control: `bool`, `number`, `text`, `enum`, `list`, `path`, `secret`.
     pub control: &'static str,
     /// The value the control starts with (never a secret's value).
     pub value: String,
     pub checked: bool,
-    /// The `<option>`s of an enum control, with the current one already marked:
-    /// deciding that here keeps the template free of string comparisons.
+    /// The `<option>`s of an enum control, with the current one marked.
     pub options: Vec<SelectOption>,
     /// The form field name is the key for a value, prefixed for a secret.
     pub field: String,
-    /// Where the effective value came from: `environment`, `config`,
-    /// `database`, `default`.
+    /// Where the effective value came from: `environment`, `config`, `database`, `default`.
     pub origin: &'static str,
-    /// The origin badge's tooltip: the `config.toml` key that supplied the
-    /// value, or who saved it. The badge says the kind, and this says which one
-    /// — on hover, because a page of keys is a page nobody reads.
+    /// The origin badge's tooltip: the `config.toml` key that supplied the value,
+    /// or who saved it.
     pub origin_title: String,
     /// The `NANOFILE_*` variable the value came from, when the environment owns
-    /// it. This is the one piece of provenance a row prints as text: it is also
-    /// the only one an operator has to go and change.
+    /// it: the only provenance a row prints as text.
     pub env_var: Option<String>,
-    /// The `NANOFILE_*` variable that would override this setting, whether or
-    /// not it currently owns the value. Printed on every row, so the pages are
-    /// also the environment-variable reference — an operator reaching a
-    /// container has no other place to look one up. The template renders this
-    /// only when [`Self::env_var`] did not, so a variable is named exactly once.
+    /// The `NANOFILE_*` variable that would override this setting, printed on every
+    /// row unless [`Self::env_var`] already named it, so a variable appears once.
     pub env_name: Option<String>,
     /// Unix seconds of the last save, for a database-sourced value.
     pub origin_at: Option<i64>,
-    /// The value in the config file, when a saved value is superseding it —
-    /// otherwise an operator editing the file sees no effect and no reason why.
+    /// The value in the config file, when a saved value is superseding it.
     pub config_value: Option<String>,
     /// The one state the row is in, by precedence: waiting for a restart
-    /// outranks needing one, which outranks being read-only. A row that said
-    /// all of them at once said none of them.
+    /// outranks needing one, which outranks being read-only.
     pub state_badge: Option<StateBadge>,
     /// Only the environment or the config file can set this.
     pub locked: bool,
@@ -97,32 +75,25 @@ pub struct SettingRow {
     pub secret_broken: bool,
 }
 
-/// The badge for the one state a row is in.
 pub struct StateBadge {
-    /// `badge-red` for something the operator still has to do, `badge-gray`
-    /// otherwise.
+    /// `badge-red` for something the operator still has to do, `badge-gray` otherwise.
     pub class: &'static str,
     pub label: String,
 }
 
 /// One group of rows on a page, ready for the template.
-///
-/// A page is rendered as its groups rather than as one flat list, so a heading
-/// and the rows under it can be hidden together when the page is filtered.
 pub struct SettingGroup {
     pub id: &'static str,
     pub title_key: &'static str,
     pub rows: Vec<SettingRow>,
 }
 
-/// One `<option>` of an enum control.
 pub struct SelectOption {
     pub value: String,
     pub label: String,
     pub selected: bool,
 }
 
-/// One entry of the section navigation.
 pub struct SectionLink {
     pub id: &'static str,
     pub label_key: &'static str,
@@ -153,25 +124,22 @@ pub struct SystemSettingsTemplate {
     pub section_subtitle_key: &'static str,
     pub sections: Vec<SectionLink>,
     pub groups: Vec<SettingGroup>,
-    /// How many rows this page holds, for the filter's "12 of 47" count. Counted
-    /// here rather than in the template because Askama has no fold.
+    /// How many rows this page holds, for the filter's "12 of 47" count.
     pub row_count: usize,
     /// Keys whose saved value supersedes a config-file entry that disagrees.
     pub drift_keys: Vec<String>,
     pub pending_restart: Vec<String>,
-    /// Keys only a full process restart applies, shown apart from the ones the
-    /// header's restart button does cover.
+    /// Keys only a full process restart applies, shown apart from the rest.
     pub pending_process_restart: Vec<String>,
     pub policy: PolicyView,
     pub error: Option<String>,
     pub success: Option<String>,
-    /// The page is the "restarting" notice rather than the settings form: the
-    /// browser polls `/health` and comes back to `restart_return`.
+    /// The page is the "restarting" notice: the browser polls `/health` and comes
+    /// back to `restart_return`.
     pub restarting: bool,
     pub restart_return: String,
-    /// The generation this page was rendered by. The browser only reloads once
-    /// `/health` reports a *different* one, so it cannot mistake the server
-    /// that is still shutting down for the one that came back.
+    /// The generation this page was rendered by. The browser reloads only once
+    /// `/health` reports a *different* one, not the server still shutting down.
     pub restart_generation: u64,
     /// Why the last in-place restart kept the previous listener, if it did.
     pub restart_error: Option<String>,
@@ -179,17 +147,11 @@ pub struct SystemSettingsTemplate {
     pub sandbox: Option<SandboxView>,
 }
 
-/// What this host actually gives, for the Sandbox page.
+/// What this host actually gives, for the Sandbox page: one band per measured
+/// profile, each with its own state and four items.
 ///
-/// One band per profile the page measured, each with its own state and its own
-/// four items. Every value comes from the report a confined child printed, so the
-/// page cannot claim protection the host does not provide, and the master switch
-/// is the page's *other* input rather than the thing the measurement was taken
-/// under.
-///
-/// There is no verdict above the bands: a sentence summarising them would only
-/// repeat what each band's state badge and each item's row already say, which is
-/// the duplication this page exists without.
+/// Every value comes from the report a confined child printed, so the page cannot
+/// claim protection the host does not provide; the master switch is separate.
 pub struct SandboxView {
     /// The profiles the page measured, in the order it lists them.
     pub profiles: Vec<SandboxProfileView>,
@@ -205,12 +167,9 @@ pub struct SandboxProfileView {
     /// One line naming what the profile serves, already translated.
     pub uses: String,
     pub icon: &'static str,
-    /// Whether the host answered for this profile at all.
-    ///
-    /// Not the same question as the state, which says whether it runs. A probe
-    /// that never reported leaves the band with a state and nothing under it, and
-    /// the page has to be read as "this host was never asked" rather than as "this
-    /// profile has no protections".
+    /// Whether the host answered for this profile at all: not the same question
+    /// as the state, which says whether it runs. A probe that never reported
+    /// leaves the band with a state and nothing under it.
     pub measured: bool,
     pub state: SandboxStateView,
     /// The four items, in the order the report carries them.
@@ -219,14 +178,12 @@ pub struct SandboxProfileView {
 
 /// Whether one profile runs, and why not when it does not.
 ///
-/// The state is not the same question as an item: a profile can have every
-/// protection and still not run — because an administrator switched it off, or
-/// because the one feature it serves has a switch of its own — and a profile can
-/// run while an item is missing, which is what the items below say.
+/// Not the same question as an item: a profile can have every protection and not
+/// run, and can run with one missing.
 pub struct SandboxStateView {
     pub label: String,
     /// `badge-green` when it runs, `badge-red` when the host cannot, `badge-gray`
-    /// when a setting or a missing helper is the reason.
+    /// otherwise.
     pub class: &'static str,
     /// Why it does not run, when it does not.
     pub reason: Option<String>,
@@ -240,33 +197,26 @@ pub struct SandboxActionView {
     pub label_key: &'static str,
 }
 
-/// One protection: whether it is in place, how much it matters, and what its
-/// absence means.
+/// One protection: whether it is in place, how much it matters, and what its absence means.
 pub struct SandboxItemView {
     /// The report's own token: `limits`, `files`, `network` or `process`.
     pub key: &'static str,
     pub label_key: &'static str,
-    /// The mark the row leads with, named rather than inlined so the template
-    /// picks the glyph and the item keeps choosing what it means.
+    /// The mark the row leads with: a name, so the template owns the glyph.
     pub icon: &'static str,
     pub present: bool,
-    /// Whether the item applies to this profile at all. The media profile exists
-    /// to start a program, so its process item is not a gap.
+    /// Whether the item applies at all: the media profile's process item is not a gap.
     pub applicable: bool,
-    /// The one item no profile may run without, so the page says which task is a
-    /// requirement rather than a matter of how much is left.
+    /// The one item no profile may run without.
     pub required: bool,
     /// `badge-red` for a critical item that is missing, `badge-gray` otherwise.
     pub class: &'static str,
-    /// 关键 / 重要 / 建议 — how much the item is worth, so that a host missing
-    /// the files layer does not read like a host missing the process bound.
-    /// Shown only when the item is missing.
+    /// 关键 / 重要 / 建议 — how much the item is worth, shown only when it is missing.
     pub severity: String,
     pub show_severity: bool,
     /// One sentence on what the absence opens, shown only when it is absent.
     pub impact: Option<String>,
-    /// The profile's own explanation that the item cannot exist for it, shown in
-    /// the row's disclosure.
+    /// The profile's own explanation that the item cannot exist for it.
     pub note: Option<String>,
     /// The residuals that weaken this item, already translated.
     pub notes: Vec<String>,
@@ -316,9 +266,7 @@ pub async fn settings_page(
     }
     let section = match path.as_ref().map(|Path(id)| id.as_str()) {
         None => Section::Server,
-        // An unknown page falls back to the first one rather than 404ing: the
-        // area is a handful of links, and a stale bookmark should land somewhere
-        // useful.
+        // An unknown page falls back to the first one rather than 404ing.
         Some(id) => section_of(id).unwrap_or(Section::Server),
     };
     let success = success_message(
@@ -415,11 +363,9 @@ async fn render(
         restart_error: crate::restart::failure(),
         sandbox: match section {
             Section::Sandbox => {
-                // The two settings the panel needs, resolved here because the
-                // service cannot move into the blocking task. The index switch is
-                // the profile's own question: document extraction exists for the
-                // search index, which has a page of its own, and a band that read
-                // "running" while nothing indexes anything would be a lie.
+                // Resolved here because the service cannot move into the blocking
+                // task. The index switch is the profile's own question: document
+                // extraction exists for the search index, on a page of its own.
                 let resolved = |key: &str| {
                     service
                         .resolved_one(key)
@@ -430,9 +376,9 @@ async fn render(
                     enabled: resolved("sandbox.enabled"),
                     index_enabled: resolved("index.enabled"),
                 };
-                // The probe spawns a child per profile, so it belongs on a
-                // blocking thread: the rest of the page must not wait on it, and
-                // an executor thread must not be parked on a process.
+                // The probe spawns a child per profile, so it belongs on a blocking
+                // thread: the page must not wait on it, and an executor thread must
+                // not be parked on a process.
                 Some(
                     tokio::task::spawn_blocking(move || sandbox_view(t, inputs))
                         .await
@@ -461,9 +407,7 @@ fn settings_url(section: Section, action: &str) -> String {
 
 /// The settings the Sandbox page needs before it can render the measurement.
 ///
-/// Resolved by the caller, because the settings service cannot cross into the
-/// blocking task the probe runs on: the master switch, and the one feature switch
-/// that decides whether a profile that is otherwise ready has anything to do.
+/// Resolved by the caller: the settings service cannot cross into the blocking task.
 pub struct SandboxInputs {
     pub enabled: bool,
     /// The effective value of `index.enabled`, which owns document extraction.
@@ -472,18 +416,10 @@ pub struct SandboxInputs {
 
 /// What this host actually gives, for the Sandbox page.
 ///
-/// Every value is measured, not asserted: it comes from children that confined
-/// themselves and printed what took. The items say which protection is in place
-/// and the notes say what the platform still leaves open, so an admin can tell
-/// "this host cannot do better" from "something here is broken". The master switch
-/// is separate: it decides whether the work runs, not what the host can give, and
-/// the page keeps the two questions apart.
-///
-/// Synchronous, and it spawns children: every value on the panel comes from a
-/// probe this call runs once per profile, so the caller hands it to
-/// `spawn_blocking` rather than blocking the runtime's thread on a child process.
-/// The answers are cached per profile, so a second visit to the page spawns
-/// nothing.
+/// Every value is measured, not asserted, from confined children that printed
+/// what took: the items say which protection is in place, the notes what the
+/// platform still leaves open. It spawns children, so the caller hands it to
+/// `spawn_blocking`; the answers are cached per profile.
 fn sandbox_view(t: &'static I18n, inputs: SandboxInputs) -> SandboxView {
     let documents = worker::page_answer(Profile::Documents);
     let media = worker::page_answer(Profile::Media);
@@ -508,16 +444,8 @@ fn sandbox_view(t: &'static I18n, inputs: SandboxInputs) -> SandboxView {
     SandboxView { profiles, raw }
 }
 
-/// One profile's band: its state, its items, and the notes on each item.
-///
-/// The notes are attached to the item they weaken rather than listed under the
-/// profile, because that is what they are: a note on the item whose name it
-/// narrows, not a fourth protection.
-///
-/// The four rows and "this host answered" are the same fact here, so they are
-/// decided together: an answer that was measured always yields all four items,
-/// whether or not the profile would run on it, and a probe that never answered
-/// yields none. A band with two rows would be a report nobody measured.
+/// One profile's band: its state, its items, and the notes on each item, attached
+/// to the item they weaken rather than listed under the profile.
 fn profile_view(
     t: &I18n,
     profile: crate::sandbox::Profile,
@@ -577,12 +505,8 @@ fn profile_view(
     }
 }
 
-/// The parser profiles' band: documents and images.
-///
-/// One band for two profiles because they install the same protections: both are
-/// confined by the same call with the same grants, and `sandbox_probe_test`
-/// asserts the item list of each. The image profile is still probed by the
-/// server on its own; this page would have nothing different to say.
+/// The parser profiles' band: documents and images, one band because both install
+/// the same protections with the same grants, asserted by `sandbox_probe_test`.
 fn documents_profile(
     t: &I18n,
     answer: &worker::PageAnswer,
@@ -591,9 +515,7 @@ fn documents_profile(
     let state = if !inputs.enabled {
         disabled_state(t)
     } else if !inputs.index_enabled {
-        // The work this profile exists for has a switch of its own, on another
-        // page: a document is not extracted for an index that is off, and this
-        // band would otherwise read "running" while nothing indexes anything.
+        // Document extraction has its own switch, on another page: no index, no extraction.
         SandboxStateView {
             label: t.tr("sandbox.state_index_off").to_string(),
             class: "badge-gray",
@@ -622,9 +544,8 @@ fn documents_profile(
 
 /// The media profile's band: the one child that may start the configured helper.
 ///
-/// Its state is its own question, because the profile's own job comes first: a
-/// host can confine it perfectly and the helper still not decode, and an
-/// administrator who has configured no helper is in neither case.
+/// Its state is its own question: a host can confine it perfectly and the helper
+/// still not decode.
 fn media_profile(t: &I18n, answer: &worker::PageAnswer, enabled: bool) -> SandboxProfileView {
     let state = if !enabled {
         disabled_state(t)
@@ -646,7 +567,7 @@ fn media_profile(t: &I18n, answer: &worker::PageAnswer, enabled: bool) -> Sandbo
                     unavailable_state(t, host_reason.clone().unwrap_or_default())
                 } else if report.job == Some(JobVerdict::NoHelper) {
                     // A state an administrator chose, not a fault: the fix is the
-                    // helper path on the storage page, and the row says where.
+                    // helper path on the storage page.
                     SandboxStateView {
                         label: t.tr("sandbox.state_no_helper").to_string(),
                         class: "badge-gray",
@@ -678,9 +599,7 @@ fn running_state(t: &I18n) -> SandboxStateView {
 
 /// A profile the master switch stopped.
 ///
-/// No reason of its own: the switch's own row carries the sentence about what
-/// switching off costs, and repeating it under both bands would be the same
-/// paragraph three times on one page.
+/// No reason of its own: the switch's row carries the cost of switching off.
 fn disabled_state(t: &I18n) -> SandboxStateView {
     SandboxStateView {
         label: t.tr("sandbox.state_disabled").to_string(),
@@ -717,11 +636,8 @@ fn item_class(item: &str, present: bool, applicable: bool) -> &'static str {
     }
 }
 
-/// Whether one item is a question at all for one profile.
-///
-/// The media profile starts the helper and the copy that leads to it by
-/// definition, so the process item cannot exist there and the row says so rather
-/// than reporting a gap.
+/// Whether one item is a question at all for one profile: the media profile
+/// starts the helper by definition, so its process item cannot exist.
 fn item_applicable(profile: Profile, item: &str) -> bool {
     !(profile.runs_helper() && item == "process")
 }
@@ -750,10 +666,8 @@ fn profile_icon(profile: Profile) -> &'static str {
 
 /// How much one item is worth, which is what tells an admin where to look first.
 ///
-/// The files layer is critical because it is the one that keeps a parser out of
-/// the server user's data; the network is important because it is how what a
-/// parser did read would leave; the process bound is advice, because a parser
-/// that cannot read or send anything has little to do with a second process.
+/// The files layer is critical: it keeps a parser out of the user's data. The
+/// network is important: it is how what a parser read would leave. Process is advice.
 fn item_severity(item: &str) -> &'static str {
     match item {
         "limits" | "files" => "sandbox.severity_critical",
@@ -772,8 +686,7 @@ fn item_impact(item: &str) -> &'static str {
     }
 }
 
-/// The mark beside one protection. A name rather than a path: the template owns
-/// the SVG, this only says which one belongs to the item.
+/// The mark beside one protection: a name, since the template owns the SVG.
 fn item_icon(item: &str) -> &'static str {
     match item {
         "limits" => "clock",
@@ -825,10 +738,8 @@ fn note_label(note: &str) -> &'static str {
 
 /// The note key for the media row, where `fork` means something else.
 ///
-/// On the document profile it is a platform concession that still leaves the
-/// bound on starting programs; on the media profile the fork *is* how the helper
-/// is started, so its note says what actually bounds the copies instead of
-/// claiming a bound that is not there.
+/// On the document profile it is a platform concession that leaves the bound on
+/// starting programs; on the media profile the fork *is* how the helper is started.
 fn media_note_label(note: &str) -> &'static str {
     match note {
         "fork" => "sandbox.note_media_fork",
@@ -838,10 +749,8 @@ fn media_note_label(note: &str) -> &'static str {
 
 /// Assemble a page's rows into its groups, in render order.
 ///
-/// A catalog key that `GROUPS` does not name would silently vanish from the
-/// page, so anything left over is collected into a trailing "Other" group rather
-/// than dropped; `the_groups_partition_the_catalog` is what stops that from
-/// being the normal case.
+/// A catalog key that `GROUPS` does not name would silently vanish, so leftovers
+/// go into a trailing "Other" group; `the_groups_partition_the_catalog` covers it.
 fn build_groups(
     section: Section,
     mut rows: HashMap<&'static str, SettingRow>,
@@ -861,9 +770,8 @@ fn build_groups(
             });
         }
     }
-    // Catalog order, not map order, so the leftovers read like a page. Anything
-    // else the map held (it should hold only this page's keys) follows by key,
-    // so the order stays deterministic whatever it is.
+    // Catalog order, not map order, so the leftovers read like a page; anything
+    // else follows by key, so the order stays deterministic.
     let mut leftovers: Vec<SettingRow> = infra::settings::section(section)
         .filter_map(|def| rows.remove(def.key))
         .collect();
@@ -907,8 +815,7 @@ fn build_row(
             .unwrap_or_else(|| stored_value.clone())
     };
 
-    // The config file's value is only interesting when a saved value is
-    // superseding it: otherwise the file *is* the origin, or it agrees.
+    // The config file's value matters only when a saved value supersedes it.
     let saved_supersedes = matches!(
         origin,
         Some(Origin::Database { .. }) | Some(Origin::Environment { .. })
@@ -918,8 +825,7 @@ fn build_row(
     let config_value = saved_supersedes.then(|| (def.get)(service.base()));
 
     // An enum's choices are named in the locale rather than shown as the wire
-    // value: `starttls` and `lazy` are the server's vocabulary, not the
-    // operator's.
+    // value: `starttls` and `lazy` are the server's vocabulary, not the operator's.
     let options = match def.kind {
         Kind::Enum(options) => options
             .iter()
@@ -933,8 +839,7 @@ fn build_row(
     };
 
     let secret_state = service.secret_state(def.key);
-    // The environment's variable is the only provenance a row prints: it is the
-    // one an operator has to go and change. The rest is a tooltip on the badge.
+    // The environment's variable is the only provenance a row prints as text.
     let (origin_id, origin_title, env_var, origin_at) = match origin {
         Some(Origin::Environment { var }) => {
             ("environment", String::new(), Some(var.to_string()), None)
@@ -958,9 +863,8 @@ fn build_row(
     let read_only = !def.is_stored();
     let locked = read_only || matches!(origin, Some(Origin::Environment { .. }));
 
-    // One state, by precedence. A value waiting for the next start is the most
-    // urgent thing about its row; that a change would need a start at all comes
-    // next; that the row cannot be edited here comes last.
+    // One state, by precedence: a value waiting for the next start, then a change
+    // that needs a start, then a row that cannot be edited here.
     let state_badge = if pending.contains(def.key) {
         Some(StateBadge {
             class: "badge-red",
@@ -985,12 +889,10 @@ fn build_row(
         None
     };
 
-    // `tr` borrows the key it is given, so the strings are owned before they
-    // outlive the temporaries.
+    // `tr` borrows the key it is given, so the strings are owned first.
     let label = t.tr(&def.label_key()).to_string();
     let help = t.tr(&def.help_key()).to_string();
-    // The variable name joins the filter's haystack: an operator who knows how
-    // a container sets a value searches for `NANOFILE_`, not for its label.
+    // The variable name joins the haystack, so `NANOFILE_` finds the row too.
     let env_name = def.env.map(str::to_string);
     let search_text = match &env_name {
         Some(var) => format!("{} {label} {help} {var}", def.key),
@@ -1038,8 +940,6 @@ fn build_row(
     }
 }
 
-// ─── POST handlers ────────────────────────────────────────────────────────
-
 fn require_admin_csrf(
     state: &Arc<AppState>,
     user: &WebUser,
@@ -1056,19 +956,16 @@ fn require_admin_csrf(
 }
 
 /// Fold a submitted body into a map, letting the **last** value of a repeated
-/// field win.
-///
-/// A checkbox submits a hidden `false` followed by a checked `true`, so
-/// last-wins is what makes an unchecked box mean `false` rather than "absent".
+/// field win: a checkbox submits its hidden `false` before the `true`, so an
+/// unchecked box means `false` rather than "absent".
 fn fold_form(pairs: &[(String, String)]) -> HashMap<String, String> {
     pairs.iter().cloned().collect()
 }
 
 /// Build the service's form from the submitted body.
 ///
-/// A secret is three-way: filled in = replace, the clear box = erase, and a
-/// rendered-but-empty field = leave what is stored alone. A checkbox that is
-/// absent submits its hidden `false`, so a boolean has no "absent" case.
+/// A secret is three-way: filled in = replace, the clear box = erase, and an
+/// empty rendered field = leave what is stored alone.
 fn parse_form(
     section: Section,
     form: &HashMap<String, String>,
@@ -1142,8 +1039,7 @@ pub async fn save(
                 .into_response())
         }
         // Re-render with the reason, and with what was submitted: a rejected
-        // value (a bad port, an invalid sender) has to be visible on the form
-        // that produced it.
+        // value (a bad port, an invalid sender) has to be visible on its form.
         Err(e) => {
             let msg = crate::ui::banner::action_error(I18n::get(user.language.as_deref()), &e);
             let flags = RenderFlags {
@@ -1155,8 +1051,7 @@ pub async fn save(
     }
 }
 
-/// POST /sysadmin/settings/reset/ — drop the saved override for one key, so the
-/// config file (or the built-in default) supplies it again.
+/// POST /sysadmin/settings/reset/ — drop the saved override for one key.
 pub async fn reset(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -1207,11 +1102,10 @@ pub async fn reset(
 
 /// POST /sysadmin/settings/restart/ — restart the server in place.
 ///
-/// The signal is raised *after* this handler has returned and the response is
-/// on its way out: the run loop tears the server down through the normal
-/// graceful shutdown, so an in-flight response is always delivered. The
-/// submitted values are deliberately ignored — restarting is not a save, and a
-/// silent save would be the wrong side effect for a button labelled "restart".
+/// The signal is raised *after* this handler has returned, so the run loop tears
+/// the server down through the normal graceful shutdown and an in-flight response
+/// is always delivered. The submitted values are deliberately ignored: restarting
+/// is not a save.
 pub async fn restart(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -1285,9 +1179,8 @@ mod tests {
             .collect()
     }
 
-    /// The media row reads `fork` differently from the document profile's
-    /// process item: there the fork is how the helper is started, so it gets
-    /// its own sentence, and every other note keeps the shared one.
+    /// The media row reads `fork` differently: the fork is how the helper is
+    /// started, so it gets its own sentence; every other note keeps the shared one.
     #[test]
     fn the_media_row_has_its_own_sentence_for_fork() {
         assert_eq!(media_note_label("fork"), "sandbox.note_media_fork");
@@ -1300,8 +1193,7 @@ mod tests {
         assert_eq!(note_label("fork"), "sandbox.note_fork");
     }
 
-    /// The notes belong to the item they weaken, so the page shows each one
-    /// exactly once and under the right protection.
+    /// The notes belong to the item they weaken: each is shown once, under it.
     #[test]
     fn a_note_is_shown_under_the_item_it_weakens() {
         assert!(note_belongs("fork", "process"));
@@ -1323,8 +1215,7 @@ mod tests {
         assert!(!note_belongs("unknown", "process"));
     }
 
-    /// Every note key the report can produce has a label, so a new token cannot
-    /// reach the page as its own identifier.
+    /// Every note key the report can produce has a label.
     #[test]
     fn every_note_has_a_label() {
         for note in [
@@ -1349,10 +1240,9 @@ mod tests {
         }
     }
 
-    /// Each band's state answers its own question, and it is where the one
-    /// sentence the page used to lead with now lives: a profile that runs, one
-    /// the switch stopped, one whose own feature switch is off, one the host
-    /// cannot run, and one that failed at its own job.
+    /// Each band's state answers its own question: a profile that runs, one the
+    /// switch stopped, one whose feature switch is off, one the host cannot run,
+    /// and one that failed at its own job.
     #[test]
     fn a_band_state_says_whether_that_profile_runs_and_why_not() {
         let t = I18n::get(Some("en"));
@@ -1372,23 +1262,20 @@ mod tests {
         let media =
             |answer: &worker::PageAnswer, enabled: bool| media_profile(t, answer, enabled).state;
 
-        // A host with every item in place, switch on: running.
         let running = documents(&measured(every_item, true, None), &inputs(true, true));
         assert_eq!(running.label, t.tr("sandbox.state_running"));
         assert_eq!(running.class, "badge-green");
         assert!(running.reason.is_none() && running.action.is_none());
 
-        // The switch is its own reason, and it is not repeated under the band:
-        // the switch's own row carries the cost, which is a setting's sentence
-        // rather than a measurement's.
+        // The switch is its own reason, not repeated under the band: the switch's
+        // own row carries the cost.
         let off = documents(&measured(every_item, true, None), &inputs(false, true));
         assert_eq!(off.label, t.tr("sandbox.state_disabled"));
         assert_eq!(off.class, "badge-gray");
         assert!(off.reason.is_none());
 
         // The feature this profile serves has a switch of its own, on another
-        // page: the band says so and points at it, rather than reading "running"
-        // while nothing indexes anything.
+        // page: the band says so and points at it.
         let no_index = documents(&measured(every_item, true, None), &inputs(true, false));
         assert_eq!(no_index.label, t.tr("sandbox.state_index_off"));
         assert_eq!(
@@ -1422,8 +1309,7 @@ mod tests {
         assert_eq!(unavailable.reason.as_deref(), Some("no worker binary"));
 
         // The media profile has a job of its own: a helper that cannot decode is
-        // neither "running" nor "the host cannot bound a child", and no helper
-        // configured is a state to fix in the settings rather than a fault.
+        // neither "running" nor "the host cannot bound a child".
         let failed = media(
             &media_report(
                 every_item,
@@ -1456,7 +1342,6 @@ mod tests {
             Some("/sysadmin/settings/storage/")
         );
 
-        // The switch comes first for the media band too.
         let media_off = media(&media_report(every_item, None, true, None), false);
         assert_eq!(media_off.label, t.tr("sandbox.state_disabled"));
     }
@@ -1499,8 +1384,7 @@ mod tests {
     }
 
     /// The item rows say which task is a requirement, how much a missing one
-    /// matters — and only then, so a healthy page carries no triage badges — and
-    /// what does not apply to a profile at all.
+    /// matters, and what does not apply at all.
     #[test]
     fn an_item_row_marks_the_required_one_and_explains_only_what_is_missing() {
         assert_eq!(Protections::REQUIRED, "limits");
@@ -1509,8 +1393,6 @@ mod tests {
             assert!(!Protections::required(item), "{item} is best-effort");
         }
 
-        // Present is green, and a missing critical item is red, whatever else is
-        // in place.
         assert_eq!(item_class("limits", true, true), "badge-green");
         assert_eq!(item_class("limits", false, true), "badge-red");
         assert_eq!(item_class("files", false, true), "badge-red");
@@ -1525,8 +1407,6 @@ mod tests {
         assert!(item_applicable(Profile::Media, "files"));
         assert_eq!(item_class("process", false, false), "badge-gray");
 
-        // How much an item is worth is the shared table, and it is what tells the
-        // reader where to look first.
         assert_eq!(item_severity("limits"), "sandbox.severity_critical");
         assert_eq!(item_severity("files"), "sandbox.severity_critical");
         assert_eq!(item_severity("network"), "sandbox.severity_important");
@@ -1535,12 +1415,8 @@ mod tests {
 
     /// A band's four rows exist exactly when the host answered for it.
     ///
-    /// The state and the rows are two questions, and this is the seam between
-    /// them: a profile the host refuses is still a *measured* band — the items are
-    /// how an admin tells "this host cannot confine the profile" from "the
-    /// program the profile runs cannot decode" — while a probe that never
-    /// reported has nothing to show, and saying "measured" there would put four
-    /// rows of nothing on the page.
+    /// A profile the host refuses is still a *measured* band — the items are how
+    /// an admin tells "cannot confine the profile" from "cannot decode".
     #[test]
     fn a_band_has_four_rows_exactly_when_the_host_answered_for_it() {
         let t = I18n::get(Some("en"));
@@ -1579,8 +1455,7 @@ mod tests {
         assert!(unmeasured.items.is_empty());
 
         // The switch does not change either half: a switched-off profile was still
-        // measured, which is the whole point of measuring it with the switch out of
-        // the picture.
+        // measured, with the switch out of the picture.
         let off = documents_profile(
             t,
             &measured(every_item, true, None),
@@ -1595,8 +1470,7 @@ mod tests {
 
     #[test]
     fn an_unchecked_box_submits_the_hidden_false() {
-        // What the browser sends for a checkbox that is off: only the hidden
-        // field. Last-wins folding makes both cases look the same to the parser.
+        // An unchecked box sends only its hidden field; last-wins makes both alike.
         let off = fold_form(&[
             ("server.share_link_enabled".to_string(), "false".to_string()),
             ("csrf_token".to_string(), "x".to_string()),
@@ -1612,7 +1486,6 @@ mod tests {
 
     #[test]
     fn a_secret_is_three_way_and_never_read_back() {
-        // Blank field: keep what is stored.
         let parsed = parse_form(
             Section::Email,
             &form(&[("secret:email.password", ""), ("csrf_token", "x")]),
@@ -1620,7 +1493,6 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.secrets.get("email.password"), Some(&None));
 
-        // Filled in: replace.
         let parsed = parse_form(
             Section::Email,
             &form(&[("secret:email.password", "hunter2")]),
@@ -1746,8 +1618,7 @@ mod tests {
         assert_eq!(listed, declared);
     }
 
-    /// A key with no group still has to reach the page: silently dropping a
-    /// setting is worse than showing it under a heading that says "Other".
+    /// A key with no group still has to reach the page; dropping it is worse.
     #[test]
     fn a_key_with_no_group_is_not_dropped() {
         let mut rows = HashMap::new();

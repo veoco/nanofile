@@ -1,10 +1,8 @@
 //! The record of one execution of a job: identity, state, progress, ownership.
 //!
-//! A [`JobRun`] is created by [`super::TaskSystem::submit`] and driven to a
-//! terminal state by the executor. Nothing else writes the state machine — in
-//! particular a handler never transitions it, which is what makes "forgot to
-//! mark the task done" (and the leaked concurrency slot it used to cause)
-//! impossible.
+//! Created by [`super::TaskSystem::submit`] and driven to a terminal state by the
+//! executor; nothing else writes the state machine, so a handler cannot leave a
+//! run stuck.
 
 use base::error::AppError;
 use serde::Serialize;
@@ -13,9 +11,8 @@ use super::spec::{JobKey, Visibility};
 
 /// Identity of one execution, and the string a client polls with.
 ///
-/// Random rather than sequential: the id is handed to whoever submitted the
-/// run and is the only thing protecting its progress from another account, so
-/// it must not be guessable.
+/// Random rather than sequential: it is the only thing protecting a run from
+/// another account, so it must not be guessable.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub struct RunId(String);
 
@@ -49,9 +46,8 @@ impl std::fmt::Display for RunId {
 
 /// Where a run is in its lifecycle.
 ///
-/// `Yielded` is deliberately distinct from `Running`: a run that stepped aside
-/// for load is still alive and must not be mistaken for a dead one by any
-/// recovery pass.
+/// `Yielded` is distinct from `Running`: it stepped aside for load but is still
+/// alive, and no recovery pass may treat it as dead.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobState {
     Queued,
@@ -67,7 +63,6 @@ pub enum JobState {
 }
 
 impl JobState {
-    /// Whether the run is finished and will not change again.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
@@ -84,13 +79,9 @@ impl JobState {
         matches!(self, Self::Queued | Self::Running | Self::Yielded)
     }
 
-    /// The state a stored row means.
-    ///
-    /// The inverse of [`JobState::as_str`], for the one reader that starts from
-    /// the database: an in-place restart empties the process-lifetime counters,
-    /// so the last verdict is read back out of the journal. A phase this build
-    /// does not know is shown as a failure rather than dropped, matching how the
-    /// listing renders an unknown badge.
+    /// The state a stored row means; [`JobState::as_str`] is the inverse, read
+    /// back out of the journal after an in-place restart empties the counters.
+    /// An unknown phase reads as a failure rather than being dropped.
     pub fn from_wire(phase: &str, error: Option<&str>) -> Self {
         match phase {
             "queued" => Self::Queued,
@@ -119,10 +110,7 @@ impl JobState {
     }
 }
 
-/// How far along a run is.
-///
-/// `total` is optional because not every job can say: a reference copy is one
-/// tree update and one commit, so its per-item percentage would be invented.
+/// How far along a run is; `total` is optional because not every job can say.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Progress {
     pub done: u64,
@@ -130,19 +118,14 @@ pub struct Progress {
     pub message: String,
 }
 
-/// What a job reports when it succeeds.
 #[derive(Clone, Debug, Default)]
 pub struct Outcome {
     pub message: String,
     pub processed: Option<u64>,
     /// The body found nothing to do.
     ///
-    /// A pass on a timer fires far more often than it has work, and "nothing
-    /// was expired" is not an event worth a run record: a job whose
-    /// [`History`](super::spec::History) is `Notable` therefore leaves no trace
-    /// for an idle run it was not asked for. A manual trigger or a request is
-    /// always recorded, so an operator who pressed the button still gets an
-    /// answer — and a failure is alway recorded, whatever this says.
+    /// A scheduled pass that found nothing leaves no trace; a manual trigger or
+    /// a request is always recorded, as is a failure.
     pub idle: bool,
 }
 
@@ -169,10 +152,8 @@ impl Outcome {
     }
 }
 
-/// Why a job did not succeed.
-///
-/// Cancellation and timeout are first-class rather than an error string so the
-/// executor can map them onto the right terminal state without parsing text.
+/// Why a job did not succeed. Cancellation and timeout are first-class so the
+/// executor can map them onto a terminal state without parsing text.
 #[derive(Debug)]
 pub enum JobFailure {
     App(AppError),
@@ -197,11 +178,7 @@ impl JobFailure {
     }
 }
 
-/// Who asked for a run.
-///
-/// The task system records two very different kinds of work in one table: what
-/// somebody asked for, and what a timer does on its own. The difference decides
-/// whether a run that found nothing to do is worth remembering at all.
+/// Who asked for a run; it decides what an idle run leaves behind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
     /// A periodic timer. Nobody is waiting for it and its next tick re-does
@@ -213,12 +190,10 @@ pub enum Origin {
     /// press, so it is kept even when the job found nothing to do.
     Operator,
     /// A one-shot pass the server starts itself: recovery, or the startup
-    /// conversion. Kept for the same reason as `Operator` — nobody can press it
-    /// again, so the record is the only account of what it said.
+    /// conversion. Kept like `Operator` — nobody can press it again.
     Startup,
 }
 
-/// Who is asking to see a run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Viewer {
     Anonymous,
@@ -243,7 +218,6 @@ impl Viewer {
 pub struct JobRun {
     pub id: RunId,
     pub key: JobKey,
-    /// Who asked for this run, which decides what an idle one leaves behind.
     pub origin: Origin,
     /// Denormalized from the spec so the store can filter without the registry.
     pub visibility: Visibility,
@@ -256,10 +230,8 @@ pub struct JobRun {
     pub finished_at: Option<i64>,
     /// 1 for the first execution; incremented by each retry.
     pub attempt: u32,
-    /// The submit-time input. Dropped once the run reaches a terminal state:
-    /// what a wire projection still needs is kept in `expected_total` and
-    /// `summary`, so a batch of a thousand names is not pinned for the whole
-    /// retention window.
+    /// The submit-time input, dropped once the run reaches a terminal state;
+    /// `expected_total` and `summary` keep what a wire projection still needs.
     pub params: Option<Params>,
     /// `total` as the submitting handler knew it, kept past the params drop.
     pub expected_total: Option<u64>,
@@ -267,10 +239,7 @@ pub struct JobRun {
     pub summary: String,
     /// Small job-specific facts a client-compatibility projection still needs
     /// after the params are gone (a reindex run's repository, its indexed and
-    /// skipped counts).
-    ///
-    /// Bounded by [`MAX_DETAIL_KEYS`]: this is a handful of scalars, not a
-    /// second place to keep a payload.
+    /// skipped counts). Bounded by [`MAX_DETAIL_KEYS`].
     pub details: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -322,13 +291,9 @@ impl JobRun {
 
     /// Whether this run may be shown to `viewer`.
     ///
-    /// A run that exists but belongs to somebody else is reported as missing
-    /// rather than forbidden, so the answer cannot be used to probe which ids
-    /// exist.
-    ///
-    /// [`Visibility::Owner`] is owner-only with no administrator override: the
-    /// copy/move progress endpoint has always answered 404 to anyone but the
-    /// submitter, and its payload carries file names.
+    /// Another account's run reads as missing rather than forbidden, so the answer
+    /// cannot probe which ids exist. [`Visibility::Owner`] has no administrator
+    /// override: that payload carries file names.
     pub fn is_visible_to(&self, viewer: Viewer) -> bool {
         match self.visibility {
             Visibility::Admin => match viewer {
@@ -364,10 +329,8 @@ impl JobRun {
                 .sum::<usize>()
     }
 
-    /// Release the submit-time input once the run can no longer need it.
-    ///
-    /// Called by the executor on the terminal transition; a wire projection
-    /// reads `expected_total`/`summary` instead.
+    /// Release the submit-time input once the run can no longer need it; a wire
+    /// projection reads `expected_total`/`summary` instead.
     pub fn drop_params(&mut self) {
         self.params = None;
     }
@@ -431,8 +394,6 @@ mod tests {
         assert!(r.is_visible_to(Viewer::user(7)));
         assert!(!r.is_visible_to(Viewer::user(8)));
         assert!(!r.is_visible_to(Viewer::Anonymous));
-        // Owner-only means owner-only: an administrator gets no override,
-        // because the payload carries the owner's file names.
         assert!(!r.is_visible_to(Viewer::admin(9)));
     }
 

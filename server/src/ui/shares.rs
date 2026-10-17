@@ -89,7 +89,6 @@ pub async fn list_shares(
         .find_by_creator_id(user.user_id)
         .await?;
 
-    // Build repo name lookup
     let mut repo_ids: Vec<String> = Vec::new();
     for s in &links {
         if !repo_ids.contains(&s.repo_id) {
@@ -101,8 +100,7 @@ pub async fn list_shares(
             repo_ids.push(u.repo_id.clone());
         }
     }
-    // Resolve all repo names in one batched query instead of one `find_by_id`
-    // per distinct repo (N+1).
+    // One batched query, not one `find_by_id` per distinct repo (N+1).
     let mut repo_names: HashMap<String, String> = HashMap::new();
     if !repo_ids.is_empty() {
         for r in state.repos.repo.find_by_ids(&repo_ids).await? {
@@ -190,11 +188,8 @@ pub async fn list_shares(
     Ok(Html(html))
 }
 
-/// POST /shares/create/ — create a new share link from the web UI form.
-///
-/// Delegates to the same service function the v2/v2.1 API uses so the
-/// encrypted-library block, the repo read-permission check and the entry-path
-/// validation cannot diverge between the two creation surfaces.
+/// POST /shares/create/ — create a share link; delegates to the v2/v2.1 service
+/// so the encrypted-library, permission and path checks cannot diverge.
 pub async fn create_share(
     user: WebUser,
     State(state): State<Arc<AppState>>,

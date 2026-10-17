@@ -1,4 +1,3 @@
-/// Web UI search handler.
 use askama::Template;
 use axum::{
     extract::{Query, State},
@@ -15,9 +14,9 @@ use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
-/// Cap the total result set so a huge repo can't force a full-tree walk (and
-/// unbounded memory) on every search. Phase 1 (content) and Phase 2 (filename)
-/// share this budget; once it is reached the remaining phases are skipped.
+/// Cap the total result set so a huge repo can't force a full-tree walk and
+/// unbounded memory. Phase 1 (content) and Phase 2 (filename) share this budget
+/// and skip the rest once it is reached.
 const MAX_SEARCH_RESULTS: usize = 200;
 
 #[derive(Template)]
@@ -54,16 +53,14 @@ pub struct SearchResultItem {
     /// URL for the directory containing this file (or the directory itself).
     #[serde(skip)]
     pub dir_url: String,
-    /// HTML snippet with `<mark>` highlighting around the content match.
-    /// Empty when the result came from a filename-only match.
+    /// HTML snippet with `<mark>` highlighting; empty for a filename-only match.
     pub content_highlight: String,
 }
 
 #[derive(Deserialize)]
 pub struct SearchQuery {
     pub q: Option<String>,
-    /// When absent or false, search both filenames and file content (default).
-    /// When true, search filenames only.
+    /// When true, search filenames only; absent or false searches content too.
     pub search_filename_only: Option<bool>,
 }
 
@@ -88,10 +85,8 @@ pub async fn search_page(
         let mut seen = std::collections::HashSet::new();
         let mut all_results: Vec<SearchResultItem> = Vec::new();
 
-        // Phase 1: Full-text (content) search via Tantivy — only in full-text
-        // mode. Filename-only mode skips it because the FS tree walk below is
-        // the authoritative filename matcher and covers binary files the index
-        // never sees.
+        // Phase 1: full-text (content) search via Tantivy; filename-only mode
+        // skips it, since the FS walk below is the authoritative name matcher.
         if has_accessible_repos
             && !search_filename_only
             && let Some(indexer) = &state.indexer
@@ -106,9 +101,7 @@ pub async fn search_page(
                     Vec::new()
                 }
             };
-            // Collect unique hits, then group by repo so the repo record +
-            // head commit are resolved once per repo and all hit paths are
-            // resolved in a shared batched walk.
+            // Group unique hits by repo so the record, head commit and paths resolve once.
             let mut unique_hits: Vec<crate::indexer::IndexHit> = Vec::new();
             for hit in &ft_results {
                 if seen.insert((hit.repo_id.clone(), hit.fullpath.clone())) {
@@ -165,11 +158,9 @@ pub async fn search_page(
             }
         }
 
-        // Phase 2: Filename search via FS tree walk — always run, since it is
-        // the only complete filename matcher (covers binary/non-indexed files
-        // and performs true substring matching). It only tops up the budget
-        // left over from Phase 1; once the cap is reached we stop walking the
-        // tree so a huge repo doesn't force a full traversal on every search.
+        // Phase 2: filename search via FS tree walk, always run because it is the
+        // only complete filename matcher (binary/non-indexed files, true substring
+        // match); it tops up Phase 1's budget and stops once the cap is reached.
         let phase2_budget = MAX_SEARCH_RESULTS.saturating_sub(all_results.len());
         if phase2_budget > 0 {
             for repo_id in &repo_ids {
@@ -212,7 +203,6 @@ pub async fn search_page(
             }
         }
 
-        // Sort: directories first, then by name.
         all_results.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
 
         let total = all_results.len() as i32;
@@ -252,11 +242,9 @@ pub async fn search_page(
     Ok(Html(html))
 }
 
-/// Resolve file metadata for many fullpaths of a single repo in a shared
-/// batched walk, returning `None` for paths that no longer resolve.
-///
-/// `repo_name`/`root_id` are resolved once per repo by the caller so the
-/// repo record + head commit are not re-fetched for every hit.
+/// Resolve file metadata for many fullpaths of one repo in a shared batched
+/// walk, returning `None` for paths that no longer resolve; `repo_name` and
+/// `root_id` are resolved once per repo by the caller.
 async fn resolve_file_metadata_batch(
     repos: &crate::repository::Repositories,
     repo_id: &str,
@@ -368,10 +356,8 @@ async fn get_accessible_repo_ids(
     Ok(ids)
 }
 
-/// Recursively search the FS tree for files/directories whose name contains the keyword.
-///
-/// Stops early once `results.len()` reaches `max_results`, so a huge repo
-/// doesn't force a full traversal when the budget is already filled.
+/// Recursively search the FS tree for names containing `keyword`, stopping early
+/// once `results.len()` reaches `max_results`.
 #[allow(clippy::too_many_arguments)]
 async fn search_fs_tree(
     repos: &crate::repository::Repositories,
@@ -385,8 +371,7 @@ async fn search_fs_tree(
     max_results: usize,
 ) {
     let keyword_lower = keyword.to_lowercase();
-    // Level frontier: each level reads all its directories with one batched
-    // `IN` query (O(#dirs) → O(depth)).
+    // Each level reads all its directories with one batched `IN` query.
     let mut frontier: Vec<(String, String)> = vec![(root_fs_id.to_string(), base_path.to_string())];
     let max_depth = crate::fs::core::traversal::max_tree_depth();
     let mut depth = 0usize;

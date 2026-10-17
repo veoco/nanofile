@@ -1,19 +1,13 @@
 //! HTTP server loop with hyper-level timeouts.
 //!
-//! `axum::serve` does not let a caller install a hyper `Timer`, which makes
-//! hyper's default `header_read_timeout` inert and leaves slow-header
-//! (slowloris) connections unbounded. [`serve_with_timeouts`] is axum's own
-//! accept loop with a timer, an explicit header-read deadline, connect-info
-//! injection, WebSocket upgrades and graceful shutdown.
-//!
-//! Both the binary (`main.rs`) and the integration-test harness build their
-//! router here, so the tests exercise the same connection handling the server
-//! ships.
-/// Injects `ConnectInfo` into every request before it reaches the router.
-///
-/// `axum::serve` does this through its private `IncomingStream` type, which the
-/// custom loop below cannot construct; extending the request here gives
-/// handlers the same `ConnectInfo<SocketAddr>` they had before.
+//! `axum::serve` never installs a hyper `Timer`, so hyper's `header_read_timeout`
+//! is inert and slow-header (slowloris) connections are unbounded;
+//! [`serve_with_timeouts`] is axum's own accept loop with a timer, a header-read
+//! deadline, connect-info injection, WebSocket upgrades and graceful shutdown.
+//! The binary and the test harness both build their router here.
+/// Injects `ConnectInfo` into every request before it reaches the router: the
+/// custom loop cannot construct `axum::serve`'s private `IncomingStream`, so the
+/// request is extended here instead.
 #[derive(Clone)]
 pub struct ConnectInfoService {
     app: axum::Router,
@@ -44,19 +38,11 @@ impl tower::Service<axum::http::Request<axum::body::Body>> for ConnectInfoServic
 
 /// Serve `app` on `listener` with a hyper-level header-read timeout.
 ///
-/// `axum::serve` builds each connection with `Builder::new(TokioExecutor::new())`
-/// and never installs a `Timer`, which makes hyper's default
-/// `header_read_timeout` inert: hyper logs "timeout `header_read_timeout` has
-/// default, but no timer set" and arms no deadline. A client that trickles
-/// request headers can therefore hold a connection open forever, and
-/// tower-http's `TimeoutLayer` does not help because its timer only starts once
-/// the request head has been parsed.
-///
-/// This is axum's own accept loop with a timer and an explicit header-read
-/// timeout. Connect info, WebSocket upgrades (`serve_connection_with_upgrades`)
-/// and graceful shutdown behave exactly as before: on the signal the listener
-/// stops accepting, in-flight connections get `graceful_shutdown()`, and the
-/// returned future resolves once they have drained.
+/// `axum::serve` never installs a hyper `Timer`, so hyper's `header_read_timeout`
+/// arms no deadline and a client trickling request headers can hold a connection
+/// open forever; tower-http's `TimeoutLayer` does not help, because its timer only
+/// starts once the request head has been parsed. Connect info, WebSocket upgrades
+/// and graceful shutdown behave as before.
 pub async fn serve_with_timeouts(
     listener: tokio::net::TcpListener,
     app: axum::Router,
@@ -109,9 +95,8 @@ pub async fn serve_with_timeouts(
 
             let mut conn =
                 std::pin::pin!(builder.serve_connection_with_upgrades(io, hyper_service));
-            // `fuse` so the branch stops being polled once the channel closes;
-            // otherwise the select would spin on an already-resolved future
-            // while the connection drains.
+            // `fuse` so the branch stops being polled once the channel closes, which
+            // would otherwise spin the select on a resolved future while draining.
             let mut signal_closed = std::pin::pin!(signal_tx.closed().fuse());
             loop {
                 tokio::select! {

@@ -1,21 +1,14 @@
 //! In-memory TTL cache for the left-panel repo list.
 //!
-//! `build_page_ctx` (used by ~15 web UI pages) and the file-preview handlers
-//! re-query the user's left-panel repos on every render — two DB queries each
-//! (`repo_members` by user, then `repos` by ids). This cache serves the same
-//! user's `LeftPanelRepo` list for 60 seconds.
+//! `build_page_ctx` (~15 web UI pages) and the file-preview handlers re-query
+//! the user's left-panel repos on every render — two DB queries each — so this
+//! serves the same user's `LeftPanelRepo` list for 60 seconds.
 //!
-//! # Correctness
-//! - The 60s TTL bounds staleness of `size_display` (the one field that
-//!   changes on the hot upload/sync paths, which deliberately do **not**
-//!   invalidate).
-//! - The handlers that create, rename or delete a repo — and the one that turns
-//!   a directory into a sub-library — call `clear_all()` on success, so a repo
-//!   or membership change is visible immediately (see `handler/repos.rs`,
-//!   `handler/dir.rs`). Keep that list in sync when adding writers. Membership
-//!   rows are written only at library creation now that user-to-user sharing is
-//!   gone, so creation is the only membership writer left.
-//! - At `MAX_CACHED_USERS` entries the whole cache is dropped, bounding memory.
+//! The 60s TTL bounds staleness of `size_display`, the one field that changes on
+//! the hot upload/sync paths, which deliberately do **not** invalidate. Repo and
+//! membership writers (`handler/repos.rs`, `handler/dir.rs`) call `clear_all()`
+//! on success, so a change is visible immediately; keep that list in sync. At
+//! `MAX_CACHED_USERS` entries the whole cache is dropped, bounding memory.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -28,8 +21,7 @@ use crate::service::repo::service::{LeftPanelRepo, load_left_panel_repos};
 
 /// How long a cached left-panel list is considered fresh.
 const LEFT_PANEL_TTL: Duration = Duration::from_secs(60);
-/// Upper bound on cached users; at this many entries the whole cache clears
-/// (cheaper than an LRU, same strategy as the block-store existence cache).
+/// Upper bound on cached users; at this many entries the whole cache clears.
 const MAX_CACHED_USERS: usize = 1024;
 
 struct CachedEntry {
@@ -37,7 +29,6 @@ struct CachedEntry {
     cached_at: Instant,
 }
 
-/// Per-user cache of the left-panel repo list.
 pub struct LeftPanelRepoCache {
     entries: Mutex<HashMap<i32, CachedEntry>>,
     ttl: Duration,
@@ -51,8 +42,7 @@ impl Default for LeftPanelRepoCache {
 }
 
 impl LeftPanelRepoCache {
-    /// `ttl`/`max_entries` are injectable so unit tests can control expiry and
-    /// capacity without real timers.
+    /// `ttl`/`max_entries` are injectable so tests can control expiry and capacity.
     fn new(ttl: Duration, max_entries: usize) -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
@@ -63,9 +53,8 @@ impl LeftPanelRepoCache {
 
     /// Return the cached list for `user_id`, or load it via `load` on a miss.
     ///
-    /// The load runs outside the lock so page rendering isn't serialized;
-    /// concurrent misses for the same user each load once and the last writer
-    /// wins (a duplicate DB hit is cheaper than serializing every render).
+    /// The load runs outside the lock so rendering isn't serialized; concurrent
+    /// misses for the same user each load once and the last writer wins.
     pub async fn get<F, Fut>(&self, user_id: i32, load: F) -> Result<Vec<LeftPanelRepo>, AppError>
     where
         F: FnOnce() -> Fut,
@@ -116,8 +105,7 @@ impl LeftPanelRepoCache {
         );
     }
 
-    /// Drop every cached entry. Called by the low-frequency repo/membership
-    /// write handlers so list changes are reflected on the next render.
+    /// Drop every cached entry, called by the repo/membership write handlers.
     pub fn clear_all(&self) {
         if let Ok(mut entries) = self.entries.lock() {
             entries.clear();
@@ -197,7 +185,6 @@ mod tests {
 
     #[tokio::test]
     async fn expired_entry_reloads() {
-        // Zero TTL: the second get immediately misses.
         let cache = LeftPanelRepoCache::new(Duration::ZERO, 10);
         let calls = Arc::new(AtomicUsize::new(0));
 
@@ -251,7 +238,6 @@ mod tests {
     #[tokio::test]
     async fn capacity_clears_all() {
         let cache = LeftPanelRepoCache::new(Duration::from_secs(60), 2);
-        // Fill u1, u2 (capacity reached), then u3 insertion clears everything.
         cache.insert(1, vec![left_panel_repo("r1")]);
         cache.insert(2, vec![left_panel_repo("r2")]);
         cache.insert(3, vec![left_panel_repo("r3")]);

@@ -24,8 +24,6 @@ use crate::ui::client_login::resolve_next;
 use crate::ui::user_agent;
 use base::error::AppError;
 
-// ─── Templates ───────────────────────────────────────────────────────────────
-
 #[derive(Template)]
 #[template(path = "page/login.html")]
 pub struct LoginTemplate {
@@ -38,9 +36,8 @@ pub struct LoginTemplate {
     pub remember_days: u64,
     /// Whether password reset is enabled (show/hide "Forgot password?" link).
     pub enable_password_reset: bool,
-    /// Whether invitation-based registration is enabled (show/hide the
-    /// "Create account" link). The POST handler enforces the same flag, so a
-    /// disabled flow cannot be reached by navigating directly.
+    /// Show/hide the "Create account" link; the POST handler enforces the same
+    /// flag, so a disabled flow cannot be reached by navigating directly.
     pub enable_invitations: bool,
     /// URL to redirect to after login (kept as a hidden form field).
     pub next: String,
@@ -57,22 +54,17 @@ pub struct TwoFactorLoginTemplate {
     pub next: String,
 }
 
-// ─── Request types ───────────────────────────────────────────────────────────
-
-/// `?next=` query parameter carried on the login pages (e.g. the SSO
-/// local-browser bounce, which redirects to `/accounts/login/?next=...`).
+/// `?next=` carried on the login pages (e.g. the SSO local-browser bounce redirect).
 #[derive(Deserialize)]
 pub struct LoginNextQuery {
     pub next: Option<String>,
-    /// Why the visitor was sent back to the form, as a locale key listed in
-    /// [`LOGIN_ERROR_KEYS`]. Any other value is ignored, so the error banner
-    /// cannot be used to reflect arbitrary text into the page.
+    /// Why the visitor was sent back, as a key listed in `LOGIN_ERROR_KEYS`; any
+    /// other value is ignored, so the banner cannot reflect arbitrary text.
     pub err: Option<String>,
 }
 
-/// Reasons `/accounts/login/` is willing to display when it is reached by a
-/// redirect. The 2FA step has no page to report a dead pending session on — the
-/// TOTP form needs a live one — so it hands the reason to the sign-in form.
+/// Reasons the sign-in form will display. The 2FA step has no page to report a
+/// dead pending session on, so it hands the reason here.
 const LOGIN_ERROR_KEYS: [&str; 4] = [
     "auth.session_expired",
     "auth.session_expired_alt",
@@ -105,8 +97,6 @@ pub struct TwoFactorAuthForm {
     pub next: Option<String>,
 }
 
-// ─── Handlers ────────────────────────────────────────────────────────────────
-
 /// GET /accounts/login/ — render the login page.
 pub async fn login_page(
     State(state): State<Arc<AppState>>,
@@ -129,26 +119,16 @@ pub async fn login_page(
     Ok(Html(html))
 }
 
-/// Whether the password-reset flow can actually deliver a link.
-///
-/// The template field this feeds used to be `auth.enable_password_reset` alone,
-/// so an install with the flag on and no mail backend showed a "Forgot
-/// password?" link whose every submission silently did nothing. Reporting the
-/// honesty of the flow is now part of deciding to show it.
+/// Whether the reset flow can deliver a link: the flag alone would offer a
+/// "Forgot password?" page whose every submission silently does nothing.
 async fn password_reset_available(state: &Arc<AppState>) -> bool {
     state.config().auth.enable_password_reset && state.mail.ready()
 }
 
 /// Tell the owner when a browser signs in for the first time.
 ///
-/// Must be called *before* the new session row is created: the check compares
-/// the request's browser against the account's existing sessions, and a session
-/// that is already inserted matches itself, which would make every login look
-/// familiar.
-///
-/// Costs nothing while mail is switched off — the switch is consulted before the
-/// session list is read — which is what keeps the default deployment's login
-/// path free of extra queries.
+/// Must be called *before* the new session row is created: an already-inserted
+/// row matches itself, which would make every login look familiar.
 async fn notify_new_browser(
     state: &Arc<AppState>,
     user_id: i32,
@@ -177,7 +157,6 @@ async fn notify_new_browser(
         .await;
 }
 
-/// Build a session cookie value with optional Secure flag.
 fn session_cookie(name: &str, value: &str, max_age: Option<u64>, secure: bool) -> String {
     let mut cookie = format!("{}={}; HttpOnly; SameSite=Lax; Path=/", name, value);
     if let Some(age) = max_age {
@@ -212,8 +191,7 @@ async fn create_pending_token(
             client_version: None,
             is_pending: true,
             source: SessionSource::Web,
-            // A 5-minute half-credential is never listed, so its user agent
-            // would only be a place for a secret-adjacent value to sit.
+            // Never listed; a user agent here would only park a secret-adjacent value.
             user_agent: None,
         })
         .await
@@ -243,10 +221,8 @@ async fn render_login_page(
     Ok(Html(html))
 }
 
-/// Reject registration when invitations are disabled.
-///
-/// Both the GET page and the POST use it, so the flag cannot be bypassed by
-/// navigating straight to `/accounts/register/`.
+/// Reject registration when invitations are disabled. Both the GET page and the
+/// POST use it, so the flag cannot be bypassed by navigating there directly.
 fn ensure_invitations_enabled(state: &Arc<AppState>) -> Result<(), AppError> {
     if state.config().auth.enable_invitations {
         Ok(())
@@ -263,8 +239,7 @@ pub async fn login(
     Query(query): Query<LoginNextQuery>,
     Form(form): Form<LoginForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    // The hidden `next` form field carries the original `?next=` query value.
-    // Fall back to the query itself for clients that post without the field.
+    // The hidden `next` field carries `?next=`; fall back to the query if absent.
     let tenant_origin = state.config().server.site_url_origin();
     let next = resolve_next(
         form.next.as_deref().or(query.next.as_deref()),
@@ -288,21 +263,18 @@ pub async fn login(
         .map(|html| (StatusCode::FORBIDDEN, Html(html)).into_response());
     }
 
-    // Client IP for rate limiting: TCP peer address (X-Forwarded-For is only
-    // trusted from configured proxies), so spoofing the header can't bypass it.
+    // Client IP for rate limiting: TCP peer, with XFF trusted only from configured proxies.
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
         &state.config().server.trusted_proxies,
     );
 
-    // Throttle keys for this attempt: the client address, the (address,
-    // account) pair, and — inside the limiter — how many distinct accounts
-    // this address has failed on. There is deliberately no username-only key:
-    // that would let anyone lock a victim out of their own account.
+    // Throttle keys: the client address, the (address, account) pair, and the
+    // limiter's per-address distinct-account count. No username-only key — that
+    // would let anyone lock a victim out of their own account.
     let login_keys = infra::rate_limit::LoginKeys::new(&client_ip, &form.email);
 
-    // Check rate limit before any DB or password work.
     if state.auth_limiters.login.is_login_blocked(&login_keys) {
         return render_login_page(
             &state,
@@ -320,13 +292,10 @@ pub async fn login(
 
     let user_record = state.repos.user.find_by_email(&form.email).await?;
 
-    // Verify the password **before** looking at `is_active`, and verify against
-    // a cost-matched dummy hash when the row is missing. Returning early for a
-    // disabled account (with no PBKDF2 work at all) used to answer in ~1ms while
-    // every other failure spends ~100-300ms at the default 600k iterations —
-    // a reliable "this email exists but is disabled" oracle. Active, disabled
-    // and unknown accounts now all pay the same PBKDF2 cost and get the same
-    // generic message.
+    // Verify against a cost-matched dummy hash when the row is missing, and check
+    // the password before `is_active`: otherwise a disabled account answers in
+    // ~1ms while a wrong password spends ~100-300ms, a reliable "this email
+    // exists but is disabled" oracle.
     let password_ok = match &user_record {
         Some(u) => {
             verify_password_async(
@@ -347,8 +316,8 @@ pub async fn login(
         }
     };
 
-    // Use the same generic error for wrong password, disabled account and
-    // unknown email to avoid user-enumeration attacks (matching seahub).
+    // Same generic error for wrong password, disabled account and unknown email,
+    // to avoid user enumeration (matching seahub).
     let Some(user_record) = user_record.filter(|u| password_ok && u.is_active) else {
         state.auth_limiters.login.record_login_failure(&login_keys);
         return render_login_page(
@@ -365,13 +334,11 @@ pub async fn login(
         .map(|html| (StatusCode::OK, Html(html)).into_response());
     };
 
-    // Successful login — forgive this address/pair, but keep the
-    // distinct-account spray history.
+    // Success forgives this address/pair but keeps the distinct-account spray history.
     state.auth_limiters.login.clear_login_failure(&login_keys);
 
-    // Upgrade the stored hash if it predates the embedded cost or was written
-    // with a different one. Best-effort: a failed write must not block a
-    // correct password.
+    // Upgrade a stored hash that predates the embedded cost or used another one.
+    // Best-effort: a failed write must not block a correct password.
     if needs_rehash(
         &user_record.password_hash,
         state.config().auth.password_hash_iterations,
@@ -394,13 +361,11 @@ pub async fn login(
         }
     }
 
-    // ── Check for 2FA ─────────────────────────────────────────────────
     let two_fa = state.repos.user_2fa.find_by_user_id(user_record.id).await?;
 
     if let Some(tfa) = two_fa
         && tfa.enabled
     {
-        // User has 2FA enabled — create a pending token and redirect to TOTP page
         let pending_token = create_pending_token(&state.repos, user_record.id).await?;
         let cookie = session_cookie(
             "seahub-session-pending",
@@ -409,8 +374,7 @@ pub async fn login(
             state.config().server.secure_cookies(),
         );
 
-        // Thread the `next` URL through the 2FA step so the user still lands
-        // on the original destination (e.g. the SSO confirm page) after TOTP.
+        // Thread `next` through 2FA so the user still lands on the original destination.
         let encoded_next: String =
             percent_encoding::utf8_percent_encode(&next, percent_encoding::NON_ALPHANUMERIC)
                 .collect();
@@ -425,7 +389,6 @@ pub async fn login(
         return Ok(response);
     }
 
-    // ── No 2FA — normal login ───────────────────────────────────────
     // Before the session is stored, so "have I seen this browser?" can be asked.
     notify_new_browser(&state, user_record.id, &headers, &client_ip).await;
 
@@ -535,11 +498,8 @@ pub async fn two_factor_auth_page(
     Ok(Html(html))
 }
 
-/// Send the visitor back to the sign-in form, optionally with the reason.
-///
-/// A pending 2FA session that cannot be used has no page of its own to report
-/// on, so the sign-in form — where the visitor has to go anyway — carries it.
-/// `next` rides along so the original destination survives the re-login, and
+/// Send the visitor back to the sign-in form with the reason: a pending 2FA
+/// session that cannot be used has no page of its own. `next` rides along and
 /// the dead pending cookie is cleared so the browser stops sending it.
 fn back_to_login(
     next: &str,
@@ -611,12 +571,10 @@ pub async fn two_factor_auth(
         &state.config().server.trusted_proxies,
     );
 
-    // Every failure from here on means the pending 2FA session cannot be used,
-    // and the TOTP form needs a live one. The reason therefore goes back to the
-    // sign-in form instead of a generic error page that would blame the request.
+    // From here on every failure means the pending 2FA session cannot be used,
+    // so the reason goes back to the sign-in form rather than a generic error page.
     let secure_cookies = state.config().server.secure_cookies();
 
-    // Read the pending token from cookie
     let pending_token = headers
         .get("Cookie")
         .and_then(|v| v.to_str().ok())
@@ -631,7 +589,6 @@ pub async fn two_factor_auth(
         return back_to_login(&next, Some("auth.session_expired"), secure_cookies);
     };
 
-    // Look up the pending token
     let token_record = match state.repos.api_token.find_by_token(pending_token).await {
         Ok(Some(record)) => record,
         Ok(None) => {
@@ -640,7 +597,6 @@ pub async fn two_factor_auth(
         Err(_) => return Err(AppError::internal("database error")),
     };
 
-    // Check expiration
     if let Some(expires_at) = token_record.expires_at {
         let now = chrono::Utc::now().timestamp();
         if now > expires_at {
@@ -668,7 +624,6 @@ pub async fn two_factor_auth(
         return back_to_login(&next, Some("auth.too_many_verification"), secure_cookies);
     }
 
-    // Fetch user's 2FA config
     let two_fa = state.repos.user_2fa.find_by_user_id(user_id).await?;
     let Some(two_fa) = two_fa else {
         // The config was removed between the password step and now, so signing
@@ -683,12 +638,10 @@ pub async fn two_factor_auth(
 
     if !two_fa.enabled {
         // 2FA was disabled since the pending token was created — proceed to login
-        // Delete pending token, redirect to login page
         let _ = state.repos.api_token.delete_by_token(pending_token).await;
         return back_to_login(&next, None, secure_cookies);
     }
 
-    // Fetch user record for email
     let user_record = state
         .repos
         .user
@@ -696,14 +649,12 @@ pub async fn two_factor_auth(
         .await?
         .ok_or(AppError::Unauthorized)?;
 
-    // Verify the TOTP code
     let totp = TotpManager::create_totp(&two_fa.totp_secret, &user_record.email, "Nanofile")
         .map_err(|e| AppError::internal(e.to_string()))?;
 
     let code_valid =
         TotpManager::verify_and_consume(&state.repos, user_id, &totp, &form.code).await;
 
-    // Try backup code if TOTP failed
     let backup_valid = if !code_valid {
         crate::service::auth::backup_codes::BackupCodeManager::verify_code(
             &state.repos,
@@ -734,9 +685,7 @@ pub async fn two_factor_auth(
         return Ok((StatusCode::OK, Html(html)).into_response());
     }
 
-    // ── TOTP verified — create real session ────────────────────────
     state.auth_limiters.totp.clear(&totp_key);
-    // Delete the pending token
     let _ = state.repos.api_token.delete_by_token(pending_token).await;
 
     // The second factor was satisfied below; from the owner's point of view this
@@ -851,7 +800,6 @@ pub async fn logout(
 
     let secure_cookies = state.config().server.secure_cookies();
     let clear_cookie = session_cookie("seahub-session", "", Some(0), secure_cookies);
-    // Clear the CSRF token cookie too.
     let mut clear_csrf = String::from("sfcsrftoken=; Path=/; SameSite=Lax; Max-Age=0");
     if secure_cookies {
         clear_csrf.push_str("; Secure");
@@ -880,8 +828,6 @@ pub async fn logout(
     Ok(response)
 }
 
-// ─── Registration (invitation-only) ─────────────────────────────────────────
-
 #[derive(Template)]
 #[template(path = "page/register.html")]
 pub struct RegisterTemplate {
@@ -903,10 +849,6 @@ pub async fn register_page(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Html<String>, AppError> {
-    // `auth.enable_invitations = false` is documented as "do not allow
-    // invitation-code registration". It used to be inert: the page and the POST
-    // below worked regardless, so an operator who closed registration still
-    // accepted accounts from any valid (or leaked) invitation code.
     ensure_invitations_enabled(&state)?;
 
     let tpl = RegisterTemplate {
@@ -921,9 +863,7 @@ pub async fn register_page(
 }
 
 /// Re-render the registration form with the reason the submission was refused.
-///
-/// `taken` lets the caller pass a translated string as well as a `&str`; the
-/// form is a plain HTML POST, so the reason has to come back as a page.
+/// The form is a plain HTML POST, so the reason has to come back as a page.
 fn register_error(
     state: &AppState,
     headers: &HeaderMap,
@@ -978,7 +918,6 @@ pub async fn register(
     }
     state.auth_limiters.registration.record_attempt(&rl_key);
 
-    // Validate passwords match before delegating to service.
     if form.password1 != form.password2 {
         return register_error(
             &state,
@@ -990,7 +929,6 @@ pub async fn register(
 
     let cfg = &state.config().auth;
 
-    // Use RegistrationService for the core logic.
     let reg_service = RegistrationService::new(state.repos.clone());
     let result = match reg_service
         .register(RegistrationParams {
@@ -1004,15 +942,13 @@ pub async fn register(
         .await
     {
         Ok(result) => result,
-        // A refused registration is the reader's to fix — a taken address, a
-        // spent invitation code, a weak password — so the form comes back with
-        // the reason on it. Returning the error would answer a plain HTML form
-        // with the wire protocol's JSON.
+        // A refused registration (taken address, spent code, weak password) is
+        // the reader's to fix, so the form comes back with the reason; returning
+        // the error would answer a plain HTML form with the wire protocol's JSON.
         Err(AppError::BadRequest(message)) => return register_error(&state, &headers, &message),
         Err(err) => return Err(err),
     };
 
-    // Auto-login — create session token and cookie.
     let now = chrono::Utc::now().timestamp();
     let session_token = generate_api_token();
     let ttl_days = cfg.api_token_ttl_days;
@@ -1078,8 +1014,6 @@ pub async fn register(
     Ok((StatusCode::FOUND, resp_headers).into_response())
 }
 
-// ─── Password Reset ─────────────────────────────────────────────────────────
-
 #[derive(Template)]
 #[template(path = "page/password_reset_form.html")]
 pub struct PasswordResetFormTemplate {
@@ -1123,10 +1057,9 @@ pub struct PasswordResetConfirmForm {
     pub password2: String,
 }
 
-/// GET /accounts/password/reset/ — show the password reset request form.
-///
-/// Answers 404 when the flow cannot deliver a link. Serving the form anyway is
-/// what made a mail-less install look like it had a working reset.
+/// GET /accounts/password/reset/ — show the reset request form. Answers 404 when
+/// the flow cannot deliver a link: serving it anyway made a mail-less install
+/// look like it had a working reset.
 pub async fn password_reset_page(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1145,11 +1078,9 @@ pub async fn password_reset_page(
     Ok(Html(html))
 }
 
-/// POST /accounts/password/reset/ — request a password reset.
-///
-/// Security: the reset link is **never** returned in the HTTP response. Without
-/// a configured email backend the flow is disabled entirely (no token is
-/// minted), so the response can never be used to take over an account.
+/// POST /accounts/password/reset/ — request a reset. The link is **never** in the
+/// response; without an email backend no token is minted, so it cannot be used to
+/// take over an account.
 pub async fn password_reset(
     State(state): State<Arc<AppState>>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -1174,13 +1105,10 @@ pub async fn password_reset(
         return Ok(Html(html));
     }
 
-    // Email delivery is required to hand the reset link to the account owner.
-    // Without it, minting a token and echoing the link back would let anyone
-    // reset any account. Render the generic page and do not create a token.
-    //
-    // `ready()` is stricter than `email.enabled`: it also requires a configured
-    // SMTP host and sender, so an install that enabled the switch but never
-    // finished configuring it still mints nothing.
+    // Email delivery is required to hand the link to the owner: minting a token
+    // and echoing it back would let anyone reset any account. `ready()` is
+    // stricter than `email.enabled` — it also requires an SMTP host and sender —
+    // so a half-configured install mints nothing.
     if !state.mail.ready() {
         let tpl = PasswordResetDoneTemplate {
             urls: crate::static_assets::template_urls(),
@@ -1212,14 +1140,11 @@ pub async fn password_reset(
     }
     state.auth_limiters.password_reset.record_attempt(&rl_key);
 
-    // Mint a token and mail it to the account owner. The response deliberately
-    // does not contain the link.
-    //
-    // The send is queued and attempted in the background rather than awaited:
-    // a known address would otherwise take an SMTP round trip that an unknown
-    // one does not, and that timing difference is a user-enumeration oracle —
-    // the very thing the generic page exists to prevent. Failures are visible
-    // on /sysadmin/email/.
+    // Mint a token and mail it to the owner; the response deliberately carries no
+    // link. The send is queued in the background rather than awaited: a known
+    // address would otherwise take an SMTP round trip an unknown one does not,
+    // and that timing difference is a user-enumeration oracle. Failures are
+    // visible on /sysadmin/email/.
     let reset_service = PasswordResetService::new(state.repos.clone());
     let result = reset_service
         .create_reset_token(&form.email, &state.config().server.site_url)
@@ -1268,8 +1193,7 @@ pub async fn password_reset_confirm_page(
     headers: HeaderMap,
     Path(token): Path<String>,
 ) -> Result<Html<String>, AppError> {
-    // `auth.enable_password_reset = false` must close the whole flow, not just
-    // hide the link: the confirm pages used to work regardless of the flag.
+    // `auth.enable_password_reset = false` must close the whole flow, not just hide the link.
     if !state.config().auth.enable_password_reset {
         return Err(AppError::NotFound("password reset is disabled".into()));
     }
@@ -1308,7 +1232,6 @@ pub async fn password_reset_confirm(
 
     let cfg = &state.config().auth;
 
-    // Validate passwords match before delegating to service.
     if form.password1 != form.password2 {
         let tpl = PasswordResetConfirmTemplate {
             urls: crate::static_assets::template_urls(),
@@ -1326,8 +1249,7 @@ pub async fn password_reset_confirm(
         return Ok((StatusCode::OK, Html(html)).into_response());
     }
 
-    // Use PasswordResetService. The manager is threaded in so the reset also
-    // drops the user's outstanding in-memory capability URLs.
+    // The token manager is threaded in so the reset drops outstanding in-memory capability URLs.
     let reset_service =
         PasswordResetService::with_token_manager(state.repos.clone(), state.token_manager.clone());
     match reset_service

@@ -1,22 +1,13 @@
 //! Everything the tray menu *does*.
 //!
-//! Shape forced by muda: the shared menu handler is invoked synchronously from
-//! inside its `WM_COMMAND` dispatch, which still holds a borrow of the clicked
-//! item — so the handler may not touch that item, and may not block on anything
-//! that pumps messages (the confirmation and elevation dialogs do exactly
-//! that). It therefore only queues a [`TrayAction`]; the Windows message loop
-//! drains the queue after the dispatch has returned (see
-//! `backend_windows.rs`), and every `set_checked`/`set_enabled` and every dialog
-//! happens there. The other backends deliver menu events from their own event
-//! loop and run the action directly.
-//!
-//! That is also why the service toggle needs no in-flight flag: all of its
-//! mutations happen on the loop thread in queue order, and a second click is
-//! prevented by disabling the menu item while the elevated helper runs.
-//!
-//! On Windows the two automatic-start mechanisms are alternatives; what that
-//! means for the two checkmarks and for the startup repair is decided once, by
-//! [`crate::startup::policy::plan`].
+//! Shape forced by muda: the menu handler runs synchronously inside its
+//! `WM_COMMAND` dispatch, which still holds a borrow of the clicked item — so it
+//! may not touch that item and may not block on anything that pumps messages (the
+//! dialogs do). It only queues a [`TrayAction`]; the Windows message loop drains
+//! the queue after the dispatch returns, and every item update and dialog happens
+//! there, while other backends run the action directly from their own event loop.
+//! Queuing is also why the service toggle needs no in-flight flag: a second click
+//! is prevented by disabling the item while the helper runs.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -54,16 +45,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MB_SETFOREGROUND, MB_TOPMOST, MessageBoxW, SW_HIDE,
 };
 
-/// Everything a menu action needs, plus the items it has to update.
-///
-/// Kept in a thread-local: menu items and OS handles are only valid on the
-/// event-loop thread, so keeping them here lets the (`Send`-bounded) menu event
-/// handler reach the shared state without ever moving anything across threads.
+/// Everything a menu action needs, plus the items it has to update. Kept in a
+/// thread-local because menu items and OS handles are only valid on the event-loop
+/// thread.
 pub(super) struct MenuState {
     pub(super) ctx: TrayContext,
     pub(super) login: PlatformLogin,
     pub(super) login_item: CheckMenuItem,
-    /// The Windows "start as a service" item.
     #[cfg(target_os = "windows")]
     pub(super) service_item: CheckMenuItem,
     /// Something else already serves this address, so this process runs no
@@ -74,24 +62,20 @@ pub(super) struct MenuState {
 
 thread_local! {
     static MENU_STATE: RefCell<Option<MenuState>> = const { RefCell::new(None) };
-    /// Actions queued by the menu handler while muda's dispatch is still on the
-    /// stack; drained by the message loop.
     static PENDING: RefCell<VecDeque<TrayAction>> = const { RefCell::new(VecDeque::new()) };
 }
 
-/// Hand the built menu state over and start handling menu events.
 pub(super) fn install(state: MenuState) {
     MENU_STATE.with(|slot| *slot.borrow_mut() = Some(state));
     MenuEvent::set_event_handler(Some(on_menu_event));
 }
 
-/// Run a closure over the menu state, if the tray is up.
 fn with_state<T>(f: impl FnOnce(&MenuState) -> T) -> Option<T> {
     MENU_STATE.with(|slot| slot.borrow().as_ref().map(f))
 }
 
-/// What a menu click asks for. No payloads: the action reads what it needs from
-/// [`MENU_STATE`] when it runs, which is outside muda's borrow.
+/// What a menu click asks for: no payloads, since the action reads what it needs
+/// from [`MENU_STATE`] when it runs, outside muda's borrow.
 #[derive(Debug, Clone, Copy)]
 enum TrayAction {
     OpenWeb,
@@ -114,14 +98,12 @@ fn on_menu_event(event: MenuEvent) {
     }
 }
 
-/// Queue the action, and ask the message loop to run it.
 fn defer(action: TrayAction) {
     #[cfg(target_os = "windows")]
     {
         PENDING.with(|queue| queue.borrow_mut().push_back(action));
         if !backend::post_action() {
-            // The loop has not started (cannot happen for a menu event, which is
-            // only delivered while it runs). Best effort: run it now.
+            // Best effort: the loop should be running, but apply it now if not.
             tracing::warn!("Tray loop not running, applying the menu action directly");
             drain();
         }
@@ -132,8 +114,7 @@ fn defer(action: TrayAction) {
     }
 }
 
-/// Run every queued action. Called from the message loop once muda's dispatch
-/// has returned, and only from there.
+/// Run every queued action, called from the message loop after muda's dispatch.
 #[cfg(target_os = "windows")]
 pub(super) fn drain() {
     while let Some(action) = PENDING.with(|queue| queue.borrow_mut().pop_front()) {
@@ -167,16 +148,12 @@ impl TrayAction {
     }
 }
 
-// ── The login entry ──────────────────────────────────────────────────────────
-
 fn toggle_login() {
     let Some((login, item)) = with_state(|state| (state.login.clone(), state.login_item.clone()))
     else {
         return;
     };
-    // The login entry and the service are alternatives: while this
-    // installation's service is registered the item is disabled, and this
-    // catches the case where the registration changed outside the tray.
+    // Re-checked because the registration may have changed outside the tray.
     #[cfg(target_os = "windows")]
     {
         let Some(config_path) = with_state(|state| state.ctx.config_path.clone()) else {
@@ -208,8 +185,6 @@ fn perform_login_toggle(login: PlatformLogin, item: CheckMenuItem) {
     item.set_checked(login.is_enabled());
 }
 
-// ── Quit ─────────────────────────────────────────────────────────────────────
-
 fn quit() {
     let Some((quit_tx, client_mode)) =
         with_state(|state| (state.quit_tx.clone(), state.client_mode))
@@ -217,10 +192,8 @@ fn quit() {
         return;
     };
     if client_mode {
-        // Something else serves the address. Quit means the same thing it means
-        // in the ordinary tray — stop the server — which in this state is this
-        // installation's Windows service, if that is what is listening.
-        // `quit_client` decides, and says so when it cannot.
+        // Something else serves the address. Quit means stopping the server,
+        // which here is this installation's service if that is what listens.
         quit_client();
     } else {
         tracing::info!("Quit requested from tray");
@@ -241,9 +214,6 @@ fn quit_client() {
     }
 }
 
-// ── The Windows service ──────────────────────────────────────────────────────
-
-/// One borrow of the menu state, carrying everything a Windows action needs.
 #[cfg(target_os = "windows")]
 struct Snapshot {
     config_path: PathBuf,
@@ -269,12 +239,9 @@ fn snapshot() -> Option<Snapshot> {
     })
 }
 
-/// Put both menu items back in step with the real machine state.
-///
-/// Through the same plan the menu was built from: the install flow removes the
-/// login entry and the uninstall flow leaves it removed, so the two items have
-/// to be re-derived rather than assumed. Re-enabling the service item is what
-/// ends a toggle that was waiting on its helper.
+/// Put both menu items back in step with the real machine state, through the same
+/// plan the menu was built from, since install and uninstall change the login entry
+/// behind the items' back. Re-enabling the service item ends a waiting toggle.
 #[cfg(target_os = "windows")]
 fn sync(
     service_item: &CheckMenuItem,
@@ -290,12 +257,9 @@ fn sync(
 }
 
 /// Whether a login-entry change must be refused because *this* installation's
-/// service is registered.
-///
-/// The login item is disabled in that state, so this only fires when the
-/// registration changed outside the tray (services.msc, another copy): the two
-/// are alternatives, and silently adding a login entry next to the service
-/// would produce a second, client-mode tray at every login.
+/// service is registered. The item is disabled in that state, so this only fires
+/// when the registration changed outside the tray: silently adding a login entry
+/// next to the service would produce a second, client-mode tray at every login.
 #[cfg(target_os = "windows")]
 fn refuse_login_entry_change(config_path: &Path) -> bool {
     let Some(snapshot) = snapshot() else {
@@ -320,7 +284,6 @@ fn refuse_login_entry_change(config_path: &Path) -> bool {
     true
 }
 
-/// The service item's click: confirm, elevate, wait for the helper.
 #[cfg(target_os = "windows")]
 fn toggle_service() {
     let Some(snapshot) = snapshot() else {
@@ -333,10 +296,8 @@ fn toggle_service() {
         login,
         service,
     } = snapshot;
-    // Disabled until the helper has reported back: a second click in the
-    // meantime must not race the registration. A click already queued behind
-    // this one is what the check is for; `sync` re-enables the item on every
-    // terminal path.
+    // Disabled until the helper has reported back: a second click must not race
+    // the registration. `sync` re-enables the item on every terminal path.
     if !service_item.is_enabled() {
         tracing::info!("a service toggle is already in flight; ignoring the click");
         return;
@@ -355,13 +316,11 @@ fn toggle_service() {
     let enable = !service.is_ours();
     let t = lang();
     // The tray always registers the default account; naming it in the dialogs is
-    // what makes "which account does it run as?" answerable without
-    // `service status` or services.msc.
+    // what makes "which account does it run as?" answerable.
     let account = crate::startup::service::ServiceAccount::default().label();
 
-    // Before elevation, and while a person is watching: a directory the service
-    // account cannot write is a registration that can never serve, and the UAC
-    // prompt should not be shown for one.
+    // Before elevation, and while a person is watching: a registration that could
+    // never serve should not raise a UAC prompt.
     if enable && !preflight_allows(t) {
         sync(&service_item, &login_item, &login, &config_path);
         return;
@@ -369,13 +328,11 @@ fn toggle_service() {
 
     let config_display = config_path.display().to_string();
     let prompt = if enable {
-        // Naming the registration that is about to be replaced matters: the
-        // service name is fixed, so enabling this install would otherwise
+        // The service name is fixed, so enabling this install would otherwise
         // silently repoint another copy's service at this executable and config.
         match &service {
-            // The registered file is gone (moved or renamed installation): say
-            // so, because "another installation" would suggest a copy that still
-            // works somewhere.
+            // The registered file is gone (moved or renamed installation): say so,
+            // rather than suggest a copy that still works somewhere.
             ServiceProbe::OtherInstall {
                 image_path,
                 missing: true,
@@ -405,8 +362,8 @@ fn toggle_service() {
             ),
         }
     } else if service.is_running() {
-        // Turning it off while it runs stops the server, and the tray in front
-        // of the user is not serving anything to take over.
+        // Turning it off while it runs stops the server, with nothing here to
+        // take over.
         t.tr("tray.service_confirm_disable_running").to_string()
     } else {
         t.tr("tray.service_confirm_disable").to_string()
@@ -432,9 +389,9 @@ fn toggle_service() {
     match launch_elevated(&exe, &parameters) {
         Ok(process) => {
             tracing::info!(action, "waiting for the elevated helper");
-            // Wait off the loop thread: blocking here would freeze the tray for
-            // as long as the helper runs. The handle travels as an integer
-            // because a raw pointer is not `Send`.
+            // Wait off the loop thread: blocking here would freeze the tray for as
+            // long as the helper runs. The handle travels as an integer because a
+            // raw pointer is not `Send`.
             let process = process as isize;
             std::thread::spawn(move || {
                 let process = process as HANDLE;
@@ -469,10 +426,9 @@ fn toggle_service() {
 /// Whether a service registration may proceed, asked of the preflight.
 ///
 /// A `Fail` is refused outright (the message names every path); a `Warn` is a
-/// confirmation, because the operator may know something the check cannot (a
-/// share already granted to the machine account, for instance). `Note`s are
-/// logged only: "the port is in use" is the expected answer while the instance
-/// asking is the one serving it.
+/// confirmation, because the operator may know something the check cannot. A
+/// `Note` is logged only: "the port is in use" is expected while this instance
+/// serves it.
 #[cfg(target_os = "windows")]
 fn preflight_allows(t: &server::i18n::I18n) -> bool {
     use crate::startup::service::{Severity, run_preflight};
@@ -516,8 +472,8 @@ pub(super) fn service_finished(enable: bool, exit_code: u32) {
     };
     let t = lang();
 
-    // The helper refused before changing anything (its own preflight): the
-    // reason is in the log and there is nothing to report twice.
+    // The helper refused before changing anything (its own preflight): the reason
+    // is in the log.
     if exit_code == crate::startup::service::EXIT_REFUSED as u32 {
         tracing::warn!("the elevated helper refused to change the service");
         sync(
@@ -530,8 +486,7 @@ pub(super) fn service_finished(enable: bool, exit_code: u32) {
     }
 
     // `STILL_ACTIVE`: the helper is still running after five minutes. Its own
-    // dialog owns any error, and what it did may well have succeeded, so only
-    // the state is refreshed.
+    // dialog owns any error, so only the menu state is refreshed.
     if exit_code != 0 && exit_code != STILL_ACTIVE as u32 {
         tracing::error!(exit_code, "the elevated helper failed");
         sync(
@@ -550,9 +505,8 @@ pub(super) fn service_finished(enable: bool, exit_code: u32) {
 
     if exit_code == 0 {
         if enable {
-            // The service starts at boot, so the login entry would start a
-            // second instance that can only end up as a client-mode tray. Only
-            // an entry this installation wrote is removed.
+            // The service starts at boot, so the login entry would start a second
+            // instance that can only end up as a client-mode tray.
             if let Err(e) = snapshot.login.retire_ours() {
                 tracing::warn!("could not remove the start-at-login entry: {e:#}");
             }
@@ -566,10 +520,8 @@ pub(super) fn service_finished(enable: bool, exit_code: u32) {
             );
         } else {
             // Deliberately *not* re-adding the login entry: "remove the service"
-            // means Nanofile no longer starts automatically, and silently writing
-            // a startup entry the user did not ask for in that click is worse
-            // than starting from an honest blank. `sync` re-enables the menu item
-            // so the choice is one click away.
+            // means Nanofile no longer starts automatically, so this click must not
+            // write a startup entry the user did not ask for.
             tracing::info!("the Windows service was removed");
             show_message(
                 t.tr("tray.notify_title"),
@@ -587,15 +539,11 @@ pub(super) fn service_finished(enable: bool, exit_code: u32) {
     );
 }
 
-/// Quit while another process serves this address.
-///
-/// In the ordinary tray, Quit stops the server. Client mode must mean the same
-/// thing: when the process serving is *this* installation's Windows service,
-/// Quit stops that service (it starts again at the next boot, exactly like a
-/// quitting tray that the login entry would restart). Only when that is not
-/// possible — the service belongs to another installation, or stopping it needs
-/// rights this process does not have — does Quit fall back to leaving it
-/// running, and then it says so instead of doing it silently.
+/// Quit while another process serves this address: in the ordinary tray that means
+/// stopping the server, so when the process serving it is *this* installation's
+/// service, Quit stops that service (it starts again at the next boot). Only when
+/// that is impossible — another installation's service, or rights this process
+/// lacks — does Quit leave it running, and then it says so instead of silently.
 #[cfg(target_os = "windows")]
 fn quit_in_client_mode() {
     let Some(config_path) = with_state(|state| state.ctx.config_path.clone()) else {
@@ -622,16 +570,15 @@ fn quit_in_client_mode() {
                     &text,
                     MB_OKCANCEL | MB_ICONWARNING | MB_SETFOREGROUND,
                 );
-                // Cancel keeps the tray (and therefore the way back to the
-                // service controls); OK quits the tray alone.
+                // Cancel keeps the tray, and with it the way back to the service
+                // controls; OK quits the tray alone.
                 if answer == IDOK {
                     std::process::exit(0);
                 }
             }
         },
         ServiceProbe::OtherInstall { running: true, .. } => {
-            // Not ours to stop: it belongs to another installation's executable
-            // and config file.
+            // Not ours to stop: it belongs to another installation.
             show_message(
                 t.tr("tray.notify_title"),
                 t.tr("tray.quit_other_service"),
@@ -639,8 +586,8 @@ fn quit_in_client_mode() {
             );
             std::process::exit(0);
         }
-        // No service of ours is running: whatever holds the address is not this
-        // process' to end.
+        // No service of ours is running: whatever holds the address is not ours
+        // to end.
         _ => std::process::exit(0),
     }
 }
@@ -655,8 +602,7 @@ enum LaunchError {
 /// Run `nanofile <parameters>` elevated, returning the process handle to wait on.
 #[cfg(target_os = "windows")]
 fn launch_elevated(exe: &Path, parameters: &str) -> Result<HANDLE, LaunchError> {
-    // ShellExecuteEx may use COM for the `runas` verb; initializing is
-    // best-effort (an already-initialized thread returns an error we ignore).
+    // ShellExecuteEx may use COM for the `runas` verb; the init is best effort.
     unsafe {
         CoInitializeEx(std::ptr::null(), 0x2 /* COINIT_APARTMENTTHREADED */)
     };

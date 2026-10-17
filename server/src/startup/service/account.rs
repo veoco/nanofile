@@ -1,26 +1,18 @@
 //! The account the Windows service runs under.
 //!
-//! Microsoft's guidance is to prefer a per-service virtual account (or
-//! `LocalService`) over `LocalSystem`, which is "powerful and convenient, but
-//! rarely appropriate: a compromise grants near-total control of the computer".
-//! A virtual account (`NT SERVICE\<ServiceName>`) is created on demand, has its
-//! own SID, needs no password or rotation, and reaches the network as the
-//! computer account — which is what a file server with no domain identity needs.
-//! It is the default here; `LocalSystem` stays available for a deployment whose
-//! state directory is somewhere a virtual account cannot be granted access to.
+//! The default is a per-service virtual account (`NT SERVICE\<ServiceName>`): its
+//! own SID, no password or rotation, and network access as the computer account.
+//! `LocalSystem` stays available for a deployment whose state directory is
+//! somewhere a virtual account cannot be granted access to.
 
-/// `NT SERVICE\Nanofile`. The name is written out rather than derived because
-/// the SDK's `%SERVICE_NAME%` placeholder is not expandable here.
+/// `NT SERVICE\Nanofile`, written out because the SDK's `%SERVICE_NAME%` is not expandable here.
 pub(crate) const VIRTUAL_ACCOUNT: &str = r"NT SERVICE\Nanofile";
 /// The machine account on the network, with minimal local privileges.
 pub(crate) const NETWORK_ACCOUNT: &str = r"NT AUTHORITY\NetworkService";
 
-/// The account a Windows service runs under.
-///
-/// `Virtual` is the default: a per-service virtual account.
+/// The account a Windows service runs under; `Virtual` is the default.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) enum ServiceAccount {
-    /// A per-service virtual account (the default).
     #[default]
     Virtual,
     /// `LocalSystem`: registered as no `ObjectName` at all, which is how the SCM
@@ -28,17 +20,15 @@ pub(crate) enum ServiceAccount {
     System,
     /// `NT AUTHORITY\NetworkService`.
     Network,
-    /// A local or domain account, which needs a password and the "Log on as a
-    /// service" right.
+    /// A local or domain account: needs a password and "Log on as a service".
     Named { name: String, password: String },
 }
 
 impl ServiceAccount {
     /// Parse `--account`, with the password a named account needs.
     ///
-    /// A password is required exactly when the value is not a built-in identity:
-    /// `virtual`, `system` and `network` have none, and neither does a name from
-    /// the `NT SERVICE\` / `NT AUTHORITY\` namespaces.
+    /// A password is required exactly when the value is not a built-in identity
+    /// or a name from the `NT SERVICE\` / `NT AUTHORITY\` namespaces.
     pub(crate) fn parse(value: &str, password: Option<String>) -> Result<Self, String> {
         let value = value.trim();
         let upper = value.to_ascii_uppercase();
@@ -93,10 +83,9 @@ impl ServiceAccount {
         }
     }
 
-    /// The name to resolve to a SID for the per-directory grant.
-    ///
-    /// `None` for `LocalSystem`, which already has access to everything: a grant
-    /// would change a system directory's access control for no reason.
+    /// The name to resolve to a SID for the per-directory grant; `None` for
+    /// `LocalSystem`, which already has access, so a grant would change a system
+    /// directory's access control for no reason.
     pub(crate) fn grant_target(&self) -> Option<String> {
         match self {
             Self::System => None,
@@ -104,8 +93,7 @@ impl ServiceAccount {
         }
     }
 
-    /// Whether the account needs the "Log on as a service" right granted
-    /// explicitly. The built-in and virtual identities have it implicitly.
+    /// Whether "Log on as a service" must be granted explicitly; built-ins have it.
     pub(crate) fn needs_service_logon_right(&self) -> bool {
         match self {
             Self::Named { name, .. } => {
@@ -120,18 +108,15 @@ impl ServiceAccount {
 /// Where a named account's password comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PasswordSource {
-    /// `--password <value>`.
     Inline,
-    /// `--password-stdin`.
     Stdin,
     /// Nothing was given: prompt, but only if the account turns out to need one.
     Prompt,
 }
 
-/// Resolve `--account` and its password into an account.
-///
-/// A prompt only happens for a named account that was given no password, so
-/// `service install` with the default (virtual) account never blocks on input.
+/// Resolve `--account` and its password: a prompt only happens for a named
+/// account given no password, so `service install` with the default account
+/// never blocks on input.
 pub(crate) fn resolve(
     value: &str,
     password: Option<String>,
@@ -173,9 +158,8 @@ fn prompt_password(account: &str) -> anyhow::Result<String> {
 
 /// Grant the "Log on as a service" right to a named account.
 ///
-/// Without it the service registers successfully and then fails at start with
-/// error 1069, which is a bad way to learn about it. The built-in and virtual
-/// identities have the right implicitly and must not come here.
+/// Without it the service registers and then fails at start with error 1069.
+/// Built-in and virtual identities have the right and must not come here.
 #[cfg(target_os = "windows")]
 pub(crate) fn grant_service_logon_right(name: &str) -> anyhow::Result<()> {
     use windows_sys::Win32::Security::Authentication::Identity::{
@@ -186,8 +170,7 @@ pub(crate) fn grant_service_logon_right(name: &str) -> anyhow::Result<()> {
 
     let name_w = crate::startup::win32::wide(name);
 
-    // The account has to exist: resolving it also produces the SID the right is
-    // granted to.
+    // The account has to exist: resolving it also produces the SID the right goes to.
     let mut sid_len = 0u32;
     let mut domain_len = 0u32;
     let mut use_: SID_NAME_USE = 0;
@@ -302,7 +285,6 @@ mod tests {
         assert_eq!(named.password(), Some("secret"));
         assert!(named.needs_service_logon_right());
 
-        // A service SID needs neither a password nor the right.
         let virtual_named = ServiceAccount::parse(r"NT SERVICE\Other", None).unwrap();
         assert_eq!(virtual_named.password(), Some(""));
         assert!(!virtual_named.needs_service_logon_right());
@@ -310,14 +292,11 @@ mod tests {
 
     #[test]
     fn the_password_source_decides_whether_a_prompt_is_needed() {
-        // The default account never prompts, so `service install` cannot block
-        // waiting for input nobody is there to type.
+        // The default account never prompts, so install cannot block on input.
         assert!(resolve("virtual", None, PasswordSource::Prompt).is_ok());
-        // An inline password is passed through to a named account.
         let named = resolve(r".\nanofile", Some("secret".into()), PasswordSource::Inline).unwrap();
         assert_eq!(named.password(), Some("secret"));
-        // A named account with nothing to read the password from is an error,
-        // never an empty password.
+        // A named account with no password source is an error, never an empty password.
         assert!(resolve(r".\nanofile", None, PasswordSource::Inline).is_err());
     }
 }

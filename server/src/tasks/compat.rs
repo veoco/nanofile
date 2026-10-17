@@ -1,11 +1,8 @@
 //! Projections from a [`JobRun`] onto the JSON shapes the official clients
 //! already parse.
 //!
-//! These endpoints are client-compatibility surface: the web UI never calls
-//! them (it uses the synchronous batch endpoints), so the only thing that keeps
-//! them honest is that their wire format is pinned by tests. The projection is
-//! deliberately the *only* implementation — there is no second store to read
-//! from, so the format cannot drift from what the task system actually records.
+//! The web UI never calls these; the only thing keeping them honest is that the
+//! wire format is pinned by tests.
 
 use serde_json::{Value, json};
 
@@ -13,9 +10,7 @@ use super::run::{JobRun, JobState};
 
 /// `GET /api/v2.1/query-copy-move-progress/`.
 ///
-/// `done_count` is `0` until the run succeeds, and equal to `total` when it
-/// does. That looks odd but it is exactly what the endpoint has always
-/// reported: the old manager only set `done_count` from `complete_task`, so a
+/// `done_count` is `0` until the run succeeds and equal to `total` when it does: a
 /// run in flight and a failed run both read `0`.
 pub fn copy_move_progress(run: &JobRun) -> Value {
     let total = run.expected_total.unwrap_or(0);
@@ -59,8 +54,7 @@ pub fn copy_move_progress(run: &JobRun) -> Value {
 
 /// `GET /api2/reindex-progress/`.
 ///
-/// Every field the old handler serialized is present, including `creator_id`,
-/// which leaked the submitter's id and is kept because clients may read it.
+/// `creator_id` leaked the submitter's id and is kept because clients may read it.
 pub fn reindex_progress(run: &JobRun) -> Value {
     let (state, error, finished_at) = match &run.state {
         JobState::Queued | JobState::Running | JobState::Yielded => ("running", None, None),
@@ -96,8 +90,8 @@ pub fn reindex_progress(run: &JobRun) -> Value {
     })
 }
 
-/// Read a string detail, falling back to the submit-time params (which are only
-/// present while the run is active).
+/// Read a string detail, falling back to the submit-time params while the run is
+/// active.
 fn detail_str(run: &JobRun, key: &str) -> String {
     run.details
         .get(key)
@@ -166,8 +160,7 @@ mod tests {
         assert_eq!(value["failed_count"], 0);
     }
 
-    /// A failed run keeps `done_count` at zero, matching the old manager, which
-    /// never touched it on the failure path.
+    /// A failed run keeps `done_count` at zero, as the old manager did.
     #[test]
     fn copy_move_progress_reports_failure_without_a_done_count() {
         let failed = run(
@@ -199,12 +192,10 @@ mod tests {
         assert_eq!(value["done_count"], 0);
     }
 
-    /// `creator_id` is part of the shape even though it leaks the submitter.
     #[test]
     fn reindex_progress_shape_is_pinned() {
         let mut r = run(JobKey::Reindex, JobState::Running, Some(10));
-        // `total` comes from what the run has actually reported, not from the
-        // submit-time expectation: the old handler started at zero too.
+        // `total` is what the run reported, not the submit-time expectation.
         r.progress.done = 4;
         r.progress.total = Some(10);
         let value = reindex_progress(&r);
@@ -264,8 +255,6 @@ mod tests {
 
     #[test]
     fn an_unknown_run_id_is_not_leaked_by_the_projection() {
-        // The projection takes a run, so "not found" is the store's answer, not
-        // this module's; assert only that a fresh id is unrelated.
         let a = RunId::new();
         let b = RunId::new();
         assert_ne!(a, b);

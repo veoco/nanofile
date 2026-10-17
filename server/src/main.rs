@@ -1,7 +1,5 @@
-// Windows tray builds are GUI-subsystem binaries: the tray icon is the whole
-// UI, so no console window is ever shown (double-click, Run-key autostart, or
-// terminal). Logs go to a file instead (see logging.rs); non-tray builds keep
-// the console subsystem for headless server use.
+// Windows tray builds are GUI-subsystem binaries: no console window is ever shown,
+// so logs go to a file instead (see logging.rs).
 #![cfg_attr(
     all(target_os = "windows", feature = "tray"),
     windows_subsystem = "windows"
@@ -29,11 +27,8 @@ mod logging;
 #[cfg(feature = "tray")]
 mod tray;
 
-/// Auto-start registrations: the per-user login entry, and the Windows service
-/// (`nanofile service …`) the tray menu drives. Compiled on every platform (its
-/// command-line, account and comparison helpers have tests that run anywhere),
-/// but only *reachable* on Windows — the subcommand below is gated on the
-/// target.
+/// Auto-start registrations (login entry, Windows service) the tray menu drives,
+/// compiled everywhere so its helpers stay testable but reachable only on Windows.
 mod startup;
 
 /// Nanofile — a Seafile-compatible sync server
@@ -56,9 +51,8 @@ enum Command {
         /// Email address (also used as login name)
         #[arg(long)]
         email: Option<String>,
-        /// Password. Visible in shell history and in `ps` output on this host,
-        /// so prefer the interactive prompt, --password-stdin or
-        /// --password-file.
+        /// Password. Visible in shell history and in `ps` output, so prefer the
+        /// interactive prompt, --password-stdin or --password-file.
         #[arg(long)]
         password: Option<String>,
         /// Read the password from the first line of standard input
@@ -68,8 +62,8 @@ enum Command {
             conflicts_with_all = ["password", "password_file"]
         )]
         password_stdin: bool,
-        /// Read the password from this file (leading/trailing whitespace is
-        /// trimmed, matching NANOFILE_ADMIN_INIT_PASSWORD_FILE)
+        /// Read the password from this file (whitespace trimmed, like
+        /// NANOFILE_ADMIN_INIT_PASSWORD_FILE)
         #[arg(
             long,
             value_name = "PATH",
@@ -81,9 +75,7 @@ enum Command {
         regular: bool,
     },
     /// Migrate the legacy flat block layout (`blocks/<2hex>/<id>`) to the
-    /// per-library layout. Normally runs automatically at startup before the
-    /// server serves its first request; use this to pre-flight the copy volume
-    /// (`--dry-run`) or to run it explicitly with the server stopped.
+    /// per-library layout (automatic at startup; `--dry-run` pre-flights the copy).
     MigrateBlocks {
         /// Only report what would be copied; touch nothing.
         #[arg(long, default_value_t = false)]
@@ -107,16 +99,14 @@ enum Command {
         json: bool,
     },
     /// Verify that every directory object reachable from a library's HEAD is
-    /// stored in seafile's canonical (descending by name) order, which is what
-    /// makes its `fs_id` reproducible by an official client. Read-only unless
-    /// `--repair` is given.
+    /// stored in seafile's canonical (descending by name) order, which makes its
+    /// `fs_id` reproducible by an official client. Read-only unless `--repair`.
     VerifyDirOrder {
         /// Report only (the default); rejects `--repair`.
         #[arg(long, default_value_t = false, conflicts_with = "repair")]
         dry_run: bool,
-        /// Append one normalizing commit per affected library. History is not
-        /// rewritten and no object is deleted, so clients pick the fix up as an
-        /// ordinary update.
+        /// Append one normalizing commit per affected library; history is not
+        /// rewritten and no object is deleted, so clients see an ordinary update.
         #[arg(long, default_value_t = false)]
         repair: bool,
         /// Restrict the check to one library.
@@ -135,27 +125,21 @@ enum Command {
     },
     /// Run one confined job (`sandbox::worker`).
     ///
-    /// The server spawns this on itself for every request a sandbox-backed
-    /// feature has — document text extraction, image decode, EXIF and media
-    /// (ffmpeg) thumbnails — so the parser runs with an address-space limit, a
-    /// CPU limit, a timeout and the platform's file, network and process
-    /// confinement rather than inside the server. Hidden because it is not an
-    /// operator command: running it by hand reads one request from standard
-    /// input, and `--selftest` prints what the sandbox could establish on this
-    /// host for the profile it names.
+    /// Spawned for sandbox-backed work (document extraction, image decode, EXIF
+    /// and ffmpeg thumbnails) so the parser runs under the address-space, CPU and
+    /// timeout limits and the platform confinement. Hidden: it reads one request
+    /// from stdin, and `--selftest` reports what the sandbox could establish.
     #[command(hide = true)]
     ExtractWorker {
-        /// The parent says it wrapped this process in the platform runner
-        /// (macOS `sandbox-exec`), so files, the network and process creation
-        /// are not its own protections to establish.
+        /// The parent wrapped this process in the platform runner (macOS
+        /// `sandbox-exec`): files, network and process creation are not its to confine.
         #[arg(long, default_value_t = false)]
         seatbelt: bool,
         /// Report the confinement this host can give, then exit.
         #[arg(long, default_value_t = false)]
         selftest: bool,
-        /// Run the probe a serving process runs at startup — the child, and the
-        /// platform runner around it — print what it found, and exit non-zero
-        /// when the worker is unavailable.
+        /// Run the probe a serving process runs at startup, print what it found,
+        /// and exit non-zero when the worker is unavailable.
         #[arg(long, default_value_t = false)]
         probe: bool,
         /// Which pipeline this child confines itself for.
@@ -174,34 +158,27 @@ enum Command {
         /// The one scratch source the media profile may read.
         #[arg(long, value_name = "PATH")]
         src: Option<String>,
-        /// A file the parent created that no profile grants. The child must be
-        /// refused reading it for the files layer to count; the parent's own
-        /// probe is the only candidate that measures the read side on every
-        /// platform. Set by the startup probe, never by a request.
+        /// A file the parent created that no profile grants; reading it must be
+        /// refused for the files layer to count. Startup probe only, never a request.
         #[arg(long, value_name = "PATH")]
         probe_path: Option<String>,
     },
 }
 
-/// Commands sent from the optional system tray menu (and, on Windows, from the
-/// service control handler) to the server task. Defined unconditionally so
-/// `run_server` keeps a stable signature; the variants are only ever
-/// constructed by those two front-ends.
+/// Commands sent from the tray menu (and, on Windows, the service control
+/// handler). Defined unconditionally so `run_server` keeps a stable signature.
 #[allow(dead_code)]
 enum TrayCommand {
     Quit,
 }
 
-/// Why a tokio channel rather than the std one: the run loop restarts in place
-/// and has to keep *waiting* on the same receiver after a restart, which is
-/// only possible with a `recv(&mut self)` API. Senders are off-runtime
-/// threads, and an unbounded send never blocks them.
+/// A tokio channel, not std: the run loop restarts in place and must keep waiting on
+/// the same receiver (`recv(&mut self)`); senders are off-runtime threads, so an
+/// unbounded send never blocks them.
 type TrayCmdReceiver = tokio::sync::mpsc::UnboundedReceiver<TrayCommand>;
 
-/// Whether a configured secret has adequate length/entropy.
-///
-/// A 64-character value is treated as raw hex (matching `decode_master_key`);
-/// anything else must provide at least 32 bytes of raw material.
+/// Whether a configured secret has adequate length/entropy. A 64-character value
+/// is raw hex (matching `decode_master_key`); anything else needs 32+ raw bytes.
 fn secret_is_strong(s: &str) -> bool {
     if s.is_empty() {
         return false;
@@ -212,14 +189,10 @@ fn secret_is_strong(s: &str) -> bool {
     s.len() >= 32
 }
 
-/// Whether a secret that passed [`secret_is_strong`] still looks like a
-/// placeholder or a single repeated character.
-///
-/// A 30+ byte `"aaaa…"` or `"changeme-…"` satisfies the length check while
-/// carrying almost no entropy, and every key in the system (sessions, CSRF,
-/// sync-token encryption, at-rest blocks, notification JWTs) is derived from
-/// this value. Warn rather than refuse: refusing would break an existing
-/// deployment on upgrade, which is the operator's call.
+/// Whether a secret that passed [`secret_is_strong`] still looks like a placeholder
+/// or a single repeated character. Every key in the system (sessions, CSRF,
+/// sync-token encryption, at-rest blocks, notification JWTs) derives from it, so warn
+/// rather than refuse: refusing would break an existing deployment on upgrade.
 fn secret_looks_low_entropy(s: &str) -> bool {
     let mut chars = s.chars();
     let Some(first) = chars.next() else {
@@ -234,12 +207,9 @@ fn secret_looks_low_entropy(s: &str) -> bool {
         .any(|placeholder| lowered.contains(placeholder))
 }
 
-/// Whether an explicitly configured notification signing key is too weak.
-///
-/// An empty value (or the legacy placeholder) is *not* weak: it has already
-/// been replaced by a 256-bit key derived from `server.secret_key`, which is
-/// itself required to be strong in release builds. Only a key the operator
-/// set by hand can be weak here.
+/// Whether an explicitly configured notification signing key is too weak. Empty or
+/// the legacy placeholder is not: it is replaced by a 256-bit key derived from
+/// `server.secret_key`.
 fn notification_key_is_weak(key: &str) -> bool {
     !key.is_empty() && key != "nanofile-notification-secret" && !secret_is_strong(key)
 }
@@ -247,13 +217,11 @@ fn notification_key_is_weak(key: &str) -> bool {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // ── Decide the run mode first: the log target depends on it ────────
     let command = cli.command.unwrap_or(Command::Server);
 
-    // The extraction worker runs before anything else: it is a child of a
-    // serving process, has no state of its own, and must not need a config
-    // file, a database, a log target or a working directory. Confining itself
-    // is the first thing it does either way (`worker::run`).
+    // The extraction worker runs first: a child process with no state that must not
+    // need a config file, a database or a log target. Confining itself is its first
+    // act (`worker::run`).
     if let Command::ExtractWorker {
         seatbelt,
         selftest,
@@ -267,22 +235,20 @@ fn main() -> anyhow::Result<()> {
     {
         let profile =
             server::sandbox::Profile::parse(profile).unwrap_or(server::sandbox::Profile::Documents);
-        // The requirement the child judges itself by: the master switch, and
-        // nothing else. The resource bound it refuses without is read back from
-        // its own report, so the parent's rule and the child's are the same rule.
+        // The requirement the child judges itself by: the master switch, and nothing
+        // else. The resource bound is read from its own report, so parent and child
+        // apply the same rule.
         let requirement = server::sandbox::Requirement::new(!sandbox_off);
-        // What the media profile may reach. The paths come from the parent on
-        // this command line because the rules they become have to be installed
-        // before the request is read; the request only names the source so the
-        // two sides agree on which file that is.
+        // What the media profile may reach: these paths come from the parent on the
+        // command line because the rules they become must be installed before the
+        // request is read.
         let grants = server::sandbox::Grants {
             helper: ffmpeg.as_deref().map(std::path::Path::new),
             source: src.as_deref().map(std::path::Path::new),
         };
-        // `--probe` runs the parent's half of the startup check, and that half
-        // applies the requirement to the report it gets back — so the pair has
-        // to be known here and not only passed to the child. The server takes
-        // the same path through `lib.rs`, before any request is handed over.
+        // `--probe` runs the parent's half of the startup check and applies the
+        // requirement to the report it gets back, so the pair must be known here; the
+        // server takes the same path through `lib.rs`.
         server::sandbox::worker::configure_requirement(requirement);
         if let Some(helper) = &grants.helper {
             server::sandbox::worker::configure_helper(helper.to_path_buf());
@@ -305,10 +271,8 @@ fn main() -> anyhow::Result<()> {
             probe_path.as_deref().map(std::path::Path::new),
         );
     }
-    // A service is the server without a desktop: it has no console a person can
-    // read, no session to show a dialog in, and it must never try to put an icon
-    // where there is no desktop. Everything else about it is the ordinary
-    // headless server.
+    // A service is the server without a desktop: no console, no session dialog, and
+    // never a tray icon. Everything else is the ordinary headless server.
     #[cfg(target_os = "windows")]
     let service_run = matches!(
         command,
@@ -320,19 +284,12 @@ fn main() -> anyhow::Result<()> {
     let service_run = false;
     let serving = matches!(command, Command::Server) || service_run;
 
-    // `*_tracked` also reports which settings the environment supplied: the
-    // admin page needs that to say whether a database save would take effect.
-    //
-    // A config file named on the command line or by `NANOFILE_CONFIG` has to
-    // exist. These paths are what a login auto-start entry and a Windows service
-    // registration record, so a moved folder leaves them pointing at nothing —
-    // and falling back to built-in defaults would quietly start a *second*
-    // instance against the default database and port instead of reporting the
-    // broken reference.
-    //
-    // Failing here is before the subscriber exists, so the reason has to be
-    // delivered by hand: a log file, and a dialog only when there is a desktop
-    // to show one on (never for a service).
+    // A config file named on the command line or by `NANOFILE_CONFIG` has to exist:
+    // auto-start entries and service registrations record these paths, and falling back
+    // to defaults would quietly start a *second* instance against the default database
+    // and port instead of reporting the broken reference. Failing here is before the
+    // subscriber exists, so the reason is delivered by hand: a log file, and a dialog
+    // only when there is a desktop.
     let (loaded, resolved_config) = match Config::load_for_start_with_path(cli.config.as_deref()) {
         Ok(loaded) => loaded,
         Err(e) => {
@@ -343,22 +300,15 @@ fn main() -> anyhow::Result<()> {
     let mut config = loaded.config;
     let mut env_keys = loaded.env_keys;
 
-    // The path this start resolved — the one an auto-start entry records, the
-    // one the log target persistence writes to, and, for a start that has never
-    // been configured, the one a first-run setup writes. One source of truth:
-    // the loader and everything downstream must not disagree about which file
-    // is in play.
+    // The path this start resolved: what an auto-start entry records, what log
+    // persistence writes, and where a first-run setup writes. One source of truth.
     let config_path: PathBuf = resolved_config.path.clone();
 
-    // Panics must reach the log file even in GUI-subsystem Windows builds
-    // (no console shows them), so install the hook before anything else.
+    // Panics must reach the log file even in GUI-subsystem Windows builds, so hook first.
     logging::install_panic_hook();
 
-    // Every `service …` action runs without a console in a GUI-subsystem build
-    // (the tray is started by a double-click, and the elevated install helper by
-    // the tray), and the elevated helper's user-visible failure channel is a
-    // message box. Routing its tracing to the log file is what makes "the reason
-    // is in the log" true — and it leaves a record of install/uninstall.
+    // Every `service …` action runs without a console in a GUI-subsystem build, and its
+    // user-visible failure channel is a message box; the log file keeps the record.
     #[cfg(target_os = "windows")]
     let service_command = matches!(command, Command::Service { .. });
     #[cfg(not(target_os = "windows"))]
@@ -375,11 +325,9 @@ fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "tray"))]
     let (tray_mode, headless_reason): (bool, Option<&'static str>) = (false, None);
 
-    // CLI subcommands may be interactive; GUI-subsystem builds have no
-    // console, so reattach to the launching terminal before any output. A
-    // running server (desktop or service) has nothing to reattach to, and the
-    // install/uninstall helper launched by the tray has no parent console for
-    // `AttachConsole` to find — it fails harmlessly there.
+    // CLI subcommands may be interactive and GUI-subsystem builds have no console, so
+    // reattach before any output. A serving process and the elevated helper have no
+    // parent console for `AttachConsole` to find.
     if !serving {
         console::attach_parent_console();
     }
@@ -391,8 +339,7 @@ fn main() -> anyhow::Result<()> {
         } else {
             logging::Kind::Cli
         },
-        // A service (and its installer) has no console at all; a tray build's
-        // stdout is invisible by construction. Both want the log file.
+        // A service, its installer and a tray build have no console: all want the log.
         tray_mode || service_run || service_command,
         &config_path,
     );
@@ -400,18 +347,12 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("{reason}");
     }
 
-    // ── First-run setup ────────────────────────────────────────────────
-    // A serving start that was named no configuration file, found none, and was
-    // handed nothing by the environment is not a deployment to report an error
-    // about: it is an installation nobody has set up yet. So instead of failing
-    // on the missing master secret (which is what a double-clicked release build
-    // used to do), it serves the setup page, which collects what that secret and
-    // every state path have to be, writes them to the per-user configuration
-    // file, and hands the listener over so the server starts on the very socket
-    // the page was served on.
-    //
-    // Deliberately before the relative-path resolution and the secret checks
-    // below: those read the configuration this writes.
+    // A serving start with no configuration file and nothing handed to it by the
+    // environment is an installation nobody has set up yet, not a deployment to report
+    // an error about: it serves the setup page, writes the collected secret and state
+    // paths to the per-user configuration file, and hands the listener over so the
+    // server starts on the socket the page was served on. Deliberately before the
+    // relative-path resolution and secret checks below.
     let mut setup_listener: Option<server::restart::BoundListener> = None;
     if matches!(command, Command::Server)
         && !service_run
@@ -427,18 +368,15 @@ fn main() -> anyhow::Result<()> {
         match rt.block_on(server::setup::run(config_path.clone(), config, defaults))? {
             server::setup::SetupOutcome::Completed { listener, .. } => {
                 setup_listener = listener;
-                // Everything below reads the configuration the page just wrote:
-                // the master secret, the database and every state directory.
+                // Everything below reads the configuration the page just wrote.
                 let (reloaded, _) = Config::load_for_start_with_path(Some(&config_path))?;
                 config = reloaded.config;
                 env_keys = reloaded.env_keys;
             }
             server::setup::SetupOutcome::Aborted => return Ok(()),
             server::setup::SetupOutcome::Expired => {
-                // A GUI-subsystem build has no console and no window: the log
-                // file and this box are the only ways the reason reaches a
-                // person. Everywhere else the logged line is enough, and a
-                // message box on a server would have nobody to dismiss it.
+                // A GUI-subsystem build has no console, so the log file and this box are
+                // the only routes to a person; a server has nobody to dismiss a box.
                 logging::show_message_box(
                     "Nanofile",
                     "Nanofile could not be set up: the configuration page was not completed in \
@@ -452,13 +390,9 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // ── Relative state paths ───────────────────────────────────────────
-    // The database, the block store and the search index default to relative
-    // paths, and the working directory of a login-started instance has nothing
-    // to do with the installation — a Windows `Run` registry value cannot even
-    // carry a start directory — so `data/nanofile.db` used to be opened (and
-    // created) wherever the process happened to start, which for an auto-started
-    // tray instance is a system directory it may not write to.
+    // State paths default to relative, and a login-started instance's working directory
+    // has nothing to do with the installation (a Windows `Run` value cannot carry a start
+    // directory), so `data/nanofile.db` would land wherever the process happened to start.
     let state_base = infra::config::state_path_base();
     let resolutions = config.resolve_state_paths(&state_base);
     let rewritten: Vec<&str> = resolutions
@@ -486,14 +420,11 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    // ── Server secret key ──────────────────────────────────────────────
-    // Release builds require an explicit, high-entropy secret: the storage
-    // encryption master key, CSRF/notification JWT keys and the sync-token
-    // encryption key are all derived from it, so an ephemeral secret silently
-    // makes encrypted data unreadable after a restart and rotates sessions.
-    // Debug builds keep the zero-config auto-generated behaviour for local
-    // development. Only `nanofile server` needs the secret; admin CLI
-    // subcommands (adduser, --version, ...) must not be blocked by it.
+    // Release builds require an explicit, high-entropy secret: the storage master key,
+    // the CSRF/notification JWT keys and the sync-token encryption key are all derived
+    // from it, so an ephemeral secret makes encrypted data unreadable after a restart
+    // and rotates sessions. Debug builds keep the zero-config behaviour; only
+    // `nanofile server` needs it, so CLI subcommands are not blocked.
     let is_dev = cfg!(debug_assertions);
     let allow_ephemeral = std::env::var("NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -502,12 +433,9 @@ fn main() -> anyhow::Result<()> {
 
     if !secret_is_strong(&config.server.secret_key) {
         if is_dev || allow_ephemeral || !needs_secret {
-            // An ephemeral key is regenerated on every start, which silently
-            // invalidates every key derived from it. For sessions and CSRF that
-            // is an inconvenience; with at-rest block encryption it is
-            // irreversible data loss (the stored blocks can never be decrypted
-            // again). Refuse instead of starting a deployment that will destroy
-            // its own data on the next restart.
+            // An ephemeral key is regenerated on every start, which invalidates every key
+            // derived from it. With at-rest block encryption that is irreversible data
+            // loss; refuse rather than start a deployment that destroys its own data.
             if needs_secret
                 && config.storage.block_encryption_mode()
                     != infra::storage::encrypting_block_store::BlockEncryptionMode::Off
@@ -562,7 +490,6 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    // An explicitly configured at-rest encryption key must also be strong.
     if let Some(key) = &config.storage.encryption_key
         && !secret_is_strong(key)
     {
@@ -579,16 +506,12 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // ── Encrypted-library wire contract ────────────────────────────────
-    // `encrypted_library_version` and `encrypted_library_pwd_hash_algo` are
-    // echoed to every client and are taken verbatim as the `enc_version` /
-    // KDF of the libraries the client creates, so an unsupported value
-    // silently breaks encrypted-library creation everywhere.
+    // The encrypted-library version and password-hash algorithm are echoed to every client
+    // and taken verbatim as the `enc_version` / KDF, so a bad value breaks all creation.
     if let Err(message) = config.server.validate_encrypted_library() {
         anyhow::bail!("{message}");
     }
 
-    // ── Derive notification private key from secret_key if not set ─────
     if config.notification.private_key.is_empty()
         || config.notification.private_key == "nanofile-notification-secret"
     {
@@ -599,9 +522,9 @@ fn main() -> anyhow::Result<()> {
         config.notification.private_key = hex::encode(hasher.finalize());
     }
 
-    // An explicitly configured notification signing key must also be strong.
-    // Guessing it lets an attacker mint subscription JWTs for any repository
-    // (and event JWTs, when `accept_legacy_event_tokens` is on).
+    // An explicitly configured notification signing key must also be strong: guessing
+    // it lets an attacker mint subscription JWTs for any repository (and event JWTs,
+    // when `accept_legacy_event_tokens` is on).
     if notification_key_is_weak(&config.notification.private_key) {
         if is_dev || allow_ephemeral || !needs_secret {
             tracing::warn!(
@@ -619,7 +542,6 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // ── Derive storage encryption key from secret_key if not set ────────
     let enc_mode = config.storage.block_encryption_mode();
     if enc_mode != infra::storage::encrypting_block_store::BlockEncryptionMode::Off
         && config.storage.encryption_key.is_none()
@@ -637,9 +559,8 @@ fn main() -> anyhow::Result<()> {
 
     match command {
         Command::Server => {
-            // With the tray feature compiled in and a desktop session
-            // present, the platform tray event loop owns the main thread and
-            // the server runs on background tokio workers instead.
+            // With the tray feature compiled in and a desktop session present, the tray
+            // event loop owns the main thread and the server runs on background workers.
             #[cfg(feature = "tray")]
             if tray_mode {
                 tray::run(config, env_keys, config_path, setup_listener);
@@ -721,8 +642,7 @@ fn main() -> anyhow::Result<()> {
                 .await?;
                 report.print(json);
                 if report.has_findings() {
-                    // Non-zero so a monitoring wrapper notices without parsing
-                    // the report.
+                    // Non-zero so a monitoring wrapper notices without parsing the report.
                     std::process::exit(1);
                 }
                 anyhow::Ok(())
@@ -743,16 +663,14 @@ fn main() -> anyhow::Result<()> {
                         .await?;
                 report.print(json);
                 if report.has_findings() {
-                    // Non-zero so a monitoring wrapper notices without parsing
-                    // the report.
+                    // Non-zero so a monitoring wrapper notices without parsing the report.
                     std::process::exit(1);
                 }
                 anyhow::Ok(())
             })
         }
-        // Windows service control. `run` never returns on its own: the SCM owns
-        // this process from `StartServiceCtrlDispatcherW` onwards, and the
-        // server itself runs inside `ServiceMain`.
+        // `run` never returns on its own: the SCM owns this process from
+        // `StartServiceCtrlDispatcherW`, and the server runs inside `ServiceMain`.
         #[cfg(target_os = "windows")]
         Command::Service { action } => {
             startup::service::run_cli(action, &config, &config_path, env_keys)
@@ -762,31 +680,25 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-/// DB setup plus server startup — shared by the headless path, the tray path
-/// (`tray::run` spawns this onto its background runtime) and the Windows
-/// service path.
+/// DB setup plus server startup — shared by the headless, tray (`tray::run` spawns
+/// this onto its background runtime) and Windows service paths.
 ///
-/// Runs the server until the process is asked to stop. An administrator
-/// restarting the server from `/sysadmin/settings/` does *not* return: the
-/// server is torn down through the normal graceful shutdown and built again
-/// from the settings table, keeping the listening socket across the gap (see
-/// `server::restart`). Everything a fresh process would re-read — the saved
-/// settings, the database, the indexer, the caches, the scheduler — is rebuilt
-/// by the next iteration.
+/// An administrator restart from `/sysadmin/settings/` does *not* return: the server
+/// is torn down through the normal shutdown and rebuilt from the settings table,
+/// keeping the listening socket across the gap (see `server::restart`).
 ///
-/// `listener` is the socket a completed first-run setup was already serving on.
-/// Handing it in is what keeps the port: releasing it and binding it again
-/// moments later is what Windows refuses while the connection the setup page
-/// just answered sits in `TIME_WAIT`. It is `None` on every other path.
+/// `listener` is the socket a completed first-run setup was already serving on:
+/// handing it in keeps the port, which Windows refuses to rebind while the setup
+/// page's connection sits in `TIME_WAIT`.
 async fn run_server_flow(
     config: Config,
     env_keys: EnvKeys,
     mut tray_cmd: Option<TrayCmdReceiver>,
     mut listener: Option<server::restart::BoundListener>,
 ) -> anyhow::Result<()> {
-    // Built once, outside the generation loop, for the same reason the listener
-    // is: an in-place restart rebuilds `AppState`, and a run submitted before it
-    // must still be pollable after it.
+    // Built once, outside the generation loop, for the same reason the listener is: an
+    // in-place restart rebuilds `AppState`, and a run submitted before it must still
+    // be pollable after it.
     let tasks = server::tasks::TaskSystem::new(
         server::tasks::TaskLimits::default(),
         tokio_util::sync::CancellationToken::new(),
@@ -827,11 +739,8 @@ async fn run_server(
     first: bool,
     tasks: &Arc<server::tasks::TaskSystem>,
 ) -> anyhow::Result<server::restart::StopReason> {
-    // ── The layered configuration ─────────────────────────────────────
-    // Read the saved settings before anything is built from the config: a value
-    // an administrator saved must decide the bind address, the data
-    // directories, the caches and every other startup-time capture, not just
-    // what a request sees afterwards.
+    // Read the saved settings before anything is built: a value an administrator saved must
+    // decide the bind address, the data directories, the caches and other startup captures.
     let settings_repo =
         server::repository::settings::DbSettingsRepository::new(Arc::new(db.clone()));
     let layers = server::settings::SettingsLayers::load(&settings_repo, &config, env_keys).await?;
@@ -853,15 +762,13 @@ async fn run_server(
     }
     let config = startup;
 
-    // ── Advisories about the *effective* configuration ─────────────────
-    // These read the layered config, not the file: a value saved at
-    // `/sysadmin/settings/` (or supplied by the environment) is what the server
-    // will actually run with, and an advisory about the other one is noise.
+    // These read the layered config, not the file: a saved value is what the server runs
+    // with, and an advisory about the other one is noise.
 
     // While `site_url` is unconfigured the request Host is echoed into
     // download/block URLs so LAN clients get a reachable address. That value is
     // client-supplied, so an attacker who can make a client use their hostname
-    // (DNS rebinding, wildcard vhost) receives the client's capability token.
+    // (DNS rebinding, wildcard vhost) receives that client's capability token.
     if config.server.site_url_is_default() && config.server.allowed_hosts.is_empty() {
         if config.server.trust_request_host {
             tracing::warn!(
@@ -881,10 +788,8 @@ async fn run_server(
         }
     }
 
-    // `0` is not "use the default" for these two: on the API login path it means
-    // the token never expires, so it silently turns into a permanent bearer
-    // credential. The web-UI path reads `0` the opposite way, which makes this
-    // easy to misread — say so out loud rather than letting it pass silently.
+    // `0` is not "use the default" for these two: on the API login path it means a token
+    // that never expires, a permanent bearer credential; the web-UI path reads it opposite.
     if config.auth.api_token_ttl_days == 0 {
         tracing::warn!(
             "auth.api_token_ttl_days = 0: account tokens issued by POST /api2/auth-token/ \
@@ -896,11 +801,10 @@ async fn run_server(
         tracing::warn!("auth.sync_token_ttl_days = 0: repository sync tokens will NEVER expire.");
     }
 
-    // Orphan blocks are no longer a quota bypass — every block write is charged
-    // as an uncommitted write (`service::fs::quota::reserve_block_bytes`) — but
-    // with GC off nothing ever reclaims blocks that no commit references (an
-    // upload abandoned before its final chunk, a sync whose branch update
-    // failed). Say so rather than letting the disk watermark grow silently.
+    // With GC off nothing reclaims blocks no commit references (an upload abandoned
+    // before its final chunk, a sync whose branch update failed). Block writes are
+    // still charged as uncommitted writes (`service::fs::quota::reserve_block_bytes`),
+    // so quota bounds one user but total disk usage only grows.
     if !config.gc.enabled {
         tracing::warn!(
             "gc.enabled = false: blocks and FS objects that no commit references are \
@@ -915,15 +819,10 @@ async fn run_server(
         config.server.port
     );
 
-    // Ensure every private data directory exists with owner-only permissions.
-    // `ensure_private_dir` is also used for the log directory (which is created
-    // earlier, during `logging::init`), so all of them are covered regardless
-    // of the operator's umask.
-    //
-    // Every failure names the setting and the directory: under a service the
-    // only report is a log line (and a restart that fails the same way), and
-    // "Permission denied" without the path is not something an operator can act
-    // on.
+    // Private data directories are created with owner-only permissions (the log
+    // directory too, via `logging::init`), so the operator's umask does not decide.
+    // Failures name the setting and the directory: under a service the only report is
+    // a log line, and "Permission denied" without the path is not actionable.
     for (field, dir) in [
         ("storage.block_dir", &config.storage.block_dir),
         ("storage.temp_dir", &config.storage.temp_dir),
@@ -940,12 +839,9 @@ async fn run_server(
         })?;
     }
 
-    // ── Block layout migration (blocks are stored per library) ─────────
-    // The legacy flat layout (`blocks/<2hex>/<id>`) has no read path in the
-    // running server, so the migration must complete *before* anything serves
-    // a request: starting with the legacy tree still present would 404 every
-    // download. It is a pure copy, resumable, and removes the legacy tree only
-    // after every referenced block is in its new place.
+    // The legacy flat layout (`blocks/<2hex>/<id>`) has no read path in the running
+    // server, so this must complete *before* anything serves: with the legacy tree
+    // present every download would 404. A resumable copy that then removes it.
     {
         let report = server::fs::core::block_migration::BlockLayoutMigration::run(
             &db,
@@ -968,11 +864,9 @@ async fn run_server(
         }
     }
 
-    // ── Stale block temp files ────────────────────────────────────────
-    // A writer killed mid-block leaves a `{block_id}.{uuid}.tmp` beside the
-    // block: writes publish atomically, so the temp file is never the block
-    // itself, but it would linger forever. Sweep once, before requests are
-    // served.
+    // A writer killed mid-block leaves a `{block_id}.{uuid}.tmp` beside the block:
+    // writes publish atomically, so it is never the block itself, but it would linger
+    // forever. Swept once, before requests are served.
     {
         let store =
             infra::storage::block_store::BlockStorage::new(config.storage.block_dir.clone());
@@ -983,19 +877,14 @@ async fn run_server(
         }
     }
 
-    // ── One-shot thumbnail cache purge (legacy tile sizes) ─────────────
-    // The DB half runs in the `purge_legacy_thumbnail_sizes` migration; the
-    // bytes on disk can only be removed here, where the cache directory is
-    // known, and only once (a marker file in the cache directory records it).
-    // Spawned rather than awaited: nothing depends on it, it walks a directory
-    // tree whose size we do not control, and deleting a cache file that a
-    // request is about to ask for again is harmless — it is simply regenerated.
+    // The DB half runs in the `purge_legacy_thumbnail_sizes` migration; the bytes on
+    // disk can only go here, where the cache directory is known, and only once (a
+    // marker file records it). Spawned rather than awaited: a cache file is regenerated.
     {
         let thumbnail_dir = config.storage.thumbnail_dir.clone();
         tokio::spawn(async move {
             match server::service::fs::thumbnail::purge_legacy_cache_files(&thumbnail_dir).await {
-                // A no-op pass (fresh install, or nothing left to reclaim) stays
-                // off the INFO log so a normal boot stays quiet.
+                // A no-op pass stays off the INFO log so a normal boot stays quiet.
                 Ok(report) if report.ran => {
                     tracing::info!("thumbnail cache purge: {}", report.summary())
                 }
@@ -1008,10 +897,8 @@ async fn run_server(
         });
     }
 
-    // Media thumbnail scratch files an earlier run could not remove: the request
-    // path deletes its own, and a process that was killed mid-request does not
-    // get to. Swept before anything serves, so a request cannot find — and then
-    // race — a file from the run before this one.
+    // Media thumbnail scratch files an earlier run could not remove: a process killed
+    // mid-request does not delete its own. Swept before serving, so no request races one.
     {
         let removed =
             server::service::fs::thumbnail::purge_media_scratch(&config.storage.temp_dir).await;
@@ -1033,23 +920,21 @@ async fn run_server(
         temp_file_manager,
         tasks.clone(),
     ));
-    // Say what the layering decided: superseded config-file values, changes that
-    // need a restart, rows this build does not know, unreadable secrets.
+    // Say what the layering decided: superseded values, pending restarts, unknown
+    // rows, unreadable secrets.
     state.settings.log_startup_diagnostics();
-    // Follow the settings table, so a change made on another instance reaches
-    // this one without a restart.
+    // Follow the settings table, so a change made on another instance reaches this
+    // one without a restart.
     state.spawn_settings_refresh();
 
-    // Rewrite any legacy plaintext sync tokens as AEAD ciphertext. This is
-    // non-disruptive — clients keep presenting the same raw token — and must
-    // happen before the HTTP server starts serving requests.
+    // Rewrite legacy plaintext sync tokens as AEAD ciphertext: non-disruptive (clients keep
+    // presenting the same raw token) and it must happen before the HTTP server serves.
     server::repository::sync_token::encrypt_legacy_sync_tokens(
         state.db.as_ref(),
         &state.token_cipher,
     )
     .await?;
 
-    // ── Auto-create admin user from config/env on first startup ──────
     if let (Some(admin_email), Some(admin_password)) = (
         &state.config().admin_init.email,
         &state.config().admin_init.password,
@@ -1077,11 +962,9 @@ async fn run_server(
 
     let app = server::app::build_app(state.clone());
 
-    // ── Bind, or carry the listening socket over ─────────────────────
-    // A restart keeps the original socket and hands this generation a
-    // duplicate, so the port is never rebound (Windows refuses a bind while a
-    // drained connection sits in TIME_WAIT). Only a *changed* address rebinds,
-    // and that path retries: whatever held it may be on its way out.
+    // A restart keeps the original socket and hands this generation a duplicate, so
+    // the port is never rebound (Windows refuses a bind while a drained connection
+    // sits in TIME_WAIT). Only a *changed* address rebinds, and that path retries.
     let addr = format!("{}:{}", config.server.addr, config.server.port);
     match server::restart::BoundListener::acquire(listener, &addr, !first).await {
         Ok(()) => server::restart::clear_failure(),
@@ -1089,10 +972,9 @@ async fn run_server(
             let Some(current) = listener.as_ref() else {
                 return Err(anyhow::anyhow!("failed to bind {addr}: {e}"));
             };
-            // The restart cannot move to the saved address. Serving nothing
-            // would be worse than serving the old one, so keep the socket that
-            // works and record why — `/sysadmin/settings/` shows it, because
-            // the RESTART response has long been sent by the time this fails.
+            // The restart cannot move to the saved address. Serving nothing would be worse
+            // than serving the old one, so keep the socket that works and record why:
+            // `/sysadmin/settings/` shows it, long after the RESTART response was sent.
             server::restart::note_failure(format!(
                 "the restart could not bind {addr} ({e}); still listening on {}",
                 current.addr()
@@ -1107,12 +989,10 @@ async fn run_server(
     let conn_listener = bound.to_tokio()?;
     tracing::info!("listening on {}", bound_addr);
 
-    // ── Start server with graceful shutdown via oneshot ─────────────
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
-    // ConnectInfo exposes the TCP peer address to handlers so rate
-    // limiting can use the real client IP instead of the spoofable
-    // X-Forwarded-For header.
+    // ConnectInfo exposes the TCP peer address to handlers so rate limiting can use
+    // the real client IP instead of the spoofable X-Forwarded-For header.
     let header_read_timeout = match config.server.header_read_timeout_secs {
         0 => None,
         secs => Some(std::time::Duration::from_secs(secs)),
@@ -1122,7 +1002,6 @@ async fn run_server(
             .await
     });
 
-    // ── Wait for Ctrl+C, SIGTERM, a tray quit or an admin restart ───
     let ctrl_c = tokio::signal::ctrl_c();
     let terminate = async {
         #[cfg(unix)]
@@ -1135,9 +1014,8 @@ async fn run_server(
         #[cfg(not(unix))]
         std::future::pending::<()>().await;
     };
-    // The tray and the service control handler both send on a tokio channel
-    // that is *reused* across restarts (`recv()` borrows rather than consumes),
-    // so a restart cannot silently disconnect the menu's Quit item.
+    // Tray and service control send on a tokio channel that is *reused* across restarts
+    // (`recv()` borrows), so a restart cannot disconnect the menu's Quit item.
     let tray_quit = async {
         if let Some(rx) = tray_cmd.as_mut() {
             while let Some(cmd) = rx.recv().await {
@@ -1171,7 +1049,6 @@ async fn run_server(
 
     tracing::info!("Shutdown signal received, starting graceful shutdown...");
 
-    // ── Signal the server to drain, bounded to 25 seconds ──────────
     let _ = shutdown_tx.send(());
     match tokio::time::timeout(std::time::Duration::from_secs(25), server_handle).await {
         Ok(Ok(Ok(()))) => tracing::info!("Server finished normally"),
@@ -1180,22 +1057,18 @@ async fn run_server(
         Err(_) => tracing::warn!("Drain timed out after 25s, proceeding with cleanup"),
     }
 
-    // ── Graceful shutdown sequence ──────────────────────────────────
     tracing::info!("Stopping background tasks...");
     state.shutdown_token.cancel();
 
-    // Record anything this generation started that has not finished. Without
-    // this a client polling a task id submitted just before the restart would
-    // get a 404 from the next generation, because the run would never report
-    // again. Bounded so a wedged job cannot hold the restart open.
+    // Record anything this generation started that has not finished: otherwise a
+    // client polling a task id submitted just before the restart gets a 404 from the
+    // next generation. Bounded so a wedged job cannot hold the restart open.
     state.tasks.drain(std::time::Duration::from_secs(5)).await;
 
-    // Close WebSocket connections cleanly.
     if let Some(ref mgr) = state.notification_manager {
         mgr.shutdown().await;
     }
 
-    // Commit Tantivy indexer.
     if let Some(ref indexer) = state.indexer
         && let Err(e) = indexer.commit()
     {
@@ -1210,11 +1083,8 @@ async fn run_server(
     Ok(reason)
 }
 
-/// Read a password from the first line of `reader`.
-///
-/// Whitespace is trimmed to match how `NANOFILE_ADMIN_INIT_PASSWORD_FILE` and
-/// `NANOFILE_STORAGE_ENCRYPTION_KEY_FILE` are read, so a trailing newline (or
-/// a CRLF line ending) never becomes part of the password.
+/// Read a password from the first line of `reader`, trimmed like
+/// `NANOFILE_ADMIN_INIT_PASSWORD_FILE`, so a trailing newline or CRLF never gets in.
 fn read_password_line<R: std::io::BufRead>(reader: R) -> anyhow::Result<String> {
     let mut line = String::new();
     let mut reader = reader;
@@ -1249,9 +1119,9 @@ async fn adduser(
     };
 
     let password = match (password, password_stdin, password_file) {
-        // A command-line password is readable by every local user through
-        // `ps` and lands in the shell history; keep it working for scripts
-        // that already rely on it, but steer the operator elsewhere.
+        // A command-line password is readable by every local user through `ps` and
+        // lands in the shell history; keep it working for scripts that already rely
+        // on it, but steer the operator elsewhere.
         (Some(p), _, _) => {
             eprintln!(
                 "warning: --password is visible in shell history and process listings; \
@@ -1357,18 +1227,16 @@ mod secret_strength_tests {
 
     #[test]
     fn notification_key_only_weak_when_explicitly_set() {
-        // Derived (empty) and legacy placeholder values are replaced at
-        // startup by a 256-bit derived key, so they are not reportable here.
+        // Derived (empty) and legacy placeholder values are replaced at startup by
+        // a 256-bit derived key, so they are not reportable here.
         assert!(!notification_key_is_weak(""));
         assert!(!notification_key_is_weak("nanofile-notification-secret"));
-        // An explicitly configured strong key passes.
         assert!(!notification_key_is_weak(
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ));
         assert!(!notification_key_is_weak(
             "a-32-byte-plus-raw-secret-value!!!"
         ));
-        // Short, non-hex-64 or placeholder-length values are weak.
         assert!(notification_key_is_weak("abc"));
         assert!(notification_key_is_weak("nanofile-notify"));
         assert!(notification_key_is_weak(&"z".repeat(64)));

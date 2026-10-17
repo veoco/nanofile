@@ -13,8 +13,7 @@ use crate::webdav::util::{
 };
 use crate::webdav::xml::{PropResponse, ResourceProps, build_multistatus};
 
-/// PROPFIND handler. Returns a 207 Multi-Status document listing the target
-/// and (depending on Depth) its descendants.
+/// PROPFIND handler: a 207 Multi-Status listing the target and its descendants.
 pub async fn propfind(
     state: Arc<AppState>,
     auth: WebDavAuth,
@@ -42,10 +41,8 @@ pub async fn propfind(
         return StatusCode::BAD_REQUEST.into_response();
     }
 
-    // The multistatus is built in memory, and an absent `Depth` header means
-    // `infinity`, so bound what one request may materialise. Over the cap the
-    // client is told to retry with a shallower depth instead of being served a
-    // truncated (and thus wrong) listing.
+    // The multistatus is built in memory and an absent `Depth` means infinity,
+    // so over the cap the client is told to retry shallower, not given a truncated list.
     let limit = state.config().server.max_propfind_entries;
     let exceeds_limit = |count: usize| limit > 0 && count > limit;
 
@@ -152,8 +149,7 @@ fn push_entry(responses: &mut Vec<PropResponse>, repo_id: &str, full_path: &str,
 }
 
 /// Detect whether the PROPFIND body requests property *names* only
-/// (`<D:propname/>`). We return the same standard property set either way;
-/// this only affects whether values are emitted.
+/// (`<D:propname/>`); the same property set is returned either way.
 async fn body_requests_propname(body: Body) -> bool {
     match axum::body::to_bytes(body, 64 * 1024).await {
         Ok(b) => String::from_utf8_lossy(&b)

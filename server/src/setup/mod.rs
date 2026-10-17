@@ -1,28 +1,14 @@
 //! First-run setup: what a start with no configuration at all serves.
 //!
-//! A zero-config start has nothing to report — there is no configuration file to
-//! complain about and no environment variable to name — so it serves a page
-//! instead: one that creates the first administrator, generates the master
-//! secret, decides where state lives, and writes `~/.nanofile/config.toml` once.
-//! Every later start reads that file and never comes back here.
+//! A zero-config start serves a page that creates the first administrator, generates
+//! the master secret, decides where state lives, and writes `~/.nanofile/config.toml`
+//! once; every later start reads that file and never comes back here.
 //!
-//! Three properties shape the implementation:
-//!
-//! * **It runs before the server exists.** The setup page is its own small
-//!   router on its own listener; no `AppState`, no database-backed route and no
-//!   middleware that assumes a signed-in session is involved. The configuration
-//!   the page writes is therefore the configuration the *next* line of `main`
-//!   loads, and nothing has to be reloaded in place.
-//! * **The socket is handed over, not released.** When the page is served on the
-//!   address the server will use, the completed setup gives that exact
-//!   [`BoundListener`] to the server flow. Releasing the port and rebinding it
-//!   moments later is what Windows refuses while a drained connection sits in
-//!   `TIME_WAIT` — the browser that just finished the form is exactly such a
-//!   connection.
-//! * **The token is the credential.** The page URL carries a 128-bit token that
-//!   is printed to stdout and to the log, and auto-opened in a browser when
-//!   there is a desktop. A bare `/` never reveals it, so a port that happens to
-//!   be reachable from elsewhere cannot be used to claim the installation.
+//! Invariants: it runs before the server exists, so the file it writes is the one the
+//! *next* line of `main` loads; the completed setup hands the exact [`BoundListener`]
+//! over rather than releasing and rebinding it, which Windows refuses while a drained
+//! connection sits in `TIME_WAIT`; and the URL's 128-bit token is printed and logged
+//! but never revealed at a bare `/`.
 
 pub mod page;
 pub mod plan;
@@ -50,74 +36,53 @@ use crate::i18n::I18n;
 use crate::restart::BoundListener;
 use plan::CONFIG_HEADER;
 
-/// How long a setup page may sit unanswered before the process gives up.
-///
-/// Bounded rather than indefinite: a double-clicked GUI build has no window a
-/// person can close, so a page nobody ever finishes would leave a process
-/// running with no visible trace of why. Running the program again starts a
-/// fresh setup page.
+/// How long a setup page may sit unanswered. Bounded: a GUI build has no window to close.
 const SETUP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
-/// How long a completed setup waits for the page it just served to be flushed
-/// before the listener is torn down.
+/// How long a completed setup waits for the page to flush before the listener closes.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// What a completed setup created, as the page reports it.
 #[derive(Debug, Clone)]
 pub struct SetupResult {
     pub config_path: PathBuf,
     pub data_dir: PathBuf,
     pub site_url: String,
-    /// The address the submitted settings name. The runner compares it with the
-    /// socket the page was served on to decide whether that socket can be
-    /// handed over.
+    /// The address the submitted settings name, compared with the socket serving the page.
     pub address: String,
-    /// Whether the socket this page was served on is the one the server will
-    /// use. The done page's automatic refresh is relative only when it is: a
-    /// fallback socket is closed before the server starts.
+    /// Whether this page's socket is the server's; refresh is relative only when it is.
     pub handover: bool,
-    /// The administrator this setup created, when the database had no account
-    /// yet.
+    /// The administrator this setup created, when the database had no account yet.
     pub created_email: Option<String>,
-    /// Accounts the database already had — a configuration file that was
-    /// deleted while its data stayed behind.
+    /// Accounts the database already had: a configuration file deleted, its data kept.
     pub accounts_kept: u64,
 }
 
-/// Why the setup phase ended.
 pub enum SetupOutcome {
     /// The page was completed and the configuration is on disk.
     Completed {
         result: SetupResult,
-        /// The socket the page was served on, when it is the one the server
-        /// will use (`None` when the submitted address differs, or when the
-        /// configured one was busy and setup fell back to a random port).
+        /// The socket the page was served on when it is the server's: `None` otherwise.
         listener: Option<BoundListener>,
     },
     /// Ctrl+C, SIGTERM or a service stop: nothing was written.
     Aborted,
-    /// Nobody completed the page within [`SETUP_TIMEOUT`].
+    /// Nobody completed the page within `SETUP_TIMEOUT`.
     Expired,
 }
 
-/// The page's state: what it was built with, and what it produced.
 pub struct SetupState {
     token: String,
     config_path: PathBuf,
     defaults: SetupDefaults,
     config: Config,
     outcome: tokio::sync::Mutex<Option<SetupResult>>,
-    /// Held for the duration of a submit, so two tabs (or a reload racing the
-    /// first response) cannot both create an administrator.
+    /// Held for a submit, so two tabs cannot both create an administrator.
     submitting: tokio::sync::Mutex<()>,
     done: tokio::sync::Notify,
 }
 
 impl SetupState {
-    /// Build the state a [`setup_router`] serves.
-    ///
-    /// Public so a test (or an embedding host) can drive the page without going
-    /// through [`run`], which owns a real listener and a real timeout.
+    /// Build the state a [`setup_router`] serves; public so a test can drive the page alone.
     pub fn new(
         token: String,
         config_path: PathBuf,
@@ -135,16 +100,12 @@ impl SetupState {
         })
     }
 
-    /// What a completed submit produced, if one has completed.
     pub async fn result(&self) -> Option<SetupResult> {
         self.outcome.lock().await.clone()
     }
 
-    /// Resolve once a submit has finished the setup.
-    ///
-    /// `notify_one` rather than `notify_waiters`: it stores a permit when nobody
-    /// is waiting yet, so a completion that lands between the check below and
-    /// the await cannot be missed.
+    /// Resolve once a submit has finished the setup. `notify_one` rather than
+    /// `notify_waiters` keeps a permit when nobody waits yet, so nothing is missed.
     pub async fn wait_for_result(&self) -> SetupResult {
         loop {
             if let Some(result) = self.result().await {
@@ -155,9 +116,7 @@ impl SetupState {
     }
 }
 
-/// Run the setup phase: serve the page on the best socket available, wait for it
-/// to be completed (or for the process to be asked to stop), and report what
-/// happened.
+/// Run the setup phase: serve the page, wait for it to be completed, and report it.
 pub async fn run(
     config_path: PathBuf,
     config: Config,
@@ -166,9 +125,7 @@ pub async fn run(
     let token = random_token();
     let address = format!("{}:{}", defaults.addr.trim(), defaults.port);
 
-    // Preferred: the very socket the server will use. When it works, the
-    // completed setup hands it over instead of releasing the port and racing
-    // `TIME_WAIT`.
+    // Preferred: the socket the server will use, so the setup hands it over, never a rebind.
     let mut held: Option<BoundListener> = None;
     let mut preferred: Option<tokio::net::TcpListener> = None;
     match BoundListener::acquire(&mut held, &address, false).await {
@@ -195,17 +152,12 @@ pub async fn run(
     let (listener, fallback) = match preferred {
         Some(listener) => (listener, false),
         None => {
-            // Somebody else holds the configured address. The page is then served
-            // somewhere reachable *now*, and the form says the prefilled port is
-            // taken instead of accepting it and failing to start.
+            // Somebody else holds the configured address: the page is served elsewhere.
             held = None;
             (tokio::net::TcpListener::bind("127.0.0.1:0").await?, true)
         }
     };
-    // Whatever socket is actually serving the page is the one the submit is
-    // allowed to name: its address counts as available even though a second
-    // bind of it would fail. Set for the fallback too, so a form that names the
-    // address the page is served on is not rejected by its own listener.
+    // The socket serving the page counts as available to the submit though a bind fails.
     let bound_addr = listener.local_addr()?;
     defaults.held_address = Some(bound_addr.to_string());
     defaults.port_in_use = fallback;
@@ -213,8 +165,7 @@ pub async fn run(
 
     let port = bound_addr.port();
     let host = match bound_addr.ip() {
-        // A wildcard bind is reachable on the loopback of its own family, and
-        // that is the address the person at the machine types.
+        // A wildcard bind is reachable on the loopback of its own family.
         std::net::IpAddr::V4(ip) if ip.is_unspecified() => "127.0.0.1".to_string(),
         std::net::IpAddr::V4(ip) => ip.to_string(),
         std::net::IpAddr::V6(ip) if ip.is_unspecified() => "[::1]".to_string(),
@@ -223,9 +174,7 @@ pub async fn run(
     let state = SetupState::new(token.clone(), config_path.clone(), config, defaults);
     let url = format!("http://{host}:{port}/setup/{token}");
 
-    // The URL is a one-time credential, so it belongs where the operator can see
-    // it and nowhere else: the console (or the container log, which is the only
-    // console a container has) and the log file.
+    // The URL is a one-time credential, so only the console and the log file see it.
     tracing::info!(%url, config = %config_path.display(), "first-run setup: open this page to create the administrator");
     println!("[nanofile] first-run setup: {url}");
     open_browser(&url);
@@ -242,8 +191,7 @@ pub async fn run(
     }
 
     let stop = tokio::select! {
-        // The serving loop only returns when the listener is closed, which is
-        // the shutdown this same future was told to wait for.
+        // The serving loop returns only when the listener closes, the shutdown it awaits.
         result = &mut serve => {
             result?;
             tracing::warn!("the setup listener stopped before the setup was completed");
@@ -255,16 +203,13 @@ pub async fn run(
         _ = tokio::time::sleep(SETUP_TIMEOUT) => Stop::Expired,
     };
 
-    // Stop accepting, let the response the handler already produced reach the
-    // browser, and only then give the socket up (or keep it, below).
+    // Stop accepting, let the served response reach the browser, then release the socket.
     let _ = shutdown_tx.send(());
     let _ = tokio::time::timeout(DRAIN_TIMEOUT, serve).await;
 
     match stop {
         Stop::Completed(result) => {
-            // Only a socket on the address the operator chose may be handed to
-            // the server: a different one would make it listen somewhere else,
-            // and the fallback socket is not even on the configured interface.
+            // Only a socket on the operator's address is handed over, never the fallback.
             let listener = held.filter(|_| result.handover);
             tracing::info!(
                 config = %result.config_path.display(),
@@ -289,14 +234,10 @@ pub async fn run(
     }
 }
 
-/// The setup page as a router.
-///
-/// Public so the integration tests can drive the page and its side effects
-/// without a browser.
+/// The setup page as a router; public so the integration tests can drive it without a browser.
 pub fn setup_router(state: Arc<SetupState>) -> Router {
     Router::new()
-        // A container healthcheck (or any supervisor) must not declare the
-        // process dead while it waits for a person.
+        // A healthcheck must not declare the process dead while it waits for a person.
         .route("/health", get(|| async { StatusCode::NO_CONTENT }))
         .route("/", get(notice_page))
         .route("/setup/{token}", get(form_page).post(submit))
@@ -306,8 +247,7 @@ pub fn setup_router(state: Arc<SetupState>) -> Router {
         .with_state(state)
 }
 
-/// The same security headers every page carries, minus the ones that would be a
-/// lie here: the setup listener speaks no TLS of its own, so no HSTS is claimed.
+/// The headers every page carries, minus HSTS: this listener speaks no TLS of its own.
 async fn security_headers(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     let mut response = next.run(req).await;
     crate::middleware::apply_security_headers(response.headers_mut(), false, false);
@@ -360,18 +300,15 @@ async fn submit(
     if !token_matches(&state.token, &token) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    // One submit at a time: a reload that races the first response must find
-    // the result rather than start a second first run.
+    // One submit at a time: a reload racing the first response must find the result.
     let _submitting = state.submitting.lock().await;
 
-    // Idempotent: a reload of the done page (or a second tab) must not create a
-    // second administrator or write a second file.
+    // Idempotent: a reload or second tab must not create a second administrator.
     if let Some(result) = state.result().await {
         return done_page(&state, &result, &headers);
     }
     if state.config_path.exists() {
-        // Another instance — or the operator — got there first. The file is the
-        // record that setup is done, so it is never overwritten.
+        // The file is the record that setup is done, so it is never overwritten.
         let t = I18n::from_headers(&headers, &state.defaults.language);
         return (
             StatusCode::CONFLICT,
@@ -396,8 +333,7 @@ async fn submit(
     match execute(&state, &plan).await {
         Ok(result) => {
             *state.outcome.lock().await = Some(result.clone());
-            // Stored before the notification: a waiter that wakes up here must
-            // find the result already in place.
+            // Stored before the notification, so a waiter waking here finds it.
             state.done.notify_one();
             done_page(&state, &result, &headers)
         }
@@ -431,19 +367,14 @@ async fn submit(
     }
 }
 
-/// Why a completed form could not be turned into an installation.
 enum SetupFailure {
     /// The configuration file appeared while the form was open.
     AlreadyConfigured,
     Failed(anyhow::Error),
 }
 
-/// Create what the plan describes, then write it down.
-///
-/// Order matters: the directories, the database and the account exist *before*
-/// the configuration file does. The other order would leave a file that makes
-/// every later start skip the setup while the installation it describes has no
-/// account to sign in with — and the only way back would be `nanofile adduser`.
+/// Create what the plan describes, then write it down. Directories, database and account
+/// exist *before* the configuration file: the reverse order leaves no account behind.
 async fn execute(state: &SetupState, plan: &SetupPlan) -> Result<SetupResult, SetupFailure> {
     let mut config = state.config.clone();
     plan.apply_to(&mut config);
@@ -505,18 +436,14 @@ async fn execute(state: &SetupState, plan: &SetupPlan) -> Result<SetupResult, Se
         data_dir: plan.data_dir.clone(),
         site_url: plan.site_url.clone(),
         address: plan.listener_address(),
-        // The socket can only be handed over when it is the one the operator
-        // asked the server to listen on; `run` applies the same condition.
+        // Handed over only when it is the socket the operator asked the server to use.
         handover: state.defaults.held_address.as_deref() == Some(plan.listener_address().as_str()),
         created_email,
         accounts_kept: accounts,
     })
 }
 
-/// Accounts a database that already exists in `data_dir` holds.
-///
-/// A hint on the page, and deliberately read-only: nothing is created here, so a
-/// setup that is abandoned leaves no empty database behind.
+/// Accounts a database already in `data_dir` holds; read-only, leaving no empty database behind.
 async fn probe_existing_accounts(data_dir: &str) -> Option<u64> {
     let file = Path::new(data_dir).join("nanofile.db");
     if !file.is_file() {
@@ -564,10 +491,7 @@ fn render_form(
     }
 }
 
-/// The password rule the form will enforce, said out loud.
-///
-/// A form that rejected a password without ever saying what it wanted would make
-/// the operator guess at the one thing this page exists to collect.
+/// The password rule the form enforces, said out loud: rejecting silently makes them guess.
 fn password_hint(t: &'static I18n, defaults: &SetupDefaults) -> String {
     if defaults.require_strong_password {
         t.tr("setup.password_strong_hint").to_string()
@@ -614,8 +538,7 @@ fn notice(
     }
 }
 
-/// A failure of the page itself. There is no error middleware on this router
-/// (there is no `AppState` for one to read), so this is the whole of it.
+/// A failure of the page itself; this router has no error middleware to catch it.
 fn page_failure(context: &str, detail: &str) -> Response {
     tracing::error!("{context}: {detail}");
     (
@@ -634,17 +557,12 @@ fn random_token() -> String {
     hex::encode(token)
 }
 
-/// Constant-time comparison, so the token cannot be recovered byte by byte from
-/// response timings.
+/// Constant-time comparison, so the token cannot be recovered from response timings.
 fn token_matches(expected: &str, presented: &str) -> bool {
     expected.as_bytes().ct_eq(presented.as_bytes()).into()
 }
 
-/// Open the setup page in a browser, when this build has one to open it in.
-///
-/// Best effort: on a machine with no browser (a server, a container) the URL in
-/// the log is the whole interface, and the page stays reachable until the setup
-/// completes.
+/// Open the setup page in a browser, when this build has one; best effort otherwise.
 #[cfg(feature = "tray")]
 fn open_browser(url: &str) {
     if !crate::desktop::has_desktop_session() {
@@ -660,7 +578,6 @@ fn open_browser(url: &str) {
     let _ = url;
 }
 
-/// Resolves on SIGTERM where the platform has one.
 async fn terminate_signal() {
     #[cfg(unix)]
     {
@@ -714,8 +631,7 @@ mod tests {
             accounts_kept: 0,
         };
 
-        // Stored, then notified -- and the wait that starts *after* both still
-        // returns, because the permit is kept.
+        // Stored, then notified: the wait that starts *after* both still returns.
         *state.outcome.lock().await = Some(result.clone());
         state.done.notify_one();
         let seen = state.wait_for_result().await;

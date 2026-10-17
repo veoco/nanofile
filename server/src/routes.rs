@@ -1,15 +1,11 @@
-//! Consolidated route definitions for all API versions.
-//!
-//! Replaces the old `api/` and `api_v21/` shim modules that only re-exported
-//! handler functions from the domain-oriented handler modules.
+//! Consolidated route definitions for all API versions: legacy v1 (`/api2/`)
+//! and v2.1 (`/api/v2.1/`).
 
 use axum::Router;
 use axum::routing::{delete, get, post, put};
 use std::sync::Arc;
 
 use crate::AppState;
-
-// ── V2 (legacy) API routes ────────────────────────────────────────────────
 
 fn v1_routes() -> Router<Arc<AppState>> {
     let repo_all = crate::handler::repos::repo_routes()
@@ -117,11 +113,8 @@ fn v1_routes() -> Router<Arc<AppState>> {
         .nest("/api2", crate::handler::credential::credential_routes())
 }
 
-// ── V2.1 API routes ──────────────────────────────────────────────────────
-
 fn v2_routes() -> Router<Arc<AppState>> {
     Router::new()
-        // Repos
         .route(
             "/api/v2.1/repos/",
             get(crate::handler::repos::list_repos_v21),
@@ -130,7 +123,6 @@ fn v2_routes() -> Router<Arc<AppState>> {
             "/api/v2.1/repos/{repo_id}/",
             get(crate::handler::repos::get_repo_v21).delete(crate::handler::repos::delete_repo_v21),
         )
-        // Dir
         .route(
             "/api/v2.1/repos/{repo_id}/dir/detail/",
             get(crate::handler::dir::dir_detail_v21),
@@ -141,14 +133,12 @@ fn v2_routes() -> Router<Arc<AppState>> {
                 .post(crate::handler::dir::create_dir_v21)
                 .delete(crate::handler::dir::delete_dir),
         )
-        // Starred
         .route(
             "/api/v2.1/starred-items/",
             get(crate::handler::starred::get_starred_items)
                 .post(crate::handler::starred::star_item)
                 .delete(crate::handler::starred::unstar_item),
         )
-        // Share Links
         .route(
             "/api/v2.1/share-links/",
             get(crate::handler::links::list_share_links_v21)
@@ -164,7 +154,6 @@ fn v2_routes() -> Router<Arc<AppState>> {
                 .put(crate::handler::links::update_share_link_v21)
                 .delete(crate::handler::links::delete_share_link_v21),
         )
-        // Upload Links
         .route(
             "/api/v2.1/upload-links/",
             get(crate::handler::links::list_upload_links_v21)
@@ -189,7 +178,6 @@ fn v2_routes() -> Router<Arc<AppState>> {
             "/api/v2.1/repos/{repo_id}/upload-links/",
             get(crate::handler::links::list_repo_upload_links_v21),
         )
-        // Activities
         .route(
             "/api/v2.1/activities/",
             get(crate::handler::activities::get_activities),
@@ -199,7 +187,6 @@ fn v2_routes() -> Router<Arc<AppState>> {
             "/api/v2.1/groups/",
             get(crate::handler::groups::list_groups_v21),
         )
-        // Batch
         .route(
             "/api/v2.1/repos/sync-batch-move-item/",
             post(crate::handler::batch::batch_move_items),
@@ -340,8 +327,6 @@ fn v2_routes() -> Router<Arc<AppState>> {
             delete(crate::handler::trash::purge_deleted_repo),
         )
 }
-
-// ── Combined API routes (V1 + V2.1) ───────────────────────────────────────
 
 /// All HTTP API routes: legacy v1 (`/api2/`) and v2.1 (`/api/v2.1/`).
 pub fn api_routes() -> Router<Arc<AppState>> {

@@ -1,16 +1,8 @@
 //! Log initialization.
 //!
-//! Headless runs (servers, Docker, CLI subcommands) log to stdout as before.
-//! Desktop runs log to a size-capped, rotating file instead — by default
-//! `nanofile.log` next to the binary, so the log is found in the same place
-//! no matter how the process was started (double-click, login autostart,
-//! terminal). The resolved default path is written back into config.toml so
-//! later runs — including login-started instances, whose working directory is
-//! meaningless — always use the same file.
-//!
-//! Rotation is done by a small custom [`MakeWriter`]: `tracing-appender` only
-//! supports time-based rotation, while the desktop requirement is a hard cap
-//! per file with a bounded number of backups.
+//! Headless runs log to stdout; desktop runs log to a size-capped rotating file
+//! whose resolved path is persisted back into config.toml. Rotation is a custom
+//! [`MakeWriter`], since `tracing-appender` only rotates by time.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -33,10 +25,8 @@ pub enum Kind {
     Cli,
 }
 
-/// Route panics through tracing so they reach the log file even in
-/// GUI-subsystem Windows builds, where the default stderr hook is invisible.
-/// The previous (default) hook still runs, keeping normal stderr output in
-/// headless builds.
+/// Route panics through tracing so they reach the log file even in GUI-subsystem
+/// Windows builds; the default hook still runs, keeping stderr output in headless builds.
 pub fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -45,18 +35,11 @@ pub fn install_panic_hook() {
     }));
 }
 
-/// Report a failure raised *before* the subscriber exists.
-///
-/// The cases that matter are the ones with nowhere to print: a Windows tray
-/// build is a GUI-subsystem binary, and a service has neither a console nor a
-/// session to show a message in. The reason is appended to the log file the
-/// process would have used (`nanofile.log` next to the binary, then the working
-/// directory — the configured path cannot be known, because reading the
-/// configuration is what failed) and, when `show_dialog` and there is a desktop,
-/// shown in a message box.
-///
-/// Best effort throughout: this runs on the way out of a process that is about
-/// to exit.
+/// Report a failure raised *before* the subscriber exists, where there may be
+/// nowhere to print: a service has no session and a tray build no console. The
+/// reason goes to the default log file (`nanofile.log` next to the binary, then the
+/// working directory — the configured path is unknown, because reading the
+/// configuration is what failed) and, when `show_dialog` allows, to a message box.
 pub fn report_startup_failure(error: &anyhow::Error, show_dialog: bool) {
     let message = format!("{error:#}");
     eprintln!("[nanofile] {message}");
@@ -113,16 +96,9 @@ fn startup_message_box(title: &str, text: &str) {
     };
 }
 
-/// Show an error box to the person at the machine, where there is one.
-///
-/// A GUI-subsystem Windows build (the double-clicked tray binary) has no console
-/// and, before the log file a person would think to open, no other channel. The
-/// first-run setup uses this for the one failure it cannot report any other way:
-/// a setup page nobody completed before it gave up.
-///
-/// A no-op elsewhere: every other platform has a console or a terminal the
-/// process was started from, and a message box on a server would have nobody to
-/// dismiss it.
+/// Show an error box to the person at the machine, where there is one: a
+/// GUI-subsystem Windows build has no console, and this is the only way first-run
+/// setup can report a page nobody completed. A no-op on platforms with a console.
 pub fn show_message_box(title: &str, text: &str) {
     #[cfg(target_os = "windows")]
     startup_message_box(title, text);
@@ -132,19 +108,15 @@ pub fn show_message_box(title: &str, text: &str) {
 
 /// Initialize the global tracing subscriber.
 ///
-/// `no_console` says this process has no console a person can read (a desktop
-/// tray build, or a service started by the Service Control Manager), so the file
-/// is the only useful default; `config_path` is the config file this instance
-/// loaded, used to persist the resolved default log file path (never created if
-/// the file doesn't exist yet).
+/// `no_console` says there is no console a person can read, so the file is the only
+/// useful default; `config_path` is used to persist the resolved log path.
 pub fn init(config: &Config, kind: Kind, no_console: bool, config_path: &Path) {
     let want_file = match config.logging.file_enabled {
         Some(enabled) => enabled,
         None => match kind {
             Kind::Cli => false,
-            // Windows GUI-subsystem builds have an invisible stdout whether or
-            // not the tray is showing, so file logging is the only useful
-            // default there too — and a service has no console at all.
+            // Windows GUI-subsystem builds have an invisible stdout whether or not the
+            // tray is showing, and a service has no console at all.
             Kind::Server => no_console || cfg!(all(target_os = "windows", feature = "tray")),
         },
     };
@@ -195,9 +167,8 @@ struct FileBackend {
     path: PathBuf,
 }
 
-/// Open the rotating log at the first candidate path that works. Candidates
-/// come in decreasing preference (binary dir → working directory), so a
-/// read-only binary directory degrades gracefully instead of losing logs.
+/// Open the rotating log at the first candidate path that works (binary dir →
+/// working directory), so a read-only binary directory degrades gracefully.
 fn open_file_logging(config: &Config) -> io::Result<FileBackend> {
     let max_bytes = config
         .logging
@@ -223,24 +194,18 @@ fn open_file_logging(config: &Config) -> io::Result<FileBackend> {
     }))
 }
 
-/// The log file this configuration uses when it can be opened.
-///
-/// The first entry of [`candidate_paths`], exposed so the Windows service
-/// preflight can answer "can the account this process runs as write the log?".
-/// That matters most for a service: the fallback is stdout, which a service has
-/// no console for, so an unwritable log location silently costs the only
-/// diagnostic channel there is.
+/// The log file this configuration uses when it can be opened, i.e. the first
+/// [`candidate_paths`] entry. The Windows service preflight uses it to tell whether
+/// the account can write the log, whose fallback is stdout a service has no console for.
 #[cfg(target_os = "windows")]
 pub(crate) fn configured_log_path(config: &Config) -> Option<PathBuf> {
     candidate_paths(config).into_iter().next()
 }
 
-/// Log file candidates in preference order. Explicit absolute paths win;
-/// relative paths resolve against the binary's directory (never the working
-/// directory, which is `C:\Windows\System32` or `/` for login-started
-/// instances — see [`infra::common::util::exe_dir`]), with the working
-/// directory as a fallback when the binary directory cannot be determined or
-/// written.
+/// Log file candidates in preference order. Explicit absolute paths win; relative
+/// paths resolve against the binary's directory (never the working directory, which
+/// is `C:\Windows\System32` or `/` for login-started instances — see
+/// [`infra::common::util::exe_dir`]), with the working directory as a fallback.
 fn candidate_paths(config: &Config) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     match &config.logging.file {
@@ -266,9 +231,8 @@ fn candidate_paths(config: &Config) -> Vec<PathBuf> {
 }
 
 /// Bake the resolved default log path into config.toml so every later run —
-/// including login-started instances — reads the same explicit path. Best
-/// effort: a missing config file stays missing (zero-config setups), and a
-/// write failure only degrades to a warning.
+/// including login-started instances — reads the same explicit path. Best effort:
+/// a missing config file stays missing, and a write failure only warns.
 fn persist_default_path(config_path: &Path, resolved: &Path) {
     if !config_path.is_file() {
         return;
@@ -286,8 +250,6 @@ fn persist_default_path(config_path: &Path, resolved: &Path) {
     }
 }
 
-// ── Size-capped rotating log file ────────────────────────────────────────────
-
 struct RotatingLog {
     path: PathBuf,
     max_bytes: u64,
@@ -302,10 +264,9 @@ impl RotatingLog {
         if let Some(dir) = path.parent()
             && !dir.as_os_str().is_empty()
         {
-            // Create an owner-only directory for the log, but never tighten one
-            // that already existed: `ensure_private_dir` also chmods a
-            // pre-existing directory, and silently turning a shared `/var/log`
-            // into 0700 breaks every other service writing there.
+            // Create an owner-only directory for the log, but never tighten one that already
+            // existed: `ensure_private_dir_only_if_created` chmods a pre-existing directory,
+            // and turning a shared `/var/log` into 0700 breaks every other service there.
             infra::common::util::ensure_private_dir_only_if_created(dir)?;
         }
         // The file itself is owner-only regardless, so the log never depends on
@@ -327,10 +288,9 @@ impl RotatingLog {
         })
     }
 
-    /// Write one formatted event, rotating first if the size cap would be
-    /// exceeded. Never fails: log writes must not take the server down, so
-    /// failures close the file (the first failure is echoed to stderr) and
-    /// later events retry the reopen.
+    /// Write one formatted event, rotating first if the size cap would be exceeded.
+    /// Never fails: failures close the file (the first is echoed to stderr) and later
+    /// events retry the reopen, so logging cannot take the server down.
     fn write_chunk(&self, buf: &[u8]) {
         if buf.is_empty() {
             return;

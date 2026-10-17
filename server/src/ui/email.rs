@@ -1,12 +1,7 @@
-//! Admin Web UI — email management: the outbox, the delivery state and the test
-//! message.
+//! Admin Web UI — email management: the outbox, delivery state and test message.
 //!
-//! The *configuration* moved to `/sysadmin/settings/email/` when the settings
-//! pages arrived, so this page does one thing: it shows what this server has
-//! tried to send, why anything is stuck, and lets an administrator probe
-//! delivery. The settings link at the top is the only way to change how mail is
-//! sent, which also means an operator cannot be looking at a second, stale copy
-//! of the SMTP host on this page.
+//! Configuration lives on `/sysadmin/settings/email/`, so this page only shows
+//! what the server has tried to send, why anything is stuck, and probes delivery.
 
 use askama::Template;
 use axum::{
@@ -26,10 +21,8 @@ use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
-/// How many outbox rows one page shows.
 const PAGE_SIZE: u64 = 25;
 
-/// One row of the outbox table, ready for the template.
 pub struct MailRow {
     pub id: i32,
     pub kind: String,
@@ -48,7 +41,6 @@ pub struct MailRow {
     pub can_retry: bool,
 }
 
-/// The state of the switchboard, for the summary strip.
 pub struct MailSummary {
     pub pending: u64,
     pub sent: u64,
@@ -67,27 +59,22 @@ pub struct EmailTemplate {
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
 
-    // ── Current state ─────────────────────────────────────────────
-    /// The master switch, `[email] enabled`.
     pub config_enabled: bool,
     /// Everything needed for delivery is in place (and the master switch is on).
     pub ready: bool,
     pub paused: bool,
-    /// Where the SMTP settings come from: `environment`, `config`, `database`,
-    /// `default`.
+    /// Where the SMTP settings come from: `environment`, `config`, `database` or `default`.
     pub settings_origin: &'static str,
     /// The variable or file key the settings come from, when there is one.
     pub settings_origin_detail: String,
     /// `tls = "none"`: credentials and message bodies travel in the clear.
     pub plaintext: bool,
-    /// Missing settings, already translated and joined. `None` when the
-    /// configuration is complete.
+    /// Missing settings, already translated and joined; `None` when complete.
     pub missing_text: Option<String>,
     /// A saved setting is waiting for the next start.
     pub restart_pending: bool,
     pub summary: MailSummary,
 
-    // ── Outbox ────────────────────────────────────────────────────
     pub messages: Vec<MailRow>,
     /// `""` (all), `pending`, `sent` or `failed`.
     pub status_filter: String,
@@ -105,23 +92,19 @@ pub struct EmailTemplate {
     pub success: Option<String>,
 }
 
-/// One status filter button.
 pub struct FilterOption {
     /// `""` for "all", otherwise a `email_messages.status` value.
     pub id: &'static str,
     pub label: String,
 }
 
-/// Query parameters of the page.
 #[derive(Deserialize, Default)]
 pub struct EmailQuery {
-    /// Confirmation carried by the redirect that follows a successful POST.
     pub action: Option<String>,
     pub status: Option<String>,
     pub page: Option<u64>,
 }
 
-/// Reasons a POST redirect can report, as locale keys.
 fn success_message(t: &I18n, action: Option<&str>) -> Option<String> {
     let key = match action {
         Some("tested") => "admin.email_test_sent",
@@ -220,8 +203,7 @@ async fn render_page(
 
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
 
-    // Where the SMTP settings come from is the one thing this page still has to
-    // say about configuration: everything else lives on the settings page.
+    // The SMTP origin is the only configuration this page still reports.
     let resolved = state.settings.resolved_one("email.host");
     let settings_origin = resolved
         .as_ref()
@@ -295,8 +277,6 @@ async fn render_page(
     Ok(Html(html).into_response())
 }
 
-// ─── POST handlers ────────────────────────────────────────────────────────
-
 async fn require_admin_csrf(
     state: &Arc<AppState>,
     user: &WebUser,
@@ -345,10 +325,8 @@ pub async fn send_test(
 
 /// POST /sysadmin/email/drain/ — ask the outbox worker to deliver now.
 ///
-/// A nudge rather than a job: delivery is a long-lived worker, so "deliver now"
-/// is the same thing the queue insertion does. Nothing is run inside this
-/// request, and nothing is recorded as a run — what the button controls is a
-/// worker that is always running, not a task that starts.
+/// A nudge, not a job: delivery is a long-lived worker, so nothing runs in this
+/// request and nothing is recorded as a run.
 pub async fn drain_now(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -435,17 +413,13 @@ mod tests {
         let t = I18n::get(Some("en"));
         assert!(success_message(t, Some("tested")).is_some());
         assert!(success_message(t, Some("drained")).is_some());
-        // The settings form moved out of this page, so its confirmation is gone.
         assert!(success_message(t, Some("saved")).is_none());
         assert!(success_message(t, Some("../../etc/passwd")).is_none());
         assert!(success_message(t, None).is_none());
     }
 
-    /// Every field name `missing()` reports is translated one by one, so each
-    /// needs a key of its own. The names are read back from a configuration
-    /// broken in all three ways rather than listed here: the key is built with
-    /// `format!`, so a field without a translation renders as a raw locale id
-    /// on the page and no whole-string search would notice.
+    /// `format!`-built keys mean a missing translation would silently render a raw
+    /// locale id, so every field `missing()` reports is checked to have its own.
     #[test]
     fn missing_fields_are_translated_one_by_one() {
         let mut config = Config::default();

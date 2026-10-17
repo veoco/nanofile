@@ -42,7 +42,6 @@ pub async fn dispatch_path(
     route_request(state, auth, path, request).await
 }
 
-/// Route a WebDAV request to the appropriate method handler.
 async fn route_request(
     state: Arc<AppState>,
     auth: WebDavAuth,
@@ -53,9 +52,8 @@ async fn route_request(
     let (parts, body) = request.into_parts();
     let headers = parts.headers;
 
-    // Resolve the repo + head commit once per request; every handler reuses it
-    // so a single request does not re-query the repo record and head commit for
-    // each path it probes.
+    // Resolve the repo + head commit once per request so no handler re-queries
+    // them for each path it probes.
     let head = match resolve_head(&state.repos, &auth.repo_id).await {
         Ok(h) => h,
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
@@ -80,8 +78,6 @@ async fn route_request(
     }
 }
 
-// ── Read methods ─────────────────────────────────────────────────────────
-
 async fn get_handler(
     state: &Arc<AppState>,
     auth: &WebDavAuth,
@@ -89,8 +85,7 @@ async fn get_handler(
     is_head: bool,
     head: &HeadContext,
 ) -> Response {
-    // Resolve the entry's fs_id + metadata in a single tree walk, then read the
-    // file fs_object directly — avoids a second full traversal of the path.
+    // Resolve fs_id + metadata in one tree walk, then read the fs_object directly.
     let (fs_id, size) = match crate::fs::core::resolve_file_entry_with_head(
         &state.repos,
         &auth.repo_id,
@@ -136,8 +131,6 @@ async fn get_handler(
     (StatusCode::OK, resp_headers, Body::from_stream(stream)).into_response()
 }
 
-// ── Write methods ────────────────────────────────────────────────────────
-
 async fn put_handler(
     state: &Arc<AppState>,
     auth: &WebDavAuth,
@@ -172,9 +165,7 @@ async fn put_handler(
         Ok(Some(_))
     );
 
-    // Stream the request body straight into CDC-chunked block writes — the file
-    // never has to be buffered whole in memory (a large PUT would otherwise
-    // peak at ~2× the file size between the collected body and the copy).
+    // Stream into CDC-chunked block writes, so a large PUT is never buffered whole.
     let content_length = headers
         .get(header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
@@ -213,8 +204,7 @@ async fn put_handler(
             Some(auth.user_id),
             false,
             // WebDAV PUT overwrites an existing resource, but a new one must
-            // still be logged/committed as a create — passing `true`
-            // unconditionally made every new PUT an "edit".
+            // still be committed as a create, so pass `existed`.
             existed,
             new_block_ids,
         )
@@ -305,8 +295,7 @@ async fn delete_handler(
     }
 }
 
-/// `entry_metadata_with_head` with per-path memoization for handlers that probe
-/// the same paths several times (MOVE/COPY probes src and dst twice each).
+/// Memoized `entry_metadata_with_head`; MOVE/COPY probes src and dst twice.
 async fn cached_entry_metadata(
     cache: &mut HashMap<String, Option<(bool, i64, i64)>>,
     repos: &crate::repository::Repositories,
@@ -332,8 +321,7 @@ async fn move_copy_handler(
     is_move: bool,
     head: &HeadContext,
 ) -> Response {
-    // Memoize per-path metadata so repeated probes of src/dst don't re-resolve
-    // the repo record + head commit every time.
+    // Per-path metadata cache: repeated src/dst probes skip the tree walk.
     let mut meta_cache: HashMap<String, Option<(bool, i64, i64)>> = HashMap::new();
 
     if auth.permission != "rw" {
@@ -396,8 +384,7 @@ async fn move_copy_handler(
         if !overwrite {
             return StatusCode::PRECONDITION_FAILED.into_response();
         }
-        // Remove the target first so batch_copy/batch_move don't auto-rename
-        // the entry (WebDAV Overwrite semantics).
+        // Remove the target first, else batch_copy/move auto-renames it (Overwrite).
         if let Some(Some((is_dir, _, _))) = dst_meta {
             let obj = if is_dir { "dir" } else { "file" };
             if state
@@ -449,7 +436,6 @@ async fn do_move(
         .unwrap_or(false);
 
     if src_parent == dst_parent {
-        // Pure rename within the same directory.
         if is_dir {
             state
                 .dir_service()
@@ -464,7 +450,7 @@ async fn do_move(
         return Ok(());
     }
 
-    // Move to the destination parent, keeping the name.
+    // Move to the destination parent, keeping the name, then rename if needed.
     if is_dir {
         state
             .dir_service()
@@ -562,8 +548,6 @@ async fn do_copy(
     }
     Ok(())
 }
-
-// ── Auxiliary methods ────────────────────────────────────────────────────
 
 fn options_response() -> Response {
     let mut resp = StatusCode::OK.into_response();

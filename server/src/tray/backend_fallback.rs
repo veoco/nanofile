@@ -1,6 +1,5 @@
-//! Stub tray backend for platforms without tray support. Unreachable in
-//! practice (`run_mode` returns `Headless` there); exists to keep the crate
-//! compiling on unusual targets.
+//! Stub tray backend for platforms without tray support: unreachable in practice
+//! (`run_mode` returns `Headless` there), but keeps the crate compiling there.
 
 use tokio::sync::mpsc::UnboundedSender;
 

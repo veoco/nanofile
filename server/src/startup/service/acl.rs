@@ -1,15 +1,11 @@
 //! Directory access for the account the service runs under.
 //!
 //! A virtual or built-in service identity starts with no access to anything
-//! outside its own profile, and the state directories live next to the
-//! installation (or wherever the administrator pointed them). Registering a
-//! service that cannot write its own database is a registration that fails at
-//! the next boot, with no console and only a log file to say so — so the
-//! install grants what the service needs, and refuses to finish if it cannot.
-//!
-//! `icacls` does the work: it understands `(OI)(CI)` inheritance and the
-//! `*<SID>` form (so a virtual account's SID is used directly, without a name
-//! lookup that depends on the account being cached).
+//! outside its own profile, so the install grants the state directories a
+//! modify ACE and refuses to finish if it cannot: a service that cannot write
+//! its own database fails at the next boot with no console to say so.
+//! `icacls` gives `(OI)(CI)` inheritance and the `*<SID>` form, so a virtual
+//! account's SID needs no name lookup.
 
 use std::path::Path;
 use std::process::Command;
@@ -81,13 +77,11 @@ pub(crate) fn grant(sid: &str, path: &Path, inheritable: bool) -> anyhow::Result
     icacls(path, &["/grant", &rights, "/Q"])
 }
 
-/// Remove the grant again, best effort: a path without the access control entry
-/// is the state the caller wants.
+/// Remove the grant again, best effort: a path without the entry is the wanted state.
 pub(crate) fn revoke(sid: &str, path: &Path) -> anyhow::Result<()> {
     icacls(path, &["/remove:g", &format!("*{sid}"), "/Q"])
 }
 
-/// Run `icacls <path> <args…>`, reporting what it said when it fails.
 fn icacls(path: &Path, args: &[&str]) -> anyhow::Result<()> {
     let output = Command::new("icacls")
         .arg(path)

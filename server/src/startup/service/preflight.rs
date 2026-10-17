@@ -1,25 +1,15 @@
-//! The Windows service preflight: the checks that need Win32, and the entry
-//! point that runs them all.
+//! The Windows service preflight: the Win32 checks and their entry point.
 //!
 //! A service runs as a different account, in a different working directory and
 //! at a different moment (boot, before anybody logs in) than the tray instance
-//! that installed it. Every one of those differences turns into a silent failure
-//! — a directory it may not write, a per-user drive mapping it cannot see, a log
-//! file it cannot open, an `ffmpeg` that is only on the user's `PATH` — and the
-//! process that fails has no console and possibly no log file to say so.
+//! that installed it, so each difference becomes a silent failure.
+//! The same checks run twice: before installing, as the installing administrator
+//! (a refusal is a dialog while somebody watches), and when the service starts
+//! (the authoritative answer, logged line by line).
 //!
-//! So the same checks run twice:
-//!
-//! * **Before installing** (the elevated helper, as the installing
-//!   administrator): a refusal is a dialog, while a person is watching.
-//! * **When the service starts** (in the service process, as the account that
-//!   will serve): the authoritative answer, logged line by line.
-//!
-//! The report's shape and its platform-independent rules live in
-//! [`super::checks`]. The checks read the *configuration file's* values; a
-//! directory an administrator changed at `/sysadmin/settings/` is only known
-//! once that server starts, which is where `run_server` names the directory it
-//! cannot create.
+//! The report's shape and rules live in [`super::checks`]; values come from the
+//! *configuration file*, so a directory changed at `/sysadmin/settings/` is only
+//! known once that server starts.
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -30,9 +20,8 @@ use super::checks::{Preflight, Severity, is_sensitive_root, probe_writable, volu
 
 /// Everything a preflight needs, taken from the loaded configuration.
 ///
-/// Owned rather than borrowing `Config` so the tray can keep one and re-run the
-/// checks when the menu item is clicked — the configuration it was built from is
-/// the one the tray shows (a saved setting reaches the menu at the next start).
+/// Owned rather than borrowing `Config` so the tray can re-run the checks from
+/// the configuration it shows.
 #[derive(Clone)]
 pub(crate) struct Input {
     config_path: Option<PathBuf>,
@@ -61,15 +50,10 @@ impl Input {
         }
     }
 
-    /// The paths the service account has to be granted access to, in the order
-    /// they are granted: every state directory, the log directory, and the
-    /// configuration file (which the server writes back to when a new setting
-    /// appears). The flag says whether the grant is inheritable — a directory
-    /// gets `(OI)(CI)`, a file does not.
-    ///
-    /// A directory the checks already refused (a system directory, or one on a
-    /// drive the service cannot reach) is not granted: the install stops before
-    /// this point.
+    /// The paths the service account is granted access to, in order: every state
+    /// directory, the log directory, then the configuration file (the server
+    /// writes back to it). The flag marks an inheritable grant: a directory gets
+    /// `(OI)(CI)`, a file does not. A refused directory is not granted at all.
     pub(crate) fn grant_targets(&self) -> Vec<(PathBuf, bool)> {
         let mut targets: Vec<(PathBuf, bool)> = self
             .dirs
@@ -86,12 +70,11 @@ impl Input {
     }
 }
 
-/// Run every check against the configuration as it was loaded.
 pub(crate) fn run(input: &Input) -> Preflight {
     let mut report = Preflight::default();
 
-    // The configuration file itself: without it the service starts against
-    // built-in defaults, on a different port and a different database.
+    // Without it the service starts on built-in defaults: another port, another
+    // database.
     match &input.config_path {
         Some(path) => match std::fs::File::open(path) {
             Ok(_) => {}
@@ -109,14 +92,12 @@ pub(crate) fn run(input: &Input) -> Preflight {
         ),
     }
 
-    // Every state directory: it has to exist (or be creatable) and be writable
-    // by the account the service runs as.
+    // Each state directory must be creatable and writable by the service account.
     for (field, dir) in &input.dirs {
         check_dir(&mut report, field, dir);
     }
-    // The log file's directory is not a state directory, but for a service it is
-    // the only diagnostic channel: `logging::init` falls back to stdout, which a
-    // service has no console for.
+    // Not a state dir, but the service's only diagnostic channel: `logging::init`
+    // falls back to stdout, and a service has no console.
     if let Some(dir) = &input.log_dir {
         check_dir(&mut report, "logging.file", dir);
     }
@@ -129,7 +110,6 @@ pub(crate) fn run(input: &Input) -> Preflight {
     report
 }
 
-/// One directory: sensitive roots, drive kind, and a write probe.
 fn check_dir(report: &mut Preflight, field: &str, dir: &Path) {
     if is_sensitive_root(dir) {
         report.push(
@@ -170,8 +150,7 @@ fn check_dir(report: &mut Preflight, field: &str, dir: &Path) {
 /// A remote, removable or unidentifiable drive, described in words.
 fn drive_kind(path: &Path) -> Option<&'static str> {
     use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
-    // The `DRIVE_*` values live in the WindowsProgramming module: an odd home
-    // for them, but it is where the SDK puts them.
+    // The `DRIVE_*` values live in `WindowsProgramming`, an odd home but the SDK's.
     use windows_sys::Win32::System::WindowsProgramming::{
         DRIVE_CDROM, DRIVE_FIXED, DRIVE_NO_ROOT_DIR, DRIVE_RAMDISK, DRIVE_REMOTE, DRIVE_REMOVABLE,
         DRIVE_UNKNOWN,
@@ -230,11 +209,9 @@ fn check_ffmpeg(report: &mut Preflight, ffmpeg_path: &str) {
         return;
     }
 
-    // Resolve the bare name through the same library call the runtime uses
+    // Resolve through the same library call the runtime uses
     // (`sandbox::worker::resolve_helper`), so a helper the media grants will find
-    // is not reported as missing here — the two disagreeing is what let a bare
-    // `ffmpeg` look configured while every thumbnail returned 404. An unresolved
-    // name comes back relative, which is how the two answers are told apart.
+    // is not reported missing here; an unresolved name comes back relative.
     let resolved = server::sandbox::worker::resolve_helper(value);
     if !resolved.is_absolute() {
         report.push(
@@ -263,9 +240,8 @@ fn check_ffmpeg(report: &mut Preflight, ffmpeg_path: &str) {
     }
 }
 
-/// A relative state path that was kept as configured is relative to the working
-/// directory. For a service that directory is `C:\Windows\System32`, so the state
-/// would be nowhere near the installation.
+/// A relative state path resolves against the working directory. For a service
+/// that directory is `C:\Windows\System32`, nowhere near the installation.
 fn check_cwd(report: &mut Preflight, input: &Input) {
     let relative: Vec<String> = input
         .dirs
@@ -294,10 +270,8 @@ fn check_cwd(report: &mut Preflight, input: &Input) {
     );
 }
 
-/// The port the service will bind, described as a note rather than a failure.
-///
-/// "In use" is expected when the tray that is installing the service is the
-/// process serving the address right now, so this never blocks an install.
+/// The port the service will bind, as a note rather than a failure: "in use" is
+/// expected while the tray installing the service is serving the address.
 fn check_port(report: &mut Preflight, input: &Input) {
     let addr = input.addr.trim();
     if addr.is_empty() {

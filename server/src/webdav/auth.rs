@@ -12,9 +12,8 @@ use crate::domain::capability::{Capability, webdav_requires_write};
 
 /// Authenticated WebDAV request identity.
 ///
-/// Username is a member's email; the password is one of that user's WebDAV
-/// keys for the repo. Permission reflects the member's repo permission
-/// ("rw" or "r").
+/// Username is a member's email, password one of that user's WebDAV keys for
+/// the repo; permission is the member's repo permission ("rw" or "r").
 #[derive(Debug, Clone)]
 pub struct WebDavAuth {
     pub user_id: i32,
@@ -23,13 +22,11 @@ pub struct WebDavAuth {
     pub permission: String,
 }
 
-/// Rejection type for `WebDavAuth`. A 401 *must* carry a `WWW-Authenticate`
-/// header or WebDAV clients will not prompt for credentials.
+/// Rejection type; a 401 *must* carry `WWW-Authenticate` or clients won't prompt.
 pub enum WebDavAuthError {
     Unauthorized,
     Forbidden,
     NotFound,
-    /// Too many failed authentication attempts from this client address.
     TooManyRequests,
 }
 
@@ -58,14 +55,12 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        // Global switch — WebDAV disabled entirely.
         if !state.config().server.webdav_enabled {
             return Err(WebDavAuthError::Forbidden);
         }
 
         // repo_id comes from the URI (`/dav/{repo_id}/...`) rather than the
-        // axum Path extractor, so the same extractor works for the root and
-        // `{*path}` route variants.
+        // axum Path extractor, so this works for root and `{*path}` routes alike.
         let repo_id = {
             let mut segs = parts.uri.path().trim_start_matches('/').split('/');
             segs.next(); // "dav"
@@ -88,9 +83,8 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
         let creds = String::from_utf8(decoded).map_err(|_| WebDavAuthError::Unauthorized)?;
         let (email, key) = creds.split_once(':').ok_or(WebDavAuthError::Unauthorized)?;
 
-        // Throttle failed attempts by client address before doing any database
-        // work. Successful requests are never counted, so a working WebDAV
-        // client cannot trip this even at high request rates.
+        // Throttle failed attempts by client address before any database work;
+        // successful requests are never counted, so a working client cannot trip this.
         let peer = parts
             .extensions
             .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
@@ -124,8 +118,6 @@ impl FromRequestParts<Arc<AppState>> for WebDavAuth {
 }
 
 impl WebDavAuth {
-    /// Resolve the user, repo and key. Split out so the caller can account for
-    /// failures (and clear them on success) in one place.
     async fn authenticate(
         state: &Arc<AppState>,
         repo_id: &str,
@@ -133,7 +125,6 @@ impl WebDavAuth {
         key: &str,
         method: &axum::http::Method,
     ) -> Result<Self, WebDavAuthError> {
-        // User must exist and be active.
         let user = state
             .repos
             .user
@@ -158,7 +149,6 @@ impl WebDavAuth {
             return Err(WebDavAuthError::Forbidden);
         }
 
-        // Determine permission from membership.
         let row = state
             .repos
             .member
@@ -172,9 +162,8 @@ impl WebDavAuth {
             _ => return Err(WebDavAuthError::Unauthorized),
         };
 
-        // The presented secret must be a unified API key that belongs to this
-        // user, carries WebDAV access and covers this library. Keys are stored
-        // as a SHA-256 hash, so only the hash is ever compared.
+        // The secret must be this user's unified API key with WebDAV access;
+        // keys are stored as a SHA-256 hash, so only the hash is compared.
         let lookup = state
             .repos
             .api_key
@@ -198,9 +187,8 @@ impl WebDavAuth {
             return Err(WebDavAuthError::Forbidden);
         }
 
-        // Effective permission is the stricter of the membership permission and
-        // what the key allows — a read-only key stays read-only even for an rw
-        // member, and a read-only member stays read-only even with an rw key.
+        // Effective permission is the stricter of the membership and the key:
+        // a read-only key stays read-only even for an rw member, and vice versa.
         let key_allows_write =
             authority.has(Capability::WebdavWrite) && authority.allows_repo(repo_id, true);
         let permission = if permission == "rw" && key_allows_write {
@@ -212,9 +200,8 @@ impl WebDavAuth {
             return Err(WebDavAuthError::Forbidden);
         }
 
-        // Best-effort last_used_at update (fire-and-forget), throttled to once
-        // per hour per key so high-frequency WebDAV traffic does not write on
-        // every request.
+        // Best-effort last_used_at (fire-and-forget), throttled to once an hour
+        // per key so high-frequency traffic does not write on every request.
         let now = chrono::Utc::now().timestamp();
         const THROTTLE_SECS: i64 = 60 * 60;
         let needs_update = match lookup.key.last_used_at {

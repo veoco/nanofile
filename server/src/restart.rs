@@ -3,15 +3,10 @@
 //! move to the address it was asked to.
 //!
 //! A restart here is *not* a re-exec: the process stays alive, tears the HTTP
-//! server and every piece of `AppState` down through the normal graceful
-//! shutdown, and builds them again from the settings table. That is what makes
-//! the same mechanism work in all three shapes of this binary — headless,
-//! desktop tray and Windows service — without dropping the tray icon or
-//! breaking the service control manager's association with the process.
-//!
-//! What it deliberately does not do is load a new binary; the log subscriber
-//! and the tray are also decided before the server loop starts (see
-//! `infra::settings::Apply::ProcessRestart`).
+//! server and every piece of `AppState` down through graceful shutdown, and
+//! builds them again from the settings table, so one mechanism works headless,
+//! in the tray and as a Windows service. It does not load a new binary; the log
+//! subscriber and tray are decided before the loop starts (`Apply::ProcessRestart`).
 
 use std::io;
 use std::net::SocketAddr;
@@ -19,14 +14,11 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-/// Response header `/health` carries the current server generation in.
-///
-/// The "restarting" page polls readiness, and readiness alone cannot tell the
-/// server that is going away from the one that replaced it: the listening socket
-/// stays bound (that is the point of [`BoundListener`]), so a request sent just
-/// before the restart is answered normally. The generation number changes with
-/// every in-place restart, which is what makes "the server is back" mean *this
-/// is a different server*.
+/// `/health` reports the current server generation in this response header.
+/// Readiness alone cannot tell the server going away from the one that replaced
+/// it, since the listening socket stays bound and answers normally; the
+/// generation changes with every in-place restart, which is what makes "the
+/// server is back" mean *this is a different server*.
 pub const GENERATION_HEADER: &str = "x-nanofile-generation";
 
 /// Bumped at the start of every server generation.
@@ -45,8 +37,7 @@ pub fn generation() -> u64 {
 /// Why one generation of the server returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopReason {
-    /// The process is shutting down: Ctrl+C, SIGTERM, a tray quit, or a
-    /// service stop request.
+    /// The process is shutting down: Ctrl+C, SIGTERM, a tray quit, or a service stop.
     Shutdown,
     /// An administrator asked for a restart from the settings page.
     Restart,
@@ -60,12 +51,8 @@ impl StopReason {
 }
 
 /// The admin-triggered restart request, shared between the HTTP handler that
-/// raises it and the run loop that acts on it.
-///
-/// A fresh instance is built with every `AppState`, so a request is scoped to
-/// the generation that received it: nothing has to be reset between
-/// generations, and a request that arrives while a restart is already draining
-/// cannot leak into the next one.
+/// raises it and the run loop that acts on it. A fresh instance per `AppState`
+/// means a draining request cannot leak into the next generation.
 #[derive(Debug, Default)]
 pub struct RestartSignal {
     requested: AtomicBool,
@@ -77,11 +64,9 @@ impl RestartSignal {
         Self::default()
     }
 
-    /// Ask the run loop to stop and come back up.
-    ///
-    /// `notify_one` (not `notify_waiters`) so a request that lands before the
-    /// loop starts waiting on this signal is still seen: the notify stores a
-    /// permit that the next `wait` consumes immediately.
+    /// Ask the run loop to stop and come back up. `notify_one` (not
+    /// `notify_waiters`) so a request that lands before the loop waits is still
+    /// seen: the notify stores a permit the next `wait` consumes immediately.
     pub fn request(&self) {
         self.requested.store(true, Ordering::SeqCst);
         self.notify.notify_one();
@@ -91,11 +76,8 @@ impl RestartSignal {
         self.requested.load(Ordering::SeqCst)
     }
 
-    /// Resolves once a restart has been requested.
-    ///
-    /// Cancel safe: dropping it (because another `select!` branch won) leaves
-    /// the request in place for the next wait, which is exactly what should
-    /// happen if the admin clicks the button twice.
+    /// Resolves once a restart has been requested. Cancel safe: dropping it
+    /// leaves the request in place for the next wait, so a second click is not lost.
     pub async fn wait(&self) {
         loop {
             let notified = self.notify.notified();
@@ -107,29 +89,22 @@ impl RestartSignal {
     }
 }
 
-/// The listening socket a restart carries over.
-///
-/// Re-binding the same port right after a graceful shutdown is not portable:
-/// Windows (and Linux without `SO_REUSEADDR` on the closing side) refuses a
-/// `bind` while a drained connection still sits in `TIME_WAIT`, which can last
-/// minutes. Keeping the original socket and handing each generation a
-/// duplicate avoids the whole problem: the port is never released, and new
-/// connections wait in the backlog until the next generation accepts them.
+/// The listening socket a restart carries over. Re-binding the same port after a
+/// graceful shutdown is not portable: Windows (and Linux without `SO_REUSEADDR`
+/// on the closing side) refuses `bind` while a drained connection sits in
+/// `TIME_WAIT`. Handing each generation a duplicate keeps the port bound, and new
+/// connections queue in the backlog until the next generation accepts them.
 pub struct BoundListener {
     listener: std::net::TcpListener,
-    /// The address as configured, which is the identity a restart compares
-    /// against — not the resolved local address.
+    /// The address as configured, not the resolved local address.
     addr: String,
 }
 
 impl BoundListener {
     /// Bind `addr`, or keep the current socket when it is already the one asked
-    /// for.
-    ///
-    /// `retry` is set for a restart: a saved address that is briefly still held
-    /// by something else (a previous instance draining, a service stopping) is
-    /// worth waiting out. The first start does not retry — a port that is taken
-    /// at boot is a configuration error the operator has to see.
+    /// for. `retry` is set for a restart: an address briefly still held by
+    /// something else is worth waiting out. The first start does not retry — a
+    /// port that is taken at boot is a configuration error the operator must see.
     pub async fn acquire(
         current: &mut Option<BoundListener>,
         addr: &str,
@@ -148,9 +123,8 @@ impl BoundListener {
             match std::net::TcpListener::bind(addr) {
                 Ok(listener) => {
                     // Dropping the old socket is what releases the previous
-                    // address; the new one is already bound, so a failure
-                    // between the two cannot leave the server without a
-                    // listener.
+                    // address; the new one is already bound, so a failure in
+                    // between cannot leave the server without a listener.
                     *current = Some(BoundListener {
                         listener,
                         addr: addr.to_string(),
@@ -166,8 +140,7 @@ impl BoundListener {
         Err(last_err.unwrap_or_else(|| io::Error::other("no bind attempt made")))
     }
 
-    /// A duplicate of the listening socket, ready to be handed to a server
-    /// generation. The original stays open, so the socket outlives it.
+    /// A duplicate of the socket; the original stays open, so it outlives the generation.
     pub fn to_tokio(&self) -> io::Result<tokio::net::TcpListener> {
         let duplicate = self.listener.try_clone()?;
         duplicate.set_nonblocking(true)?;
@@ -179,18 +152,15 @@ impl BoundListener {
         &self.addr
     }
 
-    /// The address the socket actually listens on (a configured port of `0`
-    /// resolves to the kernel-assigned one here).
+    /// The address the socket listens on (a configured port of `0` shows the assigned one).
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.listener.local_addr()
     }
 }
 
-/// The reason the last restart kept the previous listener, if it did.
-///
-/// The page that offers the restart button reads this, because the failure
-/// happens after the RESTART response has been sent: the admin would otherwise
-/// see a saved address that the server silently is not using.
+/// The reason the last restart kept the previous listener, if it did. The
+/// failure happens after the RESTART response has been sent, so the settings page
+/// reads this rather than showing an address the server is not using.
 static RESTART_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 
 /// Record that a restart could not move to the configured address.
@@ -203,8 +173,7 @@ pub fn note_failure(message: impl Into<String>) {
     *slot = Some(message);
 }
 
-/// Forget a recorded restart failure — called when a listener is acquired for
-/// the address the configuration asked for.
+/// Forget a recorded restart failure, called when the configured address is acquired.
 pub fn clear_failure() {
     let mut slot = RESTART_FAILURE
         .lock()
@@ -246,7 +215,6 @@ mod tests {
     async fn a_request_that_arrives_before_the_wait_is_not_lost() {
         let signal = RestartSignal::new();
         signal.request();
-        // The permit is stored, so this returns immediately instead of parking.
         tokio::time::timeout(Duration::from_secs(1), signal.wait())
             .await
             .expect("a request raised before the wait must still be seen");
@@ -255,8 +223,7 @@ mod tests {
     #[tokio::test]
     async fn the_same_address_reuses_the_socket() {
         // A configured port of `0` makes the kernel pick one; re-acquiring the
-        // same *configured* string has to keep that socket rather than bind a
-        // second random one.
+        // same *configured* string must keep that socket, not bind a second one.
         let mut bound = None;
         BoundListener::acquire(&mut bound, "127.0.0.1:0", false)
             .await
@@ -269,7 +236,6 @@ mod tests {
         assert_eq!(bound.as_ref().unwrap().local_addr().unwrap().port(), port);
         assert!(bound.as_ref().unwrap().to_tokio().is_ok());
 
-        // The socket is still bound: an unrelated listener cannot take it.
         assert!(std::net::TcpListener::bind(format!("127.0.0.1:{port}")).is_err());
     }
 
@@ -281,7 +247,6 @@ mod tests {
             .unwrap();
         let old = bound.as_ref().unwrap().local_addr().unwrap().port();
 
-        // Bind a concrete port so the rebind has something stable to check.
         let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let new_port = probe.local_addr().unwrap().port();
         drop(probe);
@@ -317,8 +282,7 @@ mod tests {
 
     #[test]
     fn the_failure_record_is_set_and_cleared() {
-        // Process-wide, so keep this test's value to itself by clearing it at
-        // both ends rather than asserting on the initial state.
+        // Process-wide, so clear it at both ends rather than assert initial state.
         clear_failure();
         assert!(failure().is_none());
         note_failure("could not bind 0.0.0.0:8443");
@@ -333,9 +297,8 @@ mod tests {
         assert!(!StopReason::Shutdown.should_restart());
     }
 
-    /// Every generation is distinct, which is the property the restart page
-    /// depends on: a number that repeated would look like the server never came
-    /// back.
+    /// Every generation is distinct, which the restart page depends on: a
+    /// repeated number would look like the server never came back.
     #[test]
     fn every_generation_is_a_new_number() {
         let first = next_generation();

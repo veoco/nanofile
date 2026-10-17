@@ -1,8 +1,6 @@
-//! The Windows side of the service: the Service Control Manager registration
-//! (install, uninstall, stop, probe) and the service control loop itself.
-//!
-//! Nothing here shows a dialog: the tray owns the confirmations, and a headless
-//! `nanofile service install` has a console to report on.
+//! The Windows side of the service: SCM registration (install, uninstall, stop,
+//! probe) and the service control loop itself. Nothing here shows a dialog: the
+//! tray owns the confirmations; a headless install reports on its own console.
 
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
@@ -28,8 +26,7 @@ use super::{
 use crate::startup::win32::wide;
 
 /// Where the SCM keeps a service's registration, read directly to compare the
-/// binary path. `QueryServiceConfigW` would work too, but reading the value is
-/// what a user without `SERVICE_QUERY_CONFIG` can still do.
+/// binary path; `QueryServiceConfigW` needs `SERVICE_QUERY_CONFIG` to do this.
 const SERVICE_KEY: &str = r"SYSTEM\CurrentControlSet\Services\Nanofile";
 
 pub(crate) fn message_box(title: &str, text: &str, flags: u32) -> i32 {
@@ -38,8 +35,7 @@ pub(crate) fn message_box(title: &str, text: &str, flags: u32) -> i32 {
     unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), flags) }
 }
 
-/// Report a failure the way a GUI-subsystem process can: a message box the
-/// user will actually see, plus the log file.
+/// Report a failure the way a GUI-subsystem process can: a message box plus the log file.
 pub(super) fn report_failure(context: &str, error: &anyhow::Error) {
     tracing::error!("{context}: {error:#}");
     let title = "Nanofile";
@@ -47,12 +43,8 @@ pub(super) fn report_failure(context: &str, error: &anyhow::Error) {
     message_box(title, &body, MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
 }
 
-// ── Running as a service ─────────────────────────────────────────────────────
-
-/// The config the `ServiceMain` callback (which is called by the SCM, on a
-/// thread this process does not control) has to pick up: the loaded
-/// configuration, the environment keys it was layered with, and the path of the
-/// file it came from (the preflight checks the last one directly).
+/// The config the `ServiceMain` callback (called by the SCM on a thread this
+/// process does not control) picks up, with the environment keys and file path.
 static SERVICE_INPUT: std::sync::Mutex<Option<(Config, EnvKeys, PathBuf)>> =
     std::sync::Mutex::new(None);
 
@@ -120,13 +112,11 @@ unsafe extern "system" fn control_handler(
             }
             NO_ERROR
         }
-        // The SCM asks for the last reported status; answering is enough.
         SERVICE_CONTROL_INTERROGATE => NO_ERROR,
         _ => windows_sys::Win32::Foundation::ERROR_CALL_NOT_IMPLEMENTED,
     }
 }
 
-/// The service's entry point, called by the SCM on its own thread.
 unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core::PWSTR) {
     let name = wide(SERVICE_NAME);
     let handle = unsafe {
@@ -177,8 +167,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core
         "the service is starting"
     );
 
-    // The authoritative preflight: it runs as the account that will serve, which
-    // is the one whose access to the data directories actually matters.
+    // The authoritative preflight: it runs as the account that will serve.
     let preflight =
         super::preflight::run(&super::preflight::Input::from_config(&config, &config_path));
     preflight.log();
@@ -203,9 +192,8 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core
             return;
         }
     };
-    // No first-run setup behind a service: it has no desktop, no console and
-    // nobody watching it, so there is no page to complete. The preflight above
-    // has already reported what a missing configuration means for the service.
+    // No first-run setup: a service has no desktop or console, and the preflight
+    // already reported what a missing config means.
     match runtime.block_on(crate::run_server_flow(
         config,
         env_keys,
@@ -223,11 +211,9 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core
     }
 }
 
-/// Hand this process to the SCM. Blocks until the service stops.
-///
-/// Fails immediately when the process was not started by the SCM, which is
-/// what a user typing `nanofile service run` gets — a clear error instead of
-/// a process that hangs waiting for a dispatcher that will never call.
+/// Hand this process to the SCM; blocks until the service stops. Fails
+/// immediately when the process was not started by the SCM (a user typing
+/// `nanofile service run`), instead of waiting for a dispatcher that never calls.
 pub(crate) fn run_as_service(
     config: Config,
     env_keys: EnvKeys,
@@ -257,8 +243,6 @@ pub(crate) fn run_as_service(
     Ok(())
 }
 
-// ── Install / uninstall / status ─────────────────────────────────────────────
-
 fn open_manager(access: u32) -> anyhow::Result<SC_HANDLE> {
     let handle = unsafe { OpenSCManagerW(std::ptr::null(), std::ptr::null(), access) };
     if handle.is_null() {
@@ -274,7 +258,6 @@ fn open_manager(access: u32) -> anyhow::Result<SC_HANDLE> {
     Ok(handle)
 }
 
-/// Read a `REG_SZ`/`REG_EXPAND_SZ` value out of the service's registry key.
 fn read_service_string(value_name: &str) -> Option<String> {
     let subkey = wide(SERVICE_KEY);
     let value = wide(value_name);
@@ -313,20 +296,17 @@ fn read_service_string(value_name: &str) -> Option<String> {
     String::from_utf16(&buffer[..end]).ok()
 }
 
-/// Read the service's registered `ImagePath` from the registry.
 fn read_image_path() -> Option<String> {
     read_service_string("ImagePath")
 }
 
 /// The account the service is registered to run under, as `services.msc` shows
-/// it. `None` when there is no `ObjectName` value, which is how the SCM records
-/// the default `LocalSystem` account.
+/// it; `None` means no `ObjectName` value, i.e. the default `LocalSystem`.
 pub(crate) fn registered_account() -> Option<String> {
     read_service_string("ObjectName")
 }
 
-/// What is registered under our service name, and whether it belongs to this
-/// installation.
+/// What is registered under our service name, and whether it belongs here.
 pub(crate) fn probe(config_path: &Path) -> ServiceProbe {
     let expected = match std::env::current_exe() {
         Ok(exe) => service_command_line(&exe, config_path),
@@ -358,8 +338,7 @@ pub(crate) fn probe(config_path: &Path) -> ServiceProbe {
                 ServiceProbe::Ours { running }
             } else {
                 // A moved installation leaves the registration pointing at a
-                // file that is gone, and the service then fails to start
-                // with no nanofile UI left to explain it.
+                // file that is gone, and the service then fails to start silently.
                 let missing = super::executable_in(&path)
                     .map(|exe| !Path::new(exe.as_str()).exists())
                     .unwrap_or(false);
@@ -371,8 +350,7 @@ pub(crate) fn probe(config_path: &Path) -> ServiceProbe {
             }
         }
         // No registry value: either the service does not exist, or it exists
-        // and the value is unreadable. `OpenServiceW` failing to find it is
-        // the ordinary "not installed" case.
+        // with an unreadable value.
         None => {
             if !exists && !query_failed {
                 ServiceProbe::NotInstalled
@@ -385,9 +363,8 @@ pub(crate) fn probe(config_path: &Path) -> ServiceProbe {
 
 /// Create the service, or update an existing one's command line and account.
 ///
-/// The account is chosen here, so the access control that account needs is
-/// granted here too, and the install refuses to report success when it cannot:
-/// a `NT SERVICE\Nanofile` service that may not write its own database is a
+/// The account is chosen here, so its access control is granted here too, and a
+/// failure refuses success: a service that may not write its own database is a
 /// registration that fails invisibly at the next boot.
 pub(crate) fn install(
     config_path: &Path,
@@ -402,8 +379,7 @@ pub(crate) fn install(
     let display = wide(DISPLAY_NAME);
     let bin = wide(&bin_path);
 
-    // `LocalSystem` is registered as *no* account name; the other choices name
-    // their account explicitly, and only a named account has a password.
+    // `LocalSystem` is registered as *no* account name; only a named account has a password.
     let start_name = account.name().map(wide);
     let password = account.password().map(wide);
     let start_ptr = start_name
@@ -434,8 +410,7 @@ pub(crate) fn install(
             )
         }
     } else {
-        // Already registered (possibly for another install, which the user
-        // confirmed): point it at this executable and config.
+        // Already registered (another install, confirmed): point it here.
         let ok = unsafe {
             ChangeServiceConfigW(
                 existing,
@@ -491,9 +466,8 @@ pub(crate) fn install(
         tracing::warn!("could not set the service description");
     }
 
-    // Crashes and non-zero exits are retried with a growing delay, then left
-    // stopped: `INFINITE` as the reset period is what stops a permanently
-    // broken configuration from restarting forever.
+    // Crashes and non-zero exits are retried with growing delays, then left
+    // stopped: an `INFINITE` reset period stops a broken config restarting forever.
     let mut actions = [
         SC_ACTION {
             Type: SC_ACTION_RESTART,
@@ -526,8 +500,7 @@ pub(crate) fn install(
         tracing::warn!("could not set the service failure actions");
     }
     let flag = SERVICE_FAILURE_ACTIONS_FLAG {
-        // A clean stop (exit code 0) is still a clean stop; only a failure
-        // triggers the actions above.
+        // A clean stop (exit code 0) is still a clean stop; only a failure triggers these.
         fFailureActionsOnNonCrashFailures: 1,
     };
     if unsafe {
@@ -543,12 +516,10 @@ pub(crate) fn install(
 
     // The account's SID exists only now (a virtual account is materialised by
     // `CreateServiceW`), which is why the grants happen here — and a failure is
-    // fatal: a registered service that may not write its own database fails
-    // invisibly at the next boot.
+    // fatal: a service that may not write its own database fails invisibly at boot.
     if let Err(e) = prepare_account(account, input) {
         if created {
-            // Roll the registration back. A service that cannot start is worse
-            // than no service, and the operator asked for a working one.
+            // Roll the registration back: a service that cannot start is worse than none.
             unsafe { DeleteService(service) };
         }
         unsafe {
@@ -570,10 +541,9 @@ pub(crate) fn install(
     Ok(())
 }
 
-/// Give the chosen account the rights and access the service needs.
-///
-/// The "Log on as a service" right first (without it the service starts and
-/// dies with error 1069), then modify access to every path the server writes.
+/// Give the chosen account the rights and access the service needs: the "Log on
+/// as a service" right first (without it the service starts and dies with error
+/// 1069), then modify access to every path the server writes.
 fn prepare_account(
     account: &ServiceAccount,
     input: &super::preflight::Input,
@@ -584,22 +554,19 @@ fn prepare_account(
         tracing::info!(account = %name, "granted \"log on as a service\"");
     }
     let Some(target) = account.grant_target() else {
-        // LocalSystem already has access to everything, and changing a system
-        // directory's access control for it would be a change for no reason.
+        // LocalSystem already has access to everything; its ACL needs no change.
         return Ok(());
     };
     let sid = super::acl::resolve_sid(&target)?;
     let mut granted: Vec<PathBuf> = Vec::new();
     for (path, inheritable) in input.grant_targets() {
         if !path.exists() {
-            // The preflight creates every directory; a path that is still
-            // missing is a file the operator has not created yet.
+            // The preflight creates every directory; a still-missing path is a file.
             tracing::debug!(path = %path.display(), "nothing to grant access to");
             continue;
         }
         if let Err(e) = super::acl::grant(&sid, &path, inheritable) {
-            // A half-granted account is a change to somebody else's access
-            // control that this failed install should not leave behind.
+            // Do not leave somebody else's ACL half-granted by a failed install.
             tracing::error!(
                 path = %path.display(),
                 "granting access failed; taking back the {count} grant(s) already made",
@@ -624,11 +591,8 @@ fn revoke_paths(sid: &str, paths: &[PathBuf]) {
 }
 
 /// Stop and remove the service. Removing a service that is not there is a
-/// success: the caller's intent ("it must not be registered") already holds.
-///
-/// The access control the install granted is taken back, best effort: leaving a
-/// service account with write access to a directory that is no longer its own is
-/// exactly the kind of residue a removal should not leave behind.
+/// success: the caller's intent already holds. The access the install granted is
+/// taken back, best effort.
 pub(crate) fn uninstall(input: &super::preflight::Input) -> anyhow::Result<()> {
     // Who it ran as has to be read before the registration disappears.
     let account = registered_account();
@@ -660,11 +624,9 @@ pub(crate) fn uninstall(input: &super::preflight::Input) -> anyhow::Result<()> {
                 anyhow::bail!("stopping the service failed (error {error})");
             }
         } else if !wait_for_stopped(service, std::time::Duration::from_secs(60)) {
-            // Deleting a service that is still running only marks it for
-            // deletion while it keeps serving, which would make "removed" a
-            // lie. A graceful stop can legitimately take the server's
-            // 25-second drain, so this is a real failure only after a
-            // generous wait.
+            // Deleting a service that is still running only marks it for deletion
+            // while it keeps serving, which would make "removed" a lie. A graceful
+            // stop can take the server's 25-second drain, so 60s is generous.
             unsafe {
                 CloseServiceHandle(service);
                 CloseServiceHandle(manager);
@@ -690,9 +652,8 @@ pub(crate) fn uninstall(input: &super::preflight::Input) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Take back the grants [`prepare_account`] made, ignoring what cannot be
-/// undone: the service is gone either way, and a stale access control entry on
-/// a directory the operator still owns is not worth failing a removal over.
+/// Take back the grants [`prepare_account`] made, ignoring what cannot be undone:
+/// the service is gone either way, and a stale access control entry is not worth it.
 fn revoke_access(account: Option<&str>, input: &super::preflight::Input) {
     let Some(account) = account else {
         // No `ObjectName`: LocalSystem, for which nothing was granted.
@@ -716,13 +677,10 @@ fn revoke_access(account: Option<&str>, input: &super::preflight::Input) {
 
 /// Stop the running service and wait for it to report `STOPPED`.
 ///
-/// Idempotent: a service that is not running (or not installed at all) is
-/// already in the state the caller wants. Used by the tray's Quit, which in
-/// client mode means "stop the server", exactly as it does in the ordinary
-/// tray.
-///
-/// Stopping a service needs the `SERVICE_STOP` right, so the caller has to
-/// handle the access-denied case rather than assume it.
+/// Idempotent: a service that is not running (or not installed at all) is already
+/// in the state the caller wants. Used by the tray's Quit, which in client mode
+/// means "stop the server". Needs the `SERVICE_STOP` right, so callers must
+/// handle access-denied instead of assuming it.
 #[cfg(feature = "tray")]
 pub(crate) fn stop_service() -> anyhow::Result<()> {
     let manager = open_manager(SC_MANAGER_CONNECT)?;

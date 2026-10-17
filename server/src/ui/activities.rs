@@ -37,17 +37,13 @@ pub struct ActivityView {
     pub operation_label: String,
     pub author_email: String,
     pub author_name: String,
-    /// Relative avatar URL (`/avatars/user/{email}/resized/32/`); empty when
-    /// the author no longer exists.
+    /// Relative avatar URL; empty once the author is deleted.
     pub author_avatar_url: String,
-    /// Raw Unix seconds. The row renders it in the viewer's timezone, and it is
-    /// also the local-calendar-day boundary the group headers are cut on.
+    /// Raw Unix seconds; also the local-day boundary the group headers cut on.
     pub time_ts: i64,
     /// Number of items in a batch operation (1 for single operations).
     pub batch_count: usize,
-    /// File names extracted from detail JSON (empty for single operations).
     pub detail_items: Vec<String>,
-    /// Old repo name for repo rename operations.
     pub old_repo_name: Option<String>,
 }
 
@@ -124,7 +120,6 @@ pub async fn activities_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
-    // Fetch latest 50 activities for this user
     let events = state
         .repos
         .activity
@@ -133,7 +128,6 @@ pub async fn activities_page(
 
     let t = I18n::get(user.language.as_deref());
 
-    // Batch-load repo names
     let mut repo_cache: HashMap<String, Option<String>> = HashMap::new();
     for e in &events {
         #[allow(clippy::map_entry)]
@@ -143,7 +137,6 @@ pub async fn activities_page(
         }
     }
 
-    // Batch-load user (nickname, email)
     let mut user_cache: HashMap<i32, Option<(String, String)>> = HashMap::new();
     for e in &events {
         #[allow(clippy::map_entry)]
@@ -184,9 +177,9 @@ pub async fn activities_page(
 
         let old_path_display = e.old_path.as_deref().unwrap_or("").to_string();
 
-        // Parse detail JSON for batch item names, repo rename info, and the
-        // merge markers a server-side merge writes (see `ActivityItem`). A row
-        // the server merged in must not read as a device saving this path.
+        // Detail JSON: batch item names, repo rename info, and the server-side
+        // merge markers (see `ActivityItem`); a merged row must not read as a
+        // device saving this path.
         let (batch_count, detail_items, old_repo_name, merged, merge_kept) =
             match serde_json::from_str::<serde_json::Value>(&e.detail) {
                 Ok(serde_json::Value::Array(arr)) => {

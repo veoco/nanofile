@@ -1,22 +1,13 @@
 //! The layered settings service.
 //!
 //! It owns the saved rows, computes the effective value of every catalog key
-//! (and where that value came from), keeps the [`RuntimeConfig`] snapshot in
-//! step, and persists an administrator's changes.
+//! (and where it came from), keeps the [`RuntimeConfig`] snapshot in step, and
+//! persists an administrator's changes.
 //!
-//! # What a save does
-//!
-//! 1. Reject a key that is not in the catalog, is outside the section being
-//!    edited, or is read-only.
-//! 2. Parse every submitted value and apply it to a *candidate* configuration.
-//! 3. Validate the whole candidate with the very rules the server starts with,
-//!    so a value that would break the next start is refused here instead.
-//! 4. Write the canonical values (secrets encrypted) in one transaction.
-//! 5. Recompute the live snapshot and report which long-lived objects a hook has
-//!    to be pushed into.
-//!
-//! Steps 2–3 happen before step 4 on purpose: a rejected save must leave the
-//! database exactly as it was.
+//! A save parses and validates the whole candidate against the very rules the
+//! server starts with *before* writing, so a rejected save leaves the database
+//! exactly as it was; the live snapshot is then recomputed and the hooks that
+//! have to be pushed are reported.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
@@ -33,20 +24,16 @@ use infra::settings::{
 use crate::repository::settings::SettingsRepository;
 use crate::settings::runtime::RuntimeConfig;
 
-/// The layers a service is built from.
 pub struct SettingsLayers {
     /// The config file with the environment already applied.
     pub base: Config,
-    /// The catalog keys the environment supplied.
     pub env_keys: EnvKeys,
-    /// The saved rows.
     pub rows: BTreeMap<String, SettingRow>,
     pub policy: SettingsPolicy,
 }
 
 impl SettingsLayers {
-    /// The configuration file is the only layer (tests, CLI subcommands, and any
-    /// caller without a database to read the rows from).
+    /// The config file is the only layer (tests, CLI subcommands, callers without a database).
     pub fn plain(config: &Config) -> Self {
         Self {
             base: config.clone(),
@@ -56,7 +43,6 @@ impl SettingsLayers {
         }
     }
 
-    /// Read the saved rows and resolve the policy.
     pub async fn load(
         repo: &dyn SettingsRepository,
         config: &Config,
@@ -73,12 +59,9 @@ impl SettingsLayers {
     }
 }
 
-/// A submitted settings form.
-///
-/// Non-secret values are submitted as text. A secret is submitted as
-/// `Some(value)` to replace it, `Some("")` to erase it, or `None` when the form
-/// merely rendered the field — the three-way distinction a password field needs,
-/// since an empty box and an absent one cannot be told apart by value alone.
+/// A submitted settings form: non-secret values as text, each secret as
+/// `Some(value)` to replace, `Some("")` to erase, or `None` to keep what is
+/// stored (a password field cannot tell an empty box from an absent one).
 #[derive(Clone, Debug, Default)]
 pub struct SettingsForm {
     pub values: BTreeMap<String, String>,
@@ -88,7 +71,6 @@ pub struct SettingsForm {
 /// What a save (or a reload) changed.
 #[derive(Clone, Debug, Default)]
 pub struct SaveOutcome {
-    /// Catalog keys written or removed.
     pub changed: Vec<String>,
     /// Changed keys that only take effect at the next start.
     pub restart_pending: Vec<String>,
@@ -109,8 +91,7 @@ pub enum SecretState {
     FromEnvironment,
     FromConfigFile,
     Stored,
-    /// A stored value that cannot be decrypted any more (the server
-    /// `secret_key` changed), so the setting is effectively unset.
+    /// A stored value that can no longer be decrypted (the `secret_key` changed): effectively unset.
     StoredUnreadable,
 }
 
@@ -129,20 +110,14 @@ pub struct SettingsService {
     policy: SettingsPolicy,
     rows: RwLock<BTreeMap<String, SettingRow>>,
     broken_secrets: RwLock<BTreeSet<String>>,
-    /// The effective value of each key as last applied, so a reload can tell
-    /// what actually changed.
+    /// The effective value of each key as last applied, so a reload can tell what changed.
     applied: RwLock<BTreeMap<String, String>>,
 }
 
-/// The configuration a process starts with: every layer applied.
-///
-/// Separate from [`SettingsService::new`] so the startup path can read the
-/// effective values (the bind address, the data directories, the caches) before
-/// any object is built from them, while the service that will own them is
-/// constructed from the very same layers.
-///
-/// Returns the unreadable secrets too, so the caller can report them before the
-/// first request.
+/// The configuration a process starts with: every layer applied. Also returns
+/// the unreadable secrets, so the caller can report them before the first
+/// request. It is separate from [`SettingsService::new`], so the startup path can
+/// read the effective values before any object is built from them.
 pub fn resolve_startup(
     layers: &SettingsLayers,
     cipher: &TokenCipher,
@@ -204,7 +179,6 @@ impl SettingsService {
         }
     }
 
-    /// The snapshot handle shared with `AppState`.
     pub fn runtime(&self) -> &RuntimeConfig {
         &self.runtime
     }
@@ -214,7 +188,6 @@ impl SettingsService {
         &self.startup
     }
 
-    /// The config file with the environment applied.
     pub fn base(&self) -> &Config {
         &self.base
     }
@@ -227,7 +200,6 @@ impl SettingsService {
         self.policy.refresh_interval_secs
     }
 
-    /// The stored row for a key, if any.
     pub fn row(&self, key: &str) -> Option<SettingRow> {
         self.rows
             .read()
@@ -236,7 +208,6 @@ impl SettingsService {
             .cloned()
     }
 
-    /// Every stored key, for the "unknown row" diagnostics.
     pub fn stored_keys(&self) -> BTreeSet<String> {
         self.rows
             .read()
@@ -246,11 +217,9 @@ impl SettingsService {
             .collect()
     }
 
-    /// Every catalog key with its effective value and origin.
-    ///
-    /// Secret values stay in their stored (ciphertext) form: this output feeds
-    /// HTML, and a page must never be able to print a secret back. Use
-    /// [`Self::secret_state`] for what the form should say.
+    /// Every catalog key with its effective value and origin. Secret values stay
+    /// in their stored (ciphertext) form: this output feeds HTML, and a page
+    /// must never be able to print a secret back.
     pub fn resolved(&self) -> Vec<Resolved> {
         let rows = self
             .rows
@@ -266,7 +235,6 @@ impl SettingsService {
         )
     }
 
-    /// [`Self::resolved`] restricted to one page's keys.
     pub fn resolved_for(&self, section: Section) -> Vec<Resolved> {
         self.resolved()
             .into_iter()
@@ -274,14 +242,12 @@ impl SettingsService {
             .collect()
     }
 
-    /// [`Self::resolved`] for a single key.
     pub fn resolved_one(&self, key: &str) -> Option<Resolved> {
         self.resolved()
             .into_iter()
             .find(|entry| entry.def.key == key)
     }
 
-    /// Whether a secret is configured, and from where.
     pub fn secret_state(&self, key: &str) -> Option<SecretState> {
         let entry = self.resolved_one(key)?;
         if entry.def.kind != Kind::Secret {
@@ -303,13 +269,10 @@ impl SettingsService {
         })
     }
 
-    /// Keys whose saved value only takes effect at the next start.
-    ///
-    /// Compares each restart-only setting's effective (stored) value with the
-    /// value the running process actually started with, which is what the page
-    /// has to call out. These are exactly the keys the in-place "Restart
-    /// server" button applies; [`Self::pending_process_restart`] holds the ones
-    /// it cannot.
+    /// Keys whose saved value only takes effect at the next start: a
+    /// restart-only setting's effective (stored) value differs from the value
+    /// the running process started with. The in-place "Restart server" button
+    /// applies these; [`Self::pending_process_restart`] holds the rest.
     pub fn pending_restart(&self) -> BTreeSet<String> {
         let live = self.runtime.get();
         self.resolved()
@@ -323,9 +286,7 @@ impl SettingsService {
     /// Keys whose saved value needs the *operating-system process* restarted.
     ///
     /// Read before the server loop exists (the log subscriber, the desktop
-    /// tray), so the in-app restart cannot reach them. Reporting them
-    /// separately stops the page from promising that the button fixed a value
-    /// it did not touch.
+    /// tray), so the in-app restart cannot reach them.
     pub fn pending_process_restart(&self) -> BTreeSet<String> {
         let live = self.runtime.get();
         self.resolved()
@@ -336,13 +297,10 @@ impl SettingsService {
             .collect()
     }
 
-    /// Re-read the settings table. Returns what changed, if anything.
-    ///
-    /// Called periodically so a change made on another instance (or restored
-    /// from a backup) is picked up without a restart. The environment and the
-    /// config file are *not* re-read: those are process-level inputs, and a
-    /// running process getting a different value for one of them would be a
-    /// surprise rather than an update.
+    /// Re-read the settings table, returning what changed, if anything. Called
+    /// periodically so a change made on another instance (or a restored backup)
+    /// is picked up. The environment and config file are *not* re-read:
+    /// process-level inputs must not change under a running process.
     pub async fn reload(&self) -> Result<SaveOutcome, AppError> {
         let mut fresh = self.repo.load_all().await?;
         normalize_paths(&mut fresh);
@@ -362,7 +320,6 @@ impl SettingsService {
         Ok(self.reapply())
     }
 
-    /// Save a section's form.
     pub async fn save(
         &self,
         section: Section,
@@ -492,15 +449,13 @@ impl SettingsService {
         Ok(outcome)
     }
 
-    /// Report the state of the layering at startup: which values the config file
-    /// is no longer supplying, which changes still need a restart, and which
-    /// stored rows name a setting this build does not know.
+    /// Report the layering at startup: values the config file no longer supplies,
+    /// changes still needing a restart, and stored rows this build does not know.
     pub fn log_startup_diagnostics(&self) {
         let resolved = self.resolved();
         let stored = self.stored_keys();
 
-        // A row for a key the catalog does not have (a downgrade, or a key
-        // renamed by hand) is never applied: say so rather than ignoring it.
+        // A row for a key the catalog lacks (a downgrade, or a key renamed by hand) is never applied.
         let unknown: Vec<&str> = stored
             .iter()
             .filter(|key| settings::find(key).is_none())
@@ -514,9 +469,9 @@ impl SettingsService {
             );
         }
 
-        // Under `bootstrap` a stored value wins, so a config-file entry that
-        // disagrees is no longer in effect. An operator who edited the file and
-        // saw nothing change needs to be told which keys those are.
+        // Under `bootstrap` a stored value wins, so a disagreeing config-file
+        // entry is no longer in effect; an operator who edited the file needs
+        // to be told which keys those are.
         if self.policy.should_report_drift() {
             let drifted: Vec<&str> = resolved
                 .iter()
@@ -543,8 +498,7 @@ impl SettingsService {
         }
 
         // The values read before the server loop exists cannot be reached by
-        // that restart at all, so they get their own line rather than being
-        // folded into the one above.
+        // that restart at all, so they get their own line.
         let process_pending = self.pending_process_restart();
         if !process_pending.is_empty() {
             tracing::warn!(
@@ -568,8 +522,6 @@ impl SettingsService {
         }
     }
 
-    // ── Internals ──────────────────────────────────────────────────────────
-
     /// The fully-layered configuration (every key, including restart-only ones).
     fn layered_config(&self) -> Config {
         let rows = self
@@ -592,7 +544,6 @@ impl SettingsService {
         config
     }
 
-    /// Recompute the live snapshot after the rows changed.
     fn reapply(&self) -> SaveOutcome {
         let rows = self
             .rows
@@ -630,8 +581,7 @@ impl SettingsService {
         }
 
         // The live snapshot starts from `startup` (so restart-only settings keep
-        // the value the process started with) and has every live key overwritten
-        // with the freshly resolved value.
+        // the value the process started with), with every live key overwritten.
         let mut live = self.startup.clone();
         for failure in apply_resolved(&mut live, &resolved, true) {
             tracing::error!("live setting could not be applied: {failure}");
@@ -653,7 +603,6 @@ impl SettingsService {
         }
     }
 
-    /// Look up a writable catalog entry that belongs to `section`.
     fn stored_def(&self, key: &str, section: Section) -> Result<&'static SettingDef, AppError> {
         let def = settings::find(key)
             .ok_or_else(|| AppError::BadRequest(format!("{key} is not a setting")))?;
@@ -670,13 +619,12 @@ impl SettingsService {
         Ok(def)
     }
 
-    /// The rules the server itself starts with, so a saved value cannot be one
-    /// the next start would refuse.
+    /// The rules the server starts with, so a saved value cannot be one the next start would refuse.
     fn validate(&self, candidate: &Config) -> Result<(), AppError> {
         candidate.validate().map_err(AppError::BadRequest)?;
 
-        // Server-only checks: the SMTP sender has to be a real address, the
-        // same parser the message builder uses.
+        // Server-only checks: the SMTP sender must be a real address, parsed the
+        // same way the message builder parses it.
         if !candidate.email.from_address.trim().is_empty()
             && !crate::service::mail::settings::is_valid_address(&candidate.email.from_address)
         {
@@ -700,7 +648,6 @@ impl SettingsService {
     }
 }
 
-/// Whether a catalog key holds a filesystem path.
 fn is_path_key(key: &str) -> bool {
     settings::find(key).is_some_and(|def| def.kind == Kind::Path)
 }
@@ -708,9 +655,8 @@ fn is_path_key(key: &str) -> bool {
 /// Resolve a relative path against the installation directory.
 ///
 /// [`Config::resolve_state_paths`] does this for the config file at startup; a
-/// path saved from the admin page has to follow the same rule, or the setting
-/// would name a different directory depending on where the process happened to
-/// start — which for a login-started desktop instance is a system directory.
+/// saved path must follow the same rule, or the setting names a different
+/// directory depending on where the process starts.
 fn normalize_path_value(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() || std::path::Path::new(trimmed).is_absolute() {
@@ -730,8 +676,7 @@ fn normalize_paths(rows: &mut BTreeMap<String, SettingRow>) {
     }
 }
 
-/// Resolve every key, decrypting stored secrets and reporting the ones that can
-/// no longer be read.
+/// Resolve every key, decrypting stored secrets and reporting the unreadable ones.
 fn resolve_effective(
     base: &Config,
     defaults: &Config,

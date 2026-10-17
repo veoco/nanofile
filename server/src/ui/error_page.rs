@@ -1,17 +1,12 @@
 //! The HTML error pages.
 //!
 //! `AppError` answers with the Seafile wire protocol — `{"error_msg": ...}`, or
-//! plain text for a locked file — and that is what the desktop client, the CLI
-//! and the frontend's fetch calls parse. A *browser* that lands on a page route
-//! should not be shown that, so the page routers are wrapped in
-//! [`anonymous_pages`] and [`session_pages`]: an error response is rendered as
-//! a page. Every wire endpoint (the API namespaces, `/seafhttp/`, sync, WebDAV,
-//! and the upload/block endpoints the browser itself calls with `fetch`) keeps
-//! the body it has always had.
+//! plain text for a locked file — which the desktop client, the CLI and the
+//! frontend's fetch calls parse; a *browser* on a page route must not see that,
+//! so the page routers are wrapped in [`anonymous_pages`] and [`session_pages`]
+//! and their errors render as pages. Every wire endpoint keeps its body.
 //!
-//! Which shell a page renders in is decided by the route group, not by the
-//! reader: the public share pages live in the anonymous shell when they
-//! succeed, so their errors do too.
+//! The route group, not the reader, decides the shell.
 
 use askama::Template;
 use axum::extract::{Request, State};
@@ -25,18 +20,14 @@ use crate::i18n::I18n;
 use crate::service::sharing::share::LinkFailure;
 use crate::ui::auth_extractor::{WebUser, session_cookie};
 
-// ── What the page is ────────────────────────────────────────────────────────
-
 /// A button on an error page. `label_key` is a locale key, so the page is
-/// translated exactly like every other page; `primary` picks the filled
-/// variant over the outlined one.
+/// translated; `primary` picks the filled variant over the outlined one.
 pub struct ErrorAction {
     pub label_key: &'static str,
     pub href: String,
     pub primary: bool,
 }
 
-/// One error page: what it says and what it offers.
 pub struct ErrorPage {
     pub status: StatusCode,
     pub title_key: &'static str,
@@ -48,7 +39,6 @@ pub struct ErrorPage {
 }
 
 impl ErrorPage {
-    /// The page for a failed response.
     pub fn for_status(status: StatusCode, signed_in: bool, retry: Option<String>) -> Self {
         let (title_key, desc_key) = copy(status);
         Self {
@@ -74,17 +64,15 @@ impl ErrorPage {
             actions: vec![ErrorAction {
                 label_key: "err.action.home",
                 href: "/".into(),
-                // Outlined, not filled: there is nothing here to do. The page
-                // exists to explain, and the link is just a way off it.
+                // Outlined, not filled: there is nothing here to do; the page exists to explain.
                 primary: false,
             }],
         }
     }
 }
 
-/// Copy per status. An unmapped 4xx falls back to the 400 wording and an
-/// unmapped 5xx to the 500 one, so a status nobody thought about still renders
-/// a sentence rather than an empty page.
+/// Copy per status: an unmapped 4xx falls back to the 400 wording and an unmapped
+/// 5xx to the 500 one, so a status nobody thought about still renders a sentence.
 fn copy(status: StatusCode) -> (&'static str, &'static str) {
     match status.as_u16() {
         400 => ("err.400.title", "err.400.desc"),
@@ -99,8 +87,8 @@ fn copy(status: StatusCode) -> (&'static str, &'static str) {
     }
 }
 
-/// What the page offers. A guest cannot go "back to libraries", so the primary
-/// action is the one the reader can actually take.
+/// What the page offers: a guest cannot go "back to libraries", so the primary
+/// action is the one the reader can take.
 fn actions(status: StatusCode, signed_in: bool, retry: Option<String>) -> Vec<ErrorAction> {
     let repeatable = status.is_server_error()
         || status == StatusCode::REQUEST_TIMEOUT
@@ -130,8 +118,6 @@ fn actions(status: StatusCode, signed_in: bool, retry: Option<String>) -> Vec<Er
     actions
 }
 
-// ── Templates ───────────────────────────────────────────────────────────────
-
 #[derive(Template)]
 #[template(path = "web/error.html")]
 struct AnonymousErrorTemplate {
@@ -160,15 +146,9 @@ struct AppErrorTemplate {
     actions: Vec<ErrorAction>,
 }
 
-// ── Rendering ───────────────────────────────────────────────────────────────
-
 /// Render in the app chrome when there is a user, in the anonymous shell
-/// otherwise.
-///
-/// The app shell reads the left panel, so building it can itself fail; that
-/// falls back to the anonymous page rather than turning one error into two. The
-/// anonymous page needs nothing but the locale and the stylesheet URL, which is
-/// also why a database outage can still be reported.
+/// otherwise. Building the left panel can itself fail; that falls back to the
+/// anonymous page, which is why a database outage can still be reported.
 async fn render(
     state: &AppState,
     headers: &HeaderMap,
@@ -215,12 +195,9 @@ async fn render(
     )
 }
 
-/// The page for a share or upload link that no longer resolves.
-///
-/// Always the anonymous shell, and never asynchronous: this is the one page a
-/// reader reaches with no account, on a route where there is no session to
-/// look up, and it must render even when the database is the reason the link
-/// did not resolve.
+/// The page for a share or upload link that no longer resolves: always the
+/// anonymous shell, never asynchronous, and it must render even when the database
+/// is the reason the link did not resolve.
 pub fn link_page(failure: LinkFailure, state: &AppState, headers: &HeaderMap) -> Response {
     let page = ErrorPage::for_link(failure);
     let status = page.status;
@@ -260,10 +237,8 @@ fn html<T: Template>(template: T, status: StatusCode) -> Response {
     }
 }
 
-// ── Middleware ──────────────────────────────────────────────────────────────
-
-/// Wrap a router whose pages render in the anonymous shell. Used for the public
-/// share and upload pages, which look the same signed in or out.
+/// Wrap a router whose pages render in the anonymous shell: public share and
+/// upload pages.
 pub async fn anonymous_pages(
     State(state): State<Arc<AppState>>,
     req: Request,
@@ -302,8 +277,7 @@ async fn replace_error(
         return response;
     }
 
-    // The session is read only here, on the error path: resolving it costs three
-    // lookups, and a page that rendered fine must not pay for them.
+    // The session is read only on the error path: resolving it costs three lookups.
     let user = match look_up_user {
         true => match session_cookie(headers) {
             Some(token) => WebUser::from_session_token(state, &token).await,
@@ -326,11 +300,9 @@ fn is_html(response: &Response) -> bool {
 }
 
 /// Where "Try again" points, or `None` when repeating the request is not what
-/// the reader wants.
-///
-/// Offered for a GET only: replaying a failed POST through a link would turn a
-/// form submission into a different request. The value is always a path this
-/// server just served, so it cannot become an off-site href.
+/// the reader wants. Offered for a GET only: replaying a failed POST through a
+/// link would turn a form submission into a different request. The value is
+/// always a path this server just served, so it cannot become an off-site href.
 fn retry_target(req: &Request) -> Option<String> {
     if req.method() != Method::GET {
         return None;
@@ -340,13 +312,9 @@ fn retry_target(req: &Request) -> Option<String> {
         .map(|path_and_query| path_and_query.as_str().to_string())
 }
 
-// ── Router fallback ─────────────────────────────────────────────────────────
-
-/// The path matched no route.
-///
-/// A browser gets the page; anything else keeps the empty 404 body axum
-/// produced before this existed, so a client probing an unknown API path sees
-/// no change.
+/// The path matched no route. A browser gets the page; anything else keeps the
+/// empty 404 body axum produced before this existed, so a client probing an
+/// unknown API path sees no change.
 pub async fn unknown_path(State(state): State<Arc<AppState>>, req: Request) -> Response {
     if !prefers_html(req.headers()) {
         return StatusCode::NOT_FOUND.into_response();
@@ -361,9 +329,8 @@ pub async fn unknown_path(State(state): State<Arc<AppState>>, req: Request) -> R
     render(&state, &headers, page, user.as_ref()).await
 }
 
-/// Whether the client asked for HTML. A browser sends
-/// `text/html,application/xhtml+xml,…`; a client that wants the wire protocol
-/// asks for JSON, or for nothing in particular.
+/// Whether the client asked for HTML: a browser sends `text/html`, while a client
+/// that wants the wire protocol asks for JSON, or for nothing in particular.
 fn prefers_html(headers: &HeaderMap) -> bool {
     headers
         .get(header::ACCEPT)
@@ -407,8 +374,7 @@ mod tests {
             assert!(page.actions[0].primary, "{status}");
             assert!(!page.actions[1].primary, "{status}");
         }
-        // A guest gets the retry with no second button to a page they cannot
-        // open.
+        // A guest gets the retry with no second button to a page they cannot open.
         let guest =
             ErrorPage::for_status(StatusCode::INTERNAL_SERVER_ERROR, false, Some("/x/".into()));
         assert_eq!(labels(&guest), vec!["err.action.retry"]);
@@ -416,8 +382,7 @@ mod tests {
 
     #[test]
     fn a_failure_that_cannot_be_repeated_offers_no_retry() {
-        // The POST path passes no retry target, and neither does any status
-        // whose request the reader cannot simply send again.
+        // The POST path passes no retry target, nor does a status the reader cannot resend.
         let page = ErrorPage::for_status(StatusCode::FORBIDDEN, true, None);
         assert_eq!(labels(&page), vec!["err.action.back"]);
         let page = ErrorPage::for_status(StatusCode::BAD_REQUEST, true, Some("/x/".into()));
@@ -436,8 +401,7 @@ mod tests {
             StatusCode::TOO_MANY_REQUESTS,
             StatusCode::INTERNAL_SERVER_ERROR,
             StatusCode::BAD_GATEWAY,
-            // A status nobody enumerated still gets a sentence, not an empty
-            // page or a raw key.
+            // A status nobody enumerated still gets a sentence, not an empty page.
             StatusCode::IM_A_TEAPOT,
         ] {
             let t = I18n::get(Some("en"));

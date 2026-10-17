@@ -1,12 +1,8 @@
 //! Embedded static assets service.
 //!
-//! Uses `rust-embed` to compile `static/` into the binary at build time.
-//! Provides:
-//! - Compile-time embedding of CSS, JS, favicon
-//! - Lazy-computed SHA-256 content hashes for cache-busting filename fingerprints
-//! - ETag, Last-Modified, Cache-Control: immutable headers
-//! - Conditional request handling (304 Not Modified)
-//! - `TemplateUrls` for Askama template use
+//! `rust-embed` compiles `static/` into the binary; assets are served with
+//! content-hash fingerprints in the filename, `ETag` / `Last-Modified` and
+//! `304 Not Modified` handling.
 
 use axum::{
     body::Body,
@@ -17,13 +13,9 @@ use axum::{
 use rust_embed::Embed;
 use std::sync::LazyLock;
 
-// ─── Embed ───────────────────────────────────────────────────────────────────
-
 #[derive(Embed)]
 #[folder = "static/"]
 struct Assets;
-
-// ─── Hash helpers (SHA-256 prefix, once, cached) ────────────────────────────
 
 fn hex_prefix(bytes: &[u8; 32]) -> String {
     let mut s = String::with_capacity(8);
@@ -49,8 +41,6 @@ fn http_date(unix_secs: u64) -> String {
         .map(|dt| dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string())
         .unwrap_or_default()
 }
-
-// ─── Per-asset data (lazy, computed once from embedded file metadata) ───────
 
 macro_rules! asset_data {
     ($hash:ident, $lm:ident, $etag:ident, $fp:ident, $path:expr) => {
@@ -125,12 +115,8 @@ asset_data!(
     "js/public-share.bundle.js"
 );
 
-// ─── Template URLs (for Askama templates, fingerprinted filenames) ──────────
-
-/// Pre-computed static asset URLs with content-hash fingerprint in the filename.
-///
-/// Each field contains a full URL like `"/static/css/app.abc123ef.css"`.
-/// References are `'static` — the strings live for the program's lifetime.
+/// Pre-computed static asset URLs with a content-hash fingerprint in the filename,
+/// e.g. `"/static/css/app.abc123ef.css"`; the strings are `'static`.
 #[derive(Clone, Copy)]
 pub struct TemplateUrls {
     pub css: &'static str,
@@ -161,8 +147,6 @@ pub fn template_urls() -> &'static TemplateUrls {
     &URLS
 }
 
-// ─── MIME type mapping ──────────────────────────────────────────────────────
-
 fn mime_for(path: &str) -> &'static str {
     if let Some(ext) = path.rsplit('.').next() {
         match ext {
@@ -175,8 +159,6 @@ fn mime_for(path: &str) -> &'static str {
         "application/octet-stream"
     }
 }
-
-// ─── Asset resolution (fingerprinted path → original + metadata) ────────────
 
 /// Resolve a request path (fingerprinted or plain) to its embedded original path
 /// and associated ETag / Last-Modified strings.
@@ -212,18 +194,12 @@ fn resolve_asset(path: &str) -> Option<(&'static str, &'static str, &'static str
     }
 }
 
-// ─── Handler ────────────────────────────────────────────────────────────────
-
 /// Serve an embedded static file with full HTTP caching semantics.
 ///
-/// URLs use content-hash fingerprints in the filename:
-/// `/static/css/app.abc123ef.css` — when content changes, the filename changes,
-/// which naturally busts any cache without needing a query string.
-///
-/// Supports:
-/// - `Cache-Control: public, max-age=31536000, immutable` (long-term caching)
-/// - `ETag` / `Last-Modified` headers for validation
-/// - Conditional `304 Not Modified` via `If-None-Match`
+/// Fingerprinted URLs (`/static/css/app.abc123ef.css`) change when the content
+/// does, busting caches without a query string. Responses carry
+/// `Cache-Control: public, max-age=31536000, immutable`, `ETag` / `Last-Modified`,
+/// and answer a matching `If-None-Match` with `304 Not Modified`.
 pub async fn serve_static(Path(path): Path<String>, headers: HeaderMap) -> Response {
     let path = path.trim_start_matches('/');
 
@@ -236,7 +212,6 @@ pub async fn serve_static(Path(path): Path<String>, headers: HeaderMap) -> Respo
         return (StatusCode::NOT_FOUND, "404 Not Found").into_response();
     };
 
-    // Conditional request: If-None-Match → 304
     if headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
@@ -249,7 +224,6 @@ pub async fn serve_static(Path(path): Path<String>, headers: HeaderMap) -> Respo
             .into_response();
     }
 
-    // Normal response
     let mut resp = Response::builder()
         .header(header::CONTENT_TYPE, mime_for(original_path))
         .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")

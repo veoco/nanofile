@@ -16,8 +16,6 @@ pub struct PageCtx {
     pub left_panel_repos: Vec<LeftPanelRepo>,
 }
 
-/// Build the common page context (I18n, template urls, CSRF token and the
-/// left-panel repo list) for an authenticated web UI handler.
 pub async fn build_page_ctx(state: &AppState, user: &WebUser) -> Result<PageCtx, AppError> {
     let left_panel_repos = state
         .left_panel_cache

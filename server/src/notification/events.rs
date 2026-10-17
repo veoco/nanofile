@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Top-level message format for the notification protocol.
-/// Used both for client→server messages (subscribe/unsubscribe)
-/// and server→client messages (event notifications).
+/// Top-level message format for the notification protocol, used both for
+/// client→server messages (subscribe/unsubscribe) and server→client events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationMessage {
     #[serde(rename = "type")]
@@ -18,7 +17,6 @@ pub struct RepoUpdateEvent {
     pub commit_id: String,
 }
 
-/// A file lock changed event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileLockEvent {
     pub repo_id: String,
@@ -27,7 +25,6 @@ pub struct FileLockEvent {
     pub lock_user: String,
 }
 
-/// A comment update event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommentEvent {
     pub repo_id: String,
@@ -56,14 +53,12 @@ pub struct RepoSubscription {
     pub jwt_token: String,
 }
 
-/// A single repo unsubscription.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoUnsubscription {
     pub id: String,
 }
 
-/// JWT claims embedded in the notification subscription token.
-/// Seafile format: { repo_id, username, exp }
+/// JWT claims in the subscription token (Seafile format: `{ repo_id, username, exp }`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationJwtClaims {
     pub repo_id: String,
@@ -71,8 +66,7 @@ pub struct NotificationJwtClaims {
     pub exp: i64,
 }
 
-/// A JWT-expired event — tells the client its notification token has expired
-/// and it needs to fetch a new one and resubscribe.
+/// A JWT-expired event: the client must fetch a new token and resubscribe.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JwtExpiredEvent {
     pub repo_id: String,

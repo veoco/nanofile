@@ -1,34 +1,15 @@
-//! Office document text extraction (DOCX, XLSX, PPTX and the legacy DOC, XLS,
-//! PPT).
+//! Office document text extraction (DOCX, XLSX, PPTX and legacy DOC, XLS, PPT).
 //!
-//! The parser takes a `Read + Seek` source rather than a path, so the file
-//! never has to touch the filesystem on its way from the block store into the
-//! index.
+//! The parser takes a `Read + Seek` source, so a document never touches the
+//! filesystem on its way from the block store to the index.
 //!
-//! # Decompression budget
-//!
-//! `office_oxide` bounds each OPC part at 512 MiB and its own rendered-text
-//! budget is charged on the spreadsheet paths only, so a package of many parts
-//! can still expand far past the file that carried it. [`within_budget`] closes
-//! that gap before the parser sees the bytes: it decodes every part into a
-//! fixed scratch buffer and refuses the package once the total passes
-//! [`MAX_OFFICE_UNCOMPRESSED_BYTES`].
-//!
-//! Counting decoded bytes is the only sound bound. A part's declared size lives
-//! in the ZIP central directory and is attacker-controlled, and the `zip`
-//! crate's Deflate reader runs to the end of the compressed stream rather than
-//! stopping at that declaration, so the declaration is checked first only
-//! because it is free and refuses an honest bomb without decoding it.
-//!
-//! The budget bounds the parser's *input*, not merely our own pre-check: the
-//! parser reads a subset of these same parts, so the bytes it can decode are
-//! bounded by what was counted here. The pre-check itself holds one 64 KiB
-//! buffer, so its own cost does not scale with the file.
-//!
-//! A package that legitimately expands past the budget is skipped, not failed.
-//! That is a deliberate trade: at the 8 MiB content cap such a document could
-//! only ever contribute a prefix, and the alternative — letting the parser
-//! expand without a bound — is the failure this module exists to prevent.
+//! `office_oxide` bounds each OPC part at 512 MiB but charges its rendered-text
+//! budget on spreadsheets only, so a package of many parts can expand far past
+//! the file. [`within_budget`] decodes every part into a fixed 64 KiB scratch
+//! buffer and refuses the package past [`MAX_OFFICE_UNCOMPRESSED_BYTES`], which
+//! also bounds what the parser can decode: a declared size is attacker-controlled
+//! and the Deflate reader runs to the end of the stream. Counting decoded bytes
+//! is the only sound bound; past it a package is skipped, not failed.
 
 use std::io::{Cursor, Read};
 
@@ -37,36 +18,30 @@ use zip::ZipArchive;
 
 use super::{Extracted, MAX_STRUCTURED_BYTES, finish, guard, reason};
 
-/// Most bytes a whole Office package may decompress to.
-///
-/// Eight times the size a document may have on disk ([`MAX_STRUCTURED_BYTES`]),
-/// which leaves room for the compression ratios real Office XML reaches and
-/// still bounds a bomb.
+/// Most bytes a whole Office package may decompress to: eight times the size a
+/// document may have on disk ([`MAX_STRUCTURED_BYTES`]), which leaves room for
+/// real Office XML and still bounds a bomb.
 const MAX_OFFICE_UNCOMPRESSED_BYTES: u64 = 8 * MAX_STRUCTURED_BYTES as u64;
 
-/// Most parts (ZIP entries) a package may hold.
-///
-/// Every entry costs the archive reader a name and a metadata block before any
-/// of this runs, so the count is a bound on that fixed cost as well.
+/// Most parts (ZIP entries) a package may hold; every entry costs the archive
+/// reader a name and metadata block, so this bounds that fixed cost too.
 const MAX_OFFICE_ENTRIES: usize = 10_000;
 
-/// Scratch buffer for counting a part's decoded bytes.
-///
-/// Fixed, so the pre-check's own memory does not grow with the package.
+/// Scratch buffer for counting a part's decoded bytes; fixed, so the pre-check's
+/// own memory does not grow with the package.
 const BUDGET_SCRATCH_BYTES: usize = 64 * 1024;
 
 /// Extract the text of an Office document, or why it cannot be read.
 ///
-/// `format` comes from the extraction plan, which decided it from the filename;
-/// the parser validates the package against it and fails loudly on a mismatch.
+/// `format` comes from the extraction plan; the parser validates the package
+/// against it and fails loudly on a mismatch.
 pub(super) fn extract_text(data: Vec<u8>, format: DocumentFormat) -> Extracted {
     guard(
         "office",
         |_| Extracted::Unsupported(reason::PANIC),
         move || {
             // The OOXML formats are ZIP packages; the legacy ones are compound
-            // files, which store their streams uncompressed and are therefore
-            // bounded by the file itself.
+            // files, whose streams are uncompressed and bounded by the file.
             if is_package(format)
                 && let Err(reason) =
                     within_budget(&data, MAX_OFFICE_UNCOMPRESSED_BYTES, MAX_OFFICE_ENTRIES)
@@ -100,8 +75,7 @@ fn is_package(format: DocumentFormat) -> bool {
 ///
 /// A part that fails to decode ends its own count rather than failing the
 /// package: the parser reads through the same decoder, so it cannot reach bytes
-/// this loop could not. That keeps a file with, say, one corrupt checksum
-/// (which the parser tolerates) from being refused outright.
+/// this loop could not, and one corrupt checksum does not refuse the file.
 fn within_budget(data: &[u8], budget: u64, max_entries: usize) -> Result<(), &'static str> {
     let mut archive = ZipArchive::new(Cursor::new(data)).map_err(|_| reason::PARSE)?;
     if archive.len() > max_entries {
@@ -140,8 +114,7 @@ mod tests {
     use std::io::Write;
 
     /// The offset of the uncompressed-size field inside a central directory
-    /// header (`PK\x01\x02`). The archive reader compares it against what the
-    /// part actually decodes to.
+    /// header (`PK\x01\x02`), which the archive reader trusts.
     const CENTRAL_UNCOMPRESSED_SIZE: usize = 24;
 
     #[test]
@@ -150,8 +123,7 @@ mod tests {
         assert_eq!(within_budget(&package, 64 * 1024, 10), Ok(()));
     }
 
-    /// The declared size is checked without decoding anything, so a package
-    /// claiming an absurd part is refused cheaply.
+    /// The declared size is checked without decoding, so an absurd part is refused cheaply.
     #[test]
     fn an_honest_oversized_part_is_refused() {
         let package = package(&[("word/document.xml", 64 * 1024)]);
@@ -193,8 +165,7 @@ mod tests {
         );
     }
 
-    /// Parts that each fit the budget on their own still have to be counted as
-    /// they decode: the total is what refuses the package.
+    /// Parts that each fit still have to be counted as they decode.
     #[test]
     fn the_decoded_total_refuses_a_sum_of_small_parts() {
         let package = package(&[
@@ -241,9 +212,7 @@ mod tests {
         );
     }
 
-    /// The budget has to stay above the largest document that may be read at
-    /// all, or an oversized-but-readable package would be refused twice for the
-    /// same reason.
+    /// The budget has to stay above the largest document that may be read at all.
     #[test]
     fn the_budget_is_a_multiple_of_the_document_cap() {
         assert!(MAX_OFFICE_UNCOMPRESSED_BYTES >= MAX_STRUCTURED_BYTES as u64);

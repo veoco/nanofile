@@ -1,9 +1,7 @@
 //! Web UI for managing unified API keys.
 //!
-//! Server-rendered: every capability is its own checkbox and every library its
-//! own permission selector, so the page works without JavaScript. The only
-//! enhancement (see `frontend/pages/api-keys.js`) is copying the freshly minted
-//! secret and pre-ticking a preset.
+//! Server-rendered so the page works without JavaScript; `frontend/pages/api-keys.js`
+//! only copies the freshly minted secret and pre-ticks a preset.
 
 use askama::Template;
 use axum::{
@@ -27,7 +25,6 @@ use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
-/// Query parameters of the key page.
 #[derive(Deserialize, Default)]
 pub struct ApiKeysQuery {
     /// Set by the redirect that follows a successful creation.
@@ -44,12 +41,9 @@ struct PendingReveal {
     created: Instant,
 }
 
-/// Secrets minted but not yet shown.
-///
-/// The create form redirects after a successful POST so that a browser refresh
-/// re-reads the list instead of re-running the creation. The plaintext therefore
-/// has to survive exactly one redirect: it waits here, is handed out once, and
-/// expires after [`REVEAL_TTL`] if the browser never follows the redirect.
+/// Secrets minted but not yet shown: they survive exactly the one redirect that
+/// follows creation, are handed out once, and expire after [`REVEAL_TTL`] if the
+/// browser never follows it.
 static PENDING_REVEALS: LazyLock<Mutex<HashMap<i32, PendingReveal>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -81,7 +75,6 @@ fn take_reveal(user_id: i32, key_id: i32) -> Option<NewKeyView> {
     })
 }
 
-/// One capability row in the picker.
 pub struct CapabilityView {
     pub id: &'static str,
     pub write: bool,
@@ -90,35 +83,29 @@ pub struct CapabilityView {
     pub targets: String,
 }
 
-/// Capabilities grouped under a translated domain heading.
 pub struct DomainGroup {
     pub label: String,
     pub capabilities: Vec<CapabilityView>,
 }
 
-/// A selectable starting point with its translated label.
 pub struct PresetView {
     pub id: &'static str,
     pub label: String,
     pub capabilities: Vec<&'static str>,
-    /// How many capabilities the preset expands to, shown next to the label so
-    /// an over-broad preset is visible before it is applied.
+    /// How many capabilities the preset expands to, so an over-broad preset is visible.
     pub count: usize,
 }
 
-/// A selectable lifetime preset value.
 pub struct TtlOption {
     pub days: u64,
     pub label: String,
 }
 
-/// One library row in the scope picker.
 pub struct RepoOption {
     pub id: String,
     pub name: String,
 }
 
-/// A key as rendered on the page.
 pub struct ApiKeyCard {
     pub id: i32,
     pub name: String,
@@ -177,7 +164,6 @@ pub struct ApiKeysTemplate {
     pub new_key: Option<NewKeyView>,
     pub error: Option<String>,
     pub success: Option<String>,
-    /// The shared settings navigation.
     pub nav: crate::ui::settings::SettingsNav,
 }
 
@@ -299,11 +285,9 @@ async fn render(
 
 /// Which `<option>` value the edit form should mark selected.
 ///
-/// The edit form has to offer the same lifetimes as the create form, so `never`
-/// is a choice only while the server allows keys without an expiry. A key that
-/// has no expiry while the server forbids one falls back to `custom` with no
-/// days prefilled, so saving it asks for a lifetime rather than quietly
-/// granting one.
+/// `never` is a choice only while the server allows keys without an expiry;
+/// otherwise an expiry-less key falls back to `custom`, asking for a lifetime
+/// rather than quietly granting one.
 fn expiry_option(has_expiry: bool, expiry_days: u64, presets: &[u64], max_ttl_days: u64) -> String {
     if !has_expiry {
         return if max_ttl_days == 0 {
@@ -388,11 +372,8 @@ fn all_repos_from(form: &HashMap<String, String>) -> bool {
         .is_some_and(|value| value == "1" || value == "on" || value == "true")
 }
 
-/// Read the requested lifetime, in the reader's language.
-///
-/// The service enforces the same rules for the JSON API, where the message has
-/// to stay English; this page is the one that shows them to a person, so it
-/// rejects first and says why in their language.
+/// Read the requested lifetime, rejecting what the service would reject, in the
+/// reader's language; the JSON API keeps its English messages.
 fn expiry_from(
     form: &HashMap<String, String>,
     t: &I18n,
@@ -458,8 +439,7 @@ pub async fn list_page(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ApiKeysQuery>,
 ) -> Result<Html<String>, AppError> {
-    // `?created=<id>` reveals the secret once; a second visit (or a reload of
-    // this URL) finds nothing left to show.
+    // `?created=<id>` reveals the secret once; a second visit finds nothing.
     let new_key = query
         .created
         .and_then(|key_id| take_reveal(user.user_id, key_id));
@@ -468,8 +448,7 @@ pub async fn list_page(
 
 /// POST /settings/api-keys/create/
 ///
-/// Answers with the re-rendered page so the plaintext secret can be shown
-/// exactly once; a redirect would lose it.
+/// Answers with the re-rendered page so the plaintext secret can be shown once.
 pub async fn create(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -496,8 +475,7 @@ pub async fn create(
 
     match ApiKeyService::create(&state.repos, &state.config().auth, user.user_id, input).await {
         Ok(created) => {
-            // Tell the owner a key now exists — the secret itself is only ever
-            // shown here, so this is also the record that it was created.
+            // The secret is only ever shown here, so this mail records that the key was created.
             state
                 .mail
                 .notify_api_key_created(user.user_id, &created.view.name)
@@ -581,7 +559,6 @@ pub async fn revoke(
 mod tests {
     use super::*;
 
-    /// The lifetimes the page offers, in the shipped default configuration.
     const PRESETS: &[u64] = &[7, 30, 90, 180, 365];
 
     fn form(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -596,8 +573,7 @@ mod tests {
         assert_eq!(expiry_option(false, 0, PRESETS, 0), "never");
     }
 
-    /// The create form hides `never` on a bounded server, so the edit form must
-    /// hide it too rather than offer a lifetime the service will reject.
+    /// The create form hides `never` on a bounded server, so the edit form must too.
     #[test]
     fn a_bounded_server_offers_neither_never_nor_a_silent_lifetime() {
         assert_eq!(expiry_option(false, 0, PRESETS, 30), "custom");

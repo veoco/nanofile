@@ -1,16 +1,12 @@
-//! Askama template filters.
-//!
-//! The module path `filters::` is what the Askama derive resolves custom
-//! filters to, so these functions must live here (crate-root `filters`).
+//! Askama template filters. The module path `filters::` is what the Askama
+//! derive resolves custom filters to, so these must live at crate root.
 
 use std::fmt::Display;
 
-/// Serialize `input` as a JSON string literal that is safe to embed inside an
-/// inline `<script>` block.
-///
-/// Unlike the built-in `json` filter, this additionally escapes `<`, `>`, `&`
-/// and the U+2028/U+2029 line separators, so a value containing `</script>`
-/// cannot break out of the surrounding script element.
+/// Serialize `input` as a JSON string literal that is safe inside an inline
+/// `<script>` block: unlike the built-in `json` filter it also escapes `<`, `>`,
+/// `&` and U+2028/U+2029, so a value containing `</script>` cannot break out of
+/// the surrounding script element.
 fn js_json_escape(input: &str) -> String {
     serde_json::to_string(input)
         .unwrap_or_else(|_| "\"\"".to_string())

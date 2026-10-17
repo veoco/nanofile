@@ -1,11 +1,6 @@
 /// Web UI settings handlers — the account, its security, and its credentials.
 ///
-/// The settings area is one shell with a shared navigation. Each page owns one
-/// subject: `/settings/` summarises, `/settings/profile/` holds the identity
-/// fields, `/settings/security/` the password and two-factor state, and
-/// `/settings/credentials/` the session and credential inventory. The old
-/// flat card grid mixed all of them, which is why nothing could be found and
-/// why the credential page had no way in.
+/// One shell with a shared navigation; each page owns one subject.
 use askama::Template;
 use axum::{
     Form,
@@ -26,13 +21,7 @@ use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
-// ─── Shared settings navigation ─────────────────────────────────────────────
-
-/// What the settings sidebar needs to render itself.
-///
-/// Built by every settings page so the navigation highlights the current page
-/// and carries live counts (an out-of-date "3 credentials" badge is worse than
-/// no badge).
+/// What the settings sidebar needs: the current page and live counts, never stale.
 pub struct SettingsNav {
     pub active: &'static str,
     pub is_admin: bool,
@@ -42,7 +31,6 @@ pub struct SettingsNav {
 }
 
 impl SettingsNav {
-    /// The page key used to highlight the "Overview" entry.
     pub const OVERVIEW: &'static str = "settings";
     pub const PROFILE: &'static str = "settings.profile";
     pub const SECURITY: &'static str = "settings.security";
@@ -51,10 +39,7 @@ impl SettingsNav {
     pub const INVITATIONS: &'static str = "settings.invitations";
 }
 
-/// Collect the sidebar's live state for `user`.
-///
-/// Public because the settings pages outside this module (API keys, invitation
-/// codes, two-factor setup) render the same navigation.
+/// Collect the sidebar's live state for `user`; pages outside this module share the navigation.
 pub async fn build_nav(
     state: &AppState,
     user: &WebUser,
@@ -68,8 +53,7 @@ pub async fn build_nav(
     Ok(SettingsNav {
         active,
         is_admin: user.is_admin,
-        // Every credential row that can reach the account, counted one by one:
-        // a device contributes its session plus each token and trust it holds.
+        // Every credential row that can reach the account: a session plus its tokens and trusts.
         credential_count: inventory.browsers.len()
             + inventory.clients.len()
             + inventory.sync_tokens.len()
@@ -78,8 +62,6 @@ pub async fn build_nav(
         two_fa_enabled: two_fa.as_ref().map(|tf| tf.enabled).unwrap_or(false),
     })
 }
-
-// ─── Overview ───────────────────────────────────────────────────────────────
 
 #[derive(Template)]
 #[template(path = "settings/index.html")]
@@ -91,15 +73,11 @@ pub struct SettingsIndexTemplate {
     pub is_admin: bool,
     pub active_page: &'static str,
     pub nav: SettingsNav,
-    /// The credential summary the overview cards are built from.
     pub summary: crate::service::credential::CredentialSummary,
     pub other_browser_sessions: usize,
     pub user_language: &'static str,
-    /// The page no longer posts anything itself, but every authenticated page
-    /// carries a CSRF token: `/settings/` is where other forms read one from.
+    /// `/settings/` posts nothing itself, but other forms read a CSRF token from here.
     pub csrf_token: Option<String>,
-    /// `expired_sync_tokens` and `other_browser_sessions` rendered for the
-    /// warning line. Empty when there is nothing to warn about.
     pub warning_lines: Vec<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
@@ -129,8 +107,6 @@ pub async fn settings_page(
 
     let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
 
-    // The overview's one line of warning, assembled here so the template does
-    // not have to count things or pluralise them.
     let mut warning_lines: Vec<String> = Vec::new();
     if summary.expired_sync_tokens > 0 {
         warning_lines.push(ctx.t.trf(
@@ -178,8 +154,6 @@ pub async fn settings_page(
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Html(html))
 }
-
-// ─── Profile ────────────────────────────────────────────────────────────────
 
 #[derive(Template)]
 #[template(path = "settings/profile.html")]
@@ -285,8 +259,6 @@ pub async fn update_language(
     Ok((StatusCode::FOUND, [("Location", "/settings/profile/")]).into_response())
 }
 
-// ─── Security ───────────────────────────────────────────────────────────────
-
 #[derive(Template)]
 #[template(path = "settings/security.html")]
 pub struct SecurityTemplate {
@@ -294,7 +266,6 @@ pub struct SecurityTemplate {
     pub t: &'static I18n,
     pub user_email: String,
     pub error: Option<String>,
-    /// A one-shot success message from the redirect that landed here.
     pub flash: Option<&'static str>,
     pub two_fa_enabled: bool,
     pub back_to: &'static str,
@@ -306,7 +277,6 @@ pub struct SecurityTemplate {
     pub current_repo_id: Option<String>,
 }
 
-/// Query flags the security page understands after a redirect.
 #[derive(Deserialize, Default)]
 pub struct SecurityQuery {
     pub changed: Option<String>,
@@ -342,9 +312,7 @@ pub async fn security_page(
     Ok(Html(html))
 }
 
-/// Map a `changed` query value onto its i18n key. Anything unrecognised — a
-/// hand-typed URL, a stale bookmark — renders no message rather than echoing
-/// the value back into the page.
+/// Map a `changed` value onto its i18n key; anything unrecognised renders no message.
 fn flash_for(changed: Option<&str>) -> Option<&'static str> {
     match changed {
         Some("password") => Some("settings.password_changed"),
@@ -358,7 +326,6 @@ pub async fn change_password(
     State(state): State<Arc<AppState>>,
     Form(form): Form<PasswordForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    // CSRF check — the token is mandatory; a missing token is rejected.
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
@@ -390,9 +357,7 @@ pub async fn change_password(
         .await;
     }
 
-    // Enforce the configured password policy. The self-service change form
-    // previously bypassed it entirely (a one-character password was accepted),
-    // unlike registration and password reset.
+    // Enforce the configured password policy, as registration and password reset do.
     if let Err(msg) = crate::service::auth::password::validate_password(
         &form.new_password,
         state.config().auth.password_min_length,
@@ -424,9 +389,7 @@ pub async fn change_password(
     )
     .await?;
 
-    // Report it: the revocations above are a security event the owner should
-    // be told about, not something to discover by finding other devices
-    // signed out.
+    // Report it: the revocations are a security event the owner should be told about.
     Ok((
         StatusCode::FOUND,
         [("Location", "/settings/security/?changed=password")],
@@ -434,7 +397,6 @@ pub async fn change_password(
         .into_response())
 }
 
-/// Re-render the security page with an error message.
 async fn render_security_error(
     state: &Arc<AppState>,
     user: &WebUser,
@@ -463,8 +425,6 @@ async fn render_security_error(
     Ok((StatusCode::OK, Html(html)).into_response())
 }
 
-// ─── Credentials ────────────────────────────────────────────────────────────
-
 #[derive(Template)]
 #[template(path = "settings/credentials.html")]
 pub struct CredentialsTemplate {
@@ -476,14 +436,10 @@ pub struct CredentialsTemplate {
     pub nav: SettingsNav,
     pub csrf_token: Option<String>,
     pub summary: crate::service::credential::CredentialSummary,
-    /// Client devices with everything each one owns.
     pub devices: Vec<DeviceInfo>,
     pub browsers: Vec<BrowserInfo>,
-    /// Sync tokens whose device is not in `devices`, i.e. everything except
-    /// the ones already shown inside a device's expanded detail: tokens issued
-    /// to a caller that reported no device identity (an API key asking for a
-    /// repository token), which the first device to sync with one claims. The
-    /// section that renders them is hidden when the list is empty.
+    /// Sync tokens whose device is not in `devices`: issued to a caller that reported
+    /// no device identity, which the first device to sync with one claims.
     pub loose_sync_tokens: Vec<SyncTokenInfo>,
     /// 2FA trusts whose device is not in `devices`; see `loose_sync_tokens`.
     pub loose_device_trusts: Vec<DeviceTrustInfo>,
@@ -512,7 +468,6 @@ pub struct DeviceInfo {
 
 pub struct BrowserInfo {
     pub id: i32,
-    /// i18n key naming the login this session came from.
     pub source_label: &'static str,
     /// `Chrome · macOS`, or empty when the login carried no usable agent.
     pub client: String,
@@ -543,7 +498,6 @@ pub struct DeviceTrustInfo {
     pub expires_ts: i64,
 }
 
-/// Query flags the credentials page understands after a redirect.
 #[derive(Deserialize, Default)]
 pub struct CredentialsQuery {
     pub revoked: Option<String>,
@@ -560,21 +514,15 @@ fn flash_for_revoked(revoked: Option<&str>) -> Option<&'static str> {
 
 fn flash_for_bulk(bulk: Option<&str>) -> Option<&'static str> {
     match bulk {
-        // `revoke_bulk` redirects with `bulk=nothing` when the action removed
-        // nothing, which is not a bulk action id and has its own wording.
+        // `revoke_bulk` sends `bulk=nothing` when nothing was removed; not a bulk action id.
         Some("nothing") => Some("credential.nothing_to_revoke"),
         Some(id) if BulkRevoke::from_id(id).is_some() => Some("credential.bulk_done"),
         _ => None,
     }
 }
 
-/// GET /settings/credentials/ — the account's credential inventory.
-///
-/// Everything long-lived the account holds, in one place: client sessions,
-/// browser sessions, repository sync tokens, 2FA device trusts, and a pointer
-/// to the API keys. The page exists because a credential the owner cannot see
-/// is one they cannot revoke — which is how sync tokens, with a one-year
-/// default lifetime, used to be.
+/// GET /settings/credentials/ — the account's credential inventory. A credential
+/// the owner cannot see is one they cannot revoke.
 pub async fn credentials_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -585,10 +533,7 @@ pub async fn credentials_page(
     render_credentials(&state, &user, two_fa_enabled, query, None).await
 }
 
-/// Format the inventory for the credentials page.
-///
-/// Shared by the GET handler and every error path, so a failed action shows the
-/// same page with an alert on it rather than a bare status code.
+/// Format the inventory; every error path re-renders this page with an alert.
 async fn render_credentials(
     state: &Arc<AppState>,
     user: &WebUser,
@@ -628,10 +573,8 @@ async fn render_credentials(
         })
         .collect();
 
-    // A token shown inside a device is not repeated in the flat list; the page
-    // would otherwise present the same credential twice. What is left over has
-    // no known device at all, which is why its section is only rendered when
-    // the list is non-empty.
+    // A token shown inside a device is not repeated in the flat list; the leftovers
+    // have no known device, which is why its section hides when empty.
     let attached_token_ids: std::collections::HashSet<i32> = devices
         .iter()
         .flat_map(|d| d.sync_tokens.iter().map(|t| t.id))
@@ -761,10 +704,7 @@ fn clone_device_trust_info(trust: &DeviceTrustInfo) -> DeviceTrustInfo {
     }
 }
 
-/// POST /settings/credentials/revoke/ — revoke one credential by kind and id.
-///
-/// A device is not revoked here: [`unlink_device`] owns that, because one
-/// device holds several credentials that have to go together.
+/// POST /settings/credentials/revoke/ — revoke one credential; devices use [`unlink_device`].
 pub async fn revoke_credential(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -799,8 +739,7 @@ pub async fn revoke_credential(
 
 /// POST /settings/credentials/bulk/ — sign out other browsers or drop tokens.
 ///
-/// `keep_session_id` comes from the authenticated session, never from the
-/// form: the one thing this action must not do is sign the actor out.
+/// `keep_session_id` comes from the session, never the form: must not sign the actor out.
 pub async fn revoke_bulk(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -832,10 +771,7 @@ pub async fn revoke_bulk(
     Ok((StatusCode::FOUND, [("Location", location)]).into_response())
 }
 
-/// Re-render the credentials page with an error message.
-///
-/// The status is kept honest: a caller that asked to revoke something it does
-/// not own gets a 404, not a 200 with an error printed on it.
+/// Re-render the credentials page with an error, keeping the status honest: not-owner is a 404.
 async fn render_credentials_error(
     state: &Arc<AppState>,
     user: &WebUser,
@@ -859,8 +795,7 @@ async fn render_credentials_error(
     Ok((status, Html(html)).into_response())
 }
 
-/// POST /settings/credentials/unlink/ (and the legacy
-/// `/settings/devices/`) — remove a device's tokens (API, S2FA, sync).
+/// POST /settings/credentials/unlink/ (legacy `/settings/devices/`) — drop a device's tokens.
 pub async fn unlink_device(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -872,21 +807,18 @@ pub async fn unlink_device(
         form.csrf_token.as_deref(),
     )?;
 
-    // 1. Delete API tokens for this device (identified by platform + device_id).
     state
         .repos
         .api_token
         .delete_many_by_user_platform_device(user.user_id, &form.platform, &form.device_id)
         .await?;
 
-    // 2. Delete S2FA device trust tokens (identified by device_id).
     state
         .repos
         .s2fa_token
         .delete_by_user_and_device(user.user_id, &form.device_id)
         .await?;
 
-    // 3. Delete sync tokens linked to this device via peer_id (= client_id).
     state
         .repos
         .sync_token
@@ -900,12 +832,10 @@ pub async fn unlink_device(
         .into_response())
 }
 
-/// GET /settings/devices/ — the page this one replaced.
+/// GET /settings/devices/ — legacy route, redirects to the credentials page.
 pub async fn redirect_credentials() -> impl IntoResponse {
     (StatusCode::FOUND, [("Location", "/settings/credentials/")])
 }
-
-// ─── Avatar upload (web UI) ──────────────────────────────────────────────────
 
 /// POST /settings/profile/avatar/ and its legacy alias — upload a new avatar.
 pub async fn upload_avatar(
@@ -913,7 +843,6 @@ pub async fn upload_avatar(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, AppError> {
-    // Extract the avatar file from the multipart stream.
     let mut avatar_field: Option<(String, Vec<u8>)> = None;
     let mut csrf_token: Option<String> = None;
 
@@ -948,7 +877,6 @@ pub async fn upload_avatar(
         }
     }
 
-    // CSRF check
     let expected_csrf =
         crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     if csrf_token.as_deref() != Some(&expected_csrf) {
@@ -965,8 +893,7 @@ pub async fn upload_avatar(
     let (file_name, data) =
         avatar_field.ok_or_else(|| AppError::BadRequest("no avatar file provided".into()))?;
 
-    // Delegate to the shared AvatarService which handles validation (size/ext),
-    // persistence, thumbnail generation (with square crop + EXIF), and DB upsert.
+    // AvatarService validates (size/ext), persists, thumbnails (crop + EXIF) and upserts.
     let svc = state.avatar_service();
     match svc.upload_avatar(&user.email, file_name, data).await {
         Ok(_url) => Ok((StatusCode::FOUND, [("Location", "/settings/profile/")]).into_response()),
@@ -982,7 +909,6 @@ pub async fn upload_avatar(
     }
 }
 
-/// Re-render the profile page with an error message.
 async fn render_profile_error(
     state: &Arc<AppState>,
     user: &WebUser,
@@ -1016,8 +942,6 @@ async fn render_profile_error(
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok((StatusCode::OK, Html(html)).into_response())
 }
-
-// ─── Forms ──────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct PasswordForm {

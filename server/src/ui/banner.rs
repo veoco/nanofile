@@ -1,18 +1,13 @@
 //! The message an admin page shows for a failed action.
 //!
-//! One definition, so the admin pages cannot disagree about what is safe to put
-//! in front of a user: our own client-facing errors are displayed verbatim,
-//! while an internal failure keeps its detail in the log and shows a translated
-//! generic message instead.
+//! Client-facing errors (`BadRequest`) are shown verbatim; anything else keeps
+//! its detail in the log and shows a translated generic message.
 
 use crate::i18n::I18n;
 use base::error::AppError;
 
-/// The banner text for a failed admin action.
-///
-/// `BadRequest` is the variant these services use for a condition the caller
-/// can act on (a duplicate email, a rejected value), so its message is meant to
-/// be read. Everything else — a database error, a bug — is summarised.
+/// The banner text for a failed admin action: `BadRequest` messages are shown
+/// verbatim, everything else is summarised.
 pub fn action_error(t: &I18n, error: &AppError) -> String {
     match error {
         AppError::BadRequest(message) => message.clone(),

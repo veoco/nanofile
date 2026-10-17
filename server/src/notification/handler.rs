@@ -18,15 +18,11 @@ use base::error::AppError;
 
 /// GET /notification/ — WebSocket upgrade endpoint.
 ///
-/// The client connects via WebSocket and then sends subscribe/unsubscribe
-/// messages to register for repo notifications.
-///
-/// The upgrade handshake itself carries no credentials — matching the official
-/// Seafile notification-server protocol, where auth happens per-repo via the
-/// JWT in the `subscribe` message. Instead, connection-level DoS defenses are
-/// applied here: global and per-IP connection caps are checked before the
-/// upgrade is committed (a 503 is returned when a cap is reached), and an
-/// unauthenticated connection is dropped after `subscribe_timeout_secs`.
+/// The handshake carries no credentials, matching the official Seafile
+/// notification-server protocol: auth happens per repo via the JWT in each
+/// `subscribe` message. Instead, DoS defenses apply here: global and per-IP
+/// connection caps (503, checked before the upgrade is committed) and a
+/// `subscribe_timeout_secs` deadline for unauthenticated connections.
 pub async fn ws_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
@@ -41,9 +37,8 @@ pub async fn ws_upgrade(
         &state.config().server.trusted_proxies,
     );
 
-    // Enforce connection caps before the upgrade is committed. `on_upgrade` is
-    // never called on this path, so the `OnUpgrade` future is dropped and no
-    // WebSocket is established — the client receives a plain 503.
+    // Enforce caps before the upgrade is committed: `on_upgrade` is never
+    // called, so no WebSocket is established and the client gets a plain 503.
     if let Some(mgr) = &state.notification_manager {
         let over_global =
             mgr.max_connections() > 0 && mgr.connection_count() as u64 >= mgr.max_connections();
@@ -60,7 +55,6 @@ pub async fn ws_upgrade(
     ws.on_upgrade(move |socket| handle_ws_socket(socket, peer_ip, state))
 }
 
-/// Handle an upgraded WebSocket connection.
 async fn handle_ws_socket(socket: WebSocket, peer_ip: String, state: Arc<AppState>) {
     let notif_mgr = match &state.notification_manager {
         Some(mgr) => mgr.clone(),
@@ -77,17 +71,15 @@ async fn handle_ws_socket(socket: WebSocket, peer_ip: String, state: Arc<AppStat
     // Shared timestamp (nanos since UNIX epoch) of the last received Pong.
     let last_pong = Arc::new(AtomicI64::new(now_nanos()));
 
-    // Split the socket into independent read/write halves. This is critical:
-    // the read half blocks waiting for the next client frame, and must not
-    // contend with (and starve) the write half that delivers notifications.
+    // Split the socket into independent read/write halves: the read half blocks
+    // waiting for the next client frame and must not starve the write half.
     let (mut sink, mut stream) = socket.split();
 
-    // Messages are pre-serialized bytes; the bounded channel caps how much a
-    // slow client can buffer before notifications start being dropped.
+    // Pre-serialized bytes; the bounded channel caps how much a slow client can
+    // buffer before notifications start being dropped.
     let (tx, mut rx) = mpsc::channel::<Arc<[u8]>>(64);
 
-    // Register the client. If the connection caps were hit in the race window
-    // between the pre-upgrade check and this call, close the connection.
+    // Caps can be hit in the race between the pre-upgrade check and this call.
     let (client_id, client_state) = match notif_mgr.register_client(tx, peer_ip) {
         Some(pair) => pair,
         None => {
@@ -96,7 +88,6 @@ async fn handle_ws_socket(socket: WebSocket, peer_ip: String, state: Arc<AppStat
         }
     };
 
-    // Task: read messages from the WebSocket.
     let read_mgr = notif_mgr.clone();
     let read_id = client_id;
     let read_key = private_key.clone();
@@ -137,9 +128,8 @@ async fn handle_ws_socket(socket: WebSocket, peer_ip: String, state: Arc<AppStat
         read_mgr.unregister_client(read_id).await;
     });
 
-    // Task: forward events from the notification manager channel to the
-    // WebSocket. When keepalive is enabled this task also drives the
-    // server→client ping/pong watchdog.
+    // Forward manager events to the socket; with keepalive enabled this task
+    // also drives the server→client ping/pong watchdog.
     let write_mgr = notif_mgr.clone();
     let write_id = client_id;
     let write_pong = last_pong.clone();
@@ -193,19 +183,16 @@ async fn handle_ws_socket(socket: WebSocket, peer_ip: String, state: Arc<AppStat
         write_mgr.unregister_client(write_id).await;
     });
 
-    // Wait for either task to finish.
     tokio::select! {
         _ = read_task => {},
         _ = write_task => {},
     }
 
-    // Final cleanup — unregister the client.
     notif_mgr.unregister_client(client_id).await;
 }
 
-/// Process a single WebSocket message received from the client.
-///
-/// Returns `true` if the connection should be closed (Close frame or error).
+/// Process a single WebSocket message; returns `true` if the connection should
+/// be closed (Close frame or error).
 async fn handle_read_msg(
     mgr: &super::manager::NotificationManager,
     client_id: u64,
@@ -233,7 +220,6 @@ async fn handle_read_msg(
     }
 }
 
-/// Returns the current time in nanoseconds since the UNIX epoch.
 fn now_nanos() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -241,7 +227,6 @@ fn now_nanos() -> i64 {
         .as_nanos() as i64
 }
 
-/// Process an incoming client message (subscribe or unsubscribe).
 async fn process_client_message(
     mgr: &super::manager::NotificationManager,
     client_id: u64,
@@ -254,7 +239,6 @@ async fn process_client_message(
                 return;
             };
 
-            // Validate all JWT tokens first.
             let mut valid_subs: Vec<(String, i64)> = Vec::new();
             let mut username = String::new();
 
@@ -267,8 +251,8 @@ async fn process_client_message(
                     }
                     valid_subs.push((repo.id.clone(), claims.exp));
                 } else {
-                    // Invalid/expired token: tell the client to re-fetch a new
-                    // token and resubscribe (matches seafile's behavior).
+                    // Tell the client to re-fetch a token and resubscribe
+                    // (matches Seafile's behavior).
                     let event = JwtExpiredEvent {
                         repo_id: repo.id.clone(),
                     };
@@ -295,8 +279,8 @@ async fn process_client_message(
 
 /// POST /notification/events — post an event to all subscribers.
 ///
-/// Authenticated via JWT Bearer token (Authorization: Bearer <token>).
-/// The token must be signed with the configured private key.
+/// Authenticated via JWT Bearer token (Authorization: Bearer `<token>`) signed
+/// with the configured private key.
 pub async fn post_event(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -311,7 +295,6 @@ pub async fn post_event(
         }
     };
 
-    // Validate Authorization header JWT.
     let auth_header = headers
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
@@ -328,7 +311,6 @@ pub async fn post_event(
         }
     };
 
-    // Validate the event submission JWT.
     let private_key = &state.config().notification.private_key;
     if !validate_event_jwt(
         token,
@@ -338,11 +320,9 @@ pub async fn post_event(
         return Err(AppError::Unauthorized);
     }
 
-    // Parse the event message.
     let notif_msg: NotificationMessage = serde_json::from_value(body.0.clone())
         .map_err(|_| AppError::BadRequest("invalid event format".into()))?;
 
-    // Extract repo_id from content to find subscribers.
     if let Some(repo_id) = notif_msg.content.get("repo_id").and_then(|v| v.as_str()) {
         notif_mgr.notify_repo(repo_id, &notif_msg).await;
     }
@@ -352,14 +332,11 @@ pub async fn post_event(
 
 /// Validate a JWT token for the POST /events endpoint.
 ///
-/// Events are verified against the **event** subkey, which is distinct from the
-/// subscription key. Before that separation both token kinds were signed with
-/// the same key and this endpoint only checked the signature and `exp`, so any
-/// user could take the subscription token from
-/// `/seafhttp/repo/{id}/jwt-token` and post events to any repository.
-///
-/// `accept_legacy` additionally allows the undivided root key, for external
-/// publishers written against the old scheme. It is off by default.
+/// Events are verified against the **event** subkey, distinct from the
+/// subscription key: a subscription token from
+/// `/seafhttp/repo/{id}/jwt-token` must not be usable to post events.
+/// `accept_legacy` additionally allows the undivided root key for external
+/// publishers on the old scheme; it is off by default.
 fn validate_event_jwt(token: &str, private_key: &str, accept_legacy: bool) -> bool {
     let mut validation = Validation::new(Algorithm::HS256);
     validation.validate_exp = true;

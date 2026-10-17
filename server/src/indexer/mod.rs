@@ -1,24 +1,15 @@
-//! Full-text search indexing using Tantivy + jieba tokenizer.
-//!
-//! Creates/opens a Tantivy index directory on disk. Registers the `jieba`
-//! Chinese tokenizer (via tantivy-jieba) for content fields so both CJK and
-//! Latin text are searchable.
+//! Full-text search indexing using Tantivy + jieba tokenizer: creates/opens a
+//! Tantivy index directory on disk and registers the `jieba` tokenizer for
+//! content fields so both CJK and Latin text are searchable.
 //!
 //! This module is deliberately only the *document store*: it writes, deletes
 //! and searches index documents, and knows nothing about where a file's bytes
 //! come from or what format they are. Format dispatch lives in [`extract`],
 //! and the read → extract → write pipeline lives in [`crate::service::index`].
 //!
-//! Every document carries the state that decides whether it still needs work:
-//! the file's `fs_id` (its content identity in the repo), the
-//! [`extract::EXTRACTOR_VERSION`] that produced it, and a `status`. That is
-//! what lets the backfill tell "already processed as unsupported" from "never
-//! seen" — without it, every binary file would be re-read on every pass.
-//!
-//! # Background Commit
-//!
-//! A tokio task commits the Tantivy writer every 30 seconds so uncommitted
-//! documents don't stall on a crash.
+//! Every document records the `fs_id`, [`extract::EXTRACTOR_VERSION`] and
+//! `status` that let the backfill tell "already processed as unsupported" from
+//! "never seen". A tokio task commits the writer every 30 seconds.
 
 pub mod extract;
 
@@ -39,37 +30,29 @@ use tantivy::tokenizer::TextAnalyzer;
 use crate::repository::Repositories;
 use base::error::AppError;
 
-// ── Schema field names ────────────────────────────────────────────────
 const FIELD_REPO_ID: &str = "repo_id";
 const FIELD_FULLPATH: &str = "fullpath";
 const FIELD_FILENAME: &str = "filename";
 const FIELD_CONTENT: &str = "content";
-/// Content identity of the file the document was built from (the repo's
-/// `fs_id`). Lets a later pass tell "the file changed" from "we already
-/// indexed exactly this content".
+/// Content identity of the file the document was built from (the repo's `fs_id`).
 const FIELD_FS_ID: &str = "fs_id";
 /// [`extract::EXTRACTOR_VERSION`] that produced this document.
 const FIELD_EXTRACTOR_VERSION: &str = "extractor_version";
-/// [`DocStatus::as_str`] of the document.
 const FIELD_STATUS: &str = "status";
 /// When the last attempt was made, for a failed document's retry cooldown.
 const FIELD_ATTEMPTED_AT: &str = "attempted_at";
 
-/// Marks the on-disk schema generation inside `index_dir`.
-///
-/// `Index::open_in_dir` happily opens an index whose schema predates the code,
-/// and the mismatch only surfaces later as a panic on a missing field. The
-/// marker turns that into an explicit rebuild at startup.
+/// Marks the on-disk schema generation inside `index_dir`; a mismatch turns a
+/// later panic on a missing field into an explicit rebuild at startup.
 const SCHEMA_VERSION_FILE: &str = ".nanofile_schema_version";
 /// Bump whenever the field set below changes.
 const SCHEMA_VERSION: u32 = 2;
 /// Fields the on-disk schema must expose for this code to serve it.
 ///
-/// [`SCHEMA_VERSION_FILE`] alone is not a sufficient guard: an index opened
-/// before the marker was ever written leaves `on_disk = None`, which the
-/// version check treats as current, so a stale schema can survive and the
-/// marker then gets stamped with the current version. The field set is the
-/// real contract, so rebuild also triggers when any of these is missing.
+/// [`SCHEMA_VERSION_FILE`] alone is not sufficient: an index opened before the
+/// marker was ever written leaves `on_disk = None`, which the version check treats
+/// as current, so a stale schema can survive and then be stamped with the current
+/// version. The field set is the real contract.
 const REQUIRED_FIELDS: &[&str] = &[
     FIELD_REPO_ID,
     FIELD_FULLPATH,
@@ -81,20 +64,17 @@ const REQUIRED_FIELDS: &[&str] = &[
     FIELD_ATTEMPTED_AT,
 ];
 
-/// How long a failed document waits before the backfill retries it.
-///
-/// Without this a corrupt or unreadable file would be re-read on every pass;
-/// the extractor version is stamped at the same value, so the version check
-/// alone cannot hold it back.
+/// How long a failed document waits before the backfill retries it, so a corrupt
+/// or unreadable file is not re-read on every pass (its extractor version is
+/// stamped current, so that check alone cannot hold it back).
 pub const FAILED_RETRY_AFTER_SECS: i64 = 3600;
 
 /// What the index recorded about a file, independent of its content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocStatus {
-    /// Text was extracted and is searchable.
     Indexed,
-    /// The file was examined and deliberately not indexed (binary, or a format
-    /// no extractor claims). Recorded so the backfill does not re-read it.
+    /// Examined and deliberately not indexed (binary, or a format no extractor
+    /// claims); recorded so the backfill does not re-read it.
     Skipped,
     /// Extraction or the block read failed. Retried after a cooldown.
     Failed,
@@ -137,7 +117,6 @@ impl DocMeta {
     /// The version stamped on text a client supplied directly.
     pub const MANUAL_VERSION: u32 = u32::MAX;
 
-    /// State for a freshly extracted document.
     pub fn indexed(fs_id: impl Into<String>) -> Self {
         Self {
             fs_id: fs_id.into(),
@@ -147,7 +126,6 @@ impl DocMeta {
         }
     }
 
-    /// State for a file the pipeline examined and does not index.
     pub fn skipped(fs_id: impl Into<String>) -> Self {
         Self {
             fs_id: fs_id.into(),
@@ -157,7 +135,6 @@ impl DocMeta {
         }
     }
 
-    /// State for a document whose extraction failed.
     pub fn failed(fs_id: impl Into<String>) -> Self {
         Self {
             fs_id: fs_id.into(),
@@ -172,8 +149,7 @@ impl DocMeta {
         self.extractor_version == Self::MANUAL_VERSION
     }
 
-    /// Whether the stored state means "no further work for this content at this
-    /// extractor version".
+    /// Whether the stored state means "no further work for this content at this extractor version".
     pub fn is_current(&self, fs_id: &str, now: i64) -> bool {
         if self.is_manual() {
             return true;
@@ -199,8 +175,7 @@ pub struct DocState {
 }
 
 impl DocState {
-    /// Whether this document was pinned by a client and must not be refreshed
-    /// by an automatic pass.
+    /// Whether a client pinned this document, so an automatic pass must not refresh it.
     pub fn is_manual(&self) -> bool {
         self.extractor_version == DocMeta::MANUAL_VERSION
     }
@@ -222,18 +197,13 @@ impl DocState {
 pub struct IndexHit {
     pub repo_id: String,
     pub fullpath: String,
-    /// HTML snippet around the first content match (`<mark>` around matches).
-    /// Empty when the hit matched only the filename, or the file has no
-    /// indexed content.
+    /// HTML snippet around the first content match (`<mark>` around matches);
+    /// empty when the hit matched only the filename or has no indexed content.
     pub content_highlight: String,
 }
 
-/// The schema fields every read and write path needs, resolved once.
-///
-/// Resolving them here instead of a `get_field(..).expect(..)` per call site
-/// keeps the schema invariant in exactly one place: a missing field fails at
-/// construction — behind the rebuild guard in [`TextIndexer::new`] — rather
-/// than panicking whichever task touches the index first.
+/// The schema fields every read and write path needs, resolved once, so a missing
+/// field fails behind the rebuild guard in [`TextIndexer::new`] instead of panicking.
 #[derive(Clone, Copy)]
 struct SchemaFields {
     repo_id: Field,
@@ -247,11 +217,9 @@ struct SchemaFields {
 }
 
 impl SchemaFields {
-    /// Resolve every field the indexer uses, or report the first one missing.
-    ///
-    /// Called once, after the compatibility guard in [`TextIndexer::new`], so a
-    /// failure here means that guard is wrong rather than a state the server is
-    /// expected to run in — but it still returns an error instead of panicking.
+    /// Resolve every field the indexer uses, or report the first one missing. Runs
+    /// after the guard in [`TextIndexer::new`], so a failure there means the guard
+    /// is wrong; it still returns an error rather than panicking.
     fn resolve(schema: &Schema) -> Result<Self, AppError> {
         let field = |name: &str| -> Result<Field, AppError> {
             schema.get_field(name).map_err(|e| {
@@ -278,20 +246,16 @@ pub struct TextIndexer {
     writer: Arc<Mutex<tantivy::IndexWriter<TantivyDocument>>>,
     fields: SchemaFields,
     reader: tantivy::IndexReader,
-    /// Number of uncommitted index operations since the last `commit()`.
-    /// Lets the background committer skip a needless commit+fsync when nothing
-    /// changed. `Arc` so the `Clone` derive shares the counter across clones.
+    /// Uncommitted index operations since the last `commit()`, so the background
+    /// committer can skip a needless commit+fsync. `Arc` shares it across clones.
     pending: Arc<AtomicUsize>,
-    /// Whether a debounced commit task is already scheduled, so concurrent
-    /// writes coalesce into a single commit.
+    /// Whether a debounced commit task is already scheduled, so concurrent writes coalesce.
     commit_scheduled: Arc<AtomicBool>,
 }
 
 impl TextIndexer {
-    /// Create or open a Tantivy index at `index_dir`.
-    ///
-    /// Registers the `jieba` Chinese tokenizer. Returns an error if the
-    /// directory cannot be created or the index is incompatible.
+    /// Create or open a Tantivy index at `index_dir`, registering the `jieba` Chinese
+    /// tokenizer. Errors if the directory cannot be created or the index is incompatible.
     pub fn new(index_dir: &Path) -> Result<Self, AppError> {
         std::fs::create_dir_all(index_dir)
             .map_err(|e| AppError::internal(format!("create index dir: {e}")))?;
@@ -316,14 +280,12 @@ impl TextIndexer {
 
         // An index written by an older field set cannot be served by this code
         // (`get_field` on a missing field panics), and the index is derived data
-        // that the backfill can rebuild, so incompatibility means "start over"
-        // rather than "run with the old schema".
+        // that the backfill can rebuild, so incompatibility means "start over".
         //
-        // The marker alone is not enough: an index opened before the marker
-        // existed leaves `on_disk = None`, which the version check reads as
-        // current, so a stale schema can survive and be stamped with the
-        // current version. The field set is the real contract, so a marker
-        // mismatch *or* a missing required field both force a rebuild.
+        // The marker alone is not enough: an index opened before the marker existed
+        // leaves `on_disk = None`, which the version check reads as current, so a
+        // stale schema can survive. A marker mismatch *or* a missing required field
+        // both force a rebuild.
         let marker = index_dir.join(SCHEMA_VERSION_FILE);
         let on_disk: Option<u32> = std::fs::read_to_string(&marker)
             .ok()
@@ -335,8 +297,6 @@ impl TextIndexer {
                 .all(|name| index.schema().get_field(name).is_ok())
         };
 
-        // Try to open an existing index first. This preserves indexed data
-        // across restarts. Only if no valid index exists do we create a new one.
         let index = match Index::open_in_dir(index_dir) {
             Ok(index) => {
                 let stale_marker = on_disk.is_some_and(|v| v != SCHEMA_VERSION);
@@ -359,7 +319,6 @@ impl TextIndexer {
                 }
             }
             Err(_) => {
-                // No valid index found — check if the directory is empty or corrupt.
                 if index_dir.join("meta.json").exists() {
                     tracing::warn!(
                         "Full-text index meta.json found but corrupt, rebuilding at {:?}",
@@ -382,15 +341,13 @@ impl TextIndexer {
             tracing::warn!("could not write the index schema marker: {e}");
         }
 
-        // The fields the writer and reader use are the ones on disk, not the
-        // ones just built: they are equal (the guard above guarantees it) and
-        // taking them from the index keeps a future edit from silently
-        // disagreeing.
+        // Take the fields from the index, not the schema just built: the guard above
+        // guarantees they match, and this keeps a future edit from disagreeing silently.
         let schema = index.schema();
         let fields = SchemaFields::resolve(&schema)?;
 
-        // Register the jieba Chinese tokenizer for content fields.
-        // LowerCaser ensures case-insensitive search for non-CJK text.
+        // Register the jieba Chinese tokenizer for content fields; LowerCaser makes
+        // matching case-insensitive for non-CJK text.
         index.tokenizers().register(
             "jieba",
             TextAnalyzer::builder(tantivy_jieba::JiebaTokenizer::new())
@@ -424,13 +381,8 @@ impl TextIndexer {
 
     /// Index a file's text content.
     ///
-    /// * `repo_id` — repository UUID.
-    /// * `fullpath` — absolute path within the repo (e.g. `/dir/file.txt`).
-    /// * `filename` — file name only (e.g. `file.txt`).
-    /// * `content` — text content to index.
-    ///
-    /// If a document with the same `(repo_id, fullpath)` already exists, it
-    /// is replaced (delete + add).
+    /// If a document with the same `(repo_id, fullpath)` already exists, it is
+    /// replaced (delete + add).
     ///
     /// This is the content-only entry point: it records the document as indexed
     /// at the current extractor version but with no `fs_id`, which the backfill
@@ -459,11 +411,9 @@ impl TextIndexer {
         self.write_doc(repo_id, fullpath, filename, content, meta)
     }
 
-    /// Record that a file was examined and is not searchable, without storing
-    /// any content.
-    ///
-    /// The document exists only for its state: it is what makes the backfill
-    /// skip a binary file instead of re-reading it on every pass.
+    /// Record that a file was examined and is not searchable, without storing any
+    /// content. The document exists only for its state: that is what makes the
+    /// backfill skip a binary file instead of re-reading it on every pass.
     pub fn mark_file(
         &self,
         repo_id: &str,
@@ -474,8 +424,7 @@ impl TextIndexer {
         self.write_doc(repo_id, fullpath, filename, "", meta)
     }
 
-    /// The shared body of the write paths: replace any document at
-    /// `(repo_id, fullpath)` and add the new one.
+    /// The shared body of the write paths: replace any document at `(repo_id, fullpath)`.
     fn write_doc(
         &self,
         repo_id: &str,
@@ -489,7 +438,6 @@ impl TextIndexer {
             .lock()
             .map_err(|e| AppError::internal(format!("indexer mutex poisoned: {e}")))?;
 
-        // Delete any existing document with this (repo_id, fullpath) pair.
         self.delete_docs_inner(&mut writer, repo_id, fullpath)?;
 
         let SchemaFields {
@@ -519,16 +467,13 @@ impl TextIndexer {
             .map_err(|e| AppError::internal(format!("index add doc: {e}")))?;
         self.pending.fetch_add(1, Ordering::Relaxed);
 
-        // No automatic commit here — the background committer persists pending
-        // documents periodically.  Call commit() manually when immediate
-        // durability is required (e.g. before server shutdown).
+        // No automatic commit here: the background committer persists pending documents
+        // periodically. Call commit() when immediate durability is required.
         Ok(())
     }
 
-    /// The stored state of every requested path, keyed by path.
-    ///
-    /// Paths the index has never seen are absent from the map. The lookup is
-    /// chunked so a whole-repository pass does not build one enormous query.
+    /// The stored state of every requested path, keyed by path; paths never seen are
+    /// absent. The lookup is chunked so a repository pass does not build a huge query.
     pub fn doc_states(
         &self,
         repo_id: &str,
@@ -557,8 +502,8 @@ impl TextIndexer {
             ..
         } = self.fields;
 
-        // 256 paths per query: large enough that a repository pass is a few
-        // round trips, small enough that the query stays cheap.
+        // 256 paths per query: a repository pass is a few round trips, yet the
+        // query stays cheap.
         const CHUNK: usize = 256;
         for chunk in paths.chunks(CHUNK) {
             let path_clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = chunk
@@ -678,12 +623,10 @@ impl TextIndexer {
             .map_err(|e| AppError::internal(format!("indexer mutex poisoned: {e}")))?;
         self.delete_docs_inner(&mut writer, repo_id, fullpath)?;
         self.pending.fetch_add(1, Ordering::Relaxed);
-        // No automatic commit — the background committer handles persistence.
         Ok(())
     }
 
-    /// Explicitly commit all pending index operations.
-    /// Useful in tests and before server shutdown.
+    /// Explicitly commit all pending index operations (tests, server shutdown).
     pub fn commit(&self) -> Result<(), AppError> {
         let mut writer = self
             .writer
@@ -696,8 +639,7 @@ impl TextIndexer {
         Ok(())
     }
 
-    /// Run `commit` on a blocking thread so the fsync doesn't stall the async
-    /// executor.
+    /// Run `commit` on a blocking thread so the fsync doesn't stall the async executor.
     pub async fn commit_async(&self) -> Result<(), AppError> {
         let idx = self.clone();
         tokio::task::spawn_blocking(move || idx.commit())
@@ -742,10 +684,8 @@ impl TextIndexer {
     }
 
     /// Run `delete_file` on a blocking thread for every path, then schedule a
-    /// single debounced commit.
-    ///
-    /// Used when a directory is deleted or renamed: one lock acquisition and one
-    /// commit for the whole batch instead of one per path.
+    /// single debounced commit — one lock acquisition and one commit for the
+    /// whole batch instead of one per path (used for directory delete/rename).
     pub async fn delete_files(&self, repo_id: &str, paths: &[String]) -> Result<(), AppError> {
         if paths.is_empty() {
             return Ok(());
@@ -776,32 +716,28 @@ impl TextIndexer {
         self.pending.load(Ordering::Relaxed) > 0
     }
 
-    /// Coalesce writes into a single commit shortly after the last one: when
-    /// the first write of a batch arrives, spawn a task that commits after a
-    /// short delay, then re-schedules if more writes landed during the commit.
-    /// This keeps freshly indexed documents searchable without putting the
-    /// fsync on the read path.
+    /// Coalesce writes into a single commit shortly after the last one, so freshly
+    /// indexed documents become searchable without the fsync on the read path.
     fn schedule_debounced_commit(&self) {
         if self.commit_scheduled.swap(true, Ordering::AcqRel) {
             return;
         }
         let idx = self.clone();
-        // Debounce on an async task: the sleep coalesces a batch of writes,
-        // then the commit runs off the async executor so the Tantivy fsync
-        // doesn't occupy a worker. A plain `spawn_blocking(move || commit())`
-        // would deadlock under a current-thread runtime (Tantivy's commit
-        // waits on its own threads, which can't run while the executor is
-        // blocked on the join), so the commit runs on a dedicated OS thread
-        // and only the join is offloaded to the blocking pool.
+        // Debounce on an async task: the sleep coalesces a batch of writes, then
+        // the commit runs off the async executor so the Tantivy fsync doesn't
+        // occupy a worker. A plain `spawn_blocking(move || commit())` would
+        // deadlock under a current-thread runtime (Tantivy's commit waits on its
+        // own threads, which can't run while the executor blocks on the join), so
+        // only the join is offloaded.
         tokio::runtime::Handle::current().spawn(async move {
             tokio::time::sleep(Duration::from_millis(100)).await;
             let commit_idx = idx.clone();
             let thread_handle = std::thread::spawn(move || commit_idx.commit());
             let result = tokio::task::spawn_blocking(move || thread_handle.join()).await;
-            // Store `false` before the re-check: a write that lands after this
-            // store but before the `has_pending` load is seen by the load and
-            // re-schedules. A write that lands before the store is either
-            // included in this commit or seen by the load.
+            // Store `false` before the re-check: a write landing after this store
+            // but before the `has_pending` load is seen by the load and
+            // re-schedules; one landing before the store is either in this commit
+            // or seen by the load.
             idx.commit_scheduled.store(false, Ordering::Release);
             match result {
                 Ok(Ok(Ok(()))) => {
@@ -817,7 +753,6 @@ impl TextIndexer {
     }
 
     /// Explicitly reload the reader to pick up newly committed documents.
-    /// Returns the number of segments affected.
     pub fn reload(&self) -> Result<(), AppError> {
         self.reader
             .reload()
@@ -826,30 +761,19 @@ impl TextIndexer {
 
     /// Search the full-text index.
     ///
-    /// Uses Tantivy's standard QueryParser for exact term matching.
-    /// Case-insensitivity is handled by the LowerCaser filter on the
-    /// jieba tokenizer. For substring/prefix matching on filenames, the
-    /// caller should also run the filename search fallback (FS tree
-    /// traversal with `strcasestr`).
-    ///
-    /// When `filename_only` is true, only the filename field is searched.
-    /// This is used by the Web UI's filename search to avoid the expensive
-    /// FS tree walk when an index is available.
-    ///
-    /// Returns a list of [`IndexHit`]s matching the keyword. Each hit carries
-    /// an optional `content_highlight` snippet (only set when the stored
-    /// content actually contains a query term).
-    /// Results are limited by `limit` and offset by `offset`.
+    /// Exact term matching via Tantivy's QueryParser; case-insensitivity comes from
+    /// the LowerCaser filter on the jieba tokenizer. For substring/prefix filename
+    /// matching the caller should also run the filename fallback (FS tree traversal
+    /// with `strcasestr`). `filename_only` restricts the query to the filename
+    /// field. Hits are limited by `limit` and offset by `offset`, and each carries a
+    /// `content_highlight` snippet only when the stored content matches a term.
     ///
     /// # Access control
     ///
     /// `repo_ids` is the **allow-list of repos the caller may see** and must be
-    /// non-empty. An empty list is not "search everything": it yields no
-    /// results. Treating an empty allow-list as "no filter" would leak every
-    /// repo's filenames and content snippets to a user with no accessible
-    /// repos (that was the vulnerability), so callers must resolve the
-    /// caller's accessible repos *before* searching and skip the search when
-    /// the set is empty.
+    /// non-empty: an empty list yields no results. Treating it as "no filter" would
+    /// leak every repo's filenames and content snippets, so callers must resolve the
+    /// caller's accessible repos *before* searching and skip the search if empty.
     pub async fn search(
         &self,
         keyword: &str,
@@ -865,8 +789,8 @@ impl TextIndexer {
         if repo_ids.is_empty() {
             return Ok(Vec::new());
         }
-        // Bound the keyword length so a multi-MB payload doesn't reach the
-        // Tantivy parser or the blocking pool.
+        // Bound the keyword length so a multi-MB payload doesn't reach the Tantivy
+        // parser or the blocking pool.
         const MAX_KEYWORD_LEN: usize = 256;
         if keyword.len() > MAX_KEYWORD_LEN {
             return Ok(Vec::new());
@@ -874,11 +798,9 @@ impl TextIndexer {
         let idx = self.clone();
         let keyword = keyword.to_string();
         let repo_ids = repo_ids.to_vec();
-        // The query build + Tantivy search + highlight are CPU-bound and run
-        // synchronously (Tantivy's default executor is single-threaded, so the
-        // search runs on the calling thread and does not depend on an internal
-        // thread pool). Offload them to the blocking pool so they don't occupy
-        // an async worker.
+        // The query build, search and highlight are CPU-bound and run on the
+        // calling thread (Tantivy's default executor is single-threaded), so
+        // offload them to the blocking pool rather than occupy an async worker.
         let join = tokio::task::spawn_blocking(move || {
             idx.search_sync(&keyword, &repo_ids, limit, offset, filename_only)
         });
@@ -895,8 +817,7 @@ impl TextIndexer {
         }
     }
 
-    /// Synchronous core of [`TextIndexer::search`]. Runs the Tantivy query on
-    /// the calling thread; callers offload it to a blocking thread.
+    /// Synchronous core of [`TextIndexer::search`], run by callers on a blocking thread.
     fn search_sync(
         &self,
         keyword: &str,
@@ -905,11 +826,9 @@ impl TextIndexer {
         offset: usize,
         filename_only: bool,
     ) -> Result<Vec<IndexHit>, AppError> {
-        // Reload so the reader sees documents committed by the write-side
-        // debounce or the background committer. Search reads a recent committed
-        // snapshot; the fsync is never on this read path.
-        // Always reload: cheap, and needed to see docs committed by the
-        // background committer or by an explicit commit() since the last search.
+        // Always reload: cheap, and needed to see documents committed by the
+        // debounce, the background committer, or an explicit commit() since the
+        // last search. The fsync is never on this read path.
         if let Err(e) = self.reader.reload() {
             tracing::warn!("search: reload failed: {e}");
         }
@@ -924,14 +843,10 @@ impl TextIndexer {
             ..
         } = self.fields;
 
-        // Build a BooleanQuery that combines:
-        // 1. Exact term matching via standard QueryParser.
-        // 2. Prefix matching via RegexQuery (pattern `term.*` without `^`
-        //    anchor — Tantivy-fst's automaton matches full term strings).
-        //    This makes "case" match "caseend", "casetest", etc.
-        // 3. Optional repo_id filter via TermQuery (MUST), pushed down so
-        //    Tantivy only scores and returns docs for matching repos.
-        // The LowerCaser filter on the jieba tokenizer ensures case-insensitivity.
+        // Combine: exact term matching via QueryParser; prefix matching via
+        // RegexQuery (pattern `term.*`, no `^` anchor — Tantivy-fst's automaton
+        // matches full term strings, so "case" matches "caseend"); plus a repo_id
+        // filter pushed down as a MUST so Tantivy only scores allowed repos.
         use tantivy::query::{BooleanQuery, Occur, QueryParser, RegexQuery, TermQuery};
         use tantivy::schema::IndexRecordOption;
 
@@ -941,17 +856,15 @@ impl TextIndexer {
             vec![filename_field, content_field]
         };
         let query_parser = QueryParser::for_index(&self.index, query_fields);
-        // Lenient parsing: invalid syntax (e.g. unbalanced quotes, field:foo,
-        // /regex/ which is disabled by default) becomes a match-nothing
-        // subquery instead of a hard error. The user gets an empty result
-        // set for garbage input, which is the expected UX.
+        // Lenient parsing: invalid syntax (unbalanced quotes, field:foo, /regex/
+        // which is disabled by default) becomes a match-nothing subquery instead of
+        // a hard error, so garbage input yields an empty result set — the expected UX.
         let (exact_query, _errors) = query_parser.parse_query_lenient(keyword);
 
         let mut subqueries: Vec<(Occur, Box<dyn tantivy::query::Query>)> =
             vec![(Occur::Should, exact_query)];
 
         for term in keyword.split_whitespace() {
-            // Escape regex special chars in the user's search term.
             let mut escaped = String::with_capacity(term.len() + 4);
             for c in term.chars() {
                 match c {
@@ -963,9 +876,8 @@ impl TextIndexer {
                     c => escaped.push(c),
                 }
             }
-            // `hello.*` matches any term starting with "hello".
-            // No `^` anchor — Tantivy-fst's regex automaton matches the
-            // full term string by design.
+            // `hello.*` matches any term starting with "hello". No `^` anchor —
+            // Tantivy-fst's regex automaton matches the full term string by design.
             let pattern = format!("{escaped}.*");
 
             let regex_fields: &[Field] = if filename_only {
@@ -980,11 +892,9 @@ impl TextIndexer {
             }
         }
 
-        // Build the final query. `repo_ids` is guaranteed non-empty (checked
-        // above), so the query is always
-        //   Must(text_or_prefix_match) AND Must(repo_id ∈ repo_ids).
-        // There is deliberately no "no filter" branch: an unscoped query would
-        // expose every repo's filenames and content snippets.
+        // `repo_ids` is guaranteed non-empty, so the query is always
+        // Must(text_or_prefix_match) AND Must(repo_id ∈ repo_ids). There is deliberately
+        // no "no filter" branch: an unscoped query would expose every repo's content.
         let text_query: Box<dyn tantivy::query::Query> = if subqueries.len() == 1 {
             subqueries
                 .into_iter()
@@ -1014,10 +924,8 @@ impl TextIndexer {
             Box::new(BooleanQuery::new(repo_subqueries))
         };
 
-        // Only documents that actually carry text are searchable. A "skipped"
-        // or "failed" document exists for its state alone: it records that the
-        // backfill need not look at the file again, and must not surface as a
-        // hit with no content.
+        // Only documents that actually carry text are searchable: a "skipped" or "failed"
+        // document exists for its state alone and must not surface as a hit with no content.
         let status_field = self.fields.status;
         let status_query: Box<dyn tantivy::query::Query> = Box::new(TermQuery::new(
             tantivy::Term::from_field_text(status_field, DocStatus::Indexed.as_str()),
@@ -1030,7 +938,6 @@ impl TextIndexer {
             (Occur::Must, status_query),
         ]));
 
-        // Collect enough results for offset + limit.
         let top_docs = searcher
             .search(
                 &query,
@@ -1067,7 +974,6 @@ impl TextIndexer {
                 content_highlight,
             });
 
-            // Stop when we've collected enough.
             if results.len() >= limit {
                 break;
             }
@@ -1092,7 +998,6 @@ impl TextIndexer {
             ..
         } = self.fields;
 
-        // Build a boolean query with ALL terms marked as Must (AND).
         let subqueries = vec![
             (
                 Occur::Must,
@@ -1117,17 +1022,15 @@ impl TextIndexer {
         Ok(())
     }
 
-    /// Retrieve the stored indexed text content for a `(repo_id, fullpath)` pair.
-    ///
-    /// Returns `Some(content)` if the file is in the index, or `None` if it
-    /// hasn't been indexed (e.g. binary file or not yet processed).
+    /// Retrieve the stored indexed text content for a `(repo_id, fullpath)` pair, or
+    /// `None` when the file is not indexed (e.g. binary, or not yet processed).
     pub async fn get_indexed_content(
         &self,
         repo_id: &str,
         fullpath: &str,
     ) -> Result<Option<String>, AppError> {
-        // Reload so the reader sees documents committed by the write-side
-        // debounce or the background committer. Reads never fsync.
+        // Reload so the reader sees documents committed by the debounce or the
+        // background committer. Reads never fsync.
         if let Err(e) = self.reader.reload() {
             tracing::warn!("get_indexed_content: reload failed: {e}");
         }
@@ -1158,9 +1061,8 @@ impl TextIndexer {
                     IndexRecordOption::Basic,
                 )),
             ),
-            // A "skipped"/"failed" document has no text; reporting it as an
-            // empty indexed content would be indistinguishable from a file
-            // whose content really is empty.
+            // A "skipped"/"failed" document has no text; reporting it as empty
+            // indexed content would be indistinguishable from a truly empty file.
             (
                 Occur::Must,
                 Box::new(TermQuery::new(
@@ -1194,20 +1096,18 @@ impl TextIndexer {
 }
 
 /// Build an HTML snippet from `content` highlighting matches of any
-/// whitespace-separated term in `query`.
+/// whitespace-separated term in `query`; empty when no term matches. The output is
+/// HTML-escaped except for the injected `<mark>` tags, so it is safe to render as
+/// raw HTML.
+/// Locate every case-insensitive occurrence of `terms` in `hay`, returning byte
+/// ranges guaranteed to be valid char boundaries of `hay` so callers can slice
+/// with them.
 ///
-/// Returns an empty string when no term matches. The output is HTML-escaped
-/// except for the injected `<mark>` tags, so it is safe to render as raw HTML.
-/// Locate every case-insensitive occurrence of `terms` in `hay`.
-///
-/// Returns byte ranges that are guaranteed to be valid char boundaries of
-/// `hay`, so callers can slice with them.
-///
-/// `hay_lower` must be `hay.to_lowercase()`. Its byte offsets only map back
-/// onto `hay` when lowercasing preserved the byte length; for characters that
-/// change length (`İ` → `i̇`, `ẞ` → `ß`, `ﬃ` → `ffi`) they do not, and slicing
-/// `hay` with them panics. In that case fall back to an ASCII-case-insensitive
-/// byte scan, which is length preserving.
+/// `hay_lower` must be `hay.to_lowercase()`. Its byte offsets only map back onto
+/// `hay` when lowercasing preserved the byte length; for characters that change
+/// length (`İ` → `i̇`, `ẞ` → `ß`, `ﬃ` → `ffi`) they do not, and slicing `hay`
+/// with them panics. Fall back there to an ASCII-case-insensitive byte scan,
+/// which is length preserving.
 fn find_match_ranges(hay: &str, hay_lower: &str, terms: &[String]) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
 
@@ -1263,9 +1163,8 @@ fn build_content_highlight(content: &str, query: &str) -> String {
     }
 
     // Locate the earliest match (byte offset). `to_lowercase` is byte-length
-    // preserving for ASCII/CJK, but not for every character (`İ`, `ẞ`, `ﬃ`
-    // change length), so the offset is only used to place the window and is
-    // snapped to a char boundary below.
+    // preserving for ASCII/CJK but not for every character (`İ`, `ẞ`, `ﬃ` change
+    // length), so the offset only places the window and is snapped to a boundary.
     let lower = content.to_lowercase();
     let Some(start_match) = find_match_ranges(content, &lower, &terms)
         .into_iter()
@@ -1285,8 +1184,8 @@ fn build_content_highlight(content: &str, query: &str) -> String {
     let suffix = if win_end < content.len() { "…" } else { "" };
     let window = &content[win_start..win_end];
 
-    // Collect every match range within the window (case-insensitive), merge
-    // overlaps, then escape segments and wrap matches in <mark>.
+    // Collect every match within the window, merge overlaps, then escape segments
+    // and wrap matches in <mark>.
     let win_lower = window.to_lowercase();
     let mut ranges: Vec<(usize, usize)> = find_match_ranges(window, &win_lower, &terms);
     ranges.sort_unstable();
@@ -1323,7 +1222,6 @@ fn snap_char_boundary(s: &str, mut i: usize) -> usize {
     i
 }
 
-/// Escape HTML special characters.
 fn html_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -1339,8 +1237,7 @@ fn html_escape(s: &str) -> String {
     out
 }
 
-/// One file found by a subtree walk: everything the index pipeline needs
-/// without re-reading the directory.
+/// One file found by a subtree walk: what the pipeline needs without re-reading the directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileEntry {
     /// Repo-absolute path with a leading `/`.
@@ -1352,9 +1249,8 @@ pub struct FileEntry {
 
 /// Collect every file in the tree rooted at `dir_fs_id`.
 ///
-/// This is [`collect_file_paths_under`] plus each file's `fs_id` and size,
-/// which is what lets the backfill decide "already indexed exactly this
-/// content" without a separate tree lookup per file.
+/// Each entry carries the file's `fs_id` and size, which lets the backfill decide
+/// "already indexed exactly this content" without a separate lookup per file.
 pub(crate) async fn collect_file_entries_under(
     repos: &Repositories,
     repo_id: &str,
@@ -1410,8 +1306,7 @@ mod tests {
     /// One directory object: its fs id and its `(entry id, is_dir, name)` list.
     type TreeDir<'a> = (&'a str, &'a [(&'a str, bool, &'a str)]);
 
-    /// A minimal `fs_objects` table and one directory object per entry list, so
-    /// the subtree walk can be exercised without a server.
+    /// A minimal `fs_objects` table and one directory object per entry list.
     async fn setup_tree_db(dirs: &[TreeDir<'_>]) -> Arc<crate::repository::Repositories> {
         use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 
@@ -1458,9 +1353,7 @@ mod tests {
     }
 
     /// The walk must produce repo-absolute paths: a subtree's files keep their
-    /// parent path, not just their own name. Reporting `/note.txt` for a file
-    /// actually at `/docs/note.txt` is what made the index update delete the
-    /// old entry and then fail to re-index the new one.
+    /// parent path, not just their own name.
     #[tokio::test]
     async fn test_collect_file_paths_under_is_repo_absolute() {
         let repos = setup_tree_db(&[
@@ -1479,7 +1372,6 @@ mod tests {
         assert_eq!(paths, vec!["/docs/sub/nested.txt", "/docs/top.txt"]);
     }
 
-    /// A directory with no files yields no paths.
     #[tokio::test]
     async fn test_collect_file_paths_under_empty_dir() {
         let repos = setup_tree_db(&[("d1", &[])]).await;
@@ -1489,7 +1381,6 @@ mod tests {
         assert!(paths.is_empty());
     }
 
-    /// A batch delete removes every requested document with one commit.
     #[tokio::test]
     async fn test_delete_files_batch() {
         let dir = tempfile::tempdir().unwrap();
@@ -1563,7 +1454,6 @@ mod tests {
             "Hello World, this is a test file",
         )?;
 
-        // Commit so the reader can pick up the new document.
         indexer.commit()?;
 
         let results = indexer
@@ -1578,7 +1468,6 @@ mod tests {
         assert_eq!(results[0].repo_id.as_str(), "repo-1");
         assert_eq!(results[0].fullpath.as_str(), "/hello.txt");
 
-        // Search for content (not filename).
         let results = indexer
             .search("test file", &["repo-1".to_string()], 10, 0, false)
             .await?;
@@ -1602,7 +1491,6 @@ mod tests {
         indexer.index_file("repo-1", "/a.txt", "a.txt", "alpha")?;
         indexer.index_file("repo-2", "/b.txt", "b.txt", "beta")?;
 
-        // Commit so the reader can pick up the new documents.
         indexer.commit()?;
 
         let results = indexer
@@ -1611,7 +1499,6 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].repo_id.as_str(), "repo-1");
 
-        // Scoped to wrong repo — no results.
         let results = indexer
             .search("alpha", &["repo-2".to_string()], 10, 0, false)
             .await?;
@@ -1662,11 +1549,9 @@ mod tests {
             .await?;
         assert_eq!(results.len(), 1);
 
-        // Index same path with new content.
         indexer.index_file("repo-1", "/file.txt", "file.txt", "new content")?;
         indexer.commit()?;
 
-        // Old content should no longer match.
         assert_eq!(
             indexer
                 .search("old", &["repo-1".to_string()], 10, 0, false)
@@ -1674,7 +1559,6 @@ mod tests {
                 .len(),
             0
         );
-        // New content should match.
         assert_eq!(
             indexer
                 .search("new", &["repo-1".to_string()], 10, 0, false)
@@ -1699,19 +1583,16 @@ mod tests {
 
         indexer.commit()?;
 
-        // First page: limit=3, offset=0
         let results = indexer
             .search("content", &["repo-1".to_string()], 3, 0, false)
             .await?;
         assert_eq!(results.len(), 3, "first page should have 3");
 
-        // Second page: limit=3, offset=3
         let results = indexer
             .search("content", &["repo-1".to_string()], 3, 3, false)
             .await?;
         assert_eq!(results.len(), 3, "second page should have 3");
 
-        // Last page: limit=3, offset=9
         let results = indexer
             .search("content", &["repo-1".to_string()], 3, 9, false)
             .await?;
@@ -1730,10 +1611,9 @@ mod tests {
         indexer
             .index_file_async("repo-1", "/hello.txt", "hello.txt", "Hello World")
             .await?;
-        // No explicit commit: rely on the write-side debounce. Poll instead of
-        // sleeping a fixed duration — the debounce commit runs on a dedicated
-        // OS thread and Tantivy's first commit has a cold-start cost, so a
-        // fixed sleep is flaky on slow CI runners.
+        // No explicit commit: rely on the write-side debounce. Poll instead of sleeping
+        // a fixed duration — the commit runs on a dedicated OS thread and Tantivy's first
+        // commit has a cold-start cost, so a fixed sleep is flaky on slow CI runners.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         loop {
             let results = indexer
@@ -1752,9 +1632,8 @@ mod tests {
         Ok(())
     }
 
-    /// Regression: an empty repo allow-list must mean "no results", not
-    /// "no filter". Returning documents here leaked every repo's filenames and
-    /// content snippets to a caller with no accessible repos.
+    /// Regression: an empty repo allow-list must mean "no results", not "no filter",
+    /// which leaked every repo's filenames and content snippets.
     #[tokio::test]
     async fn test_empty_repo_allow_list_returns_nothing() -> Result<(), AppError> {
         let dir = tempfile::tempdir().unwrap();
@@ -1763,7 +1642,6 @@ mod tests {
         indexer.index_file("repo-1", "/secret.txt", "secret.txt", "top secret content")?;
         indexer.commit()?;
 
-        // Sanity: the document is reachable when its repo is allowed.
         assert_eq!(
             indexer
                 .search("secret", &["repo-1".to_string()], 10, 0, false)
@@ -1789,9 +1667,9 @@ mod tests {
 mod highlight_regression_tests {
     use super::build_content_highlight;
 
-    /// Characters whose lowercase form has a different byte length used to
-    /// shift the match offsets, so slicing the un-lowercased window panicked
-    /// and any search hitting one returned HTTP 500.
+    /// Characters whose lowercase form has a different byte length shift the match
+    /// offsets, so slicing the un-lowercased window panics (HTTP 500 on any search
+    /// hitting one).
     #[test]
     fn length_changing_lowercase_does_not_panic() {
         for content in [
@@ -1852,10 +1730,9 @@ mod document_state_tests {
         assert!(hits.is_empty(), "a skipped document is not a hit: {hits:?}");
     }
 
-    /// The extractor version is what makes the backfill re-read a file the
-    /// pipeline had already examined. A document written by an *earlier*
-    /// version is stale whatever status it recorded, which is how files skipped
-    /// before a format became supported are picked up without a manual rebuild.
+    /// The extractor version is what makes the backfill re-read a file the pipeline
+    /// had already examined: a document written by an *earlier* version is stale
+    /// whatever status it recorded.
     #[tokio::test]
     async fn a_document_from_an_older_extractor_is_stale() {
         let (_dir, indexer) = temp_index();
@@ -1994,15 +1871,13 @@ mod document_state_tests {
         assert!(states.is_empty(), "the stale index was rebuilt empty");
     }
 
-    /// Regression: an index stamped with the current marker version but whose
-    /// on-disk schema is missing a required field — exactly the poison the old
-    /// marker-only guard produced — must be rebuilt, not served. Serving it used
-    /// to unwrap `get_field("status")` and panic on the read path.
+    /// Regression: an index stamped with the current marker version but missing a
+    /// required field on disk — the poison the marker-only guard produced — must be
+    /// rebuilt, not served: serving it panicked on the read path.
     #[tokio::test]
     async fn an_incompatible_schema_with_current_marker_rebuilds() {
-        // Build the schema an older release wrote: every current field except
-        // `status`, then stamp the CURRENT marker over it — the old guard never
-        // validated the schema it stamped.
+        // Build the schema an older release wrote: every current field except `status`,
+        // then stamp the CURRENT marker over it — the old guard never validated it.
         let mut builder = Schema::builder();
         builder.add_text_field(FIELD_REPO_ID, STRING | STORED);
         builder.add_text_field(FIELD_FULLPATH, STRING | STORED);
@@ -2026,7 +1901,6 @@ mod document_state_tests {
         )
         .unwrap();
 
-        // Before the fix this unwrapped `get_field("status")` and panicked.
         let indexer = TextIndexer::new(dir.path()).unwrap();
         let content = indexer
             .get_indexed_content("repo-1", "/a.txt")

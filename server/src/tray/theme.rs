@@ -1,25 +1,18 @@
 //! Desktop theme detection, for choosing between the two tray rasters.
 //!
-//! The brand mark is achromatic: its tile is near-black in the light theme and
-//! near-white in the dark one (the same accent pair the web UI uses), so a
-//! single image cannot stay visible on both a light and a dark panel. macOS is
-//! not compiled here — it inverts a template image itself.
-//!
-//! This module is only reached from the tray, which `run_mode` never enables on
-//! a platform without a desktop session.
+//! The brand mark is achromatic — near-black tile on light, near-white on dark,
+//! the web UI's accent pair — so one image cannot stay visible on both panels;
+//! macOS is not compiled here, since it inverts a template image itself.
 
-/// Whether the desktop the tray icon is drawn on is dark, i.e. whether the
-/// light-on-dark raster is the visible one. A wrong guess costs contrast, not
-/// correctness, so every probe falls back to the plain brand mark (light).
+/// Whether the desktop behind the tray is dark. A wrong guess costs contrast,
+/// not correctness, so every probe falls back to the plain (light) mark.
 #[cfg(target_os = "windows")]
 pub(super) fn is_dark() -> bool {
     use winreg::RegKey;
     use winreg::enums::HKEY_CURRENT_USER;
 
-    // `SystemUsesLightTheme` is the taskbar / notification-area setting — the
-    // surface the tray icon actually sits on (`AppsUseLightTheme` is for app
-    // windows). A missing value means an older or stripped-down system, where
-    // light is the classic default.
+    // `SystemUsesLightTheme` is the taskbar setting the tray icon sits on
+    // (`AppsUseLightTheme` is for app windows); missing means light is the default.
     const PERSONALIZE: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
     RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey(PERSONALIZE)
@@ -28,10 +21,9 @@ pub(super) fn is_dark() -> bool {
         .unwrap_or(false)
 }
 
-/// Linux: the panel an appindicator is drawn on follows the GTK theme, and GTK
-/// is already initialized when the tray is created (see `backend_linux`). The
-/// prefer-dark flag is the direct signal; some themes only say "dark" in the
-/// theme name, so that is the fallback.
+/// Linux: the panel an appindicator is drawn on follows the GTK theme, already
+/// initialized when the tray is created (see `backend_linux`). The prefer-dark
+/// flag is the direct signal; a theme name saying "dark" is the fallback.
 #[cfg(target_os = "linux")]
 pub(super) fn is_dark() -> bool {
     use gtk::prelude::GtkSettingsExt;
@@ -47,9 +39,8 @@ pub(super) fn is_dark() -> bool {
 }
 
 /// Re-applies the tray icon when the GTK theme changes, so switching to dark
-/// mode does not leave the wrong raster on the panel until a restart. The
-/// notify handlers live for the process lifetime, which is as long as the tray
-/// does; `TrayIcon` is reference-counted, so the clone keeps it alive.
+/// mode does not leave the wrong raster on the panel until a restart. The notify
+/// handlers live as long as the tray, and the clone keeps the refcounted icon alive.
 #[cfg(target_os = "linux")]
 pub(super) fn watch(tray: &tray_icon::TrayIcon) {
     use gtk::prelude::ObjectExt;

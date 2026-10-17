@@ -1,6 +1,5 @@
 //! macOS login entry: a per-user LaunchAgent
-//! (`~/Library/LaunchAgents/com.nanofile.nanofile.plist`). User-level, no
-//! admin rights involved.
+//! (`~/Library/LaunchAgents/com.nanofile.nanofile.plist`), no admin rights involved.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -44,8 +43,7 @@ impl LoginEntry for LoginManager {
         std::fs::create_dir_all(path.parent().expect("plist path has a parent"))?;
         std::fs::write(&path, launch_agent_plist(LABEL, &self.exe, &self.config))?;
 
-        // Load immediately so it also takes effect without re-login. The
-        // modern `bootstrap` API is preferred; `load -w` covers older macOS.
+        // Load immediately without re-login: `bootstrap` first, `load -w` for older macOS.
         let uid = current_uid();
         let loaded = Command::new("launchctl")
             .args(["bootstrap", &format!("gui/{uid}"), &path.to_string_lossy()])

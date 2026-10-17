@@ -1,16 +1,11 @@
-//! Windows command-line text shared by the two auto-start mechanisms.
-//!
-//! A login entry (`HKCU\…\Run`) and a service registration (`ImagePath`) both
-//! record an executable plus a `--config <absolute path>`, and both have to be
-//! read back and compared against the copy that is running. That text is
-//! generated and parsed in exactly one place.
+//! Windows command-line text shared by the two auto-start mechanisms: a `Run`
+//! value and a service `ImagePath` both record an executable plus a
+//! `--config <absolute path>`, and that text is produced in exactly one place.
 
 #![cfg_attr(not(target_os = "windows"), allow(dead_code))]
 
-/// Quotes one argument for a Windows command line.
-///
-/// Only double quotes need escaping — backslashes are literal except
-/// immediately before a quote, and doubling them would corrupt plain paths.
+/// Quotes one argument for a Windows command line. Only double quotes are
+/// escaped: backslashes are literal except immediately before a quote.
 pub(crate) fn win_cmd_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\\\""))
 }

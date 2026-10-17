@@ -1,28 +1,18 @@
 //! The scheduling policies the two persistent queues run on: the outbound-mail
-//! queue, and the journal of finished job runs.
+//! queue and the journal of finished job runs.
 //!
-//! Extracted from the outbound-mail queue, which is the one persistent queue in
-//! the codebase and therefore the one whose behaviour is known to work. The
-//! claim and lease mechanics stay in the repository that owns the table — an
-//! abstraction with a single implementation would only add indirection — but
-//! the numbers live here, where the two can be read side by side.
-//!
-//! They are two policies rather than one because the two queues keep very
-//! different things. A delivered message is a receipt somebody may need to find
-//! months later; a finished run is a record of what the server did, and past its
-//! window nobody reads it. Sharing mail's numbers gave job history 30 days of
-//! rows it had no room for — the count cap did all the work, and a 30-second
-//! timer filled it.
+//! Two policies rather than one because the queues keep different things: a
+//! delivered message is a receipt, while a finished run is a record nobody reads
+//! past its window. Claim and lease mechanics stay in the repository that owns
+//! the table; only the numbers live here.
 
 /// Exponential backoff with a ceiling, the shape both queues use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QueuePolicy {
     pub base_backoff_secs: u64,
     pub max_backoff_secs: u64,
-    /// How long a claim owns a row before another worker may take it over.
-    ///
-    /// Long enough to cover a slow delivery, short enough that a worker that
-    /// died does not strand the row.
+    /// How long a claim owns a row before another worker may take it over: long
+    /// enough for a slow delivery, short enough to not strand a dead worker's row.
     pub lease_secs: i64,
     /// Finished rows kept by age.
     pub sent_retention_secs: i64,
@@ -32,7 +22,7 @@ pub struct QueuePolicy {
 }
 
 impl QueuePolicy {
-    /// The policy the outbound-mail queue has always used.
+    /// The policy the outbound-mail queue runs on.
     pub const DEFAULT: Self = Self {
         base_backoff_secs: 30,
         max_backoff_secs: 3600,
@@ -52,8 +42,7 @@ impl Default for QueuePolicy {
 impl QueuePolicy {
     /// Delay before the next attempt after `attempts` have been made.
     pub fn backoff_secs(&self, attempts: i32) -> i64 {
-        // Clamped so a row that has somehow accumulated a huge attempt count
-        // cannot overflow the shift.
+        // Clamped so a huge accumulated attempt count cannot overflow the shift.
         let exponent = attempts.clamp(1, 32).saturating_sub(1).min(20);
         let factor = 1i64 << exponent;
         (self.base_backoff_secs as i64)
@@ -82,20 +71,16 @@ impl QueuePolicy {
 
 /// How long the journal of finished runs keeps its rows.
 ///
-/// Separate from [`QueuePolicy`] because the numbers mean something different
-/// there: a message that was delivered is a receipt, while a run is a record
-/// that something happened. Sizes are chosen to hold weeks of a healthy
-/// server's runs, which — now that an idle tick leaves no row — is a handful a
-/// day rather than thousands.
+/// Separate from [`QueuePolicy`] because the numbers mean something different: a
+/// delivered message is a receipt, while a run is a record. Sizes hold weeks of a
+/// healthy server's runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JobHistoryPolicy {
     /// How long a successful run stays readable.
     pub succeeded_retention_secs: i64,
-    /// How long a run that did not succeed stays readable. Longer, because a
-    /// failure is what somebody comes back for.
+    /// How long a failed run stays readable; failure is what somebody returns for.
     pub failed_retention_secs: i64,
-    /// Finished rows kept, oldest dropped first. Never applies to a row whose
-    /// run has not finished: that is somebody's pending work.
+    /// Finished rows kept, oldest dropped first; never a row whose run is pending.
     pub max_rows: u64,
 }
 
@@ -160,9 +145,7 @@ mod tests {
         assert!(sent > failed, "sent rows are dropped sooner");
     }
 
-    /// The journal's cutoffs come from its own policy, and they are not the
-    /// mail queue's: a failed run outlives a successful one, and neither is
-    /// measured in a receipt's terms.
+    /// The journal's cutoffs come from its own policy, not the mail queue's.
     #[test]
     fn the_journal_has_its_own_retention() {
         let p = JobHistoryPolicy::DEFAULT;

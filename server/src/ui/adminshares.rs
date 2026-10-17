@@ -104,7 +104,6 @@ pub async fn list_all_shares(
     }
 }
 
-/// Build and render the share management page, carrying at most one banner.
 async fn render_page(
     state: &Arc<AppState>,
     user: &WebUser,
@@ -115,7 +114,6 @@ async fn render_page(
     let share_models = state.repos.share_link.find_all().await?;
     let upload_models = state.repos.upload_link.find_all().await?;
 
-    // Build creator email lookup
     let mut creator_ids: Vec<i32> = Vec::new();
     for s in &share_models {
         if !creator_ids.contains(&s.creator_id) {
@@ -133,7 +131,6 @@ async fn render_page(
         creator_emails.insert(*cid, u.map(|u| u.email).unwrap_or_default());
     }
 
-    // Build repo name lookup
     let mut repo_ids: Vec<String> = Vec::new();
     for s in &share_models {
         if !repo_ids.contains(&s.repo_id) {
@@ -255,8 +252,7 @@ pub async fn delete_share(
     )?;
 
     // Admin delete — no creator_id check. Zero rows affected means the link is
-    // already gone (a stale page, a double submit): report that instead of a
-    // success that deleted nothing.
+    // already gone (stale page, double submit), which is reported as such.
     let tab = normalize_tab(form.get("tab").map(|s| s.as_str()));
     match state.repos.share_link.delete_by_token(&token).await {
         Ok(res) if res.rows_affected == 0 => {
@@ -293,8 +289,7 @@ pub async fn delete_upload(
     )?;
 
     // Admin delete — no creator_id check. Zero rows affected means the link is
-    // already gone (a stale page, a double submit): report that instead of a
-    // success that deleted nothing.
+    // already gone (stale page, double submit), which is reported as such.
     let tab = normalize_tab(form.get("tab").map(|s| s.as_str()));
     match state.repos.upload_link.delete_by_token(&token).await {
         Ok(res) if res.rows_affected == 0 => {
@@ -313,8 +308,6 @@ pub async fn delete_upload(
     Ok((StatusCode::FOUND, [("Location", deleted_location(&tab))]).into_response())
 }
 
-/// Where a successful delete lands: back on the tab it came from, with the
-/// success flag the list turns into a banner.
 fn deleted_location(tab: &str) -> String {
     if tab == "upload-links" {
         "/sysadmin/shares/?tab=upload-links&action=deleted".to_string()

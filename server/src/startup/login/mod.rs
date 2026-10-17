@@ -1,14 +1,10 @@
 //! The per-user login entry: the registration that starts the desktop instance
 //! when somebody logs in.
 //!
-//! One implementation per platform, behind [`LoginEntry`]. The registration
-//! always records the executable's absolute path and the config path
-//! (`--config <absolute path>`), because a login-started process runs with a
-//! working directory like `C:\Windows\System32` or `/`, where the default
-//! relative `config.toml` would not be found.
-//!
-//! This module is only compiled where the tray is, which is what uses it today.
-//! Windows builds without the tray do not carry it yet.
+//! One implementation per platform, behind `LoginEntry`. The registration always
+//! records the executable's absolute path and the config path (`--config <absolute
+//! path>`), because a login-started process runs with a working directory like
+//! `C:\Windows\System32` or `/`, where the default relative `config.toml` is not found.
 
 use std::path::Path;
 
@@ -29,10 +25,8 @@ mod platform;
 
 pub(crate) use platform::LoginManager as PlatformLogin;
 
-/// What the login entry looks like right now.
-///
-/// Read once (one registry/plist/desktop-file read) and handed to the policy
-/// that decides what the tray should show and do.
+/// What the login entry looks like right now, from a single registry/plist/desktop
+/// read, handed to the policy that decides what the tray should show and do.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct LoginState {
     /// A registration exists under our name.
@@ -49,23 +43,16 @@ pub(crate) trait LoginEntry {
     fn exe(&self) -> &Path;
 
     /// The `(executable, config file)` pair the entry records, or `None` when
-    /// there is no entry, or it does not name both.
-    ///
-    /// `None` is what keeps a hand-edited or foreign registration safe: a value
-    /// that cannot be read back as a pair is never "repaired" into something the
-    /// user did not ask for.
+    /// there is no entry or it does not name both: a value that cannot be read
+    /// back as a pair is never "repaired" into something the user did not ask for.
     fn recorded(&self) -> Option<(String, String)>;
 
     fn is_enabled(&self) -> bool;
     fn enable(&self) -> anyhow::Result<()>;
     fn disable(&self) -> anyhow::Result<()>;
 
-    /// Everything about the entry, from a single read.
-    ///
-    /// An entry that exists but cannot be read back as an `(executable, config)`
-    /// pair counts as present, is nobody's ("not ours"), and is never reported
-    /// as stale — the two answers that could otherwise rewrite or remove
-    /// something a person wrote by hand.
+    /// Everything about the entry, from a single read: one that exists but cannot
+    /// be read back as a pair is present, is nobody's, and is never reported as stale.
     fn state(&self) -> LoginState {
         let recorded = self.recorded();
         LoginState {
@@ -84,12 +71,10 @@ pub(crate) trait LoginEntry {
         self.state().ours
     }
 
-    /// Remove the entry **only** when it is ours, reporting whether it was.
-    ///
-    /// Used for the automatic consequences of installing the service: an
-    /// elevated helper may be running as a different account, and its `HKCU` is
-    /// then somebody else's hive — deleting a login entry there that names a
-    /// different copy would be destroying a registration we never wrote.
+    /// Remove the entry **only** when it is ours, reporting whether it was. An
+    /// elevated helper may run as a different account, whose `HKCU` is somebody
+    /// else's hive: deleting an entry there would destroy a registration we never
+    /// wrote.
     fn retire_ours(&self) -> anyhow::Result<bool> {
         if !self.is_ours() {
             return Ok(false);

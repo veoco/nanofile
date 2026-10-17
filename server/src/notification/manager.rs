@@ -10,19 +10,14 @@ use tokio_util::sync::CancellationToken;
 use super::events::{JwtExpiredEvent, NotificationJwtClaims, NotificationMessage};
 use infra::events;
 
-/// Channel capacity for outgoing WebSocket messages per client.
 /// A connected WebSocket client.
 pub struct ClientState {
-    /// The authenticated username (email) for this client.
-    /// Set on first successful subscribe.
+    /// The authenticated username (email), set on first successful subscribe.
     pub user: RwLock<String>,
-    /// Repos this client is subscribed to.
     pub subscribed_repos: RwLock<HashSet<String>>,
-    /// Bounded channel to send outgoing (pre-serialized) messages to this
-    /// client's write loop.
+    /// Bounded channel of pre-serialized messages to this client's write loop.
     pub sender: mpsc::Sender<Arc<[u8]>>,
-    /// JWT token expiration timestamps per repo (repo_id → unix timestamp).
-    /// Used by the periodic expiry checker to evict expired subscriptions.
+    /// JWT expiration per repo (repo_id → unix timestamp), for the expiry checker.
     pub token_expirations: RwLock<HashMap<String, i64>>,
     /// The client's effective IP (TCP peer, or X-Forwarded-For when behind a
     /// trusted proxy). Used for the per-IP connection cap and audit logging.
@@ -37,9 +32,8 @@ impl ClientState {
         self.user.write().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Whether the client has successfully subscribed at least once (i.e. has
-    /// presented a valid repo JWT). The username is only ever set — never
-    /// cleared — so this transition is one-way.
+    /// Whether the client has subscribed at least once with a valid repo JWT.
+    /// The username is only ever set, never cleared, so the transition is one-way.
     pub fn is_authenticated(&self) -> bool {
         !self.read_user().is_empty()
     }
@@ -60,10 +54,8 @@ impl ClientState {
     }
 }
 
-/// In-memory notification subscription manager.
-///
-/// Tracks all connected WebSocket clients and their repo subscriptions.
-/// Thread-safe: all mutable state is behind `Arc<RwLock<...>>`.
+/// In-memory notification subscription manager: the connected WebSocket clients
+/// and their repo subscriptions, all mutable state behind `Arc<RwLock<...>>`.
 #[derive(Clone)]
 pub struct NotificationManager {
     /// All connected clients, keyed by client ID.
@@ -72,8 +64,7 @@ pub struct NotificationManager {
     subscriptions: Arc<RwLock<HashMap<String, HashSet<u64>>>>,
     /// Monotonically increasing client ID counter.
     next_id: Arc<AtomicU64>,
-    /// Global cap on concurrent connections (0 = unlimited). Atomic so an
-    /// administrator can change it on a running server.
+    /// Global connection cap (0 = unlimited), atomic so an admin can change it live.
     max_connections: Arc<AtomicU64>,
     /// Cap on concurrent connections per client IP (0 = unlimited).
     max_connections_per_ip: Arc<AtomicU64>,
@@ -107,8 +98,8 @@ impl NotificationManager {
         }
     }
 
-    /// Replace the connection caps. Clients already connected are not dropped;
-    /// the new cap applies to the next registration.
+    /// Replace the caps. Connected clients are not dropped; the next registration
+    /// sees the new cap.
     pub fn set_connection_limits(&self, max_connections: u64, max_connections_per_ip: u64) {
         self.max_connections
             .store(max_connections, Ordering::Relaxed);
@@ -139,10 +130,8 @@ impl NotificationManager {
             .count()
     }
 
-    /// Register a new client and return its assigned ID and client state.
-    ///
-    /// Enforces the global and per-IP connection caps atomically under the
-    /// client-map write lock. Returns `None` when either cap is reached.
+    /// Register a client; `None` when the global or per-IP cap is reached. Both
+    /// caps are enforced atomically under the client-map write lock.
     pub fn register_client(
         &self,
         sender: mpsc::Sender<Arc<[u8]>>,
@@ -159,9 +148,8 @@ impl NotificationManager {
 
         {
             let mut clients = self.write_clients();
-            // Per-IP limit is checked by scanning the (bounded) client map
-            // under the same write lock, so no separate counter to keep in
-            // sync. Registration is infrequent so the scan is negligible.
+            // The bounded client map is scanned under the same write lock, so no
+            // separate counter is needed; registration is infrequent.
             let same_ip = clients
                 .values()
                 .filter(|c| c.peer_ip == client.peer_ip)
@@ -181,7 +169,6 @@ impl NotificationManager {
 
     /// Remove a client and all its subscriptions.
     pub async fn unregister_client(&self, client_id: u64) {
-        // Remove client from all subscription lists.
         {
             let subs = self.read_subscriptions();
             let repos: Vec<String> = subs
@@ -202,19 +189,16 @@ impl NotificationManager {
             }
         }
 
-        // Remove client from the global client map. `remove` returns the
-        // client only if it was still present, so this is idempotent — the
-        // read/write loops and the socket teardown all call it for the same
-        // client_id.
+        // `remove` returns the client only if it was still present, so this is
+        // idempotent: the read/write loops and socket teardown all call it.
         {
             let mut clients = self.write_clients();
             clients.remove(&client_id);
         }
     }
 
-    /// Subscribe a client to a set of repos.
-    /// `username` is extracted from the validated JWT token.
-    /// `repos` is a list of (repo_id, jwt_exp_timestamp) pairs.
+    /// Subscribe a client; `username` comes from the validated JWT, `repos` are
+    /// (repo_id, jwt_exp) pairs.
     pub async fn subscribe(&self, client_id: u64, username: &str, repos: &[(String, i64)]) {
         let clients = self.read_clients();
         let client = match clients.get(&client_id) {
@@ -223,7 +207,6 @@ impl NotificationManager {
         };
         drop(clients);
 
-        // Set the username on first subscription.
         {
             let mut user = client.write_user();
             if user.is_empty() {
@@ -264,11 +247,10 @@ impl NotificationManager {
         }
     }
 
-    /// Notify all subscribers of a repo about an event.
+    /// Notify all subscribers of a repo.
     ///
-    /// The message is serialized once and the bytes shared across subscribers.
-    /// If a client's bounded channel is full, that client is skipped
-    /// (non-blocking) rather than unboundedly buffering.
+    /// The message is serialized once and the bytes shared; a client whose
+    /// bounded channel is full is skipped rather than buffered without bound.
     pub async fn notify_repo(&self, repo_id: &str, message: &NotificationMessage) {
         let bytes: Arc<[u8]> = Arc::from(serde_json::to_vec(message).unwrap_or_default());
 
@@ -287,11 +269,8 @@ impl NotificationManager {
         }
     }
 
-    /// Send a message directly to a single connected client.
-    ///
-    /// Used for client-specific control messages such as `jwt-expired`.
-    /// Non-blocking: if the client's bounded channel is full the message is
-    /// dropped, mirroring [`notify_repo`](Self::notify_repo).
+    /// Send a message directly to one client (e.g. `jwt-expired`). Non-blocking:
+    /// a full bounded channel drops it, like [`notify_repo`](Self::notify_repo).
     pub async fn notify_client(&self, client_id: u64, message: &NotificationMessage) {
         let bytes: Arc<[u8]> = Arc::from(serde_json::to_vec(message).unwrap_or_default());
         let clients = self.read_clients();
@@ -300,8 +279,7 @@ impl NotificationManager {
         }
     }
 
-    /// Notify all subscribers of a repo about an event.
-    /// Convenience method that accepts a serializable event.
+    /// Notify the repo named by the event.
     pub async fn notify(&self, event: impl Into<NotificationMessage>) {
         let msg = event.into();
         if let Some(repo_id) = extract_repo_id(&msg) {
@@ -311,12 +289,9 @@ impl NotificationManager {
 }
 
 impl NotificationManager {
-    /// Run the event listener loop that forwards repo-update events from the
-    /// global broadcast channel to WebSocket subscribers.
-    ///
-    /// Runs until `token` is cancelled. Does **not** spawn internally — the
-    /// caller (typically [`Scheduler`](crate::scheduler::Scheduler)) owns the
-    /// tokio task boundary.
+    /// Forward repo-update events from the global broadcast channel to WebSocket
+    /// subscribers until `token` is cancelled. Does **not** spawn internally: the
+    /// caller (typically `Scheduler`) owns the tokio task boundary.
     pub async fn run_event_listener(&self, token: CancellationToken) {
         let mut rx = events::subscribe_repo_updates();
         let mgr = self.clone();
@@ -345,20 +320,15 @@ impl NotificationManager {
         }
     }
 
-    /// Check all clients for expired JWT tokens and send `jwt-expired`
-    /// notifications.
+    /// Single-shot check (called periodically by the `Scheduler`) that evicts
+    /// expired subscriptions and sends `jwt-expired` to each affected client.
     ///
-    /// This is a single-shot check intended to be called periodically by
-    /// the [`Scheduler`](crate::scheduler::Scheduler).
-    ///
-    /// Returns how many tokens were expired, so the pass that called this can
-    /// say what it did instead of reporting a bare "ok".
+    /// Returns how many tokens expired, so the caller can report what it did.
     pub async fn check_expired_tokens(&self) -> u64 {
         let now = chrono::Utc::now().timestamp();
         let mut expired_total = 0u64;
         let clients = self.read_clients();
         for (client_id, client) in clients.iter() {
-            // Collect expired repo_ids.
             let expired: Vec<String> = {
                 let exps = client.read_token_expirations();
                 exps.iter()
@@ -369,21 +339,18 @@ impl NotificationManager {
             if expired.is_empty() {
                 continue;
             }
-            // Remove from token_expirations.
             {
                 let mut exps = client.write_token_expirations();
                 for repo_id in &expired {
                     exps.remove(repo_id);
                 }
             }
-            // Remove from subscribed_repos.
             {
                 let mut subscribed = client.write_subscribed_repos();
                 for repo_id in &expired {
                     subscribed.remove(repo_id);
                 }
             }
-            // Remove from global subscriptions map.
             {
                 let mut subs = self.write_subscriptions();
                 for repo_id in &expired {
@@ -395,7 +362,6 @@ impl NotificationManager {
                     }
                 }
             }
-            // Send jwt-expired notification to the client.
             for repo_id in &expired {
                 let event = JwtExpiredEvent {
                     repo_id: repo_id.clone(),
@@ -411,10 +377,8 @@ impl NotificationManager {
         expired_total
     }
 
-    /// Gracefully shut down all WebSocket connections by clearing all client
-    /// and subscription state. Dropping the mpsc senders causes each write
-    /// task's `rx.recv()` to return `None`, which triggers `unregister_client`
-    /// and a clean exit.
+    /// Clear all client and subscription state; dropping the mpsc senders makes
+    /// each write task exit via `unregister_client` when `rx.recv()` returns `None`.
     pub async fn shutdown(&self) {
         tracing::info!("Shutting down notification manager");
         self.write_clients().clear();
@@ -428,8 +392,7 @@ impl Default for NotificationManager {
     }
 }
 
-/// Validate a JWT token against the notification server's subscription key.
-/// Returns the claims if valid, None otherwise.
+/// Validate a subscription JWT against the derived subkey; the claims if valid, else `None`.
 pub fn validate_notification_jwt(
     token: &str,
     private_key: &str,
@@ -440,7 +403,6 @@ pub fn validate_notification_jwt(
     // `exp` is required: an otherwise-valid signature without it would never
     // expire. (Issuance always sets it.)
     validation.required_spec_claims = std::collections::HashSet::from(["exp".to_string()]);
-    // We check repo_id manually below.
     validation.sub = None;
     validation.iss = None;
 
@@ -453,7 +415,6 @@ pub fn validate_notification_jwt(
 
     let claims = token_data.claims;
 
-    // Verify the repo_id matches.
     if claims.repo_id != expected_repo_id {
         return None;
     }

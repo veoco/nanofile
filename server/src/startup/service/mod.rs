@@ -1,46 +1,33 @@
 //! Windows service support: running nanofile under the Service Control Manager
-//! (SCM), and registering/removing that service.
+//! (SCM), and registering/removing that service. A service starts at boot with
+//! no session, unlike the login entry (`HKCU\…\Run`).
 //!
-//! Why a service: the login entry (`HKCU\…\Run`) only starts when somebody logs
-//! in. A service starts at boot with no session at all, which is what a
-//! file-sync server wants on a machine nobody sits in front of.
-//!
-//! Shape of this module:
-//!
-//! * The command line, the comparison against a registered `ImagePath`, the
-//!   account the service will run under and the preflight checks are
-//!   platform-independent, so their unit tests run everywhere
-//!   (`cargo test -p server --bin nanofile`).
-//! * Everything that talks to the SCM or the registry is `#[cfg(windows)]`.
-//! * The service *registers* itself; it never starts or stops itself. Switching
-//!   from a logged-in tray instance to the service therefore takes effect at the
-//!   next system start: handing the listening port over immediately is not
-//!   reliable on Windows, because a port whose connections were just closed
-//!   stays in `TIME_WAIT` for minutes and the new process would fail to bind it.
+//! The command line, `ImagePath` comparison, account and preflight checks are
+//! platform-independent (tested everywhere); SCM/registry code is
+//! `#[cfg(windows)]`. The service registers itself but never starts or stops
+//! itself, so switching to it takes effect at the next system start: a port
+//! whose connections were just closed stays in `TIME_WAIT` for minutes.
 
-// The neutral surface below (the command line, the `ImagePath` comparison, the
-// probe types) is only *reachable* from a Windows tray build; elsewhere it is
-// exercised by the tests. One attribute instead of a `#[allow(dead_code)]` on
-// every item — and on the platform it ships for, the lint stays active.
+// The neutral surface below is only *reachable* from a Windows tray build;
+// elsewhere the tests exercise it. One attribute instead of a per-item
+// `#[allow(dead_code)]` — and where it ships, the lint stays active.
 #![cfg_attr(not(all(target_os = "windows", feature = "tray")), allow(dead_code))]
 
 use std::path::Path;
 
 use crate::startup::cmdline::{normalize_win_path, win_cmd_quote};
 
-/// The SCM name of the service. Fixed (not derived from the install path) so
-/// `net stop Nanofile`/`sc query Nanofile` are predictable, and so the tray can
-/// find the service it manages. One service per machine.
+/// The SCM name of the service, fixed (not derived from the install path) so
+/// `sc query Nanofile` is predictable and the tray can find what it manages.
 pub(crate) const SERVICE_NAME: &str = "Nanofile";
 
 /// What the service is called in `services.msc`.
 pub(crate) const DISPLAY_NAME: &str = "Nanofile Sync Server";
 
-// ── Exit codes ───────────────────────────────────────────────────────────────
-// One vocabulary for both processes the tray reads: the elevated helper's
-// process exit status, and the service's own status in `services.msc` /
-// `sc query`. `EXIT_REFUSED` means "nothing was changed on purpose", which is
-// not a failure to report and not a success either.
+// One exit-code vocabulary for both processes the tray reads: the elevated
+// helper's exit status, and the service's status in `services.msc` / `sc
+// query`. `EXIT_REFUSED` means "nothing was changed on purpose" — neither a
+// failure to report nor a success.
 
 /// Failed; the reason is in the log file and (for the helper) in a dialog.
 #[cfg(target_os = "windows")]
@@ -50,28 +37,25 @@ pub(crate) const EXIT_FAILED: i32 = 1;
 #[cfg(target_os = "windows")]
 pub(crate) const EXIT_REFUSED: i32 = 2;
 
-/// What `nanofile service …` can be asked to do.
 #[cfg(target_os = "windows")]
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum ServiceAction {
     /// Run as a service. Called by the Service Control Manager (the registered
     /// binary path), never by hand: without the SCM this exits immediately.
     Run,
-    /// Register the auto-start service (or update its command line, account and
-    /// access control). Needs administrator rights.
+    /// Register (or update) the auto-start service; needs administrator rights.
     Install {
         /// Account the service runs under: `virtual` (the default,
         /// `NT SERVICE\Nanofile`), `system` (`LocalSystem`), `network`
-        /// (`NT AUTHORITY\NetworkService`), or any other value as a local or
-        /// domain account name, which needs a password.
+        /// (`NT AUTHORITY\NetworkService`), or a local/domain account name,
+        /// which needs a password.
         #[arg(long, value_name = "ACCOUNT", default_value = "virtual")]
         account: String,
-        /// Password for a named account. Visible in the shell history and in
-        /// `ps` output, so prefer --password-stdin or the interactive prompt.
+        /// Password for a named account; visible in shell history and `ps`, so
+        /// prefer --password-stdin or the prompt.
         #[arg(long)]
         password: Option<String>,
-        /// Read the named account's password from the first line of standard
-        /// input.
+        /// Read the named account's password from the first line of stdin.
         #[arg(long, default_value_t = false, conflicts_with = "password")]
         password_stdin: bool,
     },
@@ -87,12 +71,8 @@ pub(crate) enum ServiceProbe {
     /// No service with our name.
     NotInstalled,
     /// Registered, but its binary path belongs to a different installation
-    /// (another copy of nanofile, or another config file).
-    ///
-    /// `missing` means the executable that path names no longer exists, which is
-    /// what a moved or renamed installation leaves behind: the service then
-    /// fails to start and nothing on this side says why. The replacement
-    /// confirmation names it.
+    /// (another copy of nanofile, or another config file). `missing` means that
+    /// executable no longer exists, as after a moved or renamed install.
     OtherInstall {
         image_path: String,
         running: bool,
@@ -131,12 +111,8 @@ impl ServiceProbe {
     }
 }
 
-// ── Platform-independent helpers ─────────────────────────────────────────────
-
-/// The command line registered as the service's binary path: the same
-/// executable, told explicitly which config file to use (a service starts with
-/// a working directory of `C:\Windows\System32`, where a relative `config.toml`
-/// means nothing).
+/// The registered binary path: the same executable, told which config file to
+/// use (the SCM starts in `C:\Windows\System32`, so relative paths mean nothing).
 pub(crate) fn service_command_line(exe: &Path, config: &Path) -> String {
     format!(
         "{} service run --config {}",
@@ -155,12 +131,9 @@ pub(crate) fn service_description(config: &Path) -> String {
 }
 
 /// The executable an `ImagePath` (or any command line of ours) names: the first
-/// quoted token when the path is quoted, otherwise everything up to the first
-/// space.
-///
-/// It is only used to ask "does the file this registration launches still
-/// exist?", so a hand-edited value that parses oddly can only make the answer
-/// less precise — never destructive.
+/// quoted token when quoted, otherwise everything up to the first space. Only
+/// used to ask whether that file still exists, so a hand-edited value can only
+/// make the answer imprecise, never destructive.
 pub(crate) fn executable_in(command_line: &str) -> Option<String> {
     let text = command_line.trim();
     let token = match text.strip_prefix('"') {
@@ -172,13 +145,8 @@ pub(crate) fn executable_in(command_line: &str) -> Option<String> {
 }
 
 /// Whether a registered `ImagePath` is the command line this installation would
-/// write.
-///
-/// Not an exact-equality test on purpose: a service registered by hand (or by an
-/// older build) may carry fewer arguments, and reporting "someone else's
-/// install" for a service that starts exactly this binary would be wrong. What
-/// has to differ for the answer to be "not ours" is the executable or the
-/// config file, and both show up as a difference in the middle of the string.
+/// write. Not exact equality on purpose: a hand-registered or older service may
+/// carry fewer arguments, so only the executable or config file must differ.
 pub(crate) fn image_path_matches(registered: &str, expected: &str) -> bool {
     let registered = normalize_win_path(registered);
     let expected = normalize_win_path(expected);
@@ -254,7 +222,6 @@ mod tests {
             &PathBuf::from(r"C:\Apps\Nanofile\nanofile.exe"),
             &PathBuf::from(r"C:\Apps\Nanofile\config.toml"),
         );
-        // What the registry holds after our own write.
         assert!(image_path_matches(&expected, &expected));
         // Case and a forward slash are the same path on Windows.
         let noisy = expected.to_lowercase().replace('\\', "/");
@@ -280,7 +247,6 @@ mod tests {
             &PathBuf::from(r"D:\other\config.toml"),
         );
         assert!(!image_path_matches(&other_config, &expected));
-        // A completely different binary.
         assert!(!image_path_matches(
             r#""C:\Elsewhere\nanofile.exe" --config "x""#,
             &expected

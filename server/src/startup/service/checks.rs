@@ -1,11 +1,8 @@
 //! The shape of a preflight report and the predicates it is built from.
 //!
 //! Platform-independent so the rules that decide "this directory is not a place
-//! to touch" and "the service may not keep running" are unit-tested on every
-//! platform; the checks that need Win32 live in [`super::preflight`].
-//!
-//! Compiled with the Windows preflight, and in test builds everywhere so the
-//! tests run on Linux CI too.
+//! to touch" and "the service may not keep running" are unit-tested everywhere;
+//! the Win32 checks live in [`super::preflight`].
 
 use std::io::Write;
 use std::path::Path;
@@ -21,13 +18,11 @@ pub(crate) enum Severity {
     Note,
 }
 
-/// One check and what it found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Check {
     pub severity: Severity,
     /// What was checked, e.g. `storage.block_dir` or `storage.ffmpeg_path`.
     pub subject: String,
-    /// What the check found, meant to be read on its own.
     pub detail: String,
 }
 
@@ -78,8 +73,7 @@ impl Preflight {
             .collect()
     }
 
-    /// Log every check at its own level, so a failed service start leaves a
-    /// record naming the directory.
+    /// Log every check at its own level: a failed service start leaves a record.
     pub(crate) fn log(&self) {
         for check in &self.checks {
             match check.severity {
@@ -91,10 +85,9 @@ impl Preflight {
     }
 }
 
-/// Create the directory and write a probe file into it, then remove it.
-///
-/// The server creates exactly these directories at startup, so creating one here
-/// is not a side effect an install has to undo.
+/// Create the directory and write a probe file into it, then remove it. The
+/// server creates these directories at startup anyway, so creating one is not a
+/// side effect an install has to undo.
 pub(crate) fn probe_writable(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let probe = dir.join(format!(".nanofile-write-test-{}", std::process::id()));
@@ -111,9 +104,8 @@ pub(crate) fn probe_writable(dir: &Path) -> std::io::Result<()> {
 pub(crate) fn volume_root(path: &Path) -> Option<String> {
     let text = path.to_string_lossy();
     if text.starts_with("\\\\") {
-        // `\\server\share\…`: the first two components name the share. `split`
-        // rather than `splitn`, whose last item would swallow the rest of the
-        // path.
+        // `\\server\share\…`: the first two components name the share. `split`,
+        // not `splitn`, whose last item would swallow the rest of the path.
         let mut parts = text.split('\\').filter(|p| !p.is_empty());
         let server = parts.next()?;
         let share = parts.next()?;
@@ -128,12 +120,8 @@ pub(crate) fn volume_root(path: &Path) -> Option<String> {
 }
 
 /// Whether `path` is itself one of the directories Windows owns, or a user
-/// profile.
-///
-/// These are never a state directory and never a place to grant a service
-/// account access: the directory itself would have to have its own access
-/// control changed, which would hand the service (or anything running as it)
-/// control of the system.
+/// profile: these are never a state directory, and granting a service account
+/// access would mean changing their own access control.
 pub(crate) fn is_sensitive_root(path: &Path) -> bool {
     let mut roots: Vec<String> = Vec::new();
     for var in [
@@ -181,8 +169,7 @@ pub(crate) fn is_sensitive_root_among(path: &Path, roots: &[String]) -> bool {
     if candidate.starts_with("\\\\")
         && let Some(root) = volume_root(path)
     {
-        // A share root (`\\server\share`) is as broad as a volume root; a
-        // directory inside the share is not.
+        // A share root is as broad as a volume root; a directory inside it is not.
         return normalize(&root) == candidate;
     }
     roots.iter().any(|root| normalize(root) == candidate)
@@ -203,7 +190,6 @@ mod tests {
             volume_root(Path::new(r"\\server\share\dir\file")),
             Some(r"\\server\share".into())
         );
-        // A relative path has no volume.
         assert_eq!(volume_root(Path::new("data/blocks")), None);
         assert_eq!(volume_root(Path::new("/var/lib/nanofile")), None);
     }
@@ -216,14 +202,12 @@ mod tests {
             r"C:\Users\veoco".to_string(),
             r"C:\Users".to_string(),
         ];
-        // Bare volumes, however written.
         for volume in [r"C:", r"C:\", r"c:/"] {
             assert!(
                 is_sensitive_root_among(Path::new(volume), &roots),
                 "{volume} is a volume root"
             );
         }
-        // The directories Windows owns.
         for dir in [
             r"C:\Windows",
             r"c:\windows\\",
@@ -264,8 +248,7 @@ mod tests {
         assert!(probe_writable(&dir.path().join("nested/blocks")).is_ok());
         assert!(dir.path().join("nested/blocks").is_dir());
 
-        // A file where a directory has to be: the probe must say so rather than
-        // silently accepting the path.
+        // A file where a directory has to be: the probe must not accept the path.
         let file = dir.path().join("not-a-directory");
         std::fs::write(&file, b"x").unwrap();
         assert!(probe_writable(&file).is_err());

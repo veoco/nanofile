@@ -1,10 +1,6 @@
-//! Small Win32 helpers the auto-start code shares.
-//!
-//! Nothing here knows about the tray: they are the process-level questions
-//! ("am I elevated?", "which account is this?") and the UTF-16 conversion every
-//! `…W` call needs.
+//! Small Win32 helpers the auto-start code shares: the process-level questions
+//! ("am I elevated?", "which account?") and UTF-16 conversion for `…W` calls.
 
-/// A NUL-terminated UTF-16 buffer for a `…W` Win32 call.
 pub(crate) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -37,11 +33,8 @@ pub(crate) fn is_elevated() -> bool {
     }
 }
 
-/// The account this process runs as, in `DOMAIN\name` form.
-///
-/// Read from the process token rather than an environment variable: a service
-/// started by the SCM has no `USERNAME`, and the whole point of logging this is
-/// to say which account the data directories have to be writable by.
+/// The account this process runs as, in `DOMAIN\name` form, read from the
+/// process token: a service started by the SCM has no `USERNAME`.
 pub(crate) fn current_account_name() -> Option<String> {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};

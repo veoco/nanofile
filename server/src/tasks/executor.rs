@@ -1,10 +1,7 @@
-//! Driving one run to a terminal state.
-//!
-//! This is the only place the run state machine is written. A handler submits
-//! and forgets: it cannot leave a run stuck in `Queued`, because it has no way
-//! to transition one, and it cannot leak a concurrency slot, because the permit
-//! lives in the task this module owns and is released whatever the body does —
-//! including panicking.
+//! Driving one run to a terminal state: the only place the state machine is
+//! written, so a handler cannot leave a run stuck and cannot leak a concurrency
+//! slot — the permit lives in a task this module owns and is released whatever
+//! the body does, including panicking.
 
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -22,7 +19,6 @@ use super::store::RunStore;
 /// How often progress writes are coalesced for one run.
 const PROGRESS_THROTTLE: Duration = Duration::from_secs(1);
 
-/// What the executor produced, for logging and (later) the audit record.
 #[derive(Debug)]
 pub struct RunReport {
     pub state: JobState,
@@ -34,10 +30,8 @@ pub struct RunReport {
     pub finished_at: Option<i64>,
 }
 
-/// Drive `run`'s body to completion, writing every state transition.
-///
-/// `cancel` is the run's own token; the caller keeps a handle so it can ask the
-/// run to stop.
+/// Drive `run`'s body to completion, writing every state transition. `cancel` is
+/// the run's own token; the caller keeps a handle so it can ask the run to stop.
 pub async fn execute(
     job: &RegisteredJob,
     run: &JobRun,
@@ -82,8 +76,7 @@ pub async fn execute(
                     finished_at: Some(finished_at),
                 };
             }
-            // A cancel or a timeout is terminal: retrying would either ignore
-            // the caller or repeat whatever caused the stall.
+            // A cancel or timeout is terminal: a retry would ignore the caller or repeat the stall.
             Err(JobFailure::Cancelled) => {
                 let finished_at = mark_terminal(store, run, JobState::Cancelled, None);
                 return RunReport {
@@ -140,8 +133,7 @@ pub async fn execute(
     }
 }
 
-/// One attempt: the body, with a panic guard around it and the timeout policy
-/// applied on top.
+/// One attempt: the body under a panic guard and the timeout policy.
 async fn attempt_once(
     job: &RegisteredJob,
     ctx: &JobContext,
@@ -150,8 +142,7 @@ async fn attempt_once(
 ) -> Result<Outcome, JobFailure> {
     let body = (job.run)(ctx.clone(), params);
     // Panic isolation: a body that panics must still land in a terminal state
-    // and release its slot, which is what the old copy/move manager could not
-    // do (a panicking task held its active slot forever).
+    // and release its slot.
     let guarded = AssertUnwindSafe(body).catch_unwind();
 
     let caught = match job.spec.timeout {
@@ -164,15 +155,10 @@ async fn attempt_once(
     flatten(caught)
 }
 
-/// What a guarded body resolves to: the body's own result, or the panic payload
-/// it unwound with.
 type Caught = Result<Result<Outcome, JobFailure>, Box<dyn std::any::Any + Send>>;
 
-/// Run `body` under the timeout policy.
-///
-/// Two different questions are asked. `no_progress_for` is the one that matters
-/// for a long job: it fails a run that has stopped getting anywhere, without
-/// guessing how long the whole thing should take. `max_total` is the backstop.
+/// Run `body` under the timeout policy: `no_progress_for` fails a run that stopped
+/// getting anywhere, and `max_total` is the backstop.
 async fn watch<F>(body: F, policy: TimeoutPolicy, tick: &LivenessTick) -> Caught
 where
     F: Future<Output = Caught>,
@@ -398,9 +384,7 @@ mod tests {
         ));
     }
 
-    /// The documented defect in the old copy/move manager: a panicking task held
-    /// its active slot forever. Here the run lands in a terminal state, so the
-    /// slot is released by the caller's guard.
+    /// A panicking body lands in a terminal state, so its slot is released.
     #[tokio::test]
     async fn a_panicking_body_lands_in_failed() {
         let store = store();
@@ -591,8 +575,7 @@ mod tests {
         assert_eq!(report.state, JobState::TimedOut);
     }
 
-    /// A body that keeps checking in is not killed, however long it runs: that
-    /// is the whole point of watching progress rather than wall-clock time.
+    /// A body that keeps checking in is not killed, however long it runs.
     #[tokio::test(start_paused = true)]
     async fn a_body_that_keeps_checking_in_is_not_timed_out() {
         let store = store();
@@ -606,8 +589,7 @@ mod tests {
             },
             |ctx, _p| {
                 Box::pin(async move {
-                    // 10 chunks of 20s: well past the 30s progress window in
-                    // total, but never 30s without a checkpoint.
+                    // Ten 20s chunks: past the 30s window in total, never 30s between checkpoints.
                     for i in 0..10 {
                         ctx.checkpoint().await?;
                         tokio::time::sleep(Duration::from_secs(20)).await;

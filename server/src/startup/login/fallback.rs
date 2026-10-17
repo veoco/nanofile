@@ -1,6 +1,5 @@
-//! Stub login entry for platforms without a supported desktop integration.
-//! Unreachable in practice: `run_mode` already returns `Headless` there; it
-//! exists only to keep the crate compiling on unusual targets.
+//! Stub login entry for platforms without a desktop integration: `run_mode` already
+//! returns `Headless` there, so it exists only to keep the crate compiling.
 
 use std::path::{Path, PathBuf};
 

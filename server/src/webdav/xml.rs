@@ -1,15 +1,11 @@
-//! Minimal DAV: XML helpers for WebDAV responses (multistatus, lock, etc.).
-//!
-//! Uses `quick-xml` to build XML documents. Only what the methods we support
-//! need — no full WebDAV property namespace handling.
+//! Minimal DAV: XML helpers (multistatus, lock) built on `quick-xml`: only
+//! what the supported methods need — no full property namespace handling.
 
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 
-/// The DAV: namespace prefix used in all responses.
 pub const DAV_NS: &str = "DAV:";
 
-/// A single `<D:response>` entry in a PROPFIND multistatus document.
 pub struct PropResponse {
     /// Fully-escaped href path (already URL-encoded).
     pub href: String,
@@ -17,7 +13,6 @@ pub struct PropResponse {
     pub props: Option<ResourceProps>,
 }
 
-/// Properties returned for a single resource in a multistatus document.
 pub struct ResourceProps {
     pub is_collection: bool,
     pub displayname: String,
@@ -46,8 +41,8 @@ fn w_text(w: &mut Writer<Vec<u8>>, tag: &str, value: &str) {
 
 /// Build a PROPFIND `<D:multistatus>` document.
 ///
-/// When `propname_only` is true, properties are emitted as bare element names
-/// (no values), which is the correct response to `<D:propname/>`.
+/// With `propname_only`, properties are emitted as bare element names (no
+/// values), the correct response to `<D:propname/>`.
 pub fn build_multistatus(responses: &[PropResponse], propname_only: bool) -> Vec<u8> {
     let mut w = Writer::new(Vec::new());
     let _ = w.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)));
@@ -115,7 +110,6 @@ pub fn build_lock_body(token: &str) -> String {
     )
 }
 
-/// Build an empty PROPPATCH `<D:multistatus>` response body.
 pub fn build_empty_multistatus() -> Vec<u8> {
     let mut w = Writer::new(Vec::new());
     let _ = w.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)));

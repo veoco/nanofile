@@ -1,13 +1,9 @@
 //! What the tray should do about the two automatic-start mechanisms.
 //!
-//! On Windows a login entry and an SCM service are two ways to say "start
-//! Nanofile automatically", and they are **alternatives**: registering the
-//! service removes the login entry, and leaving both in place starts a second
-//! instance at every login that can only come up as a client-mode tray.
-//!
-//! That rule lives here, as one pure function over the probed state, so the
-//! menu's construction, every toggle's re-synchronisation and the startup repair
-//! cannot drift apart. Nothing in this module touches the machine.
+//! A login entry and an SCM service are **alternatives**: registering the service
+//! removes the login entry, and leaving both starts a second instance at every
+//! login. That rule lives here as one pure function over the probed state, so the
+//! menu, every toggle's re-synchronisation and the startup repair cannot drift apart.
 
 use super::login::LoginState;
 
@@ -15,8 +11,7 @@ use super::login::LoginState;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct StartupState {
     pub login: LoginState,
-    /// This installation's Windows service is registered. Always `false` where
-    /// there is no service concept.
+    /// This installation's service is registered; always `false` without a service concept.
     pub service_ours: bool,
 }
 
@@ -31,7 +26,6 @@ pub(crate) struct StartupPlan {
     pub login_enabled: bool,
     /// The checkmark the login item shows (the registration as it really is).
     pub login_checked: bool,
-    /// The checkmark the service item shows.
     pub service_checked: bool,
 }
 
@@ -39,18 +33,14 @@ pub(crate) struct StartupPlan {
 pub(crate) fn plan(state: StartupState) -> StartupPlan {
     StartupPlan {
         // A stale entry is only repaired while the service is *not* ours:
-        // otherwise the repair would re-create the very entry the service
-        // replaced (and the next login would start a second instance).
+        // otherwise the repair would re-create the entry the service replaced.
         repair_login: state.login.stale && !state.service_ours,
-        // The same rule from the other side: an entry of ours that survived an
-        // install (an older build, or `service install` run outside the tray)
-        // is removed, so "alternatives" is enforced rather than assumed. An
-        // entry belonging to another installation is left alone.
+        // The same rule from the other side: our entry that survived an install
+        // is removed, so "alternatives" is enforced rather than assumed; a
+        // foreign installation's entry is left alone.
         retire_login: state.login.ours && state.service_ours,
         login_enabled: !state.service_ours,
-        // The checkmark always reports the registration as it is, even while
-        // the item is disabled, so the menu never claims a state the machine is
-        // not in.
+        // The checkmark reports the registration as it is, even while disabled.
         login_checked: state.login.present,
         service_checked: state.service_ours,
     }
@@ -91,8 +81,7 @@ mod tests {
         };
         assert!(plan(stale).repair_login);
 
-        // The regression: the service replaced the login entry, so repairing a
-        // stale entry next to it would start two instances at the next login.
+        // The service replaced the entry: repairing a stale one would start two instances.
         let with_service = StartupState {
             service_ours: true,
             ..stale
@@ -121,7 +110,6 @@ mod tests {
             service_ours: true,
         };
         assert!(!plan(foreign).retire_login);
-        // ... and with no service, nothing is retired either.
         let alone = StartupState {
             login: login(true, true, false),
             service_ours: false,
@@ -144,8 +132,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_entry_is_never_repaired_or_retired() {
-        // Present, but it cannot be read back as an (executable, config) pair:
-        // `ours` and `stale` are both false by construction.
+        // Present, but not readable as an (executable, config) pair: `ours`/`stale` are false.
         let unreadable = StartupState {
             login: login(true, false, false),
             service_ours: true,

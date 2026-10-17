@@ -1,11 +1,8 @@
 /// WebUser extractor — cookie-based auth for the Web UI.
 ///
 /// Reads the `seahub-session` cookie, validates it against the `api_token`
-/// table, and returns the authenticated user. Reuses the existing token
-/// infrastructure — no new DB tables needed.
-///
-/// On failure: returns a 302 redirect to `/accounts/login/` instead of 401,
-/// so browsers see the login page rather than a raw error.
+/// table and returns the user. On failure it redirects to `/accounts/login/`
+/// instead of 401, so browsers see the login page rather than a raw error.
 use axum::{
     extract::FromRequestParts,
     http::{HeaderMap, header, request::Parts},
@@ -22,10 +19,8 @@ pub struct WebUser {
     pub email: String,
     /// The raw session token (for CSRF generation etc.).
     pub session_token: String,
-    /// The `api_tokens` row this session is, so a page that lists sessions can
-    /// mark the one the reader is using.
+    /// The `api_tokens` row this session is, so a session list can mark it.
     pub session_id: i32,
-    /// Whether the user has admin privileges.
     pub is_admin: bool,
     /// Preferred UI language from the user profile (None = browser default).
     pub language: Option<String>,
@@ -58,10 +53,7 @@ impl FromRequestParts<Arc<AppState>> for WebUser {
 }
 
 /// The `seahub-session` cookie from a request's headers, if it carries one.
-///
-/// The extractor above parses the headers it is handed; the error-page
-/// middleware only has a clone of them (the request itself has already gone to
-/// the handler), so both read the cookie through here.
+/// Shared with the error-page middleware, which only has a clone of the headers.
 pub fn session_cookie(headers: &HeaderMap) -> Option<String> {
     let mut values = headers.get_all(header::COOKIE).iter();
     let cookie = Cookie::decode(&mut values).ok()?;
@@ -71,9 +63,8 @@ pub fn session_cookie(headers: &HeaderMap) -> Option<String> {
 impl WebUser {
     /// Resolve a session cookie value to the user it belongs to.
     ///
-    /// `None` for every way a session can fail to identify a usable account:
-    /// unknown token, expired token, a 2FA-pending token (which must not work
-    /// as a full session), a deleted or deactivated user, or a failed lookup.
+    /// `None` for unknown or expired tokens, 2FA-pending tokens, deleted or
+    /// deactivated users, or a failed lookup.
     pub async fn from_session_token(state: &Arc<AppState>, session_token: &str) -> Option<Self> {
         let token_record = state
             .repos
@@ -82,7 +73,6 @@ impl WebUser {
             .await
             .ok()??;
 
-        // Check expiration
         if let Some(expires_at) = token_record.expires_at
             && chrono::Utc::now().timestamp() > expires_at
         {

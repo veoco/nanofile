@@ -1,6 +1,4 @@
-//! Windows login entry: the per-user `Run` registry key
-//! (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`). Per-user, so no
-//! administrator rights are ever required for the registration itself.
+//! Windows login entry: the per-user `Run` registry key; no admin rights are needed.
 
 use std::path::{Path, PathBuf};
 

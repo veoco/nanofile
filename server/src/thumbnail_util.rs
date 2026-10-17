@@ -1,16 +1,12 @@
 //! Shared thumbnail-generation utilities.
 //!
-//! Consolidates three identical copies of `generate_thumbnail` that existed in
-//! `fs/service/thumbnail.rs`, `user/service/avatar.rs`, and `ui/settings.rs`.
-//! Applies EXIF orientation on decode, and provides a square-crop variant for
-//! avatar thumbnails.
-//!
-//! File thumbnails are encoded by `generate_thumbnail_encoded`, which picks the
-//! container from the pixels: PNG only when transparency has to survive, JPEG
-//! otherwise. PNG is a poor fit for photographic content (a 640px PNG
-//! thumbnail measured 0.5 MB against 70 KB for the same image as JPEG), and the
-//! grid/gallery tiles are large enough that the old 256px PNG mosaic was both
-//! blurry on a 2x display *and* heavier than the JPEG replacement.
+//! Applies EXIF orientation on decode and provides a square-crop variant for
+//! avatar thumbnails. File thumbnails are encoded by
+//! `generate_thumbnail_encoded`, which picks the container from the pixels: PNG
+//! only when transparency has to survive, JPEG otherwise. PNG is a poor fit for
+//! photographic content, and the grid/gallery tiles are large enough that a
+//! 256px PNG mosaic was both blurry on a 2x display and heavier than the JPEG
+//! replacement.
 
 use std::io::Cursor;
 
@@ -21,9 +17,8 @@ use image::imageops::FilterType;
 
 use base::error::AppError;
 
-/// Upper bound for thumbnail/avatar **output** dimensions. Resizing to
-/// `size × size` at unbounded sizes would allocate `size² × 4` bytes (a 100000px
-/// thumb needs ~100 GB) and abort the process. Real clients use sizes ≤ 640.
+/// Upper bound for thumbnail/avatar **output** dimensions: an unbounded
+/// `size² × 4` allocation aborts the process. Real clients use sizes ≤ 640.
 pub const MAX_THUMBNAIL_SIZE: u32 = 1024;
 
 /// Upper bound on decoded **source** dimensions. 8192 covers 8K photos
@@ -31,26 +26,13 @@ pub const MAX_THUMBNAIL_SIZE: u32 = 1024;
 const MAX_SOURCE_DIMENSION: u32 = 8192;
 
 /// The long-edge sizes the web UI requests, and therefore the only sizes whose
-/// cache entries are still reachable:
-///
-/// - `THUMBNAIL_SIZE_SMALL` backs the list-row icon.
-/// - `THUMBNAIL_SIZE_LARGE` backs the grid tile (227 CSS px wide, i.e. 454
-///   device px at 2x), the square gallery tile (369 device px on its short
-///   edge) and the details-drawer preview. One size for all three keeps them a
-///   single cache entry per file — switching between grid and gallery was
-///   measured to hit the browser cache instead of the network — and 640 covers
-///   every aspect ratio up to ~1.85:1 with no upscaling at 2x.
-///
-/// Raising the large size was only affordable because thumbnails became JPEG
-/// unless the image actually uses transparency: the same photo measured 0.5 MB
-/// at 640 as PNG against 70 KB as JPEG.
-///
-/// A cache entry at any other size is a leftover from an older UI — the
-/// pre-640 browser asked for 256, which is why `RETAINED_THUMBNAIL_SIZES`
-/// exists: the one-shot cache purge drops those files at startup, and the
-/// `purge_legacy_thumbnail_sizes` migration drops their rows. The two lists are
-/// deliberately kept in step by hand: a migration must not change behaviour
-/// when these constants do.
+/// cache entries are reachable: `THUMBNAIL_SIZE_SMALL` backs the list-row icon,
+/// `THUMBNAIL_SIZE_LARGE` the grid, gallery and details tiles. One size for all
+/// three keeps them a single cache entry per file. A cache entry at any other
+/// size is a leftover from an older UI, which is why `RETAINED_THUMBNAIL_SIZES`
+/// exists: the startup purge and the `purge_legacy_thumbnail_sizes` migration
+/// both drop those. The two lists are kept in step by hand, since a migration
+/// must not change behaviour when these constants do.
 pub const THUMBNAIL_SIZE_SMALL: u32 = 48;
 pub const THUMBNAIL_SIZE_LARGE: u32 = 640;
 pub const RETAINED_THUMBNAIL_SIZES: [u32; 2] = [THUMBNAIL_SIZE_SMALL, THUMBNAIL_SIZE_LARGE];
@@ -60,15 +42,11 @@ pub const RETAINED_THUMBNAIL_SIZES: [u32; 2] = [THUMBNAIL_SIZE_SMALL, THUMBNAIL_
 /// The request may name any size — the Seafile clients do — but only these are
 /// generated: [`canonical_avatar_size`] snaps a request to the nearest one, so a
 /// client cannot multiply cache entries (and worker children) by walking the
-/// whole `1..=1024` range. Every size the UI and the desktop client ask for is
-/// here: the topbar's 32, the admin list's 64, the activity and file dots' 72,
-/// the account response's 80, the settings page's 96, and the stored 256.
+/// whole `1..=1024` range.
 pub const AVATAR_SIZES: [u32; 8] = [32, 48, 64, 72, 80, 96, 128, 256];
 
-/// The canonical avatar size for a request.
-///
-/// The smallest configured size that is at least `requested`, and the largest
-/// when the request is above them all. A request for `0` becomes the smallest.
+/// The smallest configured size at least `requested`, the largest when the
+/// request is above them all, and the smallest for a request of `0`.
 pub fn canonical_avatar_size(requested: u32) -> u32 {
     AVATAR_SIZES
         .iter()
@@ -77,26 +55,17 @@ pub fn canonical_avatar_size(requested: u32) -> u32 {
         .unwrap_or(AVATAR_SIZES[AVATAR_SIZES.len() - 1])
 }
 
-/// JPEG quality used for file thumbnails.
-///
-/// Measured on 1280px photographs fitted to 640px: q80/82/85/90 produce
-/// 65/70/77/95 KB at 34.7/35.3/36.3/38.9 dB PSNR. 82 is the knee — q90 spends
-/// 36% more bytes on a difference the browser's own downscale to the tile
-/// averages away.
+/// JPEG quality for file thumbnails: 82 is the knee — q90 spends 36% more bytes
+/// on a difference the browser's own downscale to the tile averages away.
 pub const JPEG_QUALITY: u8 = 82;
 
-// ─── Public API ───────────────────────────────────────────────────────────
-
-/// Container a thumbnail was encoded in.
-///
-/// Chosen per image by [`encode_thumbnail`] and persisted with the cached bytes
-/// (`thumbnails.format`), so serving a cache hit never has to decode to learn
-/// the content type.
+/// Container a thumbnail was encoded in, chosen per image by
+/// [`encode_thumbnail`] and persisted with the cached bytes (`thumbnails.format`),
+/// so serving a cache hit never decodes to learn the content type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThumbFormat {
-    /// Transparency has to survive: JPEG has no alpha channel, and the tile
-    /// background differs between the light and dark themes, so there is no
-    /// correct colour to composite onto.
+    /// Transparency has to survive: JPEG has no alpha, and the tile background
+    /// differs between themes, so there is no correct colour to composite onto.
     Png,
     /// Opaque pixels. Roughly 7x smaller than PNG for a photograph.
     Jpeg,
@@ -127,8 +96,8 @@ impl ThumbFormat {
     }
 
     /// Decode a stored identifier. Anything unrecognised is read as PNG: rows
-    /// written before the `format` column existed were all PNG, and a value
-    /// from a future encoding must not be served as JPEG by an older binary.
+    /// written before the `format` column existed were all PNG, and a value from
+    /// a future encoding must not be served as JPEG by an older binary.
     pub fn from_db(value: &str) -> Self {
         if value.eq_ignore_ascii_case("jpeg") {
             ThumbFormat::Jpeg
@@ -138,9 +107,8 @@ impl ThumbFormat {
     }
 }
 
-/// Decode image bytes, apply EXIF orientation, then produce a **square**
-/// thumbnail (center-crop + resize-exact).  Used for **avatar** thumbnails,
-/// matching seahub's `AvatarBase.create_thumbnail()` behaviour.
+/// Decode, apply EXIF orientation, then produce a **square** thumbnail
+/// (center-crop + resize-exact) matching seahub's `AvatarBase.create_thumbnail()`.
 pub(crate) fn generate_square_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, AppError> {
     let size = size.min(MAX_THUMBNAIL_SIZE);
     let img = load_image_with_orientation(content)?;
@@ -153,20 +121,13 @@ pub(crate) fn generate_square_thumbnail(content: &[u8], size: u32) -> Result<Vec
     encode_png(&DynamicImage::from(resized))
 }
 
-/// Decode image bytes, apply EXIF orientation, then produce a **same-ratio**
-/// thumbnail (fits inside `size × size`), encoded as PNG.
+/// Decode, apply EXIF orientation, and fit inside `size × size` as PNG.
 ///
-/// PNG-only: used by callers that need a container known up front (the avatar
-/// sizes and the settings preview). File thumbnails go through
-/// [`generate_thumbnail_encoded`] instead, which picks the container from the
-/// pixels.
-///
-/// Uses `Triangle` filter (faster than Lanczos3) — quality difference at
-/// thumbnail sizes is imperceptible.
-///
-/// Test-only: the server never encodes a PNG thumbnail of a whole image, and a
-/// decoder reachable from production code is the boundary this module exists to
-/// keep narrow.
+/// PNG-only for callers that need a container known up front; file thumbnails go
+/// through [`generate_thumbnail_encoded`], which picks the container from the
+/// pixels. `Triangle` is faster than Lanczos3 and imperceptible at thumbnail
+/// sizes. Test-only: the server never encodes a whole-image PNG, and a decoder
+/// reachable from production code is the boundary this module keeps narrow.
 #[cfg(test)]
 pub(crate) fn generate_thumbnail(content: &[u8], size: u32) -> Result<Vec<u8>, AppError> {
     let size = size.min(MAX_THUMBNAIL_SIZE);
@@ -214,9 +175,8 @@ pub fn is_video_ext(ext: &str) -> bool {
     )
 }
 
-/// Whether an extension is an audio file whose embedded cover art can be
-/// extracted as a thumbnail via ffmpeg. Single source of truth — the UI's
-/// `is_audio_file` delegates to this.
+/// Whether an extension is an audio file whose embedded cover art ffmpeg can
+/// extract as a thumbnail. Single source of truth — the UI delegates here.
 pub fn is_audio_ext(ext: &str) -> bool {
     matches!(
         ext,
@@ -224,28 +184,24 @@ pub fn is_audio_ext(ext: &str) -> bool {
     )
 }
 
-/// Whether an extension is a still image that the in-process image crate
-/// cannot decode but ffmpeg can (HEIC/HEIF photos, AVIF web images). These
-/// take the ffmpeg thumbnail path like video/audio. Single source of truth.
+/// Whether an extension is a still image the in-process image crate cannot
+/// decode but ffmpeg can (HEIC/HEIF, AVIF); those take the ffmpeg path like
+/// video/audio. Single source of truth.
 pub fn is_ffmpeg_image_ext(ext: &str) -> bool {
     matches!(ext, "heic" | "heif" | "avif")
 }
 
-/// Whether an extension can produce a thumbnail via either the in-process
-/// image decoder or ffmpeg. Used by the UI to decide whether to advertise a
-/// thumbnail URL for a file.
+/// Whether either the in-process decoder or ffmpeg can thumbnail this extension;
+/// the UI uses this to decide whether to advertise a thumbnail URL.
 pub fn is_thumbnail_image_ext(ext: &str) -> bool {
     is_supported_image_ext(ext) || is_ffmpeg_image_ext(ext)
 }
 
-// ─── Internal helpers ─────────────────────────────────────────────────────
-
 /// Decode raw image bytes and apply any EXIF orientation tag.
 fn load_image_with_orientation(bytes: &[u8]) -> Result<DynamicImage, AppError> {
     // Cap the decoded source dimensions so a small file that declares a huge
-    // size (a decompression bomb) is rejected before the decoder allocates
-    // width×height×bytes, which would abort the process. `max_alloc` keeps the
-    // crate default (512 MiB).
+    // size (a decompression bomb) fails before the decoder allocates
+    // width×height×bytes. `max_alloc` keeps the 512 MiB crate default.
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_SOURCE_DIMENSION);
     limits.max_image_height = Some(MAX_SOURCE_DIMENSION);
@@ -286,9 +242,8 @@ fn encode_png(img: &DynamicImage) -> Result<Vec<u8>, AppError> {
 /// Encode a `DynamicImage` as JPEG bytes at `quality`.
 fn encode_jpeg(img: &DynamicImage, quality: u8) -> Result<Vec<u8>, AppError> {
     let mut out = Vec::new();
-    // `to_rgb8` drops the alpha channel, which is only reachable for images
-    // with no transparency at all (see `has_transparency`), so nothing is ever
-    // composited onto an arbitrary background colour.
+    // `to_rgb8` drops alpha, which is only reachable when `has_transparency`
+    // found nothing, so no pixel is composited onto a background colour.
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut Cursor::new(&mut out), quality)
         .encode_image(&img.to_rgb8())
         .map_err(|e| AppError::Internal(format!("JPEG encode failed: {e}")))?;
@@ -297,14 +252,10 @@ fn encode_jpeg(img: &DynamicImage, quality: u8) -> Result<Vec<u8>, AppError> {
 
 /// Whether any pixel of `img` actually carries transparency.
 ///
-/// The colour type is checked first, which is free: a JPEG, or a PNG the
-/// decoder handed back as `Rgb8`/`Luma8`, can never be transparent. Only an
-/// image that declares an alpha channel pays for the pixel scan — and that scan
-/// covers the already-fitted thumbnail (at most `MAX_THUMBNAIL_SIZE²` pixels),
-/// never the full-size source.
-///
-/// An image that declares alpha but never uses it (an RGBA PNG exported opaque,
-/// which is common) still takes the JPEG path.
+/// The colour type is checked first, which is free: an `Rgb8`/`Luma8` image can
+/// never be transparent. Only a declared alpha channel pays for the pixel scan,
+/// which covers the fitted thumbnail, never the full-size source. A declared but
+/// unused alpha channel (an opaque RGBA PNG, which is common) still takes JPEG.
 fn has_transparency(img: &DynamicImage) -> bool {
     if !img.color().has_alpha() {
         return false;
@@ -320,10 +271,8 @@ mod tests {
         encode_png(&image::DynamicImage::ImageRgba8(img)).expect("PNG encode failed")
     }
 
-    /// A tiny JPEG whose SOF0 declares 65535×65535 is rejected without
-    /// panicking or allocating a multi-GB buffer. (The exact dimension-limit
-    /// boundary is exercised by `png_dimension_limit_boundary`; here a
-    /// truncated bomb must simply fail closed.)
+    /// A tiny JPEG whose SOF0 declares 65535×65535 is rejected without panicking
+    /// or allocating a multi-GB buffer (exact boundary: `png_dimension_limit_boundary`).
     #[test]
     fn jpeg_declaring_huge_dimensions_is_rejected() {
         // SOI | SOF0 (len 11, prec 8, h=65535, w=65535, 1 component) | EOI
@@ -351,7 +300,6 @@ mod tests {
         assert!(!thumb.is_empty());
     }
 
-    /// A normal image still produces a thumbnail.
     #[test]
     fn normal_image_thumbnail_ok() {
         let mut img = image::RgbaImage::new(16, 16);
@@ -367,10 +315,8 @@ mod tests {
         encode_png_bytes(pixels)
     }
 
-    /// The container follows the pixels: opaque content (including an image
-    /// that merely *declares* an alpha channel) is JPEG, real transparency is
-    /// PNG. The signature bytes are checked too, so the label cannot drift from
-    /// what was actually written.
+    /// The container follows the pixels — opaque content is JPEG, real
+    /// transparency PNG — and the signature bytes are checked so the label cannot drift.
     #[test]
     fn encoding_choice_follows_transparency() {
         let opaque_alpha = png_of(image::RgbaImage::from_pixel(

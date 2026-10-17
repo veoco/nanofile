@@ -1,9 +1,7 @@
-//! The standard job set, bound to one server generation.
-//!
-//! The policies come from [`catalog`](super::catalog); this module supplies the
-//! bodies. A body captures this generation's resources — the database pool, the
-//! block store, the indexer — which is why the whole set is re-installed at
-//! every generation rather than registered once for the process.
+//! The standard job set, bound to one server generation: the policies come from
+//! [`catalog`](super::catalog), while the bodies here capture the generation's
+//! pool, block store and indexer, so the whole set is re-installed per
+//! generation rather than registered once for the process.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -26,18 +24,13 @@ use infra::crypto::password_manager::PasswordManager;
 use infra::storage::DynBlockStorage;
 use infra::storage::encrypting_block_store::BlockEncryptionMode;
 
-/// How long the outbox waits before looking for retries.
-///
-/// A queued message is delivered when it is queued — the worker is woken — so
-/// this only paces the messages that failed and are waiting out their backoff.
+/// How long the outbox waits before looking for retries: a queued message wakes
+/// the worker, so this only paces failures in backoff.
 const MAIL_RETRY_TICK: Duration = Duration::from_secs(30);
 
-/// Build and install every job this server generation runs.
-///
-/// Jobs whose subsystem is switched off are simply not registered: a disabled
-/// job has no interval to show and nothing to do. Everything that is registered
-/// is registered *unconditionally otherwise*, so flipping a runtime switch does
-/// not need a restart.
+/// Build and install every job this server generation runs. A job whose
+/// subsystem is off is not registered; the rest always is, so a runtime switch
+/// needs no restart.
 #[allow(clippy::too_many_arguments)]
 pub fn install_default_jobs(
     tasks: &Arc<TaskSystem>,
@@ -56,8 +49,7 @@ pub fn install_default_jobs(
     block_dir: &Path,
     mail: Option<&Arc<Mailer>>,
 ) -> Result<(), crate::tasks::registry::RegistryError> {
-    // The gauge cannot see the database pool for itself, and the pool belongs
-    // to this generation, so the probe is installed with the generation's jobs.
+    // The gauge cannot see the database pool for itself, so the probe is installed here.
     {
         let db = db.clone();
         tasks.set_db_probe(Arc::new(move || {
@@ -75,20 +67,15 @@ pub fn install_default_jobs(
 
     let mut jobs: Vec<RegisteredJob> = Vec::new();
     // The jobs the catalog declares that this generation does not register, with
-    // the reason. Recorded on the task system *after* installing, because
-    // installing is what clears the record.
+    // the reason.
     let mut skipped: Vec<SkippedTask> = Vec::new();
 
-    // The handle the file services submit index work through. Disabled when
+    // The handle the file services submit index work through; disabled when
     // there is no indexer to write to, so a call site never has to ask.
     let scheduler = IndexScheduler::new(tasks.clone(), indexer.is_some());
 
-    // ── Jobs a request submits ───────────────────────────────────────────
-    //
-    // These are reference operations: the destination entry points at the
-    // source's fs object, so no blocks are copied and the work is one tree
-    // update plus a commit. They exist as jobs because the desktop client polls
-    // a task id, not because they are long.
+    // Copy and move are reference operations: no blocks are copied, just one
+    // tree update plus a commit. They are jobs because the desktop client polls.
     jobs.push(job(JobKey::Copy, {
         let db = db.clone();
         let repos = repos.clone();
@@ -180,14 +167,12 @@ pub fn install_default_jobs(
                 })?;
                 let svc = IndexService::new(repos, block_store, indexer);
                 // The pass checks in before every file, so it parks while the
-                // server is busy and resumes when it is not. Those checkpoints
-                // are also where a cancellation lands.
+                // server is busy.
                 let counts = svc
                     .reindex_repo(Some(&ctx), &repo_id)
                     .await
                     .map_err(|e| map_abort(&ctx, e))?;
-                // Kept past the params drop so the progress endpoint can still
-                // report which repository this was and what it did.
+                // Kept past the params drop so the progress endpoint can still report the run.
                 let skipped = counts.skipped + counts.failed + counts.gone;
                 ctx.set_detail("indexed", serde_json::json!(counts.indexed));
                 ctx.set_detail("skipped", serde_json::json!(skipped));
@@ -200,8 +185,7 @@ pub fn install_default_jobs(
     }));
 
     // Indexing the files a mutation just produced (an upload, a sync commit, a
-    // rename). One run carries a bounded batch, and the job's own concurrency
-    // cap is what stops a mass upload from tokenizing everything at once.
+    // rename), one bounded batch per run, so a mass upload is not tokenized at once.
     jobs.push(job(JobKey::IndexFiles, {
         let repos = repos.clone();
         let block_store = block_store.clone();
@@ -218,9 +202,8 @@ pub fn install_default_jobs(
                     ))
                 })?;
                 let svc = IndexService::new(repos, block_store, indexer);
-                // Explicit work: the caller is saying these paths changed, so a
-                // document a client pinned by hand is refreshed rather than
-                // left alone.
+                // Explicit work: the caller says these paths changed, so a
+                // hand-pinned document is refreshed rather than left alone.
                 let counts = svc
                     .index_batch(
                         Some(&ctx),
@@ -234,8 +217,7 @@ pub fn install_default_jobs(
                 ctx.set_detail("skipped", serde_json::json!(counts.skipped));
                 ctx.set_detail("failed", serde_json::json!(counts.failed));
                 if counts.indexed == 0 && counts.failed == 0 {
-                    // A binary upload and a no-op rename both land here: the
-                    // tick found nothing worth a run record.
+                    // A binary upload and a no-op rename both land here.
                     return Ok(Outcome::idle(format!(
                         "nothing to index ({} skipped, {} gone)",
                         counts.skipped, counts.gone
@@ -290,14 +272,9 @@ pub fn install_default_jobs(
         }
     }));
 
-    // One pass for everything whose only record is an expiry date. Four jobs
-    // with four timers did the same kind of work and each reported a number on
-    // its own; one pass reports them together, and one part failing does not
-    // hide what the others did.
-    //
-    // The temporary-upload part is skipped when the TTL is zero, which is how
-    // that cleanup is switched off: the pass says so in its own report rather
-    // than leaving a reader to wonder why nothing was deleted.
+    // One pass for everything whose only record is an expiry date; one part
+    // failing does not hide the others, and a part that is switched off (a zero
+    // TTL) still says so.
     jobs.push(job(JobKey::ExpiredDataCleanup, {
         let db = db.clone();
         let repos = repos.clone();
@@ -310,7 +287,6 @@ pub fn install_default_jobs(
             let temp_file_manager = temp_file_manager.clone();
             async move {
                 let now = chrono::Utc::now().timestamp();
-                // (what was cleaned, how much, or why it could not be)
                 let mut parts: Vec<String> = Vec::new();
                 let mut failures: Vec<String> = Vec::new();
                 let mut removed = 0u64;
@@ -354,8 +330,7 @@ pub fn install_default_jobs(
     }));
 
     // Garbage collection is registered only when it is switched on: a disabled
-    // pass has no interval to show. The switch is a restart-time setting, so the
-    // next generation picks up a change.
+    // pass has no interval to show, and the switch is a restart-time setting.
     if gc_config.enabled {
         let policy = GcPolicy::new(gc_config.min_block_age_secs);
         jobs.push(job_with_trigger(
@@ -371,10 +346,8 @@ pub fn install_default_jobs(
                     let repos = repos.clone();
                     let block_store = block_store.clone();
                     async move {
-                        // The pass checks in at every repository boundary and
-                        // between batches of deletions, so it parks while the
-                        // server is busy and resumes when it is not. Those
-                        // checkpoints are also where a cancellation lands.
+                        // The pass checks in at every repository boundary, so it
+                        // parks while the server is busy; a cancellation lands there.
                         let removed = GcManager::garbage_collect_with(
                             &repos,
                             &block_store,
@@ -383,9 +356,8 @@ pub fn install_default_jobs(
                         )
                         .await
                         .map_err(|e| {
-                            // An aborted pass comes back as an opaque failure;
-                            // the context knows whether it was a cancellation,
-                            // which is a different terminal state.
+                            // The failure is opaque; the context knows it was a
+                            // cancellation.
                             if ctx.is_cancelled() {
                                 JobFailure::Cancelled
                             } else {
@@ -406,10 +378,9 @@ pub fn install_default_jobs(
         ));
     }
 
-    // The lazy-migration conversion is registered as a manual job (it also runs
-    // once at startup) and only in `Lazy` mode, where pre-existing plaintext
-    // blocks can exist. A marker file records completion, so a later run — on
-    // the next start or from the admin page — skips with no I/O.
+    // Registered as a manual job (it also runs once at startup) and only in
+    // `Lazy` mode, where pre-existing plaintext blocks can exist. A marker file
+    // records completion, so a later run skips with no I/O.
     if enc_mode == BlockEncryptionMode::Lazy {
         const CONVERT_BATCH: usize = 100;
         const CONVERT_BATCH_SLEEP_MS: u64 = 100;
@@ -485,10 +456,8 @@ pub fn install_default_jobs(
         }));
     }
 
-    // The low-load pass over files the index has never seen, or whose document
-    // was written by an older extractor. Its cursor is process-local and
-    // advances across repositories, so a server that is usually busy still
-    // reaches every library in turn rather than retrying the first forever.
+    // The low-load pass over files the index has never seen or whose document an
+    // older extractor wrote; the cursor advances across repositories.
     if let Some(idx) = indexer.filter(|_| index_backfill_enabled) {
         let cursor = Arc::new(std::sync::Mutex::new(0usize));
         jobs.push(job(JobKey::IndexBackfill, {
@@ -545,10 +514,8 @@ pub fn install_default_jobs(
         })
     }));
 
-    // The other half of the conditions above: a job whose subsystem is switched
-    // off is not registered, which is right and also invisible. Recording why
-    // lets the admin listing say "this server does not run it" instead of
-    // showing nothing at all.
+    // A job whose subsystem is switched off is not registered, which is
+    // invisible; recording why lets the admin listing say so.
     if notification_manager.is_none() {
         skipped.push(SkippedTask::job(
             JobKey::TokenExpiryCheck,
@@ -580,8 +547,7 @@ pub fn install_default_jobs(
         ));
     }
     if mail.is_none() {
-        // Not a job any more, which is exactly why it has to be reported: the
-        // registry's service group would otherwise just not mention the outbox.
+        // A service, not a job: the service group would otherwise omit it.
         skipped.push(SkippedTask::service(
             ServiceKey::MailOutbox,
             SkipReason::MailOff,
@@ -596,10 +562,8 @@ pub fn install_default_jobs(
         tasks.record_skipped(task);
     }
 
-    // Then read back what the previous process left behind: the verdict of each
-    // job's last run, and whatever run it did not finish. Spawned rather than
-    // awaited because this runs from a synchronous constructor, and neither has
-    // to finish before the server starts serving.
+    // Read back the previous process's last verdicts and unfinished runs; spawned
+    // rather than awaited because this runs from a synchronous constructor.
     {
         let tasks = tasks.clone();
         tokio::spawn(async move {
@@ -609,16 +573,14 @@ pub fn install_default_jobs(
     }
 
     // The outbox worker is a service, not a job: a loop with no owner, no
-    // progress and no terminal state. A queued message wakes it immediately, so
-    // mail is not held behind a timer; the tick is what paces retries, which is
-    // the only thing left for a timer to do here.
+    // progress and no terminal state; a queued message wakes it immediately.
     if let Some(mail) = mail {
         let mail = mail.clone();
         tasks.spawn_service(ServiceKey::MailOutbox, move |token| async move {
             loop {
                 if !mail.config_enabled() {
-                    // Nothing can be sent, so there is nothing to pace: wait for
-                    // the setting to change (which nudges) or for the tick.
+                    // Nothing can be sent, so wait for the setting to change
+                    // (which nudges) or for the tick.
                     tokio::select! {
                         _ = token.cancelled() => break,
                         _ = mail.wait_for_nudge() => continue,
@@ -631,8 +593,7 @@ pub fn install_default_jobs(
                         delivered = report.delivered,
                         "drained the outbox"
                     ),
-                    // A database failure is worth a line and a retry, not a
-                    // dead worker.
+                    // A database failure is worth a line and a retry, not a dead worker.
                     Err(e) => tracing::warn!("could not drain the outbox: {e}"),
                 }
                 tokio::select! {
@@ -645,8 +606,7 @@ pub fn install_default_jobs(
         });
     }
 
-    // The event listener is a service, not a job: it has no owner, no progress
-    // and no terminal state, so it gets a lifecycle rather than a run record.
+    // An event listener: a service, so it gets a lifecycle rather than a record.
     if let Some(manager) = notification_manager {
         let manager = manager.clone();
         tasks.spawn_service(ServiceKey::EventListener, move |token| async move {
@@ -657,11 +617,8 @@ pub fn install_default_jobs(
     Ok(())
 }
 
-/// What an expired-data pass reports.
-///
-/// Every part is named, including the one that could not be run: a pass that
-/// silently skipped a part would read exactly like a pass that found nothing,
-/// and a part that failed must not hide what the others did.
+/// What an expired-data pass reports: every part is named, including one that
+/// could not be run, so a failed part never hides what the others did.
 fn cleanup_outcome(
     parts: &[String],
     failures: &[String],
@@ -709,10 +666,8 @@ struct IndexFilesParams {
     files: Vec<crate::service::index::IndexTarget>,
 }
 
-/// Map a pass that stopped at a checkpoint onto a cancellation.
-///
-/// The pipeline reports an aborted pass as an opaque failure; only the job body
-/// knows whether the run was cancelled, which is a different terminal state.
+/// Map a pass that stopped at a checkpoint onto a cancellation: the pipeline
+/// reports an abort as opaque, and only the job body knows it was cancelled.
 fn map_abort(ctx: &crate::tasks::context::JobContext, e: base::error::AppError) -> JobFailure {
     if ctx.is_cancelled() {
         JobFailure::Cancelled
@@ -766,8 +721,7 @@ mod tests {
     use super::*;
     use crate::tasks::run::JobState;
 
-    /// Every part is named, so the report says what the pass actually looked at
-    /// rather than a bare count.
+    /// Every part is named, so the report says what the pass looked at.
     #[test]
     fn a_pass_that_removed_something_reports_each_part() {
         let parts = vec![
@@ -783,8 +737,8 @@ mod tests {
         assert!(!outcome.idle);
     }
 
-    /// Nothing expired is not the same as nothing checked: the idle report still
-    /// names every part, including one that is switched off.
+    /// Nothing expired is not nothing checked: the idle report still names every
+    /// part, including one that is switched off.
     #[test]
     fn a_pass_with_nothing_to_do_says_what_it_checked() {
         let parts = vec![

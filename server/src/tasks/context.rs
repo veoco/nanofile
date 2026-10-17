@@ -1,5 +1,4 @@
-//! What a running job is handed: identity, progress reporting, cancellation
-//! and the checkpoints that make load awareness possible.
+//! What a running job is handed: identity, progress, cancellation, checkpoints.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -12,12 +11,9 @@ use super::run::{JobFailure, JobState, RunId};
 use super::spec::{ChunkPolicy, JobKey};
 use super::store::RunStore;
 
-/// The share of its normal work a job should attempt right now, as a
-/// percentage.
-///
-/// Scaled by load: a job written in terms of a variable batch size or
-/// concurrency width reads this and shrinks, which is the only way to reduce
-/// load from a running task — tokio cannot preempt one.
+/// The share of its normal work a job should attempt right now, in percent: a
+/// job written with a variable batch size or concurrency width shrinks by it,
+/// the only way to reduce load from a running task — tokio cannot preempt one.
 #[derive(Clone)]
 pub struct BudgetSignal {
     percent: Arc<AtomicU32>,
@@ -46,12 +42,9 @@ impl Default for BudgetSignal {
     }
 }
 
-/// Liveness counter shared between a context and the executor's watchdog.
-///
-/// Bumped by every checkpoint and every report, so the watchdog measures "the
-/// job is still getting on with it" rather than "its reported number changed" —
-/// a job legitimately working on one large item must call `checkpoint` inside
-/// it, which is exactly what [`ChunkPolicy`] asks for.
+/// Liveness counter shared between a context and the executor's watchdog, bumped
+/// by every checkpoint and report, so the watchdog measures progress rather than
+/// a reported number; a job working on one large item must call `checkpoint` in.
 #[derive(Clone, Default)]
 pub(crate) struct LivenessTick(Arc<AtomicU64>);
 
@@ -65,21 +58,17 @@ impl LivenessTick {
     }
 }
 
-/// Per-run progress writes, coalesced.
-///
-/// A job may report far more often than a reader needs, so writes are limited
-/// to one per `min_interval`; the rest update liveness only. Everything here is
-/// synchronous, so reporting never costs the job an await (and never spawns).
-/// The terminal transition is written by the executor, not through here, so a
-/// coalesced final report cannot lose the outcome.
+/// Per-run progress writes, coalesced: one write per `min_interval`, the rest
+/// bumping liveness only, all synchronously. The executor writes the terminal
+/// transition, so a coalesced final report cannot lose the outcome.
 #[derive(Clone)]
 pub(crate) struct ProgressSink {
     store: RunStore,
     id: RunId,
     base: std::time::Instant,
     min_interval_ms: u64,
-    /// Millis since `base` at the last write, used as the throttle slot.
-    /// [`NEVER`] until the first write, so the first report always lands.
+    /// Millis since `base` at the last write, the throttle slot; [`NEVER`] until
+    /// the first write, so the first report always lands.
     last_ms: Arc<AtomicU64>,
     tick: LivenessTick,
 }
@@ -103,8 +92,7 @@ impl ProgressSink {
     }
 
     pub(crate) fn report(&self, done: u64, total: Option<u64>, message: Option<String>) {
-        // Liveness counts even a coalesced report: the job is running, which is
-        // what the watchdog asks about.
+        // Liveness counts even a coalesced report: the job is running.
         self.tick.bump();
         if !self.claim_slot() {
             return;
@@ -146,17 +134,10 @@ impl ProgressSink {
 /// Sentinel for "this sink has not written yet".
 const NEVER: u64 = u64::MAX;
 
-/// The clock behind a job's declared chunk budget.
-///
-/// How long a chunk takes is something only the job can see, so the promise in
-/// [`ChunkPolicy::max_chunk_ms`] is kept where the job checks in: a checkpoint
-/// that lands more than the budget after the previous one gives the runtime
-/// back. That is what stops a job whose chunk is synchronous CPU from owning
-/// its worker until the loop ends — `checkpoint` is otherwise a no-op while the
-/// server is calm.
-///
-/// Shared by every clone of the context, because the job body and the progress
-/// clone can both reach it.
+/// The clock behind a job's declared chunk budget, shared by every clone of the
+/// context: a checkpoint that lands more than [`ChunkPolicy::max_chunk_ms`] after
+/// the previous one gives the runtime back, which stops a synchronous-CPU chunk
+/// from owning its worker.
 struct ChunkBudget {
     max_chunk_ms: u64,
     /// When the context was built, so a chunk can be measured in millis.
@@ -175,8 +156,7 @@ pub struct JobContext {
     progress: ProgressSink,
     budget: BudgetSignal,
     chunk: Option<ChunkPolicy>,
-    /// The declared chunk budget, and the clock that enforces it. `None` for a
-    /// job that declared no unit — it is not asked to hand anything back.
+    /// The declared chunk budget and its clock; `None` for a job declaring no unit.
     chunk_budget: Option<Arc<ChunkBudget>>,
     /// The load gate, for a job that declared it can be interrupted. `None`
     /// means the job never parks, which is the contract the catalog enforces.
@@ -195,9 +175,8 @@ impl JobContext {
         chunk: Option<ChunkPolicy>,
         gate: Option<YieldGate>,
     ) -> Self {
-        // A job that declared no unit, or declared one of zero, is not bounded
-        // and never hands the runtime back — `0` reads as "unlimited" here as
-        // it does for the other caps in the catalog.
+        // A job that declared no unit, or one of zero, is not bounded: `0` reads
+        // as "unlimited" here as for the other caps in the catalog.
         let chunk_budget = chunk
             .filter(|policy| policy.max_chunk_ms > 0)
             .map(|policy| {
@@ -233,11 +212,9 @@ impl JobContext {
         self.owner
     }
 
-    /// How much of its normal work the job should attempt now.
-    ///
-    /// Full speed unless load awareness is on and the server is busy, in which
-    /// case it scales down. A job that reads this can slow itself; one that
-    /// ignores it still parks at its checkpoints.
+    /// How much of its normal work the job should attempt now: full speed
+    /// unless load awareness is on and the server is busy. A job that ignores
+    /// it still parks at its checkpoints.
     pub fn budget(&self) -> f32 {
         match &self.gate {
             Some(gate) => gate.budget(),
@@ -258,8 +235,7 @@ impl JobContext {
         self.cancel.clone()
     }
 
-    /// Report progress. Cheap and synchronous to call often; writes are
-    /// coalesced to one per throttle window.
+    /// Report progress: synchronous and cheap, with writes coalesced per window.
     pub fn report(&self, done: u64, total: Option<u64>) {
         self.progress.report(done, total, None);
     }
@@ -270,36 +246,26 @@ impl JobContext {
     }
 
     /// Record a small fact the client-compatibility projection needs after the
-    /// run's params have been released — a reindex run's indexed and skipped
-    /// counts, for instance.
+    /// run's params have been released.
     pub fn set_detail(&self, key: &str, value: serde_json::Value) {
         self.progress
             .store
             .update(&self.id, |run| run.set_detail(key, value));
     }
 
-    /// The one interruption point a job must call.
+    /// The one interruption point a job must call: returns
+    /// [`JobFailure::Cancelled`] once the run has been asked to stop, and is
+    /// where load-aware yielding and [`ChunkPolicy::max_chunk_ms`] apply.
     ///
-    /// Returns [`JobFailure::Cancelled`] once the run has been asked to stop.
-    /// Load-aware yielding is layered onto this same call: the checkpoint is
-    /// deliberately the place a job waits, so parking needs no second API and a
-    /// job cannot yield "by accident" between units.
-    ///
-    /// While parked the run is recorded as [`JobState::Yielded`], which is
-    /// deliberately distinct from `Running`: the run is alive, and a recovery
-    /// pass must not mistake it for one that died.
-    ///
-    /// It is also where a job's declared [`ChunkPolicy::max_chunk_ms`] is
-    /// honoured: a chunk that has run its course gives the runtime back,
-    /// whether or not the server is busy.
+    /// While parked the run is recorded as [`JobState::Yielded`], deliberately
+    /// distinct from `Running` so a recovery pass does not mistake it for dead.
     pub async fn checkpoint(&self) -> Result<(), JobFailure> {
         self.progress.tick.bump();
         if self.cancel.is_cancelled() {
             return Err(JobFailure::Cancelled);
         }
 
-        // Before the gate, so the hand-back happens on a calm server too —
-        // which is the case the gate cannot cover.
+        // Before the gate, so the hand-back happens on a calm server too.
         self.yield_after_chunk().await;
 
         let Some(gate) = &self.gate else {
@@ -327,12 +293,9 @@ impl JobContext {
         Ok(())
     }
 
-    /// Give the runtime back once the declared chunk has run its course.
-    ///
-    /// A yield, not a park: the job is not waiting for anything, it is letting
-    /// the other tasks on its worker be polled. Cheap enough to be checked at
-    /// every checkpoint — a job whose chunks are short yields rarely, because
-    /// the budget is what decides, not the checkpoint.
+    /// Give the runtime back once the declared chunk has run its course: a yield,
+    /// not a park, letting the other tasks on its worker be polled, and the
+    /// budget decides when.
     async fn yield_after_chunk(&self) {
         let Some(budget) = &self.chunk_budget else {
             return;
@@ -343,9 +306,8 @@ impl JobContext {
             if now.saturating_sub(last) < budget.max_chunk_ms {
                 return;
             }
-            // Whoever wins the window owns the yield: a job that works through
-            // its chunks concurrently needs the runtime back once, not once per
-            // task that happens to check in.
+            // Whoever wins the window owns the yield: concurrent chunks need the
+            // runtime back once, not once per task that checks in.
             match budget.last_ms.compare_exchange_weak(
                 last,
                 now,
@@ -361,11 +323,9 @@ impl JobContext {
         }
     }
 
-    /// Run blocking work on the blocking pool, but only after a checkpoint.
-    ///
-    /// The ordering is the point: when the server is busy the job parks
-    /// *before* taking a blocking thread, so a background job stops
-    /// replenishing the pool instead of queueing ahead of interactive work.
+    /// Run blocking work on the blocking pool, but only after a checkpoint: when
+    /// the server is busy the job parks *before* taking a blocking thread, so a
+    /// background job stops replenishing the pool.
     pub async fn run_blocking<F, T>(&self, f: F) -> Result<T, JobFailure>
     where
         F: FnOnce() -> T + Send + 'static,
@@ -377,8 +337,8 @@ impl JobContext {
             .map_err(|e| JobFailure::App(base::error::AppError::internal(e.to_string())))
     }
 
-    /// An interruptible sleep: checked on both sides, so a cancelled run does
-    /// not sleep out its pause.
+    /// An interruptible sleep, checked on both sides: cancellation does not sleep
+    /// out its pause.
     pub async fn sleep(&self, duration: Duration) -> Result<(), JobFailure> {
         self.checkpoint().await?;
         tokio::time::sleep(duration).await;
@@ -432,10 +392,9 @@ mod tests {
     }
 
     /// A body whose only await points are its checkpoints, plus a witness task
-    /// that can only run if one of them gives the runtime back.
-    ///
-    /// `#[tokio::test]` is a current-thread runtime, so a job that never yields
-    /// owns the thread for the whole loop and the witness never runs.
+    /// that can only run if one of them gives the runtime back. `#[tokio::test]`
+    /// is a current-thread runtime, so a job that never yields starves the
+    /// witness.
     async fn chunked_loop(chunk: Option<ChunkPolicy>, chunk_ms: u64) -> u64 {
         let ctx = context(chunk);
         let ran = Arc::new(AtomicU64::new(0));
@@ -466,7 +425,7 @@ mod tests {
         assert!(ran > 0, "a chunk past its budget must yield");
     }
 
-    /// A chunk still inside its budget does not: the budget decides, not the
+    /// A chunk inside its budget does not yield: the budget decides, not the
     /// checkpoint.
     #[tokio::test]
     async fn a_chunk_inside_its_budget_does_not_yield() {

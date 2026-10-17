@@ -1,17 +1,13 @@
 //! Runtime tray icon, rasterized from `static/img/favicon.svg` at compile time
-//! (see `build.rs`) — the repository ships no binary icon assets.
-//!
-//! One raster per desktop theme: the mark's tile is near-black in the light
-//! theme and near-white in the dark one, so a single image cannot stay visible
-//! on both panels. macOS is the exception — its menu bar inverts a template
-//! image itself, so it gets the bare glyph.
+//! (see `build.rs`) — one raster per desktop theme, since the tile is near-black
+//! on a light panel and near-white on a dark one. macOS gets the bare glyph,
+//! because its menu bar inverts a template image itself.
 
 use tray_icon::Icon;
 
 use super::icon_gen::TRAY_ICON_SIZE;
 
-/// The icon for the desktop this process is running on. Re-reads the OS theme
-/// on every call, so callers can also use it to refresh after a theme change.
+/// The icon for this desktop; re-reads the OS theme, so callers can refresh with it.
 pub(super) fn tray_icon() -> Icon {
     #[cfg(target_os = "macos")]
     let rgba: &[u8] = TEMPLATE;

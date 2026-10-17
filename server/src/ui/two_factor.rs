@@ -1,9 +1,4 @@
 /// Web UI two-factor authentication handlers.
-///
-/// GET /profile/two-factor/ — dedicated 2FA management page.
-/// POST /profile/two-factor/setup  — generate secret + backup codes.
-/// POST /profile/two-factor/verify — verify TOTP code and enable.
-/// POST /profile/two-factor/disable — disable 2FA (requires password).
 use askama::Template;
 use axum::{
     Form,
@@ -22,8 +17,6 @@ use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
-// ─── Templates ───────────────────────────────────────────────────────────────
-
 #[derive(Template)]
 #[template(path = "settings/two_factor.html")]
 pub struct TwoFactorTemplate {
@@ -32,11 +25,9 @@ pub struct TwoFactorTemplate {
     pub user_email: String,
     pub is_admin: bool,
     pub active_page: &'static str,
-    /// Whether 2FA is currently enabled.
     pub enabled: bool,
     /// Whether setup is in progress (secret exists but not yet verified).
     pub setup_pending: bool,
-    /// TOTP secret (shown during setup).
     pub secret: Option<String>,
     /// Raw backup codes (shown once after generation).
     pub backup_codes: Option<Vec<String>>,
@@ -53,8 +44,6 @@ pub struct TwoFactorTemplate {
     pub nav: super::settings::SettingsNav,
 }
 
-// ─── Request types ──────────────────────────────────────────────────────────
-
 #[derive(Deserialize)]
 pub struct VerifyForm {
     pub code: String,
@@ -66,8 +55,6 @@ pub struct DisableForm {
     pub password: String,
     pub csrf_token: Option<String>,
 }
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
 
 async fn render_page(
     user: &WebUser,
@@ -87,8 +74,7 @@ async fn render_page(
         None
     };
 
-    // Only the enabled state has codes to account for; the query stays off the
-    // page load in the other two.
+    // Only the enabled state has codes to account for.
     let (codes_left, codes_total) = if enabled {
         let stored = state
             .repos
@@ -129,8 +115,6 @@ async fn render_page(
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Html(html))
 }
-
-// ─── Handlers ───────────────────────────────────────────────────────────────
 
 /// GET /profile/two-factor/ — show the 2FA management page.
 ///
@@ -179,8 +163,6 @@ pub async fn setup_2fa(
     // secret otherwise (idempotent against double submission).
     TotpManager::get_or_create_2fa(&state.repos, user.user_id).await?;
 
-    // No flash on the way out: the QR and the verification field *are* the
-    // response, and the page says what to do with them.
     render_page(&user, &state, None, None, None)
         .await
         .map(|html| (StatusCode::OK, html).into_response())
@@ -230,7 +212,6 @@ pub async fn verify_2fa(
             .set_enabled(user.user_id, true, now)
             .await?;
 
-        // Generate a fresh set of backup codes for the user to save one last time
         crate::service::auth::backup_codes::BackupCodeManager::delete_all_for_user(
             &state.repos,
             user.user_id,
@@ -286,8 +267,7 @@ pub async fn disable_2fa(
         form.csrf_token.as_deref(),
     )?;
 
-    // Rate-limit password attempts (this limiter used to live on the removed
-    // /api2/2fa API). Checked before the password hashes, like the API did.
+    // Rate-limit password attempts, checked before the password hashes.
     let rate_key = format!("2fa_disable:{}", user.user_id);
     if state.auth_limiters.disable_2fa.is_limited(&rate_key) {
         return Err(AppError::TooManyRequests);
@@ -323,7 +303,7 @@ pub async fn disable_2fa(
         .map(|html| (StatusCode::OK, html).into_response());
     }
 
-    // Verify 2FA is set up, then delete for a fresh secret on next setup
+    // Verify 2FA is set up before deleting the secret for a fresh setup.
     state
         .repos
         .user_2fa

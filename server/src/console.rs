@@ -1,13 +1,9 @@
 //! Console handling for Windows GUI-subsystem builds.
 
-/// Best-effort reattachment to the console of the launching terminal.
-///
-/// Windows tray builds are GUI-subsystem binaries: double-clicking one (or
-/// starting it from the Run key) creates no console at all, and even when
-/// launched from `cmd`/PowerShell the process is neither attached to the
-/// terminal nor waited on. Interactive subcommands (`adduser`) call this
-/// first so prompts and results become visible when run from a terminal;
-/// when there is no parent console (double-click) it fails silently.
+/// Best-effort reattachment to the console of the launching terminal, so
+/// interactive subcommands (`adduser`) can show prompts. A GUI-subsystem build
+/// may own no console even when started from a terminal; with no parent console
+/// (double-click, Run key) it fails silently.
 pub fn attach_parent_console() {
     #[cfg(all(target_os = "windows", feature = "tray"))]
     unsafe {
@@ -24,8 +20,7 @@ pub fn attach_parent_console() {
             s.encode_utf16().chain(std::iter::once(0)).collect()
         }
 
-        // Nothing to attach to (double-clicked, started by the Run key, or a
-        // plain console build) — leave the standard handles alone.
+        // Nothing to attach to (double-click, Run key, plain console build).
         if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
             return;
         }

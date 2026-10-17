@@ -10,8 +10,7 @@ use infra::serialization::S_IFDIR;
 use crate::fs::core::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
 
-/// Characters percent-encoded when building `<D:href>` values. Keeps `/`
-/// intact so the path remains parseable.
+/// Characters percent-encoded in `<D:href>` values; `/` stays intact so paths parse.
 pub const HREF_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b' ')
     .add(b'"')
@@ -37,8 +36,7 @@ pub enum Depth {
     Infinity,
 }
 
-/// Parse the `Depth` header. Defaults to `infinity` per RFC 4918; invalid
-/// values produce a 400 status.
+/// Parse the `Depth` header; default `infinity` per RFC 4918, invalid → 400.
 pub fn parse_depth(headers: &HeaderMap) -> Result<Depth, StatusCode> {
     match headers.get("depth").and_then(|v| v.to_str().ok()) {
         None => Ok(Depth::Infinity),
@@ -57,7 +55,6 @@ pub fn parse_overwrite(headers: &HeaderMap) -> bool {
     )
 }
 
-/// Normalize a raw `{*path}` capture into a canonical in-repo path.
 pub fn normalize_webdav_path(raw: &str) -> Result<String, StatusCode> {
     let p = format!("/{raw}");
     base::sanitize::safe_normalize_path(&p).map_err(|_| StatusCode::BAD_REQUEST)
@@ -102,17 +99,15 @@ pub fn parse_destination(dest: &str) -> Result<(String, String), StatusCode> {
     Ok((repo_id, normalized))
 }
 
-/// Per-request head commit context, resolved once and reused by all handlers
-/// so a single request does not re-query the repo record and head commit for
-/// every path it probes.
+/// Per-request head context, resolved once and reused by all handlers so one
+/// request does not re-query the repo record and head commit per probed path.
 pub struct HeadContext {
     pub root_id: String,
 }
 
-/// Resolve the repo record and its head commit once. Returns `Err` when the
-/// repo is missing; when the repo has no head commit yet, the returned context
-/// carries an empty `root_id` (so root-path probes still work on an empty
-/// repo, while any non-root path resolves to "not found").
+/// Resolve the repo record and its head commit once. A repo with no head commit
+/// gets an empty `root_id` (root probes still work; other paths are not found);
+/// a missing repo is an error.
 pub async fn resolve_head(repos: &Repositories, repo_id: &str) -> Result<HeadContext, AppError> {
     let repo_record = repos
         .repo
@@ -133,11 +128,8 @@ pub async fn resolve_head(repos: &Repositories, repo_id: &str) -> Result<HeadCon
     Ok(HeadContext { root_id })
 }
 
-/// Resolve a path's metadata from the FS tree, reusing an already-resolved
-/// head context (skips the repo + head commit lookups).
-///
-/// Returns `Ok(None)` when the path does not exist, and `Ok(Some((is_dir,
-/// size, mtime)))` otherwise.
+/// Resolve a path's `(is_dir, size, mtime)` from the FS tree, reusing a resolved
+/// head context; `Ok(None)` when the path does not exist.
 pub async fn entry_metadata_with_head(
     repos: &Repositories,
     repo_id: &str,
@@ -177,13 +169,11 @@ pub fn http_date(ts: i64) -> String {
         .unwrap_or_default()
 }
 
-/// Build a `<D:href>` value for a repo path.
 pub fn build_href(repo_id: &str, path: &str) -> String {
     let encoded = percent_encoding::utf8_percent_encode(path, HREF_ENCODE_SET).to_string();
     format!("/dav/{repo_id}{encoded}")
 }
 
-/// Join a parent path and a child name into an absolute path.
 pub fn join_path(parent: &str, name: &str) -> String {
     if parent == "/" {
         format!("/{name}")

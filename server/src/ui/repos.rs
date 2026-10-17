@@ -10,8 +10,6 @@ use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
-// ─── Templates ───────────────────────────────────────────────────────────────
-
 #[derive(Template)]
 #[template(path = "repos/list.html")]
 pub struct RepoListTemplate {
@@ -28,8 +26,6 @@ pub struct RepoListTemplate {
     pub webdav_base_url: String,
 }
 
-// ─── Data types ──────────────────────────────────────────────────────────────
-
 pub struct RepoInfo {
     pub id: String,
     pub name: String,
@@ -37,13 +33,10 @@ pub struct RepoInfo {
     pub size: i64,
     pub size_display: String,
     pub mtime: i64,
-    /// Whether the library is encrypted.
     pub encrypted: bool,
     pub history_limit: i32,
     pub history_ttl_days: i32,
 }
-
-// ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// GET /libraries/ — list user's repos.
 pub async fn list_repos(
@@ -86,9 +79,7 @@ pub async fn list_repos(
         .collect();
 
     // Render in the list's default order (name, A→Z) so the first paint is
-    // already final: sorting only in the browser reordered every row the moment
-    // the bundle ran, which read as a flicker. Lowercased, this is the same
-    // comparison the file list's name sort uses and the one repos.js repeats.
+    // already final — browser-side sorting reordered rows and read as a flicker.
     repos.sort_by_key(|a| a.name.to_lowercase());
 
     let tpl = RepoListTemplate {
