@@ -2,7 +2,6 @@ mod common;
 
 use common::TestFixture;
 
-/// E.1.4 — GET /f/{token} — shared file link download
 #[tokio::test]
 async fn test_shared_file_link_not_found() {
     let server = common::TestServer::start().await;
@@ -11,7 +10,6 @@ async fn test_shared_file_link_not_found() {
     assert_eq!(resp.status(), 404);
 }
 
-/// E.1.5 — GET /repos/{repo_id}/files/{path}
 #[tokio::test]
 async fn test_repo_files_download() {
     let f = TestFixture::new().await;
@@ -34,7 +32,6 @@ async fn test_repo_files_download() {
 }
 
 /// E.1.5c — the content type of a previewable file.
-///
 /// The preview page asks for these bytes with an `<img>`, and every response
 /// carries `X-Content-Type-Options: nosniff`: a previewable image served as
 /// `application/octet-stream` is a picture the browser refuses to decode, which
@@ -108,7 +105,6 @@ async fn test_repo_files_content_types_cover_the_previewable_formats() {
 
 /// E.1.5b — malformed paths on `/repos/{repo_id}/files/{*path}` are rejected
 /// by the shared sanitizer instead of being passed through raw.
-///
 /// The download handler used to concatenate a leading slash and hand the
 /// result straight to block resolution, so a path that every sibling
 /// `{*path}` handler rejects still reached the file layer.
@@ -125,7 +121,6 @@ async fn test_repo_files_download_rejects_malformed_path() {
 
     // Escaping above the repo root, and characters the upload path already
     // refuses to create, must not reach block resolution.
-    //
     // A literal `../` (and even the percent-encoded `%2e%2e`) is collapsed by
     // the HTTP client before the request is sent, exactly as a browser would,
     // so the traversal cases cannot reach the server at all. What can reach it
@@ -164,7 +159,6 @@ async fn test_repo_files_download_rejects_malformed_path() {
         "a backslash is a separator on Windows, not an invalid character"
     );
 
-    // Well-formed names — including one with a space — still resolve.
     for good in ["keep.txt", "my%20file.txt"] {
         let resp = f
             .client
@@ -177,7 +171,6 @@ async fn test_repo_files_download_rejects_malformed_path() {
     }
 }
 
-/// E.1.5a — Range requests on /repos/{repo_id}/files/{path} (resumable download).
 #[tokio::test]
 async fn test_repo_files_download_range() {
     let f = TestFixture::new().await;
@@ -188,7 +181,6 @@ async fn test_repo_files_download_range() {
         .await;
     assert!(up.status().is_success(), "upload failed");
 
-    // Full download → 200 with Content-Length + Accept-Ranges.
     let resp = f
         .client
         .get(
@@ -209,7 +201,6 @@ async fn test_repo_files_download_range() {
     let body = resp.bytes().await.unwrap();
     assert_eq!(&body[..], &content[..]);
 
-    // Bounded range → 206 + Content-Range + exact slice.
     let resp = f
         .client
         .get_with_range(
@@ -231,7 +222,6 @@ async fn test_repo_files_download_range() {
     let body = resp.bytes().await.unwrap();
     assert_eq!(&body[..], &content[10..20]);
 
-    // Open-ended range → 206 with the remainder.
     let resp = f
         .client
         .get_with_range(
@@ -253,7 +243,6 @@ async fn test_repo_files_unauthorized() {
     assert_eq!(resp.status(), 401);
 }
 
-/// E.2.1 — POST /upload-aj/ — AJAX file upload (multipart)
 #[tokio::test]
 async fn test_upload_aj() {
     let f = TestFixture::new().await;
@@ -277,7 +266,6 @@ async fn test_upload_aj() {
     assert_eq!(resp.status(), 200);
 }
 
-/// E.3.1 — GET /upload_progress
 #[tokio::test]
 async fn test_upload_progress() {
     let f = TestFixture::new().await;
@@ -285,7 +273,6 @@ async fn test_upload_progress() {
     assert_eq!(resp.status(), 200);
 }
 
-/// E.3.2 — GET /idx_progress
 #[tokio::test]
 async fn test_idx_progress() {
     let f = TestFixture::new().await;
@@ -293,7 +280,6 @@ async fn test_idx_progress() {
     assert_eq!(resp.status(), 200);
 }
 
-/// E.2.6 — POST /update-aj/ — AJAX file update
 #[tokio::test]
 async fn test_update_aj() {
     let f = TestFixture::new().await;
@@ -325,9 +311,6 @@ async fn test_update_aj() {
     assert_eq!(resp.status(), 200);
 }
 
-// ─── upload-api / update-api token-based upload tests ──────────────────
-
-/// F.1 — GET /api2/repos/{id}/upload-link/ returns a JSON string URL.
 #[tokio::test]
 async fn test_get_upload_link_returns_url() {
     let f = TestFixture::new().await;
@@ -350,7 +333,6 @@ async fn test_get_upload_link_returns_url() {
     );
 }
 
-/// F.2 — GET /api2/repos/{id}/update-link/ returns a JSON string URL.
 #[tokio::test]
 async fn test_get_update_link_returns_url() {
     let f = TestFixture::new().await;
@@ -373,12 +355,10 @@ async fn test_get_update_link_returns_url() {
     );
 }
 
-/// F.3 — POST /upload-api/{token} uploads a file successfully.
 #[tokio::test]
 async fn test_upload_api_uploads_file() {
     let f = TestFixture::new().await;
 
-    // Get upload link
     let resp = f
         .client
         .get(
@@ -388,7 +368,6 @@ async fn test_upload_api_uploads_file() {
         .await;
     let upload_url: String = resp.json().await.unwrap();
 
-    // Upload file via the token URL
     let file_part = reqwest::multipart::Part::bytes(b"upload api test".to_vec())
         .file_name("api-test.txt".to_string());
     let form = reqwest::multipart::Form::new()
@@ -403,7 +382,6 @@ async fn test_upload_api_uploads_file() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Verify via file detail endpoint
     let detail = f
         .client
         .get(
@@ -414,7 +392,6 @@ async fn test_upload_api_uploads_file() {
     assert_eq!(detail.status(), 200);
 }
 
-/// F.4 — POST /upload-api/{token} with invalid token returns 400.
 #[tokio::test]
 async fn test_upload_api_invalid_token() {
     let f = TestFixture::new().await;
@@ -431,12 +408,10 @@ async fn test_upload_api_invalid_token() {
     assert_eq!(resp.status(), 400);
 }
 
-/// F.5 — POST /upload-api/{token} to a Chinese-named subdirectory.
 #[tokio::test]
 async fn test_upload_api_to_chinese_dir() {
     let f = TestFixture::new().await;
 
-    // Create a Chinese-named directory
     let dir_resp = f
         .client
         .post_form(
@@ -447,7 +422,6 @@ async fn test_upload_api_to_chinese_dir() {
         .await;
     assert_eq!(dir_resp.status(), 201, "create chinese dir failed");
 
-    // Get upload link for that directory
     let resp = f
         .client
         .get(
@@ -458,7 +432,6 @@ async fn test_upload_api_to_chinese_dir() {
     assert_eq!(resp.status(), 200);
     let upload_url: String = resp.json().await.unwrap();
 
-    // Upload file
     let file_part = reqwest::multipart::Part::bytes(b"chinese dir test".to_vec())
         .file_name("hello.txt".to_string());
     let form = reqwest::multipart::Form::new()
@@ -473,7 +446,6 @@ async fn test_upload_api_to_chinese_dir() {
         .unwrap();
     assert_eq!(resp.status(), 200, "upload to chinese dir failed");
 
-    // Verify file exists via detail endpoint
     let detail = f
         .client
         .get(
@@ -494,7 +466,6 @@ async fn test_upload_api_to_chinese_dir() {
 async fn test_upload_api_with_relative_path() {
     let f = TestFixture::new().await;
 
-    // Create the target directory structure.
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/My Photos")
@@ -506,7 +477,6 @@ async fn test_upload_api_with_relative_path() {
         .await;
     assert_eq!(resp.status(), 201, "create Camera failed");
 
-    // Get upload link for ROOT (as the Android client does).
     let resp = f
         .client
         .get(
@@ -517,7 +487,6 @@ async fn test_upload_api_with_relative_path() {
     assert_eq!(resp.status(), 200);
     let upload_url: String = resp.json().await.unwrap();
 
-    // Upload a file using parent_dir=/ and relative_path=My Photos/Camera.
     let file_part = reqwest::multipart::Part::bytes(b"photo data".to_vec())
         .file_name("IMG_001.jpg".to_string());
     let form = reqwest::multipart::Form::new()
@@ -533,7 +502,6 @@ async fn test_upload_api_with_relative_path() {
         .unwrap();
     assert_eq!(resp.status(), 200, "upload with relative_path failed");
 
-    // Verify file is in /My Photos/Camera/ (not root).
     let detail = f
         .client
         .get(
@@ -550,7 +518,6 @@ async fn test_upload_api_with_relative_path() {
         "file should be at /My Photos/Camera/IMG_001.jpg, not root"
     );
 
-    // Verify file is NOT at /IMG_001.jpg (root).
     let detail_root = f
         .client
         .get(
@@ -558,7 +525,6 @@ async fn test_upload_api_with_relative_path() {
             Some(&f.api_token),
         )
         .await;
-    // file/detail returns 404 for non-existent files
     assert_ne!(
         detail_root.status(),
         200,
@@ -572,7 +538,6 @@ async fn test_upload_api_with_relative_path() {
 async fn test_upload_blks_commit_with_relative_path() {
     let f = TestFixture::new().await;
 
-    // Seed and create target directory structure.
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", ".seed", b".")
@@ -589,12 +554,10 @@ async fn test_upload_blks_commit_with_relative_path() {
         .await;
     assert_eq!(resp.status(), 201);
 
-    // Get upload-blks link (defaults to parent_dir=/).
     let link_resp = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
     assert_eq!(link_resp.status(), 200);
     let upload_url: String = link_resp.json().await.unwrap();
 
-    // Upload a block.
     let file_data = b"block upload relative_path test";
     let block_id = {
         use sha1::{Digest, Sha1};
@@ -608,7 +571,6 @@ async fn test_upload_blks_commit_with_relative_path() {
     let resp = f.client.post_multipart_url(&upload_url, form).await;
     assert_eq!(resp.status(), 200);
 
-    // Commit with parent_dir=/ and relative_path=My Photos/Camera.
     let blockids_json = serde_json::to_string(&vec![block_id]).unwrap();
     let commit_form = reqwest::multipart::Form::new()
         .text("commitonly", "true")
@@ -625,7 +587,6 @@ async fn test_upload_blks_commit_with_relative_path() {
         resp.text().await
     );
 
-    // Verify file is in /My Photos/Camera/.
     let detail = f
         .client
         .get(
@@ -648,7 +609,6 @@ async fn test_upload_blks_commit_with_relative_path() {
 async fn test_file_uploaded_bytes_returns_zero() {
     let f = TestFixture::new().await;
 
-    // Upload a file first so the repo has content
     let up = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "test.txt", b"hello")
@@ -689,19 +649,16 @@ async fn test_file_uploaded_bytes_missing_params() {
     assert_eq!(resp.status(), 400);
 }
 
-/// F.7 — POST /update-api/{token} updates an existing file.
 #[tokio::test]
 async fn test_update_api_updates_file() {
     let f = TestFixture::new().await;
 
-    // Upload initial file via regular API
     let up = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "update.txt", b"original")
         .await;
     assert!(up.status().is_success(), "initial upload failed");
 
-    // Get update link
     let resp = f
         .client
         .get(
@@ -711,7 +668,6 @@ async fn test_update_api_updates_file() {
         .await;
     let update_url: String = resp.json().await.unwrap();
 
-    // Update via update-api
     let file_part =
         reqwest::multipart::Part::bytes(b"updated".to_vec()).file_name("update.txt".to_string());
     let form = reqwest::multipart::Form::new()
@@ -726,7 +682,6 @@ async fn test_update_api_updates_file() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Download and verify new content (uses two-step download flow)
     let dl = f
         .client
         .download_file(&f.api_token, &f.repo_id, "/update.txt")
@@ -749,7 +704,6 @@ async fn test_update_api_updates_file() {
 async fn test_upload_api_quoted_boundary() {
     let f = TestFixture::new().await;
 
-    // Get upload link
     let resp = f
         .client
         .get(
@@ -790,7 +744,6 @@ async fn test_upload_api_quoted_boundary() {
         "upload with quoted boundary should succeed"
     );
 
-    // Verify file exists
     let detail = f
         .client
         .get(
@@ -805,26 +758,22 @@ async fn test_upload_api_quoted_boundary() {
     );
 }
 
-/// G.1 — POST /api/v2.1/repos/sync-batch-copy-item/ — same-repo file copy
 #[tokio::test]
 async fn test_sync_batch_copy_item_same_repo() {
     let f = TestFixture::new().await;
 
-    // Upload a file to root
     let up = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "source.txt", b"hello copy")
         .await;
     assert!(up.status().is_success(), "initial upload failed");
 
-    // Create a subdirectory
     let mkdir = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/subdir")
         .await;
     assert_eq!(mkdir.status(), 201, "create dir failed");
 
-    // Copy source.txt to /subdir/
     let body = serde_json::json!({
         "src_repo_id": f.repo_id,
         "src_parent_dir": "/",
@@ -842,7 +791,6 @@ async fn test_sync_batch_copy_item_same_repo() {
         .await;
     assert_eq!(resp.status(), 200, "same-repo copy should succeed");
 
-    // Verify original file still exists
     let orig = f
         .client
         .download_file(&f.api_token, &f.repo_id, "/source.txt")
@@ -851,7 +799,6 @@ async fn test_sync_batch_copy_item_same_repo() {
     let orig_body = orig.bytes().await.unwrap();
     assert_eq!(&orig_body[..], b"hello copy");
 
-    // Verify copied file exists in destination
     let copied = f
         .client
         .download_file(&f.api_token, &f.repo_id, "/subdir/source.txt")
@@ -865,7 +812,6 @@ async fn test_sync_batch_copy_item_same_repo() {
     assert_eq!(&copied_body[..], b"hello copy", "content should match");
 }
 
-/// G.2 — POST /api/v2.1/repos/sync-batch-copy-item/ — cross-repo returns error
 #[tokio::test]
 async fn test_sync_batch_copy_item_cross_repo_fails() {
     let f = TestFixture::new().await;
@@ -876,7 +822,6 @@ async fn test_sync_batch_copy_item_cross_repo_fails() {
         .await;
     assert!(up.status().is_success());
 
-    // Create a second repo
     let repo2_id = {
         let resp = f.client.create_repo(&f.api_token, "repo2").await;
         assert_eq!(resp.status(), 201);
@@ -884,7 +829,6 @@ async fn test_sync_batch_copy_item_cross_repo_fails() {
         body["id"].as_str().unwrap().to_string()
     };
 
-    // Try cross-repo copy (src_repo != dst_repo)
     let body = serde_json::json!({
         "src_repo_id": f.repo_id,
         "src_parent_dir": "/",
@@ -903,7 +847,6 @@ async fn test_sync_batch_copy_item_cross_repo_fails() {
     assert_eq!(resp.status(), 400, "cross-repo copy should return 400");
 }
 
-/// G.3 — POST /api/v2.1/repos/sync-batch-copy-item/ — nonexistent source
 #[tokio::test]
 async fn test_sync_batch_copy_item_not_found() {
     let f = TestFixture::new().await;

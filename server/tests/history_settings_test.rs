@@ -117,7 +117,6 @@ async fn test_update_repo_history_settings() {
     assert_eq!(repo.history_limit, 3);
     assert_eq!(repo.history_ttl_days, 30);
 
-    // Saving only name/description must not clobber the retention settings.
     let resp = f
         .client
         .post_json(
@@ -173,7 +172,6 @@ async fn test_gc_prunes_by_history_limit() {
     let old = "1".repeat(40);
     let mid = "2".repeat(40);
     let new = "3".repeat(40);
-    // Oldest first; `now` is the newest commit.
     insert_commit_and_root(db, &f.repo_id, &"c".repeat(40), &old, None, now - 200).await;
     insert_commit_and_root(
         db,
@@ -253,7 +251,6 @@ async fn test_gc_prunes_by_ttl() {
 
     let stale = "4".repeat(40);
     let fresh = "5".repeat(40);
-    // One commit 10 days old, one just now.
     insert_commit_and_root(
         db,
         &f.repo_id,
@@ -340,7 +337,6 @@ async fn test_gc_noop_when_unlimited() {
     )
     .await;
 
-    // history_limit = 0, history_ttl_days = 0 → unlimited.
     set_history(db, &f.repo_id, 0, 0).await;
 
     let removed = GcManager::garbage_collect(&f.server.repos, &block_store, GcPolicy::immediate())
@@ -385,7 +381,6 @@ async fn test_gc_collects_nested_fs_ids() {
     let g1 = "e".repeat(40);
     let file1 = "f".repeat(40);
 
-    // Old commit: root → file f_old.
     insert_fs_obj(
         db,
         &f.repo_id,
@@ -408,7 +403,6 @@ async fn test_gc_collects_nested_fs_ids() {
     .await;
     insert_commit(db, &f.repo_id, &"g".repeat(40), &r_old, None, now - 200).await;
 
-    // New commit: root → subdir d1 + file file1; d1 → file g1.
     insert_fs_obj(
         db,
         &f.repo_id,
@@ -478,7 +472,6 @@ async fn test_gc_collects_nested_fs_ids() {
         .unwrap();
     assert_eq!(commits.len(), 1);
 
-    // All objects reachable from the kept commit survive, including nested ones.
     for kept in [&r_new, &d1, &g1, &file1] {
         assert!(
             f.server

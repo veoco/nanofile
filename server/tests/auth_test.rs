@@ -12,7 +12,6 @@ async fn test_login_rate_limit_not_bypassable_via_xff_spoofing() {
     let server = TestServer::start().await;
     create_test_user(server.db.as_ref(), "victim@example.com", "secret123").await;
 
-    // Raw client so we can attach arbitrary X-Forwarded-For headers.
     let raw = reqwest::Client::builder().no_proxy().build().unwrap();
     let url = format!("{}/api2/auth-token/", server.base_url);
 
@@ -138,7 +137,6 @@ async fn test_login_success_json() {
 
     create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
 
-    // Login with JSON body
     let resp = client.login_json("test@example.com", "password123").await;
     assert_eq!(resp.status(), 200, "JSON login should succeed");
 
@@ -175,7 +173,6 @@ async fn test_login_2fa_required_no_otp() {
 
     create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
 
-    // Manually enable 2FA for the user
     let user_2fa = infra::entity::user_2fa::ActiveModel {
         user_id: sea_orm::Set(1),
         totp_secret: sea_orm::Set("JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP".to_string()),
@@ -261,8 +258,6 @@ async fn test_ping_invalid_token() {
     assert_eq!(resp.status(), 401);
 }
 
-// ========== S2FA device trust token tests ==========
-
 fn totp_secret() -> &'static str {
     "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
 }
@@ -301,7 +296,6 @@ async fn test_s2fa_trust_device_flow() {
 
     let valid_code = generate_valid_totp();
 
-    // Step 1: Login with OTP + trust device header
     let resp = client
         .login_with_otp_and_trust_device("test@example.com", "password123", &valid_code)
         .await;
@@ -319,7 +313,6 @@ async fn test_s2fa_trust_device_flow() {
     let s2fa_token = s2fa_header.unwrap();
     assert_eq!(s2fa_token.len(), 40);
 
-    // Verify body has API token
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body["token"].as_str().unwrap().len() == 40);
     assert!(
@@ -327,7 +320,6 @@ async fn test_s2fa_trust_device_flow() {
         "S2FA token should differ from API token"
     );
 
-    // Step 2: Subsequent login with S2FA token — should skip 2FA
     let resp2 = client
         .login_with_s2fa("test@example.com", "password123", &s2fa_token)
         .await;
@@ -337,7 +329,6 @@ async fn test_s2fa_trust_device_flow() {
         "S2FA token should bypass 2FA challenge"
     );
 
-    // Step 3: Plain login (no S2FA, no OTP) — should be challenged
     let resp3 = client.login("test@example.com", "password123").await;
     assert_eq!(resp3.status(), 400, "no S2FA/OTP should be challenged");
     assert!(
@@ -354,7 +345,6 @@ async fn test_s2fa_expired_token() {
     create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
     enable_2fa(server.db.as_ref(), 1).await;
 
-    // Insert an expired S2FA token directly into the database
     let now = chrono::Utc::now().timestamp();
     let expired_token = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let expired_model = infra::entity::s2fa_token::ActiveModel {
@@ -368,7 +358,6 @@ async fn test_s2fa_expired_token() {
     };
     expired_model.insert(server.db.as_ref()).await.unwrap();
 
-    // Login with expired S2FA → should fall through to OTP challenge
     let resp = client
         .login_with_s2fa("test@example.com", "password123", expired_token)
         .await;
@@ -378,7 +367,6 @@ async fn test_s2fa_expired_token() {
         "should return OTP challenge"
     );
 
-    // Verify the expired token was cleaned up
     let count = infra::entity::s2fa_token::Entity::find()
         .filter(
             infra::entity::s2fa_token::Column::Token
@@ -398,7 +386,6 @@ async fn test_s2fa_invalid_token() {
     create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
     enable_2fa(server.db.as_ref(), 1).await;
 
-    // Login with a fake S2FA token — should get 2FA challenge
     let fake_token = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let resp = client
         .login_with_s2fa("test@example.com", "password123", fake_token)
@@ -420,13 +407,11 @@ async fn test_s2fa_no_trust_device() {
 
     let valid_code = generate_valid_totp();
 
-    // Login with OTP but WITHOUT trust device header
     let resp = client
         .login_with_otp("test@example.com", "password123", &valid_code)
         .await;
     assert_eq!(resp.status(), 200, "OTP-only login should succeed");
 
-    // Should NOT have S2FA token in response
     assert!(
         resp.headers().get("X-SEAFILE-S2FA").is_none(),
         "should NOT return S2FA header without trust-device header"
@@ -440,7 +425,6 @@ async fn test_login_multipart() {
 
     create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
 
-    // Login with multipart/form-data (matching seadroid's request format)
     let resp = client
         .login_multipart("test@example.com", "password123")
         .await;
@@ -496,7 +480,6 @@ async fn test_sync_token_has_ttl() {
         .expect("sync token should exist");
     let expires_at = sync.expires_at.expect("sync token should have an expiry");
     let now = chrono::Utc::now().timestamp();
-    // Test config uses sync_token_ttl_days = 180.
     assert!(
         expires_at > now + 179 * 86400,
         "expiry too soon: {expires_at}"
@@ -620,7 +603,6 @@ async fn test_web_2fa_without_pending_session_reports_reason_on_login_form() {
     let resp = post_web_2fa(&server, None).await;
 
     assert_eq!(login_redirect_reason(&resp), "auth.session_expired");
-    // The dead cookie is cleared so the browser stops resending it.
     let cookie = resp.headers().get("set-cookie").unwrap().to_str().unwrap();
     assert!(cookie.starts_with("seahub-session-pending=;"), "{cookie}");
     assert!(cookie.contains("Max-Age=0"), "{cookie}");
@@ -696,26 +678,22 @@ async fn test_backup_code_verify_and_consume() {
         .await
         .unwrap();
 
-    // A correct code verifies the first time…
     assert!(
         BackupCodeManager::verify_code(&server.repos, user_id, &codes[0])
             .await
             .unwrap()
     );
-    // …but is consumed (used) and rejected on a second attempt.
     assert!(
         !BackupCodeManager::verify_code(&server.repos, user_id, &codes[0])
             .await
             .unwrap(),
         "a used backup code must not verify again"
     );
-    // Other unused codes still work.
     assert!(
         BackupCodeManager::verify_code(&server.repos, user_id, &codes[1])
             .await
             .unwrap()
     );
-    // An unknown code is rejected.
     assert!(
         !BackupCodeManager::verify_code(&server.repos, user_id, &"F".repeat(20))
             .await
@@ -731,7 +709,6 @@ async fn test_backup_code_verify_and_consume() {
 async fn test_legacy_password_hash_verifies_and_is_upgraded() {
     let server = TestServer::start().await;
 
-    // Reproduce the old format at the fixture's configured cost (1000).
     let password = "legacy-pass-123";
     let salt = [9u8; 16];
     let legacy = {
@@ -760,12 +737,10 @@ async fn test_legacy_password_hash_verifies_and_is_upgraded() {
     .await
     .unwrap();
 
-    // The legacy hash verifies and the login succeeds.
     let client = server.client();
     let resp = client.login("legacy@example.com", password).await;
     assert_eq!(resp.status(), 200, "legacy hash must still authenticate");
 
-    // …and the stored value was upgraded in place.
     let stored = server
         .repos
         .user
@@ -781,7 +756,6 @@ async fn test_legacy_password_hash_verifies_and_is_upgraded() {
 }
 
 /// A TOTP code must be single-use.
-///
 /// `totp-rs` accepts the previous, current and next 30-second step so that
 /// honest clients tolerate clock skew, which also means an observed code stays
 /// valid for ~90 seconds. Recording the consumed step and refusing any step that

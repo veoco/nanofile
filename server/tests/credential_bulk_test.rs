@@ -37,7 +37,6 @@ async fn seed_browser_session(f: &TestFixture, user_id: i32, source: &str) -> i3
         .id
 }
 
-/// A cookie-holding client (the Web UI authenticates with a session cookie).
 async fn login_client(fixture: &TestFixture) -> reqwest::Client {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -82,8 +81,6 @@ async fn page(client: &reqwest::Client, base_url: &str) -> String {
 #[tokio::test]
 async fn signing_out_other_sessions_keeps_the_acting_one() {
     let f = TestFixture::new().await;
-    // Two other browser sessions and one client session that must not be
-    // signed out by a browser action.
     seed_browser_session(&f, f.user_id, "web").await;
     seed_browser_session(&f, f.user_id, "web_client_login").await;
 
@@ -92,7 +89,6 @@ async fn signing_out_other_sessions_keeps_the_acting_one() {
     let token = csrf_token(&body);
     assert!(!token.is_empty(), "the page embeds a csrf token");
 
-    // The page offers the action only because there are others to sign out.
     assert!(
         body.contains(r#"name="action" value="sign_out_others""#),
         "the bulk form is offered"
@@ -114,8 +110,6 @@ async fn signing_out_other_sessions_keeps_the_acting_one() {
         "the redirect reports what was removed"
     );
 
-    // The browser session this test is holding is still usable: the page loads
-    // and still marks it as the current session.
     let after = page(&client, &f.server.base_url).await;
     assert!(
         after.contains("This session"),
@@ -150,7 +144,6 @@ async fn signing_out_other_sessions_keeps_the_acting_one() {
 #[tokio::test]
 async fn the_retired_sync_token_bulk_action_is_refused() {
     let f = TestFixture::new().await;
-    // The fixture already holds one sync token (minted through the API).
     assert_eq!(
         f.server
             .repos

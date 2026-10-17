@@ -11,7 +11,6 @@ mod common;
 use common::{TestFixture, create_test_user};
 use sea_orm::{ActiveModelTrait, Set};
 
-/// A device-trust token for `user_id`, so the inventory has one to find.
 async fn trust_token(f: &TestFixture, user_id: i32, device_id: &str) -> i32 {
     f.server
         .repos
@@ -29,8 +28,6 @@ async fn trust_token(f: &TestFixture, user_id: i32, device_id: &str) -> i32 {
         .id
 }
 
-/// A second session for `user_id`, inserted directly so the test controls its
-/// `platform` and `is_pending` flags.
 async fn raw_session(
     f: &TestFixture,
     user_id: i32,
@@ -59,8 +56,6 @@ async fn raw_session(
         .id
 }
 
-/// A browser session for `user_id`, inserted with an explicit `source` so the
-/// bulk sign-out can be tested against rows that are not the acting login.
 async fn raw_browser_session(f: &TestFixture, user_id: i32, source: &str) -> i32 {
     let raw = server::service::auth::token::generate_api_token();
     let model = infra::entity::api_token::ActiveModel {
@@ -94,9 +89,7 @@ async fn bulk_sign_out_spares_the_acting_session_and_clients() {
 
     let keep = raw_browser_session(&f, f.user_id, "web").await;
     let doomed = raw_browser_session(&f, f.user_id, "web_client_login").await;
-    // An unrecognised source is treated as a browser session, so it goes too.
     let unknown = raw_browser_session(&f, f.user_id, "something_new").await;
-    // A client application's session is a device, not a browser session.
     let client = raw_session(&f, f.user_id, Some("android"), false).await;
     let foreign = raw_browser_session(&f, other_user, "web").await;
 
@@ -279,7 +272,6 @@ async fn revocation_is_scoped_to_the_owner() {
         .expect("list")[0]
         .id;
 
-    // The ids are real, but they belong to somebody else.
     assert_eq!(
         f.server
             .repos
@@ -311,7 +303,6 @@ async fn revocation_is_scoped_to_the_owner() {
         "another account's sync token must not be revoked"
     );
 
-    // All three rows survive, and the owner can still revoke their own.
     assert!(
         f.server
             .repos

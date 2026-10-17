@@ -66,7 +66,6 @@ async fn test_tag_crud() {
     let f = TestFixture::new().await;
     let url = tags_url(&f.repo_id);
 
-    // Create
     let resp = f
         .client
         .post_json(
@@ -81,7 +80,6 @@ async fn test_tag_crud() {
     assert_eq!(body["tags"][0]["_tag_name"], "important");
     assert_eq!(body["tags"][0]["_tag_color"], "#ff0000");
 
-    // Duplicate create is deduped by name.
     let resp = f
         .client
         .post_json(
@@ -99,7 +97,6 @@ async fn test_tag_crud() {
     );
     assert_eq!(body["tags"][0]["_id"], tag_id);
 
-    // List — metadata-service `{results, metadata}` shape.
     let resp = f.client.get(&url, Some(&f.api_token)).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -111,7 +108,6 @@ async fn test_tag_crud() {
         "tag should appear in the repo tag list"
     );
 
-    // Update (rename + recolor).
     let resp = f
         .client
         .put_json(
@@ -136,7 +132,6 @@ async fn test_tag_crud() {
                 && t["_tag_color"] == "#00ff00")
     );
 
-    // Delete (DELETE with JSON body).
     let del_client = reqwest::Client::builder().no_proxy().build().unwrap();
     let resp = del_client
         .delete(format!("{}{}", f.server.base_url, url))
@@ -161,7 +156,6 @@ async fn test_tag_crud() {
 async fn test_file_tags_flow() {
     let f = TestFixture::new().await;
 
-    // Upload a file.
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "photo.jpg", b"jpeg-data")
@@ -170,7 +164,6 @@ async fn test_file_tags_flow() {
 
     let tag_id = create_tag(&f, "人物", "#ff9800").await;
 
-    // GET record/ returns a record_id derived from the path.
     let rec_url = record_url(&f.repo_id, "/", "photo.jpg");
     let resp = f.client.get(&rec_url, Some(&f.api_token)).await;
     assert_eq!(resp.status(), 200);
@@ -181,7 +174,6 @@ async fn test_file_tags_flow() {
     assert_eq!(rec["_parent_dir"], "/");
     assert_eq!(rec["_tags"].as_array().unwrap().len(), 0);
 
-    // Set tags via file-tags/.
     let ft_url = file_tags_url(&f.repo_id);
     let resp = f
         .client
@@ -203,7 +195,6 @@ async fn test_file_tags_flow() {
     );
     assert_eq!(tags[0]["display_value"], "人物");
 
-    // Clear by sending an empty array.
     let resp = f
         .client
         .put_json(
@@ -285,7 +276,6 @@ async fn test_tagged_files() {
 
     let tag_id = create_tag(&f, "文档", "#2196f3").await;
 
-    // Tag only a.pdf.
     let rec_url = record_url(&f.repo_id, "/", "a.pdf");
     let resp = f.client.get(&rec_url, Some(&f.api_token)).await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -298,7 +288,6 @@ async fn test_tagged_files() {
         )
         .await;
 
-    // tag-files/ lists only the tagged file.
     let resp = f
         .client
         .get(
@@ -367,7 +356,6 @@ async fn test_tag_path_sync_on_rename_and_delete() {
         )
         .await;
 
-    // Rename /old.txt → /new.txt.
     let resp = f
         .client
         .post_form(
@@ -378,7 +366,6 @@ async fn test_tag_path_sync_on_rename_and_delete() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // New path keeps the tag; old path no longer resolves.
     let new_rec = record_url(&f.repo_id, "/", "new.txt");
     let resp = f.client.get(&new_rec, Some(&f.api_token)).await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -396,7 +383,6 @@ async fn test_tag_path_sync_on_rename_and_delete() {
         "old path must no longer carry the tag"
     );
 
-    // Delete /new.txt → tag rows cleaned up.
     let del_client = reqwest::Client::builder().no_proxy().build().unwrap();
     let resp = del_client
         .delete(format!(
@@ -409,7 +395,6 @@ async fn test_tag_path_sync_on_rename_and_delete() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // tag-files/ should now be empty.
     let resp = f
         .client
         .get(
@@ -449,7 +434,6 @@ async fn test_folder_tag_filter_in_browser() {
         )
         .await;
 
-    // Log in through the web UI.
     let ui = reqwest::Client::builder()
         .cookie_store(true)
         .redirect(reqwest::redirect::Policy::none())
@@ -464,7 +448,6 @@ async fn test_folder_tag_filter_in_browser() {
         .unwrap();
     assert_eq!(resp.status(), 302, "web login should redirect on success");
 
-    // Full listing contains both files.
     let list_url = reqwest::Url::parse_with_params(
         &format!("{}/libraries/{}/files", f.server.base_url, f.repo_id),
         &[("partial", "1"), ("view", "all")],
@@ -474,7 +457,6 @@ async fn test_folder_tag_filter_in_browser() {
     assert!(html.contains("a.jpg"), "full listing must include a.jpg");
     assert!(html.contains("b.jpg"), "full listing must include b.jpg");
 
-    // Tag-filtered listing shows only a.jpg.
     let filter_url = reqwest::Url::parse_with_params(
         &format!("{}/libraries/{}/files", f.server.base_url, f.repo_id),
         &[("partial", "1"), ("view", "all"), ("tag", "人物")],

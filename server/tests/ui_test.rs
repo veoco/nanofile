@@ -1,13 +1,8 @@
 #![allow(dead_code)]
 
-/// Web UI E2E tests — TDD approach.
 mod common;
 
 use common::{TestFixture, TestServer, create_test_user};
-
-// ============================================================================
-// Phase 1: Auth + Layout
-// ============================================================================
 
 fn no_redirect_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -154,7 +149,6 @@ async fn test_logout_clears_session() {
 
     let client = no_redirect_client();
 
-    // Login
     let resp = client
         .post(format!("{}/accounts/login/", fixture.server.base_url))
         .form(&[("email", "test@example.com"), ("password", "password")])
@@ -163,7 +157,6 @@ async fn test_logout_clears_session() {
         .unwrap();
     assert_eq!(resp.status(), 302, "login should succeed");
 
-    // Capture the session cookie from login response
     let session_cookie = resp
         .headers()
         .get("set-cookie")
@@ -171,7 +164,6 @@ async fn test_logout_clears_session() {
         .unwrap_or("")
         .to_string();
 
-    // Logout using the session cookie
     let logout = no_redirect_client()
         .get(format!("{}/accounts/logout/", fixture.server.base_url))
         .header("Cookie", &session_cookie)
@@ -190,10 +182,6 @@ async fn test_logout_clears_session() {
         "should clear cookie, got: {set_cookie}"
     );
 }
-
-// ============================================================================
-// Phase 2: Repos
-// ============================================================================
 
 /// Helper: login and return a client with session cookie stored
 async fn login_client(fixture: &TestFixture) -> reqwest::Client {
@@ -214,7 +202,6 @@ async fn login_client(fixture: &TestFixture) -> reqwest::Client {
 }
 
 /// Mint a one-time client-login token the way the desktop client does.
-///
 /// Going through `POST /api2/client-login/` matters: the endpoint records the
 /// requesting address as the token's issuer, and the browser entry point only
 /// logs in silently when the navigation comes from that same address.
@@ -252,8 +239,6 @@ async fn settings_csrf_token(client: &reqwest::Client, base_url: &str) -> String
         .unwrap_or_default()
 }
 
-/// Extract CSRF token from any authenticated page's hidden form input.
-/// The caller must have a valid session cookie.
 async fn get_csrf_token(client: &reqwest::Client, base_url: &str, repo_id: &str) -> String {
     let resp = client
         .get(format!("{}/libraries/{}/files", base_url, repo_id))
@@ -337,16 +322,11 @@ async fn test_repo_detail_page_exists() {
     );
 }
 
-// ============================================================================
-// Phase 3: File Browser
-// ============================================================================
-
 #[tokio::test]
 async fn test_file_list_shows_root_entries() {
     let fixture = TestFixture::new().await;
     let client = login_client(&fixture).await;
 
-    // Upload a file first via API so it appears in the repo
     fixture
         .client
         .upload_file(
@@ -358,7 +338,6 @@ async fn test_file_list_shows_root_entries() {
         )
         .await;
 
-    // Now browse via UI
     let resp = client
         .get(format!(
             "{}/libraries/{}/files",
@@ -381,7 +360,6 @@ async fn test_file_list_shows_root_entries() {
 async fn test_file_list_navigates_into_dir() {
     let fixture = TestFixture::new().await;
 
-    // Create a directory and upload a file into it via API
     fixture
         .client
         .create_dir(&fixture.api_token, &fixture.repo_id, "/subdir")
@@ -428,7 +406,6 @@ async fn seahub_library_url_redirects_to_the_file_browser() {
 
     let client = login_client(&fixture).await;
 
-    // Root: `/library/<id>/<name>/` — the request the desktop actually makes.
     let resp = client
         .get(format!(
             "{}/library/{}/test-repo/",
@@ -521,7 +498,6 @@ async fn test_partial_list_returns_fragment() {
 
     assert_eq!(resp.status(), 200, "partial list should return 200");
     let body = resp.text().await.unwrap();
-    // Partial should NOT contain the full page layout
     assert!(
         !body.contains("</html>"),
         "partial response should be a fragment, not a full page"
@@ -533,7 +509,6 @@ async fn test_file_list_sort_by_name() {
     let fixture = TestFixture::new().await;
     let client = login_client(&fixture).await;
 
-    // Upload files with different names
     fixture
         .client
         .upload_file(&fixture.api_token, &fixture.repo_id, "/", "c.txt", b"c")
@@ -547,7 +522,6 @@ async fn test_file_list_sort_by_name() {
         .upload_file(&fixture.api_token, &fixture.repo_id, "/", "b.txt", b"b")
         .await;
 
-    // Request partial list sorted by name asc
     let resp = client
         .get(format!(
             "{}/libraries/{}/files?partial=1&sort=name&sort_order=asc",
@@ -566,7 +540,6 @@ async fn test_file_list_sort_by_name() {
         "files should appear in asc order: a, b, c"
     );
 
-    // Request sorted by name desc
     let resp = client
         .get(format!(
             "{}/libraries/{}/files?partial=1&sort=name&sort_order=desc",
@@ -602,7 +575,6 @@ async fn test_file_list_sort_by_mtime() {
         .upload_file(&fixture.api_token, &fixture.repo_id, "/", "new.txt", b"new")
         .await;
 
-    // Request sorted by mtime desc (newest first)
     let resp = client
         .get(format!(
             "{}/libraries/{}/files?partial=1&sort=mtime&sort_order=desc",
@@ -625,7 +597,6 @@ async fn test_file_list_sort_by_mtime() {
 async fn test_download_file_returns_content() {
     let fixture = TestFixture::new().await;
 
-    // Upload via API
     fixture
         .client
         .upload_file(
@@ -759,10 +730,6 @@ async fn test_file_preview_text() {
     assert!(body.contains("Hello world"), "should show file content");
 }
 
-// ============================================================================
-// Phase 4: Shares
-// ============================================================================
-
 #[tokio::test]
 async fn test_share_links_list_shares() {
     let fixture = TestFixture::new().await;
@@ -799,7 +766,6 @@ async fn test_create_share_link_works() {
         .await
         .unwrap();
 
-    // Should redirect after creation
     assert_eq!(resp.status(), 302, "create share should redirect");
 }
 
@@ -809,7 +775,6 @@ async fn test_delete_share_link_works() {
     let client = login_client(&fixture).await;
     let csrf_token = get_csrf_token(&client, &fixture.server.base_url, &fixture.repo_id).await;
 
-    // First create a share link via UI
     let create_resp = client
         .post(format!("{}/shares/create/", fixture.server.base_url))
         .form(&[
@@ -822,7 +787,6 @@ async fn test_delete_share_link_works() {
         .unwrap();
     assert_eq!(create_resp.status(), 302, "create share via UI");
 
-    // Verify the shares page renders
     let list_resp = client
         .get(format!("{}/shares/", fixture.server.base_url))
         .send()
@@ -834,7 +798,6 @@ async fn test_delete_share_link_works() {
 }
 
 /// The web-UI share-creation form must enforce repository access.
-///
 /// It previously inserted the `share_link` row directly, with only the global
 /// feature switch and the caller's own CSRF token checked — so any signed-in
 /// user who knew a repository id could mint an unauthenticated, permanent,
@@ -844,7 +807,6 @@ async fn test_create_share_link_requires_repo_access() {
     let fixture = TestFixture::new().await;
     let _outsider = create_test_user(&fixture.server.db, "outsider@example.com", "password").await;
 
-    // Sign the outsider in and collect their own CSRF token.
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .cookie_store(true)
@@ -861,7 +823,6 @@ async fn test_create_share_link_requires_repo_access() {
     let csrf = settings_csrf_token(&client, &fixture.server.base_url).await;
     assert!(!csrf.is_empty(), "outsider should receive a CSRF token");
 
-    // Try to create a link for a repository the outsider has no access to.
     let resp = client
         .post(format!("{}/shares/create/", fixture.server.base_url))
         .form(&[
@@ -878,7 +839,6 @@ async fn test_create_share_link_requires_repo_access() {
         "share creation must require repo access"
     );
 
-    // And nothing may have been persisted for that repository.
     let resp = fixture
         .client
         .get(
@@ -894,10 +854,6 @@ async fn test_create_share_link_requires_repo_access() {
         "no share link may be created for a repo the caller cannot read"
     );
 }
-
-// ============================================================================
-// Phase 5: Settings + 2FA
-// ============================================================================
 
 #[tokio::test]
 async fn test_settings_page_shows_info() {
@@ -938,7 +894,6 @@ async fn test_change_password_works() {
 
     assert_eq!(resp.status(), 302, "password change should redirect");
 
-    // Verify new password works via API
     let api_resp = fixture.client.login(&fixture.email, "newpass123").await;
     assert_eq!(api_resp.status(), 200, "new password should work");
 }
@@ -993,7 +948,6 @@ async fn test_change_password_rejects_weak_password() {
     // form rather than redirecting.
     assert_eq!(resp.status(), 200, "weak password must not be accepted");
 
-    // The old password still works.
     let api_resp = fixture.client.login(&fixture.email, "password").await;
     assert_eq!(api_resp.status(), 200, "password must remain unchanged");
 }
@@ -1004,7 +958,6 @@ async fn test_change_password_revokes_other_credentials() {
     let client = login_client(&fixture).await;
     let csrf = settings_csrf_token(&client, &fixture.server.base_url).await;
 
-    // Sanity: the fixture's API token and repo sync token work before the change.
     assert_eq!(
         fixture
             .client
@@ -1034,7 +987,6 @@ async fn test_change_password_revokes_other_credentials() {
         .unwrap();
     assert_eq!(resp.status(), 302, "password change should redirect");
 
-    // Other account tokens and all repo sync tokens are revoked...
     assert_eq!(
         fixture
             .client
@@ -1054,7 +1006,6 @@ async fn test_change_password_revokes_other_credentials() {
         "sync token must be revoked"
     );
 
-    // ...but the acting browser session survives, and the new password works.
     let settings = client
         .get(format!("{}/settings/", fixture.server.base_url))
         .send()
@@ -1062,10 +1013,6 @@ async fn test_change_password_revokes_other_credentials() {
         .unwrap();
     assert_eq!(settings.status(), 200, "acting session must stay logged in");
 }
-
-// ============================================================================
-// Phase 6: Search
-// ============================================================================
 
 #[tokio::test]
 async fn test_search_page_accessible() {
@@ -1092,7 +1039,6 @@ async fn test_search_no_results_message() {
     let fixture = TestFixture::new().await;
     let client = login_client(&fixture).await;
 
-    // Upload a file first so the repo has content
     let resp = fixture
         .client
         .upload_file(
@@ -1105,7 +1051,6 @@ async fn test_search_no_results_message() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Search for something that doesn't exist
     let resp = client
         .get(format!(
             "{}/search/?q=zzzzz_nonexistent",
@@ -1128,7 +1073,6 @@ async fn test_search_shows_results() {
     let fixture = TestFixture::new().await;
     let client = login_client(&fixture).await;
 
-    // Upload a file via API
     let resp = fixture
         .client
         .upload_file(
@@ -1141,7 +1085,6 @@ async fn test_search_shows_results() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Search via UI
     let resp = client
         .get(format!("{}/search/?q=hello", fixture.server.base_url))
         .send()
@@ -1166,7 +1109,6 @@ async fn test_search_multiple_results_in_ui() {
     let fixture = TestFixture::new().await;
     let client = login_client(&fixture).await;
 
-    // Upload multiple files
     for i in 0..3 {
         let name = format!("document-{}.txt", i);
         let resp = fixture
@@ -1176,7 +1118,6 @@ async fn test_search_multiple_results_in_ui() {
         assert_eq!(resp.status(), 200);
     }
 
-    // Search via UI
     let resp = client
         .get(format!("{}/search/?q=document", fixture.server.base_url))
         .send()
@@ -1196,7 +1137,6 @@ async fn test_search_dir_and_file() {
     let fixture = TestFixture::new().await;
     let client = login_client(&fixture).await;
 
-    // Create a directory first
     let resp = fixture
         .client
         .create_dir(&fixture.api_token, &fixture.repo_id, "/myfolder")
@@ -1204,7 +1144,6 @@ async fn test_search_dir_and_file() {
     // seahub answers 201 Created for mkdir.
     assert_eq!(resp.status(), 201, "create dir should succeed");
 
-    // Upload a file into it
     let resp = fixture
         .client
         .upload_file(
@@ -1217,7 +1156,6 @@ async fn test_search_dir_and_file() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Search for the directory name
     let resp = client
         .get(format!("{}/search/?q=myfolder", fixture.server.base_url))
         .send()
@@ -1231,7 +1169,6 @@ async fn test_search_dir_and_file() {
         "search should show directory name"
     );
 
-    // Search for the inner file name
     let resp = client
         .get(format!("{}/search/?q=inner", fixture.server.base_url))
         .send()
@@ -1245,10 +1182,6 @@ async fn test_search_dir_and_file() {
         "search should show inner file name"
     );
 }
-
-// ============================================================================
-// Phase 7: Client Login
-// ============================================================================
 
 #[tokio::test]
 async fn test_client_login_api_generates_token() {
@@ -1279,7 +1212,6 @@ async fn test_client_login_api_requires_auth() {
         .await
         .unwrap();
 
-    // Without auth, should fail
     assert_ne!(resp.status(), 200, "should require auth");
 }
 
@@ -1288,7 +1220,6 @@ async fn test_client_login_flow_works() {
     let fixture = TestFixture::new().await;
     let api_client = reqwest::Client::new();
 
-    // Step 1: Get token from API
     let resp = api_client
         .post(format!("{}/api2/client-login/", fixture.server.base_url))
         .header("Authorization", format!("Token {}", fixture.api_token))
@@ -1299,7 +1230,6 @@ async fn test_client_login_flow_works() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // Step 2: Use token to auto-login via browser endpoint
     let browser = no_redirect_client();
     let resp = browser
         .get(format!(
@@ -1370,7 +1300,6 @@ async fn test_client_login_expired_token_redirects() {
         .await
         .unwrap();
 
-    // Should redirect without setting cookie (token expired)
     assert!(
         resp.status() == 302 || resp.status() == 303,
         "expired token should redirect, got {}",
@@ -1413,7 +1342,6 @@ async fn test_client_login_invalid_token_redirects() {
         .await
         .unwrap();
 
-    // Should redirect without setting cookie (token not found)
     assert!(
         resp.status() == 302 || resp.status() == 303,
         "invalid token should redirect, got {}",
@@ -1441,16 +1369,13 @@ async fn test_client_login_no_token_redirects() {
         .await
         .unwrap();
 
-    // Should redirect without setting cookie (no token)
     assert!(
         resp.status() == 302 || resp.status() == 303,
         "no token should redirect"
     );
 }
 
-// ============================================================================
 // Password reset security
-// ============================================================================
 
 /// Security: with no email backend configured, the password-reset endpoint must
 /// never echo a reset link in the response, and must not mint a token at all
@@ -1470,13 +1395,11 @@ async fn test_password_reset_disabled_without_email() {
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
 
-    // No reset link / token must appear in the response body.
     assert!(
         !body.contains("/accounts/password/reset/"),
         "response leaked a reset link: {body}"
     );
 
-    // With email disabled, no reset token row may be created.
     use sea_orm::EntityTrait;
     let tokens = infra::entity::password_reset_token::Entity::find()
         .all(f.server.db.as_ref())
@@ -1515,7 +1438,6 @@ async fn test_password_reset_full_flow() {
         .to_string();
     assert!(!token.is_empty(), "minted token must be present");
 
-    // GET the confirm page — the token must be recognized as valid.
     let resp = client
         .get(format!("{}/accounts/password/reset/{}/", base, token))
         .send()
@@ -1523,7 +1445,6 @@ async fn test_password_reset_full_flow() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Submit the new password (Origin header required for CSRF).
     let resp = no_redirect_client()
         .post(format!("{}/accounts/password/reset/{}/", base, token))
         .header("origin", &base)
@@ -1540,7 +1461,6 @@ async fn test_password_reset_full_flow() {
         "valid reset should redirect to complete"
     );
 
-    // New password logs in; old password is rejected.
     let resp = no_redirect_client()
         .post(format!("{}/accounts/login/", base))
         .form(&[
@@ -1560,7 +1480,6 @@ async fn test_password_reset_full_flow() {
         .unwrap();
     assert_eq!(resp.status(), 200, "old password should be rejected");
 
-    // A used token must not reset the password a second time.
     let resp = client
         .post(format!("{}/accounts/password/reset/{}/", base, token))
         .header("origin", &base)
@@ -1593,7 +1512,6 @@ async fn test_password_reset_revokes_sync_tokens() {
     let repo_id = common::create_test_repo(&client, &api_token, "Reset Library").await;
     let sync_token = common::get_sync_token(&client, &api_token, &repo_id).await;
 
-    // Both credentials work before the reset.
     assert_eq!(
         client.get("/api2/repos/", Some(&api_token)).await.status(),
         200
@@ -1630,7 +1548,6 @@ async fn test_password_reset_revokes_sync_tokens() {
         .unwrap();
     assert_eq!(resp.status(), 302, "valid reset should redirect");
 
-    // Both credentials are revoked afterwards.
     assert_eq!(
         client.get("/api2/repos/", Some(&api_token)).await.status(),
         401,
@@ -1643,9 +1560,7 @@ async fn test_password_reset_revokes_sync_tokens() {
     );
 }
 
-// ============================================================================
 // Left-panel repo list cache
-// ============================================================================
 
 /// The left panel is served from a per-user TTL cache. A repo created or
 /// deleted via the API must show up on the next page render (the write handler
@@ -1656,7 +1571,6 @@ async fn test_left_panel_reflects_repo_changes() {
     let client = login_client(&fixture).await;
     let base = fixture.server.base_url.clone();
 
-    // Warm the cache: /settings/ renders the left panel with the fixture repo.
     let resp = client
         .get(format!("{}/settings/", base))
         .send()
@@ -1669,7 +1583,6 @@ async fn test_left_panel_reflects_repo_changes() {
         "left panel should list the fixture repo"
     );
 
-    // Create a second repo via API → the create handler clears the cache.
     let create = fixture
         .client
         .create_repo(&fixture.api_token, "second-repo")
@@ -1689,7 +1602,6 @@ async fn test_left_panel_reflects_repo_changes() {
         "created repo must appear in the left panel"
     );
 
-    // Delete it via API → cache cleared → gone from the next render.
     let del = fixture
         .client
         .delete_repo(&fixture.api_token, &second_id)

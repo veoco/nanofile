@@ -76,7 +76,6 @@ async fn ui_login(server: &common::TestServer) -> reqwest::Client {
         .unwrap();
     assert_eq!(resp.status(), 302, "UI login should redirect");
 
-    // Trigger a GET so the Set-Cookie headers are stored.
     let _ = client
         .get(format!("{}/libraries/", server.base_url))
         .send()
@@ -91,7 +90,6 @@ async fn trash_page_lists_deleted_libraries() {
     let f = TestFixture::new().await;
     let ui = ui_login(&f.server).await;
 
-    // Nothing deleted yet: the tab exists and reports an empty trash.
     let html = ui
         .get(format!("{}/trash/?tab=libraries", f.server.base_url))
         .send()
@@ -114,7 +112,6 @@ async fn trash_page_lists_deleted_libraries() {
     let resp = f.client.delete_repo(&f.api_token, &f.repo_id).await;
     assert!(resp.status().is_success());
 
-    // The default page opens on the files tab.
     let default_page = ui
         .get(format!("{}/trash/", f.server.base_url))
         .send()
@@ -162,7 +159,6 @@ async fn restore_brings_the_library_content_back() {
         resp.status()
     );
 
-    // Listed in the trash with the head commit the client knows about.
     let trash = deleted_repos(&f).await;
     let entry = trash
         .iter()
@@ -171,11 +167,9 @@ async fn restore_brings_the_library_content_back() {
     assert_eq!(entry["head_commit_id"], head_before);
     assert_eq!(entry["repo_name"], "test-repo");
 
-    // A trashed library is not readable.
     let resp = f.client.get_repo(&f.api_token, &f.repo_id).await;
     assert_eq!(resp.status(), 404);
 
-    // seahub posts the restore as a form.
     let resp = f
         .client
         .post_form(
@@ -192,7 +186,6 @@ async fn restore_brings_the_library_content_back() {
         "the trash entry is gone"
     );
 
-    // Content and head are back.
     let resp = f
         .client
         .download_file(&f.api_token, &f.repo_id, "/keep.txt")
@@ -233,7 +226,6 @@ async fn restore_accepts_form_and_json_bodies() {
     let resp = f.client.delete_repo(&f.api_token, &f.repo_id).await;
     assert!(resp.status().is_success());
 
-    // An empty repo id is a bad request, not a panic or a 500.
     let resp = f
         .client
         .post_form(
@@ -274,14 +266,12 @@ async fn trashed_library_blocks_survive_gc_and_come_back() {
     let resp = f.client.delete_repo(&f.api_token, &f.repo_id).await;
     assert!(resp.status().is_success());
 
-    // GC must not reclaim the blocks of a restorable library...
     let removed = GcManager::garbage_collect(&f.server.repos, &store, GcPolicy::immediate())
         .await
         .unwrap();
     assert_eq!(removed, 0, "a trashed library's blocks must be kept");
     assert!(repo_dir_exists(&store, &f.repo_id).await);
 
-    // ... which is what makes the restore able to serve them.
     let resp = f
         .client
         .post_form(
@@ -299,7 +289,6 @@ async fn trashed_library_blocks_survive_gc_and_come_back() {
     assert_eq!(resp.status(), 200, "download after restore");
     assert_eq!(resp.bytes().await.unwrap().to_vec(), content);
 
-    // A restored library is live content again.
     let removed = GcManager::garbage_collect(&f.server.repos, &store, GcPolicy::immediate())
         .await
         .unwrap();
@@ -343,7 +332,6 @@ async fn purging_a_library_frees_its_blocks() {
     let resp = f.client.get_repo(&f.api_token, &f.repo_id).await;
     assert_eq!(resp.status(), 404, "a purged library is gone for good");
 
-    // Purging it again is a 404, not an error.
     let resp = f
         .client
         .delete(
@@ -399,7 +387,6 @@ async fn trash_operations_are_owner_scoped() {
     let login: Value = resp.json().await.unwrap();
     let other_token = login["token"].as_str().unwrap().to_string();
 
-    // A stranger cannot restore or purge the library...
     let resp = f
         .client
         .post_form(
@@ -419,7 +406,6 @@ async fn trash_operations_are_owner_scoped() {
         .await;
     assert_eq!(resp.status(), 403);
 
-    // ... and their own trash is empty, so emptying it touches nothing.
     assert_eq!(
         deleted_repos(&f).await.len(),
         1,
@@ -436,7 +422,6 @@ async fn trash_operations_are_owner_scoped() {
         "one user's sweep must not purge another user's library"
     );
 
-    // The owner can still restore it, content included.
     let resp = f
         .client
         .post_form(
@@ -497,7 +482,6 @@ async fn restore_without_archived_content_comes_back_empty() {
     let resp = f.client.delete_repo(&f.api_token, &f.repo_id).await;
     assert!(resp.status().is_success());
 
-    // Simulate the old behaviour: the trash entry exists, the archive does not.
     for table in ["deleted_repo_commits", "deleted_repo_fs_objects"] {
         f.server
             .db
@@ -531,7 +515,6 @@ async fn restore_without_archived_content_comes_back_empty() {
         "there is no commit left to restore"
     );
 
-    // The file cannot come back: its commit and FS objects are gone.
     let link = f
         .client
         .get(

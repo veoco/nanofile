@@ -33,8 +33,6 @@ async fn seed_reset_token(f: &TestFixture, raw: &str) -> i32 {
 async fn device_wiped_accepts_bearer_and_revokes_sync_tokens() {
     let f = TestFixture::new().await;
 
-    // The fixture's token belongs to device "dev-1"; issue a fresh login on a
-    // named device so the wipe can address it.
     let resp = f
         .client
         .post_form(
@@ -56,8 +54,6 @@ async fn device_wiped_accepts_bearer_and_revokes_sync_tokens() {
         .unwrap()
         .to_string();
 
-    // A sync token for the same device: a second user is not needed, the repo
-    // token peer id is the client_id query parameter.
     let repo_tokens = f
         .client
         .get(
@@ -75,7 +71,6 @@ async fn device_wiped_accepts_bearer_and_revokes_sync_tokens() {
         .map(str::to_string)
         .expect("sync token for the repo");
 
-    // The device can use the repo token against /seafhttp/.
     let probe = f
         .client
         .put_sync(
@@ -94,7 +89,6 @@ async fn device_wiped_accepts_bearer_and_revokes_sync_tokens() {
         probe.status()
     );
 
-    // Android's shape: Authorization header, empty body, no token field.
     let resp = f
         .client
         .post_bytes("/api2/device-wiped/", Some(&device_token), Vec::new())
@@ -106,11 +100,9 @@ async fn device_wiped_accepts_bearer_and_revokes_sync_tokens() {
         resp.text().await.unwrap_or_default()
     );
 
-    // The device's API token is gone.
     let resp = f.client.ping(&device_token).await;
     assert_eq!(resp.status(), 401, "wiped device token must be invalid");
 
-    // ...and so is its repository sync token.
     let probe = f
         .client
         .put_sync(
@@ -184,7 +176,6 @@ async fn password_reset_token_is_single_use_under_concurrency() {
         "exactly one concurrent reset may succeed, got {statuses:?}"
     );
 
-    // Whichever password won must be the one that works, and only one of them.
     let first_ok = f
         .client
         .login(&f.email, "firstpassword1")
@@ -204,7 +195,6 @@ async fn password_reset_token_is_single_use_under_concurrency() {
         "exactly one of the two new passwords must be accepted"
     );
 
-    // The link is spent for good.
     let resp = client
         .post(&url)
         .header("origin", &base)
@@ -229,7 +219,6 @@ async fn password_change_revokes_reset_tokens_and_access_tokens() {
     let raw = "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface";
     seed_reset_token(&f, raw).await;
 
-    // Mint an in-memory upload token for the user, as `/upload-link/` would.
     let link = f
         .client
         .get(
@@ -240,7 +229,6 @@ async fn password_change_revokes_reset_tokens_and_access_tokens() {
     assert_eq!(link.status(), 200, "upload-link failed");
     let upload_url: String = link.json().await.unwrap();
 
-    // Change the password through the browser flow.
     let cookie_client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -284,7 +272,6 @@ async fn password_change_revokes_reset_tokens_and_access_tokens() {
         .unwrap();
     assert_eq!(resp.status(), 302, "password change should redirect");
 
-    // The pre-rotation reset link is dead.
     let model = f
         .server
         .repos
@@ -297,7 +284,6 @@ async fn password_change_revokes_reset_tokens_and_access_tokens() {
         "a password change must delete outstanding reset tokens"
     );
 
-    // The pre-rotation in-memory upload URL is dead too.
     let resp = f
         .client
         .post_upload_chunk(&upload_url, "/", "x.bin", b"12345", 0, 5)
@@ -308,7 +294,6 @@ async fn password_change_revokes_reset_tokens_and_access_tokens() {
         "an upload URL minted before the password change must not still work"
     );
 
-    // And the new password is the live one.
     let resp = f.client.login(&f.email, "rotatedpass1").await;
     assert_eq!(resp.status(), 200, "new password must work");
 }
@@ -329,7 +314,6 @@ async fn deactivating_an_account_stops_its_capability_urls() {
         .await;
     let upload_url: String = link.json().await.unwrap();
 
-    // Sanity: the URL works while the account is active.
     let ok = f
         .client
         .post_upload_chunk(&upload_url, "/", "before.bin", b"abc", 0, 3)
@@ -340,7 +324,6 @@ async fn deactivating_an_account_stops_its_capability_urls() {
         ok.status()
     );
 
-    // Deactivate the account directly.
     let user = infra::entity::user::Entity::find_by_id(f.user_id)
         .one(&*f.server.db)
         .await
@@ -405,7 +388,6 @@ async fn totp_code_cannot_be_replayed() {
         second.status()
     );
 
-    // The refusal must be the 2FA challenge, not an unrelated error.
     assert_eq!(
         second
             .headers()

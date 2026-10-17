@@ -163,13 +163,11 @@ async fn test_download_info_fields_complete() {
 
     let body: serde_json::Value = resp.json().await.unwrap();
 
-    // Required by seaf-cli (KeyError if missing)
     assert_eq!(body["email"].as_str().unwrap(), "test@example.com");
     assert_eq!(body["repo_name"].as_str().unwrap(), "My Library");
     assert_eq!(body["repo_id"].as_str().unwrap(), repo_id);
     assert!(body["token"].as_str().unwrap().len() >= 40);
 
-    // Required by seaf-daemon clone (uses .get() with defaults, but must be present)
     assert_eq!(body["repo_version"].as_i64().unwrap(), 1);
     // salt: None → null in JSON
     assert!(body["salt"].is_null());
@@ -185,7 +183,6 @@ async fn test_download_info_fields_complete() {
     assert!(body["magic"].is_null());
     assert!(body["random_key"].is_null());
 
-    // Relay fields (not used but should be present)
     assert!(body["relay_id"].is_null());
     assert!(body["relay_addr"].is_null());
     assert!(body["relay_port"].is_null());
@@ -202,18 +199,14 @@ async fn test_trailing_slash_routes() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap();
 
-    // All these should return 200 (not 404), matching Seafile client URLs
     let repo_id = common::create_test_repo(&client, token, "Trailing Test").await;
 
-    // GET /api2/repos/ with trailing slash
     let resp = client.list_repos(token).await;
     assert_eq!(resp.status(), 200);
 
-    // GET /api2/repos/{id}/ with trailing slash
     let resp = client.get_repo(token, &repo_id).await;
     assert_eq!(resp.status(), 200);
 
-    // GET /api2/repos/{id}/download-info/ with trailing slash
     let resp = client.download_info(token, &repo_id).await;
     assert_eq!(resp.status(), 200);
 }
@@ -229,7 +222,6 @@ async fn test_create_repo_trailing_slash() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap();
 
-    // POST /api2/repos/ (with trailing slash) must return 201
     let resp = client.create_repo(token, "Test Repo").await;
     assert_eq!(resp.status(), 201);
 }
@@ -253,7 +245,6 @@ async fn test_delete_repo() {
     assert_eq!(resp.status(), 404);
 }
 
-/// B.11.1 — POST /api2/repos/{repo_id}/?op=rename — rename repo.
 #[tokio::test]
 async fn test_rename_repo_success() {
     let f = TestFixture::new().await;
@@ -270,14 +261,12 @@ async fn test_rename_repo_success() {
         "rename must return the JSON string \"success\" (Android SupportResponseConverter)"
     );
 
-    // Verify via GET.
     let resp = f.client.get_repo(&f.api_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["name"], "NewName");
 }
 
-/// Regression: rename repo via multipart POST (Android client format).
 #[tokio::test]
 async fn test_rename_repo_multipart_body() {
     let f = TestFixture::new().await;
@@ -294,19 +283,16 @@ async fn test_rename_repo_multipart_body() {
         "rename must return the JSON string \"success\" (Android SupportResponseConverter)"
     );
 
-    // Verify via GET.
     let resp = f.client.get_repo(&f.api_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["name"], "MultipartName");
 }
 
-/// B.11.2 — Non-owner cannot rename a repo.
 #[tokio::test]
 async fn test_rename_repo_non_owner() {
     let f = TestFixture::new().await;
 
-    // Create a second user.
     create_test_user(f.server.db.as_ref(), "other@test.com", "password").await;
     let resp = f.client.login("other@test.com", "password").await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -324,11 +310,9 @@ async fn test_rename_repo_non_owner() {
 async fn test_rename_repo_invalid_name() {
     let f = TestFixture::new().await;
 
-    // Empty name.
     let resp = f.client.rename_repo(&f.api_token, &f.repo_id, "").await;
     assert_eq!(resp.status(), 400);
 
-    // Name with slash.
     let resp = f
         .client
         .rename_repo(&f.api_token, &f.repo_id, "bad/name")
@@ -336,12 +320,10 @@ async fn test_rename_repo_invalid_name() {
     assert_eq!(resp.status(), 400);
 }
 
-/// B.11.4 — Non-owner cannot delete a repo.
 #[tokio::test]
 async fn test_delete_repo_non_owner() {
     let f = TestFixture::new().await;
 
-    // Create a second user.
     create_test_user(f.server.db.as_ref(), "other2@test.com", "password").await;
     let resp = f.client.login("other2@test.com", "password").await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -351,7 +333,6 @@ async fn test_delete_repo_non_owner() {
     assert_eq!(resp.status(), 403);
 }
 
-/// B.11.5 — DELETE /api/v2.1/repos/{repo_id}/ — delete repo via v2.1 API.
 #[tokio::test]
 async fn test_delete_repo_v21_success() {
     let f = TestFixture::new().await;
@@ -365,17 +346,14 @@ async fn test_delete_repo_v21_success() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Verify it's gone.
     let resp = f.client.get_repo(&f.api_token, &f.repo_id).await;
     assert_eq!(resp.status(), 404);
 }
 
-/// B.11.6 — Non-owner cannot delete a repo via v2.1.
 #[tokio::test]
 async fn test_delete_repo_v21_non_owner() {
     let f = TestFixture::new().await;
 
-    // Create a second user.
     create_test_user(f.server.db.as_ref(), "other3@test.com", "password").await;
     let resp = f.client.login("other3@test.com", "password").await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -391,12 +369,10 @@ async fn test_delete_repo_v21_non_owner() {
     assert_eq!(resp.status(), 403);
 }
 
-/// B.11.7 — POST /api2/repos/ accepts JSON body (web frontend format).
 #[tokio::test]
 async fn test_create_repo_json_body() {
     let f = TestFixture::new().await;
 
-    // Create a repo with JSON body (as the web frontend does).
     let resp = f
         .client
         .post_json(
@@ -411,12 +387,10 @@ async fn test_create_repo_json_body() {
     assert!(body["id"].as_str().is_some());
 }
 
-/// Regression: POST /api2/repos/ accepts multipart body (Android client format).
 #[tokio::test]
 async fn test_create_repo_multipart_body() {
     let f = TestFixture::new().await;
 
-    // Create a repo with multipart body (as the Android client does).
     let resp = f
         .client
         .create_repo_multipart(&f.api_token, "Multipart Created Repo")
@@ -437,7 +411,6 @@ async fn test_create_repo_multipart_body() {
 }
 
 /// Creating a library mints no credential when the caller reported no device.
-///
 /// The token used to be issued up front, which left a browser-created library
 /// an unattributed `sync_tokens` row that nothing held: the credential page
 /// showed it as an unnamed device that had never synced.
@@ -523,7 +496,6 @@ async fn repo_sync_tokens(
         .unwrap()
 }
 
-/// Regression: POST /api2/repos/ accepts multipart body with description.
 #[tokio::test]
 async fn test_create_repo_multipart_with_desc() {
     let f = TestFixture::new().await;
@@ -540,17 +512,12 @@ async fn test_create_repo_multipart_with_desc() {
     assert!(body["id"].as_str().is_some());
 }
 
-// ============================================================================
-// Security: repo-scoped metadata / thumbnail / exif / history require membership
-// ============================================================================
-
 /// Security: a non-member must not read another user's repo metadata,
 /// thumbnails, EXIF data, or history.
 #[tokio::test]
 async fn test_metadata_thumbnail_exif_history_require_membership() {
     let f = TestFixture::new().await;
 
-    // Second user who is not a member of f.repo_id.
     create_test_user(f.server.db.as_ref(), "other@example.com", "password123").await;
     let resp = f.client.login("other@example.com", "password123").await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -558,7 +525,6 @@ async fn test_metadata_thumbnail_exif_history_require_membership() {
 
     let rid = &f.repo_id;
 
-    // Metadata config
     let resp = f
         .client
         .get(&format!("/api/v2.1/repos/{rid}/metadata/"), Some(&b_token))
@@ -569,7 +535,6 @@ async fn test_metadata_thumbnail_exif_history_require_membership() {
         "metadata config must require membership"
     );
 
-    // Metadata tags
     let resp = f
         .client
         .get(
@@ -579,7 +544,6 @@ async fn test_metadata_thumbnail_exif_history_require_membership() {
         .await;
     assert_eq!(resp.status(), 403, "metadata tags must require membership");
 
-    // Thumbnail
     let resp = f
         .client
         .get(
@@ -589,7 +553,6 @@ async fn test_metadata_thumbnail_exif_history_require_membership() {
         .await;
     assert_eq!(resp.status(), 403, "thumbnail must require membership");
 
-    // EXIF
     let resp = f
         .client
         .get(
@@ -599,7 +562,6 @@ async fn test_metadata_thumbnail_exif_history_require_membership() {
         .await;
     assert_eq!(resp.status(), 403, "exif must require membership");
 
-    // History
     let resp = f
         .client
         .get(
@@ -619,8 +581,6 @@ async fn test_metadata_thumbnail_exif_history_require_membership() {
         .await;
     assert_eq!(resp.status(), 200, "owner keeps access to metadata");
 }
-
-// ── repo_id validation ────────────────────────────────────────────────
 
 /// POST /api2/repos/ with an explicit `repo_id` in the body.
 async fn create_repo_with_id(f: &TestFixture, name: &str, repo_id: &str) -> reqwest::Response {
@@ -662,7 +622,6 @@ async fn test_create_repo_rejects_non_uuid_repo_id() {
         );
     }
 
-    // None of the rejected ids may exist in the database.
     use sea_orm::EntityTrait;
     let count = infra::entity::repo::Entity::find()
         .all(f.server.db.as_ref())
@@ -764,7 +723,6 @@ async fn test_chunked_upload_temp_dir_is_hashed_not_raw_repo_id() {
         "no directory may be named after the raw repo id"
     );
 
-    // Nothing escaped `{temp_dir}/upload/`.
     for entry in std::fs::read_dir(&upload_root).unwrap() {
         let path = entry.unwrap().path();
         assert!(
@@ -779,8 +737,6 @@ async fn test_chunked_upload_temp_dir_is_hashed_not_raw_repo_id() {
         );
     }
 }
-
-// ── 官方客户端兼容性（模拟客户端真实请求）──────────────────────────────────
 
 /// Compatibility: the official desktop client (`src/ui/create-repo-dialog.cpp`)
 /// creates a **plain** library without any `repo_id`, letting the server
@@ -815,15 +771,12 @@ async fn test_compat_desktop_plain_repo_without_repo_id() {
 
 /// Compatibility: the desktop client's **encrypted-library creation** payload,
 /// reproduced exactly.
-///
 /// `CreateRepoRequest` in `seafile-client/src/api/requests.cpp` sends
 /// `application/x-www-form-urlencoded` with every value stringified by
 /// `QString::number()` / `setFormParam`:
-///
 /// ```text
 /// name, desc, enc_version="4", repo_id, magic, random_key, salt
 /// ```
-///
 /// (plus `pwd_hash_algo`/`pwd_hash_params`/`pwd_hash` when
 /// `/api2/server-info/` advertises an algorithm, which is covered by
 /// `encrypted_repo_test.rs`.) Note there is **no** `encrypted` field — the
@@ -843,7 +796,6 @@ async fn test_compat_desktop_encrypted_create_form_payload() {
     let random_key =
         infra::crypto::key_derivation::generate_random_key_for_repo(password, 4, &salt).unwrap();
 
-    // Exactly the desktop's form fields, in the client's order, all as strings.
     let resp = reqwest::Client::builder()
         .no_proxy()
         .build()
@@ -964,7 +916,6 @@ async fn test_compat_client_uuid_is_validated_not_rejected_wholesale() {
     let created: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(created["repo_id"].as_str().unwrap(), client_repo_id);
 
-    // The same request with a traversal id stays rejected — that is the fix.
     let mut bad = body.clone();
     bad["repo_id"] = serde_json::json!("../../client-uuid-check");
     bad["name"] = serde_json::json!("client-uuid-check-2");

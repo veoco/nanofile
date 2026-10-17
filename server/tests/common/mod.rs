@@ -42,8 +42,8 @@ pub struct TestServer {
     /// through a route.
     pub state: Arc<AppState>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-    /// Directories created under `/tmp` for this server (block storage root and
-    /// the full-text index dir). Removed on `Drop` so repeated test runs don't
+    /// Directories created under `/tmp` for this server (block root and full-text index
+    /// dir). Removed on `Drop` so repeated runs do not leak inodes in the temp filesystem.
     /// leak inodes in the temp filesystem.
     temp_dirs: Vec<std::path::PathBuf>,
 }
@@ -410,29 +410,12 @@ impl TestServer {
         let port = listener.local_addr().unwrap().port();
         let base_url = format!("http://127.0.0.1:{}", port);
 
-        // Documents are parsed by the extraction worker, which is this package's
-        // binary re-executed: an integration test runs in its own process, so the
-        // server cannot re-execute itself and has to be told where the binary is.
-        // Setting it here means every document test goes through the real
-        // confined child, and the self-test below fails in one place — with the
-        // reason — if this host cannot bound it, instead of letting each document
-        // test fail on its own.
-        //
-        // The image profile is measured beside it: avatars, EXIF and the image
-        // thumbnails are the other three paths that decode bytes a user chose,
-        // each of them through this one profile. A host that bounds documents
-        // and not images would otherwise pass every test in this file and fail
-        // only in the three that ask for an image.
-        //
-        // What the sandbox may run is one question and not a policy these tests
-        // are about: the master switch goes on once per process, and the host's
-        // own answer — the grade, whether the container could be created — is
-        // asserted where it belongs, in `sandbox_probe_test`. A test that changes
-        // the switch puts it back.
-        //
-        // `configure_executable` is process-global and set once; a test that
-        // wants a worker that cannot run points it elsewhere before the first
-        // fixture and is then responsible for the outcome.
+        // Documents are parsed by the extraction worker, which is this package's binary
+        // re-executed; an integration test runs in its own process, so the binary path must
+        // be set explicitly for every document test to go through the real confined child.
+        // The image profile is measured too: avatars, EXIF and thumbnails decode user bytes
+        // through that one profile. The master switch is set once per process here; the
+        // host's own answer is asserted in `sandbox_probe_test`.
         sandbox::enable_real_worker();
 
         // Temp directories are derived from the random port so each server gets
@@ -522,11 +505,8 @@ impl TestServer {
                     .share_download_max_per_minute,
                 webdav_max_failures_per_5min: 30,
                 reindex_max_per_hour: 5,
-                // The index tests poll `/api2/search/` while the debounced
-                // commit lands; the production cadence (60/min) would throttle
-                // the test's own polling on a slow runner. `0` disables the
-                // meter, which its own unit test covers; a test that wants it
-                // can set `auth.search_max_per_minute` in its `tweak`.
+                // Index tests poll /api2/search/ while the debounced commit lands; the
+                // production 60/min cadence would throttle a slow runner, so the meter is off.
                 search_max_per_minute: 0,
                 api_key_ttl_presets_days: vec![7, 30, 90, 180, 365],
                 api_key_max_ttl_days: 0,
@@ -561,8 +541,7 @@ impl TestServer {
             sandbox: infra::config::SandboxConfig::default(),
             tasks: infra::config::TaskConfig {
                 max_active_tasks: task_limits.unwrap_or_default().max_active_tasks,
-                // Tests submit few runs; the byte budget only has to be large
-                // enough not to interfere.
+                // Tests submit few runs; the byte budget only has to be large enough not to interfere.
                 ..Default::default()
             },
             admin_init: Default::default(),
@@ -575,7 +554,6 @@ impl TestServer {
             settings: Default::default(),
         };
         tweak(&mut config);
-        // Ensure block directory exists
         std::fs::create_dir_all(&config.storage.block_dir).unwrap();
 
         let temp_file_manager = server::handler::web::temp_file::TempFileManager::new(
@@ -588,20 +566,15 @@ impl TestServer {
         let state = Arc::new(AppState::new(db, config, temp_file_manager));
         let block_dir = state.config().storage.block_dir.clone();
 
-        // The application the binary serves, middleware and all. It used to be
-        // a copy of the router behind a permissive 512 MiB body limit, which
-        // meant a route or a middleware could change without these tests
-        // noticing; the limits now come from the config below, so a test that
-        // needs a different one can set it in `tweak`.
+        // Serve the real app, middleware and all, so tests exercise shipped routing and limits.
         let app = server::app::build_app(state.clone());
 
-        // Debug: Print info about the server
         tracing::info!("TestServer started on port {port}");
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
-        // Use the same connection loop the binary ships (timer + header-read
-        // timeout + connect info + upgrade support) so tests cover it.
+        // Use the connection loop the binary ships (timer + header-read timeout + upgrade
+        // support) so tests cover it.
         tokio::spawn(async move {
             server::serve::serve_with_timeouts(
                 listener,
@@ -613,9 +586,8 @@ impl TestServer {
             .expect("server failed");
         });
 
-        // Poll until the server is actually ready (typically <1ms). `/health`
-        // rather than an API endpoint: it is the route that exists to answer
-        // this question, and it depends on nothing.
+        // Poll /health until the server is ready (typically <1ms): it exists to answer this
+        // question and depends on nothing else.
         // Use no_proxy() to avoid proxy resolution delays even when
         // http_proxy is set in the environment.
         let health_url = format!("{}/health", base_url);
@@ -653,8 +625,7 @@ impl Drop for TestServer {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
-        // Clean up the temp directories this server created so repeated test
-        // runs don't accumulate files in /tmp (and exhaust its inodes).
+        // Remove the temp directories this server created so repeated runs do not fill /tmp.
         for dir in &self.temp_dirs {
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -683,14 +654,9 @@ pub async fn create_test_user(db: &DatabaseConnection, email: &str, password: &s
     user.insert(db).await.unwrap().id
 }
 
-/// Grant `user_id` access to `repo_id` by inserting the `repo_members` row
-/// directly.
-///
-/// No HTTP surface creates a share any more — the `beshare` endpoint is gone
-/// along with the rest of the user-to-user sharing feature — but the permission
-/// predicates still read this table, so a test that exercises "a non-owner with
-/// `permission` can (or cannot) do X" seeds the row here instead of going
-/// through the API.
+/// Grant `user_id` access to `repo_id` by inserting the `repo_members` row directly.
+/// No HTTP surface creates shares any more, but the permission predicates still read
+/// this table, so tests of "a non-owner can (or cannot) do X" seed the row here.
 pub async fn add_repo_member(
     db: &DatabaseConnection,
     repo_id: &str,
@@ -711,11 +677,8 @@ pub async fn add_repo_member(
     .id
 }
 
-/// Revoke a `repo_members` grant inserted by [`add_repo_member`].
-///
-/// The counterpart of the removed unshare endpoint: the membership row is what
-/// every permission predicate reads, so deleting it directly is exactly the
-/// state the server has to handle after access is withdrawn.
+/// Revoke a grant inserted by [`add_repo_member`]. The membership row is what every
+/// permission predicate reads, so deleting it is the state after access is withdrawn.
 pub async fn remove_repo_member(db: &DatabaseConnection, repo_id: &str, user_id: i32) {
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     infra::entity::repo_member::Entity::delete_many()
@@ -763,12 +726,8 @@ pub async fn get_sync_token(client: &client::TestClient, api_token: &str, repo_i
     body["token"].as_str().unwrap().to_string()
 }
 
-// ── Sync-protocol commit helpers ─────────────────────────────────────────
-//
-// The `PUT /seafhttp/repo/{id}/commit/HEAD` path is what desktop/mobile
-// clients drive; its tree diff feeds activity logging and the search index.
-// These helpers build such a commit from a flat dirent list, so tests can
-// exercise renames/moves/edits the way a real client produces them.
+// Sync-protocol commit helpers: the `PUT /seafhttp/repo/{id}/commit/HEAD` path is what
+// desktop/mobile clients drive, and its tree diff feeds activity logging and the index.
 
 /// A file to upload as an fs object: `(name, content, mode)`.
 pub type SyncFileSpec<'a> = (&'a str, &'a [u8], i32);
@@ -779,18 +738,14 @@ pub fn fs_object_id(data: &[u8]) -> String {
 }
 
 /// Create an empty *file* fs object with a random id and return it.
-///
-/// The id is not content-derived; `recv_fs` stores objects under the id the
-/// client sends and the sync commit references that same id, so a random id is
-/// accepted (the same trick `common/client.rs::upload_file` relies on).
+/// `recv_fs` stores objects under the id the client sends, so a random id is accepted.
 pub async fn sync_put_file(
     client: &client::TestClient,
     token: &str,
     repo_id: &str,
     content: &[u8],
 ) -> String {
-    // Upload the content as a block and reference it, so the file is a normal
-    // readable object (the indexer re-reads it from block storage).
+    // Upload the content as a block and reference it, so the file is a normal readable object.
     let block_id = fs_object_id(content);
     let resp = client
         .put_block(token, repo_id, &block_id, content.to_vec())
@@ -828,11 +783,9 @@ pub async fn sync_put_file(
     id
 }
 
-/// Build and advance a sync commit for a flat root directory.
-///
-/// `entries` is `(file name, content)`; `dirs` is `(directory name,
-/// child entries)`; `parent` is the previous commit id (`None` for the first
-/// commit). Returns the new commit id.
+/// Build and advance a sync commit for a flat root directory. `entries` is
+/// `(file name, content)`, `dirs` is `(directory name, child entries)` and `parent` is
+/// the previous commit id (`None` for the first); returns the new commit id.
 pub async fn sync_commit(
     client: &client::TestClient,
     sync_token: &str,
@@ -963,7 +916,6 @@ pub async fn sync_commit(
 }
 
 /// Opinionated test fixture that sets up a server, user, repo, and tokens.
-///
 /// ```
 /// let f = TestFixture::new().await;
 /// // f.client, f.api_token, f.repo_id, f.sync_token, f.user_id are all ready.
@@ -981,7 +933,6 @@ pub struct TestFixture {
 
 impl TestFixture {
     /// Create a full test environment with one user and one repo.
-    ///
     /// Default user: `test@example.com` / `password`
     /// Default repo: `test-repo`
     pub async fn new() -> Self {
@@ -1035,7 +986,6 @@ impl TestFixture {
     }
 
     /// Create a full test environment whose media helper is `path`.
-    ///
     /// `storage.ffmpeg_path` is a command name looked up on the process's own
     /// `PATH`, and the sandbox grants the one file it resolves to. A test that
     /// has an absolute helper — the real `ffmpeg` CI installed, rather than a
@@ -1201,13 +1151,11 @@ impl TestFixture {
 
         let user_id = create_test_user(db, email, password).await;
 
-        // Login to get API token
         let resp = client.login(email, password).await;
         assert_eq!(resp.status(), 200, "login failed for {email}");
         let body: serde_json::Value = resp.json().await.unwrap();
         let api_token = body["token"].as_str().unwrap().to_string();
 
-        // Create a repo and get its sync token
         let repo_id = create_test_repo(&client, &api_token, repo_name).await;
         let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
 
@@ -1292,12 +1240,9 @@ pub struct TestEnv {
 }
 
 /// Shared test fixture that starts a single server per test binary.
-///
 /// Use via `tokio::sync::OnceCell` for lazy initialization:
-///
 /// ```ignore
 /// static SHARED: tokio::sync::OnceCell<SharedFixture> = tokio::sync::OnceCell::const_new();
-///
 /// #[tokio::test]
 /// async fn my_test() {
 ///     let shared = SHARED.get_or_init(|| async { SharedFixture::new().await }).await;
@@ -1380,12 +1325,9 @@ impl SharedFixture {
     }
 }
 
-// ── Document fixtures ────────────────────────────────────────────────
-//
-// The index tests upload real container formats, so these build the smallest
-// file each parser accepts: a one-page PDF with a single text object, and an
-// OOXML package holding one paragraph, one cell or one slide. `text` is
-// inserted verbatim, so it must be plain XML-safe text with no `&`, `<` or `>`.
+// Document fixtures: the index tests upload real container formats, so these build the
+// smallest file each parser accepts. `text` is inserted verbatim and must be plain
+// XML-safe text with no `&`, `<` or `>`.
 
 const XML_DECL: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#;
 
@@ -1393,18 +1335,13 @@ const OFFICE_DOC_REL: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
 
 /// Build a one-page PDF whose content stream draws `text`.
-///
-/// Written out by hand so the cross-reference table is genuinely valid: the
-/// parser must accept it for the round-trip to mean anything.
+/// Written by hand so the cross-reference table is genuinely valid.
 pub fn minimal_pdf(text: &str) -> Vec<u8> {
     minimal_pdf_with_stream(&format!("BT /F1 24 Tf 72 720 Td ({text}) Tj ET"))
 }
 
-/// Build a one-page PDF whose content stream is `stream` verbatim.
-///
-/// The same hand-written structure as [`minimal_pdf`], for a caller that needs a
-/// stream larger than one text object: a document at the size cap is built this
-/// way. The stream must be ASCII, because the offsets below are byte offsets.
+/// Build a one-page PDF whose content stream is `stream` verbatim, for a caller that needs
+/// more than one text object (e.g. a document at the size cap). The stream must be ASCII.
 pub fn minimal_pdf_with_stream(stream: &str) -> Vec<u8> {
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
@@ -1567,14 +1504,9 @@ fn zip_parts(parts: &[(&str, String)]) -> Vec<u8> {
     writer.finish().expect("finish archive").into_inner()
 }
 
-/// A `.docx` whose central directory claims a part expands past the extractor's
-/// budget.
-///
-/// Only the declaration is a lie: the package itself is a few hundred bytes, so
-/// the fixture costs the suite nothing while exercising the real pipeline. A
-/// genuinely 256 MiB-expanding part would take seconds to build and prove no
-/// more — the budget's decoded-byte path is covered by the unit tests, and this
-/// is the shape a crafted file actually takes.
+/// A `.docx` whose central directory claims a part expands past the extractor's budget.
+/// Only the declaration is a lie: the package is a few hundred bytes, and this is the
+/// shape a crafted file actually takes.
 pub fn bomb_docx() -> Vec<u8> {
     let mut package = minimal_docx("zebraquartz");
     let declared = (8 * server::indexer::extract::MAX_STRUCTURED_BYTES + 1) as u32;
@@ -1583,7 +1515,6 @@ pub fn bomb_docx() -> Vec<u8> {
 }
 
 /// Rewrite the declared uncompressed size of every central directory entry.
-///
 /// Offset 24 of a central directory header (`PK\x01\x02`) is the uncompressed
 /// size, which is the field the archive reader believes.
 fn patch_declared_uncompressed_size(package: &mut [u8], declared: u32) {

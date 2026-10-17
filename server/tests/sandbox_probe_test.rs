@@ -1,25 +1,10 @@
 //! What each profile's startup report says on this host.
 //!
-//! The typed half comes from `Report`, the mechanism tokens from the profile
-//! that installed them, and this is the one place either is asserted — on the
-//! path the server walks at startup. No fixture is built, so the worker's
-//! process-global executable is left alone.
-//!
-//! The probe measures under the master switch alone
-//! (`common::sandbox::configure_probe_requirement`): these assertions are about
-//! the mechanisms a host installs, not about a grade some setting asked for. On
-//! Linux and macOS the platform installs everything; on Windows the launch asks
-//! for its container and reports what came back.
-//!
-//! It is also where `skipped0`/`skipped1`/`skipped2` are read: on Windows each
-//! walk step that was tried and did not report leaves its name and its reason, so
-//! a host that fell back cannot be read as a host that never tried. One entry per
-//! creation that was passed over, in the order the walk tried them — `confined`
-//! first, then `plain`, then `unrestricted`. A walk starts wherever this process's
-//! earlier launches left it, so a host that gave the container up before the probe
-//! began would record `plain` first; every test here goes through
-//! `common::sandbox::with_requirement`, which installs the requirement and clears
-//! both records, so what they assert is the whole ladder.
+//! The typed facts come from `Report` and the mechanism tokens from the profile that installed
+//! them; no fixture is built, so the worker's process-global executable is left alone. The probe
+//! measures under the master switch alone, and Windows walk steps that were passed over leave
+//! their name and reason in `skipped0`/`skipped1`/`skipped2`; each test goes through
+//! `with_requirement`, which clears both records, so the whole ladder is asserted.
 
 mod common;
 
@@ -32,13 +17,11 @@ use common::sandbox::{
 };
 use server::sandbox::{JobVerdict, Profile, Report};
 
-/// A fact that has to be there, or a panic carrying the whole line.
 fn value<'a>(report: &'a Report, key: &str) -> &'a str {
     fact(report, key).unwrap_or_else(|| panic!("no {key} in: {}", report.detail))
 }
 
 /// A bare token of the fact list, matched by its prefix.
-///
 /// The resource clamps are one fact carrying a list of its own
 /// (`limits=as…,cpu…,nofile…,fsize…m,core0`), so they are looked up as tokens
 /// rather than as `key=value`.
@@ -50,14 +33,12 @@ fn bare<'a>(report: &'a Report, prefix: &str) -> Option<&'a str> {
         .find(|entry| entry.starts_with(prefix))
 }
 
-/// Whether a value is digits.
 #[cfg(target_os = "linux")]
 fn is_number(text: &str) -> bool {
     !text.is_empty() && text.chars().all(|c| c.is_ascii_digit())
 }
 
 /// What every profile on every platform has to say.
-///
 /// The resource bound is the one item with no alternative: a profile that could
 /// not establish it reports `limits=off`, and this is where that is caught
 /// wherever it happens. The other items are asserted on the platform that
@@ -74,7 +55,6 @@ fn the_common_answer(profile: Profile, report: &Report, line: &str) {
     assert!(line.contains("text_chars=8388608"), "{line}");
 }
 
-/// The documents profile parses every structured format it carries, whole.
 #[test]
 fn the_documents_report_shows_a_worker_that_still_reads() {
     let (report, line) = with_requirement(configure_probe_requirement(), || {
@@ -129,7 +109,6 @@ fn the_images_report_shows_a_worker_that_still_decodes() {
     the_platform_answer(Profile::Images, &report);
 }
 
-/// The media profile starts the helper it is granted, and the helper decodes.
 #[test]
 fn the_media_report_shows_a_helper_that_still_decodes() {
     if !helper_runs() {
@@ -176,19 +155,10 @@ fn the_media_report_shows_a_helper_that_still_decodes() {
     the_platform_answer(Profile::Media, &report);
 }
 
-/// The shape a host that refuses the container produces: the bound and the token.
-///
-/// This is the case the whole redesign is about. The container is the only
-/// mechanism that can add the files layer on that platform, creating one needs a
-/// registry profile and package access on the worker's own image, and a host
-/// sandbox that confines every command it runs refuses exactly that. The feature
-/// runs anyway — on the Job Object alone, which is what keeps the server up —
-/// and the report says which layer is missing rather than the feature being
-/// disabled over it.
-///
-/// Which of the two shapes a runner produces is the runner's answer, so this
-/// asserts the one that is not the container's when that is what came back, and
-/// leaves the container's own assertions to the other cases.
+/// The shape a host that refuses the container produces: the bound alone. The feature runs on
+/// the Job Object alone, and the report names the missing layer rather than disabling the
+/// feature. Which shape a runner produces is the runner's answer; the container's own case
+/// asserts the rest.
 #[cfg(windows)]
 #[test]
 fn the_documents_profile_reports_the_bound_without_a_container() {
@@ -229,15 +199,10 @@ fn the_documents_profile_reports_the_bound_without_a_container() {
     the_platform_answer(Profile::Documents, &report);
 }
 
-/// The items the profile has, and why those are the right ones here.
-///
-/// The two platforms that install the files layer have every item for the parser
-/// profiles, and the media profile has all but `process`, which it cannot carry:
-/// it starts the helper by copying the process, and the item's definition is that
-/// processes cannot be multiplied. A Windows host that can start neither a
-/// container nor a restrained child gives the resource bound alone, and saying so
-/// is the point of this branch: the feature runs, its bound is in place, and the
-/// item list is the honest one.
+/// The items the profile has: both files-layer platforms carry every parser item, and media has
+/// all but `process` (it starts the helper by copying the process). A Windows host that can
+/// start neither a container nor a restrained child gives the resource bound alone, and the item
+/// list says so.
 fn the_items_answer(report: &Report) {
     #[cfg(not(windows))]
     {
@@ -266,7 +231,6 @@ fn the_items_answer(report: &Report) {
     }
 }
 
-/// The layers Linux installs, and what they bound.
 #[cfg(target_os = "linux")]
 fn the_platform_answer(profile: Profile, report: &Report) {
     assert!(has(report, "no_new_privs=on"), "{}", report.detail);
@@ -327,7 +291,6 @@ fn the_platform_answer(profile: Profile, report: &Report) {
     }
 }
 
-/// The profile the parent's runner applies, and the residuals it leaves.
 #[cfg(target_os = "macos")]
 fn the_platform_answer(profile: Profile, report: &Report) {
     // Without this token a Seatbelt profile that silently did nothing would be
@@ -375,15 +338,10 @@ fn the_platform_answer(profile: Profile, report: &Report) {
     }
 }
 
-/// The creation the parent settled on, and what it bought.
-///
-/// Two shapes reach this file on Windows, and which one is the host's answer:
-/// the container where one could be created, and the bound under the job alone
-/// where it could not — which is what a host sandbox that confines every command
-/// it runs produces, and what this repository's CI runner gives. Both shapes have
-/// to carry the job object, the restricted token or the tokenless creation it
-/// fell back to, and the mitigations; only the container adds the files and
-/// network items.
+/// The creation the parent settled on. Two shapes reach this file: the container where one could
+/// be created, and the bound under the job alone where a host sandbox refuses it. Both carry the
+/// job object, the token (or its absence) and the mitigations; only the container adds files and
+/// network.
 #[cfg(windows)]
 fn the_platform_answer(profile: Profile, report: &Report) {
     let rung = value(report, "rung");

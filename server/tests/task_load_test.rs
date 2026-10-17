@@ -30,13 +30,11 @@ const CLIENTS: usize = 12;
 const REQUESTS_PER_CLIENT: usize = 20;
 
 /// The bound the interactive requests must stay under while the job runs.
-///
 /// Deliberately loose. It is not here to pin a number a busy machine can drift
 /// past, but to fail if something makes the request path wait on the job.
 const P99_BOUND: Duration = Duration::from_millis(500);
 
 /// A request head plus part of a body, and never the rest.
-///
 /// The server is still reading this body — and so still counting the request
 /// as in flight — for as long as the connection stays open. That is what makes
 /// "the server is busy" a fact the test controls rather than a race.
@@ -48,7 +46,6 @@ Content-Length: 512\r\n\
 {\"username\":\"someone@example.com\",\"password\":\"unfinis";
 
 /// Burn real CPU without yielding to the runtime.
-///
 /// Deliberately synchronous: a heavy background pass competes for the same
 /// runtime the server's requests run on, and this reproduces that.
 fn burn(duration: Duration) {
@@ -152,7 +149,6 @@ async fn interactive_requests_stay_responsive_while_a_heavy_job_runs() {
         max_worker_busy_pct: 100,
     });
 
-    // Put one real request in flight and leave it there.
     let mut stalled =
         tokio::net::TcpStream::connect(f.server.base_url.trim_start_matches("http://"))
             .await
@@ -178,7 +174,6 @@ async fn interactive_requests_stay_responsive_while_a_heavy_job_runs() {
         .await
         .expect("the run is accepted");
 
-    // It parks before touching any of its work.
     assert!(
         wait_for(Duration::from_secs(5), || async {
             tasks.store().get(&run_id).map(|run| run.state) == Some(JobState::Yielded)
@@ -188,7 +183,6 @@ async fn interactive_requests_stay_responsive_while_a_heavy_job_runs() {
     );
     assert_eq!(tasks.store().get(&run_id).unwrap().progress.done, 0);
 
-    // What a client actually sees while that job is running.
     let client = Arc::new(f.server.client());
     let samples = Arc::new(Mutex::new(Vec::new()));
     let mut load = Vec::new();
@@ -214,7 +208,6 @@ async fn interactive_requests_stay_responsive_while_a_heavy_job_runs() {
         "p99 while a heavy job runs was {p99:?}, over the {P99_BOUND:?} bound"
     );
 
-    // Not merely slow — stopped. The parked job made no progress at all while
     // the server was answering those requests.
     assert_eq!(
         tasks.store().get(&run_id).unwrap().progress.done,
@@ -222,7 +215,6 @@ async fn interactive_requests_stay_responsive_while_a_heavy_job_runs() {
         "the parked job must not have advanced during the load"
     );
 
-    // Release the server, and the job picks up where it left off: parking held
     // it back rather than ending it.
     drop(stalled);
     assert!(
@@ -236,7 +228,6 @@ async fn interactive_requests_stay_responsive_while_a_heavy_job_runs() {
         "the job must resume once the server is quiet"
     );
 
-    // Stopped rather than waited out: the burn is deliberately long.
     tasks.cancel(&run_id, Viewer::user(f.user_id)).unwrap();
     assert!(
         wait_for(Duration::from_secs(10), || async {

@@ -2,7 +2,6 @@ mod common;
 
 use common::TestFixture;
 
-/// Helper: upload a file to a repo and return success.
 async fn upload_test_file(f: &TestFixture, name: &str, data: &[u8], parent_dir: &str) {
     let resp = f
         .client
@@ -17,7 +16,6 @@ async fn upload_test_file(f: &TestFixture, name: &str, data: &[u8], parent_dir: 
     );
 }
 
-/// Helper: create a subdirectory.
 async fn create_subdir(f: &TestFixture, path: &str) {
     let resp = f.client.create_dir(&f.api_token, &f.repo_id, path).await;
     // seahub answers 201 Created for mkdir.
@@ -30,7 +28,6 @@ async fn create_subdir(f: &TestFixture, path: &str) {
     );
 }
 
-/// Helper: list directory contents and return count of entries.
 async fn dir_entry_count(f: &TestFixture, path: &str) -> usize {
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, path).await;
     assert_eq!(resp.status(), 200);
@@ -44,25 +41,18 @@ async fn dir_entry_count(f: &TestFixture, path: &str) -> usize {
     })
 }
 
-// ======================================================================
-// Batch Delete Tests
-// ======================================================================
-
 #[tokio::test]
 async fn test_batch_delete_single_file() {
     let f = TestFixture::new().await;
 
-    // Upload two files
     upload_test_file(&f, "file1.txt", b"content1", "/").await;
     upload_test_file(&f, "file2.txt", b"content2", "/").await;
 
-    // Verify both files exist
     assert!(
         dir_entry_count(&f, "/").await >= 2,
         "expected at least 2 entries in root"
     );
 
-    // Batch delete one file
     let resp = f
         .client
         .batch_delete(&f.api_token, &f.repo_id, "/", &["file1.txt"])
@@ -74,7 +64,6 @@ async fn test_batch_delete_single_file() {
         resp.text().await
     );
 
-    // Verify only file2 remains
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     let body: serde_json::Value = resp.json().await.unwrap();
     let names: Vec<&str> = body
@@ -97,7 +86,6 @@ async fn test_batch_delete_multiple_files() {
     upload_test_file(&f, "b.txt", b"bbb", "/").await;
     upload_test_file(&f, "c.txt", b"ccc", "/").await;
 
-    // Batch delete two files
     let resp = f
         .client
         .batch_delete(&f.api_token, &f.repo_id, "/", &["a.txt", "b.txt"])
@@ -125,14 +113,12 @@ async fn test_batch_delete_empty_list() {
 
     upload_test_file(&f, "keep.txt", b"keep", "/").await;
 
-    // Empty file_names should return success without error
     let resp = f
         .client
         .batch_delete(&f.api_token, &f.repo_id, "/", &[])
         .await;
     assert_eq!(resp.status(), 200);
 
-    // File should still exist
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200);
 }
@@ -144,7 +130,6 @@ async fn test_batch_delete_reloaddir() {
     upload_test_file(&f, "del1.txt", b"del1", "/").await;
     upload_test_file(&f, "del2.txt", b"del2", "/").await;
 
-    // Delete with reloaddir=true
     let resp = f
         .client
         .batch_delete_with_dir(&f.api_token, &f.repo_id, "/", &["del1.txt", "del2.txt"])
@@ -176,17 +161,12 @@ async fn test_batch_delete_no_auth() {
         .client
         .batch_delete("invalid-token", &f.repo_id, "/", &["secret.txt"])
         .await;
-    // Should fail with 401 or 403
     assert!(
         resp.status() == 401 || resp.status() == 403,
         "expected 401 or 403, got {}",
         resp.status()
     );
 }
-
-// ======================================================================
-// Batch Copy Tests
-// ======================================================================
 
 #[tokio::test]
 async fn test_batch_copy_same_repo() {
@@ -213,7 +193,6 @@ async fn test_batch_copy_same_repo() {
         resp.text().await
     );
 
-    // Verify response format
     let body: serde_json::Value = resp.json().await.unwrap();
     let results = body.as_array().expect("response should be a JSON array");
     assert_eq!(results.len(), 1);
@@ -221,7 +200,6 @@ async fn test_batch_copy_same_repo() {
     assert_eq!(results[0]["parent_dir"].as_str(), Some("/dest"));
     assert_eq!(results[0]["obj_name"].as_str(), Some("src.txt"));
 
-    // Verify file exists at destination
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/dest").await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -239,12 +217,10 @@ async fn test_batch_copy_same_repo() {
 async fn test_batch_copy_name_collision() {
     let f = TestFixture::new().await;
 
-    // Upload the same filename to root and dest
     upload_test_file(&f, "collide.txt", b"original", "/").await;
     create_subdir(&f, "/target").await;
     upload_test_file(&f, "collide.txt", b"original", "/target").await;
 
-    // Copy — destination already has collide.txt
     let resp = f
         .client
         .batch_copy(
@@ -259,7 +235,6 @@ async fn test_batch_copy_name_collision() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    // Should have auto-renamed name (e.g. "collide (1).txt")
     let obj_name = body[0]["obj_name"].as_str().unwrap();
     assert_ne!(obj_name, "collide.txt", "should auto-rename on collision");
     assert!(
@@ -274,7 +249,6 @@ async fn test_batch_copy_cross_repo_fails() {
 
     upload_test_file(&f, "xfer.txt", b"data", "/").await;
 
-    // Try cross-repo copy with a fake repo ID
     let resp = f
         .client
         .batch_copy(
@@ -286,13 +260,8 @@ async fn test_batch_copy_cross_repo_fails() {
             "/",
         )
         .await;
-    // Should fail with 400 (cross-repo not supported)
     assert_eq!(resp.status(), 400);
 }
-
-// ======================================================================
-// Batch Move Tests
-// ======================================================================
 
 #[tokio::test]
 async fn test_batch_move_same_repo() {
@@ -319,7 +288,6 @@ async fn test_batch_move_same_repo() {
         resp.text().await
     );
 
-    // Verify response format
     let body: serde_json::Value = resp.json().await.unwrap();
     let results = body.as_array().expect("response should be a JSON array");
     assert_eq!(results.len(), 1);
@@ -327,7 +295,6 @@ async fn test_batch_move_same_repo() {
     assert_eq!(results[0]["parent_dir"].as_str(), Some("/sub"));
     assert_eq!(results[0]["obj_name"].as_str(), Some("moveme.txt"));
 
-    // File should be at destination, not source
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/sub").await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -393,14 +360,10 @@ async fn test_batch_move_cross_repo_fails() {
     assert_eq!(resp.status(), 400);
 }
 
-// ─── Self-subtree moves/copies must be refused ──────────────────────────────
-//
-// The tree update is a two-phase remove-then-add with a commit in between, so
-// moving a directory into its own subtree used to commit the removal and then
-// fail to resolve the destination — the subtree disappeared from HEAD with no
-// trash entry and the client got a 500. A copy in the same shape creates a
-// reference cycle (`/a/b/a` -> `/a`) because copies share fs_ids. WebDAV
-// guarded both; the REST/sync paths did not.
+// Self-subtree moves/copies must be refused: the tree update is a two-phase
+// remove-then-add, so moving a directory into its own subtree used to commit the removal
+// and then fail to resolve the destination (subtree gone, no trash entry, 500). A copy
+// in the same shape creates a reference cycle because copies share fs_ids.
 
 #[tokio::test]
 async fn move_directory_into_its_own_subtree_is_rejected() {
@@ -433,7 +396,6 @@ async fn move_directory_into_its_own_subtree_is_rejected() {
     assert_eq!(dir_entry_count(&f, "/important").await, 2);
     assert_eq!(dir_entry_count(&f, "/important/sub").await, 0);
 
-    // Moving a directory onto itself is likewise refused.
     let resp = f
         .client
         .batch_move(
@@ -468,7 +430,6 @@ async fn copy_directory_into_its_own_subtree_is_rejected() {
     );
     assert_eq!(dir_entry_count(&f, "/a/b").await, 0);
 
-    // A sibling copy is still allowed and duplicates the subtree.
     create_subdir(&f, "/c").await;
     let resp = f
         .client
@@ -478,12 +439,7 @@ async fn copy_directory_into_its_own_subtree_is_rejected() {
     assert_eq!(dir_entry_count(&f, "/c").await, 1);
 }
 
-// ======================================================================
-// Move / rename: destination and entry identity
-// ======================================================================
-
-/// Names of the entries in a directory, sorted (handles both the v2.1 array and
-/// the wrapped `dirent_list` shape).
+/// Sorted names of a directory's entries (handles the v2.1 array and the wrapped `dirent_list`).
 async fn dir_names(f: &TestFixture, path: &str) -> Vec<String> {
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, path).await;
     assert_eq!(resp.status(), 200, "list {path} failed");
@@ -504,7 +460,6 @@ async fn dir_names(f: &TestFixture, path: &str) -> Vec<String> {
     names
 }
 
-/// `(name, type)` of every entry of a directory, sorted by name.
 async fn dir_entries(f: &TestFixture, path: &str) -> Vec<(String, String)> {
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, path).await;
     assert_eq!(resp.status(), 200, "list {path} failed");
@@ -565,8 +520,7 @@ async fn moving_a_file_into_an_ancestor_keeps_one_copy() {
     assert_eq!(resp.bytes().await.unwrap().to_vec(), b"payload");
 }
 
-/// The same bug applied to a directory: the moved subtree stayed behind at its
-/// old path as well.
+/// The same bug for a directory: the moved subtree must not stay at its old path.
 #[tokio::test]
 async fn moving_a_directory_into_an_ancestor_keeps_its_subtree_once() {
     let f = TestFixture::new().await;
@@ -591,11 +545,9 @@ async fn moving_a_directory_into_an_ancestor_keeps_its_subtree_once() {
     assert_eq!(dir_names(&f, "/a/c").await, vec!["f.txt"]);
 }
 
-/// `rename_entry` used to find the entry to rename by object id. `EMPTY_SHA1` is
-/// the id of every empty directory *and* every zero-byte file, so a directory
-/// holding both could rename the wrong sibling. The empty directory is named so
-/// that it comes first in the stored (descending) order, and the assertion is on
-/// the *type* of each entry, because renaming either one yields the same name set.
+/// `rename_entry` used to find the entry by object id. `EMPTY_SHA1` is the id of every
+/// empty directory *and* zero-byte file, so a directory holding both could rename the
+/// wrong sibling; the assertion is on each entry's *type*, because the name set is the same.
 #[tokio::test]
 async fn renaming_a_zero_byte_file_next_to_an_empty_directory_renames_the_file() {
     let f = TestFixture::new().await;
@@ -637,14 +589,12 @@ async fn renaming_a_zero_byte_file_next_to_an_empty_directory_renames_the_file()
     );
 }
 
-/// `EMPTY_SHA1` is the id of an empty directory *and* of a zero-byte file, so
-/// descending a path has to check each entry's mode: a path inside a zero-byte
-/// file does not exist, while a path inside an empty directory does.
+/// `EMPTY_SHA1` is the id of an empty directory *and* of a zero-byte file, so descending
+/// a path must check each entry's mode: a path inside a zero-byte file does not exist.
 #[tokio::test]
 async fn a_path_inside_a_zero_byte_file_does_not_resolve() {
     let f = TestFixture::new().await;
 
-    // Zero-byte file at the root: its dirent id is the `EMPTY_SHA1` sentinel.
     let resp = f
         .client
         .post_json(

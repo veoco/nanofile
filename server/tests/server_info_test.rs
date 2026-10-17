@@ -7,7 +7,6 @@ async fn test_server_info_public() {
     let server = common::TestServer::start().await;
     let client = server.client();
 
-    // Must be accessible without authentication (matching original seahub)
     let resp = client.get("/api2/server-info/", None).await;
     assert_eq!(resp.status(), 200);
 
@@ -29,7 +28,6 @@ async fn test_server_info_features_are_official() {
     let server = common::TestServer::start().await;
     let client = server.client();
 
-    // Also accessible without auth
     let resp = client.get("/api2/server-info/", None).await;
     assert_eq!(resp.status(), 200);
 
@@ -129,7 +127,6 @@ fn test_encrypted_library_config_validation() {
     config.server.encrypted_library_version = 2;
     assert!(config.server.validate_encrypted_library().is_ok());
 
-    // Upstream's default: no algorithm means the legacy magic flow.
     config.server.encrypted_library_pwd_hash_algo = None;
     assert!(config.server.validate_encrypted_library().is_ok());
     config.server.encrypted_library_pwd_hash_algo = Some(String::new());
@@ -226,7 +223,6 @@ async fn test_server_info_file_search_gated_off() {
 
 #[tokio::test]
 async fn test_ping_at_api2_ping() {
-    // /api2/ping/ should be public and return "pong"
     let server = common::TestServer::start().await;
     let client = server.client();
 

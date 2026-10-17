@@ -34,7 +34,6 @@ fn file_fixture() -> FsFileData {
 fn dir_fixture() -> FsDirData {
     FsDirData {
         dirents: vec![
-            // Regular file: keeps modifier and size.
             DirEntryData {
                 id: "a".repeat(40),
                 mode: S_IFREG,

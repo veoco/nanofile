@@ -40,7 +40,6 @@ async fn flatten_to_legacy_layout(block_dir: &std::path::Path) {
 
 /// A legacy installation is migrated on the spot, after which downloads work
 /// again and the old tree is gone.
-///
 /// This is the upgrade path end to end: real repository rows, real block files,
 /// the public `fs_objects` reference table and the same routine the server runs
 /// before serving its first request.
@@ -105,7 +104,6 @@ async fn legacy_layout_migrates_and_downloads_keep_working() {
     assert!(report.copied > 0, "blocks must have been copied");
     assert_eq!(report.missing_sources, 0);
 
-    // Content is back, byte for byte.
     let resp = f
         .client
         .download_file(&f.api_token, &f.repo_id, "/migrate.txt")
@@ -113,7 +111,6 @@ async fn legacy_layout_migrates_and_downloads_keep_working() {
     assert_eq!(resp.status(), 200, "download after migration");
     assert_eq!(resp.bytes().await.unwrap().to_vec(), content);
 
-    // Zero leftovers: the block root holds only the current layout.
     let mut entries: Vec<String> = std::fs::read_dir(&f.server.block_dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
@@ -129,7 +126,6 @@ async fn legacy_layout_migrates_and_downloads_keep_working() {
         "nothing may be left to migrate"
     );
 
-    // A second run is a no-op (the server does this on every startup).
     let again = BlockLayoutMigration::run(
         f.server.db.as_ref(),
         &f.server.block_dir,

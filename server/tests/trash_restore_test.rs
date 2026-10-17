@@ -234,7 +234,6 @@ async fn restore_over_an_existing_name_is_rejected() {
     upload(&f, "/", "b.txt", b"01234").await;
     delete(&f, "file", "/a.txt").await;
 
-    // A new file takes the name back, then the trashed one is restored.
     upload(&f, "/", "a.txt", b"0123456789abcde").await;
     assert_eq!(repo_size(&f).await, 20);
 

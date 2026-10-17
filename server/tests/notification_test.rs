@@ -5,7 +5,6 @@ use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
 /// Test that the notification endpoints respond correctly.
-///
 /// Note: Full WebSocket event delivery tests require a bidirectional
 /// connection, which is challenging in integration tests. The core
 /// notification flow is verified indirectly:
@@ -28,7 +27,6 @@ async fn test_notification_ping() {
 async fn test_notification_post_event_unauthorized() {
     let f = TestFixture::new_with_notification().await;
 
-    // Without a valid JWT, POST /notification/events should return 401.
     let event = serde_json::json!({
         "type": "file-lock-changed",
         "content": {
@@ -44,7 +42,6 @@ async fn test_notification_post_event_unauthorized() {
         .await;
     assert_eq!(resp.status(), 401);
 
-    // With an invalid token, should also return 401.
     let resp = f
         .client
         .post_json("/notification/events", Some("invalid-token"), &event)
@@ -54,7 +51,6 @@ async fn test_notification_post_event_unauthorized() {
 
 /// End-to-end: connect, subscribe, trigger a repo update, and assert the
 /// event is delivered promptly.
-///
 /// This regresses the read/write lock-starvation bug where the read half held
 /// a shared WebSocket mutex while blocking on `recv`, starving the write half
 /// and delaying (or fully blocking) notification delivery.
@@ -62,7 +58,6 @@ async fn test_notification_post_event_unauthorized() {
 async fn test_subscribe_receives_repo_update() {
     let f = TestFixture::new_with_notification().await;
 
-    // Fetch a valid subscription JWT from the notification token endpoint.
     let resp = f
         .client
         .get_sync(
@@ -74,11 +69,9 @@ async fn test_subscribe_receives_repo_update() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let jwt = body["jwt_token"].as_str().unwrap().to_string();
 
-    // Connect to the WebSocket notification endpoint.
     let ws_url = f.server.base_url.replace("http", "ws") + "/notification";
     let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
 
-    // Subscribe to the repo.
     let sub = serde_json::json!({
         "type": "subscribe",
         "content": {
@@ -89,10 +82,8 @@ async fn test_subscribe_receives_repo_update() {
         .await
         .unwrap();
 
-    // Let the server register the subscription before triggering an event.
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    // Trigger a repo update by uploading a file (fires a repo-update event).
     let upload = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "notif-ws.txt", b"data")
@@ -147,14 +138,12 @@ async fn test_websocket_upgrade_works() {
 async fn test_lock_with_notification_enabled() {
     let f = TestFixture::new_with_notification().await;
 
-    // Upload a file
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "notif-lock.txt", b"data")
         .await;
     assert!(resp.status().is_success());
 
-    // Lock the file
     let resp = f
         .client
         .put_sync(
@@ -165,7 +154,6 @@ async fn test_lock_with_notification_enabled() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Unlock the file
     let resp = f
         .client
         .put_sync(
@@ -177,14 +165,11 @@ async fn test_lock_with_notification_enabled() {
     assert_eq!(resp.status(), 200);
 }
 
-// ── WebSocket keepalive tests ──────────────────────────────────────────
-
 /// Test that the server sends WebSocket Ping frames when keepalive is
 /// enabled. The client (tokio-tungstenite) auto-responds with Pong, so
 /// we only verify that Ping frames arrive at the application layer.
 #[tokio::test]
 async fn test_server_sends_ping() {
-    // Start a server with a short ping interval so the test completes quickly.
     let _server = TestServer::start_with_custom_keepalive(1, 10).await;
     let ws_url = _server.base_url.replace("http", "ws") + "/notification";
 
@@ -203,7 +188,6 @@ async fn test_server_sends_ping() {
                         break; // ✅ received a ping — test passes
                     }
                     Some(Ok(_)) => {
-                        // Other message types — keep waiting
                     }
                     Some(Err(e)) => {
                         panic!("WebSocket error before receiving a ping: {e}");
@@ -240,10 +224,8 @@ async fn test_keepalive_keeps_connection_alive() {
             msg = ws_stream.next() => {
                 match msg {
                     Some(Ok(Message::Ping(_))) => {
-                        // Normal — server sends ping, keep waiting
                     }
                     Some(Ok(_)) => {
-                        // Other message — also fine
                     }
                     Some(Err(e)) => {
                         panic!("Connection dropped unexpectedly: {e}");
@@ -254,14 +236,11 @@ async fn test_keepalive_keeps_connection_alive() {
                 }
             }
             _ = &mut deadline => {
-                // ✅ Test passed — connection stayed alive for 5s
                 break;
             }
         }
     }
 }
-
-// ── WebSocket connection-limit and subscribe-timeout tests ────────────────
 
 /// Test that the global WebSocket connection cap is enforced: once the limit
 /// is reached, further upgrade requests are rejected with a plain 503 (no
@@ -278,10 +257,8 @@ async fn test_websocket_global_limit_rejected() {
 
     // First connection succeeds and stays open.
     let (_ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
-    // Let the server register the connection before trying the second one.
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    // Second connection hits the global cap → 503, not a WebSocket upgrade.
     let result = tokio_tungstenite::connect_async(&ws_url).await;
     match result {
         Err(tokio_tungstenite::tungstenite::Error::Http(ref r)) => {

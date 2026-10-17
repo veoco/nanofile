@@ -54,7 +54,6 @@ async fn test_permission_check_download() {
         .permission_check(&sync_token, &repo_id, "download")
         .await;
     assert_eq!(resp.status(), 200);
-    // seafile-server returns empty body on success
     let body_bytes = resp.bytes().await.unwrap();
     assert!(body_bytes.is_empty());
 }
@@ -99,7 +98,6 @@ async fn test_head_commits_multi_no_updates() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
-    // Empty repo with no commits should not return anything
     let obj = body.as_object().unwrap();
     assert!(obj.is_empty());
 }
@@ -116,7 +114,6 @@ async fn test_head_commits_multi_with_updates() {
 
     let repo_id = common::create_test_repo(&client, token, "My Library").await;
 
-    // Create a commit manually in the DB
     let commit_id = "a".repeat(40);
     let root_id = "b".repeat(40);
     let now = chrono::Utc::now().timestamp();
@@ -137,7 +134,6 @@ async fn test_head_commits_multi_with_updates() {
     };
     commit.insert(server.db.as_ref()).await.unwrap();
 
-    // Update repo HEAD
     let mut repo: infra::entity::repo::ActiveModel =
         infra::entity::repo::Entity::find_by_id(&repo_id)
             .one(server.db.as_ref())
@@ -269,8 +265,6 @@ async fn test_put_and_get_block() {
     assert_eq!(data.as_ref(), block_data);
 }
 
-// ==================== Security: oversized bodies ====================
-
 /// Security: put_block must reject bodies larger than the per-block cap
 /// (12 MiB) with 413, not buffer up to the 4 GiB upload limit.
 #[tokio::test]
@@ -320,8 +314,6 @@ async fn test_put_commit_rejects_oversized_body() {
         .await;
     assert_eq!(resp.status(), 500);
 }
-
-// ==================== Security: write permission on sync writes ====================
 
 /// Security: a read-only shared member can download but must not be able to
 /// inject blocks / fs objects / commits into the repo.
@@ -380,7 +372,6 @@ async fn test_rw_member_can_write_to_repo() {
     let rw_token = body["token"].as_str().unwrap();
     let rw_sync_token = get_sync_token(&f.client, rw_token, &f.repo_id).await;
 
-    // put_block with a SHA-1-matching payload.
     let block_data = b"rw member block data";
     let block_id = {
         use sha1::{Digest, Sha1};
@@ -394,11 +385,9 @@ async fn test_rw_member_can_write_to_repo() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // recv_fs with an empty pack is valid.
     let resp = f.client.recv_fs(&rw_sync_token, &f.repo_id, vec![]).await;
     assert_eq!(resp.status(), 200);
 
-    // put_commit with a well-formed commit.
     let commit_id = "a".repeat(40);
     let commit_json = serde_json::json!({
         "commit_id": commit_id,
@@ -422,8 +411,6 @@ async fn test_rw_member_can_write_to_repo() {
     assert_eq!(resp.status(), 200);
 }
 
-// ==================== Regression tests ====================
-
 /// Regression: sync endpoints must accept API tokens (not just sync tokens).
 /// Seaf-daemon 9.0.4 uses the API token from /api2/auth-token/ for initial
 /// /seafhttp/ requests during the check-server phase.
@@ -439,7 +426,6 @@ async fn test_sync_endpoint_accepts_api_token() {
 
     let repo_id = common::create_test_repo(&client, api_token, "API Auth Test").await;
 
-    // All sync endpoints should accept the API token (not just sync tokens)
     let resp = client.get_head_commit(api_token, &repo_id).await;
     assert_eq!(resp.status(), 200);
 
@@ -482,7 +468,6 @@ async fn test_zero_commit_for_empty_repo() {
         "0000000000000000000000000000000000000000"
     );
 
-    // Fetching the zero commit should return valid JSON (not 404)
     let resp = client
         .get_commit(
             &sync_token,
@@ -513,7 +498,6 @@ async fn test_pack_fs_accepts_json_array() {
     let repo_id = common::create_test_repo(&client, token, "JSON Body Test").await;
     let sync_token = get_sync_token(&client, token, &repo_id).await;
 
-    // First push some fs objects via recv-fs
     let empty_dir = base::common::FsDirData {
         dirents: vec![],
         obj_type: 3,
@@ -532,14 +516,12 @@ async fn test_pack_fs_accepts_json_array() {
     let resp = client.recv_fs(&sync_token, &repo_id, packed).await;
     assert_eq!(resp.status(), 200);
 
-    // Call pack-fs with JSON array body (the seaf-daemon 9.0.4 format)
     let resp = client.pack_fs(&sync_token, &repo_id, &[&dir_fs_id]).await;
     assert_eq!(resp.status(), 200);
 
     let data = resp.bytes().await.unwrap();
     assert!(!data.is_empty());
 
-    // Decode and verify the entry
     let decoded = infra::serialization::pack_fs::decode_pack_fs_entries(&data).unwrap();
     assert_eq!(decoded.len(), 1);
     assert_eq!(decoded[0].0, dir_fs_id);
@@ -559,7 +541,6 @@ async fn test_pack_fs_accepts_form_encoded() {
     let repo_id = common::create_test_repo(&client, token, "Form Body Test").await;
     let sync_token = get_sync_token(&client, token, &repo_id).await;
 
-    // Push fs object
     let empty_dir = base::common::FsDirData {
         dirents: vec![],
         obj_type: 3,
@@ -576,7 +557,6 @@ async fn test_pack_fs_accepts_form_encoded() {
     packed.extend_from_slice(&dir_compressed);
     client.recv_fs(&sync_token, &repo_id, packed).await;
 
-    // Send form-encoded request (older seafile client format)
     let form_body = format!("fs_ids={}", dir_fs_id);
     let resp = reqwest::Client::builder()
         .no_proxy()
@@ -612,7 +592,6 @@ async fn test_check_blocks_accepts_json_array() {
     let repo_id = common::create_test_repo(&client, token, "Blocks JSON Test").await;
     let sync_token = get_sync_token(&client, token, &repo_id).await;
 
-    // Upload a real block first
     let block_data = b"json test block";
     use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
@@ -622,7 +601,6 @@ async fn test_check_blocks_accepts_json_array() {
         .put_block(&sync_token, &repo_id, &real_id, block_data.to_vec())
         .await;
 
-    // Call check-blocks with JSON array body
     let resp = client
         .check_blocks(
             &sync_token,
@@ -633,7 +611,6 @@ async fn test_check_blocks_accepts_json_array() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let missing = body.as_array().unwrap();
-    // Only the nonexistent (but well-formed) block should be reported missing
     assert_eq!(missing.len(), 1);
 }
 
@@ -651,7 +628,6 @@ async fn test_check_blocks_accepts_form_encoded() {
     let repo_id = common::create_test_repo(&client, token, "Blocks Form Test").await;
     let sync_token = get_sync_token(&client, token, &repo_id).await;
 
-    // Upload a block
     let block_data = b"form test block";
     use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
@@ -661,7 +637,6 @@ async fn test_check_blocks_accepts_form_encoded() {
         .put_block(&sync_token, &repo_id, &real_id, block_data.to_vec())
         .await;
 
-    // Send form-encoded request
     let form_body = format!(
         "block_ids={}&block_ids=dddddddddddddddddddddddddddddddddddddddd",
         real_id
@@ -701,7 +676,6 @@ async fn test_check_fs_accepts_form_encoded() {
     let repo_id = common::create_test_repo(&client, token, "FS Form Test").await;
     let sync_token = get_sync_token(&client, token, &repo_id).await;
 
-    // Push an fs object
     let empty_dir = base::common::FsDirData {
         dirents: vec![],
         obj_type: 3,
@@ -718,7 +692,6 @@ async fn test_check_fs_accepts_form_encoded() {
     packed.extend_from_slice(&dir_compressed);
     client.recv_fs(&sync_token, &repo_id, packed).await;
 
-    // Send form-encoded check-fs
     let form_body = format!(
         "fs_ids={}&fs_ids=fake_missing_40char_hex_id_0000bb",
         dir_fs_id
@@ -741,7 +714,6 @@ async fn test_check_fs_accepts_form_encoded() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let missing = body.as_array().unwrap();
-    // Only the fake one should be missing
     assert_eq!(missing.len(), 1);
     assert!(missing[0].as_str().unwrap().starts_with("fake_missing"));
 }
@@ -761,7 +733,6 @@ async fn test_regression_commit_has_required_fields() {
     let repo_id = common::create_test_repo(&client, api_token, "Commit Test").await;
     let sync_token = get_sync_token(&client, api_token, &repo_id).await;
 
-    // Upload a file to create a real commit
     client
         .upload_file(api_token, &repo_id, "/", "commit_file.txt", b"test")
         .await;
@@ -774,10 +745,8 @@ async fn test_regression_commit_has_required_fields() {
     assert_eq!(resp.status(), 200);
     let data = resp.bytes().await.unwrap();
 
-    // Parse commit JSON
     let commit: serde_json::Value = serde_json::from_slice(&data).unwrap();
 
-    // Required fields for seaf-daemon parsing
     assert!(
         commit["commit_id"].is_string(),
         "commit must have commit_id"
@@ -815,8 +784,6 @@ async fn test_check_blocks_rejects_malicious_block_ids() {
         .await;
     assert_eq!(resp.status(), 400);
 }
-
-// ==================== Security: cross-repo IDOR ====================
 
 /// Security: a sync token bound to repo B must not be usable on repo A.
 #[tokio::test]
@@ -874,7 +841,6 @@ async fn test_api_token_rejected_for_other_repo() {
 }
 
 /// Percent-encode the first hex character of a repo id (`c` → `%63`).
-///
 /// This is the exact shape of the bypass: the auth middleware used the
 /// *raw* path segment, so `%63…` did not look like a UUID and the repo binding
 /// check was skipped, while axum's `Path` extractor decoded it back to the
@@ -1021,7 +987,6 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
     use base::common::{FsDirData, FsFileData};
     use infra::serialization::pack_fs;
 
-    // Create a directory with type=3 (what seaf-daemon actually sends)
     let file_data = FsFileData {
         block_ids: vec!["abc123abc123abc123abc123abc123abc123abc1".to_string()],
         size: 100,
@@ -1050,7 +1015,6 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
     let dir_json = serde_json::to_string(&dir_data).unwrap();
     let dir_compressed = pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 
-    // Upload both via recv_fs
     let mut packed = Vec::new();
     packed.extend_from_slice(dir_fs_id.as_bytes());
     packed.extend_from_slice(&(dir_compressed.len() as u32).to_be_bytes());
@@ -1062,7 +1026,6 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
     let resp = client.recv_fs(&sync_token, &repo_id, packed).await;
     assert_eq!(resp.status(), 200);
 
-    // Verify they are stored and retrievable
     let resp = client
         .check_fs(&sync_token, &repo_id, &[&dir_fs_id, &file_fs_id])
         .await;
@@ -1074,7 +1037,6 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
         "both dir (type=3) and file (type=1) must be accepted"
     );
 
-    // Verify pack_fs returns them with correct types
     let resp = client
         .pack_fs(&sync_token, &repo_id, &[&dir_fs_id, &file_fs_id])
         .await;
@@ -1103,7 +1065,6 @@ async fn test_regression_recv_fs_accepts_dir_type_3() {
 async fn test_recv_fs_rejects_invalid_dirent_name() {
     let f = TestFixture::new().await;
 
-    // Build a dir object with a traversal dirent name.
     let bad_dir = base::common::FsDirData {
         dirents: vec![base::common::DirEntryData {
             id: "0".repeat(40),
@@ -1122,7 +1083,6 @@ async fn test_recv_fs_rejects_invalid_dirent_name() {
         infra::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 
     let mut packed = Vec::new();
-    // Correct id, so the rejection is specifically the dirent-name check.
     packed.extend_from_slice(dir_fs_id.as_bytes());
     packed.extend_from_slice(&(dir_compressed.len() as u32).to_be_bytes());
     packed.extend_from_slice(&dir_compressed);
@@ -1134,7 +1094,6 @@ async fn test_recv_fs_rejects_invalid_dirent_name() {
         "recv_fs must reject dirent names with path traversal"
     );
 
-    // Also verify that a NUL-containing name is rejected.
     let bad_dir = base::common::FsDirData {
         dirents: vec![base::common::DirEntryData {
             id: "0".repeat(40),
@@ -1188,7 +1147,6 @@ async fn test_recv_fs_rejects_fs_id_mismatch() {
     let dir_compressed =
         infra::serialization::pack_fs::compress_fs_data(dir_json.as_bytes()).unwrap();
 
-    // Claim a different id than sha1(json).
     let wrong_id = "a".repeat(40);
     assert_ne!(
         wrong_id,
@@ -1258,7 +1216,6 @@ async fn test_sync_tokens_are_encrypted_at_rest() {
     );
     assert_ne!(stored.token, f.sync_token);
 
-    // The raw token still authenticates on /seafhttp.
     let resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
 }
@@ -1312,7 +1269,6 @@ async fn test_repo_tokens_reuse_stable_token() {
 
 /// Security: the block store is namespaced per repository, so a member of one
 /// library cannot read another library's block even when they know its id.
-///
 /// This is the case the previous flat, globally content-addressed layout could
 /// not express. `get_block` used to check membership on the *URL* repository
 /// only, so naming any repository the caller belonged to was enough to read any

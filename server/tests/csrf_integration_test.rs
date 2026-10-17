@@ -23,7 +23,6 @@ async fn ui_login(server: &TestServer) -> reqwest::Client {
         resp.status()
     );
 
-    // Trigger a GET to store cookies from Set-Cookie headers.
     let _ = client
         .get(format!("{}/libraries/", server.base_url))
         .send()
@@ -45,7 +44,6 @@ async fn get_api_token(server: &TestServer) -> String {
     body["token"].as_str().unwrap().to_string()
 }
 
-/// Create a repo and return its ID.
 async fn create_repo_api(base_url: &str, api_token: &str, name: &str) -> String {
     let client = reqwest::Client::new();
     let resp = client
@@ -63,10 +61,6 @@ async fn create_repo_api(base_url: &str, api_token: &str, name: &str) -> String 
     let body: serde_json::Value = resp.json().await.unwrap();
     body["repo_id"].as_str().unwrap().to_string()
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════════════════
 
 /// Login via UI sets both `seahub-session` (HttpOnly) and `sfcsrftoken` (non-HttpOnly).
 #[tokio::test]
@@ -88,7 +82,6 @@ async fn test_login_sets_csrf_cookie() {
         .unwrap();
     assert_eq!(login_resp.status(), 302, "login should redirect");
 
-    // Collect all Set-Cookie headers from the response.
     let set_cookies: Vec<String> = login_resp
         .headers()
         .get_all(reqwest::header::SET_COOKIE)
@@ -109,7 +102,6 @@ async fn test_login_sets_csrf_cookie() {
         all_cookies
     );
 
-    // seahub-session is HttpOnly
     let session_header = set_cookies
         .iter()
         .find(|c| c.starts_with("seahub-session="))
@@ -119,7 +111,6 @@ async fn test_login_sets_csrf_cookie() {
         "seahub-session must be HttpOnly: {session_header}"
     );
 
-    // sfcsrftoken is NOT HttpOnly
     let csrf_header = set_cookies
         .iter()
         .find(|c| c.starts_with("sfcsrftoken="))
@@ -157,7 +148,6 @@ async fn test_api_cookie_and_csrf_header() {
     let api_token = get_api_token(&server).await;
     let repo_id = create_repo_api(&server.base_url, &api_token, "csrf-test-repo").await;
 
-    // Star a file via API for setup.
     let raw = reqwest::Client::new();
     let star_resp = raw
         .post(format!("{}/api/v2.1/starred-items/", server.base_url))
@@ -169,10 +159,8 @@ async fn test_api_cookie_and_csrf_header() {
         .unwrap();
     assert_eq!(star_resp.status(), 200, "star via API");
 
-    // Login via UI.
     let ui_client = ui_login(&server).await;
 
-    // Extract CSRF token from the file browser page (which has hidden form inputs).
     let page_resp = ui_client
         .get(format!("{}/libraries/{}/files", server.base_url, repo_id))
         .send()
@@ -187,7 +175,6 @@ async fn test_api_cookie_and_csrf_header() {
 
     assert!(!csrf_token.is_empty(), "could not extract csrf_token");
 
-    // Call starred list API with session cookie + X-CSRFToken header.
     let list_resp = ui_client
         .get(format!("{}/api/v2.1/starred-items/", server.base_url))
         .header("X-CSRFToken", csrf_token)
@@ -269,7 +256,6 @@ async fn test_session_token_not_in_dom() {
 
     let ui_client = ui_login(&server).await;
 
-    // Check the file browser page (the one that previously exposed data-token).
     let api_token = get_api_token(&server).await;
     let repo_id = create_repo_api(&server.base_url, &api_token, "security-test").await;
 
@@ -319,10 +305,6 @@ async fn test_csrf_token_cookie_not_httponly() {
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// New tests: verify all UI pages embed CSRF tokens.
-// ═══════════════════════════════════════════════════════════════════════════════
-
 /// All form pages that were previously missing CSRF tokens now include them.
 #[tokio::test]
 async fn test_form_pages_include_csrf_tokens() {
@@ -335,7 +317,6 @@ async fn test_form_pages_include_csrf_tokens() {
 
     let ui_client = ui_login(&server).await;
 
-    // 1. Libraries page
     let libs_html = ui_client
         .get(format!("{}/libraries/", server.base_url))
         .send()
@@ -348,13 +329,11 @@ async fn test_form_pages_include_csrf_tokens() {
         libs_html.contains(r#"name="csrf_token" value=""#),
         "libraries page should have csrf_token in forms"
     );
-    // Check for create form csrf_token
     assert!(
         libs_html.contains(r#"<input type="hidden" name="csrf_token" value=""#),
         "libraries create form should have csrf_token hidden input"
     );
 
-    // 2. File browser page  (has delete and rename forms)
     let browser_html = ui_client
         .get(format!("{}/libraries/{}/files", server.base_url, repo_id))
         .send()
@@ -414,7 +393,6 @@ async fn test_form_pages_include_csrf_tokens() {
         "the profile page should have csrf_token in its avatar, display-name and language forms, found {csrf_count}"
     );
 
-    // 5. 2FA page — create user_2fa record to trigger setup_pending state
     use sea_orm::ActiveModelTrait;
     use sea_orm::Set;
     let _ = infra::entity::user_2fa::ActiveModel {
@@ -443,7 +421,6 @@ async fn test_form_pages_include_csrf_tokens() {
         tfa_html.contains(r#"name="csrf_token""#),
         "2FA page should include csrf_token in the verify form"
     );
-    // In setup_pending mode only the verify form is shown
     assert!(
         tfa_html.matches(r#"name="csrf_token""#).count() >= 1,
         "2FA verify form should include csrf_token"
@@ -459,7 +436,6 @@ async fn test_shares_page_includes_csrf_token() {
     let api_token = get_api_token(&server).await;
     let repo_id = create_repo_api(&server.base_url, &api_token, "share-test").await;
 
-    // Create a share link via API
     let share_resp = reqwest::Client::new()
         .post(format!("{}/api/v2.1/share-links/", server.base_url))
         .header("Authorization", format!("Token {}", api_token))
@@ -497,7 +473,6 @@ async fn test_invitations_page_includes_csrf_tokens() {
     let server = TestServer::start().await;
     create_test_admin(server.db.as_ref(), "test@example.com", "password").await;
 
-    // Login as admin (ui_login uses test@example.com)
     let ui_client = ui_login(&server).await;
 
     let inv_html = ui_client
@@ -513,8 +488,6 @@ async fn test_invitations_page_includes_csrf_tokens() {
         "invitations page should have csrf_token in generate form"
     );
 }
-
-// ==================== Security: sysadmin user-management CSRF ====================
 
 /// Extract the csrf_token from the sysadmin users page HTML.
 async fn sysadmin_csrf_token(client: &reqwest::Client, base_url: &str) -> String {
@@ -541,7 +514,6 @@ async fn test_sysadmin_create_user_requires_csrf() {
     create_test_admin(server.db.as_ref(), "test@example.com", "password").await;
     let client = ui_login(&server).await;
 
-    // No token → 400.
     let resp = client
         .post(format!("{}/sysadmin/users/create/", server.base_url))
         .form(&[("email", "victim@test.com"), ("password", "password123")])
@@ -550,7 +522,6 @@ async fn test_sysadmin_create_user_requires_csrf() {
         .unwrap();
     assert_eq!(resp.status(), 400, "missing csrf_token must be rejected");
 
-    // Wrong token → 400.
     let resp = client
         .post(format!("{}/sysadmin/users/create/", server.base_url))
         .form(&[
@@ -563,7 +534,6 @@ async fn test_sysadmin_create_user_requires_csrf() {
         .unwrap();
     assert_eq!(resp.status(), 400, "invalid csrf_token must be rejected");
 
-    // Valid token → 302 (success).
     let token = sysadmin_csrf_token(&client, &server.base_url).await;
     let resp = client
         .post(format!("{}/sysadmin/users/create/", server.base_url))
@@ -586,7 +556,6 @@ async fn test_sysadmin_update_user_requires_csrf() {
     let target_id = create_test_user(server.db.as_ref(), "target@test.com", "password").await;
     let client = ui_login(&server).await;
 
-    // No token → 400.
     let resp = client
         .post(format!(
             "{}/sysadmin/users/{}/update/",
@@ -598,7 +567,6 @@ async fn test_sysadmin_update_user_requires_csrf() {
         .unwrap();
     assert_eq!(resp.status(), 400, "missing csrf_token must be rejected");
 
-    // Valid token → 302.
     let token = sysadmin_csrf_token(&client, &server.base_url).await;
     let resp = client
         .post(format!(
@@ -620,7 +588,6 @@ async fn test_sysadmin_delete_user_requires_csrf() {
     let doomed_id = create_test_user(server.db.as_ref(), "doomed@test.com", "password").await;
     let client = ui_login(&server).await;
 
-    // No token → 400.
     let resp = client
         .post(format!(
             "{}/sysadmin/users/{}/delete/",
@@ -632,7 +599,6 @@ async fn test_sysadmin_delete_user_requires_csrf() {
         .unwrap();
     assert_eq!(resp.status(), 400, "missing csrf_token must be rejected");
 
-    // Valid token → 302, and the user is actually deleted.
     let token = sysadmin_csrf_token(&client, &server.base_url).await;
     let resp = client
         .post(format!(
@@ -654,10 +620,6 @@ async fn test_sysadmin_delete_user_requires_csrf() {
     assert!(gone.is_none(), "deleted user should no longer exist");
 }
 
-// ==================== Security: settings device-unlink CSRF ====================
-
-/// Extract the csrf_token from the settings page HTML (same HMAC value as any
-/// other page for the same session).
 async fn settings_csrf_token(client: &reqwest::Client, base_url: &str) -> String {
     let html = client
         .get(format!("{}/settings/", base_url))
@@ -674,15 +636,12 @@ async fn settings_csrf_token(client: &reqwest::Client, base_url: &str) -> String
         .to_string()
 }
 
-/// Unlinking a device without a csrf_token must be rejected (the token is
-/// mandatory, not optional).
 #[tokio::test]
 async fn test_settings_unlink_device_requires_csrf() {
     let server = TestServer::start().await;
     create_test_user(server.db.as_ref(), "test@example.com", "password").await;
     let client = ui_login(&server).await;
 
-    // No token → 400.
     let resp = client
         .post(format!("{}/settings/devices/", server.base_url))
         .form(&[("platform", "linux"), ("device_id", "some-client-id")])
@@ -691,7 +650,6 @@ async fn test_settings_unlink_device_requires_csrf() {
         .unwrap();
     assert_eq!(resp.status(), 400, "missing csrf_token must be rejected");
 
-    // Valid token → 302 (no matching device, deletes are no-ops).
     let token = settings_csrf_token(&client, &server.base_url).await;
     let resp = client
         .post(format!("{}/settings/devices/", server.base_url))
@@ -706,8 +664,6 @@ async fn test_settings_unlink_device_requires_csrf() {
     assert_eq!(resp.status(), 302, "valid csrf_token should succeed");
 }
 
-// ==================== Security: 2FA disable CSRF ====================
-
 /// Disabling 2FA without a csrf_token must be rejected.
 #[tokio::test]
 async fn test_two_factor_disable_requires_csrf() {
@@ -715,7 +671,6 @@ async fn test_two_factor_disable_requires_csrf() {
     create_test_user(server.db.as_ref(), "test@example.com", "password").await;
     let client = ui_login(&server).await;
 
-    // No token → 400.
     let resp = client
         .post(format!("{}/settings/two-factor/disable/", server.base_url))
         .form(&[("password", "password")])
@@ -724,7 +679,6 @@ async fn test_two_factor_disable_requires_csrf() {
         .unwrap();
     assert_eq!(resp.status(), 400, "missing csrf_token must be rejected");
 
-    // Wrong token → 400.
     let resp = client
         .post(format!("{}/settings/two-factor/disable/", server.base_url))
         .form(&[("password", "password"), ("csrf_token", "wrong-token")])
@@ -749,9 +703,6 @@ async fn test_two_factor_disable_requires_csrf() {
     );
 }
 
-// ==================== client-login forced-login defence ====================
-
-/// Mint a one-time client-login token for the account behind `api_token`.
 async fn mint_client_login_token(base_url: &str, api_token: &str) -> String {
     let client = reqwest::Client::new();
     let resp = client
@@ -768,7 +719,6 @@ async fn mint_client_login_token(base_url: &str, api_token: &str) -> String {
 }
 
 /// A cross-site navigation must never silently sign the browser in.
-///
 /// `validate_origin` accepts a request with neither `Origin` nor `Referer`, so
 /// an attacker could otherwise mint a token for their own account and have a
 /// victim's browser switch to it with a referrer-suppressed link — the victim's
@@ -865,7 +815,6 @@ async fn client_login_cross_site_navigation_is_not_silent() {
     );
 }
 
-/// The confirmation page's POST works when it comes from the site itself.
 #[tokio::test]
 async fn client_login_confirmation_post_from_site_logs_in() {
     let f = common::TestFixture::new().await;
@@ -964,7 +913,6 @@ async fn logout_is_not_triggerable_cross_site() {
         })
     };
 
-    // A cross-site navigation must not clear the session.
     let resp = client
         .get(format!("{base_url}/accounts/logout/"))
         .header("sec-fetch-site", "cross-site")
@@ -977,7 +925,6 @@ async fn logout_is_not_triggerable_cross_site() {
         "a cross-site navigation must not be able to force a logout"
     );
 
-    // The session is still valid.
     let resp = client
         .get(format!("{base_url}/libraries/"))
         .header("Cookie", &session_cookie)
@@ -986,7 +933,6 @@ async fn logout_is_not_triggerable_cross_site() {
         .unwrap();
     assert_eq!(resp.status(), 200, "the session must survive");
 
-    // A same-origin logout still works.
     let resp = client
         .get(format!("{base_url}/accounts/logout/"))
         .header("sec-fetch-site", "same-origin")

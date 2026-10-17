@@ -14,7 +14,6 @@ mod common;
 use common::{TestFixture, ZipLimits, create_test_user};
 use std::io::Read;
 
-/// Helper: upload a file to a repo.
 async fn upload(f: &TestFixture, dir: &str, name: &str, data: &[u8]) {
     let resp = f
         .client
@@ -27,7 +26,6 @@ async fn upload(f: &TestFixture, dir: &str, name: &str, data: &[u8]) {
     );
 }
 
-/// Helper: create a directory.
 async fn mkdir(f: &TestFixture, path: &str) {
     let resp = f.client.create_dir(&f.api_token, &f.repo_id, path).await;
     assert!(
@@ -37,7 +35,6 @@ async fn mkdir(f: &TestFixture, path: &str) {
     );
 }
 
-/// Helper: request a zip token and return it.
 async fn request_zip(f: &TestFixture, parent_dir: &str, dirents: &[&str]) -> String {
     let resp = f
         .client
@@ -50,7 +47,6 @@ async fn request_zip(f: &TestFixture, parent_dir: &str, dirents: &[&str]) -> Str
     token
 }
 
-/// Helper: download zip and parse it, returning (names, file_map).
 fn parse_zip(data: &[u8]) -> (Vec<String>, std::collections::HashMap<String, Vec<u8>>) {
     let mut archive =
         zip::ZipArchive::new(std::io::Cursor::new(data)).expect("should be a valid zip archive");
@@ -76,8 +72,6 @@ fn parse_zip(data: &[u8]) -> (Vec<String>, std::collections::HashMap<String, Vec
     (names, files)
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────
-
 #[tokio::test]
 async fn test_single_dir_download() {
     let f = TestFixture::new().await;
@@ -94,7 +88,6 @@ async fn test_single_dir_download() {
         zip_resp.headers().get("content-type").unwrap(),
         "application/zip",
     );
-    // Verify Content-Disposition contains directory name
     let cd = zip_resp
         .headers()
         .get("content-disposition")
@@ -163,21 +156,17 @@ async fn test_batch_multi_file_download() {
 async fn test_mixed_files_and_dirs_download() {
     let f = TestFixture::new().await;
 
-    // Root file
     upload(&f, "/", "root.txt", b"root").await;
 
-    // Subdir with files
     mkdir(&f, "/subdir").await;
     upload(&f, "/subdir", "sa.txt", b"sub a").await;
     upload(&f, "/subdir", "sb.txt", b"sub b").await;
 
-    // Select both root.txt and subdir/
     let zip_token = request_zip(&f, "/", &["root.txt", "subdir"]).await;
     let zip_resp = f.client.zip_download(&zip_token).await;
     assert_eq!(zip_resp.status(), 200);
 
     let (names, files) = parse_zip(&zip_resp.bytes().await.unwrap());
-    // subdir/ files should be prefixed with subdir/
     assert_eq!(names, vec!["root.txt", "subdir/sa.txt", "subdir/sb.txt"]);
     assert_eq!(files["root.txt"], b"root");
     assert_eq!(files["subdir/sa.txt"], b"sub a");
@@ -188,7 +177,6 @@ async fn test_mixed_files_and_dirs_download() {
 async fn test_zip_content_integrity() {
     let f = TestFixture::new().await;
 
-    // Upload binary content with known bytes
     let content: Vec<u8> = (0..255).cycle().take(1024).collect();
     upload(&f, "/", "data.bin", &content).await;
 
@@ -210,7 +198,6 @@ async fn test_empty_dir_download() {
 
     mkdir(&f, "/empty").await;
 
-    // Empty directory has no files to zip → handler returns 404
     let resp = f
         .client
         .zip_task(&f.api_token, &f.repo_id, "/", &["empty"])
@@ -222,7 +209,6 @@ async fn test_empty_dir_download() {
 async fn test_nested_dir_structure() {
     let f = TestFixture::new().await;
 
-    // Create deeply nested path: a/b/c/d/e.txt
     mkdir(&f, "/a").await;
     mkdir(&f, "/a/b").await;
     mkdir(&f, "/a/b/c").await;
@@ -276,7 +262,6 @@ async fn test_nonexistent_entry_returns_404() {
 async fn test_unauthorized_access_returns_403() {
     let f = TestFixture::new().await;
 
-    // Create a second user who does NOT own the repo
     let _uid2 = create_test_user(&f.server.db, "intruder@test.com", "password").await;
     let resp = f.client.login("intruder@test.com", "password").await;
     let body: serde_json::Value = resp.json().await.unwrap();

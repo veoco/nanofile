@@ -1,14 +1,9 @@
-//! Integration tests for the full-text search indexer.
-//!
-//! These tests verify that file operations (upload, delete, rename, move)
-//! correctly update the Tantivy full-text search index.
-//!
-//! All tests use `TestFixture::new_with_index()` which starts the server
-//! with the indexer enabled on a temporary index directory.
+//! Integration tests for the full-text search indexer: file operations must update the
+//! Tantivy index. Tests use `TestFixture::new_with_index()`, which starts the server with
+//! the indexer on a temporary index directory.
 
 mod common;
 
-/// Perform a full-text content search and return the `results` array.
 async fn search_results(f: &common::TestFixture, token: &str, q: &str) -> Vec<serde_json::Value> {
     let resp = f
         .client
@@ -24,14 +19,9 @@ async fn search_results(f: &common::TestFixture, token: &str, q: &str) -> Vec<se
         .clone()
 }
 
-/// Poll `predicate` until it returns true or `timeout` elapses. Returns `true`
-/// if the predicate became true, `false` on timeout.
-///
-/// The indexer commits asynchronously (debounced), so a freshly uploaded,
-/// renamed, moved or deleted file is not searchable immediately. Polling
-/// instead of sleeping a fixed duration keeps these tests robust on slow CI
-/// runners where the debounced commit (and Tantivy's first-commit cold start)
-/// can exceed a fixed delay.
+/// Poll `predicate` until it returns true or `timeout` elapses. The indexer commits
+/// asynchronously (debounced), so a fresh upload is not searchable immediately; polling
+/// keeps these tests robust on slow CI runners where Tantivy's first commit is cold.
 async fn wait_for<F, Fut>(timeout: std::time::Duration, mut predicate: F) -> bool
 where
     F: FnMut() -> Fut,
@@ -55,7 +45,6 @@ async fn test_upload_and_search_content() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    // Upload a text file with unique content
     let resp = f
         .client
         .upload_file(
@@ -68,7 +57,6 @@ async fn test_upload_and_search_content() {
         .await;
     assert_eq!(resp.status(), 200, "upload should succeed");
 
-    // Give the indexer time to commit (poll, not fixed sleep)
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let results = search_results(&f, token, "nanofile").await;
@@ -78,7 +66,6 @@ async fn test_upload_and_search_content() {
         "should find file via content search"
     );
 
-    // Search for content (not filename) — should find the file
     let results = search_results(&f, token, "nanofile").await;
     assert_eq!(results[0]["name"], "hello.txt");
     assert_eq!(results[0]["fullpath"], "/hello.txt");
@@ -90,7 +77,6 @@ async fn test_search_content_not_filename() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    // File with content that doesn't match its name
     let resp = f
         .client
         .upload_file(
@@ -103,7 +89,6 @@ async fn test_search_content_not_filename() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Full-text search should find it (content matches) — poll for the commit
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let results = search_results(&f, token, "installation").await;
@@ -113,7 +98,6 @@ async fn test_search_content_not_filename() {
         "full-text search should find 'installation' in content"
     );
 
-    // Filename-only search should NOT find it (name doesn't contain 'installation')
     let resp = f
         .client
         .get(
@@ -165,7 +149,6 @@ async fn test_binary_file_skipped() {
         "text signal file should be indexed"
     );
 
-    // Search for content in binary file — should not find it.
     let results = search_results(&f, token, "binary").await;
     assert!(results.is_empty(), "binary file should not be indexed");
 }
@@ -176,7 +159,6 @@ async fn test_delete_cleans_index() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    // Upload
     let resp = f
         .client
         .upload_file(
@@ -189,7 +171,6 @@ async fn test_delete_cleans_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Verify it's in the index (poll for the debounced commit)
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let results = search_results(&f, token, "delete").await;
@@ -199,7 +180,6 @@ async fn test_delete_cleans_index() {
         "file should be in index before delete"
     );
 
-    // Delete
     let resp = f
         .client
         .delete(
@@ -209,7 +189,6 @@ async fn test_delete_cleans_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Search again — should not find it (poll for the delete to commit)
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let results = search_results(&f, token, "delete").await;
@@ -226,14 +205,12 @@ async fn test_rename_updates_index() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    // Upload
     let resp = f
         .client
         .upload_file(token, &f.repo_id, "/", "rename_me.txt", b"rename content")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Rename via form POST
     let resp = f
         .client
         .post_form(
@@ -244,7 +221,6 @@ async fn test_rename_updates_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Content search at new path should work (poll for the commit)
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let results = search_results(&f, token, "rename+content").await;
@@ -263,19 +239,15 @@ async fn test_move_updates_index() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    // Create a subdirectory
     let resp = f.client.create_dir(token, &f.repo_id, "/subdir").await;
-    // seahub answers 201 Created for mkdir.
     assert_eq!(resp.status(), 201);
 
-    // Upload
     let resp = f
         .client
         .upload_file(token, &f.repo_id, "/", "move_me.txt", b"move content test")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Move via form POST
     let resp = f
         .client
         .post_form(
@@ -290,7 +262,6 @@ async fn test_move_updates_index() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Content search at new path should work (poll for the commit)
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let results = search_results(&f, token, "move+content").await;
@@ -305,7 +276,6 @@ async fn test_move_updates_index() {
 
 /// A rename performed through the sync protocol (`PUT /commit/HEAD`) must move
 /// the index entry: the new path is searchable and the old path is gone.
-///
 /// The sync path deletes the old path via the `superseded` delete change that
 /// activity logging now skips, so this guards the indexer half of that split.
 #[tokio::test]
@@ -323,7 +293,6 @@ async fn test_sync_rename_updates_index() {
         None,
     )
     .await;
-    // Same object id, new name, same directory → the diff reports a rename.
     common::sync_commit(
         &f.client,
         &f.sync_token,
@@ -359,7 +328,6 @@ async fn test_sync_rename_updates_index() {
 
 /// Poll `search_results` until `gone` is absent and every path in `want` is
 /// present, or fail.
-///
 /// The search endpoint is rate limited (60/min), so this runs one poll per test
 /// rather than polling before and after the operation.
 async fn wait_for_paths(
@@ -386,13 +354,9 @@ async fn wait_for_paths(
     panic!("expected paths {want:?} (and not {gone:?}) for {q:?}; last results: {results:?}");
 }
 
-/// Renaming a *directory* via the web API must move the index entries of the
-/// files inside it to the new path, and moving the directory must move them
-/// again.
-///
-/// The directory rename path used to skip index updates entirely, which left
-/// every file under a renamed directory unsearchable (the old path no longer
-/// resolves in the FS tree, so the stale index hit was dropped).
+/// Renaming a *directory* must move the index entries of the files inside it, and moving
+/// it must move them again. The directory rename path used to skip index updates, leaving
+/// every file under it unsearchable (the old path no longer resolves in the FS tree).
 #[tokio::test]
 async fn test_dir_rename_and_move_update_index() {
     let f = common::TestFixture::new_with_index().await;
@@ -434,7 +398,6 @@ async fn test_dir_rename_and_move_update_index() {
     )
     .await;
 
-    // Move it under another directory.
     assert_eq!(
         f.client
             .create_dir(token, &f.repo_id, "/dst")
@@ -566,7 +529,6 @@ async fn test_batch_delete_cleans_index() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    // Upload multiple files
     for i in 0..3 {
         let name = format!("batch-{}.txt", i);
         let content = format!("batch content {}", i);
@@ -577,7 +539,6 @@ async fn test_batch_delete_cleans_index() {
         assert_eq!(resp.status(), 200);
     }
 
-    // Verify files are in index (poll for the debounced commit)
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let results = search_results(&f, token, "batch").await;
@@ -587,7 +548,6 @@ async fn test_batch_delete_cleans_index() {
         "should find batch files in index"
     );
 
-    // Batch delete via v2.1 API
     let resp = f
         .client
         .post_json(
@@ -623,14 +583,12 @@ async fn test_content_search_multi_repo() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    // Upload content-matching file to first repo
     let resp = f
         .client
         .upload_file(token, &f.repo_id, "/", "unique.txt", b"unique term xyz987")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Create second repo and upload with same content
     let repo2_id = common::create_test_repo(&f.client, token, "second-repo").await;
     let resp = f
         .client
@@ -638,7 +596,6 @@ async fn test_content_search_multi_repo() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Search from first user — should find both repos (poll for the commit)
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let results = search_results(&f, token, "xyz987").await;
@@ -655,7 +612,6 @@ async fn test_reindex_endpoint() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    // Upload a text file
     let resp = f
         .client
         .upload_file(
@@ -668,7 +624,6 @@ async fn test_reindex_endpoint() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Verify it's indexed (poll for the debounced commit)
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let results = search_results(&f, token, "reindexable").await;
@@ -678,7 +633,6 @@ async fn test_reindex_endpoint() {
         "file should be indexed before reindex"
     );
 
-    // Call the reindex endpoint — starts a background task.
     let resp = f
         .client
         .post_json(
@@ -692,7 +646,6 @@ async fn test_reindex_endpoint() {
     assert_eq!(body["status"], "ok");
     let task_id = body["task_id"].as_str().unwrap().to_string();
 
-    // Poll until the background reindex task completes.
     let mut progress: serde_json::Value = serde_json::json!({});
     for _ in 0..100 {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -715,7 +668,6 @@ async fn test_reindex_endpoint() {
 
 /// A reindex checks in before every file, so a busy server parks the pass
 /// instead of letting it run to completion.
-///
 /// The catalog declares `chunkable` for this job. Without a checkpoint in the
 /// body that declaration is a lie: the run is handed a gate and never uses it.
 #[tokio::test]
@@ -810,7 +762,6 @@ async fn a_reindex_pass_parks_while_the_server_is_busy() {
 }
 
 /// A pass stopped at a checkpoint ends as a cancellation, not as a failure.
-///
 /// The abandoned pass surfaces as an opaque error; the job body is what turns
 /// it back into the terminal state the caller actually asked for.
 #[tokio::test]
@@ -893,7 +844,6 @@ async fn test_index_file_text_for_binary() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    // Upload a binary file (PNG header) — not indexable as text.
     let resp = f
         .client
         .upload_file(
@@ -906,8 +856,6 @@ async fn test_index_file_text_for_binary() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Upload a text signal file so we know the debounced commit has run before
-    // asserting the binary file is absent from the index.
     let resp = f
         .client
         .upload_file(token, &f.repo_id, "/", "signal.txt", b"commit signal text")
@@ -922,14 +870,12 @@ async fn test_index_file_text_for_binary() {
         "signal file should be indexed"
     );
 
-    // Verify the binary file is NOT found via content search.
     let results = search_results(&f, token, "vision+model").await;
     assert!(
         results.is_empty(),
         "binary file should not be indexed at upload"
     );
 
-    // Now use index_file_text to associate extracted text with the image.
     let resp = f
         .client
         .post_json(
@@ -946,7 +892,6 @@ async fn test_index_file_text_for_binary() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "ok");
 
-    // Now search for the extracted text — should find the image (poll).
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let results = search_results(&f, token, "vision+model+extracted").await;
@@ -956,7 +901,6 @@ async fn test_index_file_text_for_binary() {
         "should find image via custom text index"
     );
 
-    // Update with different text — should replace the old index entry.
     let resp = f
         .client
         .post_json(
@@ -971,7 +915,6 @@ async fn test_index_file_text_for_binary() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Old text should no longer match, new text should match (poll for both).
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let old_results = search_results(&f, token, "login+page+username").await;
@@ -991,7 +934,6 @@ async fn test_prefix_matching_in_content() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    // Upload a file with "Caseend" in the content
     let resp = f
         .client
         .upload_file(
@@ -1004,7 +946,6 @@ async fn test_prefix_matching_in_content() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Exact match should still work (poll for the debounced commit)
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let results = search_results(&f, token, "Caseend").await;
@@ -1016,7 +957,6 @@ async fn test_prefix_matching_in_content() {
     let results = search_results(&f, token, "Caseend").await;
     assert_eq!(results[0]["name"], "readme.md");
 
-    // Prefix match: "case" should find "Caseend"
     let results = search_results(&f, token, "case").await;
     assert!(!results.is_empty(), "prefix 'case' should match 'Caseend'");
     assert_eq!(results[0]["name"], "readme.md");
@@ -1029,7 +969,6 @@ async fn test_invalid_query_syntax_returns_empty_not_500() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    // Upload a file so the index is non-empty.
     let resp = f
         .client
         .upload_file(token, &f.repo_id, "/", "doc.txt", b"some content here")
@@ -1044,7 +983,6 @@ async fn test_invalid_query_syntax_returns_empty_not_500() {
         "file should be indexed"
     );
 
-    // Various invalid/special syntaxes that used to return 500.
     for bad_query in &[
         "/.*a.*b.*/",   // regex syntax (disabled by default)
         "field:value",  // field-qualified query on non-existent field
@@ -1090,9 +1028,6 @@ async fn test_overlong_keyword_returns_empty() {
     assert!(results.is_empty(), "overlong keyword should return empty");
 }
 
-// ── Access control ─────────────────────────────────────────────────────
-
-/// Fetch the `results` array for a search query, with an optional `search_repo`.
 async fn search_results_with_repo(
     f: &common::TestFixture,
     token: &str,
@@ -1119,7 +1054,6 @@ async fn test_zero_repo_user_cannot_search_other_repos() {
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
 
-    // Victim indexes a file whose name and content are both distinctive.
     let resp = f
         .client
         .upload_file(
@@ -1132,7 +1066,6 @@ async fn test_zero_repo_user_cannot_search_other_repos() {
         .await;
     assert_eq!(resp.status(), 200, "upload should succeed");
 
-    // Wait until the victim can find it — proves the document is indexed.
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             !search_results(&f, token, "zqxjwv").await.is_empty()
@@ -1141,7 +1074,6 @@ async fn test_zero_repo_user_cannot_search_other_repos() {
         "victim should find their own indexed file"
     );
 
-    // A second user with no repos at all must see nothing.
     let other = common::TestFixture::no_repo("nosy@example.com", "password").await;
     let other_token = &other.api_token;
 
@@ -1158,7 +1090,6 @@ async fn test_zero_repo_user_cannot_search_other_repos() {
         );
     }
 
-    // Filename-only mode must not leak either.
     let resp = other
         .client
         .get(
@@ -1195,7 +1126,6 @@ async fn test_owner_still_finds_own_content_after_search_fix() {
         "owner must still find their own indexed content"
     );
 
-    // Scoping to the owner's own repo also works.
     let scoped = search_results_with_repo(&f, token, "qqzzxx", Some(f.repo_id.as_str())).await;
     assert!(
         !scoped.is_empty(),
@@ -1203,10 +1133,8 @@ async fn test_owner_still_finds_own_content_after_search_fix() {
     );
 }
 
-/// Compatibility: seahub lowercases `search_repo` before comparing it against
-/// the scope keywords (`api2/views.py`: `search_repo = search_repo.lower()`),
-/// so an uppercase scope must still mean "search all accessible repos" rather
-/// than being treated as an inaccessible repo id.
+/// seahub lowercases `search_repo` before comparing it against the scope keywords, so an
+/// uppercase scope must still mean "search all accessible repos".
 #[tokio::test]
 async fn test_uppercase_search_scope_is_accepted() {
     let f = common::TestFixture::new_with_index().await;
@@ -1240,7 +1168,6 @@ async fn test_uppercase_search_scope_is_accepted() {
 }
 
 /// Absurd `page`/`per_page` values must be clamped rather than overflow.
-///
 /// `(page - 1) * per_page` was computed in `i32`, so a client could panic the
 /// handler in debug/test builds (overflow check) or get a wrapped, meaningless
 /// offset in release builds.
@@ -1265,7 +1192,6 @@ async fn test_search_pagination_is_clamped() {
         );
     }
 
-    // A normal page still returns the normal envelope.
     let body: serde_json::Value = f
         .client
         .get(
@@ -1281,7 +1207,6 @@ async fn test_search_pagination_is_clamped() {
 
 /// The low-load backfill is what indexes files the pipeline never saw: files
 /// that predate it, and files an extractor gained support for since.
-///
 /// The document is removed by hand to stand in for "this file was uploaded
 /// before the pipeline existed"; the pass must find it from the repository tree
 /// alone, and a second pass must then find nothing left to do.
@@ -1354,8 +1279,6 @@ async fn a_backfill_pass_indexes_a_file_the_index_never_saw() {
         "the backfilled file should be searchable"
     );
 
-    // The state the pass wrote says the file is done, so a second pass is a
-    // no-op rather than a re-read.
     let report = svc.backfill_pass(None, &cursor).await.expect("pass runs");
     assert_eq!(
         report.counts.indexed, 0,
@@ -1431,7 +1354,6 @@ async fn document_formats_are_searchable() {
 
 /// Files the extractor cannot turn into text are recorded as skipped, and
 /// neither the request nor the batch that carried them fails.
-///
 /// Three shapes: a damaged container the lenient reader still opens, input that
 /// is not a PDF at all, and an Office package that claims to expand far past
 /// the extraction budget. The last one is the shape a crafted file takes, and
@@ -1508,8 +1430,6 @@ async fn a_document_without_a_text_layer_is_not_indexed() {
         "a document with no extractable text must not report as indexed"
     );
 
-    // Still reachable by filename, so the skip costs the file nothing but its
-    // (nonexistent) content.
     assert!(
         wait_for(std::time::Duration::from_secs(15), || async {
             let results = search_results(&f, token, "blank").await;
@@ -1547,7 +1467,6 @@ async fn an_oversized_document_is_skipped() {
 
 /// The headline of the upgrade: a file the *previous* extractor examined and
 /// skipped becomes searchable on the next quiet pass, with no manual rebuild.
-///
 /// The file content is unchanged and the recorded `fs_id` still matches, so the
 /// only thing marking it stale is the extractor version — which is exactly the
 /// mechanism that picks up libraries indexed before PDF support existed.
@@ -1638,7 +1557,6 @@ async fn a_backfill_pass_picks_up_what_an_older_extractor_skipped() {
         "the document should be searchable again after the pass"
     );
 
-    // Now that it is current, a second pass leaves it alone.
     let report = svc.backfill_pass(None, &cursor).await.expect("pass runs");
     assert_eq!(
         report.counts.indexed, 0,

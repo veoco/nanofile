@@ -2,10 +2,6 @@ mod common;
 
 use common::TestFixture;
 
-// ======================================================================
-// Upload / Update Blocks Link Tests
-// ======================================================================
-
 #[tokio::test]
 async fn test_upload_blks_link_returns_url() {
     let f = TestFixture::new().await;
@@ -75,10 +71,6 @@ async fn test_upload_blks_link_nonexistent_repo() {
     assert_eq!(resp.status(), 404);
 }
 
-// ======================================================================
-// File Uploaded Bytes Tests
-// ======================================================================
-
 #[tokio::test]
 async fn test_file_uploaded_bytes_stub() {
     let f = TestFixture::new().await;
@@ -97,7 +89,6 @@ async fn test_file_uploaded_bytes_stub() {
 async fn test_file_uploaded_bytes_missing_params() {
     let f = TestFixture::new().await;
 
-    // Missing file_name should fail
     let resp = f
         .client
         .file_uploaded_bytes(&f.api_token, &f.repo_id, "", "")
@@ -164,7 +155,6 @@ async fn test_chunked_upload_assembles_and_commits() {
     let base = f.server.base_url.clone();
     let repo_id = f.repo_id.clone();
 
-    // Token-authenticated chunk upload via /upload-aj/{token}/.
     let token = get_upload_token(&f).await;
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
@@ -172,7 +162,6 @@ async fn test_chunked_upload_assembles_and_commits() {
     let split = 6;
     let (c1, c2) = content.split_at(split);
 
-    // Chunk 1 (intermediate) — written to the temp file, not committed.
     let resp = client
         .post(format!("{}/upload-aj/{}", base, token))
         .header(
@@ -190,7 +179,6 @@ async fn test_chunked_upload_assembles_and_commits() {
         "intermediate chunk should not commit"
     );
 
-    // Chunk 2 (final) — assembles and commits.
     let resp = client
         .post(format!("{}/upload-aj/{}", base, token))
         .header(
@@ -207,7 +195,6 @@ async fn test_chunked_upload_assembles_and_commits() {
     assert_eq!(body[0]["name"], "big.txt");
     assert_eq!(body[0]["size"], content.len() as i64);
 
-    // The assembled file must round-trip the exact bytes.
     let resp = f
         .client
         .download_file(&f.api_token, &repo_id, "/big.txt")
@@ -232,7 +219,6 @@ async fn test_chunked_upload_resume_after_interrupt() {
     let content = b"resumed-content";
     let split = 8;
 
-    // First attempt: chunk 1 with wrong data, then re-send the correct chunk 1.
     for data in [b"WRONG!!!", &content[..split]] {
         let resp = client
             .post(format!("{}/upload-aj/{}", base, token))
@@ -247,7 +233,6 @@ async fn test_chunked_upload_resume_after_interrupt() {
         assert_eq!(resp.status(), 200);
     }
 
-    // Final chunk commits the resumed file.
     let resp = client
         .post(format!("{}/upload-aj/{}", base, token))
         .header(
@@ -293,7 +278,6 @@ async fn test_chunked_upload_rejects_when_temp_cap_reached() {
         .unwrap();
     assert_eq!(resp.status(), 200);
 
-    // Chunk 1 of file B — different name → different temp entry → cap reached.
     let form_b = reqwest::multipart::Form::new()
         .part(
             "file",
@@ -327,7 +311,6 @@ async fn test_chunked_upload_rejects_size_mismatch() {
     let token = get_upload_token(&f).await;
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-    // Header says 4 bytes (0-3/8) but the body carries 2 bytes.
     let resp = client
         .post(format!("{}/upload-aj/{}", base, token))
         .header("content-range", "bytes 0-3/8")
@@ -377,7 +360,6 @@ async fn test_upload_blks_commit_rejects_size_lie() {
     assert_eq!(resp.status(), 200);
     let url: String = resp.json().await.unwrap();
 
-    // Upload a real block whose content is 5 bytes.
     let data = b"hello";
     let block_id = {
         use sha1::{Digest, Sha1};
@@ -392,7 +374,6 @@ async fn test_upload_blks_commit_rejects_size_lie() {
     let resp = f.client.post_multipart_url(&url, form).await;
     assert_eq!(resp.status(), 200, "block upload should succeed");
 
-    // Commit claims file_size=3 while the real block is 5 bytes.
     let form = reqwest::multipart::Form::new()
         .text("commitonly", "1")
         .text("parent_dir", "/")
@@ -413,7 +394,6 @@ async fn test_upload_blks_block_size_limited() {
     assert_eq!(resp.status(), 200);
     let url: String = resp.json().await.unwrap();
 
-    // A 13 MiB block part: over the 12 MiB cap, far under the 4 GiB global limit.
     let form = reqwest::multipart::Form::new().part(
         "file",
         reqwest::multipart::Part::bytes(vec![0u8; 13 * 1024 * 1024]).file_name("a"),
@@ -439,7 +419,6 @@ async fn test_upload_blks_block_size_limited() {
         ),
     }
 
-    // A normal small block still succeeds.
     let data = b"hello";
     let block_id = {
         use sha1::{Digest, Sha1};
@@ -455,9 +434,7 @@ async fn test_upload_blks_block_size_limited() {
     assert_eq!(resp.status(), 200, "small block upload should succeed");
 }
 
-// ======================================================================
 // In-transit streaming (in-order chunks CDC'd into blocks) tests
-// ======================================================================
 
 /// Deterministic pseudo-random bytes (same generator as the `file_ops` unit
 /// tests) so a fixture spanning several CDC blocks is reproducible.
@@ -524,7 +501,6 @@ async fn test_chunked_upload_streams_in_order_to_blocks() {
     }
     assert!(expected_ids.len() > 1, "fixture must span multiple blocks");
 
-    // Upload all but the final 8192-byte chunk, in order.
     let chunk_size = 8192usize;
     let n_chunks = content.len().div_ceil(chunk_size);
     for i in 0..n_chunks - 1 {
@@ -561,7 +537,6 @@ async fn test_chunked_upload_streams_in_order_to_blocks() {
         "expected in-transit blocks before the final chunk, found none"
     );
 
-    // Final chunk commits the file.
     let i = n_chunks - 1;
     let start = i * chunk_size;
     let end = content.len() - 1;
@@ -580,7 +555,6 @@ async fn test_chunked_upload_streams_in_order_to_blocks() {
     assert!(body.is_array(), "final chunk should return the file list");
     assert_eq!(body[0]["size"], content.len() as i64);
 
-    // The committed file must round-trip the exact bytes.
     let resp = f
         .client
         .download_file(&f.api_token, &repo_id, "/big.txt")

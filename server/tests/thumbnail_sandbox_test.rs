@@ -101,9 +101,6 @@ async fn a_video_thumbnail_is_generated_in_the_sandbox() {
     );
     let data = resp.bytes().await.expect("bytes");
     let decoded = image::load_from_memory(&data).expect("the reply is an image");
-    // The frame the confined worker produced was 320x240 and the same-ratio fit
-    // is exact, so the geometry says a real decode and resize happened rather
-    // than an image of some other size arriving.
     assert_eq!(
         (decoded.width(), decoded.height()),
         (48, 36),

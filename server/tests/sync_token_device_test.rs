@@ -15,8 +15,6 @@ mod common;
 use common::TestFixture;
 use server::service::user::DeviceService;
 
-/// Log in a further device through `/api2/auth-token/` and return its account
-/// token.
 async fn login_device(f: &TestFixture, platform: &str, device_id: &str) -> String {
     let resp = f
         .client
@@ -38,7 +36,6 @@ async fn login_device(f: &TestFixture, platform: &str, device_id: &str) -> Strin
     body["token"].as_str().expect("login token").to_string()
 }
 
-/// Ask for one repository's sync token the way a desktop client does.
 async fn repo_token(f: &TestFixture, token: &str, repo_id: &str) -> String {
     let resp = f
         .client
@@ -52,7 +49,6 @@ async fn repo_token(f: &TestFixture, token: &str, repo_id: &str) -> String {
         .unwrap_or_else(|| panic!("no token for {repo_id}: {tokens:?}"))
 }
 
-/// Every sync token row the fixture's user holds.
 async fn rows(f: &TestFixture) -> Vec<infra::entity::sync_token::Model> {
     f.server
         .repos
@@ -113,7 +109,6 @@ async fn download_info_hands_a_device_its_own_attributed_token() {
     let row = row_for(&f, &second).await;
     assert_eq!(row.peer_id.as_deref(), Some("dev-a"));
     assert_eq!(row.id, orphan.id, "the same row was claimed, not replaced");
-    // The raw value is unchanged, so the client holding it keeps working.
     assert_eq!(
         f.server
             .repos
@@ -163,7 +158,6 @@ async fn two_devices_hold_their_own_token_and_unlinking_one_keeps_the_other() {
             .any(|row| row.peer_id.as_deref() == Some("dev-b"))
     );
 
-    // Unlinking one device deletes only what that device holds.
     DeviceService::new(f.server.repos.clone())
         .unlink_device(f.user_id, "linux", "dev-a")
         .await
@@ -219,7 +213,6 @@ async fn syncing_never_reassigns_a_token_to_another_device() {
 async fn a_device_less_caller_keeps_the_single_unattributed_token() {
     let f = TestFixture::new().await;
 
-    // `f.api_token` came from a login that reported no device.
     let again = repo_token(&f, &f.api_token, &f.repo_id).await;
     assert_eq!(again, f.sync_token);
     assert_eq!(rows(&f).await.len(), 1, "still one shared row");

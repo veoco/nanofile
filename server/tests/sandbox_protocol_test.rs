@@ -1,25 +1,12 @@
-//! What the extraction worker does with a request it did not expect.
+//! What the extraction worker does with a request it did not expect. The child confines
+//! itself and *then* reads the request, so these tests hand the real binary hand-written
+//! bytes; the requirement is the master switch alone, and the constants are spelled here
+//! because a wire format is pinned.
 //!
-//! The child confines itself and *then* reads the request, so these tests hand
-//! the real binary hand-written bytes, the way an attacker who reached the
-//! protocol would. The requirement is the master switch alone, which keeps the
-//! subject the parser rather than this host; the constants are spelled here: a
-//! wire format is pinned.
-//!
-//! The cases that need the child to *serve* are unix-only. On Windows the
-//! memory and CPU bound is a Job Object the parent names at creation, and the one
-//! creation a child needs no token for reports no job when it was not started in
-//! one — so a test that starts the worker itself is answered `job=limits-missing`
-//! and the refusal is correct: it is the arrangement that is not the server's,
-//! not the bound. The refusal case below runs everywhere, and the parts that need
-//! a bounded child are covered on Windows by `sandbox_probe_test` and the
-//! request-path tests, both of which start it the way the server does.
-//!
-//! The file is unix-only for that reason, with the one refusal case included: a
-//! test binary that starts the worker itself cannot give it the job object on
-//! Windows, and a suite that skipped only the serving cases would still have to
-//! carry their helpers. What Windows loses here is the malformed-request surface,
-//! which `sandbox_probe_test` covers from the side that the server actually uses.
+//! The cases that need the child to *serve* are unix-only: on Windows the bound is a Job
+//! Object the parent names, and a self-started worker reports `job=limits-missing` — the
+//! arrangement, not the bound, is what differs. The malformed-request surface is covered
+//! by `sandbox_probe_test` and the request-path tests, which start it as the server does.
 #![cfg(unix)]
 
 use std::io::{Read, Write};
@@ -42,7 +29,6 @@ struct Answer {
 }
 
 impl Answer {
-    /// The reply frame, or a panic naming what came back instead.
     fn frame(&self) -> (u8, &[u8]) {
         assert!(
             self.status.success(),
@@ -80,7 +66,6 @@ impl Answer {
         std::str::from_utf8(body).expect("a refusal is text")
     }
 
-    /// A run that ended by itself, however it ended.
     fn finished(&self, case: &str) {
         assert!(
             !self.timed_out,
@@ -89,7 +74,6 @@ impl Answer {
     }
 }
 
-/// Run the worker once with `args` and `request` on its standard input.
 fn run_worker(args: &[&str], request: &[u8]) -> Answer {
     let mut child = spawn(args);
     let mut stdin = child.stdin.take().expect("a stdin pipe");
@@ -239,7 +223,6 @@ fn the_child_refuses_to_serve_with_the_sandbox_off() {
 }
 
 /// The request path returns the whole text of a real document, not a word of it.
-///
 /// The probe's `parse=` is the self-test's own answer; this is the same
 /// documents arriving the way the server sends them, plan tag and bytes, with
 /// the fixtures the parsers are tested against. A parser that stopped early, or
@@ -433,7 +416,6 @@ fn a_png_of(width: u32, height: u32) -> Vec<u8> {
     bytes
 }
 
-/// A one-pixel PNG.
 fn a_png() -> Vec<u8> {
     a_png_of(1, 1)
 }

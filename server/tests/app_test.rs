@@ -86,7 +86,6 @@ async fn a_body_over_the_configured_json_limit_is_refused() {
 /// The same 65 MiB the JSON route just refused, sent to an upload route: that
 /// group raised its own limit, so the global cap must not apply to it. Without
 /// the per-group limit in `app_routes` this is the assertion that fails.
-///
 /// `/upload-aj/` rejects a request with no session cookie before it reads the
 /// body, so it can close the connection while 65 MiB is still going out. Which
 /// side wins that race is timing, not platform: the client may then report an

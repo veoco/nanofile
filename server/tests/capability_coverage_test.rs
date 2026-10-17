@@ -13,7 +13,6 @@ use server::domain::capability::{RouteAccess, required_access};
 /// independent copy that catches a table entry disappearing.
 #[rustfmt::skip]
 const ROUTES: &[(&str, &str)] = &[
-    // Authentication plumbing.
     ("POST",   "/api2/auth-token/"),
     ("GET",    "/api2/auth/ping/"),
     ("POST",   "/api2/logout-device/"),
@@ -23,7 +22,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api2/client-sso-link/"),
     ("GET",    "/api2/client-sso-link/abc/"),
     ("POST",   "/api2/client-login/"),
-    // Account, avatar, devices, notifications.
     ("GET",    "/api2/account/info/"),
     ("PUT",    "/api2/account/info/"),
     ("POST",   "/api2/account/"),
@@ -35,7 +33,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET",    "/api2/credentials/"),
     ("DELETE", "/api2/credentials/{kind}/{id}/"),
     ("GET",    "/api2/unseen_messages/"),
-    // Library metadata.
     ("GET",    "/api2/repos/"),
     ("POST",   "/api2/repos/"),
     ("GET",    "/api/v2.1/repos/"),
@@ -53,7 +50,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api/v2.1/deleted-repos/"),
     ("DELETE", "/api/v2.1/deleted-repos/"),
     ("DELETE", "/api/v2.1/deleted-repos/{repo_id}/"),
-    // Directories and files.
     ("GET",    "/api2/repos/{repo_id}/dir/"),
     ("POST",   "/api2/repos/{repo_id}/dir/"),
     ("DELETE", "/api2/repos/{repo_id}/dir/"),
@@ -80,13 +76,11 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET",    "/api2/repos/{repo_id}/file-uploaded-bytes/"),
     ("GET",    "/api/v2.1/repos/{repo_id}/file-uploaded-bytes/"),
     ("POST",   "/api/v2.1/repos/{repo_id}/zip-task/"),
-    // Capability-URL minting.
     ("GET",    "/api2/repos/{repo_id}/upload-link/"),
     ("GET",    "/api2/repos/{repo_id}/update-link/"),
     ("GET",    "/api2/repos/{repo_id}/upload-blks-link/"),
     ("GET",    "/api2/repos/{repo_id}/update-blks-link/"),
     ("GET",    "/api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/"),
-    // Batch operations.
     ("POST",   "/api2/repos/{repo_id}/fileops/delete/"),
     ("POST",   "/api2/repos/{repo_id}/fileops/copy/"),
     ("POST",   "/api2/repos/{repo_id}/fileops/move/"),
@@ -98,7 +92,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api/v2.1/repos/async-batch-move-item/"),
     ("POST",   "/api/v2.1/copy-move-task/"),
     ("GET",    "/api/v2.1/query-copy-move-progress/"),
-    // Trash and history.
     ("GET",    "/api/v2.1/repos/{repo_id}/trash/"),
     ("DELETE", "/api/v2.1/repos/{repo_id}/trash/"),
     ("POST",   "/api/v2.1/repos/{repo_id}/trash/revert-dirents/"),
@@ -109,7 +102,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET",    "/api/v2.1/repos/{repo_id}/file/history/"),
     ("GET",    "/api/v2.1/repos/{repo_id}/file/revision/"),
     ("POST",   "/api/v2.1/repos/{repo_id}/file/revision/restore/"),
-    // Links.
     ("GET",    "/api2/shared-links/"),
     ("POST",   "/api2/shared-links/"),
     ("DELETE", "/api2/shared-links/{token}"),
@@ -133,7 +125,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET",    "/api/v2.1/repos/{repo_id}/related-users/"),
     ("GET",    "/api2/groups/"),
     ("GET",    "/api/v2.1/groups/"),
-    // Metadata and tags.
     ("GET",    "/api/v2.1/repos/{repo_id}/metadata/"),
     ("PUT",    "/api/v2.1/repos/{repo_id}/metadata/"),
     ("GET",    "/api/v2.1/repos/{repo_id}/metadata/record/"),
@@ -147,7 +138,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/v2.1/repos/{repo_id}/metadata/tags-status/"),
     ("GET",    "/api/v2.1/repos/{repo_id}/metadata/tag-files/{tag_id}/"),
     ("PUT",    "/api/v2.1/repos/{repo_id}/metadata/file-tags/"),
-    // Discovery.
     ("GET",    "/api2/starredfiles/"),
     ("GET",    "/api/v2.1/starred-items/"),
     ("POST",   "/api/v2.1/starred-items/"),
@@ -159,7 +149,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api2/reindex/"),
     ("GET",    "/api2/reindex-progress/"),
     ("POST",   "/api2/index-file-text/"),
-    // Sync-token issuance and misc.
     ("GET",    "/api2/repo-tokens/"),
     ("GET",    "/api2/repos/{repo_id}/download-info/"),
     ("GET",    "/api/v2.1/smart-link/"),
@@ -171,7 +160,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api2/admin/users/"),
     ("PUT",    "/api2/admin/users/{user_id}/"),
     ("DELETE", "/api2/admin/users/{user_id}/"),
-    // Unified API-key management (session-only).
     ("GET",    "/api2/api-keys/"),
     ("POST",   "/api2/api-keys/"),
     ("GET",    "/api2/api-keys/catalog/"),
@@ -219,7 +207,6 @@ fn router_literals_are_covered_by_the_inventory() {
 
 /// Whether `literal` names a prefix of `path`, treating `{...}` on either side
 /// as "any single segment".
-///
 /// Both sides mix conventions — `routes.rs` writes `{repo_id}` while the
 /// inventory writes `{repo_id}` for path parameters but concrete values for
 /// tokens — so placeholders are wildcards on both sides. This is a drift guard

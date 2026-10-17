@@ -2,7 +2,6 @@ mod common;
 
 use common::TestFixture;
 
-/// B.7.1 — POST /api2/client-login/
 #[tokio::test]
 async fn test_client_login_returns_token() {
     let f = TestFixture::new().await;
@@ -25,7 +24,6 @@ async fn test_client_login_unauthorized() {
 }
 
 /// B.7.2 — POST /api2/client-sso-link/ (official protocol: anonymous, no body).
-///
 /// seadroid posts with no auth and no params; the response must be the full
 /// browser link (no raw token field).
 #[tokio::test]
@@ -91,7 +89,6 @@ async fn test_client_sso_link_ignores_host_header() {
     );
 }
 
-/// B.7.3 — GET /api2/client-sso-link/{token}/ (anonymous poll).
 #[tokio::test]
 async fn test_client_sso_link_poll_waiting() {
     let server = common::TestServer::start().await;
@@ -129,10 +126,8 @@ async fn test_client_sso_full_flow() {
 
     common::create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
 
-    // 1. Client (anonymous) creates the link.
     let token = create_sso_link_token(&client).await;
 
-    // 2. Browser opens the link → 302 to the login page with next=complete.
     let no_redirect = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -159,7 +154,6 @@ async fn test_client_sso_full_flow() {
         "login next should point at the complete page: {location}"
     );
 
-    // 3. Log in through the web UI (session cookie).
     let resp = ui
         .post_ui_form(
             "/accounts/login/",
@@ -168,7 +162,6 @@ async fn test_client_sso_full_flow() {
         .await;
     assert!(resp.status().is_success(), "web login should succeed");
 
-    // 4. Visit the confirm page → confirm form with a CSRF token.
     let complete_url = format!("/client-sso/{}/complete/", token);
     let resp = ui.get_ui(&complete_url).await;
     assert_eq!(
@@ -184,13 +177,11 @@ async fn test_client_sso_full_flow() {
     let csrf = extract_form_csrf(&html);
     assert!(!csrf.is_empty(), "confirm page should embed a CSRF token");
 
-    // 5. Confirm → completion page.
     let resp = ui
         .post_ui_form(&complete_url, &[("csrf_token", csrf.as_str())])
         .await;
     assert_eq!(resp.status(), 200, "completion page should render");
 
-    // 6. Client polls → success with username + camelCase apiToken.
     let resp = client
         .get(&format!("/api2/client-sso-link/{}/", token), None)
         .await;
@@ -201,7 +192,6 @@ async fn test_client_sso_full_flow() {
     let api_token = body["apiToken"].as_str().unwrap().to_string();
     assert_eq!(api_token.len(), 40);
 
-    // The minted apiToken works for authenticated API calls.
     let resp = client.ping(&api_token).await;
     assert_eq!(resp.status(), 200);
 }
@@ -275,7 +265,6 @@ async fn test_client_sso_complete_requires_login() {
 
     let token = create_sso_link_token(&client).await;
 
-    // Use a no-redirect client so the WebUser redirect surfaces directly.
     let no_redirect = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -289,7 +278,6 @@ async fn test_client_sso_complete_requires_login() {
         .send()
         .await
         .unwrap();
-    // WebUser rejection redirects to the login page (axum Redirect = 303).
     assert_eq!(resp.status(), 303);
     let location = resp.headers().get("location").unwrap().to_str().unwrap();
     assert_eq!(location, "/accounts/login/");
@@ -305,7 +293,6 @@ async fn test_client_sso_complete_csrf_required() {
     let client = server.client();
     let token = create_sso_link_token(&client).await;
 
-    // Log in and open the browser link so the token is accessed.
     let resp = ui
         .post_ui_form(
             "/accounts/login/",
@@ -321,13 +308,10 @@ async fn test_client_sso_complete_csrf_required() {
     let link = format!("{}/client-sso/{}/", server.base_url, token);
     let _ = no_redirect.get(&link).send().await.unwrap();
 
-    // POST without a CSRF token → rejected.
     let complete_url = format!("/client-sso/{}/complete/", token);
     let resp = ui.post_ui_form(&complete_url, &[]).await;
     assert_eq!(resp.status(), 400);
 }
-
-// ── Helpers ────────────────────────────────────────────────────────────────
 
 /// Create a link via the anonymous POST and return the token extracted from
 /// the returned link (same last-path-segment extraction seadroid uses).
@@ -361,7 +345,6 @@ fn extract_form_csrf(html: &str) -> String {
 async fn test_device_wiped() {
     let f = TestFixture::new().await;
 
-    // Login with device metadata so the API token is tied to a device.
     let resp = f
         .client
         .post_form(
@@ -392,7 +375,6 @@ async fn test_device_wiped() {
 async fn test_device_wiped_invalid_token() {
     let server = common::TestServer::start().await;
     let client = server.client();
-    // A nonexistent / anonymous report must be rejected.
     let resp = client
         .post_form(
             "/api2/device-wiped/",
@@ -402,20 +384,17 @@ async fn test_device_wiped_invalid_token() {
         .await;
     assert_eq!(resp.status(), 400);
 
-    // Missing token entirely.
     let resp = client.post_form("/api2/device-wiped/", None, &[]).await;
     assert_eq!(resp.status(), 400);
 }
 
 /// B.9.1 — GET /api2/search/?q=&per_page=&page=&search_repo=
-///
 /// Searches file/directory names across accessible repos using case-insensitive
 /// substring matching.
 #[tokio::test]
 async fn test_search_returns_results() {
     let f = TestFixture::new().await;
 
-    // Upload files to the repo
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "hello.txt", b"hello world")
@@ -428,7 +407,6 @@ async fn test_search_returns_results() {
         .await;
     assert_eq!(resp.status(), 200, "file upload should succeed");
 
-    // Search for "hello" — should find hello.txt
     let resp = f
         .client
         .get("/api2/search/?q=hello&per_page=10", Some(&f.api_token))
@@ -457,7 +435,6 @@ async fn test_search_case_insensitive() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Search lowercase should match uppercase filename
     let resp = f
         .client
         .get("/api2/search/?q=hello", Some(&f.api_token))
@@ -477,14 +454,12 @@ async fn test_search_case_insensitive() {
 async fn test_search_all_repos() {
     let f = TestFixture::new().await;
 
-    // Upload a file
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "hello.txt", b"hello")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Create a second repo and upload a file with same name
     let repo2_id = common::create_test_repo(&f.client, &f.api_token, "second-repo").await;
     let resp = f
         .client
@@ -492,7 +467,6 @@ async fn test_search_all_repos() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Search across all repos — should find in both
     let resp = f
         .client
         .get("/api2/search/?q=hello&per_page=10", Some(&f.api_token))
@@ -513,14 +487,12 @@ async fn test_search_all_repos() {
 async fn test_search_scoped_to_repo() {
     let f = TestFixture::new().await;
 
-    // Upload to first repo
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "hello.txt", b"hello")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Create second repo and upload there too
     let repo2_id = common::create_test_repo(&f.client, &f.api_token, "repo2").await;
     let resp = f
         .client
@@ -528,7 +500,6 @@ async fn test_search_scoped_to_repo() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Search scoped to first repo — should find hello but not world
     let url = format!("/api2/search/?q=hello&search_repo={}", f.repo_id);
     let resp = f.client.get(&url, Some(&f.api_token)).await;
     assert_eq!(resp.status(), 200);
@@ -538,7 +509,6 @@ async fn test_search_scoped_to_repo() {
     assert_eq!(results[0]["name"], "hello.txt");
     assert_eq!(results[0]["repo_id"], f.repo_id);
 
-    // scoped to repo2 — empty for "hello"
     let url = format!("/api2/search/?q=hello&search_repo={}", repo2_id);
     let resp = f.client.get(&url, Some(&f.api_token)).await;
     assert_eq!(resp.status(), 200);
@@ -554,7 +524,6 @@ async fn test_search_scoped_to_repo() {
 async fn test_search_pagination() {
     let f = TestFixture::new().await;
 
-    // Upload 5 files with searchable names
     for i in 0..5 {
         let name = format!("alpha-{}.txt", i);
         let resp = f
@@ -564,7 +533,6 @@ async fn test_search_pagination() {
         assert_eq!(resp.status(), 200);
     }
 
-    // Page 1: per_page=2
     let resp = f
         .client
         .get(
@@ -582,7 +550,6 @@ async fn test_search_pagination() {
     assert_eq!(body["total"], 5, "total should be 5");
     assert_eq!(body["has_more"], true, "page 1 should have more");
 
-    // Page 2: per_page=2
     let resp = f
         .client
         .get(
@@ -599,7 +566,6 @@ async fn test_search_pagination() {
     );
     assert_eq!(body["has_more"], true, "page 2 should have more");
 
-    // Page 3: per_page=2 — should return 1 result (5th file)
     let resp = f
         .client
         .get(
@@ -616,7 +582,6 @@ async fn test_search_pagination() {
     );
     assert_eq!(body["has_more"], false, "page 3 should not have more");
 
-    // Page 4: beyond end — empty
     let resp = f
         .client
         .get(
@@ -637,21 +602,18 @@ async fn test_search_pagination() {
 async fn test_search_directories() {
     let f = TestFixture::new().await;
 
-    // Create a directory
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/mydir")
         .await;
     assert_eq!(resp.status(), 201, "create dir should succeed");
 
-    // Upload a file into it
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/mydir", "inner.txt", b"data")
         .await;
     assert_eq!(resp.status(), 200, "file upload into subdir should succeed");
 
-    // Search for "mydir" — should find the directory
     let resp = f
         .client
         .get("/api2/search/?q=mydir", Some(&f.api_token))
@@ -664,14 +626,12 @@ async fn test_search_directories() {
     assert_eq!(dirs[0]["name"], "mydir");
     assert_eq!(dirs[0]["fullpath"], "/mydir");
 
-    // Search for "inner" — should find the file inside
     let resp = f
         .client
         .get("/api2/search/?q=inner", Some(&f.api_token))
         .await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    // The inner.txt file is inside /mydir/inner.txt
     let all_results = body["results"].as_array().unwrap();
     assert!(
         all_results.iter().any(|r| r["name"] == "inner.txt"),
@@ -683,7 +643,6 @@ async fn test_search_directories() {
 async fn test_search_no_keyword() {
     let f = TestFixture::new().await;
 
-    // Empty query should return empty results
     let resp = f
         .client
         .get("/api2/search/?q=&per_page=10", Some(&f.api_token))
@@ -693,7 +652,6 @@ async fn test_search_no_keyword() {
     assert!(body["results"].as_array().unwrap().is_empty());
     assert_eq!(body["total"], 0);
 
-    // Missing q should also return empty
     let resp = f
         .client
         .get("/api2/search/?per_page=10", Some(&f.api_token))
@@ -713,7 +671,6 @@ async fn test_search_no_matches() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Non-existent keyword
     let resp = f
         .client
         .get("/api2/search/?q=zzzzz_not_found", Some(&f.api_token))
@@ -770,7 +727,6 @@ async fn test_sso_api_token_is_encrypted_at_rest() {
         .await
         .unwrap();
 
-    // Raw row (bypassing the repository's decryption) must not contain the token.
     let raw = infra::entity::sso_login_token::Entity::find()
         .filter(
             infra::entity::sso_login_token::Column::Token
@@ -790,7 +746,6 @@ async fn test_sso_api_token_is_encrypted_at_rest() {
         "expected ciphertext marker, got {stored}"
     );
 
-    // Reading through the repository returns the plaintext for the client.
     let record = f
         .server
         .repos

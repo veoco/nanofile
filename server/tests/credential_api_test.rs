@@ -12,7 +12,6 @@ mod common;
 use common::TestFixture;
 use serde_json::{Value, json};
 
-/// Mint a key through the management API and return its plaintext.
 async fn create_key(f: &TestFixture, body: &Value) -> String {
     let resp = f
         .client
@@ -187,7 +186,6 @@ async fn the_inventory_follows_the_device_capabilities() {
     let listed: Value = resp.json().await.unwrap();
     let token_id = listed["sync_tokens"][0]["id"].as_i64().expect("id");
 
-    // Reading is not revoking.
     let resp = f
         .client
         .delete(
@@ -207,7 +205,6 @@ async fn the_inventory_follows_the_device_capabilities() {
         .await;
     assert_eq!(resp.status(), 200, "device.write may revoke");
 
-    // A key with neither is refused outright.
     let unrelated = create_key(&f, &key_body(&["library.read"])).await;
     let resp = f.client.get("/api2/credentials/", Some(&unrelated)).await;
     assert_eq!(resp.status(), 403);
@@ -234,7 +231,6 @@ async fn the_device_list_is_the_whole_inventory() {
     assert!(kinds.contains(&"client"), "the calling session: {kinds:?}");
     assert!(kinds.contains(&"sync_token"), "{kinds:?}");
 
-    // The sync-token entry names its library and carries no value.
     let token = entries
         .iter()
         .find(|entry| entry["kind"] == "sync_token")
@@ -292,7 +288,6 @@ async fn the_device_endpoint_revokes_by_kind_too() {
 async fn every_listed_kind_can_be_fed_straight_back_to_revoke() {
     let f = TestFixture::new().await;
 
-    // A browser session and a device trust, so the list has every kind.
     let raw = server::service::auth::token::generate_api_token();
     server::repository::api_token::ApiTokenRepository::create_session_token(
         f.server.repos.api_token.as_ref(),

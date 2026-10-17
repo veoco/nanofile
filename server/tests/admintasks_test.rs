@@ -58,7 +58,6 @@ fn page_content(html: &str) -> &str {
     html.split("id=\"__i18n\"").next().unwrap_or(html)
 }
 
-/// The CSRF token embedded in the registry's trigger form.
 fn csrf_of(html: &str) -> String {
     html.split(r#"name="csrf_token" value=""#)
         .nth(1)
@@ -67,9 +66,6 @@ fn csrf_of(html: &str) -> String {
         .to_string()
 }
 
-/// One row of a list, from its own handle to the next row's, so a test can look
-/// inside one row without matching the rest of the page. `next` is the prefix
-/// every row of that list shares.
 fn row_of<'h>(html: &'h str, marker: &str, next: &str) -> &'h str {
     let at = html
         .find(marker)
@@ -148,15 +144,12 @@ async fn the_load_panel_sits_above_the_run_list() {
             && at("data-panel=\"active\"") < at("data-panel=\"recent\""),
         "the run page's blocks are out of order"
     );
-    // The rendered headings, not the keys: `page_content` cuts the dictionary
-    // off, so a heading found here is the one a reader sees.
     assert!(
         at("Server load") < at("Recent runs"),
         "the load panel is not above the run list"
     );
 }
 
-/// Neither page is reachable by an account that is not an administrator.
 #[tokio::test]
 async fn a_non_admin_is_sent_away_from_both_pages() {
     let server = TestServer::start().await;
@@ -236,7 +229,6 @@ async fn the_registry_names_the_jobs_it_did_not_register() {
     assert!(body.contains("Not registered on this server"));
 }
 
-/// A finished run in the journal, as the run page reads it.
 async fn seed_run(
     server: &TestServer,
     id: &str,
@@ -260,7 +252,6 @@ async fn seed_run(
         )
         .await
         .unwrap();
-    // Started as well as finished, so the row has a duration to report.
     journal
         .mark_running(id, finished_at - 5, finished_at + 300)
         .await
@@ -277,7 +268,6 @@ async fn seed_run(
 async fn a_journal_row_is_named_and_state_labelled() {
     let (server, admin) = admin_server().await;
 
-    // A run as the journal would hold it: queued, then finished.
     let journal = server.state.repos.job_run.clone();
     let now = chrono::Utc::now().timestamp();
     journal
@@ -326,7 +316,6 @@ async fn a_journal_row_is_named_and_state_labelled() {
     let row = row_of(
         page_content(&html),
         "data-run=\"journalled-run\"",
-        // The next row starts at the next `data-run=`; that is where this ends.
         "data-run=\"",
     );
 
@@ -344,9 +333,7 @@ async fn a_journal_row_is_named_and_state_labelled() {
         "the wire phase reached the page: {row}"
     );
     assert!(!row.contains(">gc<"), "the slug reached the page: {row}");
-    // The submitter is named, and a scheduled run has no account to name.
     assert!(row.contains("The server"), "{row}");
-    // The run's own report and its id are one disclosure away.
     assert!(row.contains("journalled-run"), "{row}");
     assert!(row.contains("nothing to remove"), "{row}");
 }
@@ -359,7 +346,6 @@ async fn the_run_list_can_be_narrowed_by_job_and_by_verdict() {
     let journal = server.state.repos.job_run.clone();
     let now = chrono::Utc::now().timestamp();
 
-    // Two jobs, one of each verdict, so every combination has an answer.
     for (id, kind, phase) in [
         ("gc-ok", JobKey::GarbageCollection, "succeeded"),
         ("gc-bad", JobKey::GarbageCollection, "failed"),
@@ -387,13 +373,10 @@ async fn the_run_list_can_be_narrowed_by_job_and_by_verdict() {
 
     let body_of = |html: &str| page_content(html).to_string();
 
-    // Everything, by default.
     let (_, html) = page(&server, &admin, RUNS).await;
     let body = body_of(&html);
     assert_eq!(body.matches("data-run=\"").count(), 3, "all three rows");
 
-    // By job: the other job's row is gone, and the verdict choice is still
-    // offered.
     let (_, html) = page(&server, &admin, "/sysadmin/tasks/?kind=gc").await;
     let body = body_of(&html);
     assert!(body.contains("data-run=\"gc-ok\""), "{body}");
@@ -404,14 +387,12 @@ async fn the_run_list_can_be_narrowed_by_job_and_by_verdict() {
         "the verdict filter kept the job: {body}"
     );
 
-    // By verdict: only the runs that did not succeed, under either job.
     let (_, html) = page(&server, &admin, "/sysadmin/tasks/?outcome=failed").await;
     let body = body_of(&html);
     assert!(body.contains("data-run=\"gc-bad\""), "{body}");
     assert!(!body.contains("data-run=\"gc-ok\""), "{body}");
     assert!(!body.contains("data-run=\"reindex-ok\""), "{body}");
 
-    // By both.
     let (_, html) = page(
         &server,
         &admin,
@@ -592,7 +573,6 @@ async fn the_registry_reads_the_last_verdict_back_after_a_restart() {
         .await
         .unwrap();
 
-    // The fresh process reading the journal behind it.
     server.state.tasks.seed_stats_from_journal().await;
 
     let (_, html) = page(&server, &admin, REGISTRY).await;

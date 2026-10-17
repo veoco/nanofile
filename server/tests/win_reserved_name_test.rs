@@ -39,7 +39,6 @@ async fn test_mkdir_reserved_name_rejected() {
 async fn test_normal_names_still_work() {
     let f = TestFixture::new().await;
 
-    // Files that merely *contain* reserved substrings must not be affected.
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "report.txt", b"hello")

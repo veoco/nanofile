@@ -27,7 +27,6 @@ struct Worker {
 }
 
 /// Most bytes of a reply the parent will read.
-///
 /// Spelled here from the same two numbers the worker's own cap is built from
 /// (`indexer::extract::MAX_INDEXED_CONTENT_BYTES` plus a mebibyte of slack),
 /// because the constant itself is private to the module that reads it.
@@ -115,7 +114,6 @@ fn the_parent_bounds_what_the_child_does_and_sees() {
     let directory = tempfile::tempdir().expect("temp dir");
     let worker = script(directory.path());
 
-    // ── The child's surroundings ────────────────────────────────────────
     let (outcome, elapsed) = a_hanging_request(Duration::from_millis(500));
     assert!(
         matches!(outcome, RunOutcome::Failed(why) if why == reason::TIMED_OUT),
@@ -147,7 +145,6 @@ fn the_parent_bounds_what_the_child_does_and_sees() {
         "the one variable the parent sets has to be there: {facts}"
     );
 
-    // ── The process group ──────────────────────────────────────────────
     // The copy was running while the request did: without this the assertion
     // below would pass on a script that never started one.
     let (_, _) = a_hanging_request(Duration::from_millis(1000));
@@ -164,7 +161,6 @@ fn the_parent_bounds_what_the_child_does_and_sees() {
          running with the protocol pipes"
     );
 
-    // ── The reply cap ──────────────────────────────────────────────────
     let outcome = worker::run_request(
         Profile::Images,
         Duration::from_secs(20),

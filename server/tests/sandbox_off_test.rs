@@ -30,7 +30,6 @@ async fn a_document_skipped_while_the_sandbox_is_off_is_reindexed_when_it_return
         .await;
     assert_eq!(resp.status(), 200, "upload should succeed");
 
-    // The master switch, off: nothing is parsed, in the child or here.
     worker::configure_requirement(Requirement::new(false));
 
     let resp = f
@@ -69,8 +68,6 @@ async fn a_document_skipped_while_the_sandbox_is_off_is_reindexed_when_it_return
         "the switched-off sandbox must leave a retryable state, not `Skipped`"
     );
 
-    // The switch back on: the same bytes are extracted for real, at whatever
-    // grade this host gives.
     worker::configure_requirement(Requirement::new(true));
 
     let resp = f

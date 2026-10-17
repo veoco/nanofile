@@ -17,7 +17,6 @@ async fn disabled_invitations_close_registration() {
     let server = TestServer::start_with_auth_config(|auth| auth.enable_invitations = false).await;
     let client = server.client();
 
-    // The login page no longer advertises registration.
     let body = client
         .get("/accounts/login/", None)
         .await
@@ -29,7 +28,6 @@ async fn disabled_invitations_close_registration() {
         "the create-account link must be hidden when invitations are disabled"
     );
 
-    // The registration page itself is gone.
     let resp = client.get("/accounts/register/", None).await;
     assert_eq!(
         resp.status(),
@@ -108,7 +106,6 @@ async fn disabled_password_reset_mints_nothing() {
         "no reset token may be minted while the feature is disabled"
     );
 
-    // The confirm page is closed too.
     let resp = client
         .get("/accounts/password/reset/sometoken/", None)
         .await;
@@ -129,7 +126,6 @@ async fn disabled_share_links_stop_minting_and_using_upload_tokens() {
         TestServer::start_with_server_info_config(|cfg| cfg.share_link_enabled = false).await;
     let client = server.client();
 
-    // Owner + repo on this server.
     let user_id = common::create_test_user(&server.db, "owner@example.com", "password123").await;
     assert!(user_id > 0);
     let login = client.login("owner@example.com", "password123").await;
@@ -140,7 +136,6 @@ async fn disabled_share_links_stop_minting_and_using_upload_tokens() {
         .to_string();
     let repo_id = common::create_test_repo(&client, &token, "lib").await;
 
-    // The anonymous entry points are refused.
     let resp = client
         .post_json(
             "/api/v2.1/upload-links/",

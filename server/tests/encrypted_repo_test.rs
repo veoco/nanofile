@@ -3,16 +3,12 @@ mod common;
 use common::{TestFixture, create_test_user};
 use infra::crypto::{key_derivation, pwd_hash};
 
-/// Pre-compute encrypted repo params using the Rust crypto module directly.
 fn make_encrypted_params(repo_id: &str, password: &str) -> (String, String) {
     let magic = key_derivation::generate_magic(repo_id, password, 2, "").unwrap();
     let random_key = key_derivation::generate_random_key_for_repo(password, 2, "").unwrap();
     (magic, random_key)
 }
 
-/// Whether `token`'s session currently holds a cached decryption key for the
-/// library, as reported by the `check-password` operation. This is the
-/// client-visible view of the server-side key cache.
 async fn cached_key_is_set(f: &TestFixture, token: &str, repo_id: &str) -> bool {
     let resp = f
         .client
@@ -27,7 +23,6 @@ async fn cached_key_is_set(f: &TestFixture, token: &str, repo_id: &str) -> bool 
     body["is_set"].as_bool().unwrap_or(false)
 }
 
-/// Create an encrypted repo and return its repo_id.
 async fn create_encrypted_repo(f: &TestFixture, name: &str, password: &str) -> String {
     let repo_id = uuid::Uuid::new_v4().to_string();
     let (magic, random_key) = make_encrypted_params(&repo_id, password);
@@ -43,8 +38,6 @@ async fn create_encrypted_repo(f: &TestFixture, name: &str, password: &str) -> S
     );
     repo_id
 }
-
-// ─── Phase 2: Encrypted Repo API ─────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_create_encrypted_repo_client_side() {
@@ -83,8 +76,6 @@ async fn test_list_repos_shows_encrypted() {
     assert!(enc_repo["magic"].as_str().is_some());
 }
 
-// ─── Password Set/Check ───────────────────────────────────────────────────────
-
 #[tokio::test]
 async fn test_set_password_v21_success() {
     let f = TestFixture::new().await;
@@ -115,7 +106,6 @@ async fn test_set_password_wrong_password() {
 #[tokio::test]
 async fn test_set_password_non_encrypted() {
     let f = TestFixture::new().await;
-    // f.repo_id is a regular (non-encrypted) repo
 
     let resp = f
         .client
@@ -142,7 +132,6 @@ async fn test_check_password_v2_correct() {
     let password = "test-password";
     let enc_repo_id = create_encrypted_repo(&f, "enc-lib", password).await;
 
-    // Re-compute the magic using the actual repo_id from the DB
     let (magic, _) = make_encrypted_params(&enc_repo_id, password);
 
     let resp = f
@@ -164,8 +153,6 @@ async fn test_check_password_v2_wrong() {
     assert_eq!(resp.status(), 441, "should fail with 441");
 }
 
-// ─── Password Change ──────────────────────────────────────────────────────────
-
 #[tokio::test]
 async fn test_change_password_success() {
     let f = TestFixture::new().await;
@@ -182,22 +169,18 @@ async fn test_change_password_success() {
         resp.text().await.unwrap_or_default()
     );
 
-    // Verify new password works
     let resp = f
         .client
         .set_repo_password_v21(&f.api_token, &enc_repo_id, "new-password")
         .await;
     assert_eq!(resp.status(), 200, "new password should work");
 
-    // Old password should fail
     let resp = f
         .client
         .set_repo_password_v21(&f.api_token, &enc_repo_id, "old-password")
         .await;
     assert_eq!(resp.status(), 440, "old password should fail");
 }
-
-// ─── Repo Info ────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_get_encrypted_repo_info() {
@@ -221,16 +204,12 @@ async fn test_download_info_encrypted_repo() {
     let resp = f.client.download_info(&f.api_token, &enc_repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    // seahub sends the *number* `1` here (`enc = 1 if repo.encrypted else ''`)
-    // and the desktop client reads the field with `QVariant::toInt()`
-    // (`requests.cpp:173`), so a JSON string would read back as 0 and hide the
-    // encryption from the clone flow.
+    // seahub emits the number `1` and the desktop client reads it with `QVariant::toInt()`,
+    // so a JSON string would read as 0 and hide encryption from the clone flow.
     assert_eq!(body["encrypted"], 1);
     assert!(body["magic"].as_str().is_some());
     assert!(body["random_key"].as_str().is_some());
 }
-
-// ─── Restrictions ─────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_share_link_blocked_for_encrypted_repo() {
@@ -265,7 +244,6 @@ async fn test_file_detail_on_encrypted_repo() {
     let f = TestFixture::new().await;
     let enc_repo_id = create_encrypted_repo(&f, "enc-lib", "test-password").await;
 
-    // Set password and upload a file
     f.client
         .set_repo_password_v21(&f.api_token, &enc_repo_id, "test-password")
         .await;
@@ -273,7 +251,6 @@ async fn test_file_detail_on_encrypted_repo() {
         .upload_file(&f.api_token, &enc_repo_id, "/", "doc.txt", b"metadata")
         .await;
 
-    // File detail (metadata only, no decryption needed)
     let resp = f
         .client
         .get(
@@ -294,7 +271,6 @@ async fn test_change_password_readonly_member_forbidden() {
     let f = TestFixture::new().await;
     let enc_repo_id = create_encrypted_repo(&f, "enc-lib", "old-password").await;
 
-    // Second user granted read-only access.
     let ro_id = create_test_user(f.server.db.as_ref(), "ro@example.com", "password").await;
     let resp = f.client.login("ro@example.com", "password").await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -302,8 +278,6 @@ async fn test_change_password_readonly_member_forbidden() {
 
     common::add_repo_member(f.server.db.as_ref(), &enc_repo_id, ro_id, "r").await;
 
-    // Read-only member must not be able to change the password, even knowing
-    // the old one.
     let resp = f
         .client
         .change_repo_password(&b_token, &enc_repo_id, "old-password", "hacked-password")
@@ -314,8 +288,6 @@ async fn test_change_password_readonly_member_forbidden() {
         "read-only member must not change the encrypted repo password"
     );
 }
-
-// ==================== Security: encrypted-repo creation validation ====================
 
 /// An encrypted repo with an unsupported enc_version (the server can only
 /// operate 2/4) must be rejected.
@@ -455,15 +427,9 @@ async fn test_create_encrypted_repo_v4_requires_salt() {
     assert_eq!(resp.status(), 400, "v4 without salt must be rejected");
 }
 
-// ─── Brute-force metering (security) ─────────────────────────────────────────
-
-/// Failed library-password checks are metered per (user, repo), and the budget
-/// is shared by **every** endpoint that verifies the password or its magic.
-///
-/// The library KDF iteration count is fixed at 1000 by the Seafile wire
-/// protocol, so this limiter is the only control against online guessing. Two
-/// of the verification endpoints used to be unmetered, which made the cap
-/// irrelevant: an attacker simply switched endpoints.
+/// Failed password checks are metered per (user, repo), and the budget is shared by every
+/// endpoint that verifies the password or its magic. The fixed 1000-iteration KDF makes this
+/// limiter the only online-guessing control.
 #[tokio::test]
 async fn library_password_guessing_is_metered_across_every_endpoint() {
     /// Must match `repo_password_max_per_hour` in `server/tests/common/mod.rs`.
@@ -571,18 +537,14 @@ async fn correct_library_password_never_consumes_the_failure_budget() {
     assert_eq!(resp.status(), 429);
 }
 
-/// Rotating a library password must invalidate **every** cached decryption key,
-/// not just the caller's.
-///
-/// Otherwise a member who knew the old password keeps decrypting the library
-/// from the in-memory key cache for up to its TTL (1 hour), so revoking a
-/// password never really takes effect for them.
+/// Rotating the password must invalidate **every** cached key, not just the caller's:
+/// otherwise a member who knew the old one keeps decrypting from the in-memory cache for up
+/// to its 1-hour TTL.
 #[tokio::test]
 async fn test_password_rotation_evicts_every_cached_key() {
     let f = TestFixture::new().await;
     let enc_repo_id = create_encrypted_repo(&f, "enc-lib", "old-password").await;
 
-    // A second member with write access.
     let member_id = create_test_user(f.server.db.as_ref(), "member@example.com", "password").await;
     common::add_repo_member(f.server.db.as_ref(), &enc_repo_id, member_id, "rw").await;
     let resp = f.client.login("member@example.com", "password").await;
@@ -591,7 +553,6 @@ async fn test_password_rotation_evicts_every_cached_key() {
         .unwrap()
         .to_string();
 
-    // The member caches the key by supplying the correct library password.
     let resp = f
         .client
         .set_repo_password_v21(&member_token, &enc_repo_id, "old-password")
@@ -602,20 +563,17 @@ async fn test_password_rotation_evicts_every_cached_key() {
         "the member must hold a cached key after supplying the password"
     );
 
-    // The owner rotates the password.
     let resp = f
         .client
         .change_repo_password(&f.api_token, &enc_repo_id, "old-password", "new-password")
         .await;
     assert_eq!(resp.status(), 200, "rotation failed");
 
-    // Every other session's cached key is gone.
     assert!(
         !cached_key_is_set(&f, &member_token, &enc_repo_id).await,
         "rotation must evict other members' cached decryption keys"
     );
 
-    // And the new password is the only one that works for the member.
     assert_eq!(
         f.client
             .set_repo_password_v21(&member_token, &enc_repo_id, "new-password")
@@ -632,13 +590,9 @@ async fn test_password_rotation_evicts_every_cached_key() {
     );
 }
 
-// ─── Write path: the library password gates uploads ─────────────────────────
-
-/// Regression: an upload into an encrypted library used to store **plaintext**
-/// blocks because every upload path passed `enc_key = None` and never consulted
-/// the server-side key cache. A cold cache must now be a hard 440 — the status
-/// Android and iOS map to "Library password is needed" — instead of silently
-/// writing plaintext into a library the owner expects to be ciphertext.
+/// Regression: uploads into an encrypted library used to store **plaintext** blocks because
+/// every path passed `enc_key = None`. A cold cache is now a hard 440, the status Android
+/// and iOS map to "library password is needed".
 #[tokio::test]
 async fn upload_to_encrypted_repo_without_password_is_rejected() {
     let f = TestFixture::new().await;
@@ -655,7 +609,6 @@ async fn upload_to_encrypted_repo_without_password_is_rejected() {
         resp.text().await.unwrap_or_default()
     );
 
-    // Nothing may have been committed for that path.
     let resp = f
         .client
         .get(
@@ -739,7 +692,6 @@ async fn upload_link_blocked_for_encrypted_repo() {
         "error should mention encryption: {body}"
     );
 
-    // The block-upload link is refused for the same reason.
     let resp = f.client.upload_blks_link(&f.api_token, &enc_repo_id).await;
     assert_eq!(
         resp.status(),
@@ -749,11 +701,9 @@ async fn upload_link_blocked_for_encrypted_repo() {
     );
 }
 
-/// The desktop client sets a library password with a bare
-/// `POST /api2/repos/{id}/` (form field `password`, no `op`). It used to answer
-/// "invalid operation", which the client renders as "Incorrect password" even
-/// for the right password — leaving encrypted libraries unusable from the
-/// desktop client while its uploads wrote plaintext.
+/// The desktop client sets a password with a bare `POST /api2/repos/{id}/` (field
+/// `password`, no `op`). It used to answer "invalid operation", which the client showed as
+/// "Incorrect password".
 #[tokio::test]
 async fn bare_post_sets_library_password() {
     let f = TestFixture::new().await;
@@ -777,7 +727,6 @@ async fn bare_post_sets_library_password() {
         "the message is what the iOS client matches on"
     );
 
-    // Correct password: the key is cached for this session.
     let resp = f
         .client
         .post_form(
@@ -797,7 +746,6 @@ async fn bare_post_sets_library_password() {
         "a successful bare set-password must cache the library key"
     );
 
-    // A bare POST that is not a password submission keeps the descriptive error.
     let resp = f
         .client
         .post_form(
@@ -844,18 +792,9 @@ async fn v1_setpassword_reports_incorrect_password_for_ios() {
     assert!(cached_key_is_set(&f, &f.api_token, &enc_repo_id).await);
 }
 
-// ─── Server-side key generation for the bare-`passwd` creation flow ──────────
-
-/// The Android client creates an encrypted library with
-/// `POST /api2/repos/` carrying only `name`/`desc`/`passwd` — no `magic`,
-/// `random_key` or `enc_version` (`NewRepoViewModel.createNewRepo`, which then
-/// reads the generated material back from `GET /api2/repos/{id}/` and calls
-/// `POST /api/v2.1/repos/{id}/set-password/`).
-///
-/// seahub forwards that password to `seafile_api.create_repo(..., passwd,
-/// enc_version=ENCRYPTED_LIBRARY_VERSION, ...)`, i.e. the **server** generates
-/// the keys. Treating `passwd` as noise (as nanofile did) creates a *plain*
-/// library instead, silently discarding the password the user typed.
+/// The Android client creates an encrypted library with `POST /api2/repos/` carrying only
+/// `name`/`desc`/`passwd`; seahub generates the keys server-side. Treating `passwd` as noise
+/// creates a plain library and silently discards the password.
 #[tokio::test]
 async fn android_bare_passwd_creation_produces_a_usable_encrypted_library() {
     let f = TestFixture::new().await;
@@ -924,10 +863,8 @@ async fn android_bare_passwd_creation_produces_a_usable_encrypted_library() {
     );
 }
 
-/// The desktop client's clone flow reads `encrypted` with `QVariant::toInt()`
-/// (`requests.cpp:173`), and seahub emits `1` / `''` (not `"true"`/`"false"`).
-/// A JSON string reads back as `0`, so every encrypted library would look
-/// unencrypted at clone time and no password would be requested.
+/// The desktop clone flow reads `encrypted` with `QVariant::toInt()`; seahub emits `1` or
+/// `''`, so a JSON string would read as 0 and make every library look unencrypted.
 #[tokio::test]
 async fn download_info_encrypted_field_is_numeric_like_seahub() {
     let f = TestFixture::new().await;
@@ -954,11 +891,8 @@ async fn download_info_encrypted_field_is_numeric_like_seahub() {
     );
 }
 
-/// `seaf_commit_to_data()` writes `salt` only for `enc_version >= 3`, and an
-/// official client's `commit_from_json_object()` returns NULL for an
-/// enc_version 3/4 commit whose `salt` is missing or not 64 hex chars — which
-/// makes the whole library history unreadable. Every commit the sync protocol
-/// serves for a v4 library must therefore carry the library's salt.
+/// Clients reject a v3/v4 commit whose `salt` is missing or not 64 hex chars, which makes the
+/// history unreadable; every served commit must carry it.
 #[tokio::test]
 async fn v4_commits_carry_the_library_salt() {
     let f = TestFixture::new().await;
@@ -1030,11 +964,9 @@ async fn v4_commits_carry_the_library_salt() {
     );
 }
 
-/// Upstream answers `444` (SEAF_HTTP_RES_REPO_DELETED) from `commit/HEAD` for a
-/// library that no longer exists; the desktop client maps exactly that status
-/// to SYNC_ERROR_ID_SERVER_REPO_DELETED and offers to remove its local copy
-/// (`sync-mgr.c: on_repo_deleted_on_server`). A 404 is just a retryable
-/// "server error", so the user is never told the library is gone.
+/// Upstream answers `444` for a missing library; the desktop maps that to
+/// SYNC_ERROR_ID_SERVER_REPO_DELETED and offers to remove its local copy, while 404 is only
+/// a retryable server error.
 #[tokio::test]
 async fn head_commit_of_a_deleted_library_reports_444() {
     let f = TestFixture::new().await;
@@ -1070,17 +1002,9 @@ async fn head_commit_of_a_deleted_library_reports_444() {
     );
 }
 
-// ─── `pwd_hash` library passwords (Seafile 11+) ──────────────────────────────
-
-/// The desktop client's POST body when `/api2/server-info/` advertises
-/// `encrypted_library_pwd_hash_algo`.
-///
-/// `create-repo-dialog.cpp` computes `pwd_hash` through seaf-daemon and sends
-/// `pwd_hash_algo`/`pwd_hash_params`/`pwd_hash`, with **no** `magic` and no
-/// `passwd`. It then feeds the *create response* into `cloneRepo()` as
-/// `more_info`, so this response has to carry the algorithm as well — otherwise
-/// `clone-mgr.c` falls into its `check_encryption_args(magic, …)` branch with an
-/// empty magic and fails with "Bad magic" right after a successful creation.
+/// The desktop's pwd_hash creation body (`pwd_hash_algo`/`pwd_hash_params`/`pwd_hash`, no
+/// `magic`, no `passwd`) is fed into `cloneRepo()` as `more_info`, so the create response must
+/// carry the algorithm too or cloning fails with "Bad magic".
 async fn create_pwd_hash_repo_via_desktop_payload(
     f: &TestFixture,
     repo_id: &str,
@@ -1089,11 +1013,8 @@ async fn create_pwd_hash_repo_via_desktop_payload(
     params: Option<&str>,
 ) -> reqwest::Response {
     let random_key = key_derivation::generate_random_key_for_repo(password, 2, "").unwrap();
-    // Callers that deliberately send an unusable algorithm or parameters still
-    // need a syntactically valid request, so the hash falls back to a
-    // placeholder: the server must reject on the algorithm/bounds, not on the
-    // hash. Deriving is skipped for those, because an out-of-range
-    // `time_cost`/`memory_cost` would burn real CPU here.
+    // An unusable algorithm or parameters still needs a valid request, so the hash falls back
+    // to a placeholder: the server rejects on the algorithm/bounds, not the hash.
     let derived = if pwd_hash::validate_params(algo, params).is_ok() {
         pwd_hash::derive_pwd_hash(repo_id, password, 2, "", algo, params)
             .unwrap_or_else(|_| "d".repeat(64))
@@ -1132,9 +1053,8 @@ async fn desktop_pwd_hash_create_payload_is_accepted_and_usable() {
     let password = "desktop-pwd-hash-password";
     let repo_id = uuid::Uuid::new_v4().to_string();
 
-    // The desktop sends the *algorithm name* where the parameters belong
-    // (`create-repo-dialog.cpp` assigns `getEncryptedLibraryPwdHashAlgo()` to
-    // `pwd_hash_params`), which upstream parses as the default iteration count.
+    // The desktop sends the algorithm name where the parameters belong, which upstream
+    // parses as the default iteration count.
     let derived = pwd_hash::derive_pwd_hash(
         &repo_id,
         password,
@@ -1288,7 +1208,6 @@ async fn pwd_hash_create_drops_a_client_supplied_magic() {
         created.get("magic").is_none(),
         "the client-supplied magic must be dropped: {created}"
     );
-    // The argon2id verifier works end to end.
     let resp = f
         .client
         .set_repo_password_v2(&f.api_token, &repo_id, password)
@@ -1418,9 +1337,8 @@ async fn pwd_hash_params_must_be_within_bounds() {
     }
 }
 
-/// A bare `passwd` from Android/the web UI is hashed by the **server**, and the
-/// configured algorithm replaces `magic` entirely (seahub passes
-/// `ENCRYPTED_LIBRARY_PWD_HASH_ALGO` into `seafile_api.create_repo`).
+/// A bare `passwd` is hashed by the **server**, and the configured algorithm replaces `magic`
+/// entirely (seahub passes `ENCRYPTED_LIBRARY_PWD_HASH_ALGO` into `create_repo`).
 #[tokio::test]
 async fn bare_passwd_creation_uses_the_configured_pwd_hash_algo() {
     let f = TestFixture::new_with_encrypted_library_config(|cfg| {
@@ -1461,7 +1379,6 @@ async fn bare_passwd_creation_uses_the_configured_pwd_hash_algo() {
     .unwrap();
     assert_eq!(created["pwd_hash"], expected);
 
-    // Android unlocks through the server, so verification has to work.
     let resp = f
         .client
         .set_repo_password_v21(&f.api_token, &repo_id, password)
@@ -1560,9 +1477,8 @@ async fn change_password_regenerates_pwd_hash() {
     assert_eq!(resp.status(), 200, "the new password must work");
 }
 
-/// `?op=checkpassword` compares a caller-supplied magic. A `pwd_hash` library
-/// has none, so upstream fails it too (with a 500 from seahub); nanofile answers
-/// 400 rather than pretending to check. No official client calls this endpoint.
+/// A `pwd_hash` library has no magic, so upstream fails `?op=checkpassword` too; nanofile
+/// answers 400 rather than pretending to check. No official client calls this endpoint.
 #[tokio::test]
 async fn pwd_hash_library_checkpassword_reports_missing_magic() {
     let f = TestFixture::new().await;

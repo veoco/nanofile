@@ -215,8 +215,6 @@ async fn test_merge_disjoint_changes() {
         }
     }
     paths.sort();
-    // Only the files: an unrelated `/` entry (the library itself) is recorded
-    // when the repository is created.
     let files: Vec<&str> = paths
         .iter()
         .filter(|p| p.ends_with(".txt"))
@@ -273,7 +271,6 @@ async fn test_merge_conflict_renames_stale_version() {
     let entries = listing(&f, "/").await;
     assert_eq!(entries.len(), 2, "both versions must survive: {entries:?}");
 
-    // HEAD's version keeps the original name...
     let (winner_id, winner_size) = entry(&f, "/", "f.txt").await;
     assert_eq!(winner_id, file_fs_id(b"winner"));
     assert_eq!(winner_size, b"winner".len() as i64);
@@ -308,7 +305,6 @@ async fn test_merge_conflict_renames_stale_version() {
 async fn test_merge_delete_versus_modify() {
     let f = TestFixture::new().await;
 
-    // Half 1: A deletes f.txt, B (stale) modifies it.
     let base = sync_commit(
         &f.client,
         &f.sync_token,
@@ -350,7 +346,6 @@ async fn test_merge_delete_versus_modify() {
         "keeping the changed side is not a conflict"
     );
 
-    // Half 2, the mirror: A changes g.txt, B (stale) deletes it.
     let head_m1 = head(&f).await;
     let base2 = sync_commit(
         &f.client,
@@ -420,7 +415,6 @@ async fn test_merge_dir_file_conflict() {
         None,
     )
     .await;
-    // A replaces the file `x` with a directory `x`.
     let head_a = sync_commit(
         &f.client,
         &f.sync_token,
@@ -430,7 +424,6 @@ async fn test_merge_dir_file_conflict() {
         Some(&base),
     )
     .await;
-    // B (stale) modifies the file `x`.
     sync_commit(
         &f.client,
         &f.sync_token,
@@ -447,7 +440,6 @@ async fn test_merge_dir_file_conflict() {
 
     let entries = listing(&f, "/").await;
     assert_eq!(entries.len(), 2, "the directory and the file: {entries:?}");
-    // The directory keeps the name; the file is renamed.
     assert_eq!(names(&f, "/x").await, vec!["inner.txt"]);
     let file = entries
         .iter()
@@ -779,7 +771,6 @@ async fn test_merge_output_dirents_are_sorted_descending() {
         vec!["z.txt", "m.txt", "a.txt"],
         "descending `strcmp` order, like `compare_dirents()`"
     );
-    // The id has to be the hash of exactly those bytes.
     assert_eq!(
         common::fs_object_id(model.data.as_bytes()),
         root_id,
@@ -792,7 +783,6 @@ async fn test_merge_output_dirents_are_sorted_descending() {
 /// keeps the old name for whatever the other side changed (`dir_mask` 5), so the
 /// same file ends up at both paths — the shape reported as "it uploaded
 /// 20261014.m4a into a directory I never saved to".
-///
 /// nanofile keeps that upstream result (nothing may be dropped), but the
 /// activity rows have to say the server put the copy there, not a device.
 #[tokio::test]
@@ -815,7 +805,6 @@ async fn merge_keeps_a_renamed_directory_and_marks_the_activity() {
     )
     .await;
 
-    // Device A renames the directory.
     sync_commit(
         &f.client,
         &f.sync_token,
@@ -914,7 +903,6 @@ async fn merge_keeps_a_renamed_directory_and_marks_the_activity() {
     );
 }
 
-/// A directory entry, for the planted trees below.
 fn planted_dir_entry(name: &str, id: &str) -> DirEntryData {
     DirEntryData {
         id: id.to_string(),

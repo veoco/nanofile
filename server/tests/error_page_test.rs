@@ -67,9 +67,7 @@ async fn an_unknown_path_renders_a_page_for_a_browser() {
 
     assert_eq!(status, 404);
     assert!(body.contains("Page not found"), "{body}");
-    // A visitor with no session is pointed at the one thing they can do.
     assert!(body.contains(">Sign in<"), "{body}");
-    // The wire body never reaches the browser.
     assert!(!body.contains("error_msg"), "{body}");
 }
 
@@ -81,7 +79,6 @@ async fn an_unknown_path_keeps_the_empty_body_for_a_client() {
         .build()
         .unwrap()
         .get(format!("{}/no/such/page/", f.server.base_url))
-        // No Accept: what a script, a probe or a legacy client sends.
         .send()
         .await
         .unwrap();
@@ -120,7 +117,6 @@ async fn an_expired_share_link_says_so() {
             &serde_json::json!({
                 "repo_id": f.repo_id,
                 "path": "/",
-                // Negative expiry: the link is born expired.
                 "expire_days": -1,
             }),
         )
@@ -144,13 +140,11 @@ async fn a_signed_in_reader_gets_a_page_inside_the_app() {
     let f = TestFixture::new().await;
     let client = login_client(&f).await;
 
-    // A library id that cannot exist.
     let path = "/libraries/00000000-0000-0000-0000-000000000000/files/";
     let (status, body) = browse_as(&client, &f, path).await;
 
     assert_eq!(status, 404);
     assert!(body.contains("Page not found"), "{body}");
-    // The app chrome is still there, so the reader can navigate away.
     assert!(body.contains("Back to libraries"), "{body}");
     assert!(body.contains(r#"id="__i18n""#), "app shell missing: {body}");
     assert!(body.contains("/settings/"), "app shell missing: {body}");

@@ -6,8 +6,6 @@ use common::{TestFixture, TestServer, create_test_repo, create_test_user};
 use reqwest::Method;
 use server::repository::member::CreateMemberParams;
 
-// ── Helpers ───────────────────────────────────────────────────────────────
-
 /// A plain HTTP client for WebDAV requests (Basic auth not handled by
 /// `TestClient`).
 fn http() -> reqwest::Client {
@@ -36,7 +34,6 @@ async fn dav(
 }
 
 /// Generate a WebDAV key for `token`'s user on `repo_id` and return it.
-///
 /// WebDAV keys are ordinary unified API keys carrying `webdav.*` and bound to
 /// one library, so they are minted through the unified management API.
 async fn gen_key(
@@ -129,17 +126,12 @@ async fn dav_get(
     dav(client, "GET", &dav_url(base, repo_id, path), email, key).await
 }
 
-// ── Key management API ────────────────────────────────────────────────────
-
-// ── Authentication ────────────────────────────────────────────────────────
-
 #[tokio::test]
 async fn test_auth_no_key_unauthorized_with_challenge() {
     let f = TestFixture::new().await;
     let base = &f.server.base_url;
     let client = http();
 
-    // No key exists yet → 401 with a Basic challenge.
     let resp = client
         .get(dav_url(base, &f.repo_id, "/"))
         .basic_auth(&f.email, Some("whatever"))
@@ -214,7 +206,6 @@ async fn test_auth_readonly_member_cannot_write() {
     let base = &f.server.base_url;
     let client = http();
 
-    // Member with read-only permission.
     let member_id = create_test_user(f.server.db.as_ref(), "reader@example.com", "password").await;
     f.server
         .repos
@@ -233,7 +224,6 @@ async fn test_auth_readonly_member_cannot_write() {
     let reader_token = body["token"].as_str().unwrap().to_string();
     let reader_key = gen_key(&client, base, &reader_token, &f.repo_id, "reader").await;
 
-    // Read works.
     let resp = dav(
         &client,
         "PROPFIND",
@@ -244,7 +234,6 @@ async fn test_auth_readonly_member_cannot_write() {
     .await;
     assert_eq!(resp.status(), 207);
 
-    // Write is forbidden.
     let resp = dav_put(
         &client,
         base,
@@ -264,10 +253,8 @@ async fn test_readonly_key_cannot_write() {
     let base = &f.server.base_url;
     let client = http();
 
-    // The owner (rw member) generates a read-only key.
     let key = gen_key_with_permission(&client, base, &f.api_token, &f.repo_id, "ro", "r").await;
 
-    // Read works.
     let resp = dav(
         &client,
         "PROPFIND",
@@ -278,7 +265,6 @@ async fn test_readonly_key_cannot_write() {
     .await;
     assert_eq!(resp.status(), 207);
 
-    // Write is forbidden even though the member is rw.
     let resp = dav_put(
         &client, base, &f.repo_id, "/no.txt", &f.email, &key, b"nope",
     )
@@ -306,7 +292,6 @@ async fn test_readonly_member_with_rw_key_still_readonly() {
     let base = &f.server.base_url;
     let client = http();
 
-    // Read-only member.
     let member_id = create_test_user(f.server.db.as_ref(), "reader@example.com", "password").await;
     f.server
         .repos
@@ -324,7 +309,6 @@ async fn test_readonly_member_with_rw_key_still_readonly() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let reader_token = body["token"].as_str().unwrap().to_string();
 
-    // Even an rw key cannot escalate a read-only member to write.
     let key = gen_key_with_permission(&client, base, &reader_token, &f.repo_id, "rw", "rw").await;
     let resp = dav_put(
         &client,
@@ -382,8 +366,6 @@ async fn test_encrypted_repo_webdav_forbidden() {
     .await;
     assert_eq!(resp.status(), 403);
 }
-
-// ── File operations ───────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_put_get_roundtrip() {
@@ -500,7 +482,6 @@ async fn test_mkcol_and_propfind() {
     .await;
     assert_eq!(resp.status(), 201);
 
-    // Re-create → 405.
     let resp = dav(
         &client,
         "MKCOL",
@@ -511,7 +492,6 @@ async fn test_mkcol_and_propfind() {
     .await;
     assert_eq!(resp.status(), 405);
 
-    // Depth 1 listing shows the folder.
     let resp = dav(
         &client,
         "PROPFIND",
@@ -547,7 +527,6 @@ async fn test_delete_file_and_root() {
     let resp = dav_get(&client, base, &f.repo_id, "/d.txt", &f.email, &key).await;
     assert_eq!(resp.status(), 404);
 
-    // DELETE root → 405.
     let resp = dav(
         &client,
         "DELETE",
@@ -558,8 +537,6 @@ async fn test_delete_file_and_root() {
     .await;
     assert_eq!(resp.status(), 405);
 }
-
-// ── MOVE / COPY ──────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_move_rename() {
@@ -636,7 +613,6 @@ async fn test_move_overwrite_precondition() {
     dav_put(&client, base, &f.repo_id, "/a.txt", &f.email, &key, b"a").await;
     dav_put(&client, base, &f.repo_id, "/b.txt", &f.email, &key, b"b").await;
 
-    // Overwrite: F with existing destination → 412.
     let m = Method::from_bytes(b"MOVE").unwrap();
     let resp = client
         .request(m, dav_url(base, &f.repo_id, "/a.txt"))
@@ -648,7 +624,6 @@ async fn test_move_overwrite_precondition() {
         .unwrap();
     assert_eq!(resp.status(), 412);
 
-    // Overwrite: T replaces the destination.
     let m = Method::from_bytes(b"MOVE").unwrap();
     let resp = client
         .request(m, dav_url(base, &f.repo_id, "/a.txt"))
@@ -689,7 +664,6 @@ async fn test_copy_file() {
         .unwrap();
     assert_eq!(resp.status(), 201);
 
-    // Source still exists, copy exists.
     assert_eq!(
         dav_get(&client, base, &f.repo_id, "/a.txt", &f.email, &key)
             .await
@@ -743,8 +717,6 @@ async fn test_copy_overwrite() {
     let resp = dav_get(&client, base, &f.repo_id, "/subdir/a.txt", &f.email, &key).await;
     assert_eq!(resp.bytes().await.unwrap().as_ref(), b"new");
 }
-
-// ── Protocol details ──────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_options_headers() {
@@ -857,7 +829,6 @@ async fn test_propfind_bad_depth() {
     let client = http();
     let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
 
-    // Send an invalid Depth value via a raw request.
     let m = Method::from_bytes(b"PROPFIND").unwrap();
     let resp = client
         .request(m, dav_url(base, &f.repo_id, "/"))
@@ -961,7 +932,6 @@ async fn test_path_traversal_rejected() {
     let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
 
     let resp = dav_get(&client, base, &f.repo_id, "/../secret", &f.email, &key).await;
-    // Rejected as bad request or not found — never succeeds.
     assert!(!resp.status().is_success());
 }
 
@@ -971,11 +941,9 @@ async fn test_delete_key_revokes_access() {
     let base = &f.server.base_url;
     let client = http();
 
-    // Generate a key and capture the plaintext + id.
     let (plaintext, key_id) =
         gen_key_with_permission_and_id(&client, base, &f.api_token, &f.repo_id, "dev", "rw").await;
 
-    // Works while present.
     assert_eq!(
         dav(
             &client,
@@ -1010,7 +978,6 @@ async fn test_delete_key_revokes_access() {
 }
 
 /// A key minted from the `webdav_ro` preset is a WebDAV key and nothing else.
-///
 /// `/dav/...` consults `webdav.*` plus the key's library binding and no other
 /// capability, so the preset used to carry `library.read`, `file.read` and
 /// `metadata.read` — quietly handing the REST API of the bound library (and with
@@ -1063,7 +1030,6 @@ async fn a_key_minted_from_the_webdav_preset_is_a_webdav_key() {
         .unwrap()
         .to_string();
 
-    // WebDAV works.
     let resp = dav(
         &client,
         "PROPFIND",
@@ -1074,7 +1040,6 @@ async fn a_key_minted_from_the_webdav_preset_is_a_webdav_key() {
     .await;
     assert_eq!(resp.status(), 207);
 
-    // The REST API of the same library does not: neither a read ...
     let resp = f
         .client
         .get(&format!("/api2/repos/{}/dir/", f.repo_id), Some(&key))
@@ -1084,7 +1049,6 @@ async fn a_key_minted_from_the_webdav_preset_is_a_webdav_key() {
         403,
         "a WebDAV key must not read the library over REST"
     );
-    // ... nor a delete, even though the binding allows writing.
     let resp = f
         .client
         .delete(

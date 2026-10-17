@@ -37,7 +37,6 @@ async fn test_list_devices_with_data() {
 
     create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
 
-    // Login with device info — simulates desktop client
     let resp = client
         .post_form(
             "/api2/auth-token/",
@@ -55,7 +54,6 @@ async fn test_list_devices_with_data() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token1 = body["token"].as_str().unwrap();
 
-    // Login again from a different device
     let resp = client
         .post_form(
             "/api2/auth-token/",
@@ -94,7 +92,6 @@ async fn test_list_devices_with_data() {
     assert!(platforms.contains(&"windows"), "should include windows");
     assert!(platforms.contains(&"android"), "should include android");
 
-    // Verify desktop client flag
     for device in &devices {
         if device["platform"] == "windows" {
             assert_eq!(device["is_desktop_client"], true);
@@ -104,7 +101,6 @@ async fn test_list_devices_with_data() {
         }
     }
 
-    // Insert a S2FA token for the android device to verify cleanup.
     let now = chrono::Utc::now().timestamp();
     let s2fa = infra::entity::s2fa_token::ActiveModel {
         id: sea_orm::NotSet,
@@ -137,7 +133,6 @@ async fn test_list_devices_with_data() {
     sync_active.last_sync_time = Set(Some(now));
     sync_active.update(server.db.as_ref()).await.unwrap();
 
-    // Verify tokens exist before unlink
     let count = infra::entity::s2fa_token::Entity::find()
         .count(server.db.as_ref())
         .await
@@ -150,7 +145,6 @@ async fn test_list_devices_with_data() {
         .unwrap();
     assert_eq!(count, 1, "sync token should exist before unlink");
 
-    // Unlink the android device
     let resp = client
         .delete_form(
             "/api2/devices/",
@@ -173,7 +167,6 @@ async fn test_list_devices_with_data() {
         "sync token should be deleted"
     );
 
-    // Verify tokens were cleaned up
     let count = infra::entity::s2fa_token::Entity::find()
         .count(server.db.as_ref())
         .await
@@ -186,7 +179,6 @@ async fn test_list_devices_with_data() {
         .unwrap();
     assert_eq!(count, 0, "sync token should be deleted after unlink");
 
-    // Verify android token no longer works
     let resp = client.ping(token2).await;
     assert_eq!(
         resp.status(),
@@ -194,7 +186,6 @@ async fn test_list_devices_with_data() {
         "unlinked device token should be invalid"
     );
 
-    // List devices again — only the windows client should remain
     let resp = client.get("/api2/devices/", Some(token1)).await;
     assert_eq!(resp.status(), 200);
     let devices: Vec<serde_json::Value> = resp
@@ -209,7 +200,6 @@ async fn test_list_devices_with_data() {
 }
 
 /// Unlinking one device revokes that device's credentials and nothing else.
-///
 /// It used to delete every sync token the account held, which meant unlinking a
 /// phone silently stopped a laptop syncing. The sync tokens it cannot attribute
 /// to a device (no `peer_id`) are left alone too: the credential inventory
@@ -221,7 +211,6 @@ async fn test_unlink_only_revokes_the_device_it_names() {
 
     create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
 
-    // Two devices, each with its own repo (creating a repo mints a sync token).
     let resp = client
         .post_form(
             "/api2/auth-token/",
@@ -276,7 +265,6 @@ async fn test_unlink_only_revokes_the_device_it_names() {
         active.update(server.db.as_ref()).await.unwrap();
     }
 
-    // Unlink the phone.
     let resp = client
         .delete_form(
             "/api2/devices/",
@@ -315,14 +303,11 @@ async fn test_unlink_only_revokes_the_device_it_names() {
         "a token the sync protocol never attributed is not swept up either"
     );
 
-    // The laptop keeps syncing.
     let resp = client.get_head_commit(&laptop, &laptop_repo).await;
     assert_eq!(resp.status(), 200, "the other device is untouched");
 }
 
-// ============================================================================
 // device-wiped (official protocol: anonymous + the device's own API token)
-// ============================================================================
 
 /// Compatibility + security: the wipe report is anonymous and carries the
 /// device's own API token (the desktop client sends no Authorization header).
@@ -349,13 +334,11 @@ async fn test_device_wiped_anonymous_with_token() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token_a = body["token"].as_str().unwrap().to_string();
 
-    // Anonymous report carrying the device's own token.
     let resp = client
         .post_form("/api2/device-wiped/", None, &[("token", &token_a)])
         .await;
     assert_eq!(resp.status(), 200);
 
-    // The reported token is invalidated.
     let resp = client.ping(&token_a).await;
     assert_eq!(resp.status(), 401, "wiped device token should be invalid");
 }
@@ -369,7 +352,6 @@ async fn test_device_wiped_scoped_to_user() {
     create_test_user(&server.db, "a@example.com", "password123").await;
     create_test_user(&server.db, "b@example.com", "password123").await;
 
-    // Both users login with the SAME device_id.
     for (user, pass) in [
         ("a@example.com", "password123"),
         ("b@example.com", "password123"),
@@ -391,7 +373,6 @@ async fn test_device_wiped_scoped_to_user() {
         assert_eq!(resp.status(), 200, "login {user} failed");
     }
 
-    // Token for user A.
     let resp = client
         .post_form(
             "/api2/auth-token/",
@@ -409,7 +390,6 @@ async fn test_device_wiped_scoped_to_user() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token_a = body["token"].as_str().unwrap().to_string();
 
-    // Token for user B.
     let resp = client
         .post_form(
             "/api2/auth-token/",
@@ -427,7 +407,6 @@ async fn test_device_wiped_scoped_to_user() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token_b = body["token"].as_str().unwrap().to_string();
 
-    // A's token reports a wipe → only A's sessions are removed.
     let resp = client
         .post_form("/api2/device-wiped/", None, &[("token", &token_a)])
         .await;
@@ -455,7 +434,6 @@ async fn test_device_wiped_expired_token_rejected() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let healthy_token = body["token"].as_str().unwrap().to_string();
 
-    // Insert an already-expired token tied to a device.
     let expired = server::service::auth::token::generate_api_token();
     let now = chrono::Utc::now().timestamp();
     let model = infra::entity::api_token::ActiveModel {
@@ -474,13 +452,11 @@ async fn test_device_wiped_expired_token_rejected() {
     };
     model.insert(server.db.as_ref()).await.unwrap();
 
-    // The expired token must be rejected without touching the user's sessions.
     let resp = client
         .post_form("/api2/device-wiped/", None, &[("token", &expired)])
         .await;
     assert_eq!(resp.status(), 400, "expired token must be rejected");
 
-    // The healthy token of the same user survives.
     let resp = client.ping(&healthy_token).await;
     assert_eq!(resp.status(), 200, "healthy token must not be revoked");
 }
@@ -496,7 +472,6 @@ async fn test_device_wiped_pending_token_rejected() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let healthy_token = body["token"].as_str().unwrap().to_string();
 
-    // Insert a 2FA-pending token tied to a device.
     let pending = server::service::auth::token::generate_api_token();
     let now = chrono::Utc::now().timestamp();
     let model = infra::entity::api_token::ActiveModel {

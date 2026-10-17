@@ -2,19 +2,16 @@ mod common;
 
 use common::TestFixture;
 
-/// B.4.1 — GET /api2/repos/{repo_id}/thumbnail/?p=&size=
 #[tokio::test]
 async fn test_thumbnail_not_found() {
     let f = TestFixture::new().await;
 
-    // Upload a file (not an image) — thumbnail won't exist
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "test.txt", b"hello")
         .await;
     assert!(resp.status().is_success());
 
-    // Request thumbnail for the text file — should 404 (can't generate thumbnail for text)
     let resp = f
         .client
         .get(
@@ -150,7 +147,6 @@ async fn test_thumbnail_container_follows_pixels_and_is_cached() {
         .join(infra::crypto::fs_id::sha1_hex(f.repo_id.as_bytes()));
 
     let read_names = || -> Vec<String> {
-        // The repo's cache directory is created lazily by the first miss.
         std::fs::read_dir(&cache_dir)
             .into_iter()
             .flatten()
@@ -214,7 +210,6 @@ async fn test_thumbnail_container_follows_pixels_and_is_cached() {
             "{name} second request"
         );
 
-        // The recorded container and the on-disk entry agree with the response.
         let record = f
             .server
             .repos
@@ -291,7 +286,6 @@ async fn test_thumbnail_etag_conditional_request() {
     );
     let client = reqwest::Client::new();
 
-    // 200 + ETag + body.
     let resp = client
         .get(&url)
         .bearer_auth(&f.api_token)

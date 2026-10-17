@@ -19,7 +19,6 @@ use server::fs::core::read_fs_dir_data;
 
 const REG: i32 = S_IFREG;
 
-/// HEAD commit id of the fixture's library.
 async fn head_commit_id(f: &TestFixture) -> Option<String> {
     infra::entity::repo::Entity::find_by_id(&f.repo_id)
         .one(f.server.db.as_ref())
@@ -29,7 +28,6 @@ async fn head_commit_id(f: &TestFixture) -> Option<String> {
         .head_commit_id
 }
 
-/// Root of a commit.
 async fn root_of(f: &TestFixture, commit_id: &str) -> String {
     infra::entity::commit::Entity::find()
         .filter(infra::entity::commit::Column::RepoId.eq(&f.repo_id))
@@ -41,7 +39,6 @@ async fn root_of(f: &TestFixture, commit_id: &str) -> String {
         .root_id
 }
 
-/// Stored bytes of an object, as the server wrote them.
 async fn object_bytes(f: &TestFixture, fs_id: &str) -> Option<String> {
     infra::entity::fs_object::Entity::find()
         .filter(infra::entity::fs_object::Column::RepoId.eq(&f.repo_id))
@@ -123,7 +120,6 @@ async fn plant_root(f: &TestFixture, data: &FsDirData) -> (String, String) {
 async fn stored_dir_objects_are_canonical() {
     let f = TestFixture::new().await;
 
-    // Deliberately ascending: what the REST/WebDAV/Web UI paths used to build.
     let data = FsDirData {
         dirents: vec![
             dirent("a.txt", &"a".repeat(40), REG, 1),
@@ -194,7 +190,6 @@ async fn a_non_canonical_head_is_reported_and_repaired() {
     assert_eq!(finding.stored_id, old_root);
     assert_ne!(finding.canonical_id, old_root);
 
-    // The canonical id is exactly what an official client computes for those
     // entries.
     let mut sorted = read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &old_root)
         .await
@@ -202,11 +197,9 @@ async fn a_non_canonical_head_is_reported_and_repaired() {
     sort_dirents_desc(&mut sorted.dirents);
     assert_eq!(compute_dir(&sorted).unwrap().0, finding.canonical_id);
 
-    // A dry run changes nothing.
     assert!(report.repairs.is_empty());
     assert_eq!(head_commit_id(&f).await.as_deref(), Some(head.as_str()));
 
-    // Repair: one commit, parented on the head it canonicalized.
     let report = DirOrder::run(f.server.db.as_ref(), Some(&f.repo_id), true)
         .await
         .unwrap();
@@ -232,10 +225,8 @@ async fn a_non_canonical_head_is_reported_and_repaired() {
     assert_eq!(commit.parent_id.as_deref(), Some(head.as_str()));
     assert_eq!(commit.description, "Normalize directory entry order");
 
-    // History is untouched: the old object (and the old commit) are still there.
     assert!(object_bytes(&f, &old_root).await.is_some());
 
-    // The tree itself is unchanged, entry for entry.
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -248,7 +239,6 @@ async fn a_non_canonical_head_is_reported_and_repaired() {
     names.sort();
     assert_eq!(names, vec!["a.txt", "b.txt"]);
 
-    // Idempotent: nothing left to report or repair.
     let report = DirOrder::run(f.server.db.as_ref(), Some(&f.repo_id), false)
         .await
         .unwrap();
@@ -265,7 +255,6 @@ async fn a_non_canonical_head_is_reported_and_repaired() {
 async fn structural_findings_are_reported_without_repairing() {
     let f = TestFixture::new().await;
 
-    // Descending order already, so there is nothing for `--repair` to do.
     let data = FsDirData {
         dirents: vec![
             dirent("gone", &"f".repeat(40), S_IFDIR, 0),
@@ -286,13 +275,11 @@ async fn structural_findings_are_reported_without_repairing() {
     assert!(kinds.contains(&"dangling-dirent"), "{report:?}");
     assert!(report.has_findings());
 
-    // Nothing was committed: the head is still the planted one.
     assert!(report.repairs.is_empty(), "{report:?}");
     assert_eq!(
         root_of(&f, &head_commit_id(&f).await.unwrap()).await,
         root_id
     );
-    // And the repairable-looking structure is untouched.
     let after = read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &root_id)
         .await
         .unwrap();

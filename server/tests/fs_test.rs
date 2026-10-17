@@ -50,8 +50,7 @@ fn make_fs_entry<T: serde::Serialize>(data: &T) -> (String, Vec<u8>) {
     (fs_id, compressed)
 }
 
-/// Pack one or more FS entries into recv-fs binary format:
-/// [40-byte fs_id][4-byte big-endian size][zlib data]...
+/// Pack FS entries into recv-fs binary: [40-byte fs_id][4-byte BE size][zlib data]...
 fn pack_fs_entries(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
     let mut packed = Vec::new();
     for (fs_id, compressed) in entries {
@@ -62,7 +61,6 @@ fn pack_fs_entries(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
     packed
 }
 
-/// Upload FS objects via recv-fs and assert success.
 async fn upload_fs_objects(
     client: &common::client::TestClient,
     sync_token: &str,
@@ -189,7 +187,6 @@ async fn test_recv_fs_binary_format() {
     let client = server.client();
     use infra::crypto::fs_id::sha1_hex;
 
-    // Upload a real block so the block integrity check passes.
     let block_data = b"hello world this is test block data";
     let block_id = sha1_hex(block_data);
     let resp = client
@@ -197,7 +194,6 @@ async fn test_recv_fs_binary_format() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Create a file fs_object referencing the real block.
     let file_data = make_file_fs_data(vec![block_id.clone()], 512);
     let (fs_id, _compressed) = make_fs_entry(&file_data);
     upload_fs_objects(
@@ -240,12 +236,10 @@ async fn test_recv_fs_invalid_obj_id() {
     packed.push(0x00);
 
     let resp = client.recv_fs(&sync_token, &repo_id, packed).await;
-    // A malformed object id is a client error (upstream answers 400).
     assert_eq!(resp.status(), 400);
 }
 
 /// A directory object must be rejected when it does not declare `type: 3`.
-///
 /// The object type used to be taken from the client-supplied `type` field, so
 /// dropping that field (or setting it to 1) skipped dirent-name validation
 /// while the tree readers still parsed the object as a directory — letting a
@@ -255,7 +249,6 @@ async fn test_recv_fs_dir_without_dir_type_rejected() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
 
-    // Has `dirents` (so it is structurally a directory) but claims to be a file.
     let payload = serde_json::json!({
         "dirents": [{"id": random_hex_id(), "mode": 33188, "mtime": 0, "name": ".."}],
         "type": 1,
@@ -276,7 +269,6 @@ async fn test_recv_fs_dir_without_dir_type_rejected() {
     );
 }
 
-/// A directory object may not contain an illegal dirent name.
 #[tokio::test]
 async fn test_recv_fs_dir_with_traversal_name_rejected() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
@@ -527,7 +519,6 @@ async fn test_regression_dir_metadata_type_is_3() {
         SEAF_METADATA_TYPE_FILE, 1,
         "SEAF_METADATA_TYPE_FILE must be 1"
     );
-    // Ensure dir and file types are not confused
     assert_ne!(SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE);
 }
 
@@ -538,7 +529,6 @@ async fn test_regression_recv_fs_stores_correct_dir_type() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
 
-    // Create a dir fs object with type=3 (what seaf-daemon sends)
     let dir_data = make_dir_fs_data(vec![]);
     let (dir_fs_id, _compressed) = make_fs_entry(&dir_data);
     upload_fs_objects(
@@ -549,10 +539,8 @@ async fn test_regression_recv_fs_stores_correct_dir_type() {
     )
     .await;
 
-    // Push a commit with this root
     push_commit(&client, &sync_token, &repo_id, &dir_fs_id, None).await;
 
-    // Now fetch via pack_fs and verify the decompressed JSON has type=3
     let resp = client.pack_fs(&sync_token, &repo_id, &[&dir_fs_id]).await;
     assert_eq!(resp.status(), 200);
     let packed = resp.bytes().await.unwrap();
@@ -618,7 +606,6 @@ async fn test_regression_api_upload_produces_correct_obj_types() {
     let repo_id = common::create_test_repo(&client, api_token, "ObjType Test").await;
     let sync_token = get_sync_token(&client, api_token, &repo_id).await;
 
-    // Upload a file via the API
     let resp = client
         .upload_file(
             api_token,
@@ -630,12 +617,10 @@ async fn test_regression_api_upload_produces_correct_obj_types() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Get the head commit
     let resp = client.get_head_commit(&sync_token, &repo_id).await;
     let body: serde_json::Value = resp.json().await.unwrap();
     let head_commit_id = body["head_commit_id"].as_str().unwrap().to_string();
 
-    // Get fs_id_list for the commit
     let resp = client
         .fs_id_list(&sync_token, &repo_id, &head_commit_id)
         .await;
@@ -647,7 +632,6 @@ async fn test_regression_api_upload_produces_correct_obj_types() {
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
 
-    // Fetch all fs objects and verify their types
     let fs_refs: Vec<&str> = fs_ids.iter().map(|s| s.as_str()).collect();
     let resp = client.pack_fs(&sync_token, &repo_id, &fs_refs).await;
     assert_eq!(resp.status(), 200);
@@ -662,14 +646,12 @@ async fn test_regression_api_upload_produces_correct_obj_types() {
         let obj_type = json_val["type"].as_i64().unwrap();
         if obj_type == 3 {
             found_dir = true;
-            // Must have dirents array
             assert!(
                 json_val["dirents"].is_array(),
                 "dir object must have dirents"
             );
         } else if obj_type == 1 {
             found_file = true;
-            // Must have block_ids array
             assert!(
                 json_val["block_ids"].is_array(),
                 "file object must have block_ids"
@@ -686,12 +668,10 @@ async fn test_regression_api_upload_produces_correct_obj_types() {
     );
 }
 
-/// Regression: The fs_id (SHA1 hash) must be computed from the sorted-key JSON,
-/// including the correct type field. If type changes, the fs_id changes.
-/// This test ensures the hash is stable.
+/// The fs_id (SHA1 of sorted-key JSON) must be stable: same data, same id; a changed
+/// type field must change it.
 #[tokio::test]
 async fn test_regression_fs_id_is_stable() {
-    // Create a known dir and compute its fs_id
     let dir_data = FsDirData {
         dirents: vec![],
         obj_type: 3,
@@ -703,11 +683,9 @@ async fn test_regression_fs_id_is_stable() {
     let fs_id_2 =
         infra::crypto::fs_id::sha1_hex(serde_json::to_string(&dir_data).unwrap().as_bytes());
 
-    // Same data must produce same fs_id
     assert_eq!(fs_id_1, fs_id_2, "fs_id must be deterministic");
     assert_eq!(fs_id_1.len(), 40, "fs_id must be 40 hex chars");
 
-    // A different type value must produce a different fs_id
     let dir_data_wrong_type = FsDirData {
         dirents: vec![],
         obj_type: 2, // wrong type (SEAF_METADATA_TYPE_LINK)
@@ -778,7 +756,6 @@ async fn test_regression_download_info_has_required_fields() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
 
-    // Required fields (KeyError in seaf-cli if missing)
     assert!(
         body["repo_version"].as_i64().is_some(),
         "repo_version is required"
@@ -801,13 +778,11 @@ async fn test_regression_download_info_has_required_fields() {
         "sync token must be at least 40 chars"
     );
 
-    // Must be present (even if null)
     assert!(body["encrypted"].is_string(), "encrypted must be a string");
     assert!(
         body["permission"].is_string(),
         "permission must be a string"
     );
-    // salt may be null or string
     assert!(
         body["salt"].is_null() || body["salt"].is_string(),
         "salt must be null or string"
@@ -821,7 +796,6 @@ async fn test_regression_pack_fs_binary_format() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
 
-    // Upload a file fs object
     let file_data = make_file_fs_data(vec![random_hex_id()], 128);
     let fs_id =
         infra::crypto::fs_id::sha1_hex(serde_json::to_string(&file_data).unwrap().as_bytes());
@@ -834,15 +808,12 @@ async fn test_regression_pack_fs_binary_format() {
     packed.extend_from_slice(&compressed);
     client.recv_fs(&sync_token, &repo_id, packed).await;
 
-    // Fetch via pack_fs
     let resp = client.pack_fs(&sync_token, &repo_id, &[&fs_id]).await;
     assert_eq!(resp.status(), 200);
     let body = resp.bytes().await.unwrap();
 
-    // Must be at least 44 bytes (40 id + 4 size)
     assert!(body.len() >= 44, "pack_fs response too short");
 
-    // Parse header
     let returned_id = String::from_utf8(body[..40].to_vec()).unwrap();
     assert_eq!(returned_id, fs_id, "returned fs_id must match requested");
 
@@ -853,7 +824,6 @@ async fn test_regression_pack_fs_binary_format() {
         "size in header must match compressed data length"
     );
 
-    // Decompress and verify
     let decompressed = pack_fs::decompress_fs_data(&body[44..44 + size]).unwrap();
     let json_val: serde_json::Value = serde_json::from_slice(&decompressed).unwrap();
     assert_eq!(json_val["type"].as_i64().unwrap(), 1);
@@ -867,7 +837,6 @@ async fn test_regression_check_endpoints_accept_json_array() {
     let client = server.client();
     use infra::crypto::fs_id::sha1_hex;
 
-    // check-fs with JSON array
     let _existing = random_hex_id();
     let file_data = make_file_fs_data(vec![random_hex_id()], 64);
     let (fs_id, compressed) = make_fs_entry(&file_data);
@@ -879,11 +848,9 @@ async fn test_regression_check_endpoints_accept_json_array() {
     )
     .await;
 
-    // Test check-fs accepts JSON array (what seaf-daemon sends)
     let resp = client.check_fs(&sync_token, &repo_id, &[&fs_id]).await;
     assert_eq!(resp.status(), 200);
 
-    // Test check-blocks accepts JSON array
     let block_data = vec![0u8; 16];
     let block_id = sha1_hex(&block_data);
     let resp = client
@@ -897,10 +864,6 @@ async fn test_regression_check_endpoints_accept_json_array() {
     assert_eq!(resp.status(), 200);
 }
 
-// ============================================================
-// T3: resolve_fs_id path resolution tests (Phase 2)
-// ============================================================
-
 /// resolve_fs_id with path="/" must return the root fs_id directly.
 #[tokio::test]
 async fn test_resolve_fs_id_root_path() {
@@ -908,7 +871,6 @@ async fn test_resolve_fs_id_root_path() {
     let client = server.client();
     use infra::crypto::fs_id::sha1_hex;
 
-    // Upload a real block so the block integrity check passes.
     let block_data = b"block data for resolve_fs_id_root_path";
     let block_id = sha1_hex(block_data);
     let resp = client
@@ -916,7 +878,6 @@ async fn test_resolve_fs_id_root_path() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Upload a file to create a real FS tree
     let file_data = make_file_fs_data(vec![block_id.clone()], 64);
     let (file_fs_id, _fc) = make_fs_entry(&file_data);
 
@@ -940,7 +901,6 @@ async fn test_resolve_fs_id_root_path() {
 
     push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
-    // Test resolve_fs_id directly
     let result = server::fs::core::resolve_fs_id(server.repos.as_ref(), &repo_id, &root_fs_id, "/")
         .await
         .unwrap();
@@ -963,7 +923,6 @@ async fn test_resolve_fs_id_deep_path() {
     let client = server.client();
     use infra::crypto::fs_id::sha1_hex;
 
-    // Upload a real block so the block integrity check passes.
     let block_data = b"block data for resolve_fs_id_deep_path";
     let block_id = sha1_hex(block_data);
     let resp = client
@@ -971,7 +930,6 @@ async fn test_resolve_fs_id_deep_path() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Build: root -> sub/ -> nested.txt
     let file_data = make_file_fs_data(vec![block_id.clone()], 32);
     let (file_fs_id, _fc) = make_fs_entry(&file_data);
 
@@ -1009,14 +967,12 @@ async fn test_resolve_fs_id_deep_path() {
 
     push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 
-    // Resolve /sub -> should get sub_fs_id
     let result =
         server::fs::core::resolve_fs_id(server.repos.as_ref(), &repo_id, &root_fs_id, "/sub")
             .await
             .unwrap();
     assert_eq!(result, sub_fs_id, "/sub must resolve to sub_fs_id");
 
-    // Resolve /sub/nested.txt -> should get file_fs_id
     let result = server::fs::core::resolve_fs_id(
         server.repos.as_ref(),
         &repo_id,

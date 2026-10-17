@@ -18,7 +18,6 @@ async fn test_api_login_records_last_login() {
     let user_id = create_test_user(&server.db, "api-login@test.com", "password").await;
     let client = server.client();
 
-    // Verify last_login_at is None before login.
     let user_before = infra::entity::user::Entity::find_by_id(user_id)
         .one(&*server.db)
         .await
@@ -29,11 +28,9 @@ async fn test_api_login_records_last_login() {
         "last_login_at should be None before first login"
     );
 
-    // Login via API.
     let resp = client.login("api-login@test.com", "password").await;
     assert_eq!(resp.status(), 200, "API login should succeed");
 
-    // Verify last_login_at is now set.
     let user_after = infra::entity::user::Entity::find_by_id(user_id)
         .one(&*server.db)
         .await
@@ -51,7 +48,6 @@ async fn test_web_login_records_last_login() {
     let user_id = create_test_user(&server.db, "web-login@test.com", "password").await;
     let db = &*server.db;
 
-    // Login via Web UI form (use no-redirect client to catch the 302).
     let client = no_redirect_client();
     let base_url = &server.base_url;
     let resp = client
@@ -67,7 +63,6 @@ async fn test_web_login_records_last_login() {
         resp.status()
     );
 
-    // Verify last_login_at is now set.
     let user_after = infra::entity::user::Entity::find_by_id(user_id)
         .one(db)
         .await
@@ -84,10 +79,8 @@ async fn test_registration_records_last_login() {
     let server = TestServer::start().await;
     let db = &*server.db;
 
-    // Create an admin user to own the invitation code.
     let admin_id = create_test_admin(db, "admin@test.com", "adminpass").await;
 
-    // Directly insert an invitation code into the database.
     let now = chrono::Utc::now().timestamp();
     let code = "TEST-INVITE-CODE-123";
     let invite = infra::entity::invitation_code::ActiveModel {
@@ -101,7 +94,6 @@ async fn test_registration_records_last_login() {
     };
     invite.insert(db).await.unwrap();
 
-    // Register with the invitation code (no-redirect client to catch 302).
     let client = no_redirect_client();
     let base_url = &server.base_url;
     let reg_resp = client
@@ -122,7 +114,6 @@ async fn test_registration_records_last_login() {
         reg_resp.status()
     );
 
-    // Verify the new user has last_login_at set.
     let new_user = infra::entity::user::Entity::find()
         .filter(infra::entity::user::Column::Email.eq("newuser@test.com"))
         .one(db)

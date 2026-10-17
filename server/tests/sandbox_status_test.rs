@@ -48,7 +48,6 @@ exit 0
     (worker, asked)
 }
 
-/// How many times the child was started, whichever way it was asked.
 fn starts(asked: &Path) -> usize {
     common::sandbox::lines(asked)
 }
@@ -61,7 +60,6 @@ fn items(profile: Profile) -> Option<Protections> {
     }
 }
 
-/// The four items in place: the shape the documents fixture answers with.
 fn every_item() -> Protections {
     Protections {
         limits: true,
@@ -71,7 +69,6 @@ fn every_item() -> Protections {
     }
 }
 
-/// The shape the images fixture answers with: the bound, the files layer, and no
 /// network or process item.
 fn files_confined() -> Protections {
     Protections {
@@ -86,13 +83,11 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
     let directory = tempfile::tempdir().expect("temp dir");
     let (_worker, asked) = script(directory.path());
 
-    // A ready answer is cached: the host is asked once, not once per caller.
     assert_eq!(items(Profile::Documents), Some(every_item()));
     assert_eq!(starts(&asked), 1, "the first call probes");
     assert_eq!(items(Profile::Documents), Some(every_item()));
     assert_eq!(starts(&asked), 1, "a second call is the cached answer");
 
-    // A report for another profile is not this profile's answer.
     let Status::Unavailable(why) = worker::status(Profile::Media) else {
         panic!("a report for documents must not be read as the media probe's");
     };
@@ -102,7 +97,6 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
     );
     assert_eq!(starts(&asked), 2);
 
-    // ... and it did not land in the documents slot, which is still the answer
     // its own probe gave.
     assert_eq!(items(Profile::Documents), Some(every_item()));
     assert_eq!(
@@ -111,7 +105,6 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
         "a refused report must not have replaced a stored one"
     );
 
-    // The profiles hold different powers, so their answers are kept apart: a
     // shared entry would have answered `full` here.
     assert_eq!(items(Profile::Images), Some(files_confined()));
     assert_eq!(starts(&asked), 3);
@@ -132,7 +125,6 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
     );
     assert_eq!(starts(&asked), 4, "a new requirement has to re-probe");
 
-    // The refusal is not asked about again inside the retry window: the next call
     // answers from the record without starting a child.
     let Status::Unavailable(why) = worker::status(Profile::Images) else {
         panic!("the retry window must answer unavailable");
@@ -147,7 +139,6 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
         "the retry window must not spawn a child per caller"
     );
 
-    // Under the switch back on, both answers are measured again — their stored
     // ones were taken under the previous requirement.
     worker::configure_requirement(Requirement::new(true));
     assert_eq!(items(Profile::Images), Some(files_confined()));

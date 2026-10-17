@@ -153,7 +153,6 @@ async fn test_libraries_page_uses_language() {
     create_test_user(&server.db, "i18n5@test.com", "password").await;
     let (client, csrf) = login_ui(&server, "i18n5@test.com", "password").await;
 
-    // Default is English (Accept-Language not sent).
     let page = client
         .get(format!("{}/libraries/", server.base_url))
         .send()
@@ -162,7 +161,6 @@ async fn test_libraries_page_uses_language() {
     let body = page.text().await.unwrap();
     assert!(body.contains("New Library"), "default should be English");
 
-    // Switch to Chinese then verify the layout switches.
     client
         .post(format!("{}/settings/language/", server.base_url))
         .form(&[("language", "zh"), ("csrf_token", &csrf)])

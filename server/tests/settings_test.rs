@@ -32,7 +32,6 @@ fn secret_form(key: &str, value: Option<&str>) -> SettingsForm {
     }
 }
 
-/// The row currently held for a key, if any.
 fn stored(server: &TestServer, key: &str) -> Option<SettingRow> {
     server.state.settings.row(key)
 }
@@ -58,9 +57,7 @@ async fn a_live_setting_takes_effect_without_a_restart() {
     assert_eq!(outcome.changed, vec!["server.share_link_enabled"]);
     assert!(outcome.restart_pending.is_empty(), "this one is live");
 
-    // The very next read sees it: no restart, and no second code path.
     assert!(!server.state.config().server.share_link_enabled);
-    // ...and it is stored, so it survives the process.
     assert_eq!(
         stored(&server, "server.share_link_enabled").map(|row| row.value),
         Some("false".to_string())
@@ -88,13 +85,11 @@ async fn a_restart_only_setting_is_stored_but_not_applied() {
         before,
         "the running process keeps the value it started with"
     );
-    // The page has to be able to say so...
     assert!(
         settings
             .pending_restart()
             .contains("server.max_json_body_mb")
     );
-    // ...and the next start picks the saved value up.
     assert_eq!(
         settings
             .resolved_one("server.max_json_body_mb")
@@ -310,7 +305,6 @@ async fn a_reload_picks_up_a_change_made_elsewhere() {
 
     assert!(server.state.config().server.share_link_enabled);
 
-    // Write a row the way another instance (or a restored backup) would.
     server
         .repos
         .settings
@@ -334,7 +328,6 @@ async fn a_reload_picks_up_a_change_made_elsewhere() {
     );
     assert!(!server.state.config().server.share_link_enabled);
 
-    // Nothing changed the second time, so no work is done and no hook fires.
     assert!(settings.reload().await.expect("reload").is_empty());
 }
 
@@ -382,7 +375,6 @@ async fn an_unknown_row_is_ignored_and_reported() {
         .await
         .expect("seed an unknown row");
 
-    // Reading the effective values must not panic or apply it.
     settings.reload().await.expect("reload");
     assert!(settings.resolved_one("no.such.setting").is_none());
     assert!(settings.stored_keys().contains("no.such.setting"));
@@ -470,7 +462,6 @@ async fn a_setting_captured_at_startup_reports_the_hook_that_applies_it() {
         .await
         .expect("restore the configured helper");
 
-    // Running every hook must be idempotent and must not panic.
     server
         .state
         .apply_settings_hooks(&infra::settings::Hook::ALL.into_iter().collect());
@@ -494,9 +485,6 @@ async fn the_outbox_drainer_checks_the_switch_itself() {
     );
 }
 
-// ── The pages themselves ─────────────────────────────────────────────────
-
-/// Sign in through the Web UI form and keep the session cookies.
 async fn ui_login(server: &TestServer, email: &str, password: &str) -> reqwest::Client {
     let client = reqwest::Client::builder()
         .cookie_store(true)
@@ -532,7 +520,6 @@ async fn page(server: &TestServer, client: &reqwest::Client, path: &str) -> (u16
 }
 
 /// Everything after the embedded `window.__T` dictionary.
-///
 /// Everything the page renders, without the translation dictionary and the
 /// bundle script that follow it. The dictionary ships every key with its
 /// translation, so a raw key there is normal; a raw key in the body is not.
@@ -540,7 +527,6 @@ fn page_content(html: &str) -> &str {
     html.split("id=\"__i18n\"").next().unwrap_or(html)
 }
 
-/// The CSRF token embedded in a settings page's form.
 fn csrf_of(html: &str) -> String {
     html.split(r#"name="csrf_token" value=""#)
         .nth(1)
@@ -592,7 +578,6 @@ async fn every_settings_page_renders_for_an_admin_only() {
         assert_eq!(status, 200, "the first page's old id must still render");
         assert!(html.matches("class=\"badge").count() >= 2, "{path}");
     }
-    // An unknown section lands on the first page rather than 404ing.
     let (status, _) = page(&server, &admin, "/sysadmin/settings/nope/").await;
     assert_eq!(status, 200);
 
@@ -612,7 +597,6 @@ async fn every_settings_page_renders_for_an_admin_only() {
     );
 }
 
-/// The markup of one row, from its opening tag to the next row's.
 fn row_of<'a>(html: &'a str, key: &str) -> &'a str {
     let marker = format!(r#"data-setting="{key}""#);
     let at = html
@@ -905,14 +889,12 @@ async fn saving_from_the_page_applies_and_reports_the_source() {
     assert_eq!(resp.status(), 302);
     assert!(!server.state.config().server.share_link_enabled);
 
-    // The page now reports where the value came from.
     let (_, html) = page(&server, &admin, "/sysadmin/settings/security/").await;
     assert!(
         html.contains("Database") || html.contains("数据库"),
         "the saved row must be shown as the source"
     );
 
-    // And clearing it puts the config file (here: the built-in default) back.
     let csrf = csrf_of(&html);
     let resp = admin
         .post(format!("{}/sysadmin/settings/reset/", server.base_url))
@@ -1016,8 +998,6 @@ async fn the_settings_page_offers_a_restart_button() {
 
     let (status, html) = page(&server, &admin, "/sysadmin/settings/").await;
     assert_eq!(status, 200);
-    // Everything before the first row is the page head, the section bar, the
-    // banners and the filter.
     let rows_at = html.find(r#"data-setting=""#).expect("the page has rows");
     let head = &html[..rows_at];
     assert!(
@@ -1131,7 +1111,6 @@ async fn restarting_from_the_page_returns_a_waiting_page_and_signals_the_runner(
         !body.contains(r#"action="/sysadmin/settings/server/save/""#),
         "the restarting page must not render the form"
     );
-    // The content is everything before the embedded i18n data block.
     let content = body
         .split(r#"id="__i18n""#)
         .next()

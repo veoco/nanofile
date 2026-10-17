@@ -2,8 +2,6 @@ mod common;
 
 use common::TestFixture;
 
-// ── Helpers ──────────────────────────────────────────────────────────────
-
 /// Upload a small file to a repo.
 async fn upload_file(f: &TestFixture, name: &str) {
     let resp = f
@@ -32,8 +30,6 @@ async fn create_subdir(f: &TestFixture, path: &str) {
     );
 }
 
-// ── Existing tests ───────────────────────────────────────────────────────
-
 #[tokio::test]
 async fn test_starred_files_empty() {
     let f = TestFixture::new().await;
@@ -59,10 +55,8 @@ async fn test_starred_files_unauthorized() {
 async fn test_v21_starred_items_star_and_unstar() {
     let f = TestFixture::new().await;
 
-    // Upload a file first
     upload_file(&f, "star-me.txt").await;
 
-    // Star it via v2.1
     let resp = f
         .client
         .post_json(
@@ -73,7 +67,6 @@ async fn test_v21_starred_items_star_and_unstar() {
         .await;
     assert_eq!(resp.status(), 200, "star failed: {:?}", resp.text().await);
 
-    // List starred via v2.1
     let resp = f
         .client
         .get("/api/v2.1/starred-items/", Some(&f.api_token))
@@ -85,7 +78,6 @@ async fn test_v21_starred_items_star_and_unstar() {
     assert_eq!(items[0]["repo_id"], f.repo_id);
     assert_eq!(items[0]["path"], "/star-me.txt");
 
-    // Legacy API should also show it
     let resp = f
         .client
         .get("/api2/starredfiles/", Some(&f.api_token))
@@ -94,28 +86,23 @@ async fn test_v21_starred_items_star_and_unstar() {
     let legacy: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(legacy.as_array().unwrap().len(), 1);
 
-    // Unstar via v2.1
     let resp = f
         .client
         .unstar_item(&f.api_token, &f.repo_id, "/star-me.txt")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // List should be empty now
     let resp = f.client.list_starred(&f.api_token).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["starred_item_list"].as_array().unwrap().len(), 0);
 }
 
-// ── New star feature tests ───────────────────────────────────────────────
-
 #[tokio::test]
 async fn test_star_directory() {
     let f = TestFixture::new().await;
     create_subdir(&f, "/subdir").await;
 
-    // Star the directory
     let resp = f
         .client
         .star_item(&f.api_token, &f.repo_id, "/subdir/")
@@ -127,7 +114,6 @@ async fn test_star_directory() {
         resp.text().await
     );
 
-    // Verify in GET it's classified as starred_folders with is_dir=true
     let body: serde_json::Value = f
         .client
         .list_starred(&f.api_token)
@@ -146,7 +132,6 @@ async fn test_star_directory() {
 async fn test_star_root_repo() {
     let f = TestFixture::new().await;
 
-    // Star the repo root
     let resp = f.client.star_item(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(
         resp.status(),
@@ -155,7 +140,6 @@ async fn test_star_root_repo() {
         resp.text().await
     );
 
-    // Verify it's classified as starred_repos (path=="/")
     let body: serde_json::Value = f
         .client
         .list_starred(&f.api_token)
@@ -168,7 +152,6 @@ async fn test_star_root_repo() {
     let item = &items[0];
     assert_eq!(item["path"], "/");
     assert_eq!(item["is_dir"], true);
-    // For a repo root, obj_name should be the repo name
     assert_eq!(item["obj_name"], item["repo_name"]);
 }
 
@@ -203,21 +186,18 @@ async fn test_star_duplicate() {
     let f = TestFixture::new().await;
     upload_file(&f, "dup.txt").await;
 
-    // Star once
     let resp = f
         .client
         .star_item(&f.api_token, &f.repo_id, "/dup.txt")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Star again — should return 200 (not error) with existing item info
     let resp = f
         .client
         .star_item(&f.api_token, &f.repo_id, "/dup.txt")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Should only appear once in the list
     let body: serde_json::Value = f
         .client
         .list_starred(&f.api_token)
@@ -261,7 +241,6 @@ async fn test_star_multipart() {
     let f = TestFixture::new().await;
     upload_file(&f, "multi.txt").await;
 
-    // Star via multipart/form-data (Android client format)
     let form = reqwest::multipart::Form::new()
         .text("repo_id", f.repo_id.clone())
         .text("path", "/multi.txt");
@@ -282,7 +261,6 @@ async fn test_star_file_in_subdir() {
     let f = TestFixture::new().await;
     create_subdir(&f, "/sub").await;
 
-    // Create empty file in subdirectory via v2.1 endpoint
     let resp = f
         .client
         .post_json(
@@ -293,7 +271,6 @@ async fn test_star_file_in_subdir() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Star the file in the subdirectory
     let resp = f
         .client
         .star_item(&f.api_token, &f.repo_id, "/sub/deep.txt")
@@ -333,7 +310,6 @@ async fn test_star_response_fields() {
         .unwrap();
     let item = &body["starred_item_list"].as_array().unwrap()[0];
 
-    // Verify all expected response fields
     assert_eq!(item["repo_id"], f.repo_id);
     assert!(!item["repo_name"].as_str().unwrap_or("").is_empty());
     assert_eq!(item["path"], "/field-test.txt");
@@ -357,7 +333,6 @@ async fn test_star_deleted_repo() {
         .star_item(&f.api_token, &f.repo_id, "/gone.txt")
         .await;
 
-    // Verify star exists before delete
     let body: serde_json::Value = f
         .client
         .list_starred(&f.api_token)
@@ -367,7 +342,6 @@ async fn test_star_deleted_repo() {
         .unwrap();
     assert_eq!(body["starred_item_list"].as_array().unwrap().len(), 1);
 
-    // Delete the repo — FK CASCADE removes the star records
     let resp = f.client.delete_repo(&f.api_token, &f.repo_id).await;
     assert_eq!(
         resp.status(),
@@ -376,7 +350,6 @@ async fn test_star_deleted_repo() {
         resp.text().await
     );
 
-    // Starred list should be empty (CASCADE delete on FK)
     let body: serde_json::Value = f
         .client
         .list_starred(&f.api_token)
@@ -396,7 +369,6 @@ async fn test_star_legacy_list_after_star() {
         .star_item(&f.api_token, &f.repo_id, "/legacy.txt")
         .await;
 
-    // Legacy API should return it with is_dir field
     let resp = f
         .client
         .get("/api2/starredfiles/", Some(&f.api_token))
@@ -447,13 +419,11 @@ async fn test_v21_star_sort_order() {
         .collect();
     eprintln!("sort order names: {:?}", names);
 
-    // First item should be the directory (dirs come before files in grouped output)
     assert_eq!(
         items[0]["obj_name"], "a",
         "expected directory first in grouped output"
     );
     assert_eq!(items[0]["is_dir"], true);
-    // Remaining should be files
     assert_eq!(items[1]["is_dir"], false);
     assert_eq!(items[2]["is_dir"], false);
 }
@@ -462,7 +432,6 @@ async fn test_v21_star_sort_order() {
 async fn test_ui_starred_page() {
     let f = TestFixture::new().await;
 
-    // Use a single cookie client for both login and page requests
     let ui_client = reqwest::Client::builder()
         .cookie_store(true)
         .build()
@@ -507,7 +476,6 @@ async fn test_ui_unstar_form() {
         .star_item(&f.api_token, &f.repo_id, "/ui-unstar.txt")
         .await;
 
-    // Use a single cookie client for login and the unstar form
     let ui_client = reqwest::Client::builder()
         .cookie_store(true)
         .build()
@@ -525,7 +493,6 @@ async fn test_ui_unstar_form() {
         login_resp.text().await
     );
 
-    // Unstar via API (the web UI now uses JS fetch to the Seafile API)
     let _ = f
         .client
         .delete(
@@ -537,7 +504,6 @@ async fn test_ui_unstar_form() {
         )
         .await;
 
-    // Verify empty via API
     let body: serde_json::Value = f
         .client
         .list_starred(&f.api_token)
@@ -550,7 +516,6 @@ async fn test_ui_unstar_form() {
 
 /// Starred rows are the user's own bookkeeping and outlive membership, so the
 /// listing must intersect them with the libraries the caller can still access.
-///
 /// Without this, a member who was removed from a library keeps an ongoing oracle
 /// on it: the response reports the library's name, encryption flag, per-file
 /// path, modification time and whether the file still exists.
@@ -559,7 +524,6 @@ async fn test_starred_items_are_filtered_by_current_access() {
     let f = TestFixture::new().await;
     upload_file(&f, "shared-star.txt").await;
 
-    // The owner stars the file as well, so both views can be compared.
     let resp = f
         .client
         .post_json(
@@ -570,7 +534,6 @@ async fn test_starred_items_are_filtered_by_current_access() {
         .await;
     assert_eq!(resp.status(), 200, "owner star failed");
 
-    // A second user with write access who stars the same file.
     let starrer_id =
         common::create_test_user(f.server.db.as_ref(), "starrer@example.com", "password").await;
     common::add_repo_member(f.server.db.as_ref(), &f.repo_id, starrer_id, "rw").await;
@@ -612,21 +575,17 @@ async fn test_starred_items_are_filtered_by_current_access() {
         }
     };
 
-    // Baseline: the member sees the entry while they have access.
     assert!(
         starred_repos(&member_token).await.contains(&f.repo_id),
         "the member must see the library while they are a member"
     );
 
-    // The owner revokes the member's access.
     common::remove_repo_member(f.server.db.as_ref(), &f.repo_id, starrer_id).await;
 
-    // The removed member no longer sees the entry…
     assert!(
         !starred_repos(&member_token).await.contains(&f.repo_id),
         "a removed member must not keep seeing the library in their starred items"
     );
-    // …while the owner (who still has access) keeps seeing it.
     assert!(
         starred_repos(&f.api_token).await.contains(&f.repo_id),
         "the owner's starred view must be unaffected"

@@ -12,9 +12,6 @@ use sea_orm::QueryFilter;
 use sea_orm::Statement;
 use serde_json::Value;
 
-// ── Helpers ──────────────────────────────────────────────────────────────
-
-/// Upload a small file to a repo.
 async fn upload_file(f: &TestFixture, name: &str) {
     let resp = f
         .client
@@ -23,14 +20,12 @@ async fn upload_file(f: &TestFixture, name: &str) {
     assert_eq!(resp.status(), 200, "upload failed: {:?}", resp.text().await);
 }
 
-/// Create a subdirectory.
 async fn create_dir(f: &TestFixture, path: &str) {
     let resp = f.client.create_dir(&f.api_token, &f.repo_id, path).await;
     // seahub answers 201 Created for mkdir.
     assert_eq!(resp.status(), 201, "mkdir failed: {:?}", resp.text().await);
 }
 
-/// Create empty file via v2.1.
 async fn create_file(f: &TestFixture, path: &str) {
     let resp = f
         .client
@@ -48,7 +43,6 @@ async fn create_file(f: &TestFixture, path: &str) {
     );
 }
 
-/// Fetch activities and return the events array + total_count.
 async fn get_activities(f: &TestFixture, page: u32, per_page: u32) -> (Vec<Value>, usize) {
     let resp = f
         .client
@@ -64,12 +58,10 @@ async fn get_activities(f: &TestFixture, page: u32, per_page: u32) -> (Vec<Value
     (events, total)
 }
 
-/// Find an event by op_type. Returns the first match.
 fn find_event<'a>(events: &'a [Value], op_type: &str) -> Option<&'a Value> {
     events.iter().find(|ev| ev["op_type"] == op_type)
 }
 
-/// Helper: create second user and return `(user_id, api_token)`.
 async fn create_second_user(f: &TestFixture) -> (i32, String) {
     let db = &*f.server.db;
     let uid = create_test_user(db, "user2@test.com", "password2").await;
@@ -79,8 +71,6 @@ async fn create_second_user(f: &TestFixture) -> (i32, String) {
     (uid, tv["token"].as_str().unwrap().to_string())
 }
 
-// ── WebDAV helpers ──────────────────────────────────────────────────────────
-
 fn http_client() -> reqwest::Client {
     reqwest::Client::builder().no_proxy().build().unwrap()
 }
@@ -89,7 +79,6 @@ fn dav_url(base: &str, repo_id: &str, path: &str) -> String {
     format!("{base}/dav/{repo_id}{path}")
 }
 
-/// Generate a WebDAV key and return it.
 async fn gen_webdav_key(
     client: &reqwest::Client,
     base: &str,
@@ -115,7 +104,6 @@ async fn gen_webdav_key(
     body["key"].as_str().unwrap().to_string()
 }
 
-/// PUT a file over WebDAV.
 async fn webdav_put(
     client: &reqwest::Client,
     base: &str,
@@ -134,8 +122,6 @@ async fn webdav_put(
         .await
         .unwrap()
 }
-
-// ── Tests ────────────────────────────────────────────────────────────────
 
 /// Initial fixture creation produces exactly one event: repo creation.
 #[tokio::test]
@@ -191,7 +177,6 @@ async fn test_activity_after_file_rename() {
     let f = TestFixture::new().await;
     create_file(&f, "/old_name.txt").await;
 
-    // Rename via v2 JSON endpoint
     let resp = f
         .client
         .rename_file(&f.api_token, &f.repo_id, "/old_name.txt", "new_name.txt")
@@ -205,7 +190,6 @@ async fn test_activity_after_file_rename() {
         "expected 3 events (repo + create + rename), got: {events:?}"
     );
 
-    // Verify rename event has old_path
     let rename_ev = find_event(&events, "rename").expect("rename event should exist");
     assert_eq!(rename_ev["path"], "/new_name.txt");
     assert_eq!(rename_ev["old_path"], "/old_name.txt");
@@ -218,7 +202,6 @@ async fn test_activity_after_file_move() {
     create_dir(&f, "/dest").await;
     create_file(&f, "/moveme.txt").await;
 
-    // Move via v2 JSON endpoint
     let resp = f
         .client
         .move_file(&f.api_token, &f.repo_id, "/moveme.txt", &f.repo_id, "/dest")
@@ -242,7 +225,6 @@ async fn test_activity_after_file_delete() {
     let f = TestFixture::new().await;
     create_file(&f, "/deleteme.txt").await;
 
-    // Delete via v2.1
     let resp = f
         .client
         .delete(
@@ -290,7 +272,6 @@ async fn test_activity_after_dir_delete() {
     let f = TestFixture::new().await;
     create_dir(&f, "/killdir").await;
 
-    // Delete dir via v2.1
     let resp = f
         .client
         .delete(
@@ -317,7 +298,6 @@ async fn test_activity_after_dir_rename() {
     let f = TestFixture::new().await;
     create_dir(&f, "/olddirname").await;
 
-    // Rename dir via JSON endpoint
     let resp = f
         .client
         .post_json(
@@ -352,7 +332,6 @@ async fn test_activity_after_dir_move() {
     create_dir(&f, "/sourcedir").await;
     create_dir(&f, "/target").await;
 
-    // Move dir via JSON endpoint
     let resp = f
         .client
         .post_json(
@@ -401,7 +380,6 @@ async fn test_activity_pagination() {
     assert_eq!(events.len(), 2, "expected 2 events on page 1");
     assert_eq!(total, 2, "expected total=2 (repo + batch_create)");
 
-    // page=3, per_page=2 → 0 events (only 2 total)
     let (events_page3, _) = get_activities(&f, 3, 2).await;
     assert_eq!(
         events_page3.len(),
@@ -414,10 +392,8 @@ async fn test_activity_pagination() {
 async fn test_activity_repo_id_filter() {
     let f = TestFixture::new().await;
 
-    // Create activity in the default repo
     create_file(&f, "/repo1-file.txt").await;
 
-    // Create a second repo and create activity there
     let resp = f.client.create_repo(&f.api_token, "second-repo").await;
     assert!(
         resp.status().is_success(),
@@ -427,7 +403,6 @@ async fn test_activity_repo_id_filter() {
     let body: Value = resp.json().await.unwrap();
     let repo2_id = body["repo_id"].as_str().unwrap_or("").to_string();
 
-    // Create file in repo2
     let resp = f
         .client
         .post_json(
@@ -438,7 +413,6 @@ async fn test_activity_repo_id_filter() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Filter by repo2 — should see 2 events (repo2 create + file create in repo2)
     let resp = f
         .client
         .get(
@@ -470,13 +444,11 @@ async fn test_activity_response_fields() {
     create_file(&f, "/fields-test.txt").await;
 
     let (events, _) = get_activities(&f, 1, 10).await;
-    // Find the file create event (skip repo create)
     let ev = events
         .iter()
         .find(|e| e["op_type"] == "create" && e["obj_type"] == "file")
         .expect("file create event should exist");
 
-    // Verify all expected response fields
     assert_eq!(ev["op_type"], "create");
     assert_eq!(ev["repo_id"], f.repo_id);
     assert!(!ev["repo_name"].as_str().unwrap_or("").is_empty());
@@ -497,7 +469,6 @@ async fn test_activity_response_fields() {
         "avatar_url should be absolute, got: {avatar_url}"
     );
     assert!(ev["time"].as_str().unwrap_or("").contains('T'));
-    // details should contain metadata about the operation
     let details = ev["details"].as_array().unwrap();
     assert_eq!(details.len(), 1, "details should have 1 item");
     assert_eq!(details[0]["path"], "/fields-test.txt");
@@ -510,13 +481,9 @@ async fn test_activity_response_fields() {
     assert_eq!(ev["count"], 1);
 }
 
-/// A rename performed through the sync protocol (`PUT /commit/HEAD`) must
-/// produce exactly one activity record — the rename — and must NOT also record
-/// a delete of the old path. Matches official seafevents, whose
-/// `CommitDiffer(handle_rename=True)` folds the delete into the rename.
-///
-/// The web rename endpoint is a separate code path that already logged one
-/// event; this covers the client/sync path, which is the one that regressed.
+/// A rename through the sync protocol (`PUT /commit/HEAD`) must produce exactly one
+/// activity record — the rename — not a rename plus a delete; seafevents' CommitDiffer
+/// folds the delete into the rename, and this is the path that regressed.
 #[tokio::test]
 async fn test_sync_rename_activity_has_no_delete() {
     let f = TestFixture::new().await;
@@ -530,7 +497,6 @@ async fn test_sync_rename_activity_has_no_delete() {
         None,
     )
     .await;
-    // Same file object id, new name, same directory → a rename.
     let c2 = sync_commit(
         &f.client,
         &f.sync_token,
@@ -564,7 +530,6 @@ async fn test_sync_rename_activity_has_no_delete() {
     assert_eq!(file_events[0]["path"], "/new.txt");
     assert_eq!(file_events[0]["old_path"], "/old.txt");
 
-    // No delete (or aggregated batch delete) may reference the old path.
     assert!(
         events
             .iter()
@@ -578,7 +543,6 @@ async fn test_activity_old_path_in_response() {
     let f = TestFixture::new().await;
     create_file(&f, "/original.txt").await;
 
-    // Rename
     let resp = f
         .client
         .rename_file(&f.api_token, &f.repo_id, "/original.txt", "renamed.txt")
@@ -601,10 +565,8 @@ async fn test_activity_multiple_operations() {
     let f = TestFixture::new().await;
     let name = "multi.txt";
 
-    // 1. Create
     create_file(&f, &format!("/{name}")).await;
 
-    // 2. Rename
     let _ = f
         .client
         .rename_file(
@@ -615,7 +577,6 @@ async fn test_activity_multiple_operations() {
         )
         .await;
 
-    // 3. Delete
     let _ = f
         .client
         .delete(
@@ -629,7 +590,6 @@ async fn test_activity_multiple_operations() {
         total, 4,
         "expected 4 total events (repo + create + rename + delete)"
     );
-    // Verify each operation type appears
     assert!(
         find_event(&events, "create").is_some(),
         "expected a create event"
@@ -648,10 +608,8 @@ async fn test_activity_multiple_operations() {
 async fn test_activity_op_user_filter() {
     let f = TestFixture::new().await;
 
-    // Create a file
     create_file(&f, "/opuser-test.txt").await;
 
-    // Filter by own email — should see activities (repo create + file create)
     let resp = f
         .client
         .get(
@@ -690,17 +648,14 @@ async fn test_activity_op_user_nonexistent() {
 async fn test_activity_cross_user_visibility() {
     let f = TestFixture::new().await;
 
-    // Create a second user
     let (user2_id, api_token2) = create_second_user(&f).await;
 
     // Give user2 access to the library directly: there is no share API any
     // more, but the permission predicates still read `repo_members`.
     common::add_repo_member(&f.server.db, &f.repo_id, user2_id, "rw").await;
 
-    // User1 creates a file in the shared repo
     create_file(&f, "/shared-file.txt").await;
 
-    // User2 should be able to see User1's activity because they share the repo
     let resp = f
         .client
         .get("/api/v2.1/activities/", Some(&api_token2))
@@ -713,7 +668,6 @@ async fn test_activity_cross_user_visibility() {
         "user2 should see activities in shared repo"
     );
 
-    // The file create event should have user1's email
     let file_create = events
         .iter()
         .find(|e| e["op_type"] == "create" && e["obj_type"] == "file");
@@ -725,7 +679,6 @@ async fn test_activity_cross_user_visibility() {
 
 /// Verify that a user can see their own activities even when repo membership
 /// is missing (direct_user_id fallback).
-///
 /// This tests our fix for the API query — the original seahub uses a
 /// UserActivity fan-out table, while nanofile adds `OR user_id = current_user`
 /// to ensure users always see their own actions regardless of membership.
@@ -733,14 +686,12 @@ async fn test_activity_cross_user_visibility() {
 async fn test_activity_own_visible_without_membership() {
     let f = TestFixture::new().await;
 
-    // Initially the user is a member → repo-create is visible via both paths.
     let (events_before, total_before) = get_activities(&f, 1, 10).await;
     assert!(
         total_before >= 1,
         "should see repo-create before removing member"
     );
 
-    // Remove the user from the repo's member list directly.
     let db = &*f.server.db;
     use sea_orm::QueryFilter;
     infra::entity::repo_member::Entity::delete_many()
@@ -750,8 +701,6 @@ async fn test_activity_own_visible_without_membership() {
         .await
         .unwrap();
 
-    // Even without membership, the API must return the user's own
-    // activities (the direct_user_id fallback).
     let (events_after, total_after) = get_activities(&f, 1, 10).await;
     assert_eq!(
         total_after, total_before,
@@ -781,28 +730,23 @@ async fn test_activity_repo_deleted_logged() {
     let f = TestFixture::new().await;
     let repo_id1 = f.repo_id.clone();
 
-    // Create a second repo to verify its activities survive FK cascade
     let resp = f.client.create_repo(&f.api_token, "survivor-repo").await;
     assert!(resp.status().is_success());
     let body: Value = resp.json().await.unwrap();
     let repo_id2 = body["repo_id"].as_str().unwrap().to_string();
 
-    // List activities before deletion — should have 2 repo-create events
     let (_events_before, total_before) = get_activities(&f, 1, 10).await;
     assert_eq!(
         total_before, 2,
         "should have 2 repo create events before delete"
     );
 
-    // Delete the first repo (activities cascade-deleted via FK)
     let resp = f
         .client
         .delete(&format!("/api2/repos/{}/", repo_id1), Some(&f.api_token))
         .await;
     assert_eq!(resp.status(), 200, "delete repo failed");
 
-    // After deletion, repo1's activities are cascade-deleted,
-    // but repo2's create activity should remain
     let (events_after, total_after) = get_activities(&f, 1, 10).await;
     assert_eq!(
         total_after, 1,
@@ -818,7 +762,6 @@ async fn test_activity_repo_deleted_v21_logged() {
     let f = TestFixture::new().await;
     let repo_id1 = f.repo_id.clone();
 
-    // Create a second repo to verify its activities survive FK cascade
     let resp = f
         .client
         .create_repo(&f.api_token, "survivor-repo-v21")
@@ -827,14 +770,12 @@ async fn test_activity_repo_deleted_v21_logged() {
     let body: Value = resp.json().await.unwrap();
     let repo_id2 = body["repo_id"].as_str().unwrap().to_string();
 
-    // List activities before deletion — should have 2 repo-create events
     let (_events_before, total_before) = get_activities(&f, 1, 10).await;
     assert_eq!(
         total_before, 2,
         "should have 2 repo create events before delete"
     );
 
-    // Delete the first repo via v2.1 API
     let resp = f
         .client
         .delete(
@@ -844,8 +785,6 @@ async fn test_activity_repo_deleted_v21_logged() {
         .await;
     assert_eq!(resp.status(), 200, "delete repo via v2.1 failed");
 
-    // After deletion, repo1's activities are cascade-deleted,
-    // but repo2's create activity should remain
     let (events_after, total_after) = get_activities(&f, 1, 10).await;
     assert_eq!(
         total_after, 1,
@@ -860,7 +799,6 @@ async fn test_activity_repo_deleted_v21_logged() {
 async fn test_ui_activities_page() {
     let f = TestFixture::new().await;
 
-    // Use a single cookie client for login and page request
     let ui_client = reqwest::Client::builder()
         .cookie_store(true)
         .build()
@@ -892,19 +830,15 @@ async fn test_ui_activities_page() {
     );
 }
 
-// ── Batch operation tests ───────────────────────────────────────────────
-
 /// Batch delete via v2 API → each deleted file has a delete activity
 #[tokio::test]
 async fn test_activity_batch_delete() {
     let f = TestFixture::new().await;
 
-    // Upload 3 files
     for i in 1..=3 {
         upload_file(&f, &format!("batch_del_{i}.txt")).await;
     }
 
-    // Batch delete via `/api2/repos/{id}/fileops/delete/`
     let resp = f
         .client
         .post_form(
@@ -939,7 +873,6 @@ async fn test_activity_batch_delete() {
         3,
         "batch_delete should have count=3"
     );
-    // Verify details contain all three file paths
     let details = batch_delete[0]["details"].as_array().unwrap();
     assert_eq!(details.len(), 3, "batch_delete details should have 3 items");
     let paths: Vec<&str> = details.iter().filter_map(|d| d["path"].as_str()).collect();
@@ -956,15 +889,12 @@ async fn test_activity_batch_delete() {
 async fn test_activity_batch_copy() {
     let f = TestFixture::new().await;
 
-    // Upload source files
     for i in 1..=2 {
         upload_file(&f, &format!("batch_copy_src_{i}.txt")).await;
     }
 
-    // Create destination directory
     create_dir(&f, "/copy_dest").await;
 
-    // Batch copy via `/api2/repos/{id}/fileops/copy/`
     let resp = f
         .client
         .post_form(
@@ -1010,14 +940,11 @@ async fn test_activity_batch_copy() {
 async fn test_activity_batch_move() {
     let f = TestFixture::new().await;
 
-    // Upload source files
     upload_file(&f, "batch_move_1.txt").await;
     upload_file(&f, "batch_move_2.txt").await;
 
-    // Create destination directory
     create_dir(&f, "/move_dest").await;
 
-    // Batch move via `/api2/repos/{id}/fileops/move/`
     let resp = f
         .client
         .post_form(
@@ -1046,7 +973,6 @@ async fn test_activity_batch_move() {
         move_events.len()
     );
 
-    // Each move event should have old_path pointing to source
     for ev in &move_events {
         assert!(
             ev["old_path"]
@@ -1059,9 +985,6 @@ async fn test_activity_batch_move() {
     }
 }
 
-// ── Async batch operation tests ──────────────────────────────────────────
-
-/// Helper: poll async task until completion
 async fn poll_until_done(f: &TestFixture, task_id: &str) {
     for _ in 0..20 {
         let resp = f
@@ -1082,14 +1005,11 @@ async fn poll_until_done(f: &TestFixture, task_id: &str) {
 async fn test_activity_async_batch_copy() {
     let f = TestFixture::new().await;
 
-    // Upload source files
     upload_file(&f, "async_copy_1.txt").await;
     upload_file(&f, "async_copy_2.txt").await;
 
-    // Create destination directory
     create_dir(&f, "/async_copy_dest").await;
 
-    // Start async batch copy
     let resp = f
         .client
         .async_batch_copy(
@@ -1135,14 +1055,11 @@ async fn test_activity_async_batch_copy() {
 async fn test_activity_async_batch_move() {
     let f = TestFixture::new().await;
 
-    // Upload source files
     upload_file(&f, "async_move_1.txt").await;
     upload_file(&f, "async_move_2.txt").await;
 
-    // Create destination directory
     create_dir(&f, "/async_move_dest").await;
 
-    // Start async batch move
     let resp = f
         .client
         .async_batch_move(
@@ -1234,11 +1151,9 @@ async fn test_async_copy_rejects_when_active_limit_reached() {
 async fn test_activity_batch_delete_mixed_types() {
     let f = TestFixture::new().await;
 
-    // Upload a file and create a directory
     upload_file(&f, "mixed_file.txt").await;
     create_dir(&f, "/mixed_dir").await;
 
-    // Batch delete both via `/api2/repos/{id}/fileops/delete/`
     let resp = f
         .client
         .post_form(
@@ -1258,7 +1173,6 @@ async fn test_activity_batch_delete_mixed_types() {
         delete_events.len()
     );
 
-    // One should be obj_type "file", the other "dir"
     let file_del: Vec<_> = delete_events
         .iter()
         .filter(|e| e["obj_type"] == "file")
@@ -1280,7 +1194,6 @@ async fn test_activity_batch_delete_mixed_types() {
         dir_del.len()
     );
 
-    // Verify correct paths
     assert!(
         file_del[0]["path"]
             .as_str()
@@ -1302,7 +1215,6 @@ async fn test_activity_batch_delete_mixed_types() {
 async fn test_activity_batch_copy_dir() {
     let f = TestFixture::new().await;
 
-    // Create source directory with a file inside
     create_dir(&f, "/batch_copy_src_dir").await;
     let resp = f
         .client
@@ -1316,7 +1228,6 @@ async fn test_activity_batch_copy_dir() {
         .await;
     assert_eq!(resp.status(), 200, "upload inside dir failed");
 
-    // Batch copy the directory
     let resp = f
         .client
         .post_form(
@@ -1332,7 +1243,6 @@ async fn test_activity_batch_copy_dir() {
     assert_eq!(resp.status(), 200, "batch copy failed");
 
     let (events, _) = get_activities(&f, 1, 25).await;
-    // Look for the batch_create event for the copied directory
     let batch_create_events: Vec<_> = events
         .iter()
         .filter(|e| {
@@ -1357,15 +1267,12 @@ async fn test_activity_batch_copy_dir() {
     );
 }
 
-// ── Rename/repo-level event tests ──────────────────────────────────────
-
 /// Rename file → API response includes old_name field
 #[tokio::test]
 async fn test_activity_rename_old_name() {
     let f = TestFixture::new().await;
     create_file(&f, "/oldname_test.txt").await;
 
-    // Rename via v2 JSON endpoint
     let resp = f
         .client
         .rename_file(&f.api_token, &f.repo_id, "/oldname_test.txt", "newname.txt")
@@ -1384,7 +1291,6 @@ async fn test_activity_rename_old_name() {
 async fn test_activity_repo_rename_logged() {
     let f = TestFixture::new().await;
 
-    // Rename the repo
     let resp = f
         .client
         .rename_repo(&f.api_token, &f.repo_id, "renamed-repo")
@@ -1395,9 +1301,8 @@ async fn test_activity_repo_rename_logged() {
     let rename_event = find_event(&events, "rename").expect("rename event should exist");
     assert_eq!(rename_event["obj_type"], "repo");
     assert_eq!(rename_event["path"], "/");
-    // The Android client renders rename as "old_name => name" and crashes on a
-    // null old_name, so old_name/old_path must carry the previous repo name
-    // and name/repo_name the new one.
+    // The Android client renders renames as "old_name => name" and crashes on a null
+    // old_name, so old_repo_name and repo_name must both be populated.
     assert_eq!(rename_event["old_name"], "test-repo");
     assert_eq!(rename_event["old_path"], "test-repo");
     assert_eq!(rename_event["name"], "renamed-repo");
@@ -1411,7 +1316,6 @@ async fn test_activity_repo_rename_old_repo_name() {
     let old_name = "test-repo"; // TestFixture default repo name
     let new_name = "renamed-repo-2";
 
-    // Rename the repo
     let resp = f
         .client
         .rename_repo(&f.api_token, &f.repo_id, new_name)
@@ -1432,8 +1336,7 @@ async fn test_activity_repo_rename_old_repo_name() {
         old_name,
         "old_name should be the original repo name"
     );
-    // repo_name is the name at event time, which (logged after the rename) is
-    // the new name.
+    // repo_name is the name at event time, i.e. after the rename.
     assert_eq!(
         rename_event["repo_name"].as_str().unwrap_or(""),
         new_name,
@@ -1452,7 +1355,6 @@ async fn test_activity_update_same_name_no_rename_event() {
     let (events_before, _) = get_activities(&f, 1, 25).await;
     let count_before = events_before.len();
 
-    // Echo the current name back via op=update.
     let resp = f
         .client
         .update_repo(&f.api_token, &f.repo_id, "test-repo")
@@ -1578,9 +1480,8 @@ async fn test_activity_avatar_deleted_user() {
         resp.text().await
     );
 
-    // Delete user2 directly from the DB while keeping their activity rows:
-    // disable FK enforcement so the cascade-delete does not remove them,
-    // simulating a residual activity for a deleted author.
+    // Delete user2's row directly with FK enforcement off, so the cascade does not remove
+    // their activity: this simulates a residual activity for a deleted author.
     let db = &*f.server.db;
     db.execute_raw(Statement::from_string(
         DatabaseBackend::Sqlite,
@@ -1616,10 +1517,9 @@ async fn test_activity_avatar_deleted_user() {
     );
 }
 
-/// Uploading identical content twice to the same path must succeed and not
-/// create a second commit — the head commit already reflects that state
-/// (regression: a same-second duplicate write collided on (repo_id, commit_id)
-/// and returned 500).
+/// Uploading identical content twice to the same path must succeed and create no second
+/// commit — the head already reflects that state (a same-second duplicate write collided
+/// on (repo_id, commit_id) and returned 500).
 #[tokio::test]
 async fn test_upload_identical_content_no_500() {
     let f = TestFixture::new().await;
@@ -1636,9 +1536,8 @@ async fn test_upload_identical_content_no_500() {
         resp1.text().await
     );
 
-    // Force the second upload to land in a different second. Without this the
-    // test silently passes when both uploads share a second and only fails on
-    // slow CI runners — the dedup must hold regardless of wall-clock timing.
+    // Force the uploads into different seconds: without this the test silently passes on
+    // fast machines and only fails on slow CI runners, while dedup must hold regardless.
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     let resp2 = f
         .client
@@ -1651,7 +1550,6 @@ async fn test_upload_identical_content_no_500() {
         resp2.text().await
     );
 
-    // The head commit must be unchanged (only one commit exists).
     let db = &*f.server.db;
     let commits = infra::entity::commit::Entity::find()
         .filter(infra::entity::commit::Column::RepoId.eq(&f.repo_id))
@@ -1682,7 +1580,6 @@ async fn test_upload_identical_content_no_500() {
 async fn test_activity_cleanup_trash_days() {
     let f = TestFixture::new().await;
 
-    // DELETE /api/v2.1/repos/{repo_id}/trash/ with a JSON body keep_days
     let resp = reqwest::Client::new()
         .delete(format!(
             "{}/api/v2.1/repos/{}/trash/",
@@ -1704,8 +1601,6 @@ async fn test_activity_cleanup_trash_days() {
     assert_eq!(ev["days"], 30, "top-level days should be emitted");
 }
 
-// ── WebDAV activity tests ───────────────────────────────────────────────────
-
 /// WebDAV PUT for a new file should log a "create" activity.
 #[tokio::test]
 async fn test_activity_webdav_upload_new_file() {
@@ -1714,7 +1609,6 @@ async fn test_activity_webdav_upload_new_file() {
     let client = http_client();
     let key = gen_webdav_key(&client, base, &f.api_token, &f.repo_id).await;
 
-    // Upload a new file via WebDAV
     let resp = webdav_put(
         &client,
         base,
@@ -1727,7 +1621,6 @@ async fn test_activity_webdav_upload_new_file() {
     .await;
     assert_eq!(resp.status(), 201, "WebDAV PUT should return 201 CREATED");
 
-    // Verify activity is logged as "create"
     let (events, _) = get_activities(&f, 1, 10).await;
     let file_ev = events
         .iter()
@@ -1748,7 +1641,6 @@ async fn test_activity_webdav_upload_overwrite() {
     let client = http_client();
     let key = gen_webdav_key(&client, base, &f.api_token, &f.repo_id).await;
 
-    // First upload - creates the file
     let resp = webdav_put(
         &client,
         base,
@@ -1761,7 +1653,6 @@ async fn test_activity_webdav_upload_overwrite() {
     .await;
     assert_eq!(resp.status(), 201);
 
-    // Second upload - overwrites the file
     let resp = webdav_put(
         &client,
         base,
@@ -1774,12 +1665,10 @@ async fn test_activity_webdav_upload_overwrite() {
     .await;
     assert_eq!(resp.status(), 204, "overwrite should return 204 NO_CONTENT");
 
-    // Verify activities: should have repo create, file create, and file edit
     let (events, _) = get_activities(&f, 1, 10).await;
     let file_events: Vec<_> = events.iter().filter(|e| e["obj_type"] == "file").collect();
     assert_eq!(file_events.len(), 2, "should have 2 file events");
 
-    // Events are returned in reverse chronological order (newest first)
     // So the edit (most recent) comes before the create
     assert_eq!(
         file_events[0]["op_type"], "edit",
@@ -1818,7 +1707,6 @@ async fn test_activity_pagination_is_clamped() {
         events.len()
     );
 
-    // A page number beyond the cap must not fail or overflow.
     let resp = f
         .client
         .get(
@@ -1832,7 +1720,6 @@ async fn test_activity_pagination_is_clamped() {
 }
 
 /// Copy/move progress must only be visible to the user who created the task.
-///
 /// The task id is an unguessable UUID, but the endpoint previously accepted any
 /// authenticated caller: a task id leaked through a log, a screenshot or a
 /// shared terminal exposed another user's file names and failure text.
@@ -1844,7 +1731,6 @@ async fn test_copy_move_progress_is_owner_only() {
     }
     let (_, other_token) = create_second_user(&f).await;
 
-    // Start an async copy as the owner.
     create_dir(&f, "/owner_only_dest").await;
     let resp = f
         .client
@@ -1863,21 +1749,18 @@ async fn test_copy_move_progress_is_owner_only() {
         .unwrap()
         .to_string();
 
-    // The owner can read it…
     let resp = f
         .client
         .query_copy_move_progress(&f.api_token, &task_id)
         .await;
     assert_eq!(resp.status(), 200);
 
-    // …another user cannot, and learns nothing about whether it exists.
     let resp = f
         .client
         .query_copy_move_progress(&other_token, &task_id)
         .await;
     assert_eq!(resp.status(), 404);
 
-    // An unknown id looks exactly the same.
     let resp = f
         .client
         .query_copy_move_progress(&f.api_token, "00000000-0000-4000-8000-000000000000")
@@ -1912,7 +1795,6 @@ async fn test_webdav_failed_auth_is_throttled() {
         }
     };
 
-    // A successful request first, to show it is not counted.
     let resp = webdav_put(&client, base, &f.repo_id, "/ok.txt", &f.email, &key, b"ok").await;
     assert_eq!(resp.status(), 201);
 

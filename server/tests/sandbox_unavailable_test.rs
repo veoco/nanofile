@@ -15,7 +15,6 @@ use common::TestFixture;
 use server::indexer::DocStatus;
 
 /// Point the worker at a path that cannot be started, once, before any fixture.
-///
 /// `OnceLock` because the tests run on their own threads: whoever gets there
 /// first configures and the rest wait, so no fixture can be built first. The
 /// fixture's own setup leaves a path that is already configured alone, which is
@@ -104,7 +103,6 @@ async fn a_document_is_not_indexed_without_the_worker() {
         "a document the worker could not carry is not indexed"
     );
 
-    // The server has to be alive and still able to index what needs no worker.
     let resp = f
         .client
         .upload_file(token, &f.repo_id, "/", "after.txt", b"aftermath signal")
@@ -132,7 +130,6 @@ async fn a_document_is_not_indexed_without_the_worker() {
 }
 
 /// An avatar is refused, and nothing of it is kept.
-///
 /// The refusal has to land *before* the bytes are stored: a host that cannot
 /// confine the decoder must not hold the upload either, or the profile being
 /// unavailable would only move the decode to a later request.
@@ -170,7 +167,6 @@ async fn an_avatar_upload_is_refused_without_the_image_worker() {
 }
 
 /// EXIF is an error, not a silent `null`.
-///
 /// `null` is what a file with no EXIF returns, so answering it for a worker
 /// that never ran would be indistinguishable from a valid answer — and the
 /// caller would have no way to tell that this host grew no EXIF support.
@@ -248,7 +244,6 @@ async fn a_thumbnail_is_not_generated_without_the_image_worker() {
     );
 }
 
-/// Perform a full-text content search and return the `results` array.
 async fn search_results(f: &common::TestFixture, token: &str, q: &str) -> Vec<serde_json::Value> {
     let resp = f
         .client

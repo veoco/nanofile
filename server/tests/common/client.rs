@@ -26,7 +26,6 @@ impl TestClient {
     }
 
     /// Create a test client WITH cookie store enabled.
-    ///
     /// This simulates a browser session: `Set-Cookie` responses are stored and
     /// automatically sent as `Cookie` headers on subsequent requests.
     /// Used for Web UI E2E tests (login → cookie → access protected pages).
@@ -41,14 +40,10 @@ impl TestClient {
         }
     }
 
-    // ========== Generic request helpers ==========
-
-    /// Build a URL from a path (must start with `/`).
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }
 
-    /// GET request with optional Bearer token.
     pub async fn get(&self, path: &str, token: Option<&str>) -> reqwest::Response {
         let mut req = self.client.get(self.url(path));
         if let Some(t) = token {
@@ -57,7 +52,6 @@ impl TestClient {
         req.send().await.unwrap()
     }
 
-    /// GET request with a `Range` header (for resumable-download tests).
     pub async fn get_with_range(
         &self,
         path: &str,
@@ -71,7 +65,6 @@ impl TestClient {
         req.send().await.unwrap()
     }
 
-    /// POST with JSON body and optional Bearer token.
     pub async fn post_json(
         &self,
         path: &str,
@@ -85,7 +78,6 @@ impl TestClient {
         req.json(body).send().await.unwrap()
     }
 
-    /// POST with form body and optional Bearer token.
     pub async fn post_form(
         &self,
         path: &str,
@@ -99,7 +91,6 @@ impl TestClient {
         req.form(fields).send().await.unwrap()
     }
 
-    /// POST with raw bytes body and optional Bearer token.
     pub async fn post_bytes(
         &self,
         path: &str,
@@ -113,7 +104,6 @@ impl TestClient {
         req.body(body).send().await.unwrap()
     }
 
-    /// PUT with JSON body and optional Bearer token.
     pub async fn put_json(
         &self,
         path: &str,
@@ -127,7 +117,6 @@ impl TestClient {
         req.json(body).send().await.unwrap()
     }
 
-    /// PUT with raw bytes body and optional Bearer token.
     pub async fn put_bytes(
         &self,
         path: &str,
@@ -141,7 +130,6 @@ impl TestClient {
         req.body(body).send().await.unwrap()
     }
 
-    /// DELETE request with optional Bearer token.
     pub async fn delete(&self, path: &str, token: Option<&str>) -> reqwest::Response {
         let mut req = self.client.delete(self.url(path));
         if let Some(t) = token {
@@ -150,7 +138,6 @@ impl TestClient {
         req.send().await.unwrap()
     }
 
-    /// DELETE with form body and optional Bearer token.
     pub async fn delete_form(
         &self,
         path: &str,
@@ -164,7 +151,6 @@ impl TestClient {
         req.form(fields).send().await.unwrap()
     }
 
-    /// DELETE with JSON body and optional Bearer token.
     pub async fn delete_json(
         &self,
         path: &str,
@@ -188,7 +174,6 @@ impl TestClient {
             .unwrap()
     }
 
-    /// POST with form body, authenticated via Seafile-Repo-Token header.
     pub async fn post_sync_form(
         &self,
         path: &str,
@@ -204,7 +189,6 @@ impl TestClient {
             .unwrap()
     }
 
-    /// POST with JSON body, authenticated via Seafile-Repo-Token header.
     pub async fn post_sync_json(
         &self,
         path: &str,
@@ -222,7 +206,6 @@ impl TestClient {
     }
 
     /// POST with JSON body as raw bytes, NO Content-Type header.
-    ///
     /// This matches how seaf-daemon sends POST requests via curl, which does
     /// not set Content-Type by default. Tests using this method verify that
     /// endpoints accept requests without a Content-Type header.
@@ -241,7 +224,6 @@ impl TestClient {
             .unwrap()
     }
 
-    /// PUT with body bytes, authenticated via Seafile-Repo-Token header.
     pub async fn put_sync(&self, path: &str, sync_token: &str, body: Vec<u8>) -> reqwest::Response {
         self.client
             .put(self.url(path))
@@ -252,7 +234,6 @@ impl TestClient {
             .unwrap()
     }
 
-    /// POST with raw bytes, authenticated via Seafile-Repo-Token header.
     pub async fn post_sync_bytes(
         &self,
         path: &str,
@@ -267,8 +248,6 @@ impl TestClient {
             .await
             .unwrap()
     }
-
-    // ========== API Endpoints ==========
 
     pub async fn login(&self, username: &str, password: &str) -> reqwest::Response {
         self.client
@@ -550,7 +529,6 @@ impl TestClient {
     }
 
     /// POST one `Content-Range` chunk to a server-returned upload URL.
-    ///
     /// The first chunk of a resumable upload is what reserves the declared
     /// total size against the user's quota (`temp_upload_ttl_hours` cleanup
     /// releases it later if the client never finishes), so tests need to drive
@@ -617,7 +595,6 @@ impl TestClient {
     }
 
     /// Step A of the download flow: the token URL that serves the raw bytes.
-    ///
     /// This endpoint only reads the file object, so it answers for a file whose
     /// blocks are not servable — which is what the layout tests rely on.
     async fn download_url(&self, token: &str, repo_id: &str, path: &str) -> String {
@@ -647,7 +624,6 @@ impl TestClient {
     }
 
     /// The same download, for a caller that has to see a transport error.
-    ///
     /// A response whose body the server abandons mid-stream ends when that
     /// connection is reset, and on macOS the reset also drops the head the
     /// client had already received: the truncation then surfaces as a transport
@@ -668,10 +644,6 @@ impl TestClient {
             .await
     }
 
-    /// List directory with optional `recursive` and `t` query parameters.
-    ///
-    /// `recursive`: Some("1") for recursive listing, None otherwise.
-    /// `t`: Some("f") for files only, Some("d") for dirs only, None for all.
     pub async fn list_dir_with_params(
         &self,
         token: &str,
@@ -728,14 +700,10 @@ impl TestClient {
             .unwrap()
     }
 
-    // ========== Web UI Endpoints ==========
-
-    /// GET a URL without any auth (for login page, etc.).
     pub async fn get_ui(&self, path: &str) -> reqwest::Response {
         self.client.get(self.url(path)).send().await.unwrap()
     }
 
-    /// POST form data without any auth (for login submission).
     pub async fn post_ui_form(&self, path: &str, fields: &[(&str, &str)]) -> reqwest::Response {
         self.client
             .post(self.url(path))
@@ -745,7 +713,6 @@ impl TestClient {
             .unwrap()
     }
 
-    /// POST multipart form data (for file upload).
     pub async fn post_ui_multipart(
         &self,
         path: &str,
@@ -759,7 +726,6 @@ impl TestClient {
             .unwrap()
     }
 
-    /// POST with multipart body and optional Bearer token.
     pub async fn post_multipart(
         &self,
         path: &str,
@@ -772,8 +738,6 @@ impl TestClient {
         }
         req.multipart(form).send().await.unwrap()
     }
-
-    // ========== Sync Protocol Endpoints ==========
 
     pub async fn protocol_version(&self) -> reqwest::Response {
         self.client
@@ -1044,9 +1008,6 @@ impl TestClient {
             .unwrap()
     }
 
-    // ========== Batch Operations ==========
-
-    /// POST /api2/repos/{repo_id}/fileops/delete/
     pub async fn batch_delete(
         &self,
         token: &str,
@@ -1067,7 +1028,6 @@ impl TestClient {
             .unwrap()
     }
 
-    /// POST /api2/repos/{repo_id}/fileops/delete/ with reloaddir=true
     pub async fn batch_delete_with_dir(
         &self,
         token: &str,
@@ -1088,7 +1048,6 @@ impl TestClient {
             .unwrap()
     }
 
-    /// POST /api2/repos/{repo_id}/fileops/copy/
     pub async fn batch_copy(
         &self,
         token: &str,
@@ -1115,7 +1074,6 @@ impl TestClient {
             .unwrap()
     }
 
-    /// POST /api2/repos/{repo_id}/fileops/move/
     pub async fn batch_move(
         &self,
         token: &str,
@@ -1143,7 +1101,6 @@ impl TestClient {
     }
 
     /// POST /api/v2.1/repos/async-batch-copy-item/
-    ///
     /// Starts an async batch copy and returns the response (containing task_id).
     pub async fn async_batch_copy(
         &self,
@@ -1173,7 +1130,6 @@ impl TestClient {
     }
 
     /// POST /api/v2.1/repos/async-batch-move-item/
-    ///
     /// Starts an async batch move and returns the response (containing task_id).
     pub async fn async_batch_move(
         &self,
@@ -1203,7 +1159,6 @@ impl TestClient {
     }
 
     /// GET /api/v2.1/query-copy-move-progress/?task_id=
-    ///
     /// Poll the progress of an async copy/move task.
     pub async fn query_copy_move_progress(&self, token: &str, task_id: &str) -> reqwest::Response {
         self.client
@@ -1217,8 +1172,6 @@ impl TestClient {
             .unwrap()
     }
 
-    // ========== Chunked Upload ==========
-
     /// POST a multipart form to an arbitrary URL (for upload-blks API calls).
     pub async fn post_multipart_url(
         &self,
@@ -1229,7 +1182,6 @@ impl TestClient {
     }
 
     /// The same POST, for a caller that has to see a transport error.
-    ///
     /// A server that refuses a large body before it reads it closes the
     /// connection while the client is still writing, which Windows reports as an
     /// aborted connection rather than as the response. A case that asserts *why*
@@ -1287,9 +1239,6 @@ impl TestClient {
             .unwrap()
     }
 
-    // ========== Star feature helpers ==========
-
-    /// POST /api/v2.1/starred-items/ with JSON body.
     pub async fn star_item(&self, token: &str, repo_id: &str, path: &str) -> reqwest::Response {
         self.post_json(
             "/api/v2.1/starred-items/",
@@ -1299,7 +1248,6 @@ impl TestClient {
         .await
     }
 
-    /// DELETE /api/v2.1/starred-items/?repo_id=...&path=...
     pub async fn unstar_item(&self, token: &str, repo_id: &str, path: &str) -> reqwest::Response {
         // URL-encode the path for the query parameter
         let encoded: String = path
@@ -1321,14 +1269,10 @@ impl TestClient {
         .await
     }
 
-    /// GET /api/v2.1/starred-items/
     pub async fn list_starred(&self, token: &str) -> reqwest::Response {
         self.get("/api/v2.1/starred-items/", Some(token)).await
     }
 
-    // ========== Activity / operation helpers ==========
-
-    /// GET /api/v2.1/activities/ with optional pagination.
     pub async fn get_activities(&self, token: &str, page: u32, per_page: u32) -> reqwest::Response {
         self.get(
             &format!("/api/v2.1/activities/?page={}&per_page={}", page, per_page),
@@ -1337,7 +1281,6 @@ impl TestClient {
         .await
     }
 
-    /// POST /api2/repos/{repo_id}/file/rename/ with JSON body (v2 JSON endpoint).
     pub async fn rename_file(
         &self,
         token: &str,
@@ -1353,7 +1296,6 @@ impl TestClient {
         .await
     }
 
-    /// POST /api2/repos/{src_repo}/file/move/ with JSON body (v2 JSON endpoint).
     pub async fn move_file(
         &self,
         token: &str,
@@ -1369,8 +1311,6 @@ impl TestClient {
         )
         .await
     }
-
-    // ========== Encrypted Repo Operations ==========
 
     /// POST /api2/repos/ with client-side encryption params (enc_version 2,
     /// no per-library salt).
@@ -1444,7 +1384,6 @@ impl TestClient {
             .await
     }
 
-    /// POST /api/v2.1/repos/{repo_id}/set-password/ with JSON body.
     pub async fn set_repo_password_v21(
         &self,
         token: &str,
@@ -1459,7 +1398,6 @@ impl TestClient {
         .await
     }
 
-    /// POST /api2/repos/{repo_id}/?op=setpassword with form body.
     pub async fn set_repo_password_v2(
         &self,
         token: &str,
@@ -1474,7 +1412,6 @@ impl TestClient {
         .await
     }
 
-    /// POST /api2/repos/{repo_id}/?op=checkpassword with magic form field.
     pub async fn check_repo_password_v2(
         &self,
         token: &str,
@@ -1489,7 +1426,6 @@ impl TestClient {
         .await
     }
 
-    /// PUT /api/v2.1/repos/{repo_id}/set-password/?operation=change-password
     pub async fn change_repo_password(
         &self,
         token: &str,
@@ -1508,7 +1444,6 @@ impl TestClient {
         .await
     }
 
-    /// POST /api/v2.1/repos/{repo_id}/zip-task/ — request a zip download token.
     pub async fn zip_task(
         &self,
         token: &str,
@@ -1527,7 +1462,6 @@ impl TestClient {
         .await
     }
 
-    /// GET /zip/{token} — download a zip archive for a previously requested token.
     pub async fn zip_download(&self, token: &str) -> reqwest::Response {
         self.client
             .get(self.url(&format!("/zip/{token}")))

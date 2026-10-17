@@ -2,7 +2,6 @@ mod common;
 
 use common::TestFixture;
 
-/// D.1 — v2.1 Repos
 #[tokio::test]
 async fn test_v21_repos_list() {
     let f = TestFixture::new().await;
@@ -40,7 +39,6 @@ async fn test_v21_repos_delete() {
     assert_eq!(resp.status(), 200);
 }
 
-/// D.2 — v2.1 Dir
 #[tokio::test]
 async fn test_v21_dir_delete_file() {
     let f = TestFixture::new().await;
@@ -68,15 +66,12 @@ async fn test_v21_dir_delete_file() {
 async fn test_v21_dir_delete_directory() {
     let f = TestFixture::new().await;
 
-    // Create a directory.
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/dir_to_delete")
         .await;
-    // seahub answers 201 Created for mkdir.
     assert_eq!(resp.status(), 201);
 
-    // Delete via the v2.1 DELETE endpoint.
     let resp = f
         .client
         .delete(
@@ -88,7 +83,6 @@ async fn test_v21_dir_delete_directory() {
     let text = resp.text().await.unwrap_or_default();
     assert_eq!(status, 200, "delete dir failed ({}): {}", status, text);
 
-    // Verify the directory no longer exists.
     let resp = f
         .client
         .get(
@@ -133,7 +127,6 @@ async fn test_v21_dir_list_with_thumbnails() {
         entries
     );
 
-    // Create subdirectory and verify listing is empty
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/subdir")
@@ -162,14 +155,12 @@ async fn test_v21_dir_list_with_thumbnails() {
 async fn test_v21_dir_list_after_create_dir() {
     let f = TestFixture::new().await;
 
-    // Create a directory via API
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/my_folder")
         .await;
     assert_eq!(resp.status(), 201);
 
-    // List via v2.1 — must show the directory
     let resp = f
         .client
         .get(
@@ -187,26 +178,22 @@ async fn test_v21_dir_list_after_create_dir() {
     );
 }
 
-/// v2.1 list_dir must return entries with Chinese directory names.
 #[tokio::test]
 async fn test_v21_dir_list_chinese_name() {
     let f = TestFixture::new().await;
 
-    // Upload a file
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "readme.txt", b"hello")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Create a directory with Chinese name (未命名文件夹 = "unnamed folder")
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/未命名文件夹")
         .await;
     assert_eq!(resp.status(), 201, "create dir with Chinese name failed");
 
-    // List via v2.1 — must show both the file and the Chinese-named directory
     let resp = f
         .client
         .get(
@@ -229,7 +216,6 @@ async fn test_v21_dir_list_chinese_name() {
     );
 }
 
-/// D.4 — v2.1 Share Links
 #[tokio::test]
 async fn test_v21_share_links_create() {
     let f = TestFixture::new().await;
@@ -259,7 +245,6 @@ async fn test_v21_share_links_list() {
     assert_eq!(resp.status(), 200);
 }
 
-/// D.5 — v2.1 Upload Links
 #[tokio::test]
 async fn test_v21_upload_links_create() {
     let f = TestFixture::new().await;
@@ -277,7 +262,6 @@ async fn test_v21_upload_links_create() {
     assert_eq!(resp.status(), 200);
 }
 
-/// D.6 — Activities (fixture creates repo which now logs a repo-create activity)
 #[tokio::test]
 async fn test_v21_activities_not_empty() {
     let f = TestFixture::new().await;
@@ -293,7 +277,6 @@ async fn test_v21_activities_not_empty() {
     );
 }
 
-/// D.8 — Batch operations
 #[tokio::test]
 async fn test_v21_batch_move_empty_source() {
     let f = TestFixture::new().await;
@@ -314,12 +297,10 @@ async fn test_v21_batch_move_empty_source() {
     assert_eq!(resp.status(), 200);
 }
 
-/// D.9 — Other v2.1
 #[tokio::test]
 async fn test_v21_file_create() {
     let f = TestFixture::new().await;
 
-    // Upload a file first so the repo has a head commit (root dir exists)
     let up = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "dummy.txt", b"seed")
@@ -339,7 +320,6 @@ async fn test_v21_file_create() {
         .await;
     assert_eq!(resp.status(), 200, "create empty file should succeed");
 
-    // Verify file exists via detail endpoint
     let detail = f
         .client
         .get(
@@ -353,7 +333,6 @@ async fn test_v21_file_create() {
     assert_eq!(body["size"], 0, "empty file should have size 0");
     assert_eq!(body["type"], "file");
 
-    // Create file in a subdirectory
     let mkdir = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/subdir")
@@ -387,7 +366,6 @@ async fn test_v21_file_create() {
 async fn test_v21_file_create_multipart() {
     let f = TestFixture::new().await;
 
-    // Upload a file first so the repo has a head commit
     let up = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "dummy.txt", b"seed")
@@ -411,7 +389,6 @@ async fn test_v21_file_create_multipart() {
         .unwrap();
     assert_eq!(resp.status(), 200, "multipart file create failed");
 
-    // Verify file exists
     let detail = f
         .client
         .get(
@@ -429,26 +406,22 @@ async fn test_v21_file_create_multipart() {
     );
 }
 
-/// GET /api/v2.1/repos/{repo_id}/dir/detail/?path=...
 #[tokio::test]
 async fn test_v21_dir_detail_returns_metadata() {
     let f = TestFixture::new().await;
 
-    // Seed: upload a file so the repo has a head commit
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", ".seed", b".")
         .await;
     assert!(resp.status().is_success());
 
-    // Create a subdirectory
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/mydir")
         .await;
     assert_eq!(resp.status(), 201);
 
-    // Get directory detail
     let resp = f
         .client
         .get(
@@ -464,7 +437,6 @@ async fn test_v21_dir_detail_returns_metadata() {
     assert!(body["mtime"].as_i64().unwrap_or(0) > 0);
     assert!(body["permission"].as_str().unwrap_or("") == "rw");
 
-    // Root path should return 400
     let resp = f
         .client
         .get(
@@ -474,7 +446,6 @@ async fn test_v21_dir_detail_returns_metadata() {
         .await;
     assert_eq!(resp.status(), 400, "root path should be rejected");
 
-    // Missing path should return 400
     let resp = f
         .client
         .get(
@@ -484,7 +455,6 @@ async fn test_v21_dir_detail_returns_metadata() {
         .await;
     assert_eq!(resp.status(), 400, "missing path should be rejected");
 
-    // Nonexistent path should return 404
     let resp = f
         .client
         .get(
@@ -500,20 +470,17 @@ async fn test_v21_dir_detail_returns_metadata() {
 
 /// Simulate the seadroid photo-backup flow and verify the v2.1 directory
 /// listing response contains all fields expected by the Seafile mobile clients.
-///
 /// Flow: multipart mkdir → upload-blks (block upload + commit) → v2.1 GET.
 #[tokio::test]
 async fn test_v21_dir_list_after_photo_backup_flow() {
     let f = TestFixture::new().await;
 
-    // ── 1. Seed: upload a file so the repo has a valid head commit ──────
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", ".seed", b".")
         .await;
     assert!(resp.status().is_success(), "seed upload failed");
 
-    // ── 2. Create a directory via multipart POST (like seadroid mkdirRemote) ──
     let resp = f
         .client
         .create_dir_multipart(&f.api_token, &f.repo_id, "/photos")
@@ -525,11 +492,9 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
         resp.text().await
     );
 
-    // ── 3. Upload a block and commit it (simulating seadroid upload-blks) ──
     let file_data = b"This is a test photo file content";
     let file_size: i64 = file_data.len() as i64;
 
-    // Compute SHA1 block id
     let block_id = {
         use sha1::{Digest, Sha1};
         let mut hasher = Sha1::new();
@@ -537,13 +502,11 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
         hex::encode(hasher.finalize())
     };
 
-    // Get upload-blks link
     let link_resp = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
     assert_eq!(link_resp.status(), 200);
     let upload_url: String = link_resp.json().await.unwrap();
     assert!(!upload_url.is_empty(), "upload URL should not be empty");
 
-    // Upload block to the URL
     let block_part =
         reqwest::multipart::Part::bytes(file_data.to_vec()).file_name(block_id.clone());
     let form = reqwest::multipart::Form::new().part("file", block_part);
@@ -555,7 +518,6 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
         resp.text().await
     );
 
-    // Commit the file
     let blockids_json = serde_json::to_string(&vec![block_id]).unwrap();
     let commit_form = reqwest::multipart::Form::new()
         .text("commitonly", "true")
@@ -571,7 +533,6 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
         resp.text().await
     );
 
-    // ── 4. List the root directory via v2.1 GET ─────────────────────
     let resp = f
         .client
         .get(
@@ -588,7 +549,6 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
         serde_json::to_string_pretty(&root_body).unwrap()
     );
 
-    // ── 5. Verify root-level fields ──────────────────────────────────
     assert!(root_body.get("user_perm").is_some(), "missing user_perm");
     assert!(root_body.get("dir_id").is_some(), "missing dir_id");
     assert!(
@@ -596,7 +556,6 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
         "root dirent_list should not be empty"
     );
 
-    // ── 6. Verify the "photos" directory entry in root ───────────────
     let photos = root_entries.iter().find(|e| e["name"] == "photos").unwrap();
     assert_eq!(photos["type"], "dir", "photos should be a directory");
     assert!(
@@ -621,7 +580,6 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
         "directory entry should NOT have size field"
     );
 
-    // ── 7. List /photos/ directory to verify the uploaded file ─────
     let resp = f
         .client
         .get(
@@ -641,7 +599,6 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
         serde_json::to_string_pretty(&photos_body).unwrap()
     );
 
-    // ── 8. Verify the file entry in /photos/ ────────────────────────
     let file_entry = photos_entries
         .iter()
         .find(|e| e["name"] == "IMG_2024.jpg")
@@ -669,7 +626,6 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
     // parent_dir must have trailing slash for non-root (seahub protocol contract)
     assert_eq!(file_entry["parent_dir"], "/photos/");
     assert_eq!(file_entry["starred"], false);
-    // File must have modifier fields
     assert!(
         file_entry.get("modifier_email").is_some(),
         "missing modifier_email"
@@ -692,14 +648,12 @@ async fn test_v21_dir_list_after_photo_backup_flow() {
 async fn test_v21_mkdir_response_format() {
     let f = TestFixture::new().await;
 
-    // Seed so the repo has a head commit.
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", ".seed_mkdir_resp", b".")
         .await;
     assert!(resp.status().is_success());
 
-    // Root-level dir.
     let resp = f
         .client
         .create_dir_multipart(&f.api_token, &f.repo_id, "/resp_format_test")
@@ -713,7 +667,6 @@ async fn test_v21_mkdir_response_format() {
         "mkdir must return the JSON string \"success\" (SupportResponseConverter)"
     );
 
-    // Subdirectory (single level, parent already exists).
     let resp = f
         .client
         .create_dir_multipart(&f.api_token, &f.repo_id, "/resp_format_test/child")
@@ -748,7 +701,6 @@ async fn test_v21_unauthorized() {
 async fn test_v21_block_download_link() {
     let f = TestFixture::new().await;
 
-    // Upload a file to create a block.
     let data = b"hello block download test data";
     let resp = f
         .client
@@ -756,7 +708,6 @@ async fn test_v21_block_download_link() {
         .await;
     assert!(resp.status().is_success());
 
-    // Get file detail to find the file's fs_id.
     let detail = f
         .client
         .get(
@@ -768,7 +719,6 @@ async fn test_v21_block_download_link() {
     let detail_body: serde_json::Value = detail.json().await.unwrap();
     let file_id = detail_body["id"].as_str().unwrap().to_string();
 
-    // Compute the block ID (SHA1 of the data, matching test upload logic).
     let block_id = {
         use sha1::{Digest, Sha1};
         let mut hasher = Sha1::new();
@@ -776,7 +726,6 @@ async fn test_v21_block_download_link() {
         hex::encode(hasher.finalize())
     };
 
-    // Call the block download link API.
     let resp = f
         .client
         .get(
@@ -796,7 +745,6 @@ async fn test_v21_block_download_link() {
     );
     assert!(url.contains(&block_id), "URL should contain block_id");
 
-    // Unauthorized access should fail.
     let resp = f
         .client
         .get(
@@ -814,9 +762,6 @@ async fn test_v21_block_download_link() {
     );
 }
 
-// ── Recursive directory listing tests (v2.1) ──────────────────────
-
-/// v2.1 recursive listing returns all entries in dirent_list with parent_dir.
 #[tokio::test]
 async fn test_v21_dir_recursive_basic() {
     let f = TestFixture::new().await;
@@ -845,7 +790,6 @@ async fn test_v21_dir_recursive_basic() {
     assert!(body.get("dir_id").is_some());
     let entries = body["dirent_list"].as_array().unwrap();
 
-    // Should contain: a.txt(file), subdir(dir), b.txt(file)
     assert_eq!(entries.len(), 3);
 
     let a_txt = entries.iter().find(|e| e["name"] == "a.txt").unwrap();
@@ -861,7 +805,6 @@ async fn test_v21_dir_recursive_basic() {
     assert_eq!(subdir["parent_dir"], "/");
 }
 
-/// v2.1 recursive with `t=f` returns only files.
 #[tokio::test]
 async fn test_v21_dir_recursive_type_filter_file() {
     let f = TestFixture::new().await;
@@ -891,7 +834,6 @@ async fn test_v21_dir_recursive_type_filter_file() {
     assert!(entries.iter().all(|e| e["type"] == "file"));
 }
 
-/// v2.1 recursive with `t=d` returns only dirs.
 #[tokio::test]
 async fn test_v21_dir_recursive_type_filter_dir() {
     let f = TestFixture::new().await;
@@ -922,12 +864,10 @@ async fn test_v21_dir_recursive_type_filter_dir() {
     assert_eq!(entries[0]["name"], "subdir");
 }
 
-/// v2.1 invalid recursive / t values return 400.
 #[tokio::test]
 async fn test_v21_dir_recursive_invalid_params() {
     let f = TestFixture::new().await;
 
-    // Invalid recursive
     let resp = f
         .client
         .get(
@@ -937,7 +877,6 @@ async fn test_v21_dir_recursive_invalid_params() {
         .await;
     assert_eq!(resp.status(), 400);
 
-    // Invalid t
     let resp = f
         .client
         .get(

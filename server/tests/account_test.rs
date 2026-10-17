@@ -3,12 +3,10 @@ mod common;
 use common::{TestFixture, TestServer, create_test_user};
 use serde_json::Value;
 
-/// GET /api2/account/info/ returns the display name when set.
 #[tokio::test]
 async fn test_account_info_returns_display_name() {
     let f = TestFixture::no_repo("test@example.com", "password").await;
 
-    // Set a display name directly in DB
     use sea_orm::{ActiveModelTrait, EntityTrait, Set};
     let user_record = infra::entity::user::Entity::find_by_id(f.user_id)
         .one(&*f.server.db)
@@ -19,7 +17,6 @@ async fn test_account_info_returns_display_name() {
     active.display_name = Set(Some("Alice".to_string()));
     active.update(&*f.server.db).await.unwrap();
 
-    // GET /api2/account/info/
     let resp = f
         .client
         .get("/api2/account/info/", Some(&f.api_token))
@@ -34,7 +31,6 @@ async fn test_account_info_returns_display_name() {
     assert!(body["total"].is_number());
 }
 
-/// GET /api2/account/info/ falls back to the local part of the email when
 /// neither display_name nor name is set.
 #[tokio::test]
 async fn test_account_info_falls_back_to_email_local_part() {
@@ -51,12 +47,10 @@ async fn test_account_info_falls_back_to_email_local_part() {
     assert_eq!(resp.status(), 200);
 
     let body: Value = resp.json().await.unwrap();
-    // No display_name or name set -> falls back to local part
     assert_eq!(body["name"], "john.doe");
     assert_eq!(body["nickname"], "john.doe");
 }
 
-/// GET /api2/account/info/ uses the name column when display_name is not set.
 #[tokio::test]
 async fn test_account_info_uses_name_when_display_name_unset() {
     let server = TestServer::start().await;
@@ -89,12 +83,10 @@ async fn test_account_info_uses_name_when_display_name_unset() {
     assert_eq!(body["nickname"], "Bob");
 }
 
-/// PUT /api2/account/info/ updates the display name.
 #[tokio::test]
 async fn test_put_account_info_updates_display_name() {
     let f = TestFixture::no_repo("test@example.com", "password").await;
 
-    // PUT with new display name
     let resp = f
         .client
         .put_json(
@@ -108,7 +100,6 @@ async fn test_put_account_info_updates_display_name() {
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["name"], "My Display Name");
 
-    // Verify it persists via GET
     let resp = f
         .client
         .get("/api2/account/info/", Some(&f.api_token))
@@ -117,13 +108,11 @@ async fn test_put_account_info_updates_display_name() {
     assert_eq!(body["name"], "My Display Name");
 }
 
-/// PUT /api2/account/info/ with an empty name clears the display name,
 /// falling back to the email local part.
 #[tokio::test]
 async fn test_put_account_info_empty_name_clears_display_name() {
     let f = TestFixture::no_repo("test@example.com", "password").await;
 
-    // First set a display name
     f.client
         .put_json(
             "/api2/account/info/",
@@ -132,7 +121,6 @@ async fn test_put_account_info_empty_name_clears_display_name() {
         )
         .await;
 
-    // Then clear it with empty string
     let resp = f
         .client
         .put_json(
@@ -144,11 +132,9 @@ async fn test_put_account_info_empty_name_clears_display_name() {
     assert_eq!(resp.status(), 200);
 
     let body: Value = resp.json().await.unwrap();
-    // Falls back to local part of email
     assert_eq!(body["name"], "test");
 }
 
-/// GET /api2/account/info/ returns 401 without auth.
 #[tokio::test]
 async fn test_account_info_unauthorized() {
     let server = TestServer::start().await;
@@ -167,12 +153,10 @@ async fn test_account_info_unauthorized() {
     assert_eq!(resp.status(), 401);
 }
 
-/// GET /api2/account/info/ returns total = -1 when storage_quota = 0 (unlimited).
 #[tokio::test]
 async fn test_account_info_quota_unlimited() {
     let f = TestFixture::no_repo("test@example.com", "password").await;
 
-    // Set storage_quota to 0 (explicitly unlimited)
     use sea_orm::{ActiveModelTrait, EntityTrait, Set};
     let user_record = infra::entity::user::Entity::find_by_id(f.user_id)
         .one(&*f.server.db)
@@ -193,12 +177,10 @@ async fn test_account_info_quota_unlimited() {
     assert_eq!(body["total"], -1);
 }
 
-/// GET /api2/account/info/ returns the user's storage_quota when set to a specific value.
 #[tokio::test]
 async fn test_account_info_quota_user_specific() {
     let f = TestFixture::no_repo("test@example.com", "password").await;
 
-    // Set storage_quota to 1 GB
     use sea_orm::{ActiveModelTrait, EntityTrait, Set};
     let user_record = infra::entity::user::Entity::find_by_id(f.user_id)
         .one(&*f.server.db)
@@ -219,7 +201,6 @@ async fn test_account_info_quota_user_specific() {
     assert_eq!(body["total"], 1_073_741_824);
 }
 
-/// GET /api2/account/info/ returns global quota when storage_quota is None.
 #[tokio::test]
 async fn test_account_info_quota_fallback_global() {
     let f = TestFixture::no_repo("test@example.com", "password").await;
@@ -235,9 +216,7 @@ async fn test_account_info_quota_fallback_global() {
     assert_eq!(body["total"], 10_737_418_240_i64); // 10 GB from test config
 }
 
-// ============================================================================
 // Account registration requires admin authentication
-// ============================================================================
 
 /// Security: anonymous registration via POST /api2/accounts/ must be rejected
 /// (it previously bypassed the invitation system and rate limits entirely).
@@ -286,7 +265,6 @@ async fn test_register_admin_allowed() {
     let client = server.client();
     let uid = create_test_user(&server.db, "admin@example.com", "password").await;
 
-    // Promote to admin.
     let user_record = infra::entity::user::Entity::find_by_id(uid)
         .one(&*server.db)
         .await
@@ -309,7 +287,6 @@ async fn test_register_admin_allowed() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // The new account exists.
     let resp = client.login("created@example.com", "secret123").await;
     assert_eq!(resp.status(), 200);
 }

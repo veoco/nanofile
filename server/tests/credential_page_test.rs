@@ -42,7 +42,6 @@ async fn page(client: &reqwest::Client, base_url: &str) -> String {
 }
 
 /// The page with its `<script>` blocks removed.
-///
 /// The base template publishes the whole translation dictionary as a JSON data
 /// block, so searching the raw body for an i18n key matches whether or not
 /// anything actually rendered it — an assertion written that way passes
@@ -92,7 +91,6 @@ fn hidden_value(body: &str, kind: &str, field: &str) -> Option<String> {
 async fn every_kind_of_credential_is_listed() {
     let f = TestFixture::new().await;
 
-    // A client that reports a device, so there is one to show.
     let resp = f
         .client
         .login_multipart("test@example.com", "password")
@@ -156,11 +154,9 @@ fn test_device() -> server::domain::device::PeerStamp {
 #[tokio::test]
 async fn a_client_without_device_details_is_still_listed() {
     let f = TestFixture::new().await;
-    // The fixture's own login sends only a username and password.
     let client = login_client(&f).await;
     let body = visible(&page(&client, &f.server.base_url).await);
 
-    // It shows up in the client section, unnamed, rather than nowhere.
     let clients_at = body
         .find("Desktop and mobile apps")
         .expect("the client heading");
@@ -388,7 +384,6 @@ async fn a_sync_token_can_be_revoked_by_id() {
         .unwrap();
     assert_eq!(resp.status(), 302);
 
-    // The row is gone from the database, not just from the page.
     assert!(
         f.server
             .repos
@@ -516,7 +511,6 @@ async fn another_accounts_credential_cannot_be_revoked() {
     );
 }
 
-/// A form post without the CSRF token must not revoke anything.
 #[tokio::test]
 async fn revocation_requires_the_csrf_token() {
     let f = TestFixture::new().await;

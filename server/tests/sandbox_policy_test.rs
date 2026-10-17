@@ -73,8 +73,6 @@ fn the_resource_bound_is_an_invariant() {
     let (mode, marker) = scripted_worker(directory.path());
     let profile = Profile::Documents;
 
-    // ── A bound host without the files layer runs the feature ─────────────
-    //
     // The script reports `limits`: the resource bound and no files layer, which
     // is what a Windows host that cannot create its container gives. Nothing
     // asks for more than the bound, so the feature runs rather than being
@@ -111,8 +109,6 @@ fn the_resource_bound_is_an_invariant() {
     );
     fs::remove_file(&marker).expect("clear the request mark");
 
-    // ── A host that gives more still runs it ──────────────────────────────
-    //
     // The default report is `partial`: the bound and the files layer. More
     // confinement is never a reason to refuse the feature.
     set_mode(&mode, "");
@@ -128,8 +124,6 @@ fn the_resource_bound_is_an_invariant() {
         report.detail
     );
 
-    // ── No bound at all is refused ────────────────────────────────────────
-    //
     // Every confinement layer in place and no memory or CPU limit: the one shape
     // nothing may run, because a parser with no bound is the failure this module
     // exists to prevent.
@@ -161,7 +155,6 @@ fn the_resource_bound_is_an_invariant() {
         "no request may reach a worker that established no bound"
     );
 
-    // ── The switch refuses whatever the host gives ────────────────────────
     set_mode(&mode, "limits");
     worker::configure_requirement(Requirement::new(false));
 

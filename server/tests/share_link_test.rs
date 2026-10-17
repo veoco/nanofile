@@ -2,12 +2,10 @@ mod common;
 
 use common::{AuthLimits, TestFixture, create_test_user};
 
-/// H.1 — POST /api/v2.1/share-links/ → GET /f/{token}/ download
 #[tokio::test]
 async fn test_share_link_create_and_download() {
     let f = TestFixture::new().await;
 
-    // Upload a file to share
     let up = f
         .client
         .upload_file(
@@ -20,7 +18,6 @@ async fn test_share_link_create_and_download() {
         .await;
     assert!(up.status().is_success(), "upload failed");
 
-    // Create share link via v2.1 API
     let resp = f
         .client
         .post_json(
@@ -37,7 +34,6 @@ async fn test_share_link_create_and_download() {
     let token = body["token"].as_str().unwrap().to_string();
     assert!(!token.is_empty(), "token must not be empty");
 
-    // Download via shared link with ?dl=1 (no auth, no password)
     let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
     assert_eq!(dl.status(), 200, "shared download should succeed");
     let content = dl.bytes().await.unwrap();
@@ -68,7 +64,6 @@ async fn test_share_link_download_range() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // Full download → 200 + Content-Length + Accept-Ranges.
     let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
     assert_eq!(dl.status(), 200);
     let headers = dl.headers().clone();
@@ -81,7 +76,6 @@ async fn test_share_link_download_range() {
         Some("bytes")
     );
 
-    // Range request → 206 + exact slice.
     let dl = f
         .client
         .get_with_range(&format!("/f/{}/?dl=1", token), None, "bytes=20-29")
@@ -101,14 +95,12 @@ async fn test_share_link_download_range() {
 async fn test_share_link_with_password() {
     let f = TestFixture::new().await;
 
-    // Upload a file (plain filename, no leading slash)
     let up = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "secret.txt", b"secret data")
         .await;
     assert!(up.status().is_success(), "upload failed");
 
-    // Create password-protected share link via v2.1 API
     let resp = f
         .client
         .post_json(
@@ -125,7 +117,6 @@ async fn test_share_link_with_password() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // Download WITHOUT password → should return 200 (HTML password form)
     let dl = f.client.get(&format!("/f/{}/", token), None).await;
     assert_eq!(dl.status(), 200, "must return 200 with password form");
     let body = dl.text().await.unwrap();
@@ -151,7 +142,6 @@ async fn test_share_link_with_password() {
         "a query-string password must not unlock the link"
     );
 
-    // Download with WRONG password via the header → password form with error.
     let wrong = reqwest::Client::builder()
         .no_proxy()
         .build()
@@ -168,7 +158,6 @@ async fn test_share_link_with_password() {
         "should show error message"
     );
 
-    // Download with CORRECT password via the header (?dl=1) → should succeed
     let raw_client = reqwest::Client::builder().no_proxy().build().unwrap();
     let ok = raw_client
         .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
@@ -218,7 +207,6 @@ async fn test_share_link_password_form_sets_cookie_not_url() {
         .build()
         .unwrap();
 
-    // Submitting the form posts the password in the body, not the URL.
     let post = browser
         .post(format!("{}/f/{}/", f.server.base_url, token))
         .form(&[("password", "mypassword")])
@@ -241,7 +229,6 @@ async fn test_share_link_password_form_sets_cookie_not_url() {
         "the unlock must be handed over as a cookie"
     );
 
-    // The stored cookie alone unlocks the download.
     let dl = browser
         .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
         .send()
@@ -408,7 +395,6 @@ async fn test_share_link_expired() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // Download should fail because link is expired
     let dl = f.client.get(&format!("/f/{}/", token), None).await;
     assert_eq!(dl.status(), 404, "expired link must return 404");
 }
@@ -418,7 +404,6 @@ async fn test_share_link_expired() {
 async fn test_share_link_delete_v21_own() {
     let f = TestFixture::new().await;
 
-    // Upload a file to share
     let up = f
         .client
         .upload_file(
@@ -431,7 +416,6 @@ async fn test_share_link_delete_v21_own() {
         .await;
     assert!(up.status().is_success(), "upload failed");
 
-    // Create share link via v2.1
     let resp = f
         .client
         .post_json(
@@ -447,11 +431,9 @@ async fn test_share_link_delete_v21_own() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // Confirm download works first
     let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
     assert_eq!(dl.status(), 200, "download should work before delete");
 
-    // Creator deletes via v2.1 — should succeed
     let del = f
         .client
         .delete(
@@ -465,7 +447,6 @@ async fn test_share_link_delete_v21_own() {
         "creator should be able to delete own link"
     );
 
-    // Verify it's gone
     let dl = f.client.get(&format!("/f/{}/", token), None).await;
     assert_eq!(dl.status(), 404);
 }
@@ -476,7 +457,6 @@ async fn test_share_link_delete_v21_other() {
     let f = TestFixture::new().await;
     let db = &*f.server.db;
 
-    // Upload a file to share
     let up = f
         .client
         .upload_file(
@@ -489,14 +469,12 @@ async fn test_share_link_delete_v21_other() {
         .await;
     assert!(up.status().is_success(), "upload failed");
 
-    // Create a second user
     let _user2_id = create_test_user(db, "user2@test.com", "password2").await;
     let resp2 = f.client.login("user2@test.com", "password2").await;
     assert_eq!(resp2.status(), 200);
     let token2_val: serde_json::Value = resp2.json().await.unwrap();
     let api_token2 = token2_val["token"].as_str().unwrap().to_string();
 
-    // User1 creates a share link via v2.1
     let resp = f
         .client
         .post_json(
@@ -512,7 +490,6 @@ async fn test_share_link_delete_v21_other() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // User2 tries to delete via v2.1 — should fail (not their link)
     let del = f
         .client
         .delete(
@@ -522,7 +499,6 @@ async fn test_share_link_delete_v21_other() {
         .await;
     assert_eq!(del.status(), 404, "other user's delete must return 404");
 
-    // Verify link still exists (user1 can still download)
     let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
     assert_eq!(dl.status(), 200, "link should still be valid");
 }
@@ -532,14 +508,12 @@ async fn test_share_link_delete_v21_other() {
 async fn test_share_link_delete_v1_own() {
     let f = TestFixture::new().await;
 
-    // Upload a file
     let up = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "v1delete.txt", b"v1 test")
         .await;
     assert!(up.status().is_success(), "upload failed");
 
-    // Use v2.1 API to create, then test v1 delete
     let resp = f
         .client
         .post_json(
@@ -556,7 +530,6 @@ async fn test_share_link_delete_v1_own() {
     let token = body["token"].as_str().unwrap().to_string();
     assert!(!token.is_empty());
 
-    // Creator deletes via v1 API (api2/shared-links/{token})
     let del = f
         .client
         .delete(&format!("/api2/shared-links/{}", token), Some(&f.api_token))
@@ -569,7 +542,6 @@ async fn test_share_link_delete_v1_own() {
 async fn test_share_link_encrypted_repo_blocked() {
     let f = TestFixture::new().await;
 
-    // Create an encrypted repo
     let repo_id = uuid::Uuid::new_v4().to_string();
     let magic = infra::crypto::key_derivation::generate_magic(&repo_id, "testpass", 2, "").unwrap();
     let random_key =
@@ -581,7 +553,6 @@ async fn test_share_link_encrypted_repo_blocked() {
         .await;
     assert_eq!(resp.status(), 201, "create encrypted repo failed");
 
-    // Try to create share link — should fail
     let resp = f
         .client
         .post_json(
@@ -613,7 +584,6 @@ async fn test_share_link_invalid_token() {
 async fn test_share_link_list_response_fields() {
     let f = TestFixture::new().await;
 
-    // Create a share link
     let resp = f
         .client
         .post_json(
@@ -627,7 +597,6 @@ async fn test_share_link_list_response_fields() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // List share links and verify response fields
     let list = f
         .client
         .get("/api/v2.1/share-links/", Some(&f.api_token))
@@ -691,7 +660,6 @@ async fn test_upload_link_create_with_password() {
     let token = body["token"].as_str().unwrap().to_string();
     assert!(!token.is_empty());
 
-    // List upload links and verify has_password field
     let list = f
         .client
         .get("/api/v2.1/upload-links/", Some(&f.api_token))
@@ -711,14 +679,12 @@ async fn test_upload_link_create_with_password() {
 async fn test_share_link_update_password() {
     let f = TestFixture::new().await;
 
-    // Upload a file
     let up = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "pw_update.txt", b"pw update")
         .await;
     assert!(up.status().is_success());
 
-    // Create share link with initial password
     let resp = f
         .client
         .post_json(
@@ -735,7 +701,6 @@ async fn test_share_link_update_password() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // Verify old password works (header, since the query string is ignored)
     let raw_client = reqwest::Client::builder().no_proxy().build().unwrap();
     let ok = raw_client
         .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
@@ -745,7 +710,6 @@ async fn test_share_link_update_password() {
         .unwrap();
     assert_eq!(ok.status(), 200);
 
-    // PUT update to new password
     let upd = f
         .client
         .put_json(
@@ -756,7 +720,6 @@ async fn test_share_link_update_password() {
         .await;
     assert_eq!(upd.status(), 200, "update password should succeed");
 
-    // Old password should no longer work
     let old = raw_client
         .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
         .header("X-Seafile-Sharelink-Password", "oldpass")
@@ -770,7 +733,6 @@ async fn test_share_link_update_password() {
         "old password should be rejected"
     );
 
-    // New password should work
     let ok = raw_client
         .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
         .header("X-Seafile-Sharelink-Password", "newpass")
@@ -782,7 +744,6 @@ async fn test_share_link_update_password() {
     assert_eq!(&content[..], b"pw update");
 }
 
-/// H.12 — PUT clear password on share link (set to null)
 #[tokio::test]
 async fn test_share_link_clear_password() {
     let f = TestFixture::new().await;
@@ -793,7 +754,6 @@ async fn test_share_link_clear_password() {
         .await;
     assert!(up.status().is_success());
 
-    // Create share link with password
     let resp = f
         .client
         .post_json(
@@ -810,7 +770,6 @@ async fn test_share_link_clear_password() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // PUT clear password (null)
     let upd = f
         .client
         .put_json(
@@ -821,7 +780,6 @@ async fn test_share_link_clear_password() {
         .await;
     assert_eq!(upd.status(), 200, "clear password should succeed");
 
-    // Should now be accessible without password
     let ok = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
     assert_eq!(ok.status(), 200);
     let content = ok.bytes().await.unwrap();
@@ -839,7 +797,6 @@ async fn test_share_link_update_expiry() {
         .await;
     assert!(up.status().is_success());
 
-    // Create share link with 1-day expiry
     let resp = f
         .client
         .post_json(
@@ -856,11 +813,9 @@ async fn test_share_link_update_expiry() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // Verify accessible now
     let ok = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
     assert_eq!(ok.status(), 200);
 
-    // PUT clear expiry (null → never expires)
     let upd = f
         .client
         .put_json(
@@ -872,7 +827,6 @@ async fn test_share_link_update_expiry() {
     assert_eq!(upd.status(), 200, "clear expiry should succeed");
 }
 
-/// H.14 — PUT update share link by non-owner returns 404
 #[tokio::test]
 async fn test_share_link_update_other_fails() {
     let f = TestFixture::new().await;
@@ -890,7 +844,6 @@ async fn test_share_link_update_other_fails() {
         .await;
     assert!(up.status().is_success());
 
-    // Create share link as user1
     let resp = f
         .client
         .post_json(
@@ -906,14 +859,12 @@ async fn test_share_link_update_other_fails() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // Create a second user
     let _user2_id = common::create_test_user(db, "user2-upd@test.com", "password2").await;
     let resp2 = f.client.login("user2-upd@test.com", "password2").await;
     assert_eq!(resp2.status(), 200);
     let token2_val: serde_json::Value = resp2.json().await.unwrap();
     let api_token2 = token2_val["token"].as_str().unwrap().to_string();
 
-    // User2 tries to update user1's link
     let upd = f
         .client
         .put_json(
@@ -925,7 +876,6 @@ async fn test_share_link_update_other_fails() {
     assert_eq!(upd.status(), 404, "non-owner update must return 404");
 }
 
-/// H.15 — PUT update non-existent token returns 404
 #[tokio::test]
 async fn test_share_link_update_nonexistent() {
     let f = TestFixture::new().await;
@@ -941,8 +891,6 @@ async fn test_share_link_update_nonexistent() {
     assert_eq!(upd.status(), 404, "non-existent token must return 404");
 }
 
-/// H.16 — Desktop client creates a share link via form-encoded POST
-/// (`repo_id`, `path`, optional `password`, `expiration_time`).
 #[tokio::test]
 async fn test_share_link_create_form_encoded_desktop() {
     let f = TestFixture::new().await;
@@ -1071,7 +1019,6 @@ async fn test_share_dir_view_paginates_large_folder() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap();
 
-    // Page 1 shows at most 200 entries and a "next" link.
     let page1 = f
         .client
         .get(&format!("/d/{}/", token), None)
@@ -1086,7 +1033,6 @@ async fn test_share_dir_view_paginates_large_folder() {
     );
     assert!(page1.contains("page=2"), "page 1 should link to page 2");
 
-    // Page 2 shows the remaining entries and a "previous" link back to page 1.
     let page2 = f
         .client
         .get(&format!("/d/{}/?page=2", token), None)
@@ -1104,8 +1050,6 @@ async fn test_share_dir_view_paginates_large_folder() {
         "page 2 should link back to page 1"
     );
 }
-
-// ==================== Security: repo-filtered link enumeration ====================
 
 /// Create a second user, grant them `permission` on the repo, and return their
 /// login token.
@@ -1137,7 +1081,6 @@ async fn test_share_link_repo_filter_only_returns_own() {
 
     let ro_token = shared_member_token(&f, "readonly-links@test.com", "r").await;
 
-    // Read-only member sees an empty list (no owner tokens leaked).
     let list = f
         .client
         .get(
@@ -1149,7 +1092,6 @@ async fn test_share_link_repo_filter_only_returns_own() {
     let links = list.json::<serde_json::Value>().await.unwrap();
     assert_eq!(links.as_array().unwrap().len(), 0);
 
-    // Owner still sees their own link.
     let list = f
         .client
         .get(
@@ -1251,7 +1193,6 @@ async fn test_rw_member_sees_only_own_links() {
 
     let rw_token = shared_member_token(&f, "rw-links@test.com", "rw").await;
 
-    // Owner creates a share link.
     let resp = f
         .client
         .post_json(
@@ -1262,7 +1203,6 @@ async fn test_rw_member_sees_only_own_links() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // RW member creates their own share + upload links.
     let resp = f
         .client
         .post_json(
@@ -1282,7 +1222,6 @@ async fn test_rw_member_sees_only_own_links() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // RW member's repo-filtered lists contain their own links, not the owner's.
     let list = f
         .client
         .get(
@@ -1331,7 +1270,6 @@ async fn test_share_download_rate_limited() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap().to_string();
 
-    // 3 downloads within the per-minute window pass, the 4th is rejected.
     for i in 0..3 {
         let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
         assert_eq!(dl.status(), 200, "download {i} should succeed");
@@ -1351,14 +1289,12 @@ async fn test_share_download_rate_limited() {
 async fn test_share_link_disabled_globally() {
     let f = TestFixture::new_with_share_link_disabled().await;
 
-    // Upload a file — uploads themselves are unaffected by the share switch.
     let up = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "disabled.txt", b"data")
         .await;
     assert!(up.status().is_success(), "upload failed");
 
-    // Creating a share link is rejected.
     let resp = f
         .client
         .post_json(
@@ -1373,7 +1309,6 @@ async fn test_share_link_disabled_globally() {
         "share-link creation should be forbidden"
     );
 
-    // Creating an upload link is rejected too.
     let resp = f
         .client
         .post_json(
@@ -1388,7 +1323,6 @@ async fn test_share_link_disabled_globally() {
         "upload-link creation should be forbidden"
     );
 
-    // server-info advertises the disable marker.
     let resp = f.client.get("/api2/server-info/", None).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -1428,7 +1362,6 @@ async fn test_share_link_disabled_blocks_existing_links() {
         .await
         .expect("failed to insert pre-existing share link");
 
-    // Accessing the folder share is rejected while disabled.
     let resp = f.client.get(&format!("/d/{}/", token), None).await;
     assert_eq!(
         resp.status(),
@@ -1436,8 +1369,6 @@ async fn test_share_link_disabled_blocks_existing_links() {
         "existing share link should be inaccessible"
     );
 }
-
-// ==================== Security: a link dies with its creator's access ==================
 
 /// Deactivating the account that created a link revokes the link too, through
 /// the same creator-access check (here via the admin service, which is what the
@@ -1474,7 +1405,6 @@ async fn test_links_are_revoked_when_the_creator_is_deactivated() {
         200
     );
 
-    // Deactivate the owner's account.
     let svc = server::service::admin::AdminUserService::new(f.server.repos.clone());
     svc.update_user(f.user_id, false, false, None)
         .await

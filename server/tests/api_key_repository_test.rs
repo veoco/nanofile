@@ -53,7 +53,6 @@ async fn create_and_look_up_a_key_with_its_bindings() {
     assert_eq!(lookup.bindings[0].repo_id, f.repo_id);
     assert_eq!(lookup.bindings[0].permission, "rw");
 
-    // The stored value is a hash: the plaintext must not be recoverable.
     assert_ne!(lookup.key.key_hash, RAW);
     assert_eq!(
         lookup.key.key_hash,
@@ -81,7 +80,6 @@ async fn revocation_takes_effect_immediately() {
         .create(create_params(&f, RAW, "ci"))
         .await
         .expect("create key");
-    // Populate the lookup cache, then revoke.
     assert!(
         repos
             .api_key
@@ -107,7 +105,6 @@ async fn revocation_takes_effect_immediately() {
             .is_none(),
         "a revoked key must stop resolving without waiting for the cache TTL"
     );
-    // A different user cannot revoke someone else's key.
     let other = repos
         .api_key
         .create(create_params(&f, RAW, "ci"))
@@ -287,7 +284,6 @@ async fn deleting_a_library_drops_its_bindings_and_unbound_keys() {
             .expect("drop bindings"),
         1
     );
-    // The bound key lost its only library and is gone; the all-repos key stays.
     assert!(
         repos
             .api_key
@@ -307,14 +303,12 @@ async fn removing_a_member_drops_their_bindings_for_that_library() {
     let f = TestFixture::new().await;
     let repos = &f.server.repos;
 
-    // The library owner's key must be untouched by another member's removal.
     repos
         .api_key
         .create(create_params(&f, RAW, "owner-key"))
         .await
         .expect("create owner key");
 
-    // A second user with their own key on the same library.
     let other_id =
         common::create_test_user(f.server.db.as_ref(), "member@example.com", "password123").await;
     let other_raw = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

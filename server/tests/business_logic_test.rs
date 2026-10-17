@@ -1,10 +1,5 @@
-//! Business logic vulnerability regression tests.
-//!
-//! Verifies the authorization, rate-limiting, and input-validation fixes
-//! applied for V-1 through V-7.  Each test validates a specific access
-//! control or input guard that was previously missing.
-//!
-//! See also: plan file at .claude/plans/rippling-booping-kahan.md
+//! Authorization, rate-limiting and input-validation regression tests: each test pins a
+//! specific access-control or input guard (V-1 through V-7).
 
 mod common;
 
@@ -12,7 +7,6 @@ use common::{TestFixture, create_test_user};
 use sea_orm::{ActiveModelTrait, EntityTrait};
 
 /// `?op=setpassword` must require access to the library.
-///
 /// It verifies the supplied password against the stored `magic` and reports the
 /// outcome through the status code, so without a membership check it is a
 /// password oracle for any signed-in user who knows a library id.
@@ -47,7 +41,6 @@ async fn test_set_repo_password_requires_repo_access() {
 async fn test_async_batch_rejects_empty_and_oversized_dirents() {
     let f = TestFixture::new().await;
 
-    // Empty list: previously indexed `src_dirents[0]` and panicked.
     let resp = f
         .client
         .post_json(
@@ -68,7 +61,6 @@ async fn test_async_batch_rejects_empty_and_oversized_dirents() {
         "empty dirent list must be a client error"
     );
 
-    // Oversized list: bounded independently of the body limit.
     let many: Vec<String> = (0..1500).map(|i| format!("f{i}.txt")).collect();
     let resp = f
         .client
@@ -87,10 +79,8 @@ async fn test_async_batch_rejects_empty_and_oversized_dirents() {
     assert_eq!(resp.status(), 400, "oversized dirent list must be rejected");
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // V-2: Upload-link / update-link — verify that a user without write
 // permission cannot obtain an upload or update URL.
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_upload_link_requires_write_permission() {
@@ -101,7 +91,6 @@ async fn test_upload_link_requires_write_permission() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let attacker_token = body["token"].as_str().unwrap();
 
-    // Non-owner tries GET /api2/repos/{id}/upload-link/
     let resp = f
         .client
         .get(
@@ -115,7 +104,6 @@ async fn test_upload_link_requires_write_permission() {
         "non-owner must be forbidden from getting upload link"
     );
 
-    // Non-owner tries GET /api2/repos/{id}/update-link/
     let resp = f
         .client
         .get(
@@ -134,7 +122,6 @@ async fn test_upload_link_requires_write_permission() {
 async fn test_upload_link_owner_can_get() {
     let f = TestFixture::new().await;
 
-    // Owner can still get upload link.
     let resp = f
         .client
         .get(
@@ -162,16 +149,13 @@ async fn test_upload_link_owner_can_get() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // V-3 / V-4: Share links — verify that a user without read permission
 // cannot create a share link for a repo (both v1 and v2.1 APIs).
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_create_share_link_requires_read_permission_v1() {
     let f = TestFixture::new().await;
 
-    // Upload a file so there's something to share.
     let resp = f
         .client
         .upload_file(
@@ -194,7 +178,6 @@ async fn test_create_share_link_requires_read_permission_v1() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let attacker_token = body["token"].as_str().unwrap();
 
-    // Non-member tries POST /api/v2.1/share-links/ (v2.1 is the active API).
     let resp = f
         .client
         .post_json(
@@ -223,7 +206,6 @@ async fn test_create_share_link_requires_read_permission_v21() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let attacker_token = body["token"].as_str().unwrap();
 
-    // Non-member tries POST /api/v2.1/share-links/ (v2.1).
     let resp = f
         .client
         .post_json(
@@ -246,7 +228,6 @@ async fn test_create_share_link_requires_read_permission_v21() {
 async fn test_create_share_link_owner_succeeds_v21() {
     let f = TestFixture::new().await;
 
-    // Upload a file first.
     let resp = f
         .client
         .upload_file(
@@ -259,7 +240,6 @@ async fn test_create_share_link_owner_succeeds_v21() {
         .await;
     assert!(resp.status().is_success(), "upload must succeed");
 
-    // Owner can still create share links via v2.1 API.
     let resp = f
         .client
         .post_json(
@@ -278,19 +258,15 @@ async fn test_create_share_link_owner_succeeds_v21() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // V-5: Download token — verify that a download token cannot be used
 // after the user's read permission has been revoked.
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_download_token_revoked_permission() {
     let f = TestFixture::new().await;
 
-    // Create a second user to grant access to.
     let uid2 = create_test_user(&f.server.db, "friend@test.com", "password").await;
 
-    // Owner uploads a file.
     let resp = f
         .client
         .upload_file(
@@ -303,10 +279,8 @@ async fn test_download_token_revoked_permission() {
         .await;
     assert!(resp.status().is_success());
 
-    // Owner grants user2 read-only access.
     common::add_repo_member(&f.server.db, &f.repo_id, uid2, "r").await;
 
-    // User2 logs in and obtains a download token (step A of download flow).
     let resp = f.client.login("friend@test.com", "password").await;
     let body: serde_json::Value = resp.json().await.unwrap();
     let friend_token = body["token"].as_str().unwrap();
@@ -330,7 +304,6 @@ async fn test_download_token_revoked_permission() {
     // The download URL is a full absolute URL like
     // "http://127.0.0.1:{port}/download-api/{token}".  Use a raw reqwest
     // client to fetch it directly (TestClient would double-prefix base_url).
-    //
     // The URL must stop working: without the membership row the read-permission
     // re-check refuses it.
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
@@ -342,13 +315,10 @@ async fn test_download_token_revoked_permission() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // V-6: 2FA disable — verify rate limiting on incorrect password attempts.
-//
 // 2FA management lives in the Web UI (`/settings/two-factor/disable/`); the
 // nanofile-specific `/api2/2fa/*` API was removed (it had no official-client
 // or first-party consumer).
-// ─────────────────────────────────────────────────────────────────────
 
 /// Log in through the browser flow so the session cookie is present.
 async fn web_login_client(f: &TestFixture) -> reqwest::Client {
@@ -411,7 +381,6 @@ async fn enable_2fa_row(f: &TestFixture) {
 #[tokio::test]
 async fn test_disable_2fa_rate_limited() {
     let f = TestFixture::new().await;
-    // Log in *before* enabling 2FA (an enabled row makes web login demand OTP).
     let client = web_login_client(&f).await;
     let csrf = web_csrf_token(&client, &f.server.base_url).await;
     enable_2fa_row(&f).await;
@@ -457,12 +426,10 @@ async fn test_disable_2fa_rate_limited() {
 #[tokio::test]
 async fn test_disable_2fa_rate_limit_cleared_on_success() {
     let f = TestFixture::new().await;
-    // Log in *before* enabling 2FA (an enabled row makes web login demand OTP).
     let client = web_login_client(&f).await;
     let csrf = web_csrf_token(&client, &f.server.base_url).await;
     enable_2fa_row(&f).await;
 
-    // A few wrong attempts, staying under the limit.
     for i in 0..3 {
         let wrong_pass = format!("wrong_{i}");
         let resp = client
@@ -480,7 +447,6 @@ async fn test_disable_2fa_rate_limit_cleared_on_success() {
         assert_eq!(resp.status(), 200, "wrong password should re-render");
     }
 
-    // The correct password succeeds.
     let resp = client
         .post(format!(
             "{}/settings/two-factor/disable/",
@@ -499,7 +465,6 @@ async fn test_disable_2fa_rate_limit_cleared_on_success() {
         "correct password should succeed after a few wrong tries"
     );
 
-    // The Web UI disable path removes the 2FA record entirely.
     let twofa = infra::entity::user_2fa::Entity::find_by_id(f.user_id)
         .one(f.server.db.as_ref())
         .await
@@ -510,16 +475,13 @@ async fn test_disable_2fa_rate_limit_cleared_on_success() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // V-7: Filename validation — verify that filenames containing `/` are
 // rejected in both the API and web-UI upload paths.
-// ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_upload_file_with_slash_in_name_rejected() {
     let f = TestFixture::new().await;
 
-    // Upload via POST /api2/repos/{repo_id}/file/ with a filename containing '/'.
     let file_part = reqwest::multipart::Part::bytes(b"content".to_vec())
         .file_name("foo/bar.txt".to_string())
         .mime_str("application/octet-stream")
@@ -547,7 +509,6 @@ async fn test_upload_file_with_slash_in_name_rejected() {
         resp.status()
     );
 
-    // Also test with other invalid characters.
     let file_part = reqwest::multipart::Part::bytes(b"content".to_vec())
         .file_name("test<file.txt".to_string())
         .mime_str("application/octet-stream")
@@ -574,7 +535,6 @@ async fn test_upload_file_with_slash_in_name_rejected() {
 async fn test_upload_file_normal_name_succeeds() {
     let f = TestFixture::new().await;
 
-    // Normal filename should still work.
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "normal.txt", b"hello")
@@ -586,16 +546,11 @@ async fn test_upload_file_normal_name_succeeds() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// expired token cleanup removes stale rows.
-// ─────────────────────────────────────────────────────────────────────
-
 #[tokio::test]
 async fn test_delete_expired_tokens() {
     let server = common::TestServer::start().await;
     let now = chrono::Utc::now().timestamp();
 
-    // An expired SSO login token...
     infra::entity::sso_login_token::ActiveModel {
         id: sea_orm::NotSet,
         token: sea_orm::Set("a".repeat(64)),
@@ -614,7 +569,6 @@ async fn test_delete_expired_tokens() {
     .await
     .unwrap();
 
-    // ...and a stale client-login token (no expiry column; older than an hour).
     infra::entity::client_login_token::ActiveModel {
         token: sea_orm::Set("b".repeat(64)),
         username: sea_orm::Set("x@example.com".to_string()),

@@ -13,7 +13,6 @@ use std::time::Duration;
 use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, Set};
 use server::setup::{self, SetupDefaults, SetupState};
 
-/// The token the form carries in its URL.
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
 struct Harness {
@@ -166,7 +165,6 @@ impl Drop for Harness {
 async fn the_page_is_gated_by_the_token_and_never_leaks_it() {
     let harness = Harness::start().await;
 
-    // The open port answers, but only with a notice that carries no credential.
     let root = harness
         .client
         .get(format!("{}/", harness.base_url))
@@ -180,7 +178,6 @@ async fn the_page_is_gated_by_the_token_and_never_leaks_it() {
         "the root page must not hand out the setup token"
     );
 
-    // A wrong token is not even a page.
     let wrong = harness
         .client
         .get(format!("{}/setup/not-the-token", harness.base_url))
@@ -189,7 +186,6 @@ async fn the_page_is_gated_by_the_token_and_never_leaks_it() {
         .unwrap();
     assert_eq!(wrong.status(), 404);
 
-    // A POST with a wrong token is refused before anything is read.
     let wrong = harness
         .client
         .post(format!("{}/setup/not-the-token", harness.base_url))
@@ -407,7 +403,6 @@ async fn an_account_that_already_exists_is_kept_instead_of_replaced() {
     let body = response.text().await.unwrap();
     assert!(body.contains("existing account(s) were kept"), "{body}");
 
-    // Still one account, and it is the one that was already there.
     let count = infra::entity::user::Entity::find()
         .count(&db)
         .await
@@ -419,6 +414,5 @@ async fn an_account_that_already_exists_is_kept_instead_of_replaced() {
     let result = harness.state.result().await.expect("the setup completed");
     assert_eq!(result.created_email, None);
     assert_eq!(result.accounts_kept, 1);
-    // The configuration is still written: that is the whole point of the retry.
     assert!(harness.config_file().is_file());
 }

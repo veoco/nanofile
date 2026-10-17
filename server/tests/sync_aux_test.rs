@@ -2,7 +2,6 @@ mod common;
 
 use common::TestFixture;
 
-/// C.2.1 — GET /seafhttp/repo/{repo_id}/jwt-token
 #[tokio::test]
 async fn test_jwt_token_success() {
     let f = TestFixture::new_with_notification().await;
@@ -33,7 +32,6 @@ async fn test_jwt_token_unauthorized() {
     assert_eq!(resp.status(), 400);
 }
 
-/// C.2.2 — POST /seafhttp/repo/folder-perm
 #[tokio::test]
 async fn test_folder_perm_returns_list() {
     let f = TestFixture::new().await;
@@ -79,7 +77,6 @@ async fn test_folder_perm_unauthorized() {
 }
 
 /// Regression: folder-perm must accept POST without Content-Type header.
-///
 /// seaf-daemon sends POST requests via curl without setting Content-Type.
 /// Before the fix, axum's Json extractor would reject these with 415.
 #[tokio::test]
@@ -104,7 +101,6 @@ async fn test_folder_perm_accepts_no_content_type() {
     assert!(!arr[0]["user_perms"].as_array().unwrap().is_empty());
 }
 
-/// C.2.3 — GET /seafhttp/accessible-repos
 #[tokio::test]
 async fn test_accessible_repos_returns_list() {
     let f = TestFixture::new().await;

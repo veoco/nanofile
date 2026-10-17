@@ -20,10 +20,8 @@ async fn set_user_quota(f: &TestFixture, quota: Option<i64>) {
 #[tokio::test]
 async fn test_quota_allows_under_limit() {
     let f = TestFixture::new().await;
-    // Set a generous quota: 1 GB.
     set_user_quota(&f, Some(1_073_741_824)).await;
 
-    // Upload a small file — should succeed.
     let data = b"hello world";
     let resp = f
         .client
@@ -40,10 +38,8 @@ async fn test_quota_allows_under_limit() {
 #[tokio::test]
 async fn test_quota_rejects_over_limit() {
     let f = TestFixture::new().await;
-    // Set a tiny quota: 1 KB.
     set_user_quota(&f, Some(1024)).await;
 
-    // Upload a file larger than 1 KB — should fail with 443.
     let data = vec![0u8; 2048];
     let resp = f
         .client
@@ -139,7 +135,6 @@ async fn test_sync_quota_check_endpoint_rejects() {
 #[tokio::test]
 async fn test_quota_exact_boundary() {
     let f = TestFixture::new().await;
-    // Set quota to exactly the file size.
     set_user_quota(&f, Some(11)).await; // "hello world" = 11 bytes
 
     let data = b"hello world";
@@ -156,7 +151,6 @@ async fn test_quota_exact_boundary() {
 }
 
 /// Count block files on disk.
-///
 /// Blocks are stored per library:
 /// `{block_dir}/repos/<sha1(repo_id)>/<2hex>/<block_id>`. The `.repo_id` marker
 /// lives directly in the library directory, so only the two-hex-digit prefix
@@ -188,7 +182,6 @@ async fn test_quota_failure_cleans_up_new_blocks() {
 
     let blocks_before = count_blocks_on_disk(&f.server.block_dir);
 
-    // Upload a file larger than 1 KB — should fail with 443.
     let data = vec![0u8; 2048];
     let resp = f
         .client
@@ -196,8 +189,6 @@ async fn test_quota_failure_cleans_up_new_blocks() {
         .await;
     assert_eq!(resp.status(), 443, "over-quota upload should be rejected");
 
-    // The newly-written blocks must have been cleaned up — no orphan blocks
-    // left on disk.
     let blocks_after = count_blocks_on_disk(&f.server.block_dir);
     assert_eq!(
         blocks_after, blocks_before,
@@ -244,7 +235,6 @@ async fn test_sync_put_block_rejects_over_quota() {
     let f = TestFixture::new().await;
     set_user_quota(&f, Some(10)).await; // 10 bytes quota
 
-    // Upload one small file to consume the quota.
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "small.txt", b"0123456789")
@@ -255,7 +245,6 @@ async fn test_sync_put_block_rejects_over_quota() {
         "small upload under quota should succeed"
     );
 
-    // Now try to put a block via sync — should be rejected with 443.
     let block_data = b"some block data that exceeds remaining quota";
     let block_id = infra::crypto::fs_id::sha1_hex(block_data);
     let resp = f
@@ -342,7 +331,6 @@ async fn committing_a_file_releases_its_block_reservation() {
         resp.status()
     );
 
-    // The budget is now genuinely full.
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "c.bin", &vec![5u8; 400])
@@ -368,7 +356,6 @@ async fn resumable_upload_reserves_its_declared_size() {
     assert_eq!(token_resp.status(), 200, "upload-link failed");
     let upload_url: String = token_resp.json().await.unwrap();
 
-    // Declare 512 KB, send only ten bytes, and never send the rest.
     let declared_total = 512 * 1024;
     let resp = f
         .client

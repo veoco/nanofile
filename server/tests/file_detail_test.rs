@@ -6,7 +6,6 @@ use common::TestFixture;
 async fn test_file_detail_success() {
     let f = TestFixture::new().await;
 
-    // Upload a file first
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "test.txt", b"hello world")
@@ -17,7 +16,6 @@ async fn test_file_detail_success() {
         resp.status()
     );
 
-    // Get file detail
     let resp = f
         .client
         .get(
@@ -69,14 +67,12 @@ async fn test_file_detail_not_found() {
 async fn test_file_detail_directory_returns_400() {
     let f = TestFixture::new().await;
 
-    // Create a dir
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/subdir")
         .await;
     assert!(resp.status().is_success());
 
-    // Requesting detail on a directory should fail
     let resp = f
         .client
         .get(

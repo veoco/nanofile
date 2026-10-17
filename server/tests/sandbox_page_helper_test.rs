@@ -16,7 +16,6 @@ mod common;
 
 use common::TestServer;
 
-/// Sign in through the Web UI form and keep the session cookies.
 async fn ui_login(server: &TestServer, email: &str, password: &str) -> reqwest::Client {
     let client = reqwest::Client::builder()
         .cookie_store(true)
@@ -37,7 +36,6 @@ async fn ui_login(server: &TestServer, email: &str, password: &str) -> reqwest::
     client
 }
 
-/// The rendered sandbox page.
 async fn sandbox_page(server: &TestServer, client: &reqwest::Client) -> String {
     let resp = client
         .get(format!(
@@ -51,7 +49,6 @@ async fn sandbox_page(server: &TestServer, client: &reqwest::Client) -> String {
     resp.text().await.unwrap()
 }
 
-/// The markup of one band, from its section up to the next band's.
 fn band<'a>(html: &'a str, id: &str) -> &'a str {
     let marker = format!("data-sandbox-profile=\"{id}\"");
     let start = html
@@ -65,7 +62,6 @@ fn band<'a>(html: &'a str, id: &str) -> &'a str {
     &rest[..end]
 }
 
-/// How many times `needle` appears in `html`.
 fn count(html: &str, needle: &str) -> usize {
     html.matches(needle).count()
 }
@@ -75,8 +71,6 @@ fn count(html: &str, needle: &str) -> usize {
 #[tokio::test]
 async fn a_helper_that_cannot_run_keeps_the_media_band_and_its_items() {
     common::sandbox::enable_real_worker();
-    // A path that is not there: absolute, so nothing resolves it further, and
-    // unique per run, so a leftover file cannot make it runnable.
     let absent =
         std::env::temp_dir().join(format!("nanofile-absent-helper-{}", uuid::Uuid::new_v4()));
     assert!(!absent.exists(), "the fixture must name a file that is not");
@@ -111,7 +105,6 @@ async fn a_helper_that_cannot_run_keeps_the_media_band_and_its_items() {
         );
     }
 
-    // The state names the failure, and the reason is the report's own.
     let t = server::i18n::I18n::get(Some("en"));
     assert!(
         media.contains(&format!(
@@ -129,8 +122,6 @@ async fn a_helper_that_cannot_run_keeps_the_media_band_and_its_items() {
         "the reason does not come from the helper's own self-test: {media}"
     );
 
-    // The process item still cannot apply to this profile, and the row still says
-    // so: a failure of the job does not turn the item into a gap.
     assert!(
         media.contains("data-sandbox-media-process"),
         "the media row does not say the process item does not apply: {media}"
@@ -140,7 +131,5 @@ async fn a_helper_that_cannot_run_keeps_the_media_band_and_its_items() {
         "no media item is marked as not applying: {media}"
     );
 
-    // The master switch is untouched by any of this: it is the page's one setting
-    // and it appears exactly once, in the form.
     assert_eq!(count(&html, "data-sandbox-switch"), 1);
 }

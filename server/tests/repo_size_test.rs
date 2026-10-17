@@ -92,7 +92,6 @@ async fn commit(
 }
 
 /// Put a commit pointing at an arbitrary root fs id, then advance HEAD to it.
-///
 /// `sync_commit` always stores a directory object (even for an empty tree), but
 /// an official client represents "no entries" as the `EMPTY_SHA1` sentinel, which
 /// has no object at all — that case needs its own path.
@@ -176,7 +175,6 @@ async fn sync_file_delete_subtracts_its_size() {
     .await;
     assert_eq!(repo_size(&f).await, 15);
 
-    // The new tree no longer lists a.txt.
     let _c2 = commit(&f, &[("b.txt", b"01234", REG)], &[], Some(&c1)).await;
     assert_eq!(repo_size(&f).await, 5, "a deletion must subtract its bytes");
     assert_eq!(account_usage(&f).await, 5);
@@ -210,8 +208,6 @@ async fn sync_emptied_root_object_subtracts_everything() {
     let c1 = commit(&f, &[("a.txt", b"01234", REG)], &[("d", &inner)], None).await;
     assert_eq!(repo_size(&f).await, 15);
 
-    // An empty root still names a stored directory object (our helper always
-    // saves one), so the deletion is found by diffing the two roots.
     let _c2 = commit(&f, &[], &[], Some(&c1)).await;
     assert_eq!(repo_size(&f).await, 0);
     assert_eq!(account_usage(&f).await, 0);
@@ -323,7 +319,6 @@ async fn sync_merge_that_deletes_a_head_file_subtracts_it() {
     .await;
     assert_eq!(repo_size(&f).await, 30);
 
-    // HEAD moves on and gains a file.
     let _b = commit(
         &f,
         &[
@@ -406,7 +401,6 @@ async fn deleting_through_the_client_frees_quota() {
         .await;
     assert_eq!(resp.status(), 443, "usage must count against the quota");
 
-    // Delete the file the way a desktop client does.
     let _c2 = commit(&f, &[], &[], Some(&c1)).await;
     assert_eq!(repo_size(&f).await, 0);
     assert_eq!(account_usage(&f).await, 0);

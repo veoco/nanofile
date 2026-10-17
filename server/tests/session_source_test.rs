@@ -145,8 +145,6 @@ async fn the_view_on_website_handoff_is_a_browser_session() {
     assert_eq!(sessions.len(), 1, "the handoff session was created");
     assert_eq!(sessions[0].user_agent.as_deref(), Some(agent));
 
-    // It is a browser session, not a client device: nothing about it should
-    // reach the list of connected devices.
     assert!(sessions[0].platform.is_none());
     assert!(sessions[0].device_id.is_none());
 }

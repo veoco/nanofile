@@ -4,15 +4,12 @@ use base::common::CommitData;
 use common::{TestFixture, TestServer, create_test_user, get_sync_token};
 use infra::serialization::pack_fs;
 
-/// Root-level file/folder leak test — directly tests the FS tree after
-/// nested file creation via the API (which calls the same FileOps functions
-/// as the UI upload handler). If this test passes, the core logic is correct
-/// and the bug is in ensure_parent_dirs or the HTTP layer.
+/// Root-level leak test: nested uploads through the API, then the FS tree is inspected
+/// directly, so a failure isolates ensure_parent_dirs/HTTP from FileOps.
 #[tokio::test]
 async fn test_api_nested_upload_no_root_leak() {
     let f = TestFixture::new().await;
 
-    // ── Add root-level content ──
     f.client
         .upload_file(
             &f.api_token,
@@ -35,7 +32,6 @@ async fn test_api_nested_upload_no_root_leak() {
         )
         .await;
 
-    // ── Create nested dirs via API (same as ensure_parent_dirs per-level) ──
     f.client
         .create_dir(&f.api_token, &f.repo_id, "/UploadedFolder")
         .await;
@@ -43,7 +39,6 @@ async fn test_api_nested_upload_no_root_leak() {
         .create_dir(&f.api_token, &f.repo_id, "/UploadedFolder/SubDir")
         .await;
 
-    // ── Upload files ──
     f.client
         .upload_file(
             &f.api_token,
@@ -63,7 +58,6 @@ async fn test_api_nested_upload_no_root_leak() {
         )
         .await;
 
-    // ── Verify tree ──
     let root_resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     let root_entries: Vec<serde_json::Value> = root_resp.json().await.unwrap();
     let root_names: Vec<&str> = root_entries
@@ -125,7 +119,6 @@ async fn test_api_nested_upload_no_root_leak() {
     assert!(sd_names.contains(&"nested_file.txt"));
 }
 
-/// Get root_fs_id from the head commit (replaces former dir_entry root lookup).
 async fn get_root_fs_id(f: &TestFixture) -> String {
     let head_resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
     let head_id: String = head_resp.json::<serde_json::Value>().await.unwrap()["head_commit_id"]
@@ -146,7 +139,6 @@ async fn test_download_sync_flow() {
     let server = TestServer::start().await;
     let client = server.client();
 
-    // Setup: create user and repo
     create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
     let resp = client.login("test@example.com", "password123").await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -155,33 +147,28 @@ async fn test_download_sync_flow() {
     let repo_id = common::create_test_repo(&client, api_token, "Sync Test").await;
     let sync_token = get_sync_token(&client, api_token, &repo_id).await;
 
-    // Upload a file via Web API to populate the server
     let file_content = b"Hello, Seafile sync!";
     let resp = client
         .upload_file(api_token, &repo_id, "/", "test.txt", file_content)
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Step 1: Check protocol version
     let resp = client.protocol_version().await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["version"].as_i64().unwrap(), 2);
 
-    // Step 2: Check head-commits-multi
     let resp = client.head_commits_multi(&[&repo_id]).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body.as_object().unwrap().contains_key(&repo_id));
 
-    // Step 3: Get HEAD commit
     let resp = client.get_head_commit(&sync_token, &repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["is_corrupted"].as_i64().unwrap(), 0);
     let head_commit_id = body["head_commit_id"].as_str().unwrap().to_string();
 
-    // Step 4: Get commit object (binary)
     let resp = client
         .get_commit(&sync_token, &repo_id, &head_commit_id)
         .await;
@@ -189,7 +176,6 @@ async fn test_download_sync_flow() {
     let commit_data = resp.bytes().await.unwrap();
     assert!(!commit_data.is_empty());
 
-    // Step 5: Get FS ID list
     let resp = client
         .fs_id_list(&sync_token, &repo_id, &head_commit_id)
         .await;
@@ -203,14 +189,12 @@ async fn test_download_sync_flow() {
         .collect();
     assert!(!fs_ids.is_empty());
 
-    // Step 6: Pack FS objects
     let fs_id_refs: Vec<&str> = fs_ids.iter().map(|s| s.as_str()).collect();
     let resp = client.pack_fs(&sync_token, &repo_id, &fs_id_refs).await;
     assert_eq!(resp.status(), 200);
     let packed_fs = resp.bytes().await.unwrap();
     assert!(!packed_fs.is_empty());
 
-    // Step 7: Check blocks
     let resp = client
         .check_blocks(
             &sync_token,
@@ -223,7 +207,6 @@ async fn test_download_sync_flow() {
     let missing = body.as_array().unwrap();
     assert_eq!(missing.len(), 1); // well-formed but non-existent block is missing
 
-    // Step 8: Verify file download
     let resp = client.download_file(api_token, &repo_id, "/test.txt").await;
     assert_eq!(resp.status(), 200);
     let downloaded = resp.bytes().await.unwrap();
@@ -235,7 +218,6 @@ async fn test_upload_sync_flow() {
     let server = TestServer::start().await;
     let client = server.client();
 
-    // Setup
     create_test_user(server.db.as_ref(), "test@example.com", "password123").await;
     let resp = client.login("test@example.com", "password123").await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -244,7 +226,6 @@ async fn test_upload_sync_flow() {
     let repo_id = common::create_test_repo(&client, api_token, "Upload Test").await;
     let sync_token = get_sync_token(&client, api_token, &repo_id).await;
 
-    // Step 1: Get server HEAD (new repo has zero-commit as head)
     let resp = client.get_head_commit(&sync_token, &repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -254,9 +235,8 @@ async fn test_upload_sync_flow() {
         "0000000000000000000000000000000000000000"
     );
 
-    // Step 2: Create a commit locally and push it. A newly-created repo has an
-    // empty root (EMPTY_SHA1), so no root object needs to be uploaded; a random
-    // root would (correctly) fail root validation at update_branch.
+    // A new repo's head is the zero-commit, so its root is EMPTY_SHA1: no root object
+    // needs uploading, and a random root would fail root validation at update_branch.
     let commit_id = "a".repeat(40);
     let root_id = "0".repeat(40);
     let now = chrono::Utc::now().timestamp();
@@ -282,13 +262,11 @@ async fn test_upload_sync_flow() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Update branch
     let resp = client
         .update_branch(&sync_token, &repo_id, &commit_id)
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Verify HEAD is updated
     let resp = client.get_head_commit(&sync_token, &repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -296,12 +274,7 @@ async fn test_upload_sync_flow() {
     assert_eq!(body["head_commit_id"].as_str().unwrap(), commit_id);
 }
 
-// ============================================================
-// Regression tests for path normalization (limitation fix #3)
-// ============================================================
-
-/// Regression: download_file must accept paths without leading slash.
-/// URL-encoded paths like ?p=file.txt should work the same as ?p=/file.txt
+/// Downloads must accept paths with or without a leading slash, including URL-encoded ones.
 #[tokio::test]
 async fn test_regression_download_path_normalization() {
     let server = TestServer::start().await;
@@ -314,7 +287,6 @@ async fn test_regression_download_path_normalization() {
 
     let repo_id = common::create_test_repo(&client, api_token, "PathNorm").await;
 
-    // Upload a file
     let resp = client
         .upload_file(
             api_token,
@@ -326,14 +298,12 @@ async fn test_regression_download_path_normalization() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Download with leading slash (should work)
     let resp = client
         .download_file(api_token, &repo_id, "/myfile.txt")
         .await;
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.bytes().await.unwrap().as_ref(), b"path normalize test");
 
-    // Download WITHOUT leading slash (the regression fix)
     let resp = client
         .download_file(api_token, &repo_id, "myfile.txt")
         .await;
@@ -341,7 +311,6 @@ async fn test_regression_download_path_normalization() {
     assert_eq!(resp.bytes().await.unwrap().as_ref(), b"path normalize test");
 }
 
-/// Regression: list_dir must normalize paths without leading slash.
 #[tokio::test]
 async fn test_regression_list_dir_path_normalization() {
     let server = TestServer::start().await;
@@ -354,7 +323,6 @@ async fn test_regression_list_dir_path_normalization() {
 
     let repo_id = common::create_test_repo(&client, api_token, "ListNorm").await;
 
-    // Upload files to root
     client
         .upload_file(api_token, &repo_id, "/", "a.txt", b"a")
         .await;
@@ -362,22 +330,14 @@ async fn test_regression_list_dir_path_normalization() {
         .upload_file(api_token, &repo_id, "/", "b.txt", b"b")
         .await;
 
-    // List root with leading slash
     let resp = client.list_dir(api_token, &repo_id, "/").await;
     assert_eq!(resp.status(), 200);
 
-    // List root WITHOUT leading slash via urlencoding for empty
-    // (pass the right path, the normalization happens server-side)
     let resp = client.list_dir(api_token, &repo_id, "").await;
     assert_eq!(resp.status(), 200);
 }
 
-// ============================================================
-// Regression tests for ancestor tree walk (limitation fix #1)
-// ============================================================
-
-/// Regression: uploading a file to a nested subdirectory must update
-/// all ancestor directories up to root, preserving the full tree.
+/// Nested uploads must update every ancestor directory up to root, preserving the full tree.
 #[tokio::test]
 async fn test_regression_nested_upload_preserves_full_tree() {
     let server = TestServer::start().await;
@@ -390,13 +350,11 @@ async fn test_regression_nested_upload_preserves_full_tree() {
 
     let repo_id = common::create_test_repo(&client, api_token, "TreeTest").await;
 
-    // Create nested directory structure
     client.create_dir(api_token, &repo_id, "/docs").await;
     client.create_dir(api_token, &repo_id, "/docs/api").await;
     client.create_dir(api_token, &repo_id, "/src").await;
 
-    // Upload README to root FIRST (critical edge case — root upload
-    // before subdir content)
+    // Root upload FIRST, before the subdir exists: the edge case that lost root entries.
     let resp = client
         .upload_file(api_token, &repo_id, "/", "README.md", b"readme")
         .await;
@@ -409,13 +367,11 @@ async fn test_regression_nested_upload_preserves_full_tree() {
         body
     );
 
-    // Upload a file deep in the tree
     let resp = client
         .upload_file(api_token, &repo_id, "/docs/api", "api.txt", b"api docs")
         .await;
     assert_eq!(resp.status(), 200, "upload api.txt failed");
 
-    // Upload another file in a different branch
     let resp = client
         .upload_file(api_token, &repo_id, "/src", "main.rs", b"fn main() {}")
         .await;
@@ -428,7 +384,6 @@ async fn test_regression_nested_upload_preserves_full_tree() {
         body
     );
 
-    // All files must be downloadable
     let resp = client
         .download_file(api_token, &repo_id, "/README.md")
         .await;
@@ -454,8 +409,7 @@ async fn test_regression_nested_upload_preserves_full_tree() {
     assert_eq!(body.as_bytes(), b"fn main() {}");
 }
 
-/// Regression: verify the commit's root_id points to the real root
-/// directory containing ALL entries (not just a subtree).
+/// The commit's root_id must point at the real root holding ALL entries, not one subtree.
 #[tokio::test]
 async fn test_regression_commit_root_contains_full_tree() {
     let server = TestServer::start().await;
@@ -469,7 +423,6 @@ async fn test_regression_commit_root_contains_full_tree() {
     let repo_id = common::create_test_repo(&client, api_token, "CRootTest").await;
     let sync_token = get_sync_token(&client, api_token, &repo_id).await;
 
-    // Create nested structure with multiple files in different dirs
     client.create_dir(api_token, &repo_id, "/lib").await;
     client.create_dir(api_token, &repo_id, "/bin").await;
 
@@ -483,18 +436,15 @@ async fn test_regression_commit_root_contains_full_tree() {
         .upload_file(api_token, &repo_id, "/bin", "app", b"binary")
         .await;
 
-    // Get the head commit
     let resp = client.get_head_commit(&sync_token, &repo_id).await;
     let body: serde_json::Value = resp.json().await.unwrap();
     let head_id = body["head_commit_id"].as_str().unwrap();
 
-    // Get the commit and extract root_id
     let resp = client.get_commit(&sync_token, &repo_id, head_id).await;
     let data = resp.bytes().await.unwrap();
     let commit: serde_json::Value = serde_json::from_slice(&data).unwrap();
     let root_id = commit["root_id"].as_str().unwrap();
 
-    // Fetch the root fs_object and verify it contains all top-level entries
     let resp = client.pack_fs(&sync_token, &repo_id, &[root_id]).await;
     let packed = resp.bytes().await.unwrap();
     let entries = infra::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
@@ -509,7 +459,6 @@ async fn test_regression_commit_root_contains_full_tree() {
         .map(|e| e["name"].as_str().unwrap())
         .collect();
 
-    // Root must contain all three top-level entries
     assert!(
         dirent_names.contains(&"top.txt"),
         "root must contain top.txt"
@@ -519,8 +468,7 @@ async fn test_regression_commit_root_contains_full_tree() {
     assert_eq!(dirent_names.len(), 3, "root must have exactly 3 entries");
 }
 
-/// Regression: uploading to root AFTER subdirectories exist must not
-/// lose existing subdirectory entries.
+/// Uploading to root after subdirectories exist must not lose the existing entries.
 #[tokio::test]
 async fn test_regression_root_upload_preserves_subdirs() {
     let server = TestServer::start().await;
@@ -534,18 +482,15 @@ async fn test_regression_root_upload_preserves_subdirs() {
     let repo_id = common::create_test_repo(&client, api_token, "RootSub").await;
     let sync_token = get_sync_token(&client, api_token, &repo_id).await;
 
-    // Create subdirectory and upload file there FIRST
     client.create_dir(api_token, &repo_id, "/subdir").await;
     client
         .upload_file(api_token, &repo_id, "/subdir", "deep.txt", b"deep content")
         .await;
 
-    // NOW upload a file to root — must NOT lose /subdir
     client
         .upload_file(api_token, &repo_id, "/", "root_file.txt", b"root content")
         .await;
 
-    // Both files must be accessible
     let resp = client
         .download_file(api_token, &repo_id, "/subdir/deep.txt")
         .await;
@@ -558,7 +503,6 @@ async fn test_regression_root_upload_preserves_subdirs() {
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.bytes().await.unwrap().as_ref(), b"root content");
 
-    // Verify commit root has both entries
     let resp = client.get_head_commit(&sync_token, &repo_id).await;
     let body: serde_json::Value = resp.json().await.unwrap();
     let head_id = body["head_commit_id"].as_str().unwrap();
@@ -587,8 +531,7 @@ async fn test_regression_root_upload_preserves_subdirs() {
     assert!(names.contains(&"subdir"), "root must have subdir directory");
 }
 
-/// Regression: multiple sibling directories at the same level must all
-/// be preserved when uploading files to one of them.
+/// Every sibling directory must survive uploads into one of the others.
 #[tokio::test]
 async fn test_regression_sibling_dirs_preserved() {
     let server = TestServer::start().await;
@@ -601,24 +544,19 @@ async fn test_regression_sibling_dirs_preserved() {
 
     let repo_id = common::create_test_repo(&client, api_token, "Sibling").await;
 
-    // Create three sibling directories under root
     for d in &["/a", "/b", "/c"] {
         client.create_dir(api_token, &repo_id, d).await;
     }
 
-    // Upload a file to /b
     client
         .upload_file(api_token, &repo_id, "/b", "target.txt", b"in b")
         .await;
 
-    // Upload file to root — must keep /a, /b, /c
     client
         .upload_file(api_token, &repo_id, "/", "root.txt", b"root")
         .await;
 
-    // All directories and files should be accessible
     for path in &["/root.txt", "/b/target.txt", "/a", "/c"] {
-        // Try download for files, list for dirs
         if path.ends_with(".txt") {
             let resp = client.download_file(api_token, &repo_id, path).await;
             assert_eq!(resp.status(), 200, "should find {}", path);
@@ -626,12 +564,7 @@ async fn test_regression_sibling_dirs_preserved() {
     }
 }
 
-// ============================================================
-// Regression tests for file replacement (limitation fix #2)
-// ============================================================
-
-/// Regression: uploading with replace=1 must overwrite existing file
-/// content without creating duplicates or returning errors.
+/// replace=1 must overwrite content without creating a duplicate or erroring.
 #[tokio::test]
 async fn test_regression_replace_overwrites_content() {
     let server = TestServer::start().await;
@@ -644,29 +577,24 @@ async fn test_regression_replace_overwrites_content() {
 
     let repo_id = common::create_test_repo(&client, api_token, "ReplTest").await;
 
-    // Upload original file without replace
     let resp = client
         .upload_file_with_replace(api_token, &repo_id, "/", "data.txt", b"original v1", false)
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Verify original content
     let resp = client.download_file(api_token, &repo_id, "/data.txt").await;
     assert_eq!(resp.bytes().await.unwrap().as_ref(), b"original v1");
 
-    // Replace with new content
     let resp = client
         .upload_file_with_replace(api_token, &repo_id, "/", "data.txt", b"REPLACED v2!", true)
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Must return NEW content
     let resp = client.download_file(api_token, &repo_id, "/data.txt").await;
     assert_eq!(resp.bytes().await.unwrap().as_ref(), b"REPLACED v2!");
 }
 
-/// Regression: uploading with replace=1 on a non-existent path should
-/// simply create the file (no error).
+/// replace=1 on a missing path creates the file.
 #[tokio::test]
 async fn test_regression_replace_creates_when_new() {
     let server = TestServer::start().await;
@@ -679,13 +607,11 @@ async fn test_regression_replace_creates_when_new() {
 
     let repo_id = common::create_test_repo(&client, api_token, "ReplNew").await;
 
-    // Upload with replace=1 on a path that doesn't exist yet
     let resp = client
         .upload_file_with_replace(api_token, &repo_id, "/", "fresh.txt", b"brand new", true)
         .await;
     assert_eq!(resp.status(), 200);
 
-    // File must exist with correct content
     let resp = client
         .download_file(api_token, &repo_id, "/fresh.txt")
         .await;
@@ -693,8 +619,7 @@ async fn test_regression_replace_creates_when_new() {
     assert_eq!(resp.bytes().await.unwrap().as_ref(), b"brand new");
 }
 
-/// Regression: uploading with replace=1 multiple times must work
-/// repeatedly without errors or stale leftovers.
+/// Repeated replace=1 uploads must not leave stale content behind.
 #[tokio::test]
 async fn test_regression_replace_multiple_times() {
     let server = TestServer::start().await;
@@ -721,7 +646,6 @@ async fn test_regression_replace_multiple_times() {
             .await;
         let status = resp.status();
         if status != 200 {
-            // Print error body for debugging
             let err_body = resp.text().await.unwrap_or_default();
             panic!("replace v{} failed with {}: {}", version, status, err_body);
         }
@@ -745,20 +669,9 @@ async fn test_regression_replace_multiple_times() {
     }
 }
 
-// ============================================================
-// Regression test for empty-dir fs_id collision (reconcile bug)
-// ============================================================
-
-/// Regression: verify the FS tree via sync-protocol pack-fs traversal.
-///
-/// All empty directories share the same fs_id (SHA1 of identical empty
-/// FsDirData JSON). When reconciliation matched only on parent_id, it
-/// over-matched and promoted grandchildren (e.g. /docs/api) to root's
-/// dirents, breaking seaf-cli downloads that rely on pack-fs traversal.
-///
-/// This test validates that the commit's root directory contains ONLY
-/// direct children, and that subdirectory children are NOT leaked to
-/// ancestor directories.
+/// Empty directories share one fs_id (the hash of identical FsDirData). Reconciliation that
+/// matched only on parent_id over-matched and promoted grandchildren to root, breaking seaf-cli
+/// pack-fs traversal. The root must hold only its direct children.
 #[tokio::test]
 async fn test_regression_sync_tree_no_grandchild_leak() {
     let server = TestServer::start().await;
@@ -772,31 +685,23 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
     let repo_id = common::create_test_repo(&client, api_token, "SyncTree").await;
     let sync_token = get_sync_token(&client, api_token, &repo_id).await;
 
-    // Recreate the exact e2e test scenario: create nested dirs first,
-    // then upload files in mixed order (root first, then deep, then sibling).
     client.create_dir(api_token, &repo_id, "/docs").await;
     client.create_dir(api_token, &repo_id, "/docs/api").await;
     client.create_dir(api_token, &repo_id, "/src").await;
 
-    // Upload root file first — triggers root reconciliation with all
-    // three dir entries sharing the same parent_id (empty-dir fs_id).
+    // Root file first: reconciliation then sees three dir entries sharing one parent_id.
     client
         .upload_file(api_token, &repo_id, "/", "README.md", b"readme")
         .await;
 
-    // Upload deep file — walks ancestors: /docs/api → /docs → root.
     client
         .upload_file(api_token, &repo_id, "/docs/api", "api.txt", b"api docs")
         .await;
 
-    // Upload sibling file — walks ancestors: /src → root.
     client
         .upload_file(api_token, &repo_id, "/src", "main.rs", b"fn main() {}")
         .await;
 
-    // --- Validate via sync protocol (pack-fs traversal) ---
-
-    // Get root_id from the commit
     let resp = client.get_head_commit(&sync_token, &repo_id).await;
     let body: serde_json::Value = resp.json().await.unwrap();
     let head_id = body["head_commit_id"].as_str().unwrap();
@@ -806,7 +711,6 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
     let commit: serde_json::Value = serde_json::from_slice(&data).unwrap();
     let root_id = commit["root_id"].as_str().unwrap();
 
-    // Fetch the root FS object and unpack its dirents
     let resp = client.pack_fs(&sync_token, &repo_id, &[root_id]).await;
     let packed = resp.bytes().await.unwrap();
     let entries = infra::serialization::pack_fs::decode_pack_fs_entries(&packed).unwrap();
@@ -821,8 +725,7 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
         .map(|e| e["name"].as_str().unwrap())
         .collect();
 
-    // Root must contain exactly the three top-level entries.
-    // The bug would cause "api" (from /docs/api) to appear here.
+    // Root must hold only its three direct children; the bug would surface "api" here.
     assert!(
         root_names.contains(&"docs"),
         "root must contain docs dir, got: {:?}",
@@ -845,7 +748,6 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
         root_names
     );
 
-    // Build a full name→id map from root's dirents for subtree verification.
     let root_map: std::collections::HashMap<String, String> = root_data["dirents"]
         .as_array()
         .unwrap()
@@ -858,7 +760,6 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
         })
         .collect();
 
-    // Verify /docs contains only "api"
     let docs_id = root_map.get("docs").unwrap();
     let resp = client
         .pack_fs(&sync_token, &repo_id, &[docs_id.as_str()])
@@ -880,7 +781,6 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
         docs_names
     );
 
-    // Verify /docs/api contains only "api.txt"
     let docs_map: std::collections::HashMap<String, String> = docs_data["dirents"]
         .as_array()
         .unwrap()
@@ -913,7 +813,6 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
         api_names
     );
 
-    // Verify /src contains only "main.rs"
     let src_id = root_map.get("src").unwrap();
     let resp = client
         .pack_fs(&sync_token, &repo_id, &[src_id.as_str()])
@@ -936,12 +835,7 @@ async fn test_regression_sync_tree_no_grandchild_leak() {
     );
 }
 
-// ============================================================
-// CDC (Content-Defined Chunking) regression tests
-// ============================================================
-
-/// CDC must produce identical block IDs for identical content.
-/// This is critical for block-level deduplication.
+/// Identical content must produce identical block IDs — the basis of block-level dedup.
 #[tokio::test]
 async fn test_regression_cdc_determinism() {
     let server = TestServer::start().await;
@@ -957,10 +851,8 @@ async fn test_regression_cdc_determinism() {
     let repo_id = common::create_test_repo(&client, &api_token, "CDCDet1").await;
     let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
 
-    // Create reproducible 1MB content
     let content: Vec<u8> = (0..(1024 * 1024)).map(|i| (i % 251) as u8).collect();
 
-    // Upload same content to two paths
     client
         .upload_file(&api_token, &repo_id, "/", "copy1.bin", &content)
         .await;
@@ -968,7 +860,6 @@ async fn test_regression_cdc_determinism() {
         .upload_file(&api_token, &repo_id, "/", "copy2.bin", &content)
         .await;
 
-    // Get root and verify both files share the same block IDs
     let resp = client.get_head_commit(&sync_token, &repo_id).await;
     let head_id = resp.json::<serde_json::Value>().await.unwrap()["head_commit_id"]
         .as_str()
@@ -987,7 +878,6 @@ async fn test_regression_cdc_determinism() {
     )
     .unwrap();
 
-    // Collect block IDs for both files
     let mut block_sets: Vec<std::collections::HashSet<String>> = vec![];
     for d in root_data["dirents"].as_array().unwrap() {
         let child_id = d["id"].as_str().unwrap();
@@ -1010,16 +900,14 @@ async fn test_regression_cdc_determinism() {
     }
 
     assert_eq!(block_sets.len(), 2, "should have 2 files");
-    // Identical content must produce identical block ID sets
     assert_eq!(
         block_sets[0], block_sets[1],
         "CDC: identical content must produce identical block IDs"
     );
 }
 
-/// CDC chunk sizes must respect seafile's min/max boundaries.
-/// For a 1MB file (below the 6MB CDC minimum): exactly one block of 1MB;
-/// every block is at most the 10MB CDC maximum.
+/// Chunk sizes must respect seafile's bounds: a 1 MB file (below the 6 MB CDC minimum)
+/// is a single block, and every block is at most the 10 MB maximum.
 #[tokio::test]
 async fn test_regression_cdc_chunk_size_bounds() {
     let server = TestServer::start().await;
@@ -1035,7 +923,7 @@ async fn test_regression_cdc_chunk_size_bounds() {
     let repo_id = common::create_test_repo(&client, &api_token, "CDCBounds").await;
     let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
 
-    // Generate 1MB of varied data that should trigger CDC breakpoints
+    // 1 MB of varied data, below the CDC minimum, so this stays one block.
     let content: Vec<u8> = (0..(1024 * 1024))
         .map(|i| ((i * 7 + 13) % 256) as u8)
         .collect();
@@ -1044,7 +932,6 @@ async fn test_regression_cdc_chunk_size_bounds() {
         .upload_file(&api_token, &repo_id, "/", "data.bin", &content)
         .await;
 
-    // Verify chunk count and sizes via pack-fs
     let resp = client.get_head_commit(&sync_token, &repo_id).await;
     let head_id = resp.json::<serde_json::Value>().await.unwrap()["head_commit_id"]
         .as_str()
@@ -1089,7 +976,6 @@ async fn test_regression_cdc_chunk_size_bounds() {
         "1MB file is below seafile's 6MB CDC minimum, so it is one block"
     );
 
-    // Verify sizes via block-map endpoint
     let block_map_sizes: Vec<i64> = client
         .block_map(&sync_token, &repo_id, child_id)
         .await
@@ -1104,7 +990,6 @@ async fn test_regression_cdc_chunk_size_bounds() {
         "sum of block sizes must equal file size"
     );
 
-    // All non-last blocks must be >= 6MB (CDC min) and every block <= 10MB (max)
     for (i, &size) in block_map_sizes.iter().enumerate() {
         if i < block_map_sizes.len() - 1 {
             assert!(
@@ -1123,7 +1008,6 @@ async fn test_regression_cdc_chunk_size_bounds() {
     }
 }
 
-/// CDC roundtrip: chunk → write blocks → read blocks → reassemble → verify.
 #[tokio::test]
 async fn test_regression_cdc_roundtrip() {
     let server = TestServer::start().await;
@@ -1138,8 +1022,7 @@ async fn test_regression_cdc_roundtrip() {
 
     let repo_id = common::create_test_repo(&client, &api_token, "CDCRound").await;
 
-    // Test with various file sizes (all below the 6 MiB CDC minimum, so each
-    // is a single block; the round-trip is what is under test here).
+    // Sizes stay below the 6 MiB CDC minimum so each file is one block; the round-trip is under test.
     let test_cases: Vec<(usize, &str)> = vec![
         (0, "empty"),
         (1, "single byte"),
@@ -1160,7 +1043,6 @@ async fn test_regression_cdc_roundtrip() {
             .upload_file(&api_token, &repo_id, "/", &fname, &content)
             .await;
 
-        // Download and verify
         let resp = client
             .download_file(&api_token, &repo_id, &format!("/{}", fname))
             .await;
@@ -1176,7 +1058,7 @@ async fn test_regression_cdc_roundtrip() {
     }
 }
 
-/// CDC with edge case content: zeros, 0xFF, high-entropy random data.
+/// Edge-case content: all zeros, all 0xFF, and high-entropy random bytes.
 #[tokio::test]
 async fn test_regression_cdc_edge_cases() {
     let server = TestServer::start().await;
@@ -1191,19 +1073,16 @@ async fn test_regression_cdc_edge_cases() {
 
     let repo_id = common::create_test_repo(&client, &api_token, "CDCEdge").await;
 
-    // Zero content (all bytes 0x00)
     let zeros = vec![0u8; 400_000];
     client
         .upload_file(&api_token, &repo_id, "/", "zeros.bin", &zeros)
         .await;
 
-    // All 0xFF
     let ffs = vec![0xFFu8; 400_000];
     client
         .upload_file(&api_token, &repo_id, "/", "ff.bin", &ffs)
         .await;
 
-    // Alternating pattern
     let alt: Vec<u8> = (0..400_000)
         .map(|i| if i % 2 == 0 { 0xAA } else { 0x55 })
         .collect();
@@ -1211,7 +1090,6 @@ async fn test_regression_cdc_edge_cases() {
         .upload_file(&api_token, &repo_id, "/", "alt.bin", &alt)
         .await;
 
-    // Verify all roundtrip correctly
     for (fname, expected) in &[("zeros.bin", &zeros), ("ff.bin", &ffs), ("alt.bin", &alt)] {
         let resp = client
             .download_file(&api_token, &repo_id, &format!("/{}", fname))
@@ -1228,8 +1106,7 @@ async fn test_regression_cdc_edge_cases() {
     }
 }
 
-/// CDC stability: a small edit should preserve some block IDs.
-/// Upload a file, replace with a 1-byte change, verify content changes.
+/// A one-byte edit must preserve some block IDs (CDC stability).
 #[tokio::test]
 async fn test_regression_cdc_stability_on_edit() {
     let server = TestServer::start().await;
@@ -1244,7 +1121,6 @@ async fn test_regression_cdc_stability_on_edit() {
 
     let repo_id = common::create_test_repo(&client, &api_token, "CDCStable").await;
 
-    // Create 512KB of base content
     let mut v1: Vec<u8> = (0..(512 * 1024))
         .map(|i: usize| (i.wrapping_mul(13) ^ (i >> 3)) as u8)
         .collect();
@@ -1261,7 +1137,6 @@ async fn test_regression_cdc_stability_on_edit() {
         .unwrap();
     assert_eq!(v1_downloaded.as_ref(), v1.as_slice());
 
-    // Modify 1 byte and re-upload
     let edit_pos = 256 * 1024; // middle
     v1[edit_pos] = v1[edit_pos].wrapping_add(1);
     client
@@ -1278,32 +1153,24 @@ async fn test_regression_cdc_stability_on_edit() {
     assert_ne!(v1_downloaded.as_ref(), v2_downloaded.as_ref());
 }
 
-// ============================================================
-// T2: BlockStore cross-protocol unification (Phase 5)
-// ============================================================
-
-/// Verify that blocks written by API upload can be read back by the sync
-/// protocol (check-blocks + get-block). This proves the single block store
-/// instance is shared across both code paths.
+/// Blocks written by API upload must be readable through sync check-blocks/get-block:
+/// both paths share one BlockStore instance.
 #[tokio::test]
 async fn test_block_store_unified_across_api_and_sync() {
     let f = TestFixture::new().await;
     let content = b"hello block unification test";
 
-    // Upload via API — writes blocks to disk via BlockStore
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "test.txt", content)
         .await;
     assert_eq!(resp.status(), 200, "API upload failed");
 
-    // Get head commit to find the root fs_id
     let resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let head_id = body["head_commit_id"].as_str().unwrap().to_string();
 
-    // Get the commit to extract root_id
     let resp = f
         .client
         .get_commit(&f.sync_token, &f.repo_id, &head_id)
@@ -1312,7 +1179,6 @@ async fn test_block_store_unified_across_api_and_sync() {
     let commit: serde_json::Value = serde_json::from_slice(&resp.bytes().await.unwrap()).unwrap();
     let _root_id = commit["root_id"].as_str().unwrap();
 
-    // Fetch all fs_ids via fs-id-list
     let resp = f
         .client
         .fs_id_list(&f.sync_token, &f.repo_id, &head_id)
@@ -1329,7 +1195,6 @@ async fn test_block_store_unified_across_api_and_sync() {
         .collect();
     assert!(!fs_ids.is_empty(), "must have fs objects");
 
-    // Find the file fs_object (type=1) to extract block_ids
     let fs_refs: Vec<&str> = fs_ids.iter().map(|s| s.as_str()).collect();
     let resp = f.client.pack_fs(&f.sync_token, &f.repo_id, &fs_refs).await;
     assert_eq!(resp.status(), 200);
@@ -1355,7 +1220,6 @@ async fn test_block_store_unified_across_api_and_sync() {
         "file fs_object must have block_ids"
     );
 
-    // Use sync protocol check-blocks to verify these blocks exist
     let block_refs: Vec<&str> = found_block_ids.iter().map(|s| s.as_str()).collect();
     let resp = f
         .client
@@ -1369,7 +1233,6 @@ async fn test_block_store_unified_across_api_and_sync() {
         missing
     );
 
-    // Also verify content via get-block
     for block_id in &found_block_ids {
         let resp = f
             .client
@@ -1385,17 +1248,11 @@ async fn test_block_store_unified_across_api_and_sync() {
     }
 }
 
-// ============================================================
-// T5: Root FsDirData stays in sync (Phase 4)
-// ============================================================
-
-/// Verify that after multiple create_dir and upload_file operations,
-/// the root FsDirData always contains the correct set of entries.
+/// Every create_dir/upload must leave root FsDirData with the full entry set.
 #[tokio::test]
 async fn test_root_entry_child_id_stays_in_sync() {
     let f = TestFixture::new().await;
 
-    // Create two root-level directories
     let resp = f.client.create_dir(&f.api_token, &f.repo_id, "/a").await;
     assert!(
         resp.status() == 200 || resp.status() == 201,
@@ -1407,17 +1264,14 @@ async fn test_root_entry_child_id_stays_in_sync() {
         "create /b failed"
     );
 
-    // Upload a file to root
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "README.md", b"readme")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Get root fs_id from head commit after first batch of operations
     let root_fs_id = get_root_fs_id(&f).await;
 
-    // Read the FsDirData at root_fs_id — must contain a, b, README.md
     let root_data =
         server::fs::core::read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &root_fs_id)
             .await
@@ -1440,7 +1294,6 @@ async fn test_root_entry_child_id_stays_in_sync() {
     );
     assert_eq!(root_names.len(), 3, "root must have exactly 3 entries");
 
-    // More operations — another dir and file
     let resp = f.client.create_dir(&f.api_token, &f.repo_id, "/c").await;
     assert!(
         resp.status() == 200 || resp.status() == 201,
@@ -1452,7 +1305,6 @@ async fn test_root_entry_child_id_stays_in_sync() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Get root fs_id again — must have changed (new root FsDirData after writes)
     let root_fs_id_v2 = get_root_fs_id(&f).await;
 
     assert_ne!(
@@ -1460,7 +1312,6 @@ async fn test_root_entry_child_id_stays_in_sync() {
         "root fs_id must change after more operations"
     );
 
-    // Verify new root contains all 5 entries
     let root_data_v2 =
         server::fs::core::read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &root_fs_id_v2)
             .await
@@ -1481,26 +1332,18 @@ async fn test_root_entry_child_id_stays_in_sync() {
     assert_eq!(root_names_v2.len(), 5, "root must have exactly 5 entries");
 }
 
-// ============================================================
-// Regression tests: rename/delete must update FS tree + commit
-// ============================================================
-
-/// Renaming a file via the form-encoded API must:
-/// 1. Create a new HEAD commit (different from previous)
-/// 2. Update the FS tree so the new name appears in listings
-/// 3. Old name no longer appears
+/// Rename must create a new HEAD, update the FS tree, and drop the old name.
+/// The assertions check all three, not just the listing.
 #[tokio::test]
 async fn test_regression_rename_file_creates_new_commit() {
     let f = TestFixture::new().await;
 
-    // Upload a file
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "old_name.txt", b"hello")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Record HEAD commit and root fs_id before rename
     let resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -1510,10 +1353,8 @@ async fn test_regression_rename_file_creates_new_commit() {
         "upload must produce a real commit"
     );
 
-    // Get current root fs_id from the head commit
     let root_before = get_root_fs_id(&f).await;
 
-    // Rename file via form POST (as the Qt client does)
     let resp = f
         .client
         .post_form(
@@ -1524,15 +1365,13 @@ async fn test_regression_rename_file_creates_new_commit() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Record HEAD commit after rename
     let resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let head_after = body["head_commit_id"].as_str().unwrap().to_string();
     assert_ne!(head_after, head_before, "HEAD must change after rename");
 
-    // CRITICAL: Read root FsDirData from the new tree and verify the
-    // file name is updated in the FS tree itself.
+    // The new tree itself, not just the listing, must carry the renamed name.
     let root_after = get_root_fs_id(&f).await;
     assert_ne!(
         root_after, root_before,
@@ -1559,7 +1398,6 @@ async fn test_regression_rename_file_creates_new_commit() {
         "root FsDirData must not contain 'old_name.txt'"
     );
 
-    // Directory listing should also show new name, not old name
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -1574,7 +1412,6 @@ async fn test_regression_rename_file_creates_new_commit() {
         "old name should not appear"
     );
 
-    // List dir via sync protocol's fs-id-list from the new HEAD
     let resp = f
         .client
         .fs_id_list(&f.sync_token, &f.repo_id, &head_after)
@@ -1584,28 +1421,23 @@ async fn test_regression_rename_file_creates_new_commit() {
     assert!(!fs_ids.is_empty(), "new HEAD must have FS objects");
 }
 
-/// Deleting a file via the API must:
-/// 1. Create a new HEAD commit
-/// 2. Remove the file from the FS tree
+/// Delete must create a new HEAD and remove the file from the FS tree.
 #[tokio::test]
 async fn test_regression_delete_file_creates_new_commit() {
     let f = TestFixture::new().await;
 
-    // Upload a file
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "delete_me.txt", b"bye bye")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Record HEAD commit before delete
     let resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let head_before = body["head_commit_id"].as_str().unwrap().to_string();
     assert_ne!(head_before, "0000000000000000000000000000000000000000");
 
-    // Delete file
     let resp = f
         .client
         .delete(
@@ -1615,14 +1447,13 @@ async fn test_regression_delete_file_creates_new_commit() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // HEAD must change
     let resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let head_after = body["head_commit_id"].as_str().unwrap().to_string();
     assert_ne!(head_after, head_before, "HEAD must change after delete");
 
-    // CRITICAL: Verify root FsDirData no longer has the deleted file
+    // The root FsDirData itself must no longer contain the deleted file.
     let root_fs_id = get_root_fs_id(&f).await;
     let root_data =
         server::fs::core::read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &root_fs_id)
@@ -1638,7 +1469,6 @@ async fn test_regression_delete_file_creates_new_commit() {
             .collect::<Vec<_>>()
     );
 
-    // Deleted file should not appear in listing
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -1650,22 +1480,18 @@ async fn test_regression_delete_file_creates_new_commit() {
     );
 }
 
-/// Renaming a directory via the form-encoded API must create a new HEAD commit.
 #[tokio::test]
 async fn test_regression_rename_dir_creates_new_commit() {
     let f = TestFixture::new().await;
 
-    // Create a directory via API JSON (exercises create_dir_by_path)
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/my_folder")
         .await;
     assert_eq!(resp.status(), 201);
 
-    // Record root fs_id before rename from head commit
     let root_before = get_root_fs_id(&f).await;
 
-    // Rename directory via form POST (as the Qt client does)
     let resp = f
         .client
         .post_form(
@@ -1676,7 +1502,6 @@ async fn test_regression_rename_dir_creates_new_commit() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // HEAD must change
     let resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -1687,7 +1512,7 @@ async fn test_regression_rename_dir_creates_new_commit() {
         "root fs_id must change after dir rename"
     );
 
-    // CRITICAL: Verify root FsDirData has the renamed directory name
+    // The root FsDirData itself must carry the renamed directory name.
     let root_data =
         server::fs::core::read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &root_after)
             .await
@@ -1705,7 +1530,6 @@ async fn test_regression_rename_dir_creates_new_commit() {
     );
     assert!(!old_in_tree, "root FsDirData must not contain 'my_folder'");
 
-    // Listing shows new name, not old name
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -1721,12 +1545,10 @@ async fn test_regression_rename_dir_creates_new_commit() {
     );
 }
 
-/// Deleting a directory via the API must create a new HEAD commit.
 #[tokio::test]
 async fn test_regression_delete_dir_creates_new_commit() {
     let f = TestFixture::new().await;
 
-    // Create a directory and upload a file inside it
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/my_folder")
@@ -1744,14 +1566,12 @@ async fn test_regression_delete_dir_creates_new_commit() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Record HEAD commit before delete
     let resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let head_before = body["head_commit_id"].as_str().unwrap().to_string();
     assert_ne!(head_before, "0000000000000000000000000000000000000000");
 
-    // Delete directory
     let resp = f
         .client
         .delete(
@@ -1761,14 +1581,13 @@ async fn test_regression_delete_dir_creates_new_commit() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // HEAD must change
     let resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let head_after = body["head_commit_id"].as_str().unwrap().to_string();
     assert_ne!(head_after, head_before, "HEAD must change after dir delete");
 
-    // CRITICAL: Verify root FsDirData no longer has the deleted directory
+    // The root FsDirData itself must no longer contain the deleted directory.
     let root_fs_id = get_root_fs_id(&f).await;
     let root_data =
         server::fs::core::read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &root_fs_id)
@@ -1784,7 +1603,6 @@ async fn test_regression_delete_dir_creates_new_commit() {
             .collect::<Vec<_>>()
     );
 
-    // Deleted directory should not appear in root listing
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -1796,25 +1614,20 @@ async fn test_regression_delete_dir_creates_new_commit() {
     );
 }
 
-/// Verify that creating a directory via API immediately shows up in list_dir.
-/// Regression test for: creating "test" folder in cloud browser shows success
-/// but the folder doesn't appear in the listing.
+/// Regression: creating a folder reported success but it did not appear in list_dir.
 #[tokio::test]
 async fn test_create_dir_shows_in_list_dir() {
     let f = TestFixture::new().await;
 
-    // Upload a file first (to have entries with a parent_id)
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "readme.txt", b"hello")
         .await;
     assert_eq!(resp.status(), 200, "upload failed");
 
-    // Create a directory via API JSON
     let resp = f.client.create_dir(&f.api_token, &f.repo_id, "/test").await;
     assert_eq!(resp.status(), 201, "create_dir /test failed");
 
-    // List root — must contain BOTH the file AND the directory
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200, "list_dir failed");
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -1831,20 +1644,16 @@ async fn test_create_dir_shows_in_list_dir() {
     );
 }
 
-/// Verify that creating a directory via API works in an empty repo
-/// (no previous files/operations).
 #[tokio::test]
 async fn test_create_dir_in_empty_repo_shows_in_list_dir() {
     let f = TestFixture::new().await;
 
-    // Create a directory in an otherwise empty repo
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/my_folder")
         .await;
     assert_eq!(resp.status(), 201, "create_dir failed");
 
-    // List root — must contain the directory
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200, "list_dir failed");
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -1856,26 +1665,22 @@ async fn test_create_dir_in_empty_repo_shows_in_list_dir() {
     );
 }
 
-/// Verify that creating a directory with a Chinese name works and shows up.
 #[tokio::test]
 async fn test_create_dir_chinese_name_shows_in_list_dir() {
     let f = TestFixture::new().await;
 
-    // Upload a file first
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "readme.txt", b"hello")
         .await;
     assert_eq!(resp.status(), 200, "upload failed");
 
-    // Create a directory with Chinese name (未命名文件夹 = "unnamed folder")
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/未命名文件夹")
         .await;
     assert_eq!(resp.status(), 201, "create_dir with Chinese name failed");
 
-    // List root — must contain the Chinese-named directory
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200, "list_dir failed");
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -1887,20 +1692,17 @@ async fn test_create_dir_chinese_name_shows_in_list_dir() {
     );
 }
 
-/// Verify that after the sync protocol updates HEAD, creating a new
-/// directory still shows up in list_dir.
 #[tokio::test]
 async fn test_create_dir_after_rebuild_shows_in_list() {
     let f = TestFixture::new().await;
 
-    // Upload a file
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "readme.txt", b"hello")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Update HEAD via sync protocol (update_branch no longer rebuilds dir_entries)
+    // update_branch updates HEAD only; it no longer rebuilds dir_entries.
     let head_resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
     let head_commit_id = head_resp.json::<serde_json::Value>().await.unwrap()["head_commit_id"]
         .as_str()
@@ -1912,14 +1714,12 @@ async fn test_create_dir_after_rebuild_shows_in_list() {
         .await;
     assert_eq!(resp.status(), 200, "update_branch failed");
 
-    // Create a new directory
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/new_folder")
         .await;
     assert_eq!(resp.status(), 201);
 
-    // List root — must contain both the file and the new directory
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -1936,21 +1736,18 @@ async fn test_create_dir_after_rebuild_shows_in_list() {
     );
 }
 
-/// Verify that empty directories use the EMPTY_SHA1 sentinel consistently
-/// across both API and UI creation paths. Creating a real fs_object breaks
-/// the Seafile C client's diff engine.
+/// Empty directories use the EMPTY_SHA1 sentinel on both creation paths; storing a real
+/// fs_object instead breaks the Seafile C client's diff engine.
 #[tokio::test]
 async fn test_empty_directory_uses_emtpysha1() {
     let f = TestFixture::new().await;
 
-    // ── API path ────────────────────────────────────────────────────────
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/api_empty")
         .await;
     assert_eq!(resp.status(), 201, "API: create dir should succeed");
 
-    // List root — verify the dir entry exists
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -1960,14 +1757,12 @@ async fn test_empty_directory_uses_emtpysha1() {
         "API: dir entry should appear in listing"
     );
 
-    // Verify the dir entry's id is EMPTY_SHA1
     let api_dir_id = api_entry.unwrap()["id"].as_str().unwrap();
     assert_eq!(
         api_dir_id, "0000000000000000000000000000000000000000",
         "API: empty dir must use EMPTY_SHA1 sentinel"
     );
 
-    // Verify no fs_object was created for the empty dir
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     let api_fs_obj = infra::entity::fs_object::Entity::find()
         .filter(
@@ -1981,7 +1776,6 @@ async fn test_empty_directory_uses_emtpysha1() {
         "API: must not create fs_object for EMPTY_SHA1 sentinel"
     );
 
-    // ── Sync protocol: root directory tree is correctly updated ─────────
     let head_resp = f.client.get_head_commit(&f.sync_token, &f.repo_id).await;
     assert_eq!(head_resp.status(), 200);
     let head_json: serde_json::Value = head_resp.json().await.unwrap();
@@ -1991,7 +1785,6 @@ async fn test_empty_directory_uses_emtpysha1() {
         "head commit should be updated after dir creation"
     );
 
-    // Retrieve the head commit and verify its root_id
     let commit_resp = f
         .client
         .get_commit(&f.sync_token, &f.repo_id, &head_commit_id)
@@ -2000,13 +1793,11 @@ async fn test_empty_directory_uses_emtpysha1() {
     let commit_bytes = commit_resp.bytes().await.unwrap();
     let commit: CommitData = serde_json::from_slice(&commit_bytes).unwrap();
 
-    // The root directory's fs_id should have changed from the empty state
     assert_ne!(
         commit.root_id, "0000000000000000000000000000000000000000",
         "root dir must have a real fs_id after creating subdirectories"
     );
 
-    // ── Nested dir creation via API (which also uses EMPTY_SHA1) ─────────
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/alpha")
@@ -2022,7 +1813,6 @@ async fn test_empty_directory_uses_emtpysha1() {
         "API: nested dir creation should succeed"
     );
 
-    // Verify the nested dir appears
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/alpha").await;
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -2035,10 +1825,8 @@ async fn test_empty_directory_uses_emtpysha1() {
     );
 }
 
-/// A zero-byte file must use the EMPTY_SHA1 sentinel as its id and create no
-/// `seafile` object — that is what a seafile client computes locally
-/// (`seaf_fs_manager_index_blocks()` sets the id to all zeros for a zero-size
-/// file). The reader must still resolve the sentinel so the file downloads as
+/// A zero-byte file uses EMPTY_SHA1 as its id and stores no `seafile` object, matching what
+/// a seafile client computes locally; the reader must still resolve the sentinel and produce
 /// an empty body.
 #[tokio::test]
 async fn test_empty_file_uses_empty_sha1_and_roundtrips() {
@@ -2054,7 +1842,6 @@ async fn test_empty_file_uses_empty_sha1_and_roundtrips() {
         resp.status()
     );
 
-    // The listed dirent carries the sentinel id and size 0.
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -2069,7 +1856,6 @@ async fn test_empty_file_uses_empty_sha1_and_roundtrips() {
     );
     assert_eq!(entry["size"].as_i64().unwrap(), 0);
 
-    // No fs_object row may be stored for the sentinel.
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     let obj = infra::entity::fs_object::Entity::find()
         .filter(
@@ -2083,7 +1869,6 @@ async fn test_empty_file_uses_empty_sha1_and_roundtrips() {
         "must not create fs_object for EMPTY_SHA1 sentinel"
     );
 
-    // Resolving the sentinel yields an empty file, so the download succeeds.
     let resp = f
         .client
         .download_file(&f.api_token, &f.repo_id, "/empty.bin")
@@ -2092,15 +1877,11 @@ async fn test_empty_file_uses_empty_sha1_and_roundtrips() {
     assert!(resp.bytes().await.unwrap().is_empty());
 }
 
-// ── Recursive directory listing tests ─────────────────────────────
-
-/// Recursive listing with `recursive=1` returns all entries in a flat list
-/// with their `parent_dir`.
+/// `recursive=1` returns every entry in one flat list, each with its `parent_dir`.
 #[tokio::test]
 async fn test_dir_recursive_basic() {
     let f = TestFixture::new().await;
 
-    // Create nested structure: /a.txt, /subdir/b.txt, /subdir/nested/c.txt
     f.client
         .upload_file(&f.api_token, &f.repo_id, "/", "a.txt", b"aaa")
         .await;
@@ -2117,14 +1898,13 @@ async fn test_dir_recursive_basic() {
         .upload_file(&f.api_token, &f.repo_id, "/subdir/nested", "c.txt", b"ccc")
         .await;
 
-    // Recursive listing — no type filter
     let resp = f
         .client
         .list_dir_with_params(&f.api_token, &f.repo_id, "/", Some("1"), None)
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Extract headers before consuming body
+    // Read headers before the body is consumed.
     let oid = resp
         .headers()
         .get("oid")
@@ -2138,10 +1918,8 @@ async fn test_dir_recursive_basic() {
 
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
 
-    // Should contain: a.txt(file), subdir(dir), b.txt(file), nested(dir), c.txt(file)
     assert_eq!(entries.len(), 5, "recursive=1 should return all 5 entries");
 
-    // Check parent_dir for each entry
     let a_txt = entries.iter().find(|e| e["name"] == "a.txt").unwrap();
     assert_eq!(a_txt["type"], "file");
     assert_eq!(a_txt["parent_dir"], "/");
@@ -2163,12 +1941,10 @@ async fn test_dir_recursive_basic() {
     assert_eq!(c_txt["type"], "file");
     assert_eq!(c_txt["parent_dir"], "/subdir/nested");
 
-    // Verify oid and dir_perm headers
     assert!(oid.as_deref().is_some_and(|v| !v.is_empty()));
     assert_eq!(dir_perm.as_deref(), Some("rw"));
 }
 
-/// Recursive listing with `t=f` returns only file entries.
 #[tokio::test]
 async fn test_dir_recursive_type_filter_file() {
     let f = TestFixture::new().await;
@@ -2190,7 +1966,6 @@ async fn test_dir_recursive_type_filter_file() {
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
 
-    // Only file entries (2 files, 0 dirs)
     assert_eq!(entries.len(), 2);
     assert!(entries.iter().all(|e| e["type"] == "file"));
     assert!(entries.iter().any(|e| e["name"] == "a.txt"));
@@ -2199,7 +1974,6 @@ async fn test_dir_recursive_type_filter_file() {
     assert!(entries.iter().any(|e| e["parent_dir"] == "/subdir"));
 }
 
-/// Recursive listing with `t=d` returns only directory entries.
 #[tokio::test]
 async fn test_dir_recursive_type_filter_dir() {
     let f = TestFixture::new().await;
@@ -2224,14 +1998,12 @@ async fn test_dir_recursive_type_filter_dir() {
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
 
-    // Only directory entries (2 dirs)
     assert_eq!(entries.len(), 2);
     assert!(entries.iter().all(|e| e["type"] == "dir"));
     assert!(entries.iter().any(|e| e["name"] == "subdir"));
     assert!(entries.iter().any(|e| e["name"] == "nested"));
 }
 
-/// Invalid `recursive` value returns 400.
 #[tokio::test]
 async fn test_dir_recursive_invalid_recursive() {
     let f = TestFixture::new().await;
@@ -2243,7 +2015,6 @@ async fn test_dir_recursive_invalid_recursive() {
     assert_eq!(resp.status(), 400);
 }
 
-/// Invalid `t` value returns 400.
 #[tokio::test]
 async fn test_dir_recursive_invalid_t() {
     let f = TestFixture::new().await;
@@ -2255,7 +2026,6 @@ async fn test_dir_recursive_invalid_t() {
     assert_eq!(resp.status(), 400);
 }
 
-/// Non-recursive listing without `recursive` param is unchanged (single-level).
 #[tokio::test]
 async fn test_dir_recursive_non_recursive_unchanged() {
     let f = TestFixture::new().await;
@@ -2270,7 +2040,6 @@ async fn test_dir_recursive_non_recursive_unchanged() {
         .upload_file(&f.api_token, &f.repo_id, "/subdir", "b.txt", b"bbb")
         .await;
 
-    // Without recursive=1 — only root-level entries
     let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
@@ -2278,11 +2047,9 @@ async fn test_dir_recursive_non_recursive_unchanged() {
     assert!(entries.iter().any(|e| e["name"] == "a.txt"));
     assert!(entries.iter().any(|e| e["name"] == "subdir"));
 
-    // No parent_dir in non-recursive response
     assert!(entries.iter().all(|e| e.get("parent_dir").is_none()));
 }
 
-/// Recursive listing from a subdirectory path works correctly.
 #[tokio::test]
 async fn test_dir_recursive_from_subdirectory() {
     let f = TestFixture::new().await;
@@ -2303,7 +2070,6 @@ async fn test_dir_recursive_from_subdirectory() {
         .upload_file(&f.api_token, &f.repo_id, "/subdir/nested", "c.txt", b"ccc")
         .await;
 
-    // Recursive listing starting from /subdir
     let resp = f
         .client
         .list_dir_with_params(&f.api_token, &f.repo_id, "/subdir", Some("1"), None)
@@ -2311,16 +2077,13 @@ async fn test_dir_recursive_from_subdirectory() {
     assert_eq!(resp.status(), 200);
     let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
 
-    // Should only contain entries under /subdir: b.txt, nested, c.txt
     assert_eq!(entries.len(), 3);
     assert!(entries.iter().any(|e| e["name"] == "b.txt"));
     assert!(entries.iter().any(|e| e["name"] == "nested"));
     assert!(entries.iter().any(|e| e["name"] == "c.txt"));
-    // Should NOT contain root-level entries
     assert!(!entries.iter().any(|e| e["name"] == "a.txt"));
 }
 
-/// Empty repo returns empty list for recursive listing.
 #[tokio::test]
 async fn test_dir_recursive_empty_repo() {
     let f = TestFixture::new().await;
@@ -2334,7 +2097,6 @@ async fn test_dir_recursive_empty_repo() {
     assert!(entries.is_empty());
 }
 
-/// File entries in recursive listing include modifier_name and modifier_contact_email.
 #[tokio::test]
 async fn test_dir_recursive_file_has_modifier_fields() {
     let f = TestFixture::new().await;

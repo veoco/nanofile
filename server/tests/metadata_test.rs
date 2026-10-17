@@ -11,7 +11,6 @@ use common::{TestFixture, create_test_user};
 async fn test_related_users_returns_user_list_objects() {
     let f = TestFixture::new().await;
 
-    // Add a second user as a repo member.
     let user2_id = create_test_user(f.server.db.as_ref(), "second@example.com", "password").await;
     let now = chrono::Utc::now().timestamp();
     f.server
@@ -40,7 +39,6 @@ async fn test_related_users_returns_user_list_objects() {
         .as_array()
         .expect("response should contain a user_list array");
 
-    // Owner + the second member.
     assert_eq!(user_list.len(), 2, "expected 2 related users: {body}");
 
     let emails: Vec<&str> = user_list
@@ -108,7 +106,6 @@ async fn test_metadata_record_returns_system_columns() {
         assert_eq!(col["type"].as_str(), Some(*ty), "type mismatch for {key}");
     }
 
-    // The record itself must carry values for the rendered fields.
     let rec = &body["results"][0];
     assert!(rec["_size"].is_number(), "_size missing: {body}");
     assert!(rec["_file_modifier"].is_string(), "_file_modifier missing");
@@ -122,7 +119,6 @@ async fn test_metadata_record_returns_system_columns() {
 async fn test_tag_files_paginates() {
     let f = TestFixture::new().await;
 
-    // Create a tag.
     let resp = f
         .client
         .post_json(
@@ -140,7 +136,6 @@ async fn test_tag_files_paginates() {
         .and_then(|s| s.parse::<i64>().ok())
         .expect("tag id missing");
 
-    // Upload 5 files and tag them all.
     let mut file_tags_data = Vec::new();
     for i in 0..5 {
         let name = format!("f{i}.txt");
@@ -167,7 +162,6 @@ async fn test_tag_files_paginates() {
         .await;
     assert_eq!(resp.status(), 200, "set tags failed");
 
-    // Page 1 → 3 entries.
     let resp = f
         .client
         .get(
@@ -182,7 +176,6 @@ async fn test_tag_files_paginates() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["results"].as_array().unwrap().len(), 3, "page 1");
 
-    // Page 2 → remaining 2.
     let resp = f
         .client
         .get(
@@ -196,7 +189,6 @@ async fn test_tag_files_paginates() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["results"].as_array().unwrap().len(), 2, "page 2");
 
-    // No params → everything (backwards compatible with existing clients).
     let resp = f
         .client
         .get(

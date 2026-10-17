@@ -15,17 +15,14 @@ use server::sandbox::Profile;
 use server::sandbox::worker::{self, Outcome};
 
 /// How much text the large document carries.
-///
 /// Three quarters of the cap the child truncates at: large enough that a limit
 /// which is merely *installed* cannot satisfy it, with room below the cap so a
 /// whole-text comparison is what the case measures rather than the truncation
 /// rule (which the second case covers).
 const LARGE_TEXT_BYTES: usize = 6 * 1024 * 1024;
 
-/// A word no filler repeats, placed where truncation would drop it.
 const MARKER: &str = "zebramarker";
 
-/// Point the worker at this package's own binary, once, before any probe.
 fn the_worker_ran() {
     static CONFIGURED: OnceLock<()> = OnceLock::new();
     CONFIGURED.get_or_init(|| {
@@ -33,14 +30,12 @@ fn the_worker_ran() {
             common::sandbox::configure_real_worker(),
             "this file must be the first to configure the worker"
         );
-        // The bound is what this file needs; the layers are asserted elsewhere.
         server::sandbox::worker::configure_requirement(common::sandbox::limits_requirement());
     });
 }
 
 /// The child has to run with its resource bound on this host, and the failure
 /// has to say what the host gave instead.
-///
 /// `limits`, not `partial`: what the policy asks for above the bound is asserted
 /// where it belongs (`sandbox_probe_test`), and a Windows host whose container
 /// cannot be created is exactly the host that gives the bound alone.
@@ -48,12 +43,10 @@ fn require_confinement() {
     common::sandbox::require_bound(Profile::Documents);
 }
 
-/// A PDF whose one text object draws `text`.
 fn pdf_with_text(text: &str) -> Vec<u8> {
     common::minimal_pdf_with_stream(&format!("BT /F1 24 Tf 72 720 Td ({text}) Tj ET"))
 }
 
-/// Extract `pdf` in the confined child, or panic with what came back instead.
 fn extracted(pdf: Vec<u8>) -> String {
     match worker::extract(Plan::Document(Document::Pdf), pdf) {
         Outcome::Extracted(Extracted::Text(text)) => text,
@@ -92,7 +85,6 @@ fn a_document_near_the_text_cap_is_extracted_whole() {
     eprintln!("a {LARGE_TEXT_BYTES}-byte document took {elapsed:?} through the confined child");
 }
 
-/// Text past the cap is cut exactly at the cap, in the child rather than here.
 #[test]
 fn text_past_the_cap_is_cut_exactly_at_the_cap() {
     the_worker_ran();

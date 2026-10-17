@@ -44,7 +44,6 @@ async fn test_full_upload_flow() {
         "0000000000000000000000000000000000000000"
     );
 
-    // Upload the block first so the block integrity check passes.
     let block_data = b"test block data content here!!!!!!";
     let file_block = sha1_hex(block_data);
     let resp = client
@@ -229,7 +228,6 @@ async fn test_incremental_upload() {
     let client = server.client();
     use infra::crypto::fs_id::sha1_hex;
 
-    // Upload a real block so the block integrity check passes.
     let block_data = b"block data for incremental upload test";
     let block_id = sha1_hex(block_data);
     let resp = client
@@ -334,7 +332,6 @@ async fn test_incremental_upload_second_commit() {
     let client = server.client();
     use infra::crypto::fs_id::sha1_hex;
 
-    // ── First commit (parent=None): upload a.txt ──
     let a_block_data = b"block data for a.txt";
     let a_block_id = sha1_hex(a_block_data);
     let resp = client
@@ -416,7 +413,6 @@ async fn test_incremental_upload_second_commit() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // ── Second commit (parent=commit1): add b.txt ──
     let b_block_data = b"block data for b.txt";
     let b_block_id = sha1_hex(b_block_data);
     let resp = client
@@ -499,7 +495,6 @@ async fn test_incremental_upload_second_commit() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // ── Negative: a commit referencing a block never uploaded must be rejected (446) ──
     let c_block_id = random_hex_id();
     let c_file = FsFileData {
         block_ids: vec![c_block_id],
@@ -570,7 +565,6 @@ async fn test_incremental_upload_second_commit() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // A genuinely missing block is still rejected with 446 (BLOCK_MISSING).
     let resp = client
         .update_branch(&sync_token, &repo_id, &commit3_id)
         .await;
@@ -646,12 +640,10 @@ async fn test_empty_directory_sync() {
     let (server, api_token, repo_id, sync_token) = setup_repo().await;
     let client = server.client();
 
-    // Step 1: Create an empty directory via the API
     let resp = client.create_dir(&api_token, &repo_id, "/emptydir").await;
     // seahub answers 201 Created for mkdir.
     assert_eq!(resp.status(), 201, "create empty dir should succeed");
 
-    // Step 2: Verify the empty directory appears in the parent dir listing
     let resp = client.list_dir(&api_token, &repo_id, "/").await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -664,7 +656,6 @@ async fn test_empty_directory_sync() {
     assert_eq!(empty_dir["type"], "dir", "should be listed as directory");
     assert_eq!(empty_dir["size"], 0, "empty directory should have size 0");
 
-    // Step 3: Create a second empty dir for the v2.1 API
     let v21_path = format!("/api/v2.1/repos/{}/dir/", repo_id);
     let resp = client
         .post_json(
@@ -675,7 +666,6 @@ async fn test_empty_directory_sync() {
         .await;
     assert_eq!(resp.status(), 200, "v2.1 create empty dir should succeed");
 
-    // Step 4: Get the head commit — should be a real commit
     let resp = client.get_head_commit(&sync_token, &repo_id).await;
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -685,7 +675,6 @@ async fn test_empty_directory_sync() {
         "should have a real commit after creating dirs"
     );
 
-    // Step 5: Verify the commit exists and has a non-EMPTY root
     let resp = client
         .get_commit(&sync_token, &repo_id, &head_commit_id)
         .await;
@@ -698,7 +687,6 @@ async fn test_empty_directory_sync() {
         "root should not be EMPTY_SHA1"
     );
 
-    // Step 6: fs-id-list — must NOT contain EMPTY_SHA1
     let resp = client
         .fs_id_list(&sync_token, &repo_id, &head_commit_id)
         .await;
@@ -716,7 +704,6 @@ async fn test_empty_directory_sync() {
         "EMPTY_SHA1 must NOT appear in fs-id-list — it's a sentinel, not an fs_object"
     );
 
-    // Step 7: pack-fs the root — verify the root's dirents contain EMPTY_SHA1
     let resp = client.pack_fs(&sync_token, &repo_id, &[&root_id]).await;
     assert_eq!(resp.status(), 200);
     let packed = resp.bytes().await.unwrap();
@@ -749,7 +736,6 @@ async fn test_empty_directory_sync() {
         "v2.1 empty directory must also use EMPTY_SHA1"
     );
 
-    // Step 8: pack-fs for EMPTY_SHA1 directly — should return nothing (no fs_object)
     let resp = client
         .pack_fs(
             &sync_token,
@@ -765,7 +751,6 @@ async fn test_empty_directory_sync() {
         "pack-fs for EMPTY_SHA1 should return no entries"
     );
 
-    // Step 9: File detail for the empty directory should return 400 (is a dir)
     let resp = client
         .get(
             &format!("/api2/repos/{}/file/detail/?p=/emptydir", repo_id),
@@ -774,7 +759,6 @@ async fn test_empty_directory_sync() {
         .await;
     assert_eq!(resp.status(), 400, "file detail on an empty dir should 400");
 
-    // Step 10: Thumbnail for the empty directory should return 400
     let resp = client
         .get(
             &format!("/api2/repos/{}/thumbnail/?p=/emptydir&size=48", repo_id),
@@ -783,7 +767,6 @@ async fn test_empty_directory_sync() {
         .await;
     assert_eq!(resp.status(), 400, "thumbnail on an empty dir should 400");
 
-    // Step 11: Upload a file inside the empty dir — verifies commit chain works
     let resp = client
         .upload_file(&api_token, &repo_id, "/emptydir", "test.txt", b"hello")
         .await;
@@ -793,7 +776,6 @@ async fn test_empty_directory_sync() {
         "should be able to upload file into empty dir"
     );
 
-    // Step 12: Verify the file is accessible
     let resp = client
         .download_file(&api_token, &repo_id, "/emptydir/test.txt")
         .await;

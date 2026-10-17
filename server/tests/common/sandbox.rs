@@ -1,10 +1,8 @@
 //! What the sandbox test binaries share.
 //!
-//! The worker's executable, the requirement it is judged against and the helper
-//! it may execute are process-global, so each sandbox test file owns its own
-//! binary and configures them before the first fixture. What is the same either
-//! way lives here: the helper, the status and probe calls, the report's facts,
-//! and the shell script that stands in for the worker.
+//! The worker executable, requirement and media grant are process-global, so each
+//! sandbox test binary configures them before its first fixture; the shared helper,
+//! probe calls and fake-worker script live here.
 
 #![allow(dead_code)]
 
@@ -16,12 +14,10 @@ use server::sandbox::worker::{self, Status};
 use server::sandbox::{Profile, Protections, Report, Requirement};
 
 /// The helper the media profile is granted, and the one that writes the clips.
-///
-/// `NANOFILE_TEST_FFMPEG_PATH` names the binary CI installed; without it the
-/// command is resolved on this process's `PATH`, because the media grant names
-/// one file and a bare name would be a grant on a relative path. The one file is
-/// also why a package manager's shim will not do: the grant reaches the named
-/// binary and nothing it starts.
+/// `NANOFILE_TEST_FFMPEG_PATH` names the binary CI installed; without it the command
+/// is resolved on `PATH`, because the grant names one file and a bare name would be a
+/// grant on a relative path. A package manager's shim will not do either: the grant
+/// reaches the named binary and nothing it starts.
 pub fn helper() -> &'static str {
     static HELPER: OnceLock<String> = OnceLock::new();
     HELPER.get_or_init(|| {
@@ -51,10 +47,8 @@ pub fn helper_runs() -> bool {
         .unwrap_or(false)
 }
 
-/// Skip the test on a development host, fail it on CI.
-///
-/// A host without the helper can do nothing here, but a green suite that never
-/// ran the media pipeline is the failure these tests exist to catch.
+/// Skip the test on a development host, fail it on CI: a green suite that never ran
+/// the media pipeline is the failure these tests exist to catch.
 pub fn without_ffmpeg() {
     if std::env::var_os("CI").is_some() {
         panic!(
@@ -88,14 +82,10 @@ pub fn generate_clip(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Generate a clip larger than the media head cap, so the thumbnail is built
-/// from a prefix of the file rather than the whole upload.
-///
-/// `v210` is uncompressed, so the size is a steady ~43 MiB at this duration —
-/// large enough to clear the head cap, which a compressed fixture at this
-/// resolution cannot reach. `faststart` places the container index at the front
-/// (the common case) when true, and at the end when false — the latter forces
-/// the full-file fallback for non-faststart containers.
+/// Generate a clip larger than the media head cap, so the thumbnail is built from a
+/// prefix of the file rather than the whole upload. `v210` is uncompressed, so the size
+/// is a steady ~43 MiB at this duration; `faststart` puts the container index at the
+/// front when true and at the end when false (the full-file fallback).
 pub fn generate_large_clip(path: &Path, faststart: bool) -> bool {
     let mut args: Vec<&str> = vec![
         "-y",
@@ -120,31 +110,22 @@ pub fn generate_large_clip(path: &Path, faststart: bool) -> bool {
         .unwrap_or(false)
 }
 
-/// Point the worker at this package's binary instead of the test process.
-///
-/// Returns whether *this* call set it: the value is process-global and set once,
-/// so a second call is silently ignored and its caller would then be measuring
-/// whatever the first one configured.
+/// Point the worker at this package's binary instead of the test process. Returns
+/// whether *this* call set it: the value is process-global and set once, so a second
+/// call is silently ignored.
 pub fn configure_real_worker() -> bool {
     worker::configure_executable(PathBuf::from(env!("CARGO_BIN_EXE_nanofile")))
 }
 
-/// Turn the real worker on, once per test binary, and leave it on.
-///
-/// Every fixture calls this before it starts a server, and two things are
-/// process-global: the executable the children are started from, and the
-/// requirement. Both are set once here, and a test that points the worker
-/// somewhere else *before* its first fixture keeps its own path — the check is
-/// what makes that order-insensitive. Re-storing the switch on every fixture
-/// would also undo a test's own setting, because `configure_requirement` clears
-/// the container give-up records with it.
+/// Turn the real worker on, once per test binary, and leave it on. The executable and
+/// the requirement are process-global and both set here; a test that points the worker
+/// elsewhere *before* its first fixture keeps its own path, and re-storing the switch
+/// would undo it because `configure_requirement` clears the give-up records.
 pub fn enable_real_worker() {
     static ENABLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     ENABLED.get_or_init(|| {
-        // A test that has already named a binary owns that decision: pointing the
-        // worker at something that cannot run is how the unavailable path is
-        // reached, and overwriting it here would make that test measure the real
-        // worker instead.
+        // A test that already named a binary owns that decision: the unavailable path
+        // is reached by pointing the worker at something that cannot run.
         if !worker::executable_is_configured() {
             configure_real_worker();
         }
@@ -152,67 +133,44 @@ pub fn enable_real_worker() {
     });
 }
 
-/// The requirement every test that runs the real worker measures under.
-///
-/// The master switch, and nothing else, because that is all the model has: what
-/// the child established is read back from its own report rather than demanded
-/// by a setting. The grade is therefore whatever the platform installed — `full`
-/// on Linux and macOS, `limits` on a Windows host that cannot create an
-/// AppContainer — and `the_platform_answer` asserts the mechanism that goes with
-/// it.
+/// The requirement every test that runs the real worker measures under: the master
+/// switch alone, since that is all the model has. The grade is whatever the platform
+/// installed, and `the_platform_answer` asserts the mechanism that goes with it.
 pub fn requirement() -> Requirement {
     Requirement::new(true)
 }
 
-/// The requirement a probe test measures a *parser* profile under.
-///
-/// The same switch: what these tests assert is that the child bounds itself and
-/// still does its job, which is true on every platform and is the one item no
-/// host may give up.
+/// The requirement a probe test measures a *parser* profile under: the same switch.
+/// These tests assert that the child bounds itself and still does its job, which is
+/// true on every platform.
 pub fn configure_probe_requirement() -> Requirement {
     requirement()
 }
 
-/// The requirement the *media* probe is measured under.
-///
-/// The same one: the media profile can never carry the process item — it starts
-/// the helper by copying itself — and that is now reported rather than refused,
-/// so a parser test and a media test measure under the same rule.
+/// The requirement the *media* probe is measured under: the same one. The media profile
+/// cannot carry the process item (it starts the helper by copying itself), and that is
+/// reported rather than refused.
 pub fn configure_media_probe_requirement() -> Requirement {
     requirement()
 }
 
-/// The `Requirement` an integration test wants the features to run under.
-///
-/// Every test binary that turns the real worker on calls this before its first
-/// fixture: what those tests are about is the feature doing its job, and the
-/// layers above the resource bound are the platform's answer rather than a test
-/// result. The grades themselves are asserted in `sandbox_probe_test`.
+/// The `Requirement` an integration test wants the features to run under. Called
+/// before the first fixture; the grades themselves are asserted in `sandbox_probe_test`.
 pub fn limits_requirement() -> Requirement {
     requirement()
 }
 
-/// Serialises a requirement change with the probe that reads it.
-///
-/// The requirement is process-global and the tests in one binary run in
-/// parallel, so a test that stored its requirement and then probed could have
-/// another test's store land in between — and the child would then be started
-/// under a *different* requirement than the one the caller asked about, with the
-/// report judged against it. That is what a Windows run showed: a probe whose
-/// caller wanted no container came back with the container creation's label.
-///
-/// One lock for the whole binary, and everything that both stores a requirement
-/// and reads what it produced goes through [`with_requirement`].
+/// Serialises a requirement change with the probe that reads it. The requirement is
+/// process-global and tests run in parallel, so a store could land between another
+/// test's store and its probe, judging the child under the wrong requirement. One lock
+/// for the binary; every store-and-read goes through [`with_requirement`].
 pub fn requirement_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
-/// Store `requirement`, run `probe`, and put the lock back.
-///
-/// The mutex is held across both, which is the point: a probe is the only reader
-/// of the requirement that spans a process boundary, and the store only matters
-/// because of it.
+/// Store `requirement`, run `probe`, and put the lock back. The mutex is held across
+/// both, which is the point: a probe is the only reader that spans a process boundary.
 pub fn with_requirement<T>(requirement: Requirement, probe: impl FnOnce() -> T) -> T {
     let guard = requirement_lock()
         .lock()
@@ -233,14 +191,10 @@ pub fn status(profile: Profile) -> Report {
     }
 }
 
-/// The report for `profile`, which has to have its resource bound in place.
-///
-/// The requirement is set here, because a caller that needs a *bounded* child is
-/// also the caller that knows the question: a Windows host that gives the bound
-/// without a container has to be able to reach it without the process-global
-/// switch deciding first. The bound is the one item every feature needs, and the
-/// only one whose absence refuses a child — the layers above it are what the
-/// platform could add, and each caller asserts the ones it needs.
+/// The report for `profile`, which has to have its resource bound in place. The
+/// requirement is set here because a caller that needs a *bounded* child knows the
+/// question; a Windows host that gives the bound without a container must be reachable
+/// without the process-global switch deciding first.
 pub fn require_bound(profile: Profile) -> Report {
     worker::configure_requirement(requirement());
     let report = status(profile);
@@ -253,15 +207,11 @@ pub fn require_bound(profile: Profile) -> Report {
     report
 }
 
-/// Run the worker's own startup probe in a child process, and parse its line.
-///
-/// `--probe` is the half the server runs at startup; `helper` is the media
-/// profile's grant, and the other profiles have none. The line is printed as
-/// well as returned: a CI log is where it is read when a runner disagrees.
-///
-/// `--probe` is a *parent*: the switch it stores is the one it judges the worker
-/// child it starts by, and the child's report is accepted on the resource bound
-/// alone, so this binary measures the same host the server does.
+/// Run the worker's own startup probe in a child process, and parse its line. `--probe`
+/// is the half the server runs at startup; `helper` is the media profile's grant, and the
+/// other profiles have none. The line is also printed, because a CI log is where it is
+/// read when a runner disagrees. `--probe` is a *parent*: the child's report is accepted
+/// on the resource bound alone, so this measures the same host the server does.
 pub fn probe(profile: Profile, helper: Option<&str>) -> (Report, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_nanofile"));
     command.args(["extract-worker", "--probe", "--profile", profile.as_str()]);
@@ -302,12 +252,9 @@ pub struct FakeWorker {
 }
 
 impl FakeWorker {
-    /// Write `body` as an executable script and install it as this process's
-    /// worker.
-    ///
-    /// The executable is process-global and set once, so its caller has to be
-    /// the first thing in its binary to reach a fixture — which is why each of
-    /// these files is a binary of its own.
+    /// Write `body` as an executable script and install it as this process's worker.
+    /// Its caller must be the first thing in its binary to reach a fixture, because the
+    /// executable is process-global and set once.
     pub fn install(directory: &Path, name: &str, body: &str) -> Self {
         let worker = FakeWorker {
             executable: directory.join(name),

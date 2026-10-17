@@ -75,7 +75,6 @@ async fn expired_sso_link_stops_resolving() {
         .unwrap()
         .to_string();
 
-    // Before expiry the poll reports "waiting".
     let resp = client
         .get(&format!("/api2/client-sso-link/{token}/"), None)
         .await;
@@ -83,7 +82,6 @@ async fn expired_sso_link_stops_resolving() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "waiting");
 
-    // Age the link past its `expires_at` (one hour) directly.
     let model = infra::entity::sso_login_token::Entity::find()
         .filter(
             infra::entity::sso_login_token::Column::Token
@@ -97,7 +95,6 @@ async fn expired_sso_link_stops_resolving() {
     active.expires_at = Set(Some(chrono::Utc::now().timestamp() - 1));
     active.update(&*server.db).await.unwrap();
 
-    // The poll now 404s (and the row is gone).
     let resp = client
         .get(&format!("/api2/client-sso-link/{token}/"), None)
         .await;
@@ -108,7 +105,6 @@ async fn expired_sso_link_stops_resolving() {
         resp.status()
     );
 
-    // The browser entry point refuses it too.
     let resp = client.get(&format!("/client-sso/{token}/"), None).await;
     assert_eq!(
         resp.status(),
@@ -127,7 +123,6 @@ async fn sso_confirm_page_shows_the_requester() {
     create_test_user(&server.db, "user@example.com", "password123").await;
     let client = server.client();
 
-    // The desktop client's shape: device parameters on the query string.
     let resp = client
         .post_form(
             "/api2/client-sso-link/?shib_platform=linux&shib_device_name=workstation&shib_client_version=9.0.21",
@@ -146,7 +141,6 @@ async fn sso_confirm_page_shows_the_requester() {
         .unwrap()
         .to_string();
 
-    // A browser session: log in with cookies and no redirect following.
     let browser = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -162,8 +156,6 @@ async fn sso_confirm_page_shows_the_requester() {
         .unwrap();
     assert_eq!(resp.status(), 302, "browser login failed");
 
-    // Opening the link marks it accessed (it also redirects to the login page,
-    // which is already satisfied).
     let _ = browser
         .get(format!("{base}/client-sso/{token}/"))
         .send()

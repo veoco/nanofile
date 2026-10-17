@@ -20,8 +20,6 @@ mod common;
 use common::TestFixture;
 use infra::serialization::pack_fs;
 
-// ── Helpers ───────────────────────────────────────────────────────────
-
 /// Fetch an `/upload-api/...` URL for the fixture's repo.
 async fn upload_link(f: &TestFixture) -> String {
     let resp = f
@@ -85,8 +83,6 @@ async fn entry_size(f: &TestFixture, path: &str, name: &str) -> Option<i64> {
         .and_then(|e| e["size"].as_i64())
 }
 
-// ── P1.1: fs-id-list / pack-fs ────────────────────────────────────────
-
 /// A new empty directory must not be advertised as a downloadable object: it is
 /// the `EMPTY_SHA1` sentinel with no stored fs object, and advertising it made
 /// seaf-daemon spin forever re-requesting it.
@@ -94,7 +90,6 @@ async fn entry_size(f: &TestFixture, path: &str, name: &str) -> Option<i64> {
 async fn test_diff_fs_id_list_excludes_empty_dir_sentinel() {
     let f = TestFixture::new().await;
 
-    // Commit A: a file so the root tree is non-trivial.
     let up = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "a.txt", b"a")
@@ -102,7 +97,6 @@ async fn test_diff_fs_id_list_excludes_empty_dir_sentinel() {
     assert!(up.status().is_success());
     let a = head_commit(&f).await;
 
-    // Commit B: an empty directory (the sentinel dirent).
     let resp = f
         .client
         .create_dir_multipart(&f.api_token, &f.repo_id, "/emptydir")
@@ -135,7 +129,6 @@ async fn test_diff_fs_id_list_excludes_empty_dir_sentinel() {
         "EMPTY_SHA1 must never appear in fs-id-list, got {ids:?}"
     );
 
-    // Everything advertised must actually come back from pack-fs.
     let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
     let resp = f.client.pack_fs(&f.sync_token, &f.repo_id, &refs).await;
     assert_eq!(resp.status(), 200, "pack-fs failed");
@@ -177,8 +170,6 @@ async fn head_commit(f: &TestFixture) -> String {
         .to_string()
 }
 
-// ── P1.2 / P1.3: replace + zero-byte ─────────────────────────────────
-
 /// Uploading a name that already exists without `replace=1` keeps both files,
 /// like seafile's `genUniqueName` — it must not overwrite.
 #[tokio::test]
@@ -219,7 +210,6 @@ async fn test_upload_with_replace_overwrites() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Query form: the upload-link endpoint echoes `?replace=1` onto the URL.
     let resp = f
         .client
         .get(
@@ -275,8 +265,6 @@ async fn test_zero_byte_upload_creates_entry() {
     assert_eq!(entry_size(&f, "/", "empty.bin").await, Some(0));
 }
 
-// ── P2.1: ret-json framing ───────────────────────────────────────────
-
 /// Without `ret-json` the body is the bare 40-hex file id — the Android and
 /// desktop clients store it verbatim.
 #[tokio::test]
@@ -300,7 +288,6 @@ async fn test_upload_api_returns_plain_id_without_ret_json() {
 async fn test_upload_api_returns_json_with_ret_json() {
     let f = TestFixture::new().await;
 
-    // Query form, as the Android chunked uploader and iOS build it.
     let url = upload_link(&f).await;
     let sep = if url.contains('?') { '&' } else { '?' };
     let resp = f
@@ -319,7 +306,6 @@ async fn test_upload_api_returns_json_with_ret_json() {
         "expected an id in the first element, got {body:?}"
     );
 
-    // Form-field form.
     let url = upload_link(&f).await;
     let resp = f
         .client
@@ -332,8 +318,6 @@ async fn test_upload_api_returns_json_with_ret_json() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body.is_array(), "expected a JSON array, got {body:?}");
 }
-
-// ── P2.7: update-api id framing and 441 ──────────────────────────────
 
 /// `/update-api` also answers a bare id without `ret-json`.
 #[tokio::test]
@@ -367,8 +351,6 @@ async fn test_update_api_missing_target_is_441() {
         .await;
     assert_eq!(resp.status(), 441, "missing target must be 441");
 }
-
-// ── P2.2: op=downloadblks ────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_file_op_downloadblks_shape() {
@@ -404,8 +386,6 @@ async fn test_file_op_downloadblks_shape() {
     assert_eq!(body["encrypted"], serde_json::json!(false));
     assert_eq!(body["enc_version"], serde_json::json!(0));
 }
-
-// ── P2.3: reloaddir ──────────────────────────────────────────────────
 
 /// `reloaddir=true` on mkdir returns the parent listing as a bare array, which
 /// is the only shape the iOS client's `SeafDir.handleData:` accepts.
@@ -466,8 +446,6 @@ async fn test_file_rename_reloaddir_returns_bare_listing() {
         "old name must be gone, got {body:?}"
     );
 }
-
-// ── P2.4: op=download|view ───────────────────────────────────────────
 
 #[tokio::test]
 async fn test_repos_files_op_download_and_view() {
@@ -549,8 +527,6 @@ async fn test_unsatisfiable_range_is_416() {
     );
 }
 
-// ── P2.5: zip-task multipart ─────────────────────────────────────────
-
 #[tokio::test]
 async fn test_zip_task_accepts_multipart_form_data() {
     let f = TestFixture::new().await;
@@ -584,8 +560,6 @@ async fn test_zip_task_accepts_multipart_form_data() {
     );
 }
 
-// ── P2.6: sub_repo_id ────────────────────────────────────────────────
-
 #[tokio::test]
 async fn test_sub_repo_response_includes_sub_repo_id() {
     let f = TestFixture::new().await;
@@ -609,8 +583,6 @@ async fn test_sub_repo_response_includes_sub_repo_id() {
         .unwrap_or_else(|| panic!("sub_repo_id missing, got {body:?}"));
     assert_eq!(id, body["id"].as_str().unwrap());
 }
-
-// ── P3: upload/update link host ──────────────────────────────────────
 
 /// With `site_url` left at its built-in loopback default, the upload link must
 /// echo the address the client actually used — the same rule download links

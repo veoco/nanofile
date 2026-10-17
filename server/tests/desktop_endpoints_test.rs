@@ -137,7 +137,6 @@ async fn test_dir_shared_items_unauthorized() {
 async fn test_repo_history_changes_no_commits() {
     let f = TestFixture::new().await;
 
-    // Upload a file to create a commit
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "history.txt", b"test")
@@ -148,7 +147,6 @@ async fn test_repo_history_changes_no_commits() {
         resp.status()
     );
 
-    // Get the head commit
     let resp = f
         .client
         .get_sync(
@@ -170,7 +168,6 @@ async fn test_repo_history_changes_no_commits() {
     );
     let commit_id = body["head_commit_id"].as_str().unwrap();
 
-    // Get history changes for this commit
     let resp = f
         .client
         .get(
@@ -189,7 +186,6 @@ async fn test_repo_history_changes_no_commits() {
         status, text
     );
     let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-    // Should have at least the uploaded file
     assert!(
         body["new_files"].as_array().is_some() || body["modified_files"].as_array().is_some(),
         "expected new_files or modified_files in: {:?}",
@@ -230,14 +226,12 @@ async fn test_repo_history_changes_unauthorized() {
 async fn test_sub_repo_create() {
     let f = TestFixture::new().await;
 
-    // Create a directory in the repo
     let resp = f
         .client
         .create_dir(&f.api_token, &f.repo_id, "/subdir")
         .await;
     assert!(resp.status().is_success());
 
-    // Create sub-repo from this directory
     let resp = f
         .client
         .get(
@@ -260,7 +254,6 @@ async fn test_sub_repo_create() {
 }
 
 /// A library created from a folder must be able to serve the folder's files.
-///
 /// Blocks are stored per library, so `copy_fs_tree` copying only the FS objects
 /// is not enough: the referenced blocks have to be copied into the new
 /// library's block directory, otherwise every download from it 404s (or the
@@ -296,7 +289,6 @@ async fn test_sub_repo_copies_referenced_blocks() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let new_repo = body["id"].as_str().unwrap().to_string();
 
-    // The new library must serve the very same bytes.
     let resp = f
         .client
         .download_file(&f.api_token, &new_repo, "/inside.txt")
@@ -331,8 +323,6 @@ async fn test_sub_repo_unauthorized() {
         .await;
     assert_eq!(resp.status(), 401);
 }
-
-// ── File history / revision / restore (web UI 文件历史版本) ──────────────
 
 /// 上传（或覆盖）`/hist.txt`，每次调用产生一个内容版本。
 async fn upload_hist_version(f: &TestFixture, data: &[u8]) {
@@ -391,7 +381,6 @@ async fn test_file_history_v21_lists_versions() {
     let data = body["data"].as_array().unwrap();
     assert_eq!(data.len(), 3, "expected 3 versions, got: {:?}", data);
 
-    // 最新版本在列表最前
     let newest = &data[0];
     assert!(newest["commit_id"].is_string());
     assert_eq!(newest["path"], "/hist.txt");
@@ -401,7 +390,6 @@ async fn test_file_history_v21_lists_versions() {
     assert!(newest["rev_file_id"].is_string());
     assert!(newest["rev_file_name"].is_string());
 
-    // 最旧版本是 v1
     assert_eq!(data[2]["size"].as_i64(), Some(b"version-1".len() as i64));
 }
 
@@ -490,7 +478,6 @@ async fn test_restore_file_revision_v21() {
         resp.text().await.unwrap_or_default()
     );
 
-    // 恢复后当前文件内容应为 v1
     let resp = f
         .client
         .download_file(&f.api_token, &f.repo_id, "/hist.txt")

@@ -2,19 +2,16 @@ mod common;
 
 use common::{TestFixture, create_test_user, get_sync_token};
 
-/// C.1.2 — POST /seafhttp/repo/{repo_id}/unlock-file?p=path
 #[tokio::test]
 async fn test_lock_file_success() {
     let f = TestFixture::new().await;
 
-    // Upload a file first
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "lock-me.txt", b"content")
         .await;
     assert!(resp.status().is_success());
 
-    // Lock the file
     let resp = f
         .client
         .put_sync(
@@ -30,14 +27,12 @@ async fn test_lock_file_success() {
 async fn test_lock_and_unlock_file() {
     let f = TestFixture::new().await;
 
-    // Upload a file
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "file.txt", b"data")
         .await;
     assert!(resp.status().is_success());
 
-    // Lock via sync auth (Seafile-Repo-Token header)
     let resp = f
         .client
         .put_sync(
@@ -48,7 +43,6 @@ async fn test_lock_and_unlock_file() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // Unlock
     let resp = f
         .client
         .put_sync(
@@ -64,7 +58,6 @@ async fn test_lock_and_unlock_file() {
 async fn test_locked_files_list() {
     let f = TestFixture::new().await;
 
-    // Upload and lock a file
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "locked.txt", b"data")
@@ -81,7 +74,6 @@ async fn test_locked_files_list() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    // List locked files (daemon uses POST with JSON body)
     let req_body = serde_json::json!([{
         "repo_id": f.repo_id,
         "token": f.sync_token,
@@ -122,7 +114,6 @@ async fn test_locked_files_empty() {
 }
 
 /// Regression: locked-files must accept POST without Content-Type header.
-///
 /// seaf-daemon sends POST requests via curl without setting Content-Type.
 #[tokio::test]
 async fn test_locked_files_accepts_no_content_type() {
@@ -151,7 +142,6 @@ async fn test_lock_file_requires_auth() {
     let resp = client
         .put_sync("/seafhttp/repo/some-repo/lock-file?p=/f.txt", "", vec![])
         .await;
-    // No valid token → 401
     assert!(resp.status() == 401 || resp.status() == 403);
 }
 
@@ -160,14 +150,12 @@ async fn test_lock_file_requires_auth() {
 async fn test_lock_file_readonly_member_forbidden() {
     let f = TestFixture::new().await;
 
-    // A file to lock.
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "lock-ro.txt", b"x")
         .await;
     assert!(resp.status().is_success());
 
-    // Second user, granted read-only access.
     let ro_id = create_test_user(f.server.db.as_ref(), "ro@example.com", "password").await;
     let resp = f.client.login("ro@example.com", "password").await;
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -177,7 +165,6 @@ async fn test_lock_file_readonly_member_forbidden() {
 
     let b_sync = get_sync_token(&f.client, &b_token, &f.repo_id).await;
 
-    // Read-only member must NOT be able to lock…
     let resp = f
         .client
         .put_sync(
@@ -188,7 +175,6 @@ async fn test_lock_file_readonly_member_forbidden() {
         .await;
     assert_eq!(resp.status(), 403, "read-only member must not lock files");
 
-    // …nor unlock.
     let resp = f
         .client
         .put_sync(

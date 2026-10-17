@@ -11,7 +11,6 @@ use common::TestFixture;
 use serde_json::{Value, json};
 use server::repository::api_key::UpdateApiKeyParams;
 
-/// Mint a key through the management API and return its plaintext.
 async fn create_key(f: &TestFixture, body: &Value) -> String {
     let resp = f
         .client
@@ -64,7 +63,6 @@ async fn a_key_exercises_only_the_capabilities_it_holds() {
         .await;
     assert_eq!(resp.status(), 200, "file.read should list a directory");
 
-    // No file.write capability: creating a directory must be refused.
     let resp = f
         .client
         .post_form(
@@ -75,7 +73,6 @@ async fn a_key_exercises_only_the_capabilities_it_holds() {
         .await;
     assert_eq!(resp.status(), 403, "file.write was not granted");
 
-    // Nor may it reach a surface it was not granted at all.
     let resp = f.client.get("/api2/starredfiles/", Some(&key)).await;
     assert_eq!(resp.status(), 403, "star.read was not granted");
 }
@@ -104,7 +101,6 @@ async fn a_read_only_key_cannot_mint_credentials() {
         assert_eq!(resp.status(), 403, "{path} needs a write capability");
     }
 
-    // A read of the same library still works.
     let resp = f
         .client
         .get(&format!("/api2/repos/{}/", f.repo_id), Some(&key))
@@ -132,7 +128,6 @@ async fn a_bound_key_cannot_reach_another_library() {
     )
     .await;
 
-    // Direct access through a path-carried library id.
     for path in [
         format!("/api2/repos/{other}/"),
         format!("/api2/repos/{other}/dir/?p=/"),
@@ -142,7 +137,6 @@ async fn a_bound_key_cannot_reach_another_library() {
         assert_eq!(resp.status(), 403, "{path} is outside the key's scope");
     }
 
-    // A write through the same path is refused too.
     let resp = f
         .client
         .post_form(
@@ -153,7 +147,6 @@ async fn a_bound_key_cannot_reach_another_library() {
         .await;
     assert_eq!(resp.status(), 403);
 
-    // The account-wide listings must not describe it either.
     let listed: Vec<Value> = f
         .client
         .get("/api2/repos/", Some(&key))
@@ -217,7 +210,6 @@ async fn an_all_repos_key_reaches_every_library() {
 #[tokio::test]
 async fn a_per_library_ceiling_downgrades_writes() {
     let f = TestFixture::new().await;
-    // The key holds file.write, but only read for this library.
     let key = create_key(
         &f,
         &key_body(
@@ -330,7 +322,6 @@ async fn sync_access_follows_the_sync_capabilities() {
     let resp = f.client.get_head_commit(&no_sync_key, &f.repo_id).await;
     assert_eq!(resp.status(), 403, "sync.read was not granted");
 
-    // A sync-capable key bound to this library cannot be used on another.
     let other = second_repo(&f).await;
     let resp = f.client.get_head_commit(&read_key, &other).await;
     assert_eq!(resp.status(), 403, "the sync scope is per library");
@@ -376,12 +367,10 @@ async fn using_a_key_records_when_it_was_last_used() {
         "a key that has never been presented has no last use"
     );
 
-    // The REST surface.
     let resp = f.client.get("/api2/repos/", Some(&key)).await;
     assert_eq!(resp.status(), 200);
     let after_rest = last_used(&f, key_id).await.expect("recorded by /api2");
 
-    // The sync surface, which is where an unthrottled write would hurt most.
     let resp = f.client.get_head_commit(&key, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let after_sync = last_used(&f, key_id).await.expect("recorded by /seafhttp");

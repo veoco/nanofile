@@ -11,7 +11,6 @@ use common::TestServer;
 use infra::settings::Section;
 use server::settings::SettingsForm;
 
-/// A form that submits non-secret values.
 fn form(pairs: &[(&str, &str)]) -> SettingsForm {
     SettingsForm {
         values: pairs
@@ -39,7 +38,6 @@ async fn save_switch(server: &TestServer, on: bool) {
     server.state.apply_settings_hooks(&outcome.hooks);
 }
 
-/// Sign in through the Web UI form and keep the session cookies.
 async fn ui_login(server: &TestServer, email: &str, password: &str) -> reqwest::Client {
     let client = reqwest::Client::builder()
         .cookie_store(true)
@@ -60,7 +58,6 @@ async fn ui_login(server: &TestServer, email: &str, password: &str) -> reqwest::
     client
 }
 
-/// Fetch a page as the signed-in client, and its status.
 async fn page(server: &TestServer, client: &reqwest::Client, path: &str) -> (u16, String) {
     let resp = client
         .get(format!(
@@ -82,7 +79,6 @@ fn page_content(html: &str) -> &str {
     html.split("id=\"__i18n\"").next().unwrap_or(html)
 }
 
-/// How many times `needle` appears in `html`.
 fn count(html: &str, needle: &str) -> usize {
     html.matches(needle).count()
 }
@@ -91,7 +87,6 @@ fn count(html: &str, needle: &str) -> usize {
 /// this host actually gives, one band per profile and one row per protection, and
 /// warns when that is not the whole set. The values come from a confined child's
 /// own report, so the page cannot advertise protection this host does not have.
-///
 /// What the host gives is not this test's to decide, so the row count is derived
 /// from the bands that were measured rather than assumed to be both of them.
 /// Whether a host can start a confined child at all is `sandbox_probe_test`'s
@@ -163,7 +158,6 @@ async fn the_sandbox_page_shows_the_measured_items_per_profile() {
         !html.contains("data-sandbox-status"),
         "the page still has a status strip"
     );
-    // A page with one row has nothing to narrow, so the filter box is not there.
     assert!(
         !html.contains("data-settings-filter"),
         "a one-row page renders a filter box"

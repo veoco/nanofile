@@ -89,7 +89,6 @@ fn strip_versioned_header(block_dir: &std::path::Path, repo_id: &str, block_id: 
 async fn block_map_reports_logical_sizes_for_headerless_at_rest_blocks() {
     let server = TestServer::start_with_storage_config(|storage| {
         storage.block_encryption_mode = "on".to_string();
-        // 64 hex chars decode to the 32-byte master key.
         storage.encryption_key = Some("42".repeat(32));
     })
     .await;
