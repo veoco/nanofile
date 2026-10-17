@@ -45,6 +45,15 @@ The `lint` job fails when:
 tokens, so the advisory is unreachable; the ignore is re-checked when
 `jsonwebtoken` gains algorithm-level features.
 
+### Build caches
+
+Rust builds are shared through `Swatinem/rust-cache` under two `shared-key`
+families: `nanofile` holds check-only output (clippy and rustdoc, nothing linked)
+and `nanofile-build` holds linked dev/test codegen. A cache entry is immutable —
+the first job to save a key defines it for every later run — so a job has to write
+the family that matches its artifacts. A check-only entry under a build job's key
+leaves that job recompiling the whole dependency graph on every run.
+
 ## `nightly.yml`
 
 Runs daily at 10:00 UTC. A scheduled run first checks whether the latest commit is

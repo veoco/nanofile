@@ -30,6 +30,10 @@ Action 固定到完整 commit SHA，tag 写在行尾注释里，因此被移动�
 
 `cargo audit` 忽略 `RUSTSEC-2023-0071`（`rsa` 里的 Marvin 攻击，由 `jsonwebtoken` 的 rust_crypto 特性引入）。Nanofile 只签发与校验 HS256 令牌，该公告在这里不可达；等 `jsonwebtoken` 支持算法级特性时再重新评估这个忽略。
 
+### 构建缓存
+
+Rust 构建通过 `Swatinem/rust-cache` 共享，分成两个 `shared-key` 家族：`nanofile` 只放 check 产物（clippy 与 rustdoc，不链接），`nanofile-build` 放链接后的 dev/test 产物。缓存条目不可覆盖——先保存该 key 的 job 决定它之后的内容——因此 job 必须写入与自身产物匹配的家族。check-only 条目落到 build job 的 key 上，会让该 job 每次运行都重编译整棵依赖图。
+
 ## `nightly.yml`
 
 每天 10:00 UTC 运行。定时运行先检查最新提交是否来自今天；手动运行跳过该检查。它构建多架构镜像并发布为 `ghcr.io/veoco/nanofile:edge`，同时对每个原生构建产物与已推送镜像的沙盒做冒烟测试（`extract-worker --probe`）。
