@@ -10,8 +10,6 @@ use crate::middleware::auth::AuthUser;
 use crate::service::user::avatar::MAX_AVATAR_SIZE;
 use base::error::AppError;
 
-// ─── Upload handler ──────────────────────────────────────────────────────────
-
 /// `POST /api/v2.1/user-avatar/`
 ///
 /// Upload a new primary avatar for the authenticated user.
@@ -28,7 +26,6 @@ pub async fn upload_avatar(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Parse the multipart stream and find the "avatar" file field.
     let mut avatar_field: Option<(String, Vec<u8>, String)> = None;
 
     while let Some(mut field) = multipart

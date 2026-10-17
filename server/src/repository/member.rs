@@ -8,7 +8,6 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::repo_member;
 
-/// Parameters for creating a repo member entry.
 pub struct CreateMemberParams {
     pub repo_id: String,
     pub user_id: i32,
@@ -40,15 +39,13 @@ pub trait MemberRepository: Send + Sync {
     ) -> Result<DeleteResult, AppError>;
     async fn delete_by_repo(&self, repo_id: &str) -> Result<DeleteResult, AppError>;
 
-    /// Create a repo member from typed parameters.
     async fn create_member(
         &self,
         params: CreateMemberParams,
     ) -> Result<repo_member::Model, AppError>;
 
-    /// Look up a repo's owner and the user's membership permission in a single
-    /// LEFT JOIN query. Returns `(owner_id, permission)` where `permission` is
-    /// `None` if the user is not a member.
+    /// Look up a repo's owner and the user's membership permission in a single LEFT JOIN query:
+    /// `(owner_id, permission)`, where `permission` is `None` if the user is not a member.
     ///
     /// This is the canonical permission check query used by `domain::permission`.
     async fn find_repo_owner_and_permission(
@@ -57,7 +54,6 @@ pub trait MemberRepository: Send + Sync {
         user_id: i32,
     ) -> Result<Option<(i32, Option<String>)>, AppError>;
 
-    /// Batch fetch a user's membership rows across many repos (chunked `IN`).
     async fn find_by_repo_ids(
         &self,
         repo_ids: &[String],

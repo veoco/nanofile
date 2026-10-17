@@ -8,7 +8,6 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::upload_link;
 
-/// Parameters for creating an upload link.
 pub struct CreateUploadLinkParams {
     pub repo_id: String,
     pub creator_id: i32,
@@ -37,7 +36,6 @@ pub trait UploadLinkRepository: Send + Sync {
     async fn find_expired(&self) -> Result<Vec<upload_link::Model>, AppError>;
     async fn insert(&self, model: upload_link::ActiveModel)
     -> Result<upload_link::Model, AppError>;
-    /// Create an upload link from typed parameters.
     async fn create_upload_link(
         &self,
         params: CreateUploadLinkParams,
@@ -57,9 +55,7 @@ pub trait UploadLinkRepository: Send + Sync {
         password: Option<Option<String>>,
         description: Option<Option<String>>,
     ) -> Result<bool, AppError>;
-    /// Delete expired upload links (where expires_at < now).
     async fn delete_expired(&self, now: i64) -> Result<u64, AppError>;
-    /// Increment the view count for an upload link by its ID.
     async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError>;
 }
 
@@ -211,8 +207,7 @@ impl UploadLinkRepository for DbUploadLinkRepository {
     }
 
     async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError> {
-        // Atomic SQL increment: `view_cnt = view_cnt + 1` avoids lost updates
-        // from concurrent read-then-write on the same link.
+        // Atomic `view_cnt = view_cnt + 1` avoids lost updates from concurrent read-then-write.
         upload_link::Entity::update_many()
             .filter(upload_link::Column::Id.eq(id))
             .col_expr(

@@ -1,13 +1,10 @@
-//! Commit domain logic — serialization and commit_id computation.
+//! Commit domain logic: serialization and commit_id computation.
 //!
-//! The `CommitData` type is defined in `base::common`; this module
-//! provides the computation functions that were previously methods
-//! on that type in `infra::serialization::commit_json`.
+//! `CommitData` is defined in `base::common`.
 
 use base::common::CommitData;
 use sha1::{Digest, Sha1};
 
-/// Serialize commit data to compact JSON.
 pub fn to_json(data: &CommitData) -> String {
     serde_json::to_string(data).unwrap()
 }

@@ -1,14 +1,7 @@
-//! # domain
+//! Domain models and pure computation functions for nanofile.
 //!
-//! Domain models and computation functions for nanofile.
-//!
-//! The type definitions (FsDirData, FsFileData, DirEntryData, CommitData)
-//! live in `base::common` so they can be shared with the infra crate.
-//! This module provides the computation functions that operate on those
-//! types — serialization to compact JSON, SHA1 fs_id computation, etc.
-//!
-//! This module intentionally avoids infrastructure concerns (DB access,
-//! HTTP, etc.) — it's pure domain logic.
+//! The types live in `base::common`; this module only holds their
+//! serialization and fs_id/commit_id computation, with no DB or HTTP access.
 
 pub mod api_key;
 pub mod capability;

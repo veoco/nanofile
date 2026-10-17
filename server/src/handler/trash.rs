@@ -220,11 +220,9 @@ pub async fn list_trash(
     Ok(Json(result))
 }
 
-/// GET /api/v2.1/deleted-repos/ — the libraries in the caller's trash.
-///
-/// The response is a bare JSON array, matching seahub's `DeletedRepos.get`
-/// (`Response(trashs_json)`), which is what the web UI's deleted-libraries view
-/// reads.
+/// GET /api/v2.1/deleted-repos/ — the libraries in the caller's trash, as a bare
+/// JSON array matching seahub's `DeletedRepos.get` (`Response(trashs_json)`), which
+/// the web UI's deleted-libraries view reads.
 pub async fn list_deleted_repos(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -260,11 +258,9 @@ pub async fn list_deleted_repos(
     Ok(Json(serde_json::Value::Array(items)))
 }
 
-/// POST /api/v2.1/deleted-repos/ — restore a library from the trash.
-///
-/// seahub posts this as a form (`repo_id=…`) and reads the repo id from
-/// `request.POST`; a JSON body is accepted as well, since that is what this
-/// endpoint used to take.
+/// POST /api/v2.1/deleted-repos/ — restore a library from the trash. seahub posts
+/// this as a form (`repo_id=…`) and reads `request.POST`; a JSON body is accepted
+/// too.
 pub async fn restore_deleted_repo(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -314,7 +310,6 @@ pub async fn purge_deleted_repos(
     Ok(ok_json())
 }
 
-/// Read the repo id from a form-encoded or JSON body.
 async fn parse_repo_id_body(req: Request<Body>) -> Result<String, AppError> {
     let (_, body) = req.into_parts();
     let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;

@@ -1,8 +1,5 @@
-/// Web UI invitation code management handlers — admin only.
-///
-/// GET  /settings/invitations/ — list invitation codes.
-/// POST /settings/invitations/ — generate a new invitation code.
-/// POST /settings/invitations/{id}/delete — delete an existing invitation code.
+/// Web UI invitation code management handlers — admin only: list and generate under
+/// `/settings/invitations/`, delete under `/settings/invitations/{id}/delete`.
 use askama::Template;
 use axum::{
     extract::{Form, Path, State},
@@ -32,7 +29,6 @@ pub struct InvitationsTemplate {
     pub csrf_token: String,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
-    /// The shared settings navigation.
     pub nav: crate::ui::settings::SettingsNav,
 }
 

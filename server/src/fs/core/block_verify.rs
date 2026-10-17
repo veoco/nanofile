@@ -1,23 +1,16 @@
 //! Verification and repair of stored blocks (`nanofile verify-blocks`).
 //!
-//! Two independent checks:
+//! Two independent checks: every stored block must hash to its content-addressed id
+//! (a mismatch means readers would serve the wrong bytes), and every file object's
+//! `block_ids` must add up to the size it declares (clients derive range/resume
+//! offsets from block sizes, so a wrong total makes them slice at the wrong offset).
+//! The report also counts file objects whose block sizes could not have come from
+//! seafile's official chunker.
 //!
-//! 1. Every stored block must hash to its content-addressed id. A mismatch, or
-//!    a block that cannot be read at all, means the stored bytes are not the
-//!    block they are named after: readers would serve the wrong bytes, and
-//!    every file referencing the block is missing them.
-//! 2. Every file object's `block_ids` must add up to the size it declares.
-//!    Clients derive range/resume offsets from block sizes, so an object that
-//!    does not add up makes them slice at the wrong offset.
-//!
-//! The report also counts file objects whose block sizes could not have come
-//! from seafile's official chunker: those are files an official client will
-//! re-chunk and re-upload once.
-//!
-//! `--repair` acts on check 1 only: a failing block is moved to
+//! `--repair` acts on the hash check only: a failing block is moved to
 //! `{block_dir}/.quarantine/...` (bytes are never deleted) and removed from the
-//! store, so clients see it as missing and a client holding a good copy
-//! re-uploads it. Quarantined bytes are kept for forensics.
+//! store, so clients see it as missing and a client holding a good copy re-uploads
+//! it. Quarantined bytes are kept for forensics.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -56,10 +49,8 @@ pub struct FileFinding {
     /// HEAD (`None` for a historical version that is no longer current).
     pub path: Option<String>,
     pub declared_size: i64,
-    /// Sum of the stored blocks' logical sizes.
     pub stored_size: i64,
     pub blocks: usize,
-    /// Blocks that are missing from the store entirely.
     pub missing_blocks: usize,
     /// Whether the block-size mix could not have come from the official chunker.
     pub non_official_chunking: bool,
@@ -89,8 +80,7 @@ impl VerifyReport {
             || !self.repair_errors.is_empty()
     }
 
-    /// Print the report: the machine-readable form when `json`, a summary
-    /// otherwise.
+    /// Print the report: machine-readable JSON when `json`, a summary otherwise.
     pub fn print(&self, json: bool) {
         if json {
             match serde_json::to_string_pretty(self) {
@@ -159,8 +149,8 @@ impl VerifyReport {
 pub struct BlockVerify;
 
 impl BlockVerify {
-    /// Check every library (or `repo_filter`) and, when `repair`, quarantine the
-    /// blocks that fail the id check.
+    /// Check every library (or `repo_filter`) and, when `repair`, quarantine the blocks
+    /// that fail the id check.
     pub async fn run(
         db: &DatabaseConnection,
         store: &DynBlockStorage,
@@ -183,7 +173,6 @@ impl BlockVerify {
             ..Default::default()
         };
 
-        // 1. Hash every stored block against its content-addressed id.
         let mut corrupt: Vec<CorruptBlock> = Vec::new();
         for repo_id in &repo_ids {
             for block_id in store.list_blocks(repo_id).await? {
@@ -209,7 +198,6 @@ impl BlockVerify {
             }
         }
 
-        // 2. Check every file object against the store.
         for repo_id in &repo_ids {
             let paths = Self::current_paths(db, repo_id).await?;
             let files = fs_object::Entity::find()
@@ -255,8 +243,7 @@ impl BlockVerify {
             }
         }
 
-        // 3. Quarantine what failed the id check, so a client with a good copy
-        //    re-uploads it and the file becomes readable again.
+        // Quarantine what failed the id check so a client with a good copy re-uploads it.
         if repair {
             for block in &corrupt {
                 match Self::quarantine(store, block_dir, &block.repo_id, &block.block_id).await {
@@ -276,14 +263,11 @@ impl BlockVerify {
     }
 
     /// Whether a file's block sizes could not have come from seafile's official
-    /// chunker.
-    ///
-    /// Official chunking emits blocks between the minimum and maximum size,
-    /// except for the file's last block: every other block is at least
-    /// [`SEAFILE_MIN_BLOCK`] and at most [`SEAFILE_MAX_BLOCK`]. A non-last block
-    /// outside that range (the pre-2017 size-dependent chunker this server used
-    /// before 2026-09-18 produced those) means an official client will re-chunk
-    /// the file, find a different `seafile` object id and re-upload it once.
+    /// chunker: besides the file's last block, every block must lie within
+    /// [`SEAFILE_MIN_BLOCK`]..[`SEAFILE_MAX_BLOCK`]. A non-last block outside that
+    /// range (the pre-2017 size-dependent chunker produced those) means an official
+    /// client will re-chunk the file, find a different `seafile` object id and
+    /// re-upload it once.
     fn non_official_chunking(sizes: &[i64]) -> bool {
         let Some((_last, rest)) = sizes.split_last() else {
             return false;
@@ -346,7 +330,6 @@ impl BlockVerify {
         Ok(paths)
     }
 
-    /// Fetch a batch of directory objects by id.
     async fn read_dirs(
         db: &DatabaseConnection,
         repo_id: &str,
@@ -377,12 +360,10 @@ impl BlockVerify {
         Ok(out)
     }
 
-    /// Move a failing block out of the store into the quarantine directory.
-    ///
-    /// The `store`'s id check already failed, so no reader can be relying on
-    /// the bytes being the block they name; moving them makes the block read as
-    /// missing, which is what makes a client re-upload it. The bytes themselves
-    /// are kept for forensics.
+    /// Move a failing block out of the store into the quarantine directory. The id
+    /// check already failed, so no reader can rely on those bytes; moving them makes
+    /// the block read as missing, which makes a client re-upload it. The bytes are
+    /// kept for forensics.
     async fn quarantine(
         store: &DynBlockStorage,
         block_dir: &Path,
@@ -410,14 +391,12 @@ impl BlockVerify {
         }
         match tokio::fs::rename(&source, &target).await {
             Ok(()) => {}
-            // The block could not be read, so the file may already be gone:
-            // there is nothing to preserve, but it must stop counting as
-            // present.
+            // The block could not be read, so the file may already be gone: nothing to
+            // preserve, but it must stop counting as present.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(AppError::internal(e.to_string())),
         }
-        // Drops the presence-cache entry either way (`remove_block` tolerates a
-        // block that is already gone).
+        // Drops the presence-cache entry either way (`remove_block` tolerates a gone block).
         store.remove_block(repo_id, block_id).await?;
         Ok(())
     }
@@ -444,7 +423,7 @@ pub fn open_block_store(config: &infra::config::Config) -> Result<DynBlockStorag
     Ok(store)
 }
 
-/// Where a quarantined block is kept, for operator reference in the report.
+/// Where a quarantined block is kept.
 pub fn quarantine_root(block_dir: &Path) -> PathBuf {
     block_dir.join(QUARANTINE_DIR)
 }
@@ -521,8 +500,7 @@ mod tests {
 
     #[test]
     fn pre_2017_sized_blocks_are_flagged() {
-        // The pre-2017 chunker's 1 MiB / 4 MiB blocks: a non-last block below
-        // the 6 MiB minimum.
+        // The pre-2017 chunker's 1 MiB / 4 MiB blocks: a non-last block below the minimum.
         assert!(BlockVerify::non_official_chunking(&[
             1_048_576, 1_048_576, 4_194_304
         ]));
@@ -541,8 +519,8 @@ mod tests {
 
         let good_id = store.write_block(REPO, b"good block").await.unwrap();
         let bad_id = store.write_block(REPO, b"bad block").await.unwrap();
-        // Overwrite the second block's bytes: the file no longer hashes to its
-        // own id, which is how a partial write used to look on disk.
+        // Overwrite the second block's bytes: the file no longer hashes to its own id,
+        // which is how a partial write looked on disk.
         std::fs::write(stored_block_path(&block_dir, &bad_id), b"corrupted").unwrap();
         store.invalidate_exists_cache();
 
@@ -556,8 +534,8 @@ mod tests {
         assert!(report.has_findings());
         assert!(store.has_block(REPO, &bad_id).await);
 
-        // Repair run: the block is quarantined (bytes kept) and reads missing,
-        // so a client with a good copy re-uploads it.
+        // Repair run: the block is quarantined (bytes kept) and reads as missing, so a
+        // client with a good copy re-uploads it.
         let report = BlockVerify::run(&db, &store, &block_dir, None, true)
             .await
             .unwrap();

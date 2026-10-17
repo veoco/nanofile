@@ -1,6 +1,5 @@
-//! Rendering one message: subject, plain-text body, HTML body, and the raw
-//! RFC 5322 bytes that are handed to the transport (and stored encrypted while
-//! the message waits in the queue).
+//! Rendering one message: subject, plain-text body, HTML body, and the raw RFC 5322 bytes handed to
+//! the transport (and stored encrypted while the message waits in the queue).
 
 use lettre::message::{Mailbox, MultiPart};
 use lettre::{Address, Message};
@@ -9,31 +8,21 @@ use super::i18n::MailStrings;
 use super::settings::EmailSettings;
 use super::{MailError, MailKind};
 
-/// Everything a body may interpolate.
-///
-/// One struct for every kind (rather than one per kind) so the placeholder set
-/// is closed and testable: a body may only name a value listed here.
+/// Everything a body may interpolate. One struct for every kind so the placeholder set is closed and
+/// testable: a body may only name a value listed here.
 #[derive(Clone, Debug, Default)]
 pub struct MailParams {
     /// Display name of the recipient (`users.nickname()`).
     pub display_name: Option<String>,
     /// Absolute URL of this server, for prose ("open Settings at …").
     pub site_url: Option<String>,
-    /// The one-time password-reset link.
     pub link: Option<String>,
-    /// How long the reset link stays valid, in days.
     pub ttl_days: Option<i64>,
-    /// Client address the action came from.
     pub ip: Option<String>,
-    /// Browser label of the session that was created.
     pub browser: Option<String>,
-    /// Device name a client application reported.
     pub device: Option<String>,
-    /// Platform a client application reported.
     pub platform: Option<String>,
-    /// Name of the API key that was created.
     pub key_name: Option<String>,
-    /// Unix seconds of the event.
     pub time_ts: Option<i64>,
 }
 
@@ -45,9 +34,8 @@ pub struct MailContent {
     pub html: String,
 }
 
-/// Placeholders a body may use. Anything else left in a template is a typo —
-/// it would ship as a literal `{foo}` to the reader — so the tests assert that
-/// the shipped strings only name these.
+/// Placeholders a body may use: anything else left in a template is a typo that ships as a literal
+/// `{foo}` to the reader, so the tests assert that the shipped strings only name these.
 pub const PLACEHOLDERS: &[&str] = &[
     "name", "brand", "site_url", "link", "ttl", "ip", "time", "browser", "device", "platform",
     "key_name",
@@ -98,20 +86,15 @@ fn now() -> i64 {
 
 /// Render a timestamp for a mail body.
 ///
-/// Unlike the Web UI — where every time ships as raw Unix seconds and the
-/// browser localizes it — mail has no browser to consult, so the server has to
-/// commit to one rendering. It commits to UTC *and says so*: an unlabelled
-/// timestamp would be read as local time and mislead the recipient about
-/// whether a sign-in was theirs.
+/// Mail has no browser to localize it, so the server commits to UTC *and says so*: an unlabelled
+/// timestamp would be read as local time and mislead the recipient about whether a sign-in was theirs.
 pub fn format_utc(ts: i64) -> String {
     let stamp = chrono::DateTime::from_timestamp(ts, 0).unwrap_or_default();
     format!("{} UTC", stamp.format("%Y-%m-%d %H:%M"))
 }
 
-/// Escape a value for interpolation into an HTML body.
-///
-/// Values reach these bodies from client-supplied fields (device names, the
-/// `User-Agent` label, an API key name), so they are escaped even though the
+/// Escape a value for interpolation into an HTML body: values reach these bodies from client-supplied
+/// fields (device names, the `User-Agent` label, an API key name), so they are escaped even though the
 /// templates themselves are trusted.
 pub fn escape_html(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -128,14 +111,12 @@ pub fn escape_html(value: &str) -> String {
     out
 }
 
-/// Render the subject and both bodies for one message.
 pub fn render(strings: &MailStrings, kind: MailKind, params: &MailParams) -> MailContent {
     let site_url = params.site_url.clone().unwrap_or_default();
     let key = |part: &str| format!("email.{}.{}", kind.id(), part);
 
-    // Two substitution passes over one value set: bodies interpolate escaped
-    // values, the plain-text alternative interpolates them verbatim (escaping
-    // there would print `&amp;` to a terminal).
+    // Two substitution passes over one value set: bodies interpolate escaped values, the plain-text
+    // alternative interpolates them verbatim (escaping there would print `&amp;` to a terminal).
     let text_args: Vec<(&str, String)> = PLACEHOLDERS
         .iter()
         .map(|name| (*name, value(params, name, &site_url)))
@@ -188,9 +169,9 @@ pub fn render(strings: &MailStrings, kind: MailKind, params: &MailParams) -> Mai
 
 /// Build the raw RFC 5322 message that will be handed to the SMTP transport.
 ///
-/// The result is what gets encrypted into the queue and sent verbatim, so the
-/// message is assembled exactly once per attempt set rather than re-rendered at
-/// delivery time (a recipient's language could otherwise change under it).
+/// The result is what gets encrypted into the queue and sent verbatim, so the message is assembled
+/// exactly once per attempt set rather than re-rendered at delivery time (a recipient's language could
+/// otherwise change under it).
 pub fn format_message(
     settings: &EmailSettings,
     to: &str,
@@ -212,9 +193,8 @@ pub fn format_message(
         .parse()
         .map_err(|e| MailError::new(format!("invalid recipient address: {e}")))?;
 
-    // A generated id is better than the feature-less fallback (`@localhost`),
-    // and the domain comes from the configured site URL rather than the host
-    // the process happens to run on.
+    // A generated id is better than the feature-less fallback (`@localhost`), and the domain comes
+    // from the configured site URL rather than the host the process happens to run on.
     let message_id = format!("<{}@{}>", uuid::Uuid::new_v4(), message_id_domain);
 
     let message = Message::builder()
@@ -224,8 +204,8 @@ pub fn format_message(
         .date_now()
         .message_id(Some(message_id))
         .multipart(MultiPart::alternative_plain_html(
-            // Both parts are built with `charset=utf-8`, which is what lets a
-            // Chinese body survive without a hand-written encoder.
+            // Both parts are built with `charset=utf-8`, which lets a Chinese body survive without a
+            // hand-written encoder.
             content.text.clone(),
             content.html.clone(),
         ))
@@ -299,8 +279,8 @@ mod tests {
         MailKind::Test,
     ];
 
-    /// Every shipped string may only use placeholders the renderer supplies;
-    /// a typo would otherwise ship a literal `{foo}` to the reader.
+    /// Every shipped string may only use placeholders the renderer supplies; a typo would ship a
+    /// literal `{foo}` to the reader.
     #[test]
     fn bodies_only_use_known_placeholders() {
         for lang in ["en", "zh"] {
@@ -338,7 +318,6 @@ mod tests {
                 if kind != MailKind::Test {
                     assert!(content.text.contains("Ada"), "text greets the recipient");
                 }
-                // Neither body may keep an unsubstituted placeholder.
                 for body in [&content.text, &content.html] {
                     assert!(
                         !body.contains("{name}") && !body.contains("{time}"),
@@ -363,8 +342,8 @@ mod tests {
         assert!(content.html.contains("203.0.113.7"));
     }
 
-    /// Values a client controls are escaped in HTML but not in text: an
-    /// unescaped device name would be an HTML injection into the owner's mail.
+    /// Values a client controls are escaped in HTML but not in text: an unescaped device name would
+    /// be an HTML injection into the owner's mail.
     #[test]
     fn client_supplied_values_are_escaped_in_html_only() {
         let strings = MailStrings::get(Some("en"), "en");
@@ -388,8 +367,8 @@ mod tests {
                 !content.html.contains("onerror=alert(1)>"),
                 "html body must escape a hostile key name"
             );
-            // The text alternative keeps the raw value: it is not markup, and
-            // escaping there would print entities to a terminal.
+            // The text alternative keeps the raw value: it is not markup, and escaping there would
+            // print entities to a terminal.
             assert!(content.text.contains("<script>alert(1)</script>"));
         }
     }

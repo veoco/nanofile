@@ -9,21 +9,19 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::repo;
 
-/// Row shape for `SELECT SUM(size) AS total FROM repos WHERE owner_id = ?`.
-/// `total` is `Option` because SQL `SUM` yields NULL when no rows match.
+/// Row shape for the per-owner size sum; `total` is `Option` because SQL `SUM` yields NULL when
+/// no rows match.
 #[derive(FromQueryResult)]
 struct TotalSize {
     total: Option<i64>,
 }
 
-/// Row shape for `SELECT owner_id, SUM(size) AS total FROM repos GROUP BY owner_id`.
 #[derive(FromQueryResult)]
 struct OwnerTotal {
     owner_id: i32,
     total: Option<i64>,
 }
 
-/// Parameters for creating a new repo.
 pub struct CreateRepoParams {
     pub id: String,
     pub name: String,
@@ -48,9 +46,8 @@ pub struct CreateRepoParams {
 
 /// The password-verifier columns rewritten by a password rotation.
 ///
-/// `None` clears the column, which is what switching between the `magic` and
-/// `pwd_hash` flows requires: a library carries one verifier or the other, never
-/// both (upstream writes the `magic` commit field only when `!pwd_hash`).
+/// `None` clears the column: a library carries one verifier or the other, never both (upstream
+/// writes the `magic` commit field only when `!pwd_hash`).
 #[derive(Default)]
 pub struct UpdateRepoKeysParams {
     pub magic: Option<String>,
@@ -63,23 +60,17 @@ pub struct UpdateRepoKeysParams {
 #[async_trait]
 pub trait RepoRepository: Send + Sync {
     async fn find_by_id(&self, repo_id: &str) -> Result<Option<repo::Model>, AppError>;
-    /// Fetch multiple repos by id in one query (chunked to stay under the
-    /// SQLite variable limit). Repos that don't exist are simply absent.
+    /// Fetch multiple repos by id in one query, chunked under the SQLite variable limit.
     async fn find_by_ids(&self, repo_ids: &[String]) -> Result<Vec<repo::Model>, AppError>;
     async fn find_by_owner_id(&self, user_id: i32) -> Result<Vec<repo::Model>, AppError>;
-    /// The earliest repo owned by the user (by created_at), used as the default
-    /// library. Limits to a single row in SQL instead of loading every owned
-    /// repo just to pick the first by creation time.
+    /// The earliest repo owned by the user (by `created_at`), used as the default library.
     async fn find_earliest_by_owner(&self, user_id: i32) -> Result<Option<repo::Model>, AppError>;
-    /// Sum the `size` of all repos owned by a user, in a single SQL query.
     async fn sum_size_by_owner(&self, user_id: i32) -> Result<i64, AppError>;
-    /// Sum the `size` of repos per owner, grouped in one query, for the given
-    /// owner ids. Pairs with a total of 0 are omitted.
+    /// Sum the `size` of repos per owner, grouped in one query; pairs with a total of 0 are omitted.
     async fn sum_sizes_by_owner(&self, user_ids: &[i32]) -> Result<Vec<(i32, i64)>, AppError>;
     /// Get all repos (used by garbage collection).
     async fn find_all(&self) -> Result<Vec<repo::Model>, AppError>;
     async fn create(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
-    /// Create a repo from typed parameters.
     async fn create_repo(&self, params: CreateRepoParams) -> Result<repo::Model, AppError>;
     async fn update(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
     async fn update_head_commit(
@@ -87,21 +78,15 @@ pub trait RepoRepository: Send + Sync {
         repo_id: &str,
         head_commit_id: Option<String>,
     ) -> Result<(), AppError>;
-    /// Compare-and-swap the HEAD commit: set `to` only if the stored value is
-    /// still `from`. Returns whether the row matched.
+    /// Compare-and-swap the HEAD commit: set `to` only if the stored value is still `from`;
+    /// returns whether the row matched.
     ///
-    /// `update_head_commit` above is unconditional, which is only safe when the
-    /// caller knows no other writer can be in flight. The sync branch update
-    /// cannot assume that — two clients uploading at the same time both read
-    /// HEAD, both compute a merge against it, and with an unconditional UPDATE
-    /// the second write silently drops the first client's commit. Upstream does
-    /// the equivalent with `seaf_branch_manager_test_and_update_branch()`
-    /// (`common/branch-mgr.c`), which runs the comparison inside the same
-    /// transaction as the write.
-    ///
-    /// This mirrors upstream's `SELECT ... FOR UPDATE` + conditional UPDATE
-    /// inside one statement: SQLite serialises writes, and `rows_affected()`
-    /// tells the caller whether it won the race.
+    /// The unconditional `update_head_commit` is only safe when no other writer can be in flight,
+    /// which the sync branch update cannot assume: two clients uploading concurrently both read
+    /// HEAD and compute a merge against it, and the second unconditional write would silently drop
+    /// the first client's commit. Upstream's `seaf_branch_manager_test_and_update_branch()` does
+    /// the comparison inside the same transaction as the write; here SQLite serialises writes and
+    /// `rows_affected()` tells the caller whether it won.
     async fn test_and_update_head_commit(
         &self,
         repo_id: &str,
@@ -111,7 +96,6 @@ pub trait RepoRepository: Send + Sync {
     async fn delete_by_id(&self, repo_id: &str) -> Result<(), AppError>;
     /// Add a delta to the repo's size (can be negative).
     async fn adjust_size(&self, repo_id: &str, delta: i64) -> Result<(), AppError>;
-    /// Update repo encryption keys (magic + random_key). Used by password change.
     async fn update_repo_keys(
         &self,
         repo_id: &str,
@@ -120,8 +104,7 @@ pub trait RepoRepository: Send + Sync {
     /// Rename a repo (owner-only).
     async fn rename_repo(&self, repo_id: &str, name: &str, updated_at: i64)
     -> Result<(), AppError>;
-    /// Update repo name, description, and/or history retention settings
-    /// (owner-only). `None` fields are left unchanged.
+    /// Update name, description and history settings (owner-only); `None` fields are unchanged.
     async fn update_repo_details(
         &self,
         repo_id: &str,
@@ -169,9 +152,8 @@ impl RepoRepository for DbRepoRepository {
             history_ttl_days: Set(0),
             r#type: Set(params.r#type),
         };
-        // NOTE: `ActiveModelTrait::insert` (which uses `RETURNING *`) fails to
-        // map the `type` column back to `r#type` for this entity, so insert and
-        // re-fetch by id instead.
+        // NOTE: `ActiveModelTrait::insert` (`RETURNING *`) fails to map the `type` column back to
+        // `r#type` for this entity, so insert and re-fetch by id instead.
         repo::Entity::insert(model).exec(self.db.as_ref()).await?;
         self.find_by_id(&params.id)
             .await?
@@ -253,12 +235,11 @@ impl RepoRepository for DbRepoRepository {
     }
 
     async fn create(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError> {
-        // Extract the repo_id before insert (ActiveModel will be consumed)
         let repo_id = match &model.id {
             sea_orm::Set(id) => id.clone(),
             _ => return Err(AppError::Internal("repo id is required".into())),
         };
-        // See `create_repo` — avoid `RETURNING` for this entity.
+        // See `create_repo`: avoid `RETURNING` for this entity.
         repo::Entity::insert(model).exec(self.db.as_ref()).await?;
         self.find_by_id(&repo_id)
             .await?
@@ -314,8 +295,7 @@ impl RepoRepository for DbRepoRepository {
     }
 
     async fn adjust_size(&self, repo_id: &str, delta: i64) -> Result<(), AppError> {
-        // Atomic `size = MAX(0, size + delta)` avoids the read-then-write lost
-        // update that a separate `find_by_id` + `update_many` would introduce.
+        // Atomic `size = MAX(0, size + delta)` avoids the read-then-write lost update.
         repo::Entity::update_many()
             .filter(repo::Column::Id.eq(repo_id))
             .col_expr(
@@ -336,8 +316,8 @@ impl RepoRepository for DbRepoRepository {
         repo::Entity::update_many()
             .filter(repo::Column::Id.eq(repo_id))
             .set(repo::ActiveModel {
-                // `None` clears the column: rotating a `pwd_hash` library's
-                // password must leave `magic` NULL, and vice versa.
+                // `None` clears the column: rotating a `pwd_hash` library's password must leave
+                // `magic` NULL, and vice versa.
                 magic: Set(params.magic),
                 random_key: Set(params.random_key),
                 pwd_hash: Set(params.pwd_hash),
@@ -454,7 +434,6 @@ mod tests {
         );
         assert_eq!(head(&repo, "repo-empty").await.as_deref(), Some("c1"));
 
-        // The stored value is now `c1`, so the same NULL-based swap must miss.
         assert!(
             !repo
                 .test_and_update_head_commit("repo-empty", None, "c2")
@@ -483,7 +462,6 @@ mod tests {
         );
         assert_eq!(head(&repo, "repo-h1").await.as_deref(), Some("c1"));
 
-        // The winner's value is now the expected one.
         assert!(
             repo.test_and_update_head_commit("repo-h1", Some("c1"), "c3")
                 .await
@@ -491,7 +469,6 @@ mod tests {
         );
         assert_eq!(head(&repo, "repo-h1").await.as_deref(), Some("c3"));
 
-        // An unknown repo id matches no row.
         assert!(
             !repo
                 .test_and_update_head_commit("nope", None, "c4")

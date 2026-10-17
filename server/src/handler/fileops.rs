@@ -17,7 +17,6 @@ use crate::service::fs::fileops::{self as fops_svc};
 use base::error::AppError;
 use base::sanitize::safe_normalize_path;
 
-/// Get the directory listing for a path (reloaddir=true support).
 #[derive(Serialize)]
 pub struct DirEntry {
     pub id: String,
@@ -80,8 +79,6 @@ async fn list_dir_from_fs_tree(
     ))
 }
 
-// ─── Query / Request types ───────────────────────────────────
-
 #[derive(Deserialize)]
 pub struct FileOpsQuery {
     pub p: Option<String>,
@@ -103,8 +100,6 @@ pub struct CopyMoveWithDirResult {
     pub dir_listing: Option<Vec<DirEntry>>,
 }
 
-// ─── Routes ──────────────────────────────────────────────────
-
 pub fn fileops_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
@@ -121,8 +116,6 @@ pub fn fileops_routes() -> Router<Arc<AppState>> {
         )
 }
 
-// ─── Request body parsing ─────────────────────────────────────
-
 async fn parse_form_body(
     req: Request<axum::body::Body>,
 ) -> Result<HashMap<String, String>, AppError> {
@@ -131,8 +124,6 @@ async fn parse_form_body(
     serde_urlencoded::from_bytes(&bytes)
         .map_err(|_| AppError::BadRequest("invalid form data".into()))
 }
-
-// ─── Batch Delete ────────────────────────────────────────────
 
 pub async fn batch_delete_handler(
     access: RepoPathWrite,
@@ -163,10 +154,9 @@ pub async fn batch_delete_handler(
     )
     .await?;
 
-    // Handle reloaddir=true: seahub's `reloaddir_if_necessary` answers with the
-    // parent directory's dirents as a **bare** array. The iOS client's
-    // `SeafDir.handleData:` rejects any other wrapper, so `{"dir_listing": …}`
-    // left its list stale.
+    // reloaddir=true: seahub's `reloaddir_if_necessary` answers with the parent
+    // directory's dirents as a **bare** array; the iOS client's `SeafDir.handleData:`
+    // rejects any other wrapper, so `{"dir_listing": …}` left its list stale.
     if crate::handler::dir::is_true(query.reloaddir.as_deref()) {
         let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &parent_dir).await?;
         return Ok(Json(json!(entries)).into_response());
@@ -174,8 +164,6 @@ pub async fn batch_delete_handler(
 
     Ok(StatusCode::OK.into_response())
 }
-
-// ─── Batch Copy ──────────────────────────────────────────────
 
 pub async fn batch_copy_handler(
     access: RepoPathWrite,
@@ -218,7 +206,6 @@ pub async fn batch_copy_handler(
         )
         .await?;
 
-    // Convert results to response format
     let json_results: Vec<CopyMoveResult> = results
         .into_iter()
         .map(|r| CopyMoveResult {
@@ -228,8 +215,7 @@ pub async fn batch_copy_handler(
         })
         .collect();
 
-    // seahub reloads the **source** directory (`parent_dir = ?p`) after a copy,
-    // as a bare dirent array.
+    // seahub reloads the **source** directory (`parent_dir = ?p`) after a copy.
     if crate::handler::dir::is_true(query.reloaddir.as_deref()) {
         let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &src_parent_dir).await?;
         return Ok(Json(json!(entries)).into_response());
@@ -237,8 +223,6 @@ pub async fn batch_copy_handler(
 
     Ok(Json(json!(json_results)).into_response())
 }
-
-// ─── Batch Move ──────────────────────────────────────────────
 
 pub async fn batch_move_handler(
     access: RepoPathWrite,
@@ -290,8 +274,7 @@ pub async fn batch_move_handler(
         })
         .collect();
 
-    // seahub reloads the **source** directory (`parent_dir = ?p`) after a move,
-    // as a bare dirent array.
+    // seahub reloads the **source** directory (`parent_dir = ?p`) after a move.
     if crate::handler::dir::is_true(query.reloaddir.as_deref()) {
         let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &src_parent_dir).await?;
         return Ok(Json(json!(entries)).into_response());

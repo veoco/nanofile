@@ -1,41 +1,23 @@
-//! One-shot migration of the legacy flat block layout to the per-repository
-//! layout.
-//!
-//! The legacy layout stored every block of every library in one flat
-//! content-addressed tree keyed only by the block id:
+//! One-shot migration of the legacy flat block layout to the per-repository layout.
 //!
 //! ```text
 //! {block_dir}/<2hex>/<block_id>
 //! ```
 //!
-//! The current layout stores each block inside the library that owns it:
-//!
 //! ```text
 //! {block_dir}/repos/<sha1(repo_id)>/<2hex>/<block_id>
 //! ```
 //!
-//! Namespacing by repository is what makes authorization exact — a block id
-//! learned elsewhere (a cached `fs_object`, another account's client state, a
-//! dedup oracle) is simply not reachable through a library the caller does not
-//! own. The legacy tree therefore has to go away completely: the
-//! server has no read path for it.
+//! Namespacing by repository is what makes authorization exact: a block id learned
+//! elsewhere (a cached `fs_object`, another account's client state, a dedup oracle)
+//! is not reachable through a library the caller does not own, so the legacy tree
+//! must go away completely — the server has no read path for it.
 //!
-//! Properties of this migration:
-//!
-//! * **Pure copy.** No hard links and no symlinks, so it behaves identically on
-//!   Windows, exFAT and network shares.
-//! * **Idempotent and resumable.** A block already present with the same size is
-//!   skipped, so an interrupted run can simply be repeated.
-//! * **Verify before delete.** The legacy tree is removed only after every
-//!   referenced block has been copied or confirmed in its new location. A
-//!   size mismatch aborts the run *before* anything is deleted.
-//! * **No leftovers.** The legacy directories are removed together with any
-//!   temporary file an interrupted copy may have left, and a layout marker is
-//!   written so later startups take the fast path.
-//!
-//! The reference set comes from the `fs_objects` table, which is already keyed
-//! by repository: that covers sub-repository copies and every historical
-//! revision without walking a single FS tree.
+//! It copies rather than links (same behaviour on Windows, exFAT and network
+//! shares), is idempotent and resumable, verifies before it deletes, and leaves no
+//! leftovers (legacy directories, `.tmp` files) plus a layout marker for later
+//! startups. The reference set comes from `fs_objects`, already keyed by repository,
+//! so no FS tree walk is needed.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -52,28 +34,18 @@ use infra::storage::{BlockStorageBackend, LegacyCopyOutcome};
 /// Summary of one migration run.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MigrationReport {
-    /// Repositories that reference at least one block.
     pub repositories: usize,
-    /// Distinct `(repository, block)` pairs found in `fs_objects`.
     pub references: usize,
-    /// Blocks copied into a repository directory.
     pub copied: usize,
-    /// Blocks whose destination already held identical content.
     pub already_present: usize,
     /// Referenced blocks absent from the legacy store (data lost before this
     /// run; reported so the operator can restore from a backup).
     pub missing_sources: usize,
-    /// Legacy files present when the run started.
     pub legacy_files: usize,
-    /// Bytes held by those legacy files.
     pub legacy_bytes: u64,
-    /// Legacy top-level directories removed.
     pub purged_dirs: u64,
-    /// Stray `.tmp` files removed from repository directories.
     pub stale_temp_files: u64,
-    /// The block root was already on the current layout.
     pub already_migrated: bool,
-    /// Nothing was modified (report only).
     pub dry_run: bool,
     /// First few missing block ids (bounded so the report stays printable).
     pub missing_block_ids: Vec<String>,
@@ -123,19 +95,17 @@ pub enum MigrationMode {
 pub struct BlockLayoutMigration;
 
 impl BlockLayoutMigration {
-    /// Progress log interval (in blocks) for a long migration.
     const LOG_EVERY: usize = 5_000;
 
     /// Whether the legacy layout or an interrupted migration is still present.
     ///
-    /// Used by the startup guard: while this returns `true` the server must not
-    /// serve, because the new code paths only look in the per-repository layout.
+    /// The startup guard uses this: while it returns `true` the server must not serve,
+    /// because the new code paths only look in the per-repository layout.
     pub async fn migration_pending(block_dir: &Path) -> bool {
         let store = BlockStorage::new(block_dir.to_path_buf());
         matches!(store.legacy_layout_present().await, Ok(true))
     }
 
-    /// Run (or report) the migration.
     pub async fn run(
         db: &DatabaseConnection,
         block_dir: &Path,
@@ -148,8 +118,8 @@ impl BlockLayoutMigration {
             .await
             .map_err(|e| AppError::internal(format!("scan legacy block layout: {e}")))?;
 
-        // The reference map is needed even for a dry run (to report the copy
-        // volume), but not when there is nothing to migrate.
+        // Needed even for a dry run (to report the copy volume), but not when there
+        // is nothing to migrate.
         let references = if legacy_files.is_empty() {
             BTreeSet::new()
         } else {
@@ -172,8 +142,8 @@ impl BlockLayoutMigration {
         };
 
         if references.is_empty() && legacy_files.is_empty() {
-            // Fresh install, or a previous run already finished. Make the
-            // current layout explicit and clear any partial copy left behind.
+            // Fresh install, or a previous run already finished: make the current
+            // layout explicit and clear any partial copy left behind.
             report.already_migrated = true;
             if mode == MigrationMode::Apply {
                 report.stale_temp_files = store
@@ -188,9 +158,8 @@ impl BlockLayoutMigration {
             return Ok(report);
         }
 
-        // A dry run only reports what would happen: the would-be copies are
-        // derived from the legacy file list plus the current layout, so nothing
-        // is written.
+        // A dry run only reports: the would-be copies are derived from the legacy
+        // file list plus the current layout, so nothing is written.
         if mode == MigrationMode::DryRun {
             let legacy_ids: BTreeSet<&str> =
                 legacy_files.iter().map(|(id, _)| id.as_str()).collect();
@@ -209,7 +178,6 @@ impl BlockLayoutMigration {
             return Ok(report);
         }
 
-        // 1. Copy every referenced block into its own repository directory.
         for (index, (repo_id, block_id)) in references.iter().enumerate() {
             if index > 0 && index % Self::LOG_EVERY == 0 {
                 tracing::info!(
@@ -227,8 +195,8 @@ impl BlockLayoutMigration {
                         report.missing_block_ids.push(block_id.clone());
                     }
                 }
-                // A size mismatch means a destination file is corrupt: abort
-                // while the legacy tree is still intact.
+                // A size mismatch means a corrupt destination: abort while the legacy
+                // tree is still intact.
                 Err(e) => {
                     return Err(AppError::internal(format!(
                         "cannot migrate block {block_id} of repository {repo_id}: {e}"
@@ -237,16 +205,15 @@ impl BlockLayoutMigration {
             }
         }
 
-        // 2. Purge the legacy layout wholesale. Every block that could still be
-        //    referenced was copied in step 1 (missing sources had nothing to
-        //    copy), so nothing of value is left behind.
+        // Purge the legacy layout wholesale: every block that could still be referenced
+        // was copied above (missing sources had nothing to copy), so nothing of value
+        // is left behind.
         report.purged_dirs = store
             .purge_legacy_layout()
             .await
             .map_err(|e| AppError::internal(format!("remove legacy block layout: {e}")))?;
 
-        // 3. Clear partial copies and record completion so the next startup
-        //    skips the whole scan.
+        // Clear partial copies and record completion so the next startup skips the scan.
         report.stale_temp_files = store
             .purge_layout_temp_files()
             .await
@@ -260,10 +227,8 @@ impl BlockLayoutMigration {
         Ok(report)
     }
 
-    /// Every `(repo_id, block_id)` pair referenced by a file object.
-    ///
-    /// Rows are read per repository so the working set stays proportional to one
-    /// library at a time rather than the whole table.
+    /// Every `(repo_id, block_id)` pair referenced by a file object. Rows are read
+    /// per repository so the working set stays proportional to one library at a time.
     async fn collect_references(
         db: &DatabaseConnection,
     ) -> Result<BTreeSet<(String, String)>, AppError> {
@@ -283,9 +248,9 @@ impl BlockLayoutMigration {
                 .all(db)
                 .await?;
             for file in files {
-                // A row that does not parse is already unusable to every reader
-                // (the same `serde_json` parse guards the download path), so it
-                // is skipped rather than failing the whole migration.
+                // An unparseable row is already unusable to every reader (the same
+                // `serde_json` parse guards the download path), so skip it instead of
+                // failing the whole migration.
                 let Ok(data) = serde_json::from_str::<FileObjectData>(&file.data) else {
                     tracing::warn!(
                         fs_id = %file.fs_id,
@@ -303,7 +268,6 @@ impl BlockLayoutMigration {
     }
 }
 
-/// Minimal view of a file object: only the block list is needed here.
 #[derive(Deserialize)]
 struct FileObjectData {
     block_ids: Vec<String>,
@@ -373,9 +337,8 @@ mod tests {
         }
     }
 
-    /// The migration copies each referenced block into its own repository and
-    /// removes every legacy file: no leftovers, and the same block content is
-    /// owned separately by each repository that references it.
+    /// The migration copies each referenced block into its own repository and removes
+    /// every legacy file: the same content ends up owned by each referencing repository.
     #[tokio::test]
     async fn migrates_references_and_removes_every_legacy_file() {
         let db = temp_db().await;
@@ -431,8 +394,7 @@ mod tests {
             "unreferenced legacy blocks are dropped, not copied"
         );
 
-        // Zero leftovers: the block root now holds exactly the current layout
-        // and its marker — no legacy prefix directories, no temporary files.
+        // Zero leftovers: the block root holds exactly the current layout and its marker.
         let mut entries: Vec<String> = std::fs::read_dir(&block_dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
@@ -470,7 +432,7 @@ mod tests {
         assert!(!store.has_block(REPO_A, &id).await);
     }
 
-    /// Re-running after an interrupted migration completes it, and a completed
+    /// Re-running after an interrupted migration completes it; a completed
     /// migration is a no-op.
     #[tokio::test]
     async fn migration_is_idempotent_and_resumable() {
@@ -493,14 +455,12 @@ mod tests {
         assert!(second.already_migrated);
         assert_eq!(second.purged_dirs, 0);
 
-        // The block is still there and readable after the re-run.
         let store = BlockStorage::new(block_dir.clone());
         assert_eq!(store.read_block(REPO_A, &id).await.unwrap(), content);
     }
 
-    /// Referenced blocks that the legacy store no longer holds are reported
-    /// instead of aborting: the data was already lost before this run, and the
-    /// legacy tree holds nothing to recover it with.
+    /// Referenced blocks the legacy store no longer holds are reported instead of
+    /// aborting: that data was already lost, and the legacy tree cannot recover it.
     #[tokio::test]
     async fn missing_legacy_blocks_are_reported_not_fatal() {
         let db = temp_db().await;
@@ -520,8 +480,8 @@ mod tests {
         assert!(!BlockLayoutMigration::migration_pending(&block_dir).await);
     }
 
-    /// Without the migration the new code paths cannot see the blocks at all,
-    /// which is exactly why startup must not proceed while it is pending.
+    /// Without the migration the new code paths cannot see the blocks at all, which is
+    /// why startup must not proceed while it is pending.
     #[tokio::test]
     async fn pending_flag_tracks_the_legacy_layout() {
         let (_dir, block_dir) = temp_block_dir();

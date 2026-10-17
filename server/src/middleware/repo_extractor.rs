@@ -1,9 +1,7 @@
 //! Extractors that combine authentication with repo permission checking.
 //!
-//! These extractors reduce boilerplate in handlers that need to:
-//! 1. Authenticate the user (via AuthUser)
-//! 2. Extract repo_id from the URL path
-//! 3. Check read/write permission on the repo
+//! Each one authenticates the user (`AuthUser`), takes `repo_id` from the path,
+//! then checks read or write permission on that repo.
 
 use axum::extract::{FromRequestParts, Path};
 use axum::http::request::Parts;
@@ -14,7 +12,6 @@ use crate::middleware::auth::AuthUser;
 use axum::http::StatusCode;
 use base::error::AppError;
 
-/// Map `AuthUser`'s rejection status onto the API error it represents.
 fn auth_rejection_to_app_error(status: StatusCode) -> AppError {
     match status {
         StatusCode::FORBIDDEN => AppError::Forbidden,
@@ -22,19 +19,14 @@ fn auth_rejection_to_app_error(status: StatusCode) -> AppError {
     }
 }
 
-/// Extractor for authenticated user + repo read permission.
-///
-/// Combines `AuthUser` extraction, `Path::<String>` extraction, and
-/// `check_repo_read_permission` into a single step.
+/// Authenticated user plus a checked repo read permission.
 #[derive(Debug, Clone)]
 pub struct RepoPathRead {
     pub user: AuthUser,
     pub repo_id: String,
 }
 
-/// Extractor for authenticated user + repo write permission.
-///
-/// Same as `RepoPathRead` but checks write permission.
+/// Authenticated user plus a checked repo write permission.
 #[derive(Debug, Clone)]
 pub struct RepoPathWrite {
     pub user: AuthUser,
@@ -48,20 +40,17 @@ impl FromRequestParts<Arc<AppState>> for RepoPathRead {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        // Extract authenticated user. The status is preserved: a missing or
-        // invalid credential is 401, while an API key that lacks the capability
-        // or the library scope is 403 — collapsing both into 401 would tell a
-        // client to re-authenticate when re-authenticating cannot help.
+        // The status is preserved: a missing or invalid credential is 401, while a
+        // key lacking the capability or library scope is 403 — collapsing both into
+        // 401 would ask the client to re-authenticate when that cannot help.
         let user = AuthUser::from_request_parts(parts, state)
             .await
             .map_err(auth_rejection_to_app_error)?;
 
-        // Extract repo_id from path
         let Path(repo_id) = Path::<String>::from_request_parts(parts, state)
             .await
             .map_err(|_| AppError::BadRequest("missing repo_id in path".into()))?;
 
-        // Check read permission
         crate::domain::permission::check_repo_read_permission(
             state.repos.member.as_ref(),
             &repo_id,
@@ -86,20 +75,16 @@ impl FromRequestParts<Arc<AppState>> for RepoPathWrite {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        // Extract authenticated user. The status is preserved: a missing or
-        // invalid credential is 401, while an API key that lacks the capability
-        // or the library scope is 403 — collapsing both into 401 would tell a
-        // client to re-authenticate when re-authenticating cannot help.
+        // Same 401/403 distinction: a key lacking the capability or scope is 403,
+        // and asking it to re-authenticate would not help.
         let user = AuthUser::from_request_parts(parts, state)
             .await
             .map_err(auth_rejection_to_app_error)?;
 
-        // Extract repo_id from path
         let Path(repo_id) = Path::<String>::from_request_parts(parts, state)
             .await
             .map_err(|_| AppError::BadRequest("missing repo_id in path".into()))?;
 
-        // Check write permission
         crate::domain::permission::check_repo_write_permission(
             state.repos.member.as_ref(),
             &repo_id,

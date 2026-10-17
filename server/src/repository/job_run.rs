@@ -1,14 +1,11 @@
-//! Durable history for background runs, and the claim that makes a run
-//! resumable.
+//! Durable history for background runs, and the lease claim that makes a run resumable.
 //!
-//! Shaped like the outbound-mail queue: a row is *claimed* by setting a lease,
-//! and the claim is exclusive only because a second worker's update also has to
-//! find the lease free or expired. See [`crate::tasks::queue::QueuePolicy`] for
-//! the backoff, lease and retention numbers both queues share.
+//! A row is claimed by setting a lease; the claim is exclusive because a competing worker's
+//! update must find the lease free or expired. Backoff, lease and retention numbers are shared
+//! with the outbound-mail queue (see [`crate::tasks::queue::QueuePolicy`]).
 //!
-//! Only a job declared `Durable` gets its input stored: replaying a destructive
-//! run after a crash would be worse than losing it, and the catalog refuses
-//! `Durable` for a job that is not idempotent.
+//! Only a job declared `Durable` stores its input, and the catalog refuses `Durable` for a job
+//! that is not idempotent: replaying a destructive run after a crash is worse than losing it.
 
 use std::sync::Arc;
 
@@ -24,17 +21,13 @@ use infra::entity::job_run;
 /// Which finished runs a reader asked to see.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunHistoryFilter {
-    /// A job slug. A slug rather than a `JobKey`, because the journal holds
-    /// rows for jobs this build no longer runs.
+    /// A job slug, not a `JobKey`: the journal holds rows for jobs this build no longer runs.
     pub kind: Option<String>,
     pub outcome: Option<RunOutcome>,
 }
 
-/// The verdict a reader filters by.
-///
-/// Two cases rather than one per phase: a reader looking for trouble wants
-/// everything that did not succeed, and separating a timeout from a failure
-/// would only make them guess which one they wanted.
+/// The verdict a reader filters by. Timeouts count as failures: a reader looking for trouble
+/// wants everything that did not succeed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunOutcome {
     Succeeded,
@@ -51,12 +44,9 @@ pub struct NewJobRun {
     pub created_at: i64,
 }
 
-/// A run recorded only once it has something to report.
-///
-/// A job that keeps only its notable runs is never written down before it
-/// starts, so its whole row is built at the end. There are no params: nothing
-/// reads them, and a run that was never going to be replayed has no reason to
-/// keep its input.
+/// A run recorded only once it has something to report: a job that keeps only notable runs is
+/// never written down before it starts, so its whole row is built at the end. No params, since
+/// nothing reads them.
 pub struct FinishedJobRun {
     pub id: String,
     pub kind: String,
@@ -73,16 +63,11 @@ pub struct FinishedJobRun {
 
 #[async_trait]
 pub trait JobRunRepository: Send + Sync {
-    /// Record a submitted run as queued, holding a lease so a concurrent
-    /// recovery pass leaves it alone.
+    /// Queue a submitted run under a lease, so a concurrent recovery pass leaves it alone.
     async fn enqueue(&self, run: NewJobRun, lease_until: i64) -> Result<(), AppError>;
 
-    /// Write the terminal state, releasing the lease and dropping the input.
-    ///
-    /// `summary` replaces the one recorded at submit time when it is `Some`:
-    /// the job's own account of what it did is the point of the column, while
-    /// `None` keeps what the submitter said — which is what a run that failed
-    /// before it could report anything has left to say.
+    /// Write the terminal state, releasing the lease and dropping the input. A `Some` summary
+    /// replaces the submit-time one; `None` keeps what the submitter said.
     async fn finish(
         &self,
         id: &str,
@@ -93,12 +78,10 @@ pub trait JobRunRepository: Send + Sync {
         finished_at: i64,
     ) -> Result<(), AppError>;
 
-    /// Record a run that was never written down before it started, because its
-    /// job keeps only the runs with something to report.
+    /// Record a run never written down before it started: its job keeps only the notable runs.
     async fn record_finished(&self, run: FinishedJobRun) -> Result<(), AppError>;
 
-    /// Record that a run is executing, so a crash leaves a `running` row rather
-    /// than a `queued` one.
+    /// Mark a run executing, so a crash leaves a `running` row rather than a `queued` one.
     async fn mark_running(
         &self,
         id: &str,
@@ -106,8 +89,7 @@ pub trait JobRunRepository: Send + Sync {
         lease_until: i64,
     ) -> Result<(), AppError>;
 
-    /// Unfinished rows whose lease has run out: the ones a recovery pass may
-    /// take over, oldest first.
+    /// Unfinished rows whose lease ran out, oldest first: the ones a recovery pass may take over.
     async fn recoverable(&self, now: i64, limit: u64) -> Result<Vec<job_run::Model>, AppError>;
 
     /// Take a row over for recovery: bump the attempt and renew the lease.
@@ -121,9 +103,6 @@ pub trait JobRunRepository: Send + Sync {
     ) -> Result<bool, AppError>;
 
     /// Newest finished runs, for the administrator's listing.
-    ///
-    /// Shorthand for [`JobRunRepository::recent_matching`] with no filter, which
-    /// is what most callers want.
     async fn recent(&self, limit: u64) -> Result<Vec<job_run::Model>, AppError>;
 
     /// Newest finished runs a reader asked to see.
@@ -133,24 +112,17 @@ pub trait JobRunRepository: Send + Sync {
         filter: &RunHistoryFilter,
     ) -> Result<Vec<job_run::Model>, AppError>;
 
-    /// The jobs that appear in the newest `window` finished runs, newest first.
-    ///
-    /// What a reader can filter the list by is what the list actually holds: a
-    /// filter offering a job with no rows would only ever show an empty page.
+    /// The jobs that appear in the newest `window` finished runs, newest first: what a reader can
+    /// filter by is what the list holds, and a job with no rows would only show an empty page.
     async fn recent_kinds(&self, window: u64) -> Result<Vec<String>, AppError>;
 
-    /// The newest finished run of each job the `window` reaches.
-    ///
-    /// Read once at start-up: the counters the registry page shows are
-    /// process-lifetime, so a restart empties them, and the journal is where the
-    /// last verdict actually lives.
+    /// The newest finished run of each job the `window` reaches, read once at start-up: those
+    /// counters are process-lifetime, so the journal is where the last verdict actually lives.
     async fn latest_per_kind(&self, window: u64) -> Result<Vec<job_run::Model>, AppError>;
 
-    /// Retention: drop finished rows past either age cutoff, then drop the
-    /// oldest finished rows until at most `max_rows` are left.
-    ///
-    /// A run that has not finished is never dropped: it is somebody's pending
-    /// work, and the store's own bookkeeping reads it.
+    /// Retention: drop finished rows past either age cutoff, then the oldest until at most
+    /// `max_rows` are left. An unfinished run is never dropped: it is somebody's pending work,
+    /// and the store's own bookkeeping reads it.
     async fn prune(
         &self,
         succeeded_before: i64,
@@ -211,8 +183,7 @@ impl JobRunRepository for DbJobRunRepository {
             owner: Set(run.owner),
             phase: Set(run.phase),
             summary: Set(run.summary),
-            // Nothing reads a finished run's input, and this one was never
-            // written down as replayable work.
+            // Nothing reads a finished run's input, and this one was never replayable work.
             params: Set(None),
             error: Set(run.error),
             processed: Set(run.processed),
@@ -261,8 +232,7 @@ impl JobRunRepository for DbJobRunRepository {
             error: Set(error.map(str::to_string)),
             processed: Set(processed),
             finished_at: Set(Some(finished_at)),
-            // The run is over, so nobody holds it and its input is no
-            // longer needed.
+            // The run is over, so nobody holds it and its input is no longer needed.
             lease_until: Set(None),
             params: Set(None),
             ..Default::default()
@@ -379,8 +349,6 @@ impl JobRunRepository for DbJobRunRepository {
         failed_before: i64,
         max_rows: u64,
     ) -> Result<u64, AppError> {
-        // Age first, and by phase: a failure is worth keeping for longer than a
-        // success, which one shared cutoff cannot express.
         let by_age = job_run::Entity::delete_many()
             .filter(job_run::Column::FinishedAt.is_not_null())
             .filter(
@@ -395,10 +363,8 @@ impl JobRunRepository for DbJobRunRepository {
             .await?
             .rows_affected;
 
-        // Then the count cap. The row the cap lands on is found by asking the
-        // database for it rather than by reading the table into memory, and
-        // everything up to and including it goes — so the cap is exact, and a
-        // few rows that share its second with it go too.
+        // Then the count cap. The boundary row is found in the database rather than by reading
+        // the table into memory, and everything up to and including it goes, so the cap is exact.
         let by_count = match job_run::Entity::find()
             .filter(job_run::Column::FinishedAt.is_not_null())
             .order_by_desc(job_run::Column::FinishedAt)
@@ -462,8 +428,6 @@ mod tests {
         .unwrap();
     }
 
-    /// The age cutoff is per phase: a failure is kept for longer than a success,
-    /// which one shared cutoff cannot express.
     #[tokio::test]
     async fn a_failure_outlives_a_success_of_the_same_age() {
         let repo = repo().await;
@@ -487,8 +451,7 @@ mod tests {
         assert_eq!(left[0].id, "old-failure");
     }
 
-    /// The count cap drops the oldest rows and leaves the newest alone, and the
-    /// row that writes a run's end is the row the listing reads back.
+    /// The count cap drops the oldest rows and leaves the newest alone.
     #[tokio::test]
     async fn the_count_cap_drops_the_oldest_rows() {
         let repo = repo().await;
@@ -504,8 +467,7 @@ mod tests {
             .await;
         }
 
-        // Keep the newest two: the cap lands on the third, and everything up to
-        // and including it goes.
+        // Keep the newest two: the cap lands on the third, and everything up to it goes.
         assert_eq!(repo.prune(0, 0, 2).await.unwrap(), 3);
         let left = repo.recent(10).await.unwrap();
         assert_eq!(left.len(), 2);
@@ -513,12 +475,10 @@ mod tests {
         assert_eq!(left[0].summary, "did 4", "the run's own report survives");
         assert_eq!(left[1].id, "run-3");
 
-        // Nothing left to drop.
         assert_eq!(repo.prune(0, 0, 2).await.unwrap(), 0);
     }
 
-    /// A run that has not finished is somebody's pending work: no cutoff and no
-    /// count cap may drop it.
+    /// An unfinished run is somebody's pending work: no cutoff and no count cap may drop it.
     #[tokio::test]
     async fn an_unfinished_run_is_never_pruned() {
         let repo = repo().await;

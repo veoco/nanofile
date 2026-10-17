@@ -9,7 +9,6 @@ use crate::service::auth::token::generate_share_link_token;
 use base::error::AppError;
 use infra::entity::share_link;
 
-/// Resolve the s_type ("f" or "d") for a path in a repo by walking the FS tree.
 pub async fn resolve_entry_type_raw(
     repos: &Repositories,
     repo_id: &str,
@@ -33,7 +32,6 @@ pub async fn resolve_entry_type_raw(
         .await?
         .ok_or_else(|| AppError::Internal("head commit not found".into()))?;
 
-    // Resolve the parent directory to find the entry's mode
     let (parent_path, entry_name) = path.rsplit_once('/').unwrap_or(("/", path));
 
     let parent_fs_id = if parent_path.is_empty() {
@@ -62,8 +60,6 @@ pub async fn resolve_entry_type_raw(
     })
 }
 
-// ── Response types ────────────────────────────────────────────────────
-
 #[derive(Serialize)]
 pub struct ShareLinkInfo {
     pub token: String,
@@ -78,9 +74,7 @@ pub struct ShareLinkInfo {
     pub description: Option<String>,
 }
 
-/// Build an absolute share-link URL, matching seahub's `gen_shared_link()`
-/// (`{service_url}/f/{token}/` or `{service_url}/d/{token}/`). Clients
-/// (notably the Android app) share/copy the `link` field verbatim.
+/// Absolute share-link URL matching seahub's `gen_shared_link()`; clients copy the `link` field verbatim.
 fn share_link_url(s_type: &str, token: &str, base_url: &str) -> String {
     let base = base_url.trim_end_matches('/');
     if s_type == "d" {
@@ -90,7 +84,6 @@ fn share_link_url(s_type: &str, token: &str, base_url: &str) -> String {
     }
 }
 
-/// Map a share-link model to its API response shape.
 fn share_link_info_from_model(l: &share_link::Model, base_url: &str) -> ShareLinkInfo {
     ShareLinkInfo {
         token: l.token.clone(),
@@ -105,8 +98,6 @@ fn share_link_info_from_model(l: &share_link::Model, base_url: &str) -> ShareLin
         description: l.description.clone(),
     }
 }
-
-// ── Share link operations (v2) ────────────────────────────────────────
 
 pub async fn list_share_links(
     repos: &Repositories,
@@ -146,10 +137,9 @@ pub async fn list_share_links_for_path(
     Ok(infos)
 }
 
-/// Shared implementation for creating a share link (used by v2, v2.1 and the
-/// web UI form handler). Routing every creation path through this one function
-/// is what keeps the encrypted-library block, the membership check and the
-/// path validation from being bypassed by a caller that forgets them.
+/// Shared implementation for creating a share link (v2, v2.1 and the web UI form handler). Routing
+/// every creation path through it is what keeps the encrypted-library block, the membership check and
+/// the path validation from being bypassed by a caller that forgets them.
 pub(crate) async fn create_share_link_impl(
     repos: &Repositories,
     config: &Config,
@@ -160,7 +150,6 @@ pub(crate) async fn create_share_link_impl(
     description: Option<String>,
     creator_id: i32,
 ) -> Result<ShareLinkInfo, AppError> {
-    // Block share links for encrypted repos
     let repo_model = repos
         .repo
         .find_by_id(repo_id)
@@ -172,7 +161,6 @@ pub(crate) async fn create_share_link_impl(
         ));
     }
 
-    // Verify caller has read permission on the repo
     crate::domain::permission::check_repo_read_permission(
         repos.member.as_ref(),
         repo_id,
@@ -245,8 +233,6 @@ pub async fn delete_share_link(
     Ok(())
 }
 
-// ── Share link operations (v21) ───────────────────────────────────────
-
 pub async fn create_share_link_v21(
     repos: &Repositories,
     config: &Config,
@@ -314,7 +300,6 @@ pub async fn update_share_link_v21(
 ) -> Result<ShareLinkInfo, AppError> {
     let now = chrono::Utc::now().timestamp();
 
-    // Find and validate ownership
     let link = repos
         .share_link
         .find_by_token(token)
@@ -324,7 +309,6 @@ pub async fn update_share_link_v21(
         return Err(AppError::NotFound("Share link not found".into()));
     }
 
-    // Prepare field updates (business logic: password hashing, expire_days conversion)
     let new_password =
         password.map(|pwd| pwd.map(|p| hash_password(&p, config.auth.password_hash_iterations)));
     let new_expire_at = expire_days.map(|days| days.map(|d| now + d * 86400));
@@ -340,7 +324,7 @@ pub async fn update_share_link_v21(
         )
         .await?;
 
-    // Compute effective values for the response using original + requested changes
+    // Effective values for the response: the requested change, else the stored one.
     let effective_password = new_password.flatten().or(link.password);
     let effective_expire_at = new_expire_at.flatten().or(link.expires_at);
     let effective_description = description.flatten().or(link.description);
@@ -361,12 +345,10 @@ pub async fn update_share_link_v21(
     })
 }
 
-/// How long the "may the creator still act on this library" answer is cached.
-///
-/// This is checked on every anonymous link request, and the answer only changes
-/// when an administrator revokes access or the library changes hands — so a
-/// short TTL keeps the common path free of two extra queries while bounding the
-/// window in which a revoked account's links still resolve.
+/// How long the "may the creator still act on this library" answer is cached: this runs on every
+/// anonymous link request and only changes when an administrator revokes access or the library changes
+/// hands, so a short TTL keeps the common path free of two extra queries while bounding how long a
+/// revoked account's links still resolve.
 const LINK_CREATOR_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Hard cap on the cache, so a flood of distinct links cannot grow it forever.
@@ -380,15 +362,12 @@ static LINK_CREATOR_CACHE: std::sync::LazyLock<LinkCreatorCache> =
 
 /// Whether the user who created a link may still act on `repo_id`.
 ///
-/// A share/upload link is a capability handed to third parties, but it acts
-/// **as its creator**: it exposes library content (share link) or accepts new
-/// content (upload link) in a library the creator may since have lost, or whose
-/// account may have been deactivated. Resolving a link therefore re-checks the
-/// creator rather than trusting the link alone — the same rule the download and
-/// upload tokens already apply, where "the token outlives the grant".
-///
-/// Results are cached for [`LINK_CREATOR_CACHE_TTL`] because this runs on every
-/// anonymous request; the revocation window is therefore at most that long.
+/// A share/upload link is a capability handed to third parties, but it acts **as its creator**: it
+/// exposes library content (share link) or accepts new content (upload link) in a library the creator
+/// may since have lost, or whose account may have been deactivated. Resolving a link therefore
+/// re-checks the creator rather than trusting the link alone — the same rule the download and upload
+/// tokens already apply, where "the token outlives the grant". Cached for `LINK_CREATOR_CACHE_TTL`, so
+/// the revocation window is at most that long.
 pub async fn link_creator_may_access(
     repos: &Repositories,
     creator_id: i32,
@@ -435,10 +414,8 @@ pub async fn link_creator_may_access(
 
 /// Drop cached "creator may access" decisions.
 ///
-/// Called whenever membership or account state changes so that revoking access
-/// takes effect immediately instead of after [`LINK_CREATOR_CACHE_TTL`]. Passing
-/// `repo_id = None` drops every entry for that user (account-level changes such
-/// as deactivation).
+/// Called whenever membership or account state changes so revoking access takes effect immediately
+/// instead of after `LINK_CREATOR_CACHE_TTL`; `repo_id = None` drops every entry for that user.
 pub fn invalidate_link_creator_cache(user_id: i32, repo_id: Option<&str>) {
     let mut cache = LINK_CREATOR_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.retain(|(creator_id, cached_repo, _), _| {
@@ -452,41 +429,35 @@ pub fn invalidate_link_creator_cache(user_id: i32, repo_id: Option<&str>) {
     });
 }
 
-/// The wire-protocol message for a link that does not resolve. Exposed so the
-/// HTML page can tell "turned off" apart from "expired" without matching a
-/// literal it does not own.
+/// The wire-protocol message for a link that does not resolve. Exposed so the HTML page can tell
+/// "turned off" apart from "expired" without matching a literal it does not own.
 pub const LINK_NOT_FOUND: &str = "Link not found";
 
 /// The wire-protocol message for a link that ran out of time.
 pub const LINK_EXPIRED: &str = "Link has expired";
 
-/// The same message for upload links, which have their own lookup.
 pub const UPLOAD_LINK_NOT_FOUND: &str = "Upload link not found";
 
-/// The same message for upload links that ran out of time.
 pub const UPLOAD_LINK_EXPIRED: &str = "Upload link has expired";
 
 /// Why a link stopped resolving.
 ///
-/// The wire protocol flattens both into one 404 — every Seafile client only
-/// distinguishes "resolves" from "does not" — but an HTML page should not tell
-/// the person holding an expired link the same thing as one holding a link the
-/// owner switched off.
+/// The wire protocol flattens both into one 404 — every Seafile client only distinguishes
+/// "resolves" from "does not" — but an HTML page should not tell the holder of an expired link the
+/// same thing as the holder of a link the owner switched off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkFailure {
-    /// Unknown token, revoked link, deleted library, or a creator who lost
-    /// access. Kept indistinguishable on purpose: the wire response must not
-    /// confirm that a token exists.
+    /// Unknown token, revoked link, deleted library, or a creator who lost access. Kept
+    /// indistinguishable on purpose: the wire response must not confirm that a token exists.
     Unknown,
     Expired,
 }
 
 /// Classify the result of a share- or upload-link lookup for the HTML pages.
 ///
-/// Only a lookup's own `NotFound` is classified: for those calls it always
-/// means "this link does not resolve", so a database or IO failure stays a 500
-/// rather than being dressed up as a dead link. `None` means "not a link
-/// failure — propagate it unchanged".
+/// Only a lookup's own `NotFound` is classified: for those calls it always means "this link does not
+/// resolve", so a database or IO failure stays a 500 rather than being dressed up as a dead link.
+/// `None` means "not a link failure — propagate it unchanged".
 pub fn classify_link_failure(err: &AppError) -> Option<LinkFailure> {
     match err {
         AppError::NotFound(msg) if msg == LINK_EXPIRED || msg == UPLOAD_LINK_EXPIRED => {
@@ -497,8 +468,7 @@ pub fn classify_link_failure(err: &AppError) -> Option<LinkFailure> {
     }
 }
 
-/// Look up a share link, check expiry and that its creator still has access,
-/// return the link model or error.
+/// Look up a share link, check expiry and that its creator still has access.
 pub async fn resolve_share_link(
     repos: &Repositories,
     token: &str,
@@ -571,8 +541,7 @@ mod link_failure_tests {
             classify_link_failure(&AppError::NotFound(UPLOAD_LINK_EXPIRED.into())),
             Some(LinkFailure::Expired)
         );
-        // Every other NotFound from a lookup is the link itself being gone —
-        // including the ones whose exact text is not spelled out here.
+        // Every other NotFound from a lookup is the link itself being gone.
         assert_eq!(
             classify_link_failure(&AppError::NotFound("Repo not found".into())),
             Some(LinkFailure::Unknown)

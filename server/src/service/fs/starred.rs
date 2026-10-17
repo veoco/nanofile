@@ -28,12 +28,9 @@ impl StarredService {
         Self { repos }
     }
 
-    /// List starred files (legacy v2 API).
-    ///
-    /// Entries are intersected with the libraries the user can still access, the
-    /// same way the v2.1 list does. A stale row otherwise kept disclosing a
-    /// library id and the exact file/directory paths of a library the user was
-    /// removed from.
+    /// List starred files (legacy v2 API), intersected with the libraries the
+    /// user can still access: a stale row must not disclose a library id or the
+    /// exact paths of a library the user was removed from.
     pub async fn list_starred_files(
         &self,
         user_id: i32,
@@ -73,15 +70,14 @@ impl StarredService {
 
         let entries = self.repos.starred.find_by_user_id(user_id).await?;
 
-        // Starred rows are user-owned bookkeeping and outlive membership: a row
-        // for a library the user has been removed from must not keep reporting
-        // that library's name, paths, timestamps or "deleted" state. Intersect
-        // with the repositories the user can currently access (fail closed).
+        // Starred rows outlive membership: a row for a library the user was
+        // removed from must not report its name, paths, timestamps or "deleted"
+        // state. Intersect with the accessible repos (fail closed).
         let accessible =
             crate::domain::permission::accessible_repo_ids(&self.repos, user_id, scope).await?;
 
-        // Batch-load the distinct repos and their head commits in two queries
-        // instead of one repo + one commit lookup per starred repo.
+        // Batch-load the distinct repos (one query) and their head commits
+        // (another) instead of one repo + one commit lookup per starred repo.
         let mut distinct_repo_ids: Vec<String> = Vec::new();
         {
             let mut seen = HashSet::new();
@@ -134,9 +130,8 @@ impl StarredService {
 
         for entry in &entries {
             // Rows for libraries the caller can no longer access are skipped
-            // entirely: emitting them (even with an empty name and
-            // `deleted: true`) would still disclose the library id, the path and
-            // the fact that the item exists.
+            // entirely: even an empty name with `deleted: true` would disclose
+            // the library id, the path and that the item exists.
             if !accessible.contains(&entry.repo_id) {
                 continue;
             }
@@ -258,7 +253,6 @@ impl StarredService {
             }
         };
 
-        // Check for duplicate
         let existing = self
             .repos
             .starred
@@ -281,7 +275,6 @@ impl StarredService {
             ));
         }
 
-        // Insert
         let now = Utc::now().timestamp();
         self.repos
             .starred
@@ -389,9 +382,9 @@ fn build_item_json(
     })
 }
 
-/// Batch-resolve `(mtime, deleted)` for all non-"/" starred entries, grouping
-/// by repo and resolving every parent path in a shared level-frontier walk
-/// instead of one `resolve_fs_id` + `read_fs_dir_data` round-trip per entry.
+/// Batch-resolve `(mtime, deleted)` for all non-"/" starred entries, grouping by
+/// repo and resolving every parent path in one level-frontier walk instead of a
+/// resolve + read round-trip per entry.
 async fn batch_resolve_mtime_deleted(
     repos: &Repositories,
     entries: &[infra::entity::starred_file::Model],

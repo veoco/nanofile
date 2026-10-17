@@ -4,22 +4,17 @@ use crate::repository::Repositories;
 use base::error::AppError;
 use infra::common::util::timestamp_rfc3339;
 
-/// Largest page size the activity list accepts. The endpoint's own Web UI asks
-/// for 25; the ceiling only exists so one authenticated request cannot ask the
-/// database for the entire activity table.
+/// Largest page size the activity list accepts. The endpoint's own Web UI asks for 25; the ceiling
+/// exists so one authenticated request cannot ask the database for the entire activity table.
 pub const MAX_ACTIVITY_PER_PAGE: u32 = 100;
 
-/// Largest page number the activity list accepts.
 pub const MAX_ACTIVITY_PAGE: u32 = 10_000;
 
-/// Service for activity-related operations.
 pub struct ActivityService;
 
 impl ActivityService {
-    /// Get activity logs with optional repo_id and user_id filtering.
-    ///
-    /// `base_url` is the site origin (scheme://host[:port]) used to build the
-    /// absolute `avatar_url` (matching seahub's `api_avatar_url`).
+    /// `base_url` is the site origin (`scheme://host[:port]`) used to build the absolute `avatar_url`
+    /// (matching seahub's `api_avatar_url`).
     pub async fn get_activities(
         repos: &Repositories,
         base_url: &str,
@@ -36,7 +31,6 @@ impl ActivityService {
         let per_page = per_page.clamp(1, MAX_ACTIVITY_PER_PAGE);
         let offset = u64::from(page - 1) * u64::from(per_page);
 
-        // Build list of accessible repo IDs (owned + shared).
         let mut repo_ids: Vec<String> = repos
             .repo
             .find_by_owner_id(user_id)
@@ -53,8 +47,7 @@ impl ActivityService {
         // through the activity feed.
         repo_ids.retain(|id| repo_scope.allows(id));
 
-        // Look up op_user by email if provided.
-        // If the email doesn't match any user, return empty immediately.
+        // An email that matches no user yields an empty page.
         let op_user_id = match op_user {
             Some(email) => match repos.user.find_by_email(email).await? {
                 Some(u) => Some(u.id),
@@ -100,10 +93,9 @@ impl ActivityService {
 
             let (user_name, user_email) = users_by_id.get(&a.user_id).cloned().unwrap_or_default();
 
-            // Absolute avatar URL (seahub returns a full URL via api_avatar_url;
-            // the Android client loads this field directly with Glide). When the
-            // author no longer exists (empty email), use a placeholder so the
-            // URL is well-formed; the avatar route serves the default avatar.
+            // Absolute avatar URL (seahub's `api_avatar_url`; the Android client loads this field
+            // directly with Glide). When the author no longer exists (empty email), a placeholder
+            // keeps the URL well-formed; the avatar route then serves the default.
             let avatar_url = format!(
                 "{}{}",
                 base_url,
@@ -117,7 +109,6 @@ impl ActivityService {
                 )
             );
 
-            // Build details array, count, and extract old_repo_name.
             // detail is an Object for single events and an Array for batch-aggregated events.
             let (details, count, old_repo_name) = match &detail_value {
                 serde_json::Value::Array(arr) => {
@@ -138,8 +129,8 @@ impl ActivityService {
                 _ => (serde_json::json!([]), 0, None),
             };
 
-            // Extract repo_name from detail (set at event time by log_activity,
-            // so it reflects the name when the activity occurred).
+            // repo_name from detail, set at event time by log_activity, so it reflects the name when
+            // the activity occurred.
             let repo_name = match &detail_value {
                 serde_json::Value::Object(obj) => obj
                     .get("repo_name")
@@ -155,11 +146,9 @@ impl ActivityService {
                 _ => String::new(),
             };
 
-            // name is the basename of path. Official seahub: repo events always
-            // have path="/", so name="". Exception: nanofile's own repo-rename
-            // events (no equivalent in official seahub) keep the new repo name
-            // so the Android client renders "old_name => name" correctly (see
-            // the old_name fallback below).
+            // name is the basename of path. Official seahub: repo events always have path="/", so
+            // name="". Exception: nanofile's own repo-rename events (no seahub equivalent) keep the
+            // new repo name so the Android client renders "old_name => name" correctly.
             let name = if a.obj_type == "repo" {
                 if a.op_type == "rename" {
                     repo_name.clone()
@@ -173,9 +162,8 @@ impl ActivityService {
                     .unwrap_or_default()
             };
 
-            // old_name = basename of old_path. Repo rename events recorded
-            // before this fix carry a null old_path; fall back to
-            // old_repo_name so the Android client (which renders rename as
+            // old_name = basename of old_path. Rename events recorded by older builds carry a null
+            // old_path; fall back to old_repo_name so the Android client (which renders rename as
             // "old_name => name") never receives a null old_name.
             let old_name = a
                 .old_path
@@ -189,12 +177,10 @@ impl ActivityService {
                     }
                 });
 
-            // Historical debt: official seahub conditionally emits old_path
-            // (move/rename), old_name (rename) and old_repo_name (rename+repo).
-            // We emit them on every event because seadroid renders renames as
-            // "old_name => name" and NPEs on a missing old_name (an official
-            // client-side bug on repo renames). Aligning would break the
-            // Android client; revisit in a future major version.
+            // Official seahub conditionally emits old_path (move/rename), old_name (rename) and
+            // old_repo_name (rename+repo). We emit them on every event because seadroid renders
+            // renames as "old_name => name" and NPEs on a missing old_name (an official client-side
+            // bug). Aligning would break the Android client; revisit in a future major version.
             let mut ev = serde_json::json!({
                 "id": a.id,
                 "op_type": a.op_type,
@@ -209,8 +195,8 @@ impl ActivityService {
                 "author_email": user_email,
                 "author_name": user_name,
                 "author_contact_email": user_email,
-                // nanofile has no login_id/profile concept; official seahub
-                // returns "" when the author has no configured login_id.
+                // nanofile has no login_id/profile concept; official seahub returns "" when the
+                // author has none.
                 "login_id": "",
                 "avatar_url": avatar_url,
                 "user_name": user_name,
@@ -221,8 +207,7 @@ impl ActivityService {
                 "time": timestamp_rfc3339(a.created_at),
             });
 
-            // Official seahub emits a top-level days field only for
-            // clean-up-trash events.
+            // Official seahub emits a top-level days field only for clean-up-trash events.
             if a.op_type == "clean-up-trash"
                 && let Some(days) = detail_value.get("days").and_then(|v| v.as_i64())
             {

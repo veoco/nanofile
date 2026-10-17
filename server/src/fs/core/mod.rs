@@ -1,8 +1,5 @@
-//! Core FS tree operations — tree traversal, FS object storage, commit+tree manipulation.
-//!
-//! This module was extracted from `server::repo` during the architecture refactor
-//! (Phase 2). It contains the fundamental file-system operations that were mixed
-//! in with repo-management code.  Repo-management-only code remains in `server::repo`.
+//! Core FS tree operations: traversal, FS object storage, and commit+tree
+//! manipulation.
 
 pub mod block_encryption_convert;
 pub mod block_migration;

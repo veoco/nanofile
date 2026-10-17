@@ -1,18 +1,8 @@
-//! Repository id extraction from request paths.
-//!
-//! Two callers need different things from the same path shape:
-//!
-//! * `SyncAuth` (see [`crate::middleware::auth`]) resolves the repo a
-//!   `/seafhttp/...` request is bound to, and must fail closed for anything
-//!   that is not a known shape.
-//! * The account-key guard needs a cheap "does this path mention a library?"
-//!   answer so it can apply the key's library bindings before the handler runs.
-//!
-//! [`candidates`] keeps the sync-specific positions, [`find_repo_id`] answers
-//! the general question. Both percent-decode first: axum's `Path` extractor
-//! hands the handler the decoded segment, so comparing an undecoded value would
-//! let `%63cab3e0-...` look like "not a repo id" while the handler still sees
-//! the real library.
+//! Repository-id extraction from request paths: `SyncAuth` must fail closed on
+//! unknown `/seafhttp/...` shapes, and the account-key guard needs a cheap "does
+//! this path mention a library?". Both percent-decode first, because axum's `Path`
+//! hands the handler the decoded segment — an undecoded comparison would let
+//! `%63cab3e0-...` look like "not a repo id" while the handler sees the library.
 
 /// True when `s` is a UUID-formatted string (8-4-4-4-12 hex).
 pub fn is_uuid(s: &str) -> bool {
@@ -28,11 +18,8 @@ pub fn is_uuid(s: &str) -> bool {
 }
 
 /// Candidate repo-id positions for a **trimmed** (no leading `/`) path, most
-/// specific first: the full `seafhttp/repo/{id}` form, the `repo/{id}` form and
-/// the stripped `{id}/...` form.
-///
-/// The last entry is always the path's first segment, which is what the caller
-/// inspects to decide whether a non-UUID path is a known non-repo endpoint.
+/// specific first. The last entry is always the path's first segment, which the
+/// caller inspects to decide whether a non-UUID path is a known non-repo endpoint.
 pub fn candidates(trimmed_path: &str) -> Vec<&str> {
     let mut out: Vec<&str> = Vec::with_capacity(3);
     for prefix in ["seafhttp/repo/", "repo/"] {
@@ -46,15 +33,10 @@ pub fn candidates(trimmed_path: &str) -> Vec<&str> {
     out
 }
 
-/// Percent-decode `path` and return its first UUID-formatted segment.
-///
-/// Account-key bindings are enforced on every `/api2` and `/api/v2.1` route
-/// whose path carries a library id. In every such route the repo id is the
-/// first UUID segment (later UUIDs are file ids); non-UUID parameters
-/// (`{token}`, `{user_id}`, `{tag_id}`, a 40-hex `{block_id}`) never take that
-/// shape, so this does not manufacture false positives.
-///
-/// Returns `None` when the path cannot be decoded or contains no UUID.
+/// Percent-decode `path` and return its first UUID-formatted segment: in every
+/// route carrying a library id that id is the first UUID (later ones are file
+/// ids), and non-UUID parameters (`{token}`, `{user_id}`, `{tag_id}`, a 40-hex
+/// `{block_id}`) never take that shape. `None` if undecodable or UUID-free.
 pub fn find_repo_id(path: &str) -> Option<String> {
     let decoded = percent_encoding::percent_decode_str(path)
         .decode_utf8()
@@ -89,9 +71,6 @@ mod tests {
 
     #[test]
     fn candidates_cover_the_three_sync_shapes() {
-        // A matched prefix contributes the repo id, and the leading path segment
-        // is appended last: callers read `[0]` for the id and the tail for the
-        // "is this a known repo-less endpoint" check.
         assert_eq!(
             candidates(&format!("seafhttp/repo/{REPO}/commit/HEAD")),
             vec![REPO, "seafhttp"]
@@ -101,8 +80,6 @@ mod tests {
             vec![REPO, "repo"]
         );
         assert_eq!(candidates(&format!("{REPO}/commit")), vec![REPO]);
-        // No repo shape: only the leading segment, so the caller can still see
-        // whether this is one of the protocol's repo-less endpoints.
         assert_eq!(candidates("accessible-repos"), vec!["accessible-repos"]);
     }
 

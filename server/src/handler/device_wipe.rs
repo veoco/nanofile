@@ -9,21 +9,12 @@ use base::error::AppError;
 
 /// POST /api2/device-wiped/
 ///
-/// A wiped device reports itself so the server drops the credentials it holds.
-/// The two official callers authenticate differently and **both** shapes have
-/// to work:
-///
-/// * desktop Qt: `application/x-www-form-urlencoded` with a `token` form field
-///   and *no* `Authorization` header
-///   (`seafile-client/src/api/requests.cpp:1225-1235`);
-/// * Android: an empty multipart POST with `Authorization: Token <token>` and
-///   no body fields (`seadroid/.../AccountService.java:24-26`, token added by
-///   `TokenInterceptor`).
-///
-/// Requiring only the form field meant Android's wipe report was rejected and
-/// its credentials were never revoked; requiring only the header would break
-/// the desktop client. Scoping by the reporting token's owner prevents
-/// cross-user session revocation.
+/// A wiped device reports itself so the server drops the credentials it holds. Both
+/// official shapes must work: desktop Qt sends `application/x-www-form-urlencoded` with
+/// a `token` field and no `Authorization` header
+/// (`seafile-client/src/api/requests.cpp:1225-1235`), Android an empty multipart POST
+/// with `Authorization: Token <token>` (`AccountService.java:24-26`). Scoping by the
+/// reporting token's owner prevents cross-user session revocation.
 pub async fn device_wiped(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -62,9 +53,9 @@ pub async fn device_wiped(
 
     let svc = state.sso_service();
     svc.device_wiped(token_record.user_id, &device_id).await?;
-    // The device's `/download-api/…`, `/upload-api/…` capability URLs are
-    // credentials too, and they are not addressed by device id, so drop all of
-    // the user's outstanding ones.
+    // The device's `/download-api/…` and `/upload-api/…` capability URLs are
+    // credentials too, and they are not addressed by device id, so drop all of the
+    // user's outstanding ones.
     state.token_manager.revoke_user(token_record.user_id);
 
     Ok(ok_json())

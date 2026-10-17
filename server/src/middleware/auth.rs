@@ -17,17 +17,12 @@ use base::error::AppError;
 pub struct AuthUser {
     pub user_id: i32,
     pub email: String,
-    /// What authenticated the request.
-    ///
-    /// Never [`Credential::SyncToken`]: repository-scoped tokens are accepted
-    /// only by the sync protocol (see [`SyncAuth`]).
+    /// What authenticated the request; never [`Credential::SyncToken`], which
+    /// only [`SyncAuth`] accepts.
     pub credential: Credential,
-    /// The device that authenticated, when the credential carries one.
-    ///
-    /// A client API token records the `device_id` its login reported; a cookie
-    /// session and a unified API key have no device. Endpoints that mint a
-    /// repository sync token use this to attach the token to its device at
-    /// issuance instead of waiting for the first sync to reveal it.
+    /// The device the credential carries: a client API token records the
+    /// `device_id` its login reported, while sessions have none. Sync-token
+    /// issuance attaches the token to it instead of waiting for the first sync.
     pub device: Option<DeviceIdentity>,
 }
 
@@ -37,12 +32,8 @@ impl AuthUser {
         self.credential.repo_scope()
     }
 
-    /// Enforce a key's library scope for a repo id the path guard cannot see.
-    ///
-    /// Some endpoints carry the library in a query parameter or a JSON body
-    /// (`repo-tokens`, the batch copy/move handlers, `search-file`), so callers
-    /// apply this next to the membership check for those ids. Sessions are
-    /// unaffected: they carry no ceiling.
+    /// Enforce a key's library scope for a repo id the path guard cannot see,
+    /// as some endpoints carry the library in a query parameter or JSON body.
     pub fn ensure_repo_allowed(&self, repo_id: &str, need_write: bool) -> Result<(), AppError> {
         if self.credential.allows_repo(repo_id, need_write) {
             Ok(())
@@ -59,14 +50,12 @@ pub struct SyncAuth {
     /// What authenticated the request: a repository sync token, an account
     /// token, or a unified API key.
     pub credential: Credential,
-    /// The device behind the request, when it can be told: the peer already
-    /// recorded on the presented sync token, the `device_id` of the account
-    /// token, or the `client_id` the sync protocol put in the URL.
+    /// The device behind the request when it is known: the presented sync
+    /// token's peer, the account token's `device_id`, or the URL's `client_id`.
     pub device: Option<DeviceIdentity>,
 }
 
 impl SyncAuth {
-    /// The libraries an account-wide sync query may return.
     pub fn repo_scope(&self) -> RepoScope {
         self.credential.repo_scope()
     }
@@ -84,30 +73,26 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
 
         // Repo id embedded in the URL path, if any (`/seafhttp/repo/{repo_id}/…`).
         // Endpoints without a repo segment (accessible-repos, head-commits-multi)
-        // skip the repo binding check. A repo segment that is present but is not
-        // a valid UUID is rejected outright (see `extract_url_repo_id`) — axum's
-        // `Path` extractor hands the *decoded* value to the handler, so treating
-        // an undecodable segment as "not a repo endpoint" would let a
-        // percent-encoded id (`%63cab3e0-…`) bypass the binding check entirely.
+        // skip the binding check. A present but non-UUID segment is rejected
+        // outright (see `extract_url_repo_id`): axum's `Path` hands the handler
+        // the *decoded* value, so treating it as "no repo" would let a
+        // percent-encoded id (`%63cab3e0-…`) bypass the binding check.
         let url_repo_id =
             extract_url_repo_id(parts.uri.path()).map_err(|_| base::error::AppError::Forbidden)?;
 
-        // First try to authenticate via sync token (primary sync protocol path).
-        // We look up sync_tokens directly here (rather than delegating to from_token)
-        // so we can capture client_id from the request URI and store peer info.
+        // Sync token first, looked up here rather than via `from_token` so the
+        // request's client hints can be recorded against it.
         let sync_record = repos.sync_token.find_by_token(&token).await?;
 
         if let Some(record) = sync_record {
-            // Check token expiry / repository binding. seaf-daemon only
-            // understands 403 (permission) and 400 (malformed request), so an
-            // invalid or cross-repo repo token is rejected as 403 — matching
-            // seafile's fileserver (`server/http-server.c`, `fileserver/sync_api.go`).
+            // seaf-daemon only understands 403 (permission) and 400 (malformed),
+            // so an invalid or cross-repo token is 403 — matching seafile's
+            // fileserver (`server/http-server.c`, `fileserver/sync_api.go`).
             if is_token_expired(record.expires_at) {
                 return Err(base::error::AppError::Forbidden);
             }
 
-            // A sync token is bound to exactly one repo: it must match the repo
-            // in the URL (matches seafile-server's validate_token behaviour).
+            // A sync token is bound to exactly one repo: it must match the URL's.
             if let Some(url_repo) = &url_repo_id
                 && record.repo_id != *url_repo
             {
@@ -117,8 +102,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
             let user_id = record.user_id;
             let repo_id = record.repo_id.clone();
 
-            // A deactivated account must not keep syncing (AuthUser applies the
-            // same is_active check on the web/API surfaces).
+            // A deactivated account must not keep syncing.
             if !repos
                 .user
                 .find_by_id(user_id)
@@ -128,14 +112,12 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
                 return Err(base::error::AppError::Forbidden);
             }
 
-            // Capture client_id, client_name, client_ver from the URL query.
-            // The sync protocol identifies the device there (`seaf-daemon` adds
-            // them to `permission-check`; see `fileserver/sync_api.go`).
+            // The sync protocol names the device in the URL query (`seaf-daemon`
+            // adds it to `permission-check`; see `fileserver/sync_api.go`).
             let hint = client_hint(parts);
 
-            // A token that is already attributed keeps that attribution: peer
-            // info is insert-once, so one device can never take another's token
-            // over (upstream's `RepoTokenPeerInfo` behaves the same way).
+            // Peer info is insert-once, so one device can never take another's
+            // token over (upstream's `RepoTokenPeerInfo` behaves the same).
             if let Some(device) = &hint
                 && record.peer_id.as_deref().is_none_or(str::is_empty)
             {
@@ -145,8 +127,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
                     .await;
             }
 
-            // The volatile columns still follow the request, throttled so a
-            // syncing client's many small requests do not each cost a write.
+            // Volatile columns follow each request, throttled per token.
             if let Some(device) = &hint
                 && repos.peer_info_writes.allows_now(record.id)
             {
@@ -176,10 +157,8 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
             });
         }
 
-        // Fall back to a unified API key or a session API token. Neither has a
-        // device of its own, so the URL's `client_id` is the only identity the
-        // request may carry (used when a client asks for its repository tokens
-        // before it has one).
+        // Fall back to a unified API key or a session API token; neither has a
+        // device, so the URL's `client_id` is the only identity available.
         let mut auth = match SyncAuth::from_token(
             repos,
             &token,
@@ -191,16 +170,13 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
         {
             Ok(auth) => auth,
             Err(_) => {
-                // seafile's file-server checks that the library still exists
-                // *before* it validates credentials (`get_head_commit_cb`
-                // queries the Repo table first) and answers
-                // 444 (SEAF_HTTP_RES_REPO_DELETED) when it is gone. The desktop
-                // client turns exactly 444 into SYNC_ERROR_ID_SERVER_REPO_DELETED
-                // and offers to remove its local copy
-                // (`sync-mgr.c: on_repo_deleted_on_server`); anything else is a
-                // retryable generic error. A repository token is deleted
-                // together with its library, so without this check a client
-                // whose library was deleted server-side only ever saw 403.
+                // seafile's file server checks that the library still exists
+                // *before* validating credentials and answers 444
+                // (SEAF_HTTP_RES_REPO_DELETED) when it is gone; the desktop client
+                // turns exactly 444 into SYNC_ERROR_ID_SERVER_REPO_DELETED and
+                // offers to remove its local copy (`sync-mgr.c:
+                // on_repo_deleted_on_server`). A repo token dies with its library,
+                // so without this a deleted library only ever looked like 403.
                 if let Some(url_repo) = &url_repo_id
                     && repos.repo.find_by_id(url_repo).await?.is_none()
                 {
@@ -216,31 +192,21 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
     }
 }
 
-/// Sync-protocol endpoints that live under `/seafhttp/` but carry no repo id.
-///
-/// These are the only paths allowed to skip the token↔repo binding check.
+/// The only `/seafhttp/` endpoints allowed to skip the token↔repo binding check.
 const NON_REPO_SYNC_ENDPOINTS: [&str; 3] =
     ["accessible-repos", "head-commits-multi", "protocol-version"];
 
 /// Extract the repo id from a `/seafhttp/repo/{repo_id}/…` URL path.
 ///
-/// `nest` strips the matched prefix before the request reaches the inner
-/// router, and `SyncAuth` can be extracted at several nesting depths, so the
-/// path may arrive as either the full form (`/seafhttp/repo/{id}/…`) or the
-/// stripped form (`/{id}/…`). Both are accepted.
+/// `nest` strips the matched prefix and `SyncAuth` runs at several depths, so
+/// both the full form and the stripped form (`/{id}/…`) are accepted.
 ///
-/// # Security
-///
-/// The path is percent-decoded **before** the UUID check, because axum's `Path`
+/// The path is percent-decoded **before** the UUID check because axum's `Path`
 /// extractor also decodes it. Without this, `/seafhttp/repo/%63cab3e0-…/commit`
 /// would look like a non-UUID segment (→ `None` → binding check skipped) while
-/// the handler would see the victim's real repo id — letting any sync token
-/// read any repo.
-///
-/// The check is fail-closed: only the explicit [`NON_REPO_SYNC_ENDPOINTS`]
-/// allow-list may return `Ok(None)`; anything else that fails to yield a UUID
-/// is `Err`, so a malformed or encoded repo segment can never be mistaken for
-/// "this endpoint has no repo".
+/// the handler saw the victim's real repo id — letting any sync token read any
+/// repo. The check is fail-closed: only the explicit
+/// [`NON_REPO_SYNC_ENDPOINTS`] allow-list may return `Ok(None)`.
 fn extract_url_repo_id(path: &str) -> Result<Option<String>, ()> {
     let decoded = percent_encoding::percent_decode_str(path)
         .decode_utf8()
@@ -272,12 +238,11 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
     ) -> Result<Self, Self::Rejection> {
         let repos = &state.repos;
 
-        // ── Path 1: Authorization header (external API clients) ──────────────
+        // Authorization header (external API clients).
         let token_str = extract_auth_header_token(&parts.headers);
 
-        // ── Path 2: Session cookie + CSRF header (browser UI requests) ──────
-        // CSRF check is skipped for safe methods (GET, HEAD) because browsers
-        // cannot attach custom headers for <img>, <link>, <script> etc.
+        // CSRF check is skipped for safe methods (GET, HEAD): browsers cannot
+        // attach custom headers for <img>, <link>, <script> etc.
         let token_str = match token_str {
             Some(t) => t,
             None => match try_extract_cookie_session(&parts.headers, state, &parts.method) {
@@ -286,16 +251,12 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             },
         };
 
-        // Only account credentials authenticate `/api2/*` and the Web UI:
-        // unified API keys (created in the settings UI) and session API tokens.
-        // Repository-scoped sync tokens are accepted exclusively by [`SyncAuth`]
-        // on `/seafhttp/...`, mirroring seahub's `TokenAuthentication`, which
-        // never consults the repo-token table. Treating a repo token as an
-        // account session would let a leaked library credential read the whole
-        // account.
-        //
-        // A key and a session token can never share a value (both are 160-bit
-        // random), so the two lookups run together and the order is immaterial.
+        // Only account credentials authenticate `/api2/*` and the Web UI: unified
+        // API keys and session API tokens. Repository-scoped sync tokens are
+        // accepted only by [`SyncAuth`], mirroring seahub's `TokenAuthentication`;
+        // treating one as an account session would let a leaked library
+        // credential read the whole account. A key and a session token cannot share
+        // a value (both 160-bit random), so the two lookups run together.
         let (key_lookup, api_record) = tokio::join!(
             repos.api_key.find_by_presented(&token_str),
             repos.api_token.find_by_token(&token_str),
@@ -313,15 +274,13 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
                 tracing::warn!(key_id = lookup.key.id, %error, "rejecting API key with an unreadable capability set");
                 StatusCode::UNAUTHORIZED
             })?;
-            // The key is authentic; note that it was used before the route
-            // guard decides whether it may be.
+            // Note the key as used before the route guard decides.
             note_key_usage(repos, lookup.key.id).await;
             let credential = Credential::Key(authority);
             enforce_route_access(&credential, parts)?;
             // A unified API key belongs to no device.
             (lookup.key.user_id, credential, None)
         } else if let Some(token_record) = api_record {
-            // Check API token expiration.
             if is_token_expired(token_record.expires_at) {
                 return Err(StatusCode::UNAUTHORIZED);
             }
@@ -358,9 +317,6 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
 }
 
 /// The device an account token was issued to, when its login reported one.
-///
-/// A browser session and a client that sent no device details both carry a
-/// `NULL` `device_id`, and both correctly yield `None` here.
 fn device_from_api_token(record: &infra::entity::api_token::Model) -> Option<DeviceIdentity> {
     DeviceIdentity::new(
         record.platform.clone(),
@@ -382,10 +338,9 @@ fn device_from_token(record: &infra::entity::sync_token::Model) -> Option<Device
 
 /// The device the sync protocol named in the request URL.
 ///
-/// `seaf-daemon` appends `client_id`/`client_name`/`client_ver` to the sync
-/// requests it makes (upstream's fileserver reads the same three parameters in
-/// `permissionCheckCB`), so they identify the device even when the credential
-/// that authenticated the request carries no device of its own.
+/// `seaf-daemon` appends `client_id`/`client_name`/`client_ver` (upstream's
+/// fileserver reads them in `permissionCheckCB`), so they identify the device
+/// even when the credential carries none.
 fn client_hint(parts: &Parts) -> Option<DeviceIdentity> {
     let params: std::collections::HashMap<String, String> =
         serde_urlencoded::from_str(parts.uri.query().unwrap_or_default()).ok()?;
@@ -400,18 +355,14 @@ fn client_hint(parts: &Parts) -> Option<DeviceIdentity> {
 /// Apply a credential's capability and library limits to a request.
 ///
 /// Every credential goes through here, so the route table is the single place
-/// that decides which caller may reach which route. A session satisfies every
-/// capability (it *is* the account) but is still classified, which is what
-/// makes an unclassified route fail closed for everyone rather than only for
-/// keys. An unclassified route is denied, so a newly added endpoint is
-/// unreachable until it is classified instead of silently accepting every
-/// caller.
+/// that decides which caller may reach which route; a session satisfies every
+/// capability but is still classified, so an unclassified route fails closed for
+/// everyone and a new endpoint stays unreachable until it is classified.
 ///
-/// Classification uses the router's matched path template, not the raw URI:
-/// `nest` strips the matched prefix before the request reaches a nested handler,
-/// so the raw path is `/{repo_id}/dir/` where the template is
-/// `/api2/repos/{repo_id}/dir/`. Library binding is checked against the raw path
-/// instead, because that is where the concrete id lives.
+/// Classification uses the router's matched path *template*, not the raw URI
+/// (`nest` leaves the raw path as `/{repo_id}/dir/` where the template is
+/// `/api2/repos/{repo_id}/dir/`); library binding uses the raw path, where the
+/// concrete id lives.
 fn enforce_route_access(credential: &Credential, parts: &Parts) -> Result<(), StatusCode> {
     let matched = parts
         .extensions
@@ -426,11 +377,8 @@ fn enforce_route_access(credential: &Credential, parts: &Parts) -> Result<(), St
     )
 }
 
-/// The policy half of [`enforce_route_access`].
-///
-/// Split out because the path *template* arrives in a request extension that
-/// only a real router fills in; taking it as a parameter keeps the decision
-/// testable, including the branch that denies an unclassified route.
+/// The policy half of [`enforce_route_access`], split out so the branch that
+/// denies an unclassified route is testable without a real router.
 fn route_decision(
     credential: &Credential,
     method: &axum::http::Method,
@@ -438,10 +386,8 @@ fn route_decision(
     uri_path: &str,
 ) -> Result<(), StatusCode> {
     let Some(access) = required_access(method, route) else {
-        // Fail closed, and leave a trace: a gap in the table is a bug, so it
-        // has to be observable instead of looking like an ordinary refusal.
-        // `record` answers true only for the first hit of a given route, so a
-        // misclassified hot endpoint cannot flood the log.
+        // Fail closed and leave a trace: a gap in the table is a bug, so it must
+        // be observable. `record` answers true only for a route's first hit.
         if super::route_audit::record(method.as_str(), uri_path) {
             tracing::warn!(
                 %method,
@@ -455,9 +401,8 @@ fn route_decision(
     if !credential.allows_route(access) {
         return Err(StatusCode::FORBIDDEN);
     }
-    // A key carries a per-library ceiling on top of the route's requirement.
-    // Every other credential is the account itself and has no ceiling, so
-    // `allows_repo` accepts unconditionally there.
+    // A key carries a per-library ceiling on top of the route requirement; every
+    // other credential is the account itself, so `allows_repo` accepts.
     if let RouteAccess::Capability(capability) = access
         && let Some(repo_id) = repo_path::find_repo_id(uri_path)
         && !credential.allows_repo(&repo_id, capability.is_write())
@@ -469,9 +414,7 @@ fn route_decision(
 
 /// Extract a token from `Authorization: Bearer <token>` or `Authorization: Token <token>`.
 fn extract_auth_header_token(headers: &axum::http::HeaderMap) -> Option<String> {
-    // Prefer the strongly-typed Bearer extraction.
-    // We cannot use TypedHeader here because we only have headers, not Parts,
-    // so we parse the header manually as a fallback.
+    // TypedHeader needs Parts, which we lack here, so parse the header by hand.
     if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         if let Some(token) = auth.strip_prefix("Token ") {
             return Some(token.to_string());
@@ -482,11 +425,9 @@ fn extract_auth_header_token(headers: &axum::http::HeaderMap) -> Option<String> 
     None
 }
 
-/// Try to authenticate via `seahub-session` cookie + `X-CSRFToken` header.
-///
-/// This is the **browser UI** path: the browser automatically sends the HttpOnly
-/// session cookie, and JavaScript reads `sfcsrftoken` from its non-HttpOnly cookie
-/// and echoes it back as `X-CSRFToken`.
+/// Authenticate via the `seahub-session` cookie plus an `X-CSRFToken` header:
+/// JavaScript reads `sfcsrftoken` from its non-HttpOnly cookie and echoes it,
+/// while the browser sends the HttpOnly session cookie automatically.
 fn try_extract_cookie_session(
     headers: &axum::http::HeaderMap,
     state: &std::sync::Arc<AppState>,
@@ -500,11 +441,8 @@ fn try_extract_cookie_session(
         .find(|s| s.starts_with("seahub-session="))
         .and_then(|s| s.strip_prefix("seahub-session="))?;
 
-    // ── CSRF check ──
-    // Only required for state-changing methods (POST, PUT, PATCH, DELETE, etc.).
-    // Safe methods (GET, HEAD, OPTIONS) are idempotent and cannot cause side
-    // effects — browsers routinely issue them from <img>, <link>, <script> tags
-    // that cannot attach custom headers.
+    // CSRF applies to state-changing methods only. Safe methods are idempotent
+    // and come from tags that cannot attach custom headers.
     if *method != axum::http::Method::GET
         && *method != axum::http::Method::HEAD
         && !crate::service::auth::csrf::validate_csrf_header(
@@ -520,11 +458,9 @@ fn try_extract_cookie_session(
 }
 
 impl SyncAuth {
-    /// Authenticate via sync token or API token.
-    ///
-    /// `url_repo_id` is the repo in the request URL path (if any). Sync tokens
-    /// must match it; API tokens are only accepted when the caller is a member
-    /// of that repo.
+    /// Authenticate a sync request; `url_repo_id` is the repo in the URL path,
+    /// which a sync token must match and whose membership an API token's caller
+    /// must hold.
     pub async fn from_token(
         repos: &Repositories,
         token_str: &str,
@@ -532,14 +468,12 @@ impl SyncAuth {
         method: &axum::http::Method,
         path: &str,
     ) -> Result<Self, StatusCode> {
-        // Query all three credential tables concurrently.
         let sync_fut = repos.sync_token.find_by_token(token_str);
         let api_fut = repos.api_token.find_by_token(token_str);
         let key_fut = repos.api_key.find_by_presented(token_str);
 
         let (sync_result, api_result, key_result) = tokio::join!(sync_fut, api_fut, key_fut);
 
-        // Check sync token first (has repo_id — preferred).
         if let Some(record) = sync_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
             if is_token_expired(record.expires_at) {
                 return Err(StatusCode::FORBIDDEN);
@@ -577,8 +511,7 @@ impl SyncAuth {
             } else {
                 crate::domain::capability::Capability::SyncRead
             };
-            // A sync client makes many small requests, so this is the surface
-            // where an unthrottled `last_used_at` would hurt most.
+            // A sync client makes many small requests, so throttle this write.
             note_key_usage(repos, lookup.key.id).await;
             if !authority.has(needed) {
                 return Err(StatusCode::FORBIDDEN);
@@ -588,8 +521,7 @@ impl SyncAuth {
                     return Err(StatusCode::FORBIDDEN);
                 }
                 // The key's scope is a ceiling, not a grant: the permission
-                // check still decides, so a revoked account loses access at
-                // once.
+                // check still decides, so a revoked account loses access at once.
                 crate::domain::permission::check_repo_read_permission(
                     repos.member.as_ref(),
                     url_repo,
@@ -621,8 +553,7 @@ impl SyncAuth {
 
             // Session tokens are not repo-scoped. On repo-scoped endpoints the
             // caller must be a member of the URL repo, closing the cross-repo
-            // IDOR while keeping seaf-daemon's API-token logon working for the
-            // user's own repos.
+            // IDOR while keeping seaf-daemon's API-token logon working.
             if let Some(url_repo) = url_repo_id {
                 crate::domain::permission::check_repo_read_permission(
                     repos.member.as_ref(),
@@ -648,17 +579,13 @@ impl SyncAuth {
     }
 }
 
-/// Check if a token has expired. Returns `true` when `expires_at` is set
-/// and is in the past.
+/// Check if a token has expired: `expires_at` set and in the past.
 fn is_token_expired(expires_at: Option<i64>) -> bool {
     matches!(expires_at, Some(exp) if chrono::Utc::now().timestamp() > exp)
 }
 
-/// Ensure the user behind a sync/API token still exists and is active.
-///
-/// Mirrors the `is_active` check that [`AuthUser`] applies on the web/API
-/// surfaces, so a deactivated account cannot keep syncing through a token
-/// that was issued before deactivation.
+/// Ensure the user behind a sync/API token still exists and is active, so a
+/// deactivated account cannot keep syncing through a token issued earlier.
 async fn ensure_active_user(repos: &Repositories, user_id: i32) -> Result<(), StatusCode> {
     let user = repos
         .user
@@ -672,8 +599,7 @@ async fn ensure_active_user(repos: &Repositories, user_id: i32) -> Result<(), St
     Ok(())
 }
 
-/// Extract a sync/API token from HTTP headers. Used by /seafhttp/ endpoints.
-/// Checks the Seafile-Repo-Token header first, then the Authorization header.
+/// Extract a sync/API token from headers: `Seafile-Repo-Token` first, then `Authorization`.
 pub fn extract_sync_token(
     headers: &axum::http::HeaderMap,
 ) -> Result<String, base::error::AppError> {
@@ -692,18 +618,13 @@ pub fn extract_sync_token(
         return Ok(token.to_string());
     }
 
-    // Missing credentials are a malformed request: seafile's fileserver answers
-    // 400 here, and seaf-daemon classifies 400 as a general request error.
+    // Missing credentials are malformed: seafile's fileserver answers 400 here.
     Err(AppError::BadRequest("token is null".into()))
 }
 
 /// Record that a key authenticated a request, at most once per
-/// [`crate::repository::throttle::KEY_USAGE_WRITE_INTERVAL`].
-///
-/// Best effort: a key must not fail a request because a timestamp could not be
-/// written, so the error is logged and dropped. This counts *authentication*,
-/// not success — a key that keeps being refused still shows as used, which is
-/// the more useful thing for an owner auditing it.
+/// [`crate::repository::throttle::KEY_USAGE_WRITE_INTERVAL`]; best effort, and
+/// it counts authentication rather than success.
 async fn note_key_usage(repos: &Repositories, key_id: i32) {
     if !repos.key_usage_writes.allows_now(key_id) {
         return;
@@ -746,8 +667,7 @@ mod tests {
         })
     }
 
-    /// A session satisfies every capability, so classification must not get in
-    /// its way: the route table says what a *key* needs.
+    /// A session satisfies every capability, so classification must not block it.
     #[test]
     fn a_session_passes_every_classified_route() {
         for (method, route) in [
@@ -774,9 +694,8 @@ mod tests {
         }
     }
 
-    /// The hardening this table is for: a route that nobody classified is
-    /// denied to *every* credential, so adding an endpoint without classifying
-    /// it cannot leave a silently open door.
+    /// A route that nobody classified is denied to *every* credential, so adding
+    /// an endpoint without classifying it cannot leave a silently open door.
     #[test]
     fn an_unclassified_route_is_denied_to_every_credential() {
         let session = Credential::Session;
@@ -807,9 +726,8 @@ mod tests {
         );
     }
 
-    /// A denied request must leave a trace, otherwise a gap in the table is
-    /// indistinguishable from a legitimate refusal. The classified route in the
-    /// same test is the control: reaching it must not be reported as a gap.
+    /// A denied request must leave a trace; the classified route in the same test
+    /// is the control, since reaching it must not be reported as a gap.
     #[test]
     fn an_unclassified_route_is_recorded_and_a_classified_one_is_not() {
         use crate::middleware::route_audit;
@@ -840,9 +758,8 @@ mod tests {
         );
     }
 
-    /// The key half of the policy, and the wiring the template/URI split
-    /// exists for: the route is matched on the template while the library
-    /// ceiling is checked against the concrete id in the raw path.
+    /// The key half of the policy: the route is matched on the template while the
+    /// library ceiling is checked against the concrete id in the raw path.
     #[test]
     fn a_key_is_limited_by_its_capabilities_and_its_library_ceiling() {
         let read_only_here = key(
@@ -893,8 +810,7 @@ mod tests {
             extract_url_repo_id(&format!("/seafhttp/repo/{REPO}/commit/HEAD")),
             Ok(Some(REPO.to_string()))
         );
-        // The nested router strips the prefix, so the handler-side form must
-        // work too.
+        // The nested router strips the prefix, so the handler-side form works too.
         assert_eq!(
             extract_url_repo_id(&format!("/{REPO}/commit/HEAD")),
             Ok(Some(REPO.to_string()))
@@ -908,10 +824,8 @@ mod tests {
 
     #[test]
     fn endpoints_without_a_repo_segment_return_none() {
-        // `nest` strips the matched prefix before the request reaches the inner
-        // router, so the middleware observes the stripped form for the
-        // non-repo protocol endpoints (`/seafhttp/accessible-repos` arrives as
-        // `/accessible-repos`). These are the only paths allowed to skip the
+        // `nest` strips the prefix, so the middleware sees `/accessible-repos`
+        // for `/seafhttp/accessible-repos`; only the allow-list may skip the
         // binding check.
         for path in [
             "/accessible-repos",
@@ -931,12 +845,9 @@ mod tests {
         }
     }
 
-    /// Regression: the middleware must derive the binding value the same
-    /// way axum's `Path` extractor does — by percent-decoding. Decoding is the
-    /// correct behaviour (it makes the compared value identical to the one the
-    /// handler uses); the vulnerability was that the *undecoded* segment was
-    /// compared, so a `%XX`-encoded id failed the UUID test and skipped the
-    /// binding check entirely.
+    /// Regression: the binding value must be derived by percent-decoding, as
+    /// axum's `Path` does. The bug compared the *undecoded* segment, so a `%XX`
+    /// id failed the UUID test and skipped the binding check entirely.
     #[test]
     fn percent_encoded_repo_id_is_decoded_before_the_binding_check() {
         // '%63' == 'c' — the exact encoding shape used in the PoC.
@@ -947,8 +858,7 @@ mod tests {
             Ok(Some(REPO.to_string())),
             "the decoded value must be used for the binding comparison"
         );
-        // Every hex char is encodable — all of them must decode consistently,
-        // in both the full and the stripped path form.
+        // Every hex char must decode consistently, in both path forms.
         for (i, ch) in REPO.char_indices().filter(|(_, c)| c.is_ascii_hexdigit()) {
             let mut buf = String::new();
             buf.push_str(&REPO[..i]);

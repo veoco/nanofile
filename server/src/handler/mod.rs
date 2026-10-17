@@ -1,43 +1,34 @@
 //! HTTP handler layer — thin adapters between axum and the service layer.
 //!
-//! REST API handlers live as flat files under `handler/`, grouped by domain.
-//! The sync protocol (`/seafhttp/`) and file serving (`/download-api/`, etc.)
-//! each have their own subdirectories due to their distinct auth patterns.
+//! REST handlers are flat files grouped by domain; the sync protocol (`/seafhttp/`)
+//! and file serving have subdirectories because of their distinct auth patterns.
 
 use axum::Json;
 use base::error::AppError;
 
-/// Standard success response body: `{"success": true}`.
 pub fn ok_json() -> Json<serde_json::Value> {
     Json(serde_json::json!({"success": true}))
 }
 
-/// Upper bound for pure-metadata request bodies (login, file/dir/repo/trash
-/// ops). These never carry file bytes; the global upload limit is far larger.
+/// Upper bound for pure-metadata bodies (login, file/dir/repo/trash ops).
 pub const MAX_SMALL_BODY_BYTES: usize = 1024 * 1024;
 
-/// Upper bound for a single content-addressed block. Seafile CDC produces
-/// blocks up to 10 MiB (CDC_MAX_BLOCK_SIZE); 12 MiB leaves headroom for
-/// encrypted (AES-padded) block data. Shared by the sync put_block and the
-/// mobile upload-blks-api paths.
+/// Upper bound for a single content-addressed block: Seafile CDC produces blocks up
+/// to 10 MiB (CDC_MAX_BLOCK_SIZE) and 12 MiB leaves headroom for the AES padding of
+/// encrypted data. Shared by sync put_block and the mobile upload-blks-api.
 pub const MAX_BLOCK_UPLOAD_BYTES: usize = 12 * 1024 * 1024;
 
-/// Upper bound on the number of dirent names accepted in one request.
+/// Upper bound on dirent names accepted in one request.
 ///
-/// Several endpoints accept a list of names and then do per-name work over the
-/// repository tree (a recursive walk for `zip-task`, a linear scan of the
-/// parent directory for the batch endpoints). A 64 MiB JSON body holds well
-/// over a million short names, so the list must be bounded independently of the
-/// body limit. A real client sends at most a handful — the selection made in
-/// the file browser — so this is far above legitimate use.
+/// Endpoints take a name list and then do per-name work over the tree (a recursive walk
+/// for `zip-task`, a linear scan for the batch ones), and a 64 MiB body holds well over
+/// a million short names — hence a bound independent of the body limit.
 pub const MAX_REQUEST_DIRENTS: usize = 1000;
 
-/// Validate and normalise a client-supplied list of dirent names.
-///
-/// Caps the count and removes duplicates in place. Duplicates matter beyond the
-/// wasted work: every operation here is "for each name, find the entry and add
-/// it to the result", so a repeated name would otherwise be applied N times
-/// (e.g. writing the same entry into a directory object many times).
+/// Validate and normalise a client-supplied list of dirent names: cap the count and
+/// dedupe in place, because every operation is "for each name, find the entry and add it
+/// to the result" and a repeated name would be applied N times (e.g. the same entry
+/// written into a directory object many times).
 pub fn sanitize_dirent_list(names: &mut Vec<String>) -> Result<(), AppError> {
     if names.len() > MAX_REQUEST_DIRENTS {
         return Err(AppError::BadRequest(format!(
@@ -66,9 +57,9 @@ pub async fn read_body_limited(
     })
 }
 
-/// Stream a multipart field into memory under `limit`. Rejects an oversized
-/// part from its Content-Length header before buffering, and independently
-/// caps the bytes actually read so a lying header can't force a large buffer.
+/// Stream a multipart field into memory under `limit`: reject an oversized part from
+/// its Content-Length before buffering and cap the bytes read, so a lying header
+/// cannot force a large buffer.
 pub async fn read_multipart_field_limited(
     field: &mut axum::extract::multipart::Field<'_>,
     limit: usize,

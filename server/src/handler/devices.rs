@@ -8,14 +8,7 @@ use crate::service::credential::{CredentialKind, CredentialService};
 use crate::service::user::DeviceService;
 use base::error::AppError;
 
-/// Format a Unix timestamp as `YYYY-MM-DD HH:MM` (UTC) for the device API's
-/// payload.
-///
-/// This is the only remaining server-side time formatting: the payload is
-/// machine-facing, so it stays UTC and fixed-shape. Everything a person reads in
-/// the Web UI ships raw Unix seconds and is rendered by the browser instead.
-///
-/// Out-of-range timestamps fall back to the Unix epoch instead of panicking.
+/// Formats a Unix timestamp as `YYYY-MM-DD HH:MM` (UTC); bad values become the epoch.
 fn format_ts(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
         .unwrap_or_default()
@@ -23,13 +16,8 @@ fn format_ts(ts: i64) -> String {
         .to_string()
 }
 
-/// Body of `DELETE /api2/devices/`.
-///
-/// Two addressing schemes are accepted. A *device* is named by `platform` +
-/// `device_id`, which is what the official clients send and what groups a
-/// device's credentials together. Everything else the inventory can list
-/// (a browser session, a sync token, a 2FA device trust) is named by `kind` +
-/// `id`, because it has no device identity to group by.
+/// Body of `DELETE /api2/devices/`: address a *device* by `platform` + `device_id`
+/// (what the official clients send), or any other inventory row by `kind` + `id`.
 #[derive(Deserialize)]
 pub struct UnlinkDeviceForm {
     #[serde(default)]
@@ -51,23 +39,12 @@ pub fn devices_routes() -> axum::Router<Arc<AppState>> {
 
 /// GET /api2/devices/
 ///
-/// Everything long-lived the account holds, as one array. Each entry carries a
-/// `kind` so a caller can tell them apart:
-///
-/// * `client` — an application that identified itself, grouped by device;
-/// * `browser` — a session held by a web browser;
-/// * `sync_token` — one library's sync credential for one device;
-/// * `device_trust` — a device allowed to skip the second factor.
-///
-/// A credential's *value* is never included. A `sync_token` row holds a
-/// ciphertext this server can decrypt, so only metadata is returned.
-///
-/// # Compatibility
-///
-/// The `client` entries keep the field names they always had, and `kind` is an
-/// addition. A client that ignores it therefore sees the extra entries rather
-/// than a changed shape — which is why this endpoint, unlike
-/// `/api2/credentials/`, is not the right one for a *device* screen to iterate.
+/// Every long-lived credential the account holds, one array, each entry tagged with a
+/// `kind`: `client`, `browser`, `sync_token` or `device_trust`. A credential's *value* is
+/// never included — a `sync_token` row holds a ciphertext this server can decrypt, so
+/// only metadata is returned. `client` entries keep their field names and `kind` is an
+/// addition, so a client that ignores it sees extra entries rather than a changed shape —
+/// hence `/api2/credentials/` is the right endpoint for a *device* screen.
 pub async fn list_devices(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -78,12 +55,10 @@ pub async fn list_devices(
     let mut entries: Vec<serde_json::Value> = Vec::new();
 
     for client in inventory.clients {
-        // Stable, non-secret identifier: the row's `token` column holds the
-        // SHA-256 *digest* of a bearer credential and used to be echoed here.
+        // Stable, non-secret identifier: `token` holds a SHA-256 digest.
         let key = format!("{}:{}", client.platform, client.device_id);
         entries.push(serde_json::json!({
-            // A device has no row id -- it is a group of them -- so it is
-            // addressed by `platform` + `device_id` rather than by kind.
+            // A device is a group of rows, addressed by platform + device_id.
             "kind": "client",
             "key": key,
             "platform": client.platform,
@@ -97,8 +72,7 @@ pub async fn list_devices(
 
     for browser in inventory.browsers {
         entries.push(serde_json::json!({
-            // The addressing kind, not a display name: a caller has to be able
-            // to feed this value straight back to the revoke route.
+            // The addressing kind, not a display name: it goes back to the revoke route.
             "kind": CredentialKind::BrowserSession.id(),
             "key": format!("browser:{}", browser.id),
             "id": browser.id,
@@ -141,16 +115,15 @@ pub async fn list_devices(
 
 /// DELETE /api2/devices/
 ///
-/// Revoke one credential. With `platform` + `device_id` this is the original
-/// device unlink: every credential that device owns goes together. With `kind`
-/// + `id` it revokes the single row the inventory named.
+/// Revoke one credential: `platform` + `device_id` unlinks everything that device
+/// owns, `kind` + `id` revokes the single row the inventory named.
 pub async fn unlink_device(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Form(form): Form<UnlinkDeviceForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    // An explicit kind wins, so a caller can address a browser session whose
-    // `platform` is empty without that looking like a device with an empty id.
+    // An explicit kind wins, so a browser session with an empty `platform` stays
+    // addressable without looking like a device with an empty id.
     if let Some(kind) = form.kind.as_deref() {
         let kind = CredentialKind::from_id(kind)
             .ok_or_else(|| AppError::BadRequest("unknown credential kind".into()))?;

@@ -42,7 +42,7 @@ pub async fn get_thumbnail(
     let (data, etag, format) = svc.get_thumbnail(&repo_id, &path, size).await?;
 
     // Conditional request: a matching validator short-circuits to 304 without
-    // re-sending the thumbnail body (mirrors the download endpoint).
+    // re-sending the body (mirrors the download endpoint).
     let if_none_match = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok());
@@ -52,8 +52,8 @@ pub async fn get_thumbnail(
         None => false,
     };
     if matches {
-        // 304 carries the same cache headers as the 200 so the client can
-        // keep revalidating without a full refetch.
+        // 304 carries the same cache headers as the 200 so the client can keep
+        // revalidating without a full refetch.
         return Ok((
             StatusCode::NOT_MODIFIED,
             [
@@ -68,10 +68,9 @@ pub async fn get_thumbnail(
     Ok((
         StatusCode::OK,
         [
-            // The container follows the pixels (JPEG when opaque, PNG when the
-            // image actually uses transparency); the cache entry remembers which.
+            // The container follows the pixels (JPEG when opaque, PNG when it uses
+            // transparency); the cache entry remembers which. THUMBNAIL_CACHE_DAYS=7.
             (header::CONTENT_TYPE, format.mime()),
-            // Matching seahub's THUMBNAIL_CACHE_DAYS=7 → 604800 seconds
             (header::CACHE_CONTROL, "private, max-age=604800"),
             (header::ETAG, &etag),
         ],

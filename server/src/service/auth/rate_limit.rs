@@ -3,10 +3,7 @@ use std::sync::Arc;
 use infra::config::AuthConfig;
 use infra::rate_limit::{GenericRateLimiter, LoginRateLimiter};
 
-/// Aggregated authentication rate limiters shared via `AppState`.
-///
-/// Collapses the five independent limiter fields that used to live on
-/// `AppState` into one cohesive unit, since they are all constructed from
+/// Aggregated authentication rate limiters shared via `AppState`, all built from
 /// the same `AuthConfig` and used only by auth paths.
 pub struct AuthRateLimiters {
     pub login: Arc<LoginRateLimiter>,
@@ -15,13 +12,13 @@ pub struct AuthRateLimiters {
     pub totp: Arc<GenericRateLimiter>,
     pub disable_2fa: Arc<GenericRateLimiter>,
     pub link_password: Arc<GenericRateLimiter>,
-    /// Failed encrypted-library password checks, keyed by `(user, repo)`.
-    /// The wire protocol fixes the KDF iteration count, so throttling is the
-    /// only available control against offline-fast guessing online.
+    /// Failed encrypted-library password checks, keyed by `(user, repo)`: the wire
+    /// protocol fixes the KDF iteration count, so throttling is the only control
+    /// against online guessing.
     pub repo_password: Arc<GenericRateLimiter>,
     pub share_download: Arc<GenericRateLimiter>,
-    /// Failed WebDAV Basic-auth attempts, keyed by client IP. Successful
-    /// requests are never counted, so a working client cannot trip this.
+    /// Failed WebDAV Basic-auth attempts, keyed by client IP. Successes are never
+    /// counted, so a working client cannot trip this.
     pub webdav_auth: Arc<GenericRateLimiter>,
     pub reindex: Arc<GenericRateLimiter>,
     /// Anonymous SSO link creations, keyed by client IP.
@@ -68,7 +65,7 @@ impl AuthRateLimiters {
 
     /// Push a new configuration into the limiters of a running server.
     ///
-    /// The windows already counted are kept: a save must not be a way to clear a
+    /// Windows already counted are kept: saving must not be a way to clear a
     /// lockout, and raising a budget should not forget who has been trying.
     pub fn apply(&self, cfg: &AuthConfig) {
         self.login.set_limits(
@@ -97,25 +94,22 @@ impl AuthRateLimiters {
 }
 
 impl AuthRateLimiters {
-    /// Rate-limit key for failed encrypted-library password checks, scoped to
-    /// one (user, repo) pair.
+    /// Rate-limit key for failed encrypted-library password checks, scoped to one
+    /// `(user, repo)` pair.
     ///
-    /// **Every** endpoint that verifies a library password or magic must use
-    /// this key. The library KDF iteration count is fixed at 1000 by the
-    /// Seafile wire protocol, so this limiter is the only control against
-    /// online guessing; a second endpoint using a different key would hand the
-    /// attacker an unmetered oracle.
+    /// **Every** endpoint that verifies a library password or magic must use this
+    /// key: the library KDF count is fixed at 1000 by the Seafile wire protocol, so
+    /// this limiter is the only control against online guessing, and a second
+    /// endpoint with a different key would be an unmetered oracle.
     pub fn repo_password_key(user_id: i32, repo_id: &str) -> String {
         format!("repo_pw:{user_id}:{repo_id}")
     }
 
-    /// Whether this (user, repo) pair has exhausted its failed-attempt budget.
     pub fn is_repo_password_limited(&self, user_id: i32, repo_id: &str) -> bool {
         self.repo_password
             .is_limited(&Self::repo_password_key(user_id, repo_id))
     }
 
-    /// Count one failed library password/magic guess.
     pub fn record_repo_password_failure(&self, user_id: i32, repo_id: &str) {
         self.repo_password
             .record_attempt(&Self::repo_password_key(user_id, repo_id));
@@ -123,9 +117,9 @@ impl AuthRateLimiters {
 
     /// Clear the failure budget after a successful verification.
     ///
-    /// Only failures may ever be counted: the Android client re-submits its own
-    /// cached password before every download, so counting successes would lock
-    /// a legitimate user out of their own library.
+    /// Only failures may be counted: the Android client re-submits its cached
+    /// password before every download, so counting successes would lock a
+    /// legitimate user out of their own library.
     pub fn clear_repo_password_failures(&self, user_id: i32, repo_id: &str) {
         self.repo_password
             .clear(&Self::repo_password_key(user_id, repo_id));
@@ -138,9 +132,7 @@ mod tests {
     use infra::config::AuthConfig;
     use infra::rate_limit::LoginKeys;
 
-    /// Every field documented as "(0 = unlimited)" must really disable its
-    /// limiter. The config used to be clamped with `.max(1)` on construction,
-    /// which turned "unlimited" into "reject the first request".
+    /// Every field documented as "(0 = unlimited)" must really disable its limiter.
     #[test]
     fn zero_config_disables_every_limiter() {
         let cfg = AuthConfig {

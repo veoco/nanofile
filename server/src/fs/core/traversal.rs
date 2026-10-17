@@ -1,29 +1,22 @@
 //! Bounded traversal guards for directory-tree walks.
 //!
-//! Every FS walk in this crate is a level-by-level BFS over `dirents`. Because
-//! `recv-fs` trusts the object id a client supplies for the object bytes
-//! (verified separately in `SyncService::insert_fs_objects`), a client can
-//! still craft a directory object that references itself, which would make an
-//! unbounded walk expand forever. These guards bound the work:
+//! Every FS walk is a level-by-level BFS over `dirents`. Because `recv-fs`
+//! trusts the object id a client supplies (verified separately in
+//! `SyncService::insert_fs_objects`), a client can craft a directory object that
+//! references itself and make an unbounded walk expand forever.
+//! [`TreeGuard::enter_level`] caps BFS depth (a cycle always increases depth, so
+//! it terminates) and [`TreeGuard::visit`] caps the total node count.
 //!
-//! * [`TreeGuard::enter_level`] caps the BFS depth (a cycle always increases
-//!   depth, so it terminates),
-//! * [`TreeGuard::visit`] caps the total number of visited nodes.
-//!
-//! A **global** visited-set would be wrong here: Seafile content-addresses
-//! directory objects, so the same dir id legitimately appears under several
-//! parents, and de-duplicating would change size/quota semantics.
-//!
-//! Limits are process-wide and configured from `[sync]` at startup; the
-//! defaults are far above any real tree.
+//! A **global** visited-set would be wrong: Seafile content-addresses directory
+//! objects, so one dir id legitimately appears under several parents, and
+//! de-duplicating would change size/quota semantics. Limits are process-wide,
+//! configured from `[sync]` at startup, and default far above any real tree.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use base::error::AppError;
 
-/// Default maximum BFS depth. Real trees are tens of levels at most.
 pub const DEFAULT_MAX_TREE_DEPTH: usize = 512;
-/// Default maximum number of visited directory nodes per walk.
 pub const DEFAULT_MAX_TREE_VISITS: usize = 1_000_000;
 
 static MAX_TREE_DEPTH: AtomicUsize = AtomicUsize::new(DEFAULT_MAX_TREE_DEPTH);
@@ -35,21 +28,17 @@ pub fn configure(max_depth: usize, max_visits: usize) {
     MAX_TREE_VISITS.store(max_visits.max(1), Ordering::Relaxed);
 }
 
-/// Current maximum BFS depth.
 pub fn max_tree_depth() -> usize {
     MAX_TREE_DEPTH.load(Ordering::Relaxed)
 }
 
-/// Current maximum visited-node count.
 pub fn max_tree_visits() -> usize {
     MAX_TREE_VISITS.load(Ordering::Relaxed)
 }
 
 /// Depth/visit counter for one BFS walk.
-///
-/// Create one per walk, call [`TreeGuard::enter_level`] at the top of each
-/// `while !frontier.is_empty()` iteration and [`TreeGuard::visit`] with the
-/// number of nodes processed at that level.
+/// Call [`TreeGuard::enter_level`] at each BFS level and [`TreeGuard::visit`]
+/// with the number of nodes processed at that level.
 #[derive(Debug, Default)]
 pub struct TreeGuard {
     depth: usize,
@@ -91,10 +80,9 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// Both tests below rewrite the process-wide limits via [`configure`], and
-    /// `cargo test` runs them concurrently, so without this lock one test's
-    /// `configure` can land between the other's setup and assertion (it would
-    /// restore the 1,000,000-visit default and make `visit(1)` succeed).
+    /// Both tests rewrite the process-wide limits via [`configure`] and `cargo
+    /// test` runs them concurrently, so without this lock one test's `configure`
+    /// can land between the other's setup and its assertion.
     static LIMITS_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]

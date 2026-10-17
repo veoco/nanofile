@@ -1,12 +1,7 @@
-//! The outbox: queueing a rendered message and getting it delivered, with
-//! retries that survive a restart.
-//!
-//! Delivery is **at-least-once**. A row is claimed by incrementing `attempts`
-//! in a conditional `UPDATE`, so a process that dies mid-send leaves the row
-//! pending and it will be tried again; the cost is a possible duplicate, which
-//! for a notification or a reset link is harmless. Exactly-once would need a
-//! distributed lock, and would still be defeated by a relay that accepted the
-//! message and then lost it.
+//! The outbox: queueing a rendered message and getting it delivered, with retries that survive a
+//! restart. Delivery is **at-least-once** — a row is claimed by incrementing `attempts` in a
+//! conditional `UPDATE`, so a process that dies mid-send leaves it pending and it is tried again;
+//! duplicates are possible and harmless for a notification or a reset link.
 
 use base::error::AppError;
 use base64::Engine as _;
@@ -20,33 +15,24 @@ use crate::repository::email_message::NewEmailMessage;
 use super::settings::EmailSettings;
 use super::transport::MailTransport;
 
-/// Messages attempted per drain. Bounds how long one scheduler tick can run
-/// when a long outage has piled messages up.
+/// Messages attempted per drain, bounding how long one scheduler tick can run after a long outage.
 pub const DRAIN_BATCH: u64 = 25;
 
-/// The queue's schedule: backoff, claim lease and retention. Shared with any
-/// other persistent queue rather than restated here.
+/// The queue's schedule: backoff, claim lease and retention, shared with any other persistent queue.
 pub const POLICY: crate::tasks::queue::QueuePolicy = crate::tasks::queue::QueuePolicy::DEFAULT;
 
-/// Delay before the next attempt after `attempts` failed tries.
-///
-/// 30s, 1m, 2m, 4m … capped at an hour: long enough that a down relay is not
-/// hammered, short enough that a transient failure is invisible to the user.
+/// Delay before the next attempt after `attempts` failed tries: 30s, 1m, 2m, 4m … capped at an hour,
+/// so a down relay is not hammered and a transient failure stays invisible to the user.
 pub fn backoff_secs(attempts: i32) -> i64 {
     POLICY.backoff_secs(attempts)
 }
 
-/// When the next attempt is due after `attempts` failed tries.
 pub fn next_attempt_at(now: i64, attempts: i32) -> i64 {
     POLICY.next_attempt_at(now, attempts)
 }
 
-/// Encode a rendered message for storage.
-///
-/// The raw bytes go through base64 before encryption because the column is
-/// text: a message is mostly ASCII (quoted-printable/base64 bodies, encoded
-/// headers), but a header holding raw UTF-8 must not be able to break the
-/// round-trip.
+/// Encode a rendered message for storage: base64 before encryption, since a text column cannot carry
+/// raw UTF-8 header bytes safely.
 pub fn encode_body(raw: &[u8]) -> String {
     BASE64.encode(raw)
 }
@@ -105,10 +91,9 @@ pub async fn enqueue(
 
 /// Try to deliver one queued message.
 ///
-/// `Ok(true)` means it was delivered. `Ok(false)` covers every other outcome —
-/// another attempt claimed it, the body is unreadable, or SMTP refused — with
-/// the row already updated to say which. Errors are reserved for database
-/// failures, which the caller should log rather than retry blindly.
+/// `Ok(true)` means it was delivered; `Ok(false)` covers every other outcome — another attempt
+/// claimed it, the body is unreadable, or SMTP refused — with the row already updated to say which.
+/// Errors are database failures, which the caller should log rather than retry blindly.
 pub async fn attempt(
     repos: &Repositories,
     cipher: &TokenCipher,
@@ -117,11 +102,10 @@ pub async fn attempt(
     row: &email_message::Model,
     now: i64,
 ) -> Result<bool, AppError> {
-    // Claiming is what makes a crash mid-send safe, and the lease is what stops
-    // a second drain (or a manual retry) from sending the same body twice: the
-    // attempt counter alone is not exclusive, because a drain that reads the row
-    // after the first claim commits sees the incremented value and its own swap
-    // succeeds.
+    // Claiming is what makes a crash mid-send safe, and the lease is what stops a second drain (or a
+    // manual retry) from sending the same body twice: the attempt counter alone is not exclusive,
+    // because a drain that reads the row after the first claim commits sees the incremented value
+    // and its own swap succeeds.
     if !repos
         .email_message
         .claim(row.id, row.attempts, now, POLICY.lease_until(now))
@@ -177,7 +161,6 @@ pub async fn attempt(
     }
 }
 
-/// Deliver everything that is due, then apply retention.
 pub async fn drain(
     repos: &Repositories,
     cipher: &TokenCipher,
@@ -194,9 +177,8 @@ pub async fn drain(
         if attempt(repos, cipher, settings, hello_name, &row, now).await? {
             report.delivered += 1;
         } else {
-            // Re-read the row rather than guessing: `attempt` may have been
-            // beaten to the claim by a manual retry, in which case the outcome
-            // is neither a retry nor a terminal failure.
+            // Re-read the row rather than guessing: `attempt` may have been beaten to the claim by a
+            // manual retry, in which case the outcome is neither a retry nor a terminal failure.
             match repos.email_message.find_by_id(row.id).await? {
                 Some(after) if after.status == email_message::Status::Failed.id() => {
                     report.failed += 1;
@@ -214,14 +196,12 @@ pub async fn drain(
 
 /// Clear leases whose holder disappeared, so their rows become claimable.
 ///
-/// A row is left pending with its attempt counted when the process dies
-/// mid-send; clearing the lease is all that is needed for the next drain to
-/// pick it up. Called before each drain rather than on its own timer.
+/// A row is left pending with its attempt counted when the process dies mid-send; clearing the lease is
+/// all the next drain needs. Called before each drain, not on its own timer.
 pub async fn reap_leases(repos: &Repositories, now: i64) -> Result<u64, AppError> {
     repos.email_message.reap_expired_leases(now).await
 }
 
-/// Apply the retention policy, returning how many rows were removed.
 pub async fn prune(repos: &Repositories, now: i64) -> Result<u64, AppError> {
     repos
         .email_message
@@ -348,10 +328,9 @@ mod tests {
         assert_eq!(after.attempts, 1);
     }
 
-    /// The bug the lease exists for: the attempt counter alone is not
-    /// exclusive. A drain that re-reads the row after the first claim commits
-    /// sees the incremented counter, so its own compare-and-swap succeeds and
-    /// both send. The lease closes that window.
+    /// The bug the lease exists for: the attempt counter alone is not exclusive. A drain that
+    /// re-reads the row after the first claim commits sees the incremented counter, so its own
+    /// compare-and-swap succeeds and both send. The lease closes that window.
     #[tokio::test]
     async fn a_second_claim_with_the_fresh_attempt_count_is_still_refused() {
         let repos = repos().await;
@@ -375,8 +354,7 @@ mod tests {
                 .await
                 .unwrap()
         );
-        // Exactly the case the old conditional update allowed through: a second
-        // worker that read `attempts = 1` after the first claim landed.
+        // A second worker that read `attempts = 1` after the first claim landed.
         let reread = repos
             .email_message
             .find_by_id(row.id)
@@ -443,8 +421,8 @@ mod tests {
         );
     }
 
-    /// A lease still held keeps its row out of a competing drain even after the
-    /// counter moved, and the same drain can extend it.
+    /// A lease still held keeps its row out of a competing drain even after the counter moved, and
+    /// the same drain can extend it.
     #[tokio::test]
     async fn a_lease_can_be_renewed() {
         let repos = repos().await;
@@ -575,7 +553,6 @@ mod tests {
                 repos.email_message.mark_sent(row.id, now).await.unwrap();
             }
         }
-        // A pending row is never pruned by age.
         let pending = enqueue(
             &repos,
             &cipher,

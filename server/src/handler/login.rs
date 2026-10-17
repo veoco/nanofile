@@ -46,11 +46,8 @@ fn login_error(msg: &str) -> Result<Response, AppError> {
         .into_response())
 }
 
-/// Parse a multipart/form-data login request body.
-///
-/// The seadroid client sends login credentials as multipart/form-data
-/// (via Retrofit's @Multipart + @PartMap), so we need to handle this
-/// in addition to JSON and URL-encoded form data.
+/// Parse a multipart/form-data login body (seadroid's Retrofit @Multipart + @PartMap),
+/// alongside JSON and URL-encoded forms.
 async fn parse_multipart_login(bytes: &[u8], content_type: &str) -> Result<LoginForm, String> {
     let boundary =
         multer::parse_boundary(content_type).map_err(|e| format!("invalid boundary: {e}"))?;
@@ -107,7 +104,6 @@ pub async fn login(
     headers: HeaderMap,
     req: Request<Body>,
 ) -> Result<Response, AppError> {
-    // ── Parse body: accept both JSON and URL-encoded form data ──────────
     let (parts, body) = req.into_parts();
     let bytes = match read_body_limited(body, MAX_SMALL_BODY_BYTES).await {
         Ok(b) => b,
@@ -137,20 +133,17 @@ pub async fn login(
             .map_err(|e| AppError::BadRequest(format!("Invalid form body: {e}")))?
     };
 
-    // ── CSRF: validate Origin/Referer for browser-based requests ──────
     let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return login_error("Invalid request origin.");
     }
 
-    // ── Extract client IP for rate limiting ──────────────────────────
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
         &state.config().server.trusted_proxies,
     );
 
-    // Extract S2FA/OTP/trust-device headers
     let s2fa_header = headers.get("X-SEAFILE-S2FA").and_then(|v| v.to_str().ok());
     let otp_header = headers.get("X-SEAFILE-OTP").and_then(|v| v.to_str().ok());
     let trust_device = headers
@@ -158,13 +151,12 @@ pub async fn login(
         .and_then(|v| v.to_str().ok())
         == Some("1");
 
-    // The device fields are moved into the service, but the notification built
-    // from them afterwards still needs them.
+    // The device fields are moved into the service, but the notification built from
+    // them afterwards still needs them.
     let device_platform = form.platform.clone().unwrap_or_default();
     let device_id = form.device_id.clone().unwrap_or_default();
     let device_name = form.device_name.clone().unwrap_or_default();
 
-    // ── Call service ─────────────────────────────────────────────────
     let svc = state.login_service();
     let login_result = svc
         .authenticate(
@@ -181,7 +173,6 @@ pub async fn login(
         )
         .await?;
 
-    // ── Format response ──────────────────────────────────────────────
     match login_result {
         LoginResult::Success {
             user_id,
@@ -190,8 +181,8 @@ pub async fn login(
             new_device,
         } => {
             if new_device {
-                // Best-effort and in the background: the response below must not
-                // wait on a mail server, and a failure must not fail the login.
+                // Best-effort: the response must not wait on a mail server, and a
+                // failure must not fail the login.
                 state
                     .mail
                     .notify_new_device(
@@ -241,28 +232,23 @@ pub async fn login(
     }
 }
 
-/// Public ping — returns "pong" (no auth required).
-/// Matches the original seahub's GET /api2/ping/ behavior.
+/// Public ping, no auth required; matches seahub's GET /api2/ping/.
 pub async fn public_ping() -> impl IntoResponse {
     (StatusCode::OK, Json("pong"))
 }
 
-/// Authenticated ping — requires a valid token but returns "pong" (matching
-/// seahub's AuthPing, which also answers `Response('pong')`).
-/// Serves GET /api2/auth/ping/.
+/// Authenticated ping (`GET /api2/auth/ping/`): a valid token is required, the body is
+/// `"pong"` as seahub's AuthPing answers.
 pub async fn ping(_auth: AuthUser) -> impl IntoResponse {
     (StatusCode::OK, Json("pong"))
 }
 
-/// `POST /api2/logout-device/`
-///
-/// Invalidates the current API token, logging out the device.
+/// `POST /api2/logout-device/` — invalidate the current API token.
 pub async fn logout_device(
     _auth: AuthUser,
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Extract the token from Authorization header
     let token_str = headers
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
@@ -272,7 +258,6 @@ pub async fn logout_device(
         })
         .ok_or(AppError::Unauthorized)?;
 
-    // Invalidate device session via service
     state.login_service().logout_device(token_str).await?;
 
     Ok(ok_json())

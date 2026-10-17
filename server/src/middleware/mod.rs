@@ -14,33 +14,17 @@ use axum::http::{HeaderValue, header};
 
 /// Add baseline security headers to every response.
 ///
-/// `script-src 'self'` — no `'unsafe-inline'`: the pre-paint preference guards
-/// load as a blocking external script, the share pages share one bundle, and
-/// the translation table travels as a `type="application/json"` data block,
-/// which is not executable and therefore not subject to `script-src`.
+/// `script-src 'self'` allows no `'unsafe-inline'`: pending guards load as external
+/// scripts and the translation table as a non-executable JSON block. `style-src`
+/// still allows `'unsafe-inline'` only for tag colours, whose arbitrary API hex
+/// reaches the page as a `style="…"` attribute no class could express; tightening
+/// it would break Seafile clients. Everything else is locked to `'self'` (no `*`
+/// fallback), so remote script, frame, font and object loading is blocked.
+/// `Strict-Transport-Security` is sent only for an HTTPS `site_url`.
 ///
-/// `style-src` still allows `'unsafe-inline'` for one reason: tag colours. A tag
-/// carries an arbitrary hex value from the API (`_tag_color`), and `_tag_color`
-/// reaches the page as a `style="background-color: …"` attribute because no
-/// class can express a value the server learns at request time. Everything else
-/// that used to need the directive is gone — the public pages' `<style>` blocks,
-/// the modal's inline box-shadow, the progress-bar and left-panel width
-/// attributes, and `base.html`'s first-paint background rule (now set from the
-/// theme script). Tightening the directive therefore means restricting tags to a
-/// fixed palette, which would break Seafile clients that write arbitrary
-/// colours.
-///
-/// Everything else is locked to `'self'` (no fallback to `*`), so remote
-/// script, frame, font and object loading is blocked.
-///
-/// `Strict-Transport-Security` is only sent when `site_url` is HTTPS: a
-/// plain-HTTP LAN deployment must not be pinned to HTTPS by its own server.
-/// Count a request as in flight for as long as it is being served.
-///
-/// The counter is what the load gauge reports as *foreground* load, so it is
-/// the signal that decides whether a background job may run. The guard is RAII
-/// and drops on every path, including a panic, so a failed request cannot make
-/// the server look permanently busy.
+/// Count a request as in flight for as long as it is being served: the counter is
+/// the *foreground* load the gauge reports, so it decides whether a background job
+/// may run. The RAII guard drops on every path, including a panic.
 pub async fn load_guard(
     State(state): State<std::sync::Arc<AppState>>,
     request: axum::extract::Request,
@@ -66,16 +50,10 @@ pub async fn security_headers(
 
 /// Insert the baseline security headers.
 ///
-/// `secure` is `site_url` being HTTPS; only then is `Strict-Transport-Security`
-/// added, because a plain-HTTP deployment must not pin clients to a scheme its
-/// own links do not use. `hsts_include_subdomains` extends that pin to
-/// subdomains and is opt-in, since a deployment may serve unrelated plain-HTTP
-/// sites on sibling host names.
-///
-/// `pub(crate)` because the first-run setup listener (see [`crate::setup`]) is a
-/// second, `AppState`-less router: it carries the same headers, and the only
-/// input it cannot read from a configuration is the pair above — it serves no
-/// TLS of its own, so it passes `false` twice.
+/// `secure` means `site_url` is HTTPS; `hsts_include_subdomains` is opt-in since
+/// sibling host names may serve unrelated plain-HTTP sites. `pub(crate)` for the
+/// first-run setup listener ([`crate::setup`]), an `AppState`-less second router
+/// that serves no TLS of its own and so passes `false` twice.
 pub(crate) fn apply_security_headers(
     headers: &mut axum::http::HeaderMap,
     secure: bool,
@@ -94,21 +72,19 @@ pub(crate) fn apply_security_headers(
         header::HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
-    // Nothing here is meant to be embedded by another origin (X-Frame-Options
-    // and `frame-ancestors` already cover framing; this also blocks subresource
-    // embedding of authenticated responses).
+    // Nothing here is meant to be embedded by another origin (X-Frame-Options and
+    // `frame-ancestors` cover framing; this also blocks subresource embedding).
     headers.insert(
         header::HeaderName::from_static("cross-origin-resource-policy"),
         HeaderValue::from_static("same-origin"),
     );
-    // A user-uploaded SVG is the one file format this server hands to the
-    // browser as a *document*: navigated to directly, the browser parses it and
-    // runs it in this origin, so a `<script>` in an uploaded file would be
-    // same-origin code. `sandbox` moves it to an opaque one — no scripts, no
-    // same-origin reads, no forms, no top-level navigation. It is keyed off the
-    // response's own content type so that every path serving an SVG inherits the
-    // rule, and the page policy is deliberately not sent with it: nothing in an
-    // uploaded file is a document of this application.
+    // A user-uploaded SVG is the one format handed to the browser as a *document*:
+    // navigated to directly, it is parsed and runs in this origin, so a `<script>`
+    // in it would be same-origin code. `sandbox` moves it to an opaque origin — no
+    // scripts, same-origin reads, forms or top-level navigation. Keyed off the
+    // response's own content type so every path serving an SVG inherits it; the
+    // page policy is deliberately not sent, as nothing in an upload is a document
+    // of this application.
     let uploaded_svg = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -123,8 +99,6 @@ pub(crate) fn apply_security_headers(
         }),
     );
     if secure {
-        // `includeSubDomains` is opt-in: a deployment may serve unrelated
-        // plain-HTTP sites on sibling host names.
         headers.insert(
             header::STRICT_TRANSPORT_SECURITY,
             HeaderValue::from_static(if hsts_include_subdomains {
@@ -145,14 +119,12 @@ const BASELINE_CSP: &str = "default-src 'self'; script-src 'self'; \
 
 /// Enforce CSRF protection for a state-changing handler registered on `GET`.
 ///
-/// [`AuthUser`](auth::AuthUser) deliberately skips its CSRF check for safe
-/// methods, because a browser cannot attach a custom header to an `<img>` or
-/// `<link>` subresource. A handler that mutates state while living on `GET`
-/// therefore has to demand the token itself, otherwise a cross-site subresource
-/// request carrying the victim's session cookie is enough to perform the write.
-///
-/// Bearer-token callers are left alone: a cross-site request cannot set an
-/// `Authorization` header, so they are not CSRF-able.
+/// [`AuthUser`](auth::AuthUser) skips its CSRF check for safe methods, because a
+/// browser cannot attach a custom header to an `<img>` or `<link>` subresource. A
+/// handler that mutates state while living on `GET` must therefore demand the
+/// token itself, otherwise a cross-site subresource request carrying the victim's
+/// session cookie is enough to perform the write. Bearer-token callers are left
+/// alone: a cross-site request cannot set an `Authorization` header.
 pub fn require_csrf_for_cookie_session(
     headers: &axum::http::HeaderMap,
     csrf_secret: &[u8],
@@ -176,9 +148,9 @@ pub fn require_csrf_for_cookie_session(
     }
 }
 
-/// Reject a request when external share/upload links are globally disabled by
-/// the `server.share_link_enabled` setting. Call this at the top of handlers
-/// that create or serve anonymous share/upload links.
+/// Reject a request when external share/upload links are globally disabled by the
+/// `server.share_link_enabled` setting. Call at the top of handlers that create or
+/// serve anonymous share/upload links.
 pub fn ensure_share_links_enabled(state: &std::sync::Arc<AppState>) -> Result<(), AppError> {
     if state.config().server.share_link_enabled {
         Ok(())
@@ -189,29 +161,14 @@ pub fn ensure_share_links_enabled(state: &std::sync::Arc<AppState>) -> Result<()
 
 /// Determine the effective client IP for rate limiting.
 ///
-/// Uses the TCP peer address exposed via `ConnectInfo`. `X-Forwarded-For` and
-/// `CF-Connecting-IP` are only consulted when the peer is a configured
-/// `trusted_proxies` entry (see [`proxy_matches`]); when the peer is not
-/// trusted, those headers are ignored so a client cannot choose its own rate
-/// limit bucket.
-///
-/// Behind a trusted proxy the client address is taken in this order:
-///
-/// 1. `CF-Connecting-IP` — Cloudflare writes this single, immutable client
-///    address on every request from its edge to the origin (it overwrites any
-///    client-supplied value), so it is the authoritative source when a
-///    Cloudflare Tunnel / `cloudflared` sits in front of the server.
-/// 2. `X-Forwarded-For` — walked **right to left**, skipping entries that are
-///    trusted proxies, and the first untrusted hop is returned. This is the
-///    ordinary reverse-proxy path (nginx/caddy), where the proxy appends to the
-///    chain. Cloudflare additionally appends its *own* edge IP as the rightmost
-///    entry, which is why the `CF-Connecting-IP` step above is preferred: it
-///    avoids mistaking Cloudflare's edge for the visitor. Taking the leftmost
-///    entry instead would hand the value to the client, since a forged
-///    `X-Forwarded-For: 1.2.3.4` would sit left of the real client address.
-///
-/// If neither header yields a usable address, the peer itself is returned rather
-/// than an attacker-supplied value.
+/// The TCP peer address is authoritative unless it is a configured
+/// `trusted_proxies` entry; otherwise forwarded headers are ignored so a client
+/// cannot choose its own rate-limit bucket. Behind a trusted proxy,
+/// `CF-Connecting-IP` wins: Cloudflare overwrites it with the single client
+/// address, so it avoids mistaking the edge for the visitor. `X-Forwarded-For` is
+/// walked **right to left**, skipping trusted proxies, because a forged entry sits
+/// to the left of the real client. If no header yields a usable address, the peer
+/// is returned rather than an attacker-supplied value.
 pub fn effective_client_ip(
     addr: &SocketAddr,
     headers: &axum::http::HeaderMap,
@@ -222,8 +179,7 @@ pub fn effective_client_ip(
         return peer.to_string();
     }
 
-    // Cloudflare Tunnel / `cloudflared`: the edge sets a single, spoof-proof
-    // client address. Prefer it over the X-Forwarded-For chain.
+    // Cloudflare sets a single, spoof-proof client address; prefer it over XFF.
     if let Some(ip) = cf_connecting_ip(headers) {
         return ip;
     }
@@ -242,19 +198,14 @@ pub fn effective_client_ip(
         }
     }
 
-    // Every hop was one of our own proxies (or the headers were absent/empty):
-    // fall back to the peer rather than to an attacker-supplied value.
+    // Every hop was ours (or headers absent): fall back to the peer, not a header.
     peer.to_string()
 }
 
-/// Whether `peer` is a configured trusted reverse proxy.
-///
-/// Each entry is matched as one of:
-/// - `loopback` / `private` / `link-local` / `unique-local` keywords,
-/// - a CIDR range (e.g. `172.16.0.0/12`, `fd00::/8`), or
-/// - an exact IP address (IPv4/IPv6).
-///
-/// Empty `trusted_proxies` means nothing sits in front of the server.
+/// Whether `peer` is a configured trusted reverse proxy: an entry may be a
+/// `loopback`/`private`/`link-local`/`unique-local` keyword, a CIDR range (e.g.
+/// `172.16.0.0/12`, `fd00::/8`) or an exact IP. Empty means nothing sits in front
+/// of the server.
 fn proxy_matches(peer: &std::net::IpAddr, entries: &[String]) -> bool {
     entries.iter().any(|e| entry_matches(peer, e.trim()))
 }
@@ -298,11 +249,8 @@ fn is_link_local(ip: &std::net::IpAddr) -> bool {
     }
 }
 
-/// Parse `CF-Connecting-IP` into a single, validated client address.
-///
-/// Returns `None` when the header is absent or does not hold a single IP (so the
-/// caller falls back to `X-Forwarded-For` / the peer rather than trusting a
-/// malformed value).
+/// Parse `CF-Connecting-IP` into a single validated address, `None` when absent or
+/// malformed so the caller falls back rather than trusting it.
 fn cf_connecting_ip(headers: &axum::http::HeaderMap) -> Option<String> {
     let raw = headers
         .get("cf-connecting-ip")
@@ -328,8 +276,7 @@ mod security_header_tests {
         headers
     }
 
-    /// HSTS is only meaningful over HTTPS: sending it from a plain-HTTP LAN
-    /// deployment would pin clients to a scheme the server cannot serve.
+    /// HSTS is only meaningful over HTTPS: a plain-HTTP deployment cannot serve it.
     #[test]
     fn hsts_follows_the_site_scheme() {
         assert_eq!(
@@ -365,8 +312,7 @@ mod security_header_tests {
         let csp = headers.get("content-security-policy").unwrap();
         let csp = csp.to_str().unwrap();
         assert!(csp.contains("default-src 'self'"));
-        // Same-origin sockets stay allowed through `'self'`, but an
-        // attacker-chosen `wss://` endpoint must not be.
+        // Same-origin sockets stay allowed through `'self'`, not arbitrary wss://.
         assert!(
             !csp.contains("ws:") && !csp.contains("wss:"),
             "connect-src must not allow arbitrary websocket origins: {csp}"
@@ -375,8 +321,7 @@ mod security_header_tests {
             headers.get("cross-origin-resource-policy").unwrap(),
             "same-origin"
         );
-        // Inline scripts must stay rejected: every inline <script> was moved to
-        // an external bundle or a JSON data block.
+        // No inline <script> remains: bundles and JSON blocks only.
         let script_src = csp
             .split(';')
             .find(|d| d.trim_start().starts_with("script-src"))
@@ -386,9 +331,7 @@ mod security_header_tests {
     }
 
     /// A user-uploaded SVG is parsed as a document when navigated to directly, so
-    /// `sandbox` — not the page policy — is what keeps it out of this origin. The
-    /// page policy is no substitute: it allows same-origin scripts, which is the
-    /// only kind an uploaded file could reach.
+    /// `sandbox` keeps it out of this origin; the page policy would allow scripts.
     #[test]
     fn an_uploaded_svg_is_sandboxed() {
         let mut headers = axum::http::HeaderMap::new();
@@ -401,8 +344,7 @@ mod security_header_tests {
         assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
     }
 
-    /// Everything else keeps the policy the app is written against, including a
-    /// `Content-Type` that merely starts the same way.
+    /// Everything else keeps the baseline policy, even a near-miss Content-Type.
     #[test]
     fn a_non_svg_response_keeps_the_baseline_policy() {
         for content_type in [
@@ -466,8 +408,7 @@ mod ip_tests {
         );
     }
 
-    // The cloudflared scenario: peer is loopback (or a private bridge gateway)
-    // and Cloudflare's edge IP header carries the real visitor.
+    // The cloudflared scenario: loopback peer, real visitor in the CF header.
     #[test]
     fn trusted_peer_prefers_cf_connecting_ip() {
         let addr = sock("127.0.0.1");

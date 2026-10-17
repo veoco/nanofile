@@ -13,14 +13,10 @@ use base::common::EMPTY_SHA1;
 use base::error::AppError;
 use infra::serialization::pack_fs;
 
-/// One recv-fs pack carries a batch of compressed fs objects (each already
-/// capped at MAX_FS_OBJECT_BYTES on decompress). 32 MiB is far above any
-/// normal sync batch and bounds the per-request buffer.
+/// A recv-fs pack is a batch of compressed fs objects, each capped on decompress.
 const MAX_FS_PACK_BYTES: usize = 32 * 1024 * 1024;
 
-/// Parse fs_ids from the request body. The seaf-daemon may send either:
-/// 1. JSON array: ["id1", "id2"] (newer versions)
-/// 2. URL-encoded form: fs_ids=id1&fs_ids=id2 (older versions)
+/// Parse fs_ids: JSON array (newer seaf-daemon) or URL-encoded form (older).
 fn parse_fs_ids_from_bytes(data: &[u8]) -> Result<Vec<String>, AppError> {
     if let Ok(arr) = serde_json::from_slice::<Vec<String>>(data)
         && !arr.is_empty()
@@ -93,9 +89,9 @@ pub async fn fs_id_list(
     Path(repo_id): Path<String>,
     Query(query): Query<FsIdListQuery>,
 ) -> Result<Json<Vec<String>>, AppError> {
-    // Defense in depth: `SyncAuth` already fails closed when the URL repo does
-    // not match the token's repo, but every read path checks membership
-    // explicitly so a future gap in the path/repo binding cannot leak data.
+    // Defense in depth: `SyncAuth` already fails closed when the URL repo does not
+    // match the token's; every read path re-checks membership so a future gap cannot
+    // leak data.
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         &repo_id,
@@ -108,8 +104,7 @@ pub async fn fs_id_list(
         .ok_or_else(|| AppError::BadRequest("missing server-head parameter".into()))?;
 
     // Upstream validates both heads as 40-hex object ids and answers 400
-    // (`sync_api.go:118-132`); passing garbage straight through produced a
-    // confusing 404/500 instead.
+    // (`sync_api.go:118-132`); passing garbage through produced a 404/500.
     if !is_object_id(&server_head) {
         return Err(AppError::BadRequest(
             "Invalid server-head parameter.".into(),
@@ -135,7 +130,6 @@ pub async fn fs_id_list(
         .await?
         .ok_or_else(|| AppError::NotFound("server commit not found".into()))?;
 
-    // Resolve the client root when a real client head was provided.
     let client_root: Option<String> = match query.client_head.as_deref() {
         Some(head) if head != EMPTY_SHA1 => svc.get_commit_root(&repo_id, head).await?,
         _ => None,
@@ -145,7 +139,6 @@ pub async fn fs_id_list(
         if client_root == &server_root {
             return Ok(Json(vec![]));
         }
-        // Roots differ: send only the server objects the client is missing.
         let result: Vec<String> = svc
             .diff_fs_ids(&repo_id, client_root, &server_root, dir_only)
             .await?
@@ -186,18 +179,12 @@ pub async fn pack_fs_handler(
         .fetch_fs_objects(&repo_id, &fs_ids)
         .await?;
 
-    // A requested id the server cannot serve must fail the request instead of
-    // producing a short 200. seaf-daemon treats "requested but not returned" as
-    // "retry immediately" — it re-queues every missing id and loops with no
-    // sleep and no retry cap — so a silent subset turns a server-side gap into a
-    // client-side infinite loop. Upstream `packFSCB` returns 500 when an object
-    // cannot be read (and only ever returns a short pack when it hits its size
-    // cut-off, where the omitted ids still exist and the retry terminates).
-    //
-    // `EMPTY_SHA1` is the empty-directory / zero-byte-file sentinel: it has no
-    // stored object, clients materialise it locally, and `check-fs` reports it
-    // as always present. It is answered with no entry, as before; `fs-id-list`
-    // never advertises it (see `diff_fs_ids`).
+    // A requested id the server cannot serve must fail the request, not produce a short
+    // 200: seaf-daemon retries "requested but not returned" immediately with no sleep
+    // and no cap, so a silent subset becomes a client-side infinite loop. Upstream
+    // `packFSCB` returns 500 when an object cannot be read. `EMPTY_SHA1` (empty dir /
+    // zero-byte file) has no stored object and is answered with no entry as before;
+    // `fs-id-list` never advertises it (see `diff_fs_ids`).
     let stored: std::collections::HashSet<&str> =
         objects.iter().map(|obj| obj.fs_id.as_str()).collect();
     if let Some(missing) = fs_ids
@@ -209,9 +196,7 @@ pub async fn pack_fs_handler(
         )));
     }
 
-    // zlib compression is CPU-bound; offload to the blocking pool so the
-    // async runtime can serve other requests (locked-files, commit/HEAD)
-    // concurrently instead of stalling on a busy worker thread.
+    // zlib compression is CPU-bound; offload to the blocking pool.
     let packed = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, std::io::Error> {
         let obj_map: std::collections::HashMap<&str, &infra::entity::fs_object::Model> = objects
             .iter()
@@ -260,8 +245,7 @@ pub async fn check_fs(
         .map_err(|e| AppError::internal(e.to_string()))?;
     let fs_ids = parse_fs_ids_from_bytes(&body_data)?;
 
-    // Only fs_ids are needed, so use the column-projected, chunked query
-    // instead of fetching each object's (potentially large) `data` JSON.
+    // Only fs_ids are needed: a column-projected, chunked query beats reading `data`.
     let existing = state
         .repos
         .fs_object
@@ -285,8 +269,7 @@ pub async fn recv_fs(
     Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
-    // Writing fs objects mutates the repo's object store; a read-only member
-    // must not be able to inject data. Checked before the body is buffered.
+    // A read-only member must not inject fs objects; checked before the body is read.
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
         &repo_id,
@@ -298,8 +281,8 @@ pub async fn recv_fs(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    // A malformed pack (bad id, truncated entry, trailing bytes) is a client
-    // error upstream answers with 400 (`sync_api.go:465-509`), not a 500.
+    // A malformed pack is a client error that upstream answers with 400
+    // (`sync_api.go:465-509`), not a 500.
     let entries = pack_fs::decode_pack_fs_entries(&data).map_err(AppError::BadRequest)?;
     state
         .sync_service()

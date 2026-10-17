@@ -12,8 +12,6 @@ use crate::middleware::auth::AuthUser;
 use crate::service::user::{primary_avatar_url, resolve_size};
 use base::error::AppError;
 
-// ─── API response types ──────────────────────────────────────────────────────
-
 #[derive(Serialize)]
 pub struct AvatarResponse {
     pub url: String,
@@ -21,13 +19,10 @@ pub struct AvatarResponse {
     pub mtime: i64,
 }
 
-/// Parse the `{size}` segment and reject absurd sizes (which would otherwise
-/// drive a `size² × 4` allocation in the thumbnail generator → OOM).
-///
-/// The accepted value is then snapped to one of [`crate::thumbnail_util::
-/// AVATAR_SIZES`]: the image route is reachable without authentication, and a
-/// distinct cache entry per integer would let a caller walk the whole range and
-/// make the server generate (and store) a thumbnail for each.
+/// Parse the `{size}` segment, reject absurd sizes (a `size² × 4` allocation → OOM)
+/// and snap to [`crate::thumbnail_util::AVATAR_SIZES`]: this image route is
+/// unauthenticated, so a distinct cache entry per integer would let a caller walk the
+/// range and force a stored thumbnail for each.
 fn parse_resize_size(size_str: &str) -> Result<u32, AppError> {
     let size = resolve_size(size_str);
     if size > crate::thumbnail_util::MAX_THUMBNAIL_SIZE {
@@ -39,24 +34,19 @@ fn parse_resize_size(size_str: &str) -> Result<u32, AppError> {
     Ok(crate::thumbnail_util::canonical_avatar_size(size))
 }
 
-// ─── JSON API endpoint (seafile API2) ───────────────────────────────────────
-
-/// `GET /api2/avatars/user/{email}/resized/{size}/`
-///
-/// Returns avatar metadata as JSON: the URL to fetch the actual image,
-/// whether it's the default, and the last-modified timestamp.
+/// `GET /api2/avatars/user/{email}/resized/{size}/` — avatar metadata as JSON: image
+/// URL, is_default, mtime.
 pub async fn get_avatar(
     _auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Path((email, size_str)): Path<(String, String)>,
 ) -> Result<Json<AvatarResponse>, AppError> {
     // Seahub compatibility: always return a URL (default if no avatar or user
-    // doesn't exist).  Clients query avatars for any email without checking
-    // user existence first.
+    // doesn't exist); clients query any email without checking existence first.
     let size = parse_resize_size(&size_str)?;
 
-    // Desktop client uses the returned `url` directly as the fetch target, so
-    // it must be an absolute URL (matching seahub's api_avatar_url behaviour).
+    // The client uses `url` as the fetch target, so it must be absolute
+    // (matching seahub's api_avatar_url behaviour).
     let origin = state.config().server.site_url_origin();
     let url = format!("{}{}", origin, primary_avatar_url(&email, size));
 
@@ -77,13 +67,8 @@ pub async fn get_avatar(
     }
 }
 
-// ─── Image serving endpoint (raw binary) ─────────────────────────────────────
-
-/// `GET /avatars/user/{email}/resized/{size}/`
-///
-/// Serves the actual avatar image binary. Returns the default-avatar SVG when
-/// the user has not uploaded an avatar. Generates and caches thumbnails at any
-/// requested size on first access (thumbnail-on-demand).
+/// `GET /avatars/user/{email}/resized/{size}/` — the image binary or the default-avatar
+/// SVG; thumbnails are generated and cached on first access.
 pub async fn serve_avatar_image(
     State(state): State<Arc<AppState>>,
     Path((email, size_str)): Path<(String, String)>,
@@ -116,9 +101,6 @@ pub async fn serve_avatar_image(
     }
 }
 
-// ─── Default avatar ──────────────────────────────────────────────────────────
-
-/// Return the embedded default-avatar SVG as an HTTP response.
 fn serve_default_avatar() -> Response {
     (
         StatusCode::OK,
@@ -128,8 +110,6 @@ fn serve_default_avatar() -> Response {
         .into_response()
 }
 
-// ─── Routes ──────────────────────────────────────────────────────────────────
-
 /// JSON-API route, nested under `/api2` by the caller.
 pub fn api_routes() -> Router<Arc<AppState>> {
     Router::new().route(
@@ -138,8 +118,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
     )
 }
 
-/// Image-binary route, mounted at the application root so the returned
-/// `primary_avatar_url()` paths resolve directly.
+/// Image-binary route, mounted at the root so `primary_avatar_url()` paths resolve.
 pub fn image_routes() -> Router<Arc<AppState>> {
     Router::new().route(
         "/avatars/user/{email}/resized/{size}/",

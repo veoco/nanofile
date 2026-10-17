@@ -16,17 +16,11 @@ use crate::service::sharing::link as upload_link_service;
 use crate::ui::auth_extractor::WebUser;
 use base::error::AppError;
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Compute the actual target directory given the base `parent_dir` and an
+/// Compute the actual target directory from the base `parent_dir` and an
 /// optional `relative_path` (e.g. `"myfolder/sub/"` from a folder upload).
-/// When `relative_path` is empty, returns `parent_dir` unchanged.
 ///
-/// # Errors
-///
-/// Returns `AppError::BadRequest` if the resulting path contains traversal
-/// components that would escape the repository root, or if the path contains
-/// invalid characters.
+/// Returns `AppError::BadRequest` if the result contains traversal components
+/// escaping the repository root, or invalid characters.
 fn compute_target_dir(parent_dir: &str, relative_path: &str) -> Result<String, AppError> {
     base::sanitize::safe_join_path(parent_dir, relative_path).map_err(|e| {
         AppError::BadRequest(format!(
@@ -36,20 +30,18 @@ fn compute_target_dir(parent_dir: &str, relative_path: &str) -> Result<String, A
     })
 }
 
-/// Compute the target directory for a token-authenticated upload, scoping
-/// upload-link tokens to the directory the link was created for. Upload links
-/// must not be able to write outside their directory via a client-supplied
-/// `parent_dir` or `relative_path`.
+/// Resolve the target directory for a token-authenticated upload, scoping
+/// upload-link tokens to the directory the link was created for; a link must
+/// never write outside it via a client-supplied `parent_dir` or `relative_path`.
 fn compute_scoped_target_dir(
     info: &crate::service::auth::access_token::AccessToken,
     client_parent_dir: &str,
     relative_path: &str,
 ) -> Result<String, AppError> {
     if info.upload_link_id.is_some() {
-        // Upload links are scoped to their directory: ignore the client's
-        // `parent_dir` and resolve relative to the link's own path, then ensure
-        // the result stays inside it. (`safe_join_path` only clamps traversal to
-        // the repo root, not to the link's directory.)
+        // Upload links are scoped to their directory: resolve relative to the
+        // link's own path and clamp to it (`safe_join_path` only clamps to the
+        // repo root).
         let target = base::sanitize::safe_join_path(&info.parent_dir, relative_path)
             .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
         let root = base::sanitize::safe_normalize_path(&info.parent_dir)
@@ -68,16 +60,11 @@ fn compute_scoped_target_dir(
     }
 }
 
-// ─── Content-Range / chunked upload helpers ───────────────────────────────
-
-/// Parse seafile's `replace` argument.
-///
-/// Upstream reads `r.FormValue("replace")`, so both the URL query (the
-/// `upload-link` endpoint appends `?replace=1`) and a multipart/form field
-/// count. Absent, `0` or `false` means *keep both*: the existing entry survives
-/// and the new file is stored under a unique name (`name (1).ext`). `1`/`true`
-/// overwrites in place. Anything else is rejected, matching
-/// `server/fileserver/fileop.go:1220-1231`.
+/// Parse seafile's `replace` argument from the URL query (the `upload-link`
+/// endpoint appends `?replace=1`) or a multipart form field, as upstream's
+/// `r.FormValue("replace")` does. Absent, `0` or `false` keeps both (the new
+/// file becomes `name (1).ext`); `1`/`true` overwrites in place; anything else
+/// is rejected, matching `server/fileserver/fileop.go:1220-1231`.
 fn parse_replace_arg(query: Option<&str>, form: Option<&str>) -> Result<bool, AppError> {
     let raw = form.or(query).map(str::trim).filter(|v| !v.is_empty());
     match raw {
@@ -96,19 +83,16 @@ fn query_params(uri: &axum::http::Uri) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
-/// True when the request carries `ret-json` in its query string or its form
-/// body. Upstream tests for the key's mere presence (`r.Form["ret-json"]`), so
-/// the Android client's `ret-json=1`, the iOS client's `ret-json=true` and a
-/// bare `ret-json` all switch the success body to JSON.
+/// True when the request carries `ret-json` in its query or form body. Upstream
+/// tests the key's mere presence (`r.Form["ret-json"]`), so `ret-json=1`,
+/// `ret-json=true` and a bare `ret-json` all switch the success body to JSON.
 fn wants_ret_json(query: &HashMap<String, String>, fields: &HashMap<String, String>) -> bool {
     query.contains_key("ret-json") || fields.contains_key("ret-json")
 }
 
-/// Reject an update whose target does not exist with 441.
-///
-/// Upstream's update endpoints answer `SEAF_HTTP_RES_NOT_EXISTS` (441) instead
-/// of silently creating the file (`server/fileserver/fileop.go:3339-3343`), so
-/// an update against a deleted path must not resurrect it as a plain create.
+/// Reject an update whose target does not exist with 441
+/// (`SEAF_HTTP_RES_NOT_EXISTS`): upstream's update endpoints answer that instead
+/// of silently creating the file (`server/fileserver/fileop.go:3339-3343`).
 async fn require_target_exists(
     state: &AppState,
     repo_id: &str,
@@ -126,13 +110,11 @@ async fn require_target_exists(
     Ok(())
 }
 
-/// Frame a committed upload's success body.
-///
-/// `-aj` endpoints always answer with the JSON array (`isAjax=true`). The
-/// `-api` endpoints answer with tab-separated plain-text file ids unless
-/// `ret-json` was requested — the official Android and desktop clients store
-/// that body verbatim as the file id, so a JSON array there corrupts their
-/// state. Matches `server/fileserver/fileop.go:1859-1884`.
+/// Frame a committed upload's success body: `-aj` endpoints always answer the
+/// JSON array (`isAjax=true`), while `-api` endpoints answer the plain-text file
+/// id unless `ret-json` was requested — the official Android and desktop clients
+/// store that body verbatim, so a JSON array there corrupts their state
+/// (`server/fileserver/fileop.go:1859-1884`).
 fn upload_commit_response(
     ret_json: bool,
     id: &str,
@@ -158,12 +140,14 @@ fn upload_commit_response(
 enum ChunkResult {
     /// Not the final chunk: upstream always answers `{"success": true}`.
     Intermediate,
-    /// The final chunk was assembled and committed.
-    Committed { id: String, name: String, size: i64 },
+    Committed {
+        id: String,
+        name: String,
+        size: i64,
+    },
 }
 
-/// Render a chunk outcome for the `-aj` endpoints, which always answer JSON
-/// (`isAjax=true` upstream).
+/// Render a chunk outcome for the `-aj` endpoints, which always answer JSON.
 fn chunk_result_json(result: ChunkResult) -> Json<serde_json::Value> {
     match result {
         ChunkResult::Intermediate => Json(json!({ "success": true })),
@@ -173,12 +157,9 @@ fn chunk_result_json(result: ChunkResult) -> Json<serde_json::Value> {
     }
 }
 
-/// Parse a `Content-Range` header of the form `bytes start-end/file_size`.
-///
-/// Example: `"bytes 0-8388607/26214400"` → `(0, 8388607, 26214400)`
-/// Validate an upload-link commit `file_name`, aligned with seafile's
-/// `should_ignore_file` semantics (reject empty, path separators, NUL, "." /
-/// "..", and over-long names) rather than a strict character blacklist.
+/// Validate an upload-link commit `file_name` like seafile's `should_ignore_file`:
+/// reject empty names, path separators, NUL, "." / "..", and names over 255
+/// bytes, rather than using a strict character blacklist.
 fn is_valid_upload_filename(name: &str) -> bool {
     !name.is_empty()
         && name != "."
@@ -188,10 +169,9 @@ fn is_valid_upload_filename(name: &str) -> bool {
         && name.len() <= 255
 }
 
-/// Pre-check storage quota against Content-Length before consuming the upload
-/// body. Content-Length is an upper bound on the file size (includes multipart
-/// framing overhead), so a pass here doesn't guarantee the post-commit check
-/// will pass — but a fail means we can reject without writing any blocks.
+/// Pre-check storage quota against Content-Length before consuming the body. The
+/// length is an upper bound (it includes multipart framing), so a pass does not
+/// guarantee the post-commit check, but a fail rejects without writing blocks.
 async fn precheck_quota(
     state: &AppState,
     user_id: Option<i32>,
@@ -245,10 +225,9 @@ fn parse_content_range(header: &str) -> Result<(u64, u64, u64), AppError> {
 /// Read a chunked upload's file field into memory under the per-chunk cap.
 ///
 /// Rejects an oversized chunk from the Content-Range header before reading any
-/// body, and independently caps the number of bytes actually read so a client
-/// that lies about the header cannot force the server to buffer more than
-/// `max_chunk_bytes`. (`field.bytes()` would otherwise read the whole part
-/// before the cap in `try_handle_chunked` is reached.)
+/// body, and caps the bytes actually read so a client that lies about the header
+/// cannot force more than `max_chunk_bytes` to be buffered (`field.bytes()` would
+/// read the whole part first).
 async fn read_chunked_field(
     field: &mut multer::Field<'_>,
     content_range: Option<&str>,
@@ -256,22 +235,19 @@ async fn read_chunked_field(
 ) -> Result<Vec<u8>, AppError> {
     let Some(header) = content_range else {
         // Only reached when a Content-Range header exists but failed to parse
-        // as UTF-8 (callers invoke this only on chunked requests). Reject it
-        // rather than reading the field unbounded.
+        // as UTF-8; reject rather than read the field unbounded.
         return Err(AppError::BadRequest("invalid content-range header".into()));
     };
     let (start, end, _file_size) = parse_content_range(header)?;
     let expected_len = (end - start + 1) as usize;
-    // Reject oversized chunks from the header alone, before reading any body.
     if max_chunk_bytes > 0 && expected_len as u64 > max_chunk_bytes {
         return Err(AppError::BadRequest(format!(
             "chunk size {expected_len} exceeds per-chunk limit {max_chunk_bytes}"
         )));
     }
-    // Stream the part in bounded chunks and enforce the cap on bytes actually
-    // read (chunk() may return one large Bytes when the body is pre-buffered).
-    // Cap the initial allocation (1 MiB) so a lying header can't force a large
-    // upfront reserve; the Vec grows to the real size on demand.
+    // Enforce the cap on bytes actually read (chunk() may return one large Bytes
+    // when the body is pre-buffered); an initial 1 MiB reserve stops a lying
+    // header from forcing a large upfront allocation.
     let mut out = Vec::with_capacity(expected_len.min(1 << 20));
     while let Some(c) = field
         .chunk()
@@ -298,17 +274,11 @@ fn map_temp_error(e: std::io::Error) -> AppError {
     }
 }
 
-/// Handle a chunked (resumable) upload when a `Content-Range` header is
-/// present.
+/// Handle a chunked (resumable) upload when a `Content-Range` header is present.
 ///
-/// Returns:
-/// - `Ok(None)` — not a chunked upload (no Content-Range, caller should
-///   handle as a regular non-chunked upload).
-/// - `Ok(Some(ChunkResult::Intermediate))` — an intermediate chunk was stored;
-///   the caller answers `{"success": true}`.
-/// - `Ok(Some(ChunkResult::Committed { .. }))` — the final chunk was assembled
-///   and committed; the caller frames the body for its endpoint.
-/// - `Err(...)` — an error occurred.
+/// `Ok(None)` means not chunked (the caller handles it as a regular upload);
+/// `Intermediate` means a chunk was stored; `Committed` means the final chunk was
+/// assembled and committed, and the caller frames the body for its endpoint.
 async fn try_handle_chunked(
     temp_mgr: &crate::handler::web::temp_file::TempFileManager,
     state: &AppState,
@@ -328,7 +298,6 @@ async fn try_handle_chunked(
 
     let (start, end, file_size) = parse_content_range(range_header)?;
 
-    // Validate the chunk size matches the declared range
     let expected_len = (end - start + 1) as usize;
     if file_data.len() != expected_len {
         return Err(AppError::BadRequest(format!(
@@ -337,8 +306,7 @@ async fn try_handle_chunked(
         )));
     }
 
-    // Cap a single chunk so one request can't buffer arbitrarily many bytes
-    // (a client could otherwise send the whole file as one Content-Range).
+    // Cap a single chunk so one request cannot buffer arbitrarily many bytes.
     let max_chunk_bytes = state.config().server.max_chunk_size_mb * 1024 * 1024;
     if max_chunk_bytes > 0 && expected_len as u64 > max_chunk_bytes {
         return Err(AppError::BadRequest(format!(
@@ -353,14 +321,11 @@ async fn try_handle_chunked(
         return Err(AppError::TooLarge);
     }
 
-    // Pre-check storage quota once (on the first chunk) against the declared
-    // total size so over-quota uploads fail before consuming the whole file.
-    // The result only depends on `file_size`, so re-checking every chunk is
-    // wasted work; the final assembly path re-checks quota as a backstop.
+    // Pre-check storage quota once, on the first chunk, against the declared
+    // total size; the final assembly path re-checks it as a backstop.
     let file_path = base::sanitize::safe_join_path(target_dir, file_name)
         .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
 
-    // Ensure temp file exists
     temp_mgr
         .get_or_create(repo_id, &file_path, file_size)
         .await
@@ -369,13 +334,9 @@ async fn try_handle_chunked(
         temp_mgr.bind_owner(repo_id, &file_path, uid).await;
     }
 
-    // Pre-check and **reserve** storage quota once (on the first chunk) against
-    // the declared total size. Reserving (rather than only comparing against
-    // committed usage) is what bounds an upload abandoned before its final
-    // chunk: its bytes are already in the block store, so without the
-    // reservation every later upload would still see a full quota. The
-    // reservation is released when the file commits, or when the upload is
-    // aborted / reaped as stale (which also deletes the blocks).
+    // Reserve (not just compare) the declared size so an upload abandoned before
+    // its final chunk cannot leave quota-exempt blocks behind; the reservation is
+    // released on commit, abort, or stale reaping.
     if start == 0
         && let Some(uid) = user_id
     {
@@ -389,38 +350,27 @@ async fn try_handle_chunked(
         .await?;
     }
 
-    // Write the chunk at the declared offset
     temp_mgr
         .write_chunk(repo_id, &file_path, start, file_data)
         .await
         .map_err(map_temp_error)?;
 
-    // In-transit streaming: feed in-order chunks through the upload's CDC
-    // chunker so a fully in-order upload commits on the final chunk without
-    // re-reading the temp file. Out-of-order chunks disable streaming and the
-    // final chunk falls back to the temp-file assembly below. The result is
-    // ignored — `Broken` is recorded internally and short-circuits later feeds.
-    //
-    // Encrypted libraries use the assembly fallback exclusively: the streaming
-    // state hashes plaintext blocks as they arrive (`feed_stream` →
-    // `sha1_hex(&blk)`), whereas an encrypted library must store
-    // `sha1(ciphertext)`. Skipping the feed leaves the stream's chunker unset,
-    // so `take_streamed_blocks` returns `None` and the fallback below — which
-    // does honour `enc_key` — assembles the file.
+    // In-transit streaming: in-order chunks feed the CDC chunker so a fully
+    // in-order upload commits on the final chunk; out-of-order chunks fall back
+    // to temp-file assembly. Encrypted libraries always take the fallback: the
+    // stream hashes plaintext (`sha1(blk)`), but they must store `sha1(ciphertext)`.
     if enc_key.is_none() {
         let _ = temp_mgr
             .feed_stream(&state.block_store, repo_id, &file_path, start, file_data)
             .await;
     }
 
-    // Intermediate chunk — tell the client to keep sending
     if end != file_size - 1 {
         return Ok(Some(ChunkResult::Intermediate));
     }
 
-    // ── Final chunk: commit ──
-    // Fast path: if the whole file streamed in order, the block ids are
-    // already persisted — commit directly and skip the temp-file re-read.
+    // Fast path: a fully in-order upload already has its block ids persisted,
+    // so commit directly and skip the temp-file re-read.
     if let Some((block_ids, total_size, new_block_ids)) = temp_mgr
         .take_streamed_blocks(&state.block_store, repo_id, &file_path, file_size)
         .await
@@ -449,9 +399,7 @@ async fn try_handle_chunked(
     }
 
     // Fallback path: stream the temp file through the CDC chunker so the whole
-    // file never has to be buffered in memory; `write_stream_blocks` writes
-    // blocks to the content-addressed store and `upload_file_committed_stream`
-    // commits the resulting block_ids into the repo.
+    // file is never buffered in memory, then commit the resulting block ids.
     let Some(stream) = temp_mgr.read_stream(repo_id, &file_path).await else {
         temp_mgr
             .abort(&state.repos, repo_id, &file_path, &state.block_store)
@@ -470,14 +418,12 @@ async fn try_handle_chunked(
     )
     .await?;
 
-    // Track what this upload wrote so an abort or a stale cleanup can delete
-    // the blocks instead of leaving orphans behind.
+    // Track written blocks so an abort or stale cleanup can delete them.
     temp_mgr
         .record_new_blocks(repo_id, &file_path, &new_block_ids)
         .await;
 
-    // Verify we got the expected number of bytes (the streamed total must
-    // match the declared file size).
+    // The streamed total must match the declared file size.
     if total_size as u64 != file_size {
         temp_mgr
             .abort(&state.repos, repo_id, &file_path, &state.block_store)
@@ -503,7 +449,6 @@ async fn try_handle_chunked(
         )
         .await?;
 
-    // Clean up the temp file regardless of success/failure
     temp_mgr.finish(repo_id, &file_path).await;
 
     Ok(Some(ChunkResult::Committed {
@@ -513,13 +458,11 @@ async fn try_handle_chunked(
     }))
 }
 
-// ─── Multipart parser (for desktop-client compatibility) ──────────────────────
-
-/// Simple multipart/form-data parser that finds a named field's value
-/// and extracts the file (if any) from the multipart body.
+/// Simple multipart/form-data parser that finds a named field's value and
+/// extracts the file (if any) from the body.
 ///
-/// Avoids axum's `Multipart` extractor which mysteriously fails with 400
-/// on the desktop client's uploads (possibly a content-type encoding issue).
+/// Used instead of axum's `Multipart` extractor, which fails with 400 on the Qt
+/// desktop client's uploads.
 #[cfg(test)]
 fn parse_multipart(data: &[u8], boundary: &str) -> MultipartResult {
     let boundary_str = format!("--{}", boundary);
@@ -536,7 +479,7 @@ fn parse_multipart(data: &[u8], boundary: &str) -> MultipartResult {
     let mut pos = 0;
 
     loop {
-        // Find the next boundary (first one has no leading \r\n).
+        // The first boundary has no leading CRLF.
         let boundary_start = if pos == 0 && data[pos..].starts_with(btag) {
             pos
         } else if let Some(off) = data[pos..]
@@ -549,7 +492,6 @@ fn parse_multipart(data: &[u8], boundary: &str) -> MultipartResult {
         };
 
         let mut boundary_end = boundary_start + btag.len();
-        // Skip trailing \r\n or -- (closing)
         if boundary_end + 2 <= data.len() && &data[boundary_end..boundary_end + 2] == b"--" {
             break; // closing boundary
         }
@@ -558,12 +500,10 @@ fn parse_multipart(data: &[u8], boundary: &str) -> MultipartResult {
         }
         pos = boundary_end;
 
-        // Find end of headers (\r\n\r\n)
         if let Some(hdr_end) = data[pos..].windows(4).position(|w| w == b"\r\n\r\n") {
             let hdr = String::from_utf8_lossy(&data[pos..pos + hdr_end]);
             pos += hdr_end + 4;
 
-            // Body extends to the next boundary
             let body_end = if let Some(next_off) = data[pos..]
                 .windows(crlf_btag_bytes.len())
                 .position(|w| w == crlf_btag_bytes)
@@ -575,7 +515,7 @@ fn parse_multipart(data: &[u8], boundary: &str) -> MultipartResult {
             let body = &data[pos..pos + body_end];
             pos += body_end;
 
-            // Trim trailing \r\n from body
+            // Trim the trailing CRLF that belongs to the boundary.
             let body = body
                 .strip_suffix(b"\r\n")
                 .or_else(|| body.strip_suffix(b"\n"))
@@ -587,9 +527,8 @@ fn parse_multipart(data: &[u8], boundary: &str) -> MultipartResult {
                 .unwrap_or("");
 
             // Extract filename — handle both single-line and multi-line headers.
-            // Qt client sends `filename="value"\r\nContent-Type: ...` so we
-            // cannot use strip_suffix('"') (which would look for a trailing `"`
-            // that isn't there). Instead, split on `"` to get the value.
+            // Qt sends `filename="value"\r\nContent-Type: ...`, so split on `"`
+            // rather than using strip_suffix('"').
             if let Some(fname) = hdr.split(';').find_map(|s| {
                 let s = s.trim();
                 s.strip_prefix("filename=\"")
@@ -620,15 +559,8 @@ struct MultipartResult {
     file_data: Option<Vec<u8>>,
 }
 
-// ─── No-token web upload endpoints ────────────────────────────────────────────
-
-/// POST /upload-aj/ — AJAX file upload (Seahub web UI, no token).
-///
-/// Expects multipart fields:
-/// - `file` — the file bytes
-/// - `repo_id` — repository ID
-/// - `parent_dir` — target directory (default `/`)
-/// - `relative_path` — subdirectory path for folder uploads (optional)
+/// `POST /upload-aj/` — AJAX file upload from the Seahub web UI (no token),
+/// taking `file`, `repo_id`, `parent_dir` and optional `relative_path` fields.
 pub async fn upload_aj(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -637,8 +569,8 @@ pub async fn upload_aj(
     body: axum::body::Body,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Pre-check quota against Content-Length before consuming the body, so an
-    // over-quota upload is rejected without writing any blocks. Chunked uploads
-    // (Content-Range) are pre-checked on their first chunk instead.
+    // over-quota upload is rejected without writing blocks; chunked uploads are
+    // pre-checked on their first chunk instead.
     if headers.get("content-range").is_none() {
         precheck_quota(
             &state,
@@ -648,21 +580,19 @@ pub async fn upload_aj(
         .await?;
     }
     let boundary = extract_multipart_boundary(&headers)?;
-    // Multer's Multipart consumes the raw body stream, letting the file part
-    // be read incrementally via `field.chunk()` (axum's `Multipart` extractor
-    // only offers whole-field `bytes()`).
+    // Multer's Multipart consumes the raw body stream, so the file part can be
+    // read incrementally via `field.chunk()` (axum's extractor offers only
+    // whole-field `bytes()`).
     let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
 
     let mut fields: HashMap<String, String> = HashMap::new();
     let mut filename = String::new();
 
-    // Resumable (Content-Range) uploads send the whole part at once — the
-    // resumable path needs the bytes in hand, so it keeps the buffered read.
+    // Resumable uploads need the whole chunk in hand, so they keep the buffered read.
     let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let is_chunked = content_range.is_some();
     let mut chunked_file_data: Option<Vec<u8>> = None;
-    // Non-chunked uploads are staged on disk and only ingested into the global
-    // block store after the write-permission check below.
+    // Non-chunked uploads are staged on disk, ingested only after authorization.
     let mut staged_path: Option<std::path::PathBuf> = None;
     let staging_dir = upload_staging_dir(&state);
 
@@ -732,8 +662,8 @@ pub async fn upload_aj(
     .await?;
 
     // Encrypted libraries require the password-equivalent key before anything
-    // reaches the block store; the staged bytes are still plaintext on disk in
-    // the staging area, which is not part of the library.
+    // reaches the block store; staged bytes are plaintext in the staging area,
+    // which is not part of the library.
     let enc_key = super::download::upload_block_key(&state, repo_id, user.user_id, false).await?;
     let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
 
@@ -760,7 +690,7 @@ pub async fn upload_aj(
         return Ok(Json(json!([{"name": filename, "uploaded": true}])));
     }
 
-    // Ingest the staged bytes now that the caller is authorized. The guard
+    // Ingest the staged bytes now that the caller is authorized; the guard
     // removes the staging file on every exit path.
     let staged = StagedUpload(staged_path);
     if let Some(path) = staged.path() {
@@ -772,10 +702,8 @@ pub async fn upload_aj(
         )
         .await;
         let (block_ids, total_size, new_block_ids) = ingested?;
-        // Zero-byte files are committed too: seafile gives them the
-        // `EMPTY_SHA1` sentinel id but still creates the dirent, so skipping
-        // the commit here made an empty upload silently do nothing
-        // (`server/fileserver/fileop.go:3699-3702`).
+        // Zero-byte files are committed too: seafile gives them the `EMPTY_SHA1`
+        // sentinel id but still creates the dirent (`server/fileserver/fileop.go:3699-3702`).
         let (fs_id, effective_name) = state
             .file_service()
             .upload_file_committed_stream(
@@ -812,14 +740,12 @@ fn extract_multipart_boundary(headers: &HeaderMap) -> Result<String, AppError> {
 }
 
 /// Stream a multipart file field straight into content-defined blocks in the
-/// block store, returning the block ids and total size, so the file is never
-/// fully buffered in memory. `Chunker::new(0)` uses seafile's fixed official
-/// block sizes (8 MiB avg / 6 MiB min / 10 MiB max), matching what a seafile
-/// client computes for the same content.
+/// block store, so the file is never fully buffered in memory; `Chunker::new(0)`
+/// uses seafile's fixed 8 MiB avg / 6 MiB min / 10 MiB max sizes.
 ///
 /// `enc_key` is the library block key for an encrypted repository (see
-/// [`upload_block_key`]); when set, each block is encrypted before it is stored
-/// and its id becomes `sha1(ciphertext)`, which is the Seafile convention
+/// `upload_block_key`); when set, each block is encrypted before it is stored
+/// and its id becomes `sha1(ciphertext)`, the Seafile convention
 /// (`common/fs-mgr.c:707-721` hashes the encrypted buffer).
 pub(crate) async fn stream_file_into_blocks(
     store: infra::storage::DynBlockStorage,
@@ -863,11 +789,10 @@ pub(crate) async fn stream_file_into_blocks(
 
 /// A multipart file staged on disk before authorization.
 ///
-/// The no-token web endpoints (`/upload-aj/`, `/update-aj/`, `/update-api/`)
-/// carry the repository id inside the multipart body, so permission can only be
-/// checked after parsing. Staging the bytes on disk keeps them out of the
-/// global block store until the caller is authorized, without buffering
-/// the whole file in memory. The file is removed when the guard drops.
+/// The no-token web endpoints carry the repository id inside the multipart body,
+/// so permission can only be checked after parsing; staging the bytes keeps them
+/// out of the global block store until then, and the guard removes the file on
+/// drop.
 struct StagedUpload(Option<std::path::PathBuf>);
 
 impl StagedUpload {
@@ -923,8 +848,7 @@ async fn stage_file_field(
 
 /// CDC a staged file into the block store (called only after authorization).
 ///
-/// `enc_key` behaves exactly as in [`stream_file_into_blocks`]: `Some` for an
-/// encrypted library, so the staged plaintext is encrypted on the way in.
+/// `enc_key` behaves exactly as in [`stream_file_into_blocks`].
 async fn ingest_staged_file(
     store: infra::storage::DynBlockStorage,
     repo_id: &str,
@@ -984,12 +908,8 @@ fn max_upload_bytes(state: &AppState) -> u64 {
     state.config().server.max_upload_size_mb * 1024 * 1024
 }
 
-/// POST /update-api/ — Update existing file (web UI, no token).
-///
-/// Expects multipart fields:
-/// - `file` — the new file bytes
-/// - `repo_id` — repository ID
-/// - `p` or `path` — full path of the target file (e.g. `/dir/file.txt`)
+/// `POST /update-api/` — update an existing file from the web UI (no token),
+/// taking `file`, `repo_id`, and `p` / `path` (the full target path).
 pub async fn update_api(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -1107,12 +1027,8 @@ pub async fn update_api(
     Ok(ok_json())
 }
 
-/// POST /update-aj/ — AJAX file update (Seahub web UI).
-///
-/// Expects multipart fields:
-/// - `file` — the new file bytes
-/// - `repo_id` — repository ID
-/// - `target_file` — full path (e.g. `/dir/file.txt`)
+/// `POST /update-aj/` — AJAX file update from the Seahub web UI (no token),
+/// taking `file`, `repo_id` and `target_file` (the full target path).
 pub async fn update_aj(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -1264,17 +1180,8 @@ pub async fn update_aj(
     Ok(ok_json())
 }
 
-// ─── Token-authenticated upload endpoints ─────────────────────────────────────
-
-/// POST /upload-aj/{token} — Token-based AJAX file upload (Seahub web frontend).
-///
-/// This is the endpoint the Seahub React frontend sends uploads to after
-/// obtaining an upload link from `/api2/repos/{id}/upload-link/?from=web`.
-///
-/// Multipart fields:
-/// - `file` — the file bytes
-/// - `parent_dir` — target directory
-/// - `relative_path` — subdirectory path for folder uploads (optional)
+/// `POST /upload-aj/{token}` — upload with an upload-link token, as sent by the
+/// Seahub React frontend after `/api2/repos/{id}/upload-link/?from=web`.
 pub async fn upload_aj_token(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
@@ -1399,8 +1306,7 @@ pub async fn upload_aj_token(
                 &file_data,
                 content_range,
                 &info.username,
-                // Bind anonymous (upload-link) chunked uploads to the token
-                // owner's storage quota, matching the non-chunked path below.
+                // Upload-link chunked uploads count against the owner's quota.
                 Some(info.user_id),
                 enc_key_ref,
                 replace,
@@ -1429,7 +1335,6 @@ pub async fn upload_aj_token(
         )
         .await?;
 
-    // Increment upload count if this was triggered by an upload link
     if let Some(link_id) = info.upload_link_id {
         upload_link_service::increment_upload_view_cnt(state.repos.clone(), link_id);
     }
@@ -1439,34 +1344,24 @@ pub async fn upload_aj_token(
     ))
 }
 
-/// POST /upload-api/{token} — Token-authenticated file upload (desktop client).
-///
-/// Uses the custom `parse_multipart` helper instead of axum's `Multipart`
-/// extractor because the Qt desktop client sends a quoted boundary string
-/// that axum rejects with 400.
-///
-/// Multipart fields:
-/// - `file` — the file bytes
-/// - `parent_dir` — target directory (falls back to token's parent_dir)
-/// - `relative_path` — subdirectory path for folder uploads (optional)
+/// `POST /upload-api/{token}` — token-authenticated upload for the desktop
+/// client, which sends a quoted multipart boundary that axum's extractor rejects.
 pub async fn upload_api(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Result<axum::response::Response, AppError> {
-    // Extract Content-Type header before consuming the request body.
     let ct = req
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned())
         .unwrap_or_default();
-    // Resumable uploads (`Content-Range`) reach this endpoint: the desktop Qt
-    // client fetches `api2/repos/{id}/upload-link/` and chunks files over
-    // 100 MB (`ReliablePostFileTask`, `kMinimalSizeForChunkedUploads`). The
-    // chunk has to go through the temp-file/assembly path — streaming a chunk
-    // straight into blocks would commit it as a complete file, and it is also
-    // where the declared total size is reserved against the quota.
+    // Resumable uploads reach this endpoint: the Qt desktop client fetches
+    // `api2/repos/{id}/upload-link/` and chunks files over 100 MB
+    // (`ReliablePostFileTask`). A chunk must go through the temp-file / assembly
+    // path — streaming it straight into blocks would commit it as a whole file,
+    // and that path is also where the declared size is reserved against quota.
     let content_range = req
         .headers()
         .get("content-range")
@@ -1512,10 +1407,9 @@ pub async fn upload_api(
         precheck_quota(&state, Some(info.user_id), content_length.as_deref()).await?;
     }
 
-    // Extract boundary from Content-Type. NOTE: Qt's QHttpMultiPart sends a
-    // quoted boundary (`boundary="_.Seafile._UUID"`) while the body uses the
-    // unquoted form (`--_.Seafile._UUID`) — strip surrounding quotes to handle
-    // both. The body is consumed as a stream so the file is never buffered.
+    // Qt's QHttpMultiPart sends a quoted boundary (`boundary="_.Seafile._UUID"`)
+    // while the body uses the unquoted form, so strip surrounding quotes. The
+    // body is consumed as a stream so the file is never buffered.
     let boundary = ct
         .split("boundary=")
         .nth(1)
@@ -1583,9 +1477,8 @@ pub async fn upload_api(
         query.get("replace").map(String::as_str),
         fields.get("replace").map(String::as_str),
     )?;
-    // Only `/upload-api` honours `ret-json`; the `-aj` endpoints always answer
-    // JSON. Official Android/desktop clients read the plain-text body as the
-    // file id, so the default must stay plain text.
+    // Only `/upload-api` honours `ret-json`; official Android/desktop clients
+    // read the plain-text body as the file id, so the default stays plain text.
     let ret_json = wants_ret_json(&query, &fields);
 
     if is_chunked {
@@ -1640,15 +1533,9 @@ pub async fn upload_api(
     ))
 }
 
-// ─── Token-authenticated update endpoints ─────────────────────────────────────
-
-/// POST /update-api/{token} — Token-authenticated file update / overwrite (desktop client).
-///
-/// Multipart fields (parsed via custom parser for Qt compat):
-/// - `file` — the new file bytes
-/// - `target_file` — full path of the file to overwrite (e.g. `/dir/file.txt`)
-/// - `relative_path` — optional subdirectory path (prepended to target_file's parent)
-/// - `parent_dir` — fallback base directory when target_file is absent
+/// `POST /update-api/{token}` — token-authenticated file overwrite for the
+/// desktop client. `target_file`, or `parent_dir` + `relative_path`, names the
+/// existing file; the update always overwrites in place.
 pub async fn update_api_handler(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
@@ -1753,18 +1640,14 @@ pub async fn update_api_handler(
     // (its fs id is the `EMPTY_SHA1` sentinel).
     let uid = Some(info.user_id);
     if !target_file.is_empty() {
-        // Derive target from target_file + optional relative_path
         let (raw_parent, raw_name) = target_file.rsplit_once('/').unwrap_or(("/", &target_file));
         let parent = if raw_parent.is_empty() {
             "/"
         } else {
             raw_parent
         };
-        // Scoped helper, for consistency with every other token path. An
-        // update token never carries `upload_link_id` today, so this does
-        // not change behaviour; it keeps the link-directory clamp from
-        // silently disappearing if an update-link is ever minted from an
-        // upload link.
+        // Scoped for consistency: an update token never carries `upload_link_id`
+        // today, but this keeps the link-directory clamp if one ever does.
         let target_dir = compute_scoped_target_dir(&info, parent, &relative_path)?;
         let name = raw_name.to_string();
         require_target_exists(&state, &info.repo_id, &target_dir, &name).await?;
@@ -1826,12 +1709,8 @@ pub async fn update_api_handler(
     Ok(ok_json().into_response())
 }
 
-/// POST /update-aj/{token} — Token-based AJAX file update (Seahub web frontend).
-///
-/// Multipart fields:
-/// - `file` — the new file bytes
-/// - `target_file` — full path (e.g. `/dir/file.txt`)
-/// - `relative_path` — optional subdirectory path
+/// `POST /update-aj/{token}` — token-based AJAX file update from the Seahub web
+/// frontend, taking `file`, `target_file` and optional `relative_path`.
 pub async fn update_aj_token(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
@@ -1943,25 +1822,12 @@ pub async fn update_aj_token(
     Ok(ok_json())
 }
 
-/// POST /upload-blks-api/{token} — Token-based block upload and commit.
+/// `POST /upload-blks-api/{token}` — block upload and commit.
 ///
-/// Two modes:
-///
-/// **Block upload mode** (no `commitonly` field):
-/// Accepts multipart with `file` parts (one per block, filename = block ID).
-/// Validates SHA1 matches the block ID, stores each block.
-///
-/// **Commit mode** (with `commitonly` field):
-/// Multipart fields:
-/// - `commitonly` — must be present (any value)
-/// - `parent_dir` — target directory
-/// - `file_name` — name of the assembled file
-/// - `blockids` — JSON array of block IDs: `["id1","id2"]`
-/// - `file_size` — total file size in bytes
-/// - `replace` — "1" to overwrite (optional)
-/// - `last_modify` — ISO timestamp (optional)
-///
-/// Response: `{"id": "<file_fs_id>"}` on success.
+/// Without `commitonly`, each `file` part is one block whose filename is its
+/// SHA-1, verified before storing. With `commitonly`, the `parent_dir`,
+/// `file_name`, `blockids` (JSON array), `file_size` and optional `replace`
+/// fields assemble the file; the response is `{"id": "<file_fs_id>"}`.
 pub async fn upload_blks_api(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
@@ -2019,19 +1885,18 @@ pub async fn upload_blks_api(
             let block_id = field.file_name().unwrap_or("").to_string();
             let data = read_multipart_field_limited(&mut field, MAX_BLOCK_UPLOAD_BYTES).await?;
             if !block_id.is_empty() && !data.is_empty() {
-                // Stream each block: verify its SHA-1 and write it immediately,
-                // so one request can't buffer every block in memory at once.
+                // Verify the SHA-1 and write immediately, so one request cannot
+                // buffer every block in memory at once.
                 let computed = infra::crypto::fs_id::sha1_hex(&data);
                 if computed != block_id {
                     return Err(AppError::BadRequest(format!(
                         "block ID mismatch: expected {block_id}, computed {computed}"
                     )));
                 }
-                // Charge the block before it is written. This branch had no
-                // quota check at all, so a loop that only ever uploaded blocks
-                // (never a commit) could fill the disk while the caller's
-                // committed usage stayed at zero. 443 is the code both the Qt
-                // client and seaf-daemon map to "out of quota".
+                // Charge the block before writing it, so a loop that only uploads
+                // blocks (never a commit) cannot fill the disk while committed
+                // usage stays at zero. 443 is what the Qt client and seaf-daemon
+                // map to "out of quota".
                 crate::service::fs::quota::reserve_block_bytes(
                     &state.repos,
                     info.user_id,
@@ -2059,7 +1924,6 @@ pub async fn upload_blks_api(
         }
     }
 
-    // Check if this is a commit request
     if fields.contains_key("commitonly") {
         let parent_dir = fields
             .get("parent_dir")
@@ -2069,9 +1933,8 @@ pub async fn upload_blks_api(
             .get("file_name")
             .ok_or_else(|| AppError::BadRequest("file_name required for commit".into()))?;
         // Align with seafile's should_ignore_file: reject empty names, path
-        // separators, NUL, "." / "..", and over-long names. Deliberately NOT
-        // the strict character blacklist so clients can upload files with
-        // quotes, brackets etc.
+        // separators, NUL, "." / "..", and over-long names. Deliberately not the
+        // strict character blacklist, so quotes, brackets etc. remain uploadable.
         if !is_valid_upload_filename(file_name) {
             return Err(AppError::BadRequest("invalid file_name".into()));
         }
@@ -2084,7 +1947,6 @@ pub async fn upload_blks_api(
             .ok_or_else(|| AppError::BadRequest("file_size required for commit".into()))?;
         let replace = fields.get("replace").map(|s| s.as_str()) == Some("1");
 
-        // Parse blockids JSON array
         let block_ids: Vec<String> = serde_json::from_str(blockids_str)
             .map_err(|_| AppError::BadRequest("invalid blockids JSON array".into()))?;
 
@@ -2092,9 +1954,8 @@ pub async fn upload_blks_api(
             return Err(AppError::BadRequest("blockids cannot be empty".into()));
         }
 
-        // Verify all blocks exist in block store and sum their real sizes.
-        // Reject malformed / path-traversal ids outright — a valid block id
-        // is exactly 40 hex chars (content-addressed SHA-1).
+        // Reject malformed / path-traversal ids outright — a valid block id is
+        // exactly 40 hex chars (content-addressed SHA-1).
         if let Some(bad) = block_ids
             .iter()
             .find(|bid| bid.len() != 40 || !bid.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -2131,9 +1992,9 @@ pub async fn upload_blks_api(
             ));
         }
 
-        // Pre-check storage quota against the actual block bytes before
-        // assembling the file from its blocks. On failure, remove blocks
-        // newly written by this request so they don't linger as orphans.
+        // Pre-check quota against the actual block bytes before assembling. On
+        // failure, remove blocks newly written by this request so they don't
+        // linger as orphans.
         if let Err(e) = crate::service::fs::quota::check_upload_quota(
             &state.repos,
             info.user_id,
@@ -2150,18 +2011,16 @@ pub async fn upload_blks_api(
             return Err(e);
         }
 
-        // Resolve the target directory **before** writing the file object, and
-        // through the upload-link-aware helper: a token that carries an
-        // `upload_link_id` is scoped to the link's directory and must not be
-        // able to commit outside it via `parent_dir`/`relative_path`. Rejecting
-        // an invalid path here also avoids leaving an orphan fs_object behind.
+        // Resolve the target directory **before** writing the file object, via
+        // the upload-link-aware helper: an `upload_link_id` token is scoped to
+        // the link's directory and must not commit outside it. Rejecting an
+        // invalid path here also avoids leaving an orphan fs_object behind.
         let relative_path = fields
             .get("relative_path")
             .map(|s| s.as_str())
             .unwrap_or("");
         let target_dir = compute_scoped_target_dir(&info, parent_dir, relative_path)?;
 
-        // Create FsFileData from block IDs
         let file_fs_data = base::common::FsFileData {
             block_ids: block_ids.clone(),
             size: file_size,
@@ -2172,15 +2031,12 @@ pub async fn upload_blks_api(
             crate::fs::core::store_fs_file_object(state.db.as_ref(), &info.repo_id, &file_fs_data)
                 .await?;
 
-        // Update directory tree and create commit
         let now = chrono::Utc::now().timestamp();
 
-        // Full path of the assembled file (for activity logging).
         let fp = base::sanitize::safe_join_path(&target_dir, file_name)
             .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
 
-        // Resolve parent directory and capture ancestor chain for the
-        // subsequent walk_up_ancestors (avoids O(d²) re-resolution).
+        // Resolve the parent and its ancestor chain to avoid O(d²) re-resolution.
         let (parent_fs_id, ancestor_chain) =
             crate::fs::core::file_ops::FileOps::resolve_fs_id_chain(
                 &state.repos,
@@ -2190,8 +2046,7 @@ pub async fn upload_blks_api(
             .await
             .map_err(|e| AppError::Internal(format!("resolve parent dir failed: {e}")))?;
 
-        // Determine the pre-commit state of the target entry from the parent
-        // dirents (avoids a fresh head-commit path resolution in finalize_upload).
+        // Pre-commit target state from the parent dirents, avoiding a head walk.
         let parent_data =
             crate::fs::core::read_fs_dir_data(&state.repos, &info.repo_id, &parent_fs_id)
                 .await
@@ -2200,12 +2055,10 @@ pub async fn upload_blks_api(
         let file_exists = existing.is_some();
         let old_size = existing.map(|d| d.size).unwrap_or(0);
 
-        // Add file entry to parent directory
         let entry_name = file_name.clone();
         let modifier_name = info.username.clone();
-        // The stored name may differ from the requested one: without `replace`,
-        // a collision is resolved with `name (1).ext` and the caller reports that
-        // name back.
+        // The stored name may differ from the requested one: without `replace`, a
+        // collision is resolved with `name (1).ext`, which the caller reports back.
         let mut effective_name = entry_name.clone();
         crate::fs::core::file_ops::FileOps::update_dir_tree_and_commit(
             state.db.as_ref(),
@@ -2220,7 +2073,6 @@ pub async fn upload_blks_api(
                 if replace {
                     dirents.retain(|d| d.name != entry_name);
                 }
-                // Handle name collision
                 if dirents.iter().any(|d| d.name == entry_name) {
                     let unique_name =
                         infra::common::util::generate_unique_filename(dirents, &entry_name);
@@ -2249,7 +2101,7 @@ pub async fn upload_blks_api(
         .await
         .map_err(|e| AppError::Internal(format!("commit blocks failed: {e}")))?;
 
-        // Adjust repo size and log activity (op_type from actual existence).
+        // Adjust repo size and log activity.
         state
             .file_service()
             .finalize_upload(
@@ -2278,18 +2130,9 @@ pub async fn upload_blks_api(
 mod tests {
     use super::*;
 
-    /// parse_multipart must correctly extract field names even when extra
-    /// headers (e.g. Content-Length) follow the Content-Disposition line.
-    /// OkHttp (used by the Android client) adds Content-Length to each part:
-    ///
-    ///   Content-Disposition: form-data; name="parent_dir"\r\n
-    ///   Content-Length: 1\r\n
-    ///
-    /// The earlier field-name extraction used strip_suffix('"') which assumed
-    /// the Content-Disposition line is the only header and always ends with a
-    /// closing quote. When extra headers follow, strip_suffix('"') returned
-    /// None and the field name was silently lost, causing all uploads to go
-    /// to root regardless of parent_dir or relative_path.
+    /// OkHttp (used by the Android client) adds Content-Length to each part, so
+    /// field-name extraction must not assume Content-Disposition is the only
+    /// header: splitting on `"` instead of strip_suffix('"') keeps the name.
     #[test]
     fn test_parse_multipart_with_content_length() {
         let boundary = "testboundary";
@@ -2319,7 +2162,6 @@ mod tests {
         );
     }
 
-    /// parse_multipart must still work without extra headers (simple case).
     #[test]
     fn test_parse_multipart_simple() {
         let boundary = "simple";
@@ -2347,7 +2189,6 @@ mod tests {
         );
     }
 
-    /// parse_multipart must extract file parts with extra headers (Content-Type).
     #[test]
     fn test_parse_multipart_with_file_and_content_type() {
         let boundary = "filebound";
@@ -2367,8 +2208,6 @@ mod tests {
         assert_eq!(result.file_data.as_deref(), Some(&b"filedata"[..]));
     }
 
-    // ── read_chunked_field (bounded chunk reads) ─────────────────────────
-
     /// Build a single-part multipart body carrying `data` as the `file` field.
     fn multipart_body(boundary: &str, data: &[u8]) -> String {
         format!(
@@ -2381,8 +2220,7 @@ mod tests {
         )
     }
 
-    /// A chunk whose Content-Range declares more bytes than the per-chunk cap
-    /// must be rejected before any body is read.
+    /// A chunk declaring more than the per-chunk cap is rejected from the header.
     #[tokio::test]
     async fn test_read_chunked_field_rejects_oversized_header() {
         let body = multipart_body("HDRBOUND", b"hi");
@@ -2401,8 +2239,7 @@ mod tests {
         assert!(matches!(err, AppError::BadRequest(_)));
     }
 
-    /// A client that lies about the header (declares a small chunk but sends a
-    /// larger body) must be cut off at the actual-bytes cap.
+    /// A client that lies about the header is cut off at the actual-bytes cap.
     #[tokio::test]
     async fn test_read_chunked_field_rejects_oversized_body() {
         let body = multipart_body("BODYBOUND", b"01234567890123456789");
@@ -2421,7 +2258,6 @@ mod tests {
         assert!(matches!(err, AppError::BadRequest(_)));
     }
 
-    /// A valid chunk within the cap is read back verbatim.
     #[tokio::test]
     async fn test_read_chunked_field_reads_valid_chunk() {
         let body = multipart_body("OKBOUND", b"hello");
@@ -2439,8 +2275,7 @@ mod tests {
         assert_eq!(data, b"hello");
     }
 
-    /// A chunk whose Content-Range header can't be parsed (e.g. non-UTF-8)
-    /// must be rejected instead of being read unbounded.
+    /// An unparsable Content-Range is rejected instead of reading unbounded.
     #[tokio::test]
     async fn test_read_chunked_field_without_range_rejects() {
         let body = multipart_body("NORANGE", b"fullbody");

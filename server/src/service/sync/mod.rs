@@ -48,29 +48,19 @@ fn fs_object_verify_mode() -> FsObjectVerifyMode {
 }
 
 /// Description upstream gives a server-side merge commit with no conflict
-/// (`fast_forward_or_merge()`, `server/http-server.c`).
-///
-/// A conflicting merge would get a generated description instead, but on this
-/// code path upstream's `gen_merge_description()` always returns NULL — the
-/// merge diff against both parents is always empty, because the merge never
-/// changes a file's content-id, only renames a copy — and upstream then falls
-/// back to this same string. See `crate::fs::core::merge` for the details.
+/// (`fast_forward_or_merge()`): a conflicting merge falls back to this same
+/// string, because its merge diff is always empty (see `crate::fs::core::merge`).
 const AUTO_MERGE_DESCRIPTION: &str = "Auto merge by system";
 
-/// Cap on the number of FS objects accepted in a single `recv-fs` pack.
-/// The request body is already bounded, but the entry count drives how many
-/// objects are parsed and inserted, so it is bounded independently.
+/// Cap on FS objects in a single `recv-fs` pack: the entry count drives how many
+/// objects are parsed and inserted, so it is bounded apart from the body size.
 const MAX_FS_PACK_ENTRIES: usize = 4096;
 
-/// Cap on the **total** decompressed size of a single `recv-fs` pack.
-///
-/// `pack_fs` caps one object at 64 MiB, but without an aggregate cap a pack of
-/// many highly-compressible objects can expand a few MiB of body into gigabytes
-/// of resident memory: every object is decompressed and materialised before the
-/// single batched insert.
+/// Cap on the **total** decompressed size of a single `recv-fs` pack. `pack_fs`
+/// caps one object at 64 MiB, but a pack of compressible objects could still
+/// expand a few MiB of body into gigabytes before the single batched insert.
 const MAX_FS_PACK_DECOMPRESSED_BYTES: u64 = 128 * 1024 * 1024;
 
-/// Join a directory prefix and entry name into an absolute path.
 fn join_sync_path(prefix: &str, name: &str) -> String {
     if prefix.is_empty() {
         format!("/{name}")
@@ -79,7 +69,6 @@ fn join_sync_path(prefix: &str, name: &str) -> String {
     }
 }
 
-/// Service for sync protocol operations.
 pub struct SyncService {
     pub(super) repos: Arc<Repositories>,
     pub(super) db: Arc<DatabaseConnection>,
@@ -106,12 +95,8 @@ impl SyncService {
         }
     }
 
-    /// Get all repos accessible to a user with their sync tokens.
-    ///
-    /// Batch-loads repos and owners, and resolves every token in two batched
-    /// queries, so the total work is a handful of queries instead of ~4-5 per
-    /// member repo. `peer` is the requesting device: each library gets that
-    /// device's own token.
+    /// Get all repos accessible to a user with their sync tokens, batch-loading
+    /// repos, owners and tokens; `peer` is the requesting device.
     pub async fn accessible_repos(
         &self,
         user_id: i32,
@@ -121,9 +106,8 @@ impl SyncService {
     ) -> Result<Vec<AccessibleRepo>, AppError> {
         let memberships = self.repos.member.find_by_user_id(user_id).await?;
 
-        // Distinct repo ids across memberships, limited to the caller's scope.
-        // Filtering before the tokens are minted keeps a key from causing work
-        // (and rows) for libraries it cannot reach.
+        // Distinct repo ids in scope; filtering before tokens are minted keeps a
+        // key from causing work (and rows) for libraries it cannot reach.
         let mut repo_ids: Vec<String> = Vec::with_capacity(memberships.len());
         let mut seen: HashSet<&str> = HashSet::with_capacity(memberships.len());
         for m in &memberships {
@@ -136,7 +120,6 @@ impl SyncService {
         let repo_by_id: HashMap<&str, &infra::entity::repo::Model> =
             repos.iter().map(|r| (r.id.as_str(), r)).collect();
 
-        // Distinct owner ids for the batch owner lookup.
         let mut owner_ids: Vec<i32> = Vec::new();
         let mut owner_seen: HashSet<i32> = HashSet::new();
         for r in &repos {
@@ -184,8 +167,7 @@ impl SyncService {
         token: &str,
     ) -> Result<FolderPermResult, AppError> {
         // Same validity rules as `SyncAuth`: repo binding, expiry and an active
-        // owner. This endpoint carries the token in the body, so it does not go
-        // through the middleware and must apply them itself.
+        // owner. Here the token travels in the body, so no middleware applies them.
         if !crate::service::auth::token::verify_body_sync_token(&self.repos, repo_id, token).await?
         {
             return Ok(FolderPermResult {
@@ -207,9 +189,8 @@ impl SyncService {
         };
 
         // The permission is the token holder's own membership. Ownership is
-        // tested explicitly rather than inferred from the row: a token minted
-        // while a grant existed can outlive the grant, and defaulting a missing
-        // row to "rw" would then keep reporting write access for it.
+        // tested explicitly: a token minted while a grant existed can outlive the
+        // grant, and defaulting a missing row to "rw" would still report write.
         let owner_id = self
             .repos
             .repo
@@ -240,7 +221,6 @@ impl SyncService {
         })
     }
 
-    /// Get head commits for a list of repo IDs.
     pub async fn head_commits_multi(
         &self,
         repo_ids: &[String],
@@ -254,7 +234,6 @@ impl SyncService {
         Ok(commits)
     }
 
-    /// Get the root fs_id of a commit by its commit_id.
     pub async fn get_commit_root(
         &self,
         repo_id: &str,
@@ -268,10 +247,8 @@ impl SyncService {
         Ok(commit.map(|c| c.root_id))
     }
 
-    /// Recursively collect all fs_ids under a given root fs_id.
-    ///
-    /// When `dir_only` is true only directory objects are returned; the
-    /// traversal still walks every object to discover children.
+    /// Recursively collect all fs_ids under a given root fs_id. With `dir_only` only
+    /// directory objects are returned, but the traversal still walks every object.
     pub async fn collect_fs_ids(
         &self,
         repo_id: &str,
@@ -280,8 +257,7 @@ impl SyncService {
     ) -> Result<HashSet<String>, AppError> {
         let mut visited = HashSet::new();
         let mut result = HashSet::new();
-        // Level frontier: each level fetches all its fs_objects with one
-        // batched `IN` query (O(#objects) → O(depth)).
+        // Level frontier: each level fetches all its fs_objects in one batched IN.
         let mut frontier = vec![root_fs_id.to_string()];
         let mut guard = crate::fs::core::traversal::TreeGuard::new();
         while !frontier.is_empty() {
@@ -318,15 +294,10 @@ impl SyncService {
         Ok(result)
     }
 
-    /// Compute the fs_ids the client needs to download: every server-side
-    /// object the client tree is missing or whose id differs. Used by
-    /// `fs-id-list` when the client head differs from the server head so we
-    /// don't return the whole tree (the client dedups locally anyway, so the
-    /// full tree only wastes bandwidth — but the diff keeps the response small).
-    ///
-    /// Walks a paired (client, server) frontier and only descends into
-    /// subtrees whose ids differ, so a one-file change costs O(change) instead
-    /// of materialising the whole client tree.
+    /// Compute the fs_ids the client needs to download: every server-side object
+    /// the client tree is missing or whose id differs. Walks a paired (client,
+    /// server) frontier, descending only into differing subtrees, so a one-file
+    /// change costs O(change) rather than the whole tree.
     pub async fn diff_fs_ids(
         &self,
         repo_id: &str,
@@ -378,8 +349,7 @@ impl SyncService {
                     continue; // missing/empty server dir → nothing to sync
                 };
                 // A present client id that fails to resolve (missing or not a
-                // directory) is treated as absent, like the original code which
-                // only ever matched paths present in the client map.
+                // directory) is treated as absent.
                 let client_dir = frame
                     .client_fs_id
                     .as_ref()
@@ -387,15 +357,12 @@ impl SyncService {
 
                 match client_dir {
                     None => {
-                        // Client lacks this directory → the whole server
-                        // subtree must be sent.
+                        // Client lacks this directory → send the whole subtree.
                         for entry in &server_dir.dirents {
-                            // An empty directory is the `EMPTY_SHA1` sentinel and
-                            // has no stored fs object: the client materialises it
-                            // from the dirent. Advertising it here would make the
-                            // client request a `pack-fs` entry the server cannot
-                            // serve, and seaf-daemon then re-requests it forever
-                            // (upstream excludes `emptySHA1` from this list too).
+                            // An empty directory is the `EMPTY_SHA1` sentinel with no
+                            // stored fs object; the client materialises it from the
+                            // dirent. Advertising it would make seaf-daemon request a
+                            // `pack-fs` entry that never exists, and retry forever.
                             if entry.id == EMPTY_SHA1 {
                                 continue;
                             }
@@ -420,9 +387,7 @@ impl SyncService {
                             .map(|d| (d.name.as_str(), d))
                             .collect();
                         for entry in &server_dir.dirents {
-                            // See the `None` branch above: `EMPTY_SHA1` is a
-                            // sentinel with no object, so it must never be
-                            // advertised as something to download.
+                            // See the `None` branch: never advertise `EMPTY_SHA1`.
                             if entry.id == EMPTY_SHA1 {
                                 continue;
                             }
@@ -459,7 +424,6 @@ impl SyncService {
         Ok(result)
     }
 
-    /// Batch fetch FS objects for given fs_ids.
     pub async fn fetch_fs_objects(
         &self,
         repo_id: &str,
@@ -471,11 +435,9 @@ impl SyncService {
             .await
     }
 
-    /// Batch insert FS objects with ON CONFLICT DO NOTHING semantics.
-    ///
-    /// Dirent names in directory objects are validated with
-    /// [`validate_filename`] to prevent Zip Slip and other downstream
-    /// injection via malicious names synced from a rogue client.
+    /// Batch insert FS objects (ON CONFLICT DO NOTHING). Dirent names are
+    /// validated with [`validate_filename`] to stop Zip Slip and other injection
+    /// via names synced from a rogue client.
     pub async fn insert_fs_objects(
         &self,
         repo_id: &str,
@@ -483,9 +445,8 @@ impl SyncService {
     ) -> Result<(), AppError> {
         let repo_id = repo_id.to_string();
 
-        // Bound the entry count before parsing anything: the compressed body is
-        // already capped, but a huge number of tiny objects would still drive
-        // one parse + insert each.
+        // Bound the entry count before parsing: many tiny objects each cost a parse
+        // and an insert.
         if entries.len() > MAX_FS_PACK_ENTRIES {
             return Err(AppError::BadRequest(format!(
                 "too many fs objects in pack: {} (max {MAX_FS_PACK_ENTRIES})",
@@ -493,12 +454,10 @@ impl SyncService {
             )));
         }
 
-        // Decompression, JSON parsing, and filename validation are CPU-bound;
-        // offload to the blocking pool so the async runtime is not stalled.
+        // CPU-bound work (decompress, JSON, name checks) stays off the async runtime.
         let models = tokio::task::spawn_blocking(move || {
-            // Running total of decompressed bytes across the whole pack; a pack
-            // of many high-ratio objects must not be able to expand into
-            // gigabytes of resident memory before the batched insert.
+            // Running total: many high-ratio objects must not expand into gigabytes
+            // before the single batched insert.
             let mut total_decompressed: u64 = 0;
 
             entries
@@ -518,11 +477,9 @@ impl SyncService {
                             )));
                         }
 
-                        // The object id is sha1 over the *uncompressed* JSON, so
-                        // hash the bytes exactly as received rather than any
-                        // re-serialization. Every legitimate repo-v1 client sends
-                        // a matching id; rejecting a mismatch stops a rogue client
-                        // from storing arbitrary bytes under a chosen id.
+                        // The object id is sha1 over the *uncompressed* JSON, so hash
+                        // the bytes as received. Official repo-v1 clients always match;
+                        // a mismatch means a rogue client storing arbitrary bytes.
                         if fs_id != EMPTY_SHA1 {
                             let computed = sha1_hex(&decompressed);
                             if computed != fs_id {
@@ -551,12 +508,9 @@ impl SyncService {
                             })?;
 
                         // Classify by the JSON **structure**, never by the
-                        // client-declared `type` field alone. Trusting `type`
-                        // let a client send `{"dirents": [...]}` without a dir
-                        // `type` and skip dirent-name validation entirely, while
-                        // the tree readers still parsed it as a directory —
-                        // planting `..`, `/` or control characters in the tree
-                        // that later reach listings, hrefs and ZIP entry names.
+                        // client-declared `type` alone: trusting `type` let a client
+                        // skip dirent-name validation and plant `..`, `/` or control
+                        // characters that later reach listings, hrefs and ZIP entries.
                         let obj_type = if json_val.get("dirents").is_some() {
                             let dir_data: FsDirData =
                                 serde_json::from_str(&json_str).map_err(|e| {
@@ -600,8 +554,8 @@ impl SyncService {
                                     file_data.version
                                 )));
                             }
-                            // A negative size would later be cast to `usize`
-                            // for a capacity hint, wrapping to `usize::MAX`.
+                            // A negative size would wrap to `usize::MAX` as a capacity
+                            // hint, so it is rejected.
                             if file_data.size < 0 {
                                 return Err(AppError::BadRequest(format!(
                                     "file object size must be >= 0, got {}",
@@ -634,8 +588,8 @@ impl SyncService {
 
     /// Insert a commit if it doesn't already exist.
     ///
-    /// Deliberately does **not** validate `root_id`: seaf-daemon sends the
-    /// commit before the FS objects it references. The root is validated in
+    /// Deliberately does **not** validate `root_id`: seaf-daemon sends the commit
+    /// before its FS objects, so the root is validated in
     /// [`SyncService::update_branch`] once everything has been uploaded.
     pub async fn put_commit(&self, data: &base::common::CommitData) -> Result<(), AppError> {
         use crate::repository::commit::CreateCommitParams;
@@ -659,8 +613,7 @@ impl SyncService {
                     ctime: data.ctime,
                     version: data.version as i8,
                     // A client-supplied commit normally carries neither flag;
-                    // upstream's `seaf_commit_from_data` stores them verbatim
-                    // when it does, and so do we.
+                    // upstream's `seaf_commit_from_data` stores them verbatim.
                     new_merge: data.new_merge.map(|v| v != 0),
                     conflict: data.conflict.map(|v| v != 0),
                 })
@@ -669,7 +622,6 @@ impl SyncService {
         Ok(())
     }
 
-    /// Find a commit by repo_id and commit_id.
     pub async fn find_commit(
         &self,
         repo_id: &str,
@@ -681,12 +633,10 @@ impl SyncService {
             .await
     }
 
-    /// Check if a repo exists by ID.
     pub async fn repo_exists(&self, repo_id: &str) -> Result<bool, AppError> {
         Ok(self.repos.repo.find_by_id(repo_id).await?.is_some())
     }
 
-    /// Find a repo model by ID.
     pub async fn find_repo(
         &self,
         repo_id: &str,
@@ -694,7 +644,6 @@ impl SyncService {
         self.repos.repo.find_by_id(repo_id).await
     }
 
-    /// Update repo head commit.
     pub async fn update_head_commit(
         &self,
         repo_id: &str,
@@ -706,15 +655,12 @@ impl SyncService {
             .await
     }
 
-    // ── Branch update (sync protocol) ──────────────────────────────────
-
-    /// Merge an upload whose parent is no longer the repository HEAD, and
-    /// return `(merged_commit_id, merged_root, diff_base_root, size_delta)`.
+    /// Merge an upload whose parent is no longer the repository HEAD, returning
+    /// `(merged_commit_id, merged_root, diff_base_root, size_delta)`.
     ///
-    /// This is the merge branch of upstream's `fast_forward_or_merge()`
-    /// (`seafile-server/server/http-server.c`): three-way merge of the client's
-    /// tree with the current HEAD against the commit the client based its upload
-    /// on, recorded as a commit with two parents.
+    /// The merge branch of upstream's `fast_forward_or_merge()` (`http-server.c`):
+    /// a three-way merge of the client's tree with the current HEAD against the
+    /// commit the client based its upload on, recorded as a two-parent commit.
     async fn merge_branch(
         &self,
         repo_id: &str,
@@ -734,8 +680,8 @@ impl SyncService {
             &self.repos,
             self.db.as_ref(),
             repo_id,
-            // No base commit (`EMPTY_SHA1` parent, or a library that had no
-            // HEAD when the client based its upload on it) means an empty tree.
+            // No base commit (`EMPTY_SHA1` parent, or a library with no HEAD) is an
+            // empty tree.
             base_root_id.unwrap_or(EMPTY_SHA1),
             &head_commit.root_id,
             &new_commit.root_id,
@@ -743,11 +689,9 @@ impl SyncService {
         )
         .await?;
 
-        // Blocks newly referenced by the merged tree (the client's own uploads,
-        // which the caller already verified, plus at most head-side entries the
-        // merge renamed), and the size delta the repo still has to absorb: the
-        // stored size already includes `head_root`, so the delta has to be
-        // measured against it rather than against the client's base.
+        // Blocks newly referenced by the merged tree, and the size delta: the stored
+        // size already includes `head_root`, so the delta is measured against it
+        // rather than against the client's base.
         let mut missing = Vec::new();
         let mut delta = 0;
         self.check_commit_blocks(
@@ -784,14 +728,10 @@ impl SyncService {
 
     /// Insert the commit that records a server-side merge.
     ///
-    /// Field for field upstream's
-    /// `seaf_commit_new(NULL, repo->id, merged_root, new_commit->creator_name,
-    /// EMPTY_SHA1, desc, 0)` plus `seaf_repo_to_commit()`: the merge is
-    /// attributed to whoever uploaded the commit being merged, its parent is the
-    /// HEAD it was merged with and its second parent is the upload. The
-    /// encryption block is *not* stored — `get_commit` re-synthesises it from
-    /// the repo row through `RepoCrypto` — so only the identity and the two
-    /// merge flags matter here.
+    /// Field for field upstream's `seaf_commit_new(...)` plus `seaf_repo_to_commit()`:
+    /// attributed to whoever uploaded the commit being merged, parented on the HEAD
+    /// it was merged with and second-parented on the upload. Only identity and the
+    /// two merge flags matter; `get_commit` re-synthesises the encryption block.
     async fn create_merge_commit(
         &self,
         repo_id: &str,
@@ -831,9 +771,9 @@ impl SyncService {
         };
         let commit_id = crate::domain::commit::compute_commit_id(&data);
 
-        // Two identical merges can be computed within the same second (a client
-        // retrying a PUT that already succeeded), which yields the same
-        // commit id; the row is then already there and must not be re-inserted.
+        // Identical merges can be computed within the same second (a client retrying
+        // a PUT that already succeeded), yielding the same commit id; the row is then
+        // already there and must not be re-inserted.
         let existing = self
             .repos
             .commit
@@ -863,15 +803,9 @@ impl SyncService {
 
     /// Check file blocks exist for a commit and compute its size delta.
     ///
-    /// `size_delta` becomes `size(new_root) - size(base_root)`: this is a
-    /// two-sided tree diff, so a deleted file or a deleted subtree subtracts its
-    /// bytes instead of leaving the library's size inflated forever. Missing
-    /// blocks are reported for the new tree only — a deletion has nothing left to
-    /// upload.
-    ///
-    /// `base_root_id == None` means there is no base to compare against (a
-    /// library's first upload, or a commit whose parent is the `EMPTY_SHA1`
-    /// sentinel): the new tree is then summed whole.
+    /// `size_delta` is `size(new_root) - size(base_root)` over a two-sided diff, so
+    /// a deletion subtracts its bytes; missing blocks are reported for the new tree
+    /// only. `base_root_id == None` sums the whole new tree.
     pub async fn check_commit_blocks(
         &self,
         repo_id: &str,
@@ -880,8 +814,7 @@ impl SyncService {
         missing: &mut Vec<String>,
         size_delta: &mut i64,
     ) -> Result<(), AppError> {
-        /// An empty directory is the `EMPTY_SHA1` sentinel and has no stored FS
-        /// object: it is "no entries", never a missing object.
+        /// An empty directory is the `EMPTY_SHA1` sentinel: never a missing object.
         fn stored_dir(id: &str) -> Option<String> {
             if id == EMPTY_SHA1 {
                 None
@@ -892,14 +825,11 @@ impl SyncService {
 
         /// One directory pair of the two-sided walk.
         struct DiffFrame {
-            /// Base directory. `None` = no counterpart, so everything under
-            /// `new_fs_id` is an addition.
+            /// Base directory. `None` = everything under `new_fs_id` is an addition.
             base_fs_id: Option<String>,
-            /// New directory. `None` = no counterpart, so everything under
-            /// `base_fs_id` was deleted.
+            /// New directory. `None` = everything under `base_fs_id` was deleted.
             new_fs_id: Option<String>,
-            /// Path under the new root. Only the new side reports it, as the
-            /// path of a file whose blocks are missing.
+            /// Path under the new root, reported for a file whose blocks are missing.
             prefix: String,
         }
 
@@ -908,8 +838,7 @@ impl SyncService {
                 return Ok(());
             }
 
-            // Level frontier: each level fetches all base and new directories
-            // with two batched IN queries instead of two queries per frame.
+            // Level frontier: two batched IN queries per level, not two per frame.
             let mut frontier: Vec<DiffFrame> = vec![DiffFrame {
                 base_fs_id: stored_dir(base_root),
                 new_fs_id: stored_dir(new_root_id),
@@ -938,14 +867,12 @@ impl SyncService {
                     crate::fs::core::read_fs_dir_data_batch(&self.repos, repo_id, &base_ids).await?
                 };
 
-                // Files needing block checks are batched into one file-object
-                // fetch per level.
+                // File objects needing block checks are batched into one fetch per level.
                 let mut pending_files: Vec<(String, String)> = Vec::new();
                 let mut next: Vec<DiffFrame> = Vec::new();
 
                 for frame in &frontier {
-                    // Identical subtrees (including the empty pair) contribute
-                    // nothing and need no further walk.
+                    // Identical subtrees (including the empty pair) need no further walk.
                     if frame.base_fs_id == frame.new_fs_id {
                         continue;
                     }
@@ -953,18 +880,14 @@ impl SyncService {
                     let base_dir = frame.base_fs_id.as_deref().and_then(|id| base_map.get(id));
                     let new_dir = frame.new_fs_id.as_deref().and_then(|id| new_map.get(id));
 
-                    // An id naming an object the database does not hold is
-                    // *unknown*, not empty: skipping the pair neither adds nor
-                    // subtracts bytes it cannot account for.
+                    // An id the database does not hold is *unknown*, not empty:
+                    // skipping the pair neither adds nor subtracts bytes.
                     //
-                    // An object that only the *new* side references is different:
-                    // this upload introduced it, so if the database does not hold
-                    // it the client's own object upload did not land. Accepting
-                    // the commit would leave every client with a tree it cannot
-                    // check out, so the upload is rejected with 446 and the
-                    // client re-sends what it still has. (An object the base side
-                    // also references may have been pruned by GC — that is not
-                    // this upload's business, and stays unknown.)
+                    // An object only the *new* side references is different: this
+                    // upload introduced it, so a missing row means the client's upload
+                    // did not land — accepting the commit would leave every client with
+                    // a tree it cannot check out, so reject with 446 and re-send. (A
+                    // base-side object may have been pruned by GC: stays unknown.)
                     if (frame.base_fs_id.is_some() && base_dir.is_none())
                         || (frame.new_fs_id.is_some() && new_dir.is_none())
                     {
@@ -990,8 +913,7 @@ impl SyncService {
                         }
                     };
 
-                    // Deleted subtree (or a root that became an empty directory):
-                    // subtract every entry, recursing into directories.
+                    // Deleted subtree (or a root that became an empty dir): subtract all.
                     let Some(new_dir) = new_dir else {
                         if let Some(base_dir) = base_dir {
                             for entry in &base_dir.dirents {
@@ -1009,7 +931,6 @@ impl SyncService {
                         continue;
                     };
 
-                    // Added subtree: add every entry and check its blocks.
                     let Some(base_dir) = base_dir else {
                         for entry in &new_dir.dirents {
                             let child = child_of(&entry.name);
@@ -1033,8 +954,7 @@ impl SyncService {
                         .map(|d| (d.name.as_str(), d))
                         .collect();
 
-                    // Names present on both sides, so the sweep below only has to
-                    // look at the entries the new tree deleted.
+                    // Names on both sides, so the sweep below only sees deletions.
                     let mut matched: std::collections::HashSet<&str> =
                         std::collections::HashSet::with_capacity(base_dir.dirents.len());
 
@@ -1062,15 +982,14 @@ impl SyncService {
                                 let base_is_dir =
                                     base_entry.mode & infra::serialization::S_IFDIR != 0;
                                 match (base_is_dir, is_dir) {
-                                    // A directory replaced by another directory:
-                                    // diff the two subtrees level by level.
+                                    // Directory → directory: diff both subtrees.
                                     (true, true) => next.push(DiffFrame {
                                         base_fs_id: stored_dir(&base_entry.id),
                                         new_fs_id: stored_dir(&new_entry.id),
                                         prefix: child,
                                     }),
-                                    // A file replaced by a directory: drop the
-                                    // file's bytes and add the subtree's.
+                                    // File → directory: drop the file's bytes, add
+                                    // the subtree's.
                                     (false, true) => {
                                         *size_delta -= base_entry.size;
                                         next.push(DiffFrame {
@@ -1079,10 +998,8 @@ impl SyncService {
                                             prefix: child,
                                         });
                                     }
-                                    // A directory replaced by a file: a directory
-                                    // entry carries no size of its own, so the
-                                    // whole base subtree has to be subtracted by
-                                    // the deletion frame while the file is added.
+                                    // Directory → file: a directory entry carries no
+                                    // size, so the deletion frame subtracts the subtree.
                                     (true, false) => {
                                         next.push(DiffFrame {
                                             base_fs_id: stored_dir(&base_entry.id),
@@ -1101,7 +1018,6 @@ impl SyncService {
                         }
                     }
 
-                    // Entries the new tree no longer has were deleted.
                     for base_entry in &base_dir.dirents {
                         if matched.contains(base_entry.name.as_str()) {
                             continue;
@@ -1125,9 +1041,7 @@ impl SyncService {
                         crate::fs::core::read_fs_file_data_batch(&self.repos, repo_id, &file_ids)
                             .await?;
 
-                    // Deduplicate block ids across all files in this level and
-                    // check them once, instead of re-checking shared blocks per
-                    // file.
+                    // Deduplicate block ids across this level's files, checking each once.
                     let unique_ids: Vec<String> = {
                         let mut seen = std::collections::HashSet::new();
                         file_map
@@ -1150,8 +1064,6 @@ impl SyncService {
                                     async move { !store.has_block(repo_id, &id).await }
                                 })
                                 .collect();
-                            // Each future yields `true` when the block is
-                            // missing (`!has_block`), so collect those ids.
                             let missing_flags: Vec<bool> = futures::future::join_all(futures).await;
                             for (id, missing) in chunk.iter().zip(missing_flags) {
                                 if missing {
@@ -1164,12 +1076,9 @@ impl SyncService {
 
                     for (fs_id, path) in &pending_files {
                         let Some(file_data) = file_map.get(fs_id) else {
-                            // `EMPTY_SHA1` is a zero-byte file's id and has no
-                            // object. Every other id here was added or changed by
-                            // this upload (see the arms that push into
-                            // `pending_files`), so a missing object means the
-                            // upload did not land: reject it the same way a
-                            // missing block is rejected, and the client re-sends.
+                            // `EMPTY_SHA1` is a zero-byte file's id and has no object. Every
+                            // other id was added or changed by this upload, so a missing
+                            // object means it did not land: reject with 446.
                             if fs_id != EMPTY_SHA1 {
                                 tracing::warn!(
                                     "sync: upload for {repo_id} references a missing file object at \
@@ -1211,8 +1120,7 @@ impl SyncService {
             path: String,
         }
 
-        // Level frontier: each level fetches all its fs_objects with one
-        // batched IN query (O(#objects) → O(depth)).
+        // Level frontier: each level fetches all its fs_objects in one batched IN.
         let mut frontier: Vec<Frame> = vec![Frame {
             fs_id: root_id.to_string(),
             path: String::new(),
@@ -1238,14 +1146,10 @@ impl SyncService {
 
             for frame in &frontier {
                 let Some(obj) = obj_map.get(&frame.fs_id) else {
-                    // `EMPTY_SHA1` frames never reach the map: they are the
-                    // empty-directory / zero-byte-file sentinel, not objects.
-                    // Anything else the tree references has to exist, because
-                    // this walk has no base to compare against: the whole tree
-                    // came with this upload (the repository had no HEAD, or the
-                    // commit's parent is the sentinel). A hole here would leave
-                    // every client with a tree it cannot check out, so the
-                    // upload is rejected with 446 and the client re-sends.
+                    // `EMPTY_SHA1` frames never reach the map: they are the empty-dir /
+                    // zero-byte-file sentinel, not objects. Anything else the tree
+                    // references must exist (no base here), so a hole is rejected with
+                    // 446 and the client re-sends.
                     if frame.fs_id != EMPTY_SHA1 {
                         tracing::warn!(
                             "sync: first upload for {repo_id} references a missing object at {} \
@@ -1331,14 +1235,12 @@ impl SyncService {
             .await?
             .ok_or_else(|| AppError::Internal("commit not found".into()))?;
 
-        // Root validation must happen here, not at `PUT /commit/{id}`:
-        // seaf-daemon uploads the commit object *before* the FS objects it
-        // references (daemon/http-tx-mgr.c: send_commit_object → recv-fs →
-        // blocks → update_branch), so rejecting a dangling root at commit-write
-        // time would break every official client. By the time the branch is
-        // advanced the objects are on the server, so a dangling root is either
-        // corruption or an attack. Missing → 446 (client re-syncs), wrong type
-        // → 400.
+        // Root validation must happen here, not at `PUT /commit/{id}`: seaf-daemon
+        // uploads the commit object *before* the FS objects it references
+        // (daemon/http-tx-mgr.c: send_commit_object → recv-fs → blocks →
+        // update_branch), so rejecting a dangling root at commit-write time would
+        // break every official client. By now a dangling root is corruption or an
+        // attack: 446 when missing, 400 on a wrong type.
         if new_commit.root_id != EMPTY_SHA1 {
             match self
                 .repos
@@ -1388,9 +1290,8 @@ impl SyncService {
         )
         .await?;
 
-        // Parent existence is already known from the single `find_commit`
-        // above (a real parent yields a `base_root_id`; the null commit
-        // yields `None` by the `!= EMPTY_SHA1` guard).
+        // Parent existence is known from the `find_commit` above: a real parent
+        // yields a `base_root_id`, the sentinel yields `None`.
         if let Some(parent_id) = new_commit.parent_id.as_deref()
             && parent_id != EMPTY_SHA1
             && base_root_id.is_none()
@@ -1403,16 +1304,14 @@ impl SyncService {
         loop {
             attempt += 1;
 
-            // Fetch the repo once per CAS attempt: the HEAD value gates the
-            // compare-and-swap and is reused by the merge and by the batch
-            // activity logging below (no per-change repo lookup).
+            // Fetch the repo once per CAS attempt: the HEAD value gates the swap
+            // and is reused by the merge and by the activity logging below.
             let repo_model = self
                 .find_repo(repo_id)
                 .await?
                 .ok_or_else(|| AppError::Internal("repo not found".into()))?;
-            // A stored `EMPTY_SHA1` means "no HEAD": nanofile leaves
-            // `head_commit_id` NULL until the first upload, while
-            // `get_head_commit` reports the sentinel to clients.
+            // A stored `EMPTY_SHA1` means "no HEAD": `head_commit_id` stays NULL
+            // until the first upload, while `get_head_commit` reports the sentinel.
             let current_head = repo_model
                 .head_commit_id
                 .clone()
@@ -1420,18 +1319,16 @@ impl SyncService {
             let repo_name = repo_model.name.clone();
 
             if current_head.as_deref() == Some(new_head) {
-                // The branch already points at this commit: a retried upload,
-                // not a conflict.
+                // The branch already points here: a retried upload, not a conflict.
                 events::publish_repo_update(repo_id, new_head.to_string());
                 return Ok(true);
             }
 
             // Upstream compares the uploaded commit's *parent* with HEAD
-            // (`base->commit_id` vs `current_head->commit_id`). A library
-            // without a HEAD has no base at all, which upstream cannot reach
-            // (it creates a "Created library" commit) but nanofile can: the
-            // client's first upload carries the `EMPTY_SHA1` sentinel as parent
-            // and has to be accepted as a fast-forward.
+            // (`base->commit_id` vs `current_head->commit_id`). A library without a
+            // HEAD has no base upstream can reach (it creates a "Created library"
+            // commit), but nanofile's first upload carries the `EMPTY_SHA1` parent
+            // and must be accepted as a fast-forward.
             let parent_matches_head = matches!(
                 (&new_commit.parent_id, &current_head),
                 (Some(parent), Some(head)) if parent == head
@@ -1467,12 +1364,9 @@ impl SyncService {
                 .test_and_update_head_commit(repo_id, current_head.as_deref(), &target_head)
                 .await?
             {
-                // Another writer advanced HEAD between the read above and the
-                // swap (a merge can also lose a second race): re-read and, for
-                // a merge, re-merge against the new HEAD — upstream's
-                // `goto retry`. After `MAX_BRANCH_RETRY` retries upstream
-                // reports a server error, and so do we: its only 409 is a GC
-                // conflict, and GC-conflict tracking is disabled on SQLite.
+                // Another writer advanced HEAD between the read above and the swap
+                // (a merge can lose a second race too): re-read and, for a merge,
+                // re-merge — upstream's `goto retry`. Its only 409 is a GC conflict.
                 if attempt > MAX_BRANCH_RETRY {
                     return Err(AppError::Internal(format!(
                         "repository {repo_id} HEAD was updated concurrently more than \
@@ -1487,12 +1381,9 @@ impl SyncService {
 
             crate::fs::core::adjust_repo_size(&self.repos, repo_id, delta).await?;
 
-            // Activity logging and reindexing describe what *this* commit
-            // introduced: for a fast-forward that is the client's diff against
-            // its own base, for a merge it is the merged tree against the HEAD
-            // the client's changes were merged with. The head side's own
-            // history was already recorded when it landed, so diffing against
-            // `base_root_id` in the merge case would double-report it.
+            // Activity logging and reindexing describe what *this* commit introduced:
+            // for a fast-forward the client's diff against its own base, for a merge
+            // the merged tree against the HEAD, so the head side is not re-reported.
             let changes = tree_diff::diff_trees(
                 &self.repos,
                 repo_id,
@@ -1505,12 +1396,9 @@ impl SyncService {
             let is_reverted =
                 commit_desc.starts_with("Reverted") || commit_desc.starts_with("Recovered");
 
-            // A merge that kept a path one side had deleted (`kept_deleted`)
-            // puts back paths the merged-with HEAD no longer had. Those rows
-            // must not read as a device saving a file there. The paths in
-            // question are exactly the ones the head side removed relative to
-            // the uploading client's base, i.e. the deletes of `diff(base,
-            // head)` — computed only in that rare case.
+            // A merge that kept a path one side had deleted (`kept_deleted`) puts back
+            // paths the merged-with HEAD no longer had; those rows must not read as a
+            // device saving a file there. They are the deletes of `diff(base, head)`.
             let kept_paths: Vec<(String, bool)> = if is_merge && merge_kept_deleted {
                 match (base_root_id.as_deref(), diff_base_root.as_deref()) {
                     (Some(base), Some(head)) => {
@@ -1541,9 +1429,8 @@ impl SyncService {
                 })
             };
 
-            // Collect activity items up-front so the batch write below
-            // runs one repo lookup (already done above) plus one query per
-            // (op_type, obj_type) group, instead of ~3 per change.
+            // Collect activity items up-front so the batch write below runs one
+            // repo lookup plus one query per (op_type, obj_type) group.
             let items: Vec<infra::activity_log::ActivityItem> = changes
                 .iter()
                 .filter_map(|c| {
@@ -1553,11 +1440,9 @@ impl SyncService {
                     }
 
                     // diff_trees keeps the old-path delete of a rename/move (the
-                    // indexer needs it to drop the old path) but marks it
-                    // superseded. seafevents reports a rename as a single
-                    // record, so skip the superseded delete. This runs before
-                    // the prefix filter so an excluded path can never leave the
-                    // delete behind without its rename.
+                    // indexer needs it) but marks it superseded. seafevents reports a
+                    // rename as one record, so skip it — before the prefix filter, so an
+                    // excluded path cannot leave the delete behind without its rename.
                     if c.superseded {
                         return None;
                     }
@@ -1595,11 +1480,9 @@ impl SyncService {
             }
 
             if let Some(indexer) = self.indexer.as_ref() {
-                // Reading a changed file's content is the index job's business,
-                // so the new paths go out as one scheduled batch rather than
-                // being read on this commit's time. Deletes stay here: they are
-                // cheap (no content is read) and leaving a deleted path
-                // searchable is the worse failure.
+                // Reading a changed file's content is the index job's business, so new
+                // paths go out as one scheduled batch. Deletes stay here: they are cheap
+                // and leaving a deleted path searchable is the worse failure.
                 let mut targets: Vec<crate::service::index::IndexTarget> = Vec::new();
                 for change in &changes {
                     if change.obj_type != "file" {
@@ -1622,11 +1505,9 @@ impl SyncService {
                 }
                 self.scheduler.schedule(repo_id, targets, "sync").await;
 
-                // A directory whose path changed stands for every file under it.
-                // `diff_trees` reports such a directory once (its contents are
-                // byte-identical, so it does not descend), which means the file
-                // loop above never sees those files — the subtree has to be
-                // scheduled explicitly.
+                // A directory whose path changed stands for every file under it, and
+                // `diff_trees` reports it once (its contents are byte-identical), so the
+                // subtree has to be scheduled explicitly.
                 for change in &changes {
                     if change.obj_type != "dir" {
                         continue;
@@ -1663,7 +1544,6 @@ impl SyncService {
     }
 }
 
-/// Response type for accessible repos.
 #[derive(serde::Serialize)]
 pub struct AccessibleRepo {
     pub repo_id: String,
@@ -1674,7 +1554,6 @@ pub struct AccessibleRepo {
     pub permission: String,
 }
 
-/// Result of a folder permission check.
 pub struct FolderPermResult {
     pub valid: bool,
     pub permission: String,

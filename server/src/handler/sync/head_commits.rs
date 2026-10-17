@@ -8,15 +8,13 @@ use base::error::AppError;
 /// Maximum number of repo ids accepted in one batch.
 const MAX_REPO_IDS: usize = 4096;
 
-/// POST `/seafhttp/repo/head-commits-multi/`
+/// POST `/seafhttp/repo/head-commits-multi/` — JSON array of repo ids in,
+/// `{repo_id: head_commit_id}` out. Raw body rather than the `Json` extractor, because
+/// the C sync client sends JSON without a `Content-Type` header.
 ///
-/// Accepts a JSON array of repo IDs and returns `{repo_id: head_commit_id}` map.
-/// Uses raw body (not `Json` extractor) because the C sync client sends JSON
-/// body without a `Content-Type` header.
-///
-/// This endpoint is intentionally unauthenticated (seaf-daemon calls it with
-/// no credentials, matching official seafile), so it validates its input
-/// strictly instead: every id must be a UUID and the array size is bounded.
+/// Intentionally unauthenticated (seaf-daemon calls it with no credentials, matching
+/// official seafile), so it validates strictly instead: every id must be a UUID and
+/// the array size is bounded.
 pub async fn head_commits_multi(
     State(state): State<Arc<AppState>>,
     body: axum::body::Body,

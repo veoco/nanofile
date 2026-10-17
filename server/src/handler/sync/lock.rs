@@ -20,7 +20,6 @@ pub struct LockResponse {
     pub success: bool,
 }
 
-/// Response entry for the batch locked-files endpoint.
 #[derive(Serialize)]
 pub struct LockedFileEntry {
     pub path: String,
@@ -28,7 +27,6 @@ pub struct LockedFileEntry {
     pub by_me: i32,
 }
 
-/// Request entry for the batch locked-files endpoint.
 #[derive(Deserialize)]
 pub struct LockedFilesReq {
     pub repo_id: String,
@@ -36,7 +34,6 @@ pub struct LockedFilesReq {
     pub ts: i64,
 }
 
-/// Response entry for the batch locked-files endpoint.
 #[derive(Serialize)]
 pub struct LockedFilesRes {
     pub repo_id: String,

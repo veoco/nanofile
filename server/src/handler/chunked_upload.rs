@@ -59,7 +59,6 @@ pub async fn update_blks_link(
     headers: HeaderMap,
     Query(query): Query<BlksLinkQuery>,
 ) -> Result<Json<String>, AppError> {
-    // Mints a block-upload token on a GET; see `repo_tokens` in `repos.rs`.
     crate::middleware::require_csrf_for_cookie_session(&headers, &state.csrf_secret)?;
 
     let parent_dir = query.p.as_deref().unwrap_or("/");
@@ -81,11 +80,10 @@ pub async fn update_blks_link(
 
 /// Refuse to hand out a block-upload URL for an encrypted library.
 ///
-/// The block API is id-addressed: the client names each block (`sha1` of the
-/// bytes it sends) and later commits by replaying that list, so the server
-/// cannot re-key the blocks to `sha1(ciphertext)` without breaking the commit
-/// the client is about to make. Refusing here keeps the refusal close to the
-/// cause instead of failing at the first block write.
+/// The block API is id-addressed: the client names each block (`sha1` of the bytes
+/// it sends) and later commits by replaying that list, so the server cannot re-key
+/// the blocks to `sha1(ciphertext)` without breaking that commit. Refusing here
+/// fails close to the cause instead of at the first block write.
 async fn ensure_not_encrypted(state: &AppState, repo_id: &str) -> Result<(), AppError> {
     if let Some(repo_model) = state.repos.repo.find_by_id(repo_id).await?
         && repo_model.encrypted != 0
@@ -97,9 +95,8 @@ async fn ensure_not_encrypted(state: &AppState, repo_id: &str) -> Result<(), App
     Ok(())
 }
 
-/// Build a block-upload URL on the Host-aware external base, so a LAN client
-/// that reached the server by address is not told to upload to loopback (the
-/// same rule download links use).
+/// Build a block-upload URL on the Host-aware external base, so a LAN client that
+/// reached the server by address is not told to upload to loopback.
 fn build_blks_op_url(state: &AppState, op: &str, token: &str, headers: &HeaderMap) -> String {
     let host = headers.get("host").and_then(|v| v.to_str().ok());
     let base = state.config().server.download_url_base(host);

@@ -17,14 +17,9 @@ use base::error::AppError;
 
 /// Acquire a permit covering one thumbnail generation.
 ///
-/// The gate itself lives beside the image worker ([`crate::sandbox::jobs::
-/// images::acquire_image_permit`]) so that every path which starts an image
-/// child — a file thumbnail, a media frame and an avatar — is paced by the same
-/// bound. A cache miss either decodes a large image or spawns an `ffmpeg` child
-/// that may read a 512 MiB media file, so a burst of requests for distinct files
-/// would otherwise start unbounded subprocesses and saturate CPU, memory and
-/// file descriptors. Callers queue rather than fail, preserving the behaviour of
-/// a normal burst.
+/// The gate is shared with the image worker so every path that starts an image child is paced by
+/// one bound: a cache miss decodes a large image or spawns an `ffmpeg` child that may read a
+/// 512 MiB file. Callers queue rather than fail, preserving the behaviour of a normal burst.
 async fn acquire_thumbnail_permit() -> Result<tokio::sync::OwnedSemaphorePermit, AppError> {
     crate::sandbox::jobs::images::acquire_image_permit()
         .await
@@ -34,9 +29,7 @@ async fn acquire_thumbnail_permit() -> Result<tokio::sync::OwnedSemaphorePermit,
 pub struct ThumbnailService {
     repos: Arc<Repositories>,
     block_store: infra::storage::DynBlockStorage,
-    /// Thumbnail cache directory (configurable).
     thumbnail_dir: Arc<PathBuf>,
-    /// Scratch directory for streaming video files before ffmpeg extracts a frame.
     temp_dir: Arc<PathBuf>,
     /// Path to the `ffmpeg` binary ("ffmpeg" by default).
     ffmpeg_path: Arc<String>,
@@ -61,20 +54,16 @@ impl ThumbnailService {
 
     /// Path to the repo-level thumbnail cache directory.
     ///
-    /// The directory name is `sha1(repo_id)` rather than the raw id: the cache
-    /// is keyed by a client-supplied identifier that must never be able to
-    /// escape `thumbnail_dir` via `..` or an absolute path. The
-    /// directory is a regenerable cache, so the naming scheme is internal.
+    /// The segment is `sha1(repo_id)`, never the raw id: that id is client-supplied and must not
+    /// escape `thumbnail_dir` via `..` or an absolute path.
     fn thumbnail_repo_dir(&self, repo_id: &str) -> PathBuf {
         self.thumbnail_dir.join(thumbnail_dir_name(repo_id))
     }
 
-    /// Deterministic on-disk filename for a thumbnail, matching seahub's
-    /// `generate_thumbnail_key()` approach but using MD5(repo_id + path)
-    /// instead of a bare path (avoids path-collision bugs).
+    /// Deterministic on-disk filename for a thumbnail.
     ///
-    /// The extension follows the container the bytes were encoded in, so the
-    /// cache directory is readable by an operator (and by `file`).
+    /// The extension follows the container the bytes were encoded in, so cache files stay
+    /// readable by an operator (and by `file`).
     fn thumbnail_file_path(&self, repo_id: &str, path: &str, size: u32, ext: &str) -> PathBuf {
         let hash = thumbnail_key(repo_id, path);
         self.thumbnail_repo_dir(repo_id)
@@ -83,9 +72,8 @@ impl ThumbnailService {
 
     /// Get or generate a thumbnail for a file.
     ///
-    /// Returns the thumbnail data, a strong ETag (SHA-1 of the bytes) so the
-    /// handler can serve `If-None-Match` conditional requests, and the
-    /// container the bytes are in so it can set `Content-Type`.
+    /// Returns the bytes, a strong ETag (SHA-1 of them) for `If-None-Match`, and the container so
+    /// the handler can set `Content-Type`.
     pub async fn get_thumbnail(
         &self,
         repo_id: &str,
@@ -100,7 +88,6 @@ impl ThumbnailService {
             format!("/{path}")
         };
 
-        // Verify path exists and is a file
         let repo_model = self
             .repos
             .repo
@@ -117,8 +104,7 @@ impl ThumbnailService {
             .await?
             .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-        // Resolve the file's fs_id and current mtime in one tree walk (the
-        // mtime comes from the final hop's parent dirent).
+        // Resolve fs_id and mtime in one tree walk; the mtime comes from the final hop's dirent.
         let (file_fs_id, current_mtime) =
             resolve_file_entry(&self.repos, repo_id, &head_commit.root_id, &normalized_path)
                 .await
@@ -145,12 +131,10 @@ impl ThumbnailService {
             .unwrap_or("file")
             .to_string();
 
-        // Parse the file object's block list once so both thumbnail sources
-        // (image bytes / ffmpeg stream) avoid re-resolving the path.
+        // Parse the block list once so neither thumbnail source re-resolves the path.
         let file_data: FsFileData = serde_json::from_str(&file_obj.data)
             .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
 
-        // ── Check if a valid cached thumbnail exists ──
         let existing = self
             .repos
             .thumbnail
@@ -158,12 +142,10 @@ impl ThumbnailService {
             .await?;
 
         if let Some(record) = existing {
-            // The container is part of the cache entry: a hit must not decode
-            // the bytes to work out its content type.
+            // The container is part of the cache entry: a hit must not decode to find its type.
             let format = ThumbFormat::from_db(&record.format);
             let thumbnail_path =
                 self.thumbnail_file_path(repo_id, &normalized_path, size, format.ext());
-            // Staleness check: if source file was modified after the thumbnail was created, regenerate
             if record.file_modified_at >= current_mtime && thumbnail_path.exists() {
                 let data = tokio::fs::read(&thumbnail_path)
                     .await
@@ -171,17 +153,14 @@ impl ThumbnailService {
                 let etag = etag_for(&data);
                 return Ok((data, etag, format));
             }
-            // Stale — fall through to regenerate
         }
 
-        // Every path below is expensive (decode or a child process). Queue on
-        // the global gate *after* the cache check so cached thumbnails stay
-        // free, and hold the permit until the result has been written.
+        // Everything below is expensive (a decode or a child process). Queue on the global gate
+        // after the cache check so cached hits stay free, and hold the permit until the write.
         let _permit = acquire_thumbnail_permit().await?;
 
-        // Supported sources are images (decoded in-process, or via ffmpeg for
-        // HEIC/HEIF/AVIF) and audio/video (a frame or embedded cover art
-        // extracted via ffmpeg). Anything else has no thumbnail.
+        // Images (in-process, or ffmpeg for HEIC/HEIF/AVIF) and audio/video (a frame or cover
+        // via ffmpeg) have thumbnails; anything else does not.
         let ext = std::path::Path::new(&file_name)
             .extension()
             .and_then(|e| e.to_str())
@@ -196,8 +175,7 @@ impl ThumbnailService {
         }
 
         let (thumbnail_data, format) = if is_image {
-            // Skip huge images and cap the in-memory read; decoding a truncated
-            // multi-hundred-MB image would waste CPU and memory for no benefit.
+            // Cap the in-memory read: decoding a multi-hundred-MB image wastes CPU and memory.
             const MAX_THUMBNAIL_SOURCE: i64 = 32 * 1024 * 1024;
             if file_data.size > MAX_THUMBNAIL_SOURCE {
                 return Err(AppError::NotFound("thumbnail not available".into()));
@@ -214,8 +192,7 @@ impl ThumbnailService {
             .await
             .map_err(|_| AppError::NotFound("thumbnail not available".into()))?;
 
-            // The decode, the resize and the encode all happen in the confined
-            // child: an image is the second thing here a hostile file can be.
+            // Decode, resize and encode all happen in the confined child: images are hostile input.
             tokio::task::spawn_blocking(move || images::thumbnail(&content, size))
                 .await
                 .map_err(|e| AppError::Internal(format!("thumbnail worker panicked: {e}")))?
@@ -232,17 +209,14 @@ impl ThumbnailService {
                 .await?
         };
 
-        // ── Store thumbnail for future requests ──
         let thumbnail_dir = self.thumbnail_repo_dir(repo_id);
         tokio::fs::create_dir_all(&thumbnail_dir).await?;
         let thumbnail_path =
             self.thumbnail_file_path(repo_id, &normalized_path, size, format.ext());
         let _ = tokio::fs::write(&thumbnail_path, &thumbnail_data).await;
 
-        // Drop a stale entry in the other container: a size cached before the
-        // encoding followed the pixels (or a file that changed from opaque to
-        // transparent) would otherwise leave an unreadable orphan behind, and
-        // `cleanup()` only runs on delete.
+        // Drop a stale entry in the other container, which would otherwise stay as an unreadable
+        // orphan until `cleanup()` runs on delete.
         for other in [ThumbFormat::Png, ThumbFormat::Jpeg] {
             if other != format {
                 let stale = self.thumbnail_file_path(repo_id, &normalized_path, size, other.ext());
@@ -250,7 +224,6 @@ impl ThumbnailService {
             }
         }
 
-        // ── Upsert database record (if stale, update; if new, insert) ──
         let now = chrono::Utc::now().timestamp();
         if let Some(_record) = self
             .repos
@@ -269,7 +242,7 @@ impl ThumbnailService {
                     now,
                 )
                 .await?;
-            // Delete old-naming disk file if it still exists (migration from old path scheme)
+            // Remove an old-scheme disk file (migration cleanup).
             let legacy_path = self
                 .thumbnail_dir
                 .join(thumbnail_dir_name(repo_id))
@@ -299,24 +272,18 @@ impl ThumbnailService {
 
     /// Generate a thumbnail for an audio/video file in the confined worker.
     ///
-    /// The file is streamed to a scratch file under `temp_dir` so the helper can
-    /// seek — a pipe cannot be seeked, and a container whose index is at the end
-    /// needs it. For video a frame is captured ~1s in (falling back to the first
-    /// frame); for audio the embedded cover art is extracted. The helper, the
-    /// decode of what it produced and the resize all run in the sandbox worker;
-    /// nothing of the media reaches this process. Returns `NotFound` when the
-    /// helper is unavailable or no frame/cover exists — the UI then falls back
-    /// to an extension badge / play icon.
+    /// The head of the file is streamed to a scratch file under `temp_dir` because the helper must
+    /// seek and a pipe cannot. For video a frame is captured ~1s in (falling back to the first
+    /// frame); for audio the embedded cover art is extracted. The helper, the decode of what it
+    /// produced and the resize all run in the sandbox worker; nothing of the media reaches this
+    /// process. Returns `NotFound` when the helper is unavailable or no frame/cover exists, so the
+    /// UI falls back to an extension badge / play icon.
     ///
-    /// Only the *head* of the file is streamed for an audio/video source: the
-    /// first frame and any embedded cover art sit at offset zero, and a
-    /// faststart container keeps its index there too, so a small prefix is all
-    /// ffmpeg needs (see [`media_head_cap`]). That keeps a multi-gigabyte upload
-    /// off disk and out of the read path. When that head misses a container
-    /// whose index is at the end (a non-faststart file), and the file fits the
-    /// per-kind cap, the whole file is fetched once as a fallback so those files
-    /// keep working. Images (HEIC/AVIF) are not streams, so they keep the
-    /// whole-file cap unchanged.
+    /// Only the *head* is streamed: a first frame, cover art and a faststart index all sit at
+    /// offset zero (see [`media_head_cap`]), which keeps a multi-gigabyte upload off disk. When the
+    /// head misses a container whose index is at the end and the file fits the per-kind cap, the
+    /// whole file is fetched once as a fallback. Images (HEIC/AVIF) are not streams, so they keep
+    /// the whole-file cap unchanged.
     async fn generate_media_thumbnail(
         &self,
         repo_id: &str,
@@ -329,9 +296,8 @@ impl ThumbnailService {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
 
-        // Images cannot be decoded from a truncated read, so they still need the
-        // whole file; a pathological >256 MiB image is refused — it could never
-        // be decoded from a prefix anyway.
+        // Images cannot decode from a truncated read, so they need the whole file; a >256 MiB
+        // image is refused, since it could never be decoded from a prefix anyway.
         if kind == MediaKind::Image && file_data.size > max_ffmpeg_source(kind) {
             return Err(AppError::NotFound("thumbnail not available".into()));
         }
@@ -339,8 +305,7 @@ impl ThumbnailService {
         let ffmpeg = crate::sandbox::worker::resolve_helper(self.ffmpeg_path.as_str());
         let file_size = file_data.size as u64;
 
-        // First try the head: a prefix is enough for the common faststart case
-        // and avoids reading a large file in full.
+        // Try the head first: a prefix is enough for the common faststart case.
         let head_cap = media_head_cap(kind);
         if let Some(source) = self
             .write_media_scratch(repo_id, normalized_path, &file_data.block_ids, head_cap)
@@ -351,8 +316,7 @@ impl ThumbnailService {
                     let _ = tokio::fs::remove_file(&source).await;
                     return Ok(ok);
                 }
-                // A panic is a worker failure, not an unthumbnailable file:
-                // propagate it rather than fall through to a 404 / a retry.
+                // A panic is a worker failure, not an unthumbnailable file: propagate it.
                 Err(AppError::Internal(e)) => {
                     let _ = tokio::fs::remove_file(&source).await;
                     return Err(AppError::Internal(e));
@@ -363,9 +327,8 @@ impl ThumbnailService {
             }
         }
 
-        // Fallback: only worth reading the rest when the file is within the cap.
-        // A file past it was refused above for images, and is left to fail for
-        // huge video/audio where reading the whole thing is the cost we avoid.
+        // Fallback: reading the rest is only worth it within the cap. A file past it failed above
+        // for images and is left to fail for huge video/audio, where the full read is the cost.
         let fallback = if kind != MediaKind::Image
             && file_size > head_cap
             && file_data.size <= max_ffmpeg_source(kind)
@@ -399,13 +362,10 @@ impl ThumbnailService {
         Err(AppError::NotFound("thumbnail not available".into()))
     }
 
-    /// Stream at most `cap` bytes of a file (by its block IDs) into a fresh,
-    /// unique scratch file and return its path.
+    /// Stream at most `cap` bytes of a file into a fresh, unique scratch file.
     ///
-    /// A prefix is all ffmpeg needs to extract a frame from a faststart
-    /// container, so capping the bytes here keeps large uploads from being read
-    /// in full. Returns `Ok(None)` on a write or stream error — nothing usable
-    /// was written — which the caller treats as an unthumbnailable file.
+    /// Returns `Ok(None)` on a write or stream error (nothing usable was written), which the
+    /// caller treats as an unthumbnailable file.
     async fn write_media_scratch(
         &self,
         repo_id: &str,
@@ -417,8 +377,7 @@ impl ThumbnailService {
         tokio::fs::create_dir_all(&scratch_dir)
             .await
             .map_err(|e| AppError::Internal(format!("create scratch dir failed: {e}")))?;
-        // Unique per request: a previous version shared this name across
-        // concurrent misses for the same path and truncated each other's stream.
+        // Unique per request, so concurrent misses for one path cannot truncate each other's stream.
         let scratch = scratch_dir.join(format!(
             "{}_{}_{}.bin",
             thumbnail_dir_name(repo_id),
@@ -461,12 +420,8 @@ impl ThumbnailService {
         }
     }
 
-    /// Hand a scratch file to the confined media worker and map its answer (a
-    /// decoded, resized thumbnail) onto the service's result type.
-    ///
-    /// The scratch is removed by the caller on either outcome; a worker that
-    /// panicked is exactly the case that used to leave the copy on disk, so the
-    /// caller removes it regardless of the answer.
+    /// Hand a scratch file to the confined media worker and map its answer onto the service's
+    /// result type. The caller removes the scratch on either outcome, including a worker panic.
     async fn run_media_thumbnail(
         kind: MediaKind,
         source: &Path,
@@ -483,8 +438,7 @@ impl ThumbnailService {
             .map_err(|_| AppError::NotFound("thumbnail not available".into()))
     }
 
-    /// Remove all cached thumbnails (disk + DB) for a given repo path.
-    /// Called when a file is deleted.
+    /// Remove all cached thumbnails (disk + DB) for a repo path; called when a file is deleted.
     pub async fn cleanup(&self, repo_id: &str, path: &str) {
         let normalized = if path.is_empty() || path == "/" {
             "/"
@@ -494,14 +448,12 @@ impl ThumbnailService {
             return; // non-absolute paths shouldn't happen
         };
 
-        // 1. Delete DB records
         let _ = self
             .repos
             .thumbnail
             .delete_by_path(repo_id, normalized)
             .await;
 
-        // 2. Delete disk files by enumerating the repo thumbnail dir
         let dir = self.thumbnail_repo_dir(repo_id);
         let prefix = thumbnail_key(repo_id, normalized);
         if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
@@ -516,19 +468,13 @@ impl ThumbnailService {
     }
 }
 
-// ─── One-shot legacy-size purge ───────────────────────────────────────────
-
-/// Marker file recording that the legacy-size purge has run for the current set
-/// of retained sizes. Its presence is what makes the purge one-shot rather than
-/// a startup cost on every boot; deleting it re-arms the purge.
+/// Marker file recording that the legacy-size purge has run for the current retained sizes.
 ///
-/// The name carries the size set (`.legacy_sizes_purged_48_640`) on purpose:
-/// when a future UI changes the sizes it requests, every entry at the previous
-/// size becomes unreachable, and a new marker name makes the purge run again by
-/// itself instead of leaving those files behind as permanent dead weight. (The
-/// database rows need a new migration for the same reason — a migration is
-/// frozen once it has shipped — which is what
-/// `m20260918_000002_purge_legacy_thumbnail_sizes` is.)
+/// Its presence makes the purge one-shot; deleting it re-arms it. The name carries the size set
+/// (`.legacy_sizes_purged_48_640`) on purpose: when a UI change drops a size, a new marker name
+/// re-runs the purge by itself instead of leaving those files as permanent dead weight. (The
+/// database rows need a new migration for the same reason — a migration is frozen once shipped —
+/// which is `m20260918_000002_purge_legacy_thumbnail_sizes`.)
 pub fn legacy_purge_marker() -> String {
     let sizes: Vec<String> = crate::thumbnail_util::RETAINED_THUMBNAIL_SIZES
         .iter()
@@ -545,9 +491,8 @@ pub struct ThumbnailCachePurge {
     pub files_removed: u64,
     pub bytes_freed: u64,
     pub dirs_removed: u64,
-    /// Files whose name carries no trailing size. Left alone: nothing can
-    /// reference them, but guessing at a cache file's meaning is worse than
-    /// leaving the bytes for an operator to look at.
+    /// Files whose name carries no trailing size: nothing can reference them, so leave them for an
+    /// operator rather than guess at their meaning.
     pub unrecognized: u64,
 }
 
@@ -573,26 +518,19 @@ impl ThumbnailCachePurge {
 
 /// Remove the media-thumbnail scratch files an earlier run left behind.
 ///
-/// Every request that streams a media file writes one scratch file under
-/// `{temp_dir}/media_thumbs/` and removes it when it is done. A server that was
-/// killed mid-request cannot: a tray quit ends the process with
-/// `std::process::exit`, which runs no destructor, and a media child that the
-/// job terminated may still hold the file open when the removal is attempted, in
-/// which case Windows refuses the delete and the file stays. Nothing else sweeps
-/// this directory, so it is swept here — once at startup, where the temporary
-/// directory is known, exactly as `{temp_dir}/upload/` is.
-///
-/// Only files at the top level are removed, and a file that cannot be removed is
-/// left rather than failing the sweep: a leftover scratch file costs disk, and
-/// the request that is about to write one does not need this to succeed first.
+/// Every request writes one under `{temp_dir}/media_thumbs/` and removes it when done, but a tray
+/// quit ends the process via `std::process::exit`, which runs no destructor, and a terminated child
+/// may still hold the file open on Windows, where the delete then fails. Nothing else sweeps the
+/// directory, so it is swept once at startup, like `{temp_dir}/upload/`. Only top-level files are
+/// removed and a failure is ignored: a leftover costs disk, and the request about to write one does
+/// not need this to succeed first.
 pub async fn purge_media_scratch(temp_dir: &Path) -> usize {
     let directory = temp_dir.join("media_thumbs");
     let Ok(mut entries) = tokio::fs::read_dir(&directory).await else {
         return 0;
     };
     let mut removed = 0;
-    // A `read_dir` error mid-walk (a directory removed under us, a permission
-    // that changed) ends the sweep with what was removed so far.
+    // A `read_dir` error mid-walk (a removed directory, a changed permission) ends the sweep.
     while let Ok(Some(entry)) = entries.next_entry().await {
         if tokio::fs::remove_file(entry.path()).await.is_ok() {
             removed += 1;
@@ -603,23 +541,17 @@ pub async fn purge_media_scratch(temp_dir: &Path) -> usize {
 
 /// Delete thumbnail cache files for sizes the UI no longer requests.
 ///
-/// The database half of this lives in the `purge_legacy_thumbnail_sizes`
-/// migration; the file half cannot, because a schema migration has no access to
-/// the configured cache directory. So the rows go during the upgrade and the
-/// bytes go here, on the first start of the new binary.
+/// The database half lives in the `purge_legacy_thumbnail_sizes` migration; the file half cannot,
+/// because a migration has no access to the configured cache directory.
 ///
-/// Guarded by a marker named after the retained sizes (see
-/// [`legacy_purge_marker`]), written only after a pass completes, so a server
-/// that restarts does not walk the cache again — and a pass interrupted halfway
-/// (crash, SIGKILL, disk full) simply finishes on the next start, since deleting
-/// an already-deleted file is a no-op. The marker lives in the cache directory
-/// itself, so pointing a server at a different cache directory re-runs the purge
-/// there, which is what you want.
+/// A marker named after the retained sizes (see [`legacy_purge_marker`]) makes it one-shot and is
+/// written only after a pass completes, so a restart does not walk the cache again and an
+/// interrupted pass finishes on the next start (deleting a deleted file is a no-op). The marker
+/// lives in the cache directory itself, so a different cache directory re-runs the purge there.
 ///
-/// Only the layout of `thumbnail_dir` is assumed: one directory per repo (the
-/// directory name is a hash, so it is not decoded), each holding
-/// `…_<size>.<ext>` entries. Deeper levels are never descended into, and a file
-/// that does not end in `_<size>` is counted and skipped.
+/// Only this layout is assumed: one directory per repo (the name is a hash, so it is not decoded),
+/// each holding `…_<size>.<ext>` entries. Deeper levels are not descended into, and a file that does
+/// not end in `_<size>` is counted and skipped.
 pub async fn purge_legacy_cache_files(
     thumbnail_dir: &Path,
 ) -> Result<ThumbnailCachePurge, AppError> {
@@ -663,8 +595,8 @@ pub async fn purge_legacy_cache_files(
                     report.files_removed += 1;
                     report.bytes_freed += bytes;
                 }
-                // Report it and keep going: one locked file must not stop the
-                // sweep. It is still counted as kept, so its directory stays.
+                // Report it and keep going: one locked file must not stop the sweep, and it counts
+                // as kept so its directory stays.
                 Err(e) => {
                     tracing::warn!(
                         file = %file.path().display(),
@@ -683,20 +615,16 @@ pub async fn purge_legacy_cache_files(
     Ok(report)
 }
 
-/// Size encoded in a cache file name: `…_<size>.<ext>`, which covers both the
-/// hashed scheme (`thumb_<hash>_640.jpg`) and the pre-hash one
-/// (`Field_Photos_pine_256.png`). `None` when the name carries no trailing size.
+/// Size encoded in a cache file name: `…_<size>.<ext>`, covering both the hashed scheme
+/// (`thumb_<hash>_640.jpg`) and the pre-hash one (`Field_Photos_pine_256.png`).
 fn cache_file_size(name: &str) -> Option<u32> {
     let stem = name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(name);
     stem.rsplit_once('_')
         .and_then(|(_, size)| size.parse::<u32>().ok())
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────
-
-/// Source-file size cap for ffmpeg thumbnails. Still images (HEIC/AVIF photos)
-/// are capped tighter than video/audio — decoding a huge image needs lots of
-/// memory for little benefit, and phone photos are typically a few MB.
+/// Source-file size cap for ffmpeg thumbnails. Still images (HEIC/AVIF) are capped tighter than
+/// video/audio: decoding a huge image needs much memory for little benefit.
 fn max_ffmpeg_source(kind: MediaKind) -> i64 {
     match kind {
         MediaKind::Image => 256 * 1024 * 1024,
@@ -704,17 +632,12 @@ fn max_ffmpeg_source(kind: MediaKind) -> i64 {
     }
 }
 
-/// How much of a video/audio file is streamed to the scratch file for a frame.
-///
-/// A frame and an embedded cover art both sit at the start of the file, so this
-/// prefix is enough for the common (faststart) case; a container whose index is
-/// at the end falls back to the full file only when it fits [`max_ffmpeg_source`].
-/// `Image` (HEIC/AVIF) is not a stream, so a truncated read cannot decode it and
-/// it keeps the whole-file cap.
+/// How much of a video/audio file is streamed to the scratch file for a frame: a frame and any
+/// embedded cover art sit at the start, so this prefix covers the common (faststart) case. A
+/// container whose index is at the end falls back to the full file only when it fits
+/// [`max_ffmpeg_source`]. `Image` (HEIC/AVIF) is not a stream and keeps the whole-file cap.
 const MEDIA_HEAD_BYTES: u64 = 32 * 1024 * 1024;
 
-/// The head of a media file handed to ffmpeg: a small prefix for video/audio,
-/// the whole-file cap for images (which cannot be decoded from a truncate).
 fn media_head_cap(kind: MediaKind) -> u64 {
     match kind {
         MediaKind::Image => max_ffmpeg_source(kind) as u64,
@@ -724,14 +647,13 @@ fn media_head_cap(kind: MediaKind) -> u64 {
 
 /// Whether the configured ffmpeg binary looks runnable.
 ///
-/// A filesystem check rather than running `ffmpeg -version` in the server
-/// process: that was an unconfined exec on the request path, and everything a
-/// helper reads belongs behind the sandbox. Whether the binary actually *works*
-/// is what the confined media probe answers (`parse=media-ok`), which is also
-/// what the request path gates on through `sandbox::available`.
+/// A filesystem check, not `ffmpeg -version` in the server process: that would be an unconfined exec
+/// on the request path, and everything a helper reads belongs behind the sandbox. Whether the
+/// binary actually *works* is what the confined media probe answers (`parse=media-ok`), which the
+/// request path gates on through `sandbox::available`.
 ///
-/// Not cached: saving `storage.ffmpeg_path` re-points the setting, and a
-/// process-lifetime answer would keep reporting the previous path.
+/// Not cached: saving `storage.ffmpeg_path` re-points the setting, so a process-lifetime answer
+/// would keep reporting the previous path.
 fn ffmpeg_available(ffmpeg: &str) -> bool {
     let path = crate::sandbox::worker::resolve_helper(ffmpeg);
     if !path.is_file() {
@@ -750,26 +672,23 @@ fn ffmpeg_available(ffmpeg: &str) -> bool {
     }
 }
 
-/// Strong ETag for a thumbnail: SHA-1 of the PNG bytes, so the validator
-/// always reflects exactly what was served (even when the staleness check
-/// mistakenly returns a cached image).
+/// Strong ETag for a thumbnail: SHA-1 of the bytes served, so the validator always reflects exactly
+/// what went out (even when a stale cached entry was served by mistake).
 fn etag_for(data: &[u8]) -> String {
     format!("\"{}\"", infra::crypto::fs_id::sha1_hex(data))
 }
 
 /// Filesystem-safe directory name for a repo's thumbnail cache.
 ///
-/// `repo_id` is a client-supplied identifier, so it must never be used as a
-/// path segment directly: a value such as `../../x` or `/etc/cron.d/y` would
-/// resolve outside `thumbnail_dir`. Hashing it keeps the mapping stable
-/// and collision-free while removing all path semantics.
+/// `repo_id` is client-supplied, so it must never be a path segment: a value such as `../../x` or
+/// `/etc/cron.d/y` would resolve outside `thumbnail_dir`. Hashing keeps the mapping stable and
+/// collision-free while removing all path semantics.
 fn thumbnail_dir_name(repo_id: &str) -> String {
     infra::crypto::fs_id::sha1_hex(repo_id.as_bytes())
 }
 
-/// Build a deterministic, collision-free filename prefix for a thumbnail.
-/// Uses SHA256(repo_id + path) — matching seahub's `generate_thumbnail_key()` approach
-/// but with SHA-256 instead of MD5 (seahub uses MD5, but SHA-256 is already a dependency).
+/// Deterministic, collision-free filename prefix for a thumbnail: SHA-256(repo_id + path), matching
+/// seahub's `generate_thumbnail_key()` but with SHA-256 (already a dependency) instead of MD5.
 fn thumbnail_key(repo_id: &str, path: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(repo_id.as_bytes());
@@ -779,8 +698,7 @@ fn thumbnail_key(repo_id: &str, path: &str) -> String {
     format!("thumb_{}", &hash[..32])
 }
 
-/// Old path-normalization function kept only for migration cleanup.
-/// Replaced by `thumbnail_key()` which avoids path collisions.
+/// Old path-normalization helper kept only for migration cleanup; `thumbnail_key()` replaced it.
 fn normalize_path_for_file(path: &str) -> String {
     path.trim_matches('/').replace('/', "_")
 }
@@ -789,9 +707,6 @@ fn normalize_path_for_file(path: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Extract a frame from a synthetic ffmpeg-generated video and verify the
-    /// output is a decodable PNG that the shared thumbnail fitter accepts.
-    /// Skips silently when ffmpeg isn't installed on the host (CI installs it).
     #[test]
     fn extract_video_frame_writes_png() {
         if !ffmpeg_available("ffmpeg") {
@@ -810,7 +725,6 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("test.mp4");
 
-        // Generate a small synthetic video (2s of test pattern).
         let status = Command::new("ffmpeg")
             .arg("-y")
             .arg("-loglevel")
@@ -839,8 +753,6 @@ mod tests {
         assert!(!thumb.is_empty());
     }
 
-    /// Build an m4a with embedded cover art and verify `extract_media_frame`
-    /// (Audio) pulls the cover out as a decodable PNG. Skips without ffmpeg.
     #[test]
     fn extract_audio_cover_writes_png() {
         if !ffmpeg_available("ffmpeg") {
@@ -859,7 +771,6 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("cover.m4a");
 
-        // 1s sine tone as audio + a 1-frame pattern as attached cover art.
         let status = Command::new("ffmpeg")
             .arg("-y")
             .arg("-loglevel")
@@ -901,9 +812,6 @@ mod tests {
         assert!(!thumb.is_empty());
     }
 
-    /// Decode a still image (HEIC/HEIF/AVIF path) via `extract_media_frame` and
-    /// verify the output is a decodable PNG the shared fitter accepts.
-    /// Skips silently when ffmpeg isn't installed on the host.
     #[test]
     fn extract_image_writes_png() {
         if !ffmpeg_available("ffmpeg") {
@@ -922,7 +830,6 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("test.jpg");
 
-        // Generate a single static test frame.
         let status = Command::new("ffmpeg")
             .arg("-y")
             .arg("-loglevel")
@@ -951,8 +858,6 @@ mod tests {
         assert!(!thumb.is_empty());
     }
 
-    /// Encode a synthetic TIFF in-process and verify the in-process thumbnail
-    /// path (image crate + shared fitter) accepts it.
     #[test]
     fn tiff_in_process_thumbnail() {
         let mut img = image::RgbaImage::new(64, 64);
@@ -969,8 +874,8 @@ mod tests {
         assert!(!thumb.is_empty());
     }
 
-    /// The extension classification is the single source of truth for which
-    /// format takes which thumbnail path.
+    /// The extension classification is the single source of truth for which format takes which
+    /// thumbnail path.
     #[test]
     fn extension_classification() {
         use crate::thumbnail_util::{
@@ -1002,9 +907,8 @@ mod concurrency_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// The gate is process-global (`thumbnail_service()` builds a fresh service
-    /// per request), so permits acquired from unrelated call sites must still
-    /// share one cap.
+    /// The gate is process-global (`thumbnail_service()` builds a fresh service per request), so
+    /// permits acquired from unrelated call sites must still share one cap.
     #[tokio::test]
     async fn concurrent_generations_are_capped() {
         let in_flight = Arc::new(AtomicUsize::new(0));
@@ -1041,8 +945,8 @@ mod purge_tests {
     };
     use std::path::Path;
 
-    /// Both naming schemes (hashed and pre-hash) end in `_<size>.<ext>`; a name
-    /// that carries no trailing size is reported so the purge can skip it.
+    /// Both naming schemes end in `_<size>.<ext>`; a name carrying no trailing size is reported so
+    /// the purge can skip it.
     #[test]
     fn cache_file_size_reads_both_naming_schemes() {
         assert_eq!(
@@ -1057,8 +961,8 @@ mod purge_tests {
         assert_eq!(cache_file_size(&legacy_purge_marker()), None);
     }
 
-    /// The marker names the retained size set, so changing that set re-arms the
-    /// purge without anyone having to remember to bump a version.
+    /// The marker names the retained size set, so changing that set re-arms the purge without a
+    /// version bump.
     #[test]
     fn marker_names_the_retained_sizes() {
         assert_eq!(legacy_purge_marker(), ".legacy_sizes_purged_48_640");
@@ -1080,9 +984,6 @@ mod purge_tests {
         v
     }
 
-    /// The purge removes exactly the unreachable sizes, keeps the retained
-    /// ones, never recurses below the per-repo directory, leaves names it
-    /// cannot parse alone, drops a directory it emptied, and does not run twice.
     #[tokio::test]
     async fn purge_removes_only_unreachable_sizes_and_runs_once() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1127,7 +1028,7 @@ mod purge_tests {
         );
         assert!(root.join(legacy_purge_marker()).exists());
 
-        // Second start: the marker short-circuits, even with a new stale file.
+        // The marker short-circuits even with a new stale file present.
         write(&repo_a, "thumb_eee_256.png", 30);
         let again = purge_legacy_cache_files(root).await.unwrap();
         assert!(!again.ran, "the marker makes this a one-shot");
@@ -1135,9 +1036,8 @@ mod purge_tests {
         assert!(repo_a.join("thumb_eee_256.png").exists());
     }
 
-    /// A stale file that cannot be removed (a directory in its place, for
-    /// instance) keeps its repo directory alive and is counted as kept, but does
-    /// not abort the sweep.
+    /// A stale file that cannot be removed keeps its repo directory alive and is counted as kept,
+    /// but does not abort the sweep.
     #[tokio::test]
     async fn an_unremovable_entry_does_not_abort_the_sweep() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1159,9 +1059,6 @@ mod purge_tests {
         assert!(repo.join("thumb_x_256.png").is_dir());
     }
 
-    /// A server that was killed mid-request leaves its media scratch file behind,
-    /// and the next start removes it: the request path deletes its own, and a
-    /// process that never ran its destructors does not.
     #[tokio::test]
     async fn the_media_scratch_of_a_previous_run_is_swept_and_the_rest_left_alone() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1170,8 +1067,8 @@ mod purge_tests {
         std::fs::create_dir_all(&scratch).unwrap();
         std::fs::write(scratch.join("repo-a_key_1.bin"), b"leftover").unwrap();
         std::fs::write(scratch.join("repo-b_key_2.bin"), b"leftover").unwrap();
-        // A directory is not a scratch file, and the sibling of the scratch
-        // directory is not this sweep's business.
+        // A directory is not a scratch file, and the sibling of the scratch directory is not this
+        // sweep's business.
         std::fs::create_dir_all(scratch.join("not-a-file")).unwrap();
         std::fs::create_dir_all(root.join("upload")).unwrap();
         std::fs::write(root.join("upload").join("staged"), b"staged").unwrap();
@@ -1182,8 +1079,7 @@ mod purge_tests {
         assert!(scratch.join("not-a-file").is_dir());
         assert!(root.join("upload").join("staged").exists());
 
-        // A host with no scratch directory is not an error, and neither is a
-        // second sweep: there is nothing left to remove.
+        // A missing scratch directory is not an error, and neither is a second sweep.
         assert_eq!(purge_media_scratch(root).await, 0);
         assert_eq!(purge_media_scratch(&root.join("absent")).await, 0);
     }

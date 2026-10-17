@@ -11,10 +11,8 @@ pub mod thumbnail;
 
 /// Error for a failed parent-directory resolution on a write path.
 ///
-/// A missing component, or a component that is not a directory (a path "inside"
-/// a file), is the request's fault and must stay a 404; wrapping it into
-/// `Internal` would answer 500 for a client mistake. Anything else — a database
-/// failure, say — keeps its context and is reported as internal.
+/// A missing or non-directory component is the request's fault and must stay a
+/// 404; anything else, a database failure say, is reported as internal.
 pub(crate) fn resolve_parent_error(
     e: base::error::AppError,
     context: &str,

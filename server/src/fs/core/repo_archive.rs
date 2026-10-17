@@ -1,40 +1,27 @@
 //! Archive of a deleted library's content while it sits in the trash.
 //!
-//! Deleting a library removes its `repos` row, and `commits` /
-//! `fs_objects` cascade with it. The block files survive on disk — garbage
-//! collection deliberately keeps the block directory of a library that is still
-//! listed in `deleted_repos` — but without the commit graph and the FS objects
-//! nothing can enumerate them, so restoring a library used to rebuild an empty
-//! one.
+//! Deleting a library removes its `repos` row, and `commits` / `fs_objects`
+//! cascade with it. The block files survive on disk (GC keeps the block
+//! directory of a library still listed in `deleted_repos`), but without the
+//! commit graph nothing can enumerate them. [`copy_to`] copies the content into
+//! `deleted_repo_commits` / `deleted_repo_fs_objects`, [`copy_from`] puts it
+//! back on restore, and [`drop_archive`] discards it on purge.
 //!
-//! [`copy_to`] copies that content into `deleted_repo_commits` /
-//! `deleted_repo_fs_objects`, [`copy_from`] puts it back when the library is
-//! restored, and [`drop_archive`] discards it when the trash entry is purged.
-//! `copy_to` does **not** delete the live rows: the caller runs it inside the
-//! same transaction as the delete, so the archive and the library cannot
-//! diverge. `copy_from` likewise keeps the archive rows, which makes a
-//! restored-then-crashed library resumable; the caller drops them once the
-//! restore has fully succeeded.
-//!
-//! This mirrors the official server, which renames a deleted library's
-//! `storage/commits/<repo_id>` and `storage/fs/<repo_id>` into
-//! `seafile-data/deleted_store/` and keeps the library's blocks until its trash
-//! entry is cleared.
+//! `copy_to` keeps the live rows (the caller deletes them in the same
+//! transaction, so archive and library cannot diverge); `copy_from` keeps the
+//! archive rows so a crashed restore is resumable, and mirrors the official
+//! server's `deleted_store/` rename.
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait};
 
 use base::error::AppError;
 
-/// Archived columns, in the order the `INSERT ... SELECT` statements use. They
-/// mirror the `commit` and `fs_object` entities.
+/// Archived columns in `INSERT ... SELECT` order; they mirror the entities.
 const COMMIT_COLUMNS: &str = "id, repo_id, commit_id, root_id, parent_id, second_parent_id, \
      creator_name, creator, description, ctime, version, new_merge, conflict";
 const FS_OBJECT_COLUMNS: &str = "id, repo_id, fs_id, obj_type, data";
 
-/// Build the copy statement for one table.
-///
-/// Table names and column lists are compile-time constants; only the library id
-/// is bound as a parameter.
+/// Build the copy statement; table and column names are compile-time constants.
 fn copy_sql(from: &str, to: &str, columns: &str) -> String {
     format!(
         "INSERT OR REPLACE INTO {to} ({columns}) SELECT {columns} FROM {from} WHERE repo_id = $1"
@@ -57,11 +44,9 @@ async fn run<C: ConnectionTrait>(conn: &C, sql: String, repo_id: &str) -> Result
 }
 
 /// Copy the library's commits and FS objects into the archive.
-///
-/// Returns the number of rows copied. The library's previous archive, if any, is
-/// discarded first: a library that is deleted again after being restored must not
-/// keep archived objects that its current content no longer has, or restoring it
-/// a second time would resurrect pruned commits.
+/// Returns the number of rows copied. The previous archive is discarded first:
+/// re-archiving must not keep objects the current content no longer has, or a
+/// second restore would resurrect pruned commits.
 pub async fn copy_to<C: ConnectionTrait>(conn: &C, repo_id: &str) -> Result<u64, AppError> {
     drop_archive(conn, repo_id).await?;
     let mut copied = run(
@@ -81,8 +66,7 @@ pub async fn copy_to<C: ConnectionTrait>(conn: &C, repo_id: &str) -> Result<u64,
 
 /// Copy the archived commits and FS objects back into the live tables.
 ///
-/// Returns the number of rows restored. Idempotent, and it leaves the archive
-/// in place so a failed restore can be retried.
+/// Returns the number of rows restored; the archive stays so a retry works.
 pub async fn copy_from<C: ConnectionTrait>(conn: &C, repo_id: &str) -> Result<u64, AppError> {
     let mut restored = run(
         conn,
@@ -106,19 +90,11 @@ pub async fn drop_archive<C: ConnectionTrait>(conn: &C, repo_id: &str) -> Result
     Ok(removed)
 }
 
-/// Archive a library's content and delete the library's rows, in one
-/// transaction.
-///
-/// This is the delete half of the trash cycle. Copying the content and removing
-/// the rows together means a crash can never leave a library deleted with its
-/// content unarchived — which would strand its blocks with nothing to enumerate
-/// them.
-///
-/// The rows are deleted here rather than through the repositories so that the
-/// whole move is a single transaction; the caller only has to flush the cached
-/// sync tokens afterwards. Deleting the `repos` row also cascades into the
-/// library's shares, upload links, tags, metadata and WebDAV keys: a trashed
-/// library is reachable by none of them, and only the content is archived.
+/// Archive a library's content and delete its rows in one transaction.
+/// A crash cannot leave a library deleted with its content unarchived, and the
+/// `repos` delete cascades into shares, upload links, tags, metadata and WebDAV
+/// keys: a trashed library is reachable by none of them. Callers only have to
+/// flush the cached sync tokens afterwards.
 pub async fn archive_and_delete(db: &DatabaseConnection, repo_id: &str) -> Result<u64, AppError> {
     let txn = db.begin().await?;
     let archived = copy_to(&txn, repo_id).await?;
@@ -180,8 +156,7 @@ mod tests {
         .unwrap()
     }
 
-    /// Simulate the cascade: the library's live rows disappear, and the archive
-    /// brings them back unchanged.
+    /// The library's live rows disappear and the archive brings them back.
     #[tokio::test]
     async fn archived_content_survives_the_delete_and_comes_back() {
         let db = setup().await;
@@ -254,17 +229,15 @@ mod tests {
         assert_eq!(drop_archive(&db, "repo-1").await.unwrap(), 0);
     }
 
-    /// A library that is deleted, restored and deleted again must not keep an
-    /// archived object its current content no longer has: restoring it a second
-    /// time would otherwise resurrect a pruned commit whose blocks are gone.
+    /// Re-archiving must not keep an object the current content lost, or a second
+    /// restore would resurrect a pruned commit whose blocks are gone.
     #[tokio::test]
     async fn re_archiving_drops_objects_the_library_no_longer_has() {
         let db = setup().await;
         assert_eq!(copy_to(&db, "repo-1").await.unwrap(), 2);
         assert_eq!(count(&db, "deleted_repo_fs_objects").await, 1);
 
-        // The restored library lost its FS object (e.g. history pruning) and is
-        // deleted again.
+        // The restored library lost its FS object (e.g. history pruning).
         db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "DELETE FROM fs_objects WHERE repo_id = 'repo-1'",
@@ -277,8 +250,7 @@ mod tests {
         assert_eq!(count(&db, "deleted_repo_fs_objects").await, 0);
     }
 
-    /// A library never deleted has no archive, and other libraries' archives are
-    /// never touched.
+    /// A library never deleted has no archive, and other archives stay intact.
     #[tokio::test]
     async fn archive_is_scoped_to_one_library() {
         let db = setup().await;
@@ -303,8 +275,7 @@ mod tests {
         assert_eq!(count(&db, "deleted_repo_commits").await, 1);
     }
 
-    /// The delete path: the content is archived and the library's rows are gone
-    /// in the same transaction, so a restore can rebuild that library.
+    /// The content is archived and the library's rows are gone in one transaction.
     #[tokio::test]
     async fn archive_and_delete_removes_the_library_and_keeps_its_content() {
         let db = setup().await;
@@ -322,8 +293,7 @@ mod tests {
         assert_eq!(count(&db, "deleted_repo_commits").await, 1);
         assert_eq!(count(&db, "deleted_repo_fs_objects").await, 1);
 
-        // Restoring recreates the library row (as `restore_deleted_repo` does)
-        // and copies the content back.
+        // Restoring recreates the row (as `restore_deleted_repo` does).
         db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "INSERT INTO repos (id, name, description, owner_id, encrypted, enc_version, salt, \

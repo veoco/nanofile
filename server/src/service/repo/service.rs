@@ -11,8 +11,6 @@ use infra::activity_log;
 use infra::common::util::{format_size, timestamp_rfc3339};
 use infra::entity::{repo, user};
 
-// ── Response types ──────────────────────────────────────────────────────
-
 #[derive(Serialize)]
 pub struct RepoInfo {
     pub id: String,
@@ -46,13 +44,10 @@ pub struct RepoInfo {
     /// `pwd_hash` verifier of a Seafile 11+ library. Present only when the
     /// library uses one, in which case `magic` is **absent**.
     ///
-    /// These three fields are a superset of seahub's `GET /api2/repos/{id}/`
-    /// (which returns only `magic`/`random_key`/`salt`), but they are required
-    /// here: nanofile's `POST /api2/repos/` answers with this shape, and the
-    /// desktop client parses the create response with the same
-    /// `RepoDownloadInfo::fromDict()` it uses for `download-info` — it then
-    /// feeds `pwd_hash*` into the follow-up `cloneRepo()`, which fails with
-    /// "Bad magic" if the algorithm is missing.
+    /// These three are a superset of seahub's `GET /api2/repos/{id}/`, but required
+    /// here: `POST /api2/repos/` answers with this shape and the desktop client
+    /// parses it with `RepoDownloadInfo::fromDict()` before feeding `pwd_hash*` into
+    /// `cloneRepo()`, which fails with "Bad magic" without the algorithm.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pwd_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,20 +77,17 @@ pub struct DownloadInfoResponse {
     pub relay_addr: Option<String>,
     pub relay_port: Option<String>,
     pub enc_version: i32,
-    /// seahub's `repo_download_info()` sends `1` for an encrypted library and
-    /// the **empty string** otherwise, and the desktop client reads this field
-    /// with `QVariant::toInt()` (`requests.cpp:173`). A JSON string `"true"`
-    /// would therefore read back as `0` and every encrypted library would look
-    /// unencrypted at clone time, so the value must stay numeric-ish.
+    /// seahub's `repo_download_info()` sends `1` for an encrypted library and the
+    /// **empty string** otherwise, and the desktop client reads it with
+    /// `QVariant::toInt()`: a JSON string `"true"` would read back as `0` and look
+    /// unencrypted at clone time.
     pub encrypted: serde_json::Value,
     pub magic: Option<String>,
     pub random_key: Option<String>,
     pub repo_version: i32,
     pub salt: Option<String>,
-    /// `pwd_hash` verifier triple (see [`RepoInfo`]). seahub returns these from
-    /// `repo_download_info()` even when they are empty; the desktop client
-    /// copies the non-empty ones into the clone task's `more_info`, which is the
-    /// only place `clone-mgr.c` learns the algorithm from.
+    /// `pwd_hash` verifier triple (see [`RepoInfo`]). seahub returns these even when
+    /// empty; the desktop client copies the non-empty ones into `more_info`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pwd_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -132,18 +124,14 @@ pub struct V21RepoInfo {
     pub group_name: Option<String>,
 }
 
-// ── Service ─────────────────────────────────────────────────────────────
-
 pub struct RepoService;
 
-/// The `pwd_hash` verifier triple of a Seafile 11+ encrypted library,
-/// mirroring seafile-server's `RepoCryptInfo` (`server/repo-mgr.c`).
+/// The `pwd_hash` verifier triple of a Seafile 11+ encrypted library, mirroring
+/// seafile-server's `RepoCryptInfo` (`server/repo-mgr.c`).
 ///
-/// All three values travel together: the algorithm is what tells a client which
-/// KDF to run, and the parameters what to run it with. `params = None` means
-/// "the algorithm's defaults" (upstream stores an SQL NULL for that, and so do
-/// we; the commit then omits the key, which reads back as NULL on the client and
-/// lands on the same defaults).
+/// All three travel together: the algorithm tells a client which KDF to run and the
+/// parameters what to run it with. `params = None` means the algorithm's defaults
+/// (upstream stores SQL NULL and the commit then omits the key).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PwdHash {
     pub hash: Option<String>,
@@ -152,7 +140,6 @@ pub struct PwdHash {
 }
 
 impl PwdHash {
-    /// Build one from the three wire fields.
     pub fn from_request(
         hash: Option<String>,
         algo: Option<String>,
@@ -161,9 +148,7 @@ impl PwdHash {
         Self { hash, algo, params }
     }
 
-    /// Treat blank fields as absent (the clients send `""` for anything they do
-    /// not set, and seahub's own `request.data.get(...)` yields `None`), and
-    /// drop a triple that has no algorithm.
+    /// Treat blank fields as absent and drop a triple that has no algorithm.
     pub fn normalized(self) -> Self {
         fn clean(v: Option<String>) -> Option<String> {
             v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
@@ -175,40 +160,31 @@ impl PwdHash {
         };
         if out.algo.is_none() {
             // Mirrors `repo_crypt_info_new` + `create_repo_common`: nothing is
-            // read from `crypt_info` unless `pwd_hash_algo` is set, so a client
-            // that sends only `pwd_hash` gets it ignored rather than having an
-            // unusable verifier stored (which would leave the library
-            // unopenable).
+            // read from `crypt_info` unless `pwd_hash_algo` is set, so a lone
+            // `pwd_hash` is ignored rather than stored as an unusable verifier.
             out.hash = None;
             out.params = None;
         }
         out
     }
 
-    /// Whether the request carries a usable verifier triple.
-    ///
-    /// Upstream gates *every* `pwd_hash` field on the algorithm
-    /// (`if (crypt_info && crypt_info->pwd_hash_algo)`), so a lone `pwd_hash`
-    /// without an algorithm is not a verifier at all.
+    /// Whether the request carries a usable verifier triple: upstream gates *every*
+    /// `pwd_hash` field on the algorithm (`if (crypt_info && crypt_info->pwd_hash_algo)`),
+    /// so a lone `pwd_hash` is not a verifier at all.
     pub fn is_present(&self) -> bool {
         self.algo.is_some()
     }
 
-    /// The three `repos` columns.
     pub fn to_columns(&self) -> (Option<String>, Option<String>, Option<String>) {
         (self.hash.clone(), self.algo.clone(), self.params.clone())
     }
 
-    /// seafile-server's `create_repo_common()` validation for the triple.
-    ///
-    /// * an algorithm outside `{pbkdf2_sha256, argon2id}` is rejected
-    ///   ("Unsupported encryption algothrims")
-    /// * the hash must be exactly 64 characters ("Bad pwd_hash") — we also
-    ///   require ASCII hex, because a 64-character string that is not hex can
-    ///   never equal `hex(derived_key)` and would leave the library silently
-    ///   unopenable
-    /// * the parameters are parsed and bounded (see
-    ///   [`infra::crypto::pwd_hash::validate_params`])
+    /// seafile-server's `create_repo_common()` validation for the triple: an
+    /// algorithm outside `{pbkdf2_sha256, argon2id}` is rejected ("Unsupported
+    /// encryption algothrims"), the hash must be 64 ASCII hex characters ("Bad
+    /// pwd_hash") — a non-hex string can never equal `hex(derived_key)` — and the
+    /// parameters are parsed and bounded by
+    /// [`infra::crypto::pwd_hash::validate_params`].
     pub fn validate(&self) -> Result<(), AppError> {
         let algo = self
             .algo
@@ -237,22 +213,18 @@ impl PwdHash {
 
 /// The server-side encrypted-library policy, i.e. seahub's
 /// `ENCRYPTED_LIBRARY_VERSION` / `ENCRYPTED_LIBRARY_PWD_HASH_ALGO` /
-/// `ENCRYPTED_LIBRARY_PWD_HASH_PARAMS`.
-///
-/// Used when a client asks for an encrypted library by sending only a password
-/// (Android, the web UI): the *server* generates the verifier.
+/// `ENCRYPTED_LIBRARY_PWD_HASH_PARAMS`. Used when a client asks for an encrypted
+/// library with only a password (Android, the web UI): the *server* generates it.
 #[derive(Debug, Clone)]
 pub struct EncryptedLibraryPolicy {
     pub enc_version: i32,
-    /// `None` keeps the legacy `magic` flow, which is upstream's default
-    /// (`ENCRYPTED_LIBRARY_PWD_HASH_ALGO = ""`).
+    /// `None` keeps the legacy `magic` flow, upstream's default (`ALGO = ""`).
     pub pwd_hash_algo: Option<String>,
     pub pwd_hash_params: Option<String>,
 }
 
 impl EncryptedLibraryPolicy {
-    /// Read the policy from the server config, treating empty strings as
-    /// "unset" (seahub passes `ENCRYPTED_LIBRARY_PWD_HASH_ALGO or None`).
+    /// Read the policy from config, treating empty strings as "unset".
     pub fn from_config(config: &infra::config::ServerConfig) -> Self {
         fn clean(v: &Option<String>) -> Option<String> {
             v.as_deref()
@@ -271,8 +243,8 @@ impl EncryptedLibraryPolicy {
 /// The encryption block of a library, as every read path needs it.
 ///
 /// Centralises the "a `pwd_hash` library has no `magic`" rule: upstream writes
-/// the `magic` commit field only when `!commit->pwd_hash`, and a client that saw
-/// both would verify the password against a `magic` the server never stored.
+/// `magic` only when `!commit->pwd_hash`, and a client that saw both would verify
+/// the password against a `magic` the server never stored.
 #[derive(Debug, Clone, Default)]
 pub struct RepoCrypto {
     pub encrypted: bool,
@@ -321,17 +293,13 @@ fn build_op_url(site_url: &str, op: &str, token: &str) -> String {
     format!("{}/{}/{}", base, op, token)
 }
 
-/// Build the `RepoInfo` wire shape of one library the caller can access, for a
-/// list response.
+/// Build the `RepoInfo` wire shape of one library the caller can access.
 ///
-/// `user_id` decides `type` — `repo` for the owner, `srepo` for a member — and
-/// `permission` is that caller's membership row, passed in because the caller
-/// has already loaded the memberships. Encryption fields are echoed from the
-/// stored row, so a library read here cannot disagree with a later `get`.
-///
-/// The per-caller extras (`token`, `email` and the duplicated `repo_id` /
-/// `repo_name`) stay empty: only the endpoints that hand the caller a credential
-/// of its own fill them (see [`RepoService::create_repo`]).
+/// `user_id` decides `type` (`repo` for the owner, `srepo` for a member) and
+/// `permission` is that caller's membership row. Encryption fields are echoed from
+/// the stored row, so a library read here cannot disagree with a later `get`. The
+/// per-caller extras (`token`, `email`, duplicated ids) stay empty: only endpoints
+/// that hand the caller a credential of its own fill them (`create_repo`).
 fn build_repo_info_from_model(
     r: &repo::Model,
     owner_email: &str,
@@ -394,7 +362,6 @@ impl RepoService {
     ) -> Result<Vec<RepoInfo>, AppError> {
         let memberships = repos.member.find_by_user_id(user_id).await?;
 
-        // Batch-load all member repos in one query instead of one per member.
         let repo_ids: Vec<String> = memberships.iter().map(|m| m.repo_id.clone()).collect();
         let repos_map: HashMap<String, repo::Model> = repos
             .repo
@@ -404,8 +371,7 @@ impl RepoService {
             .map(|r| (r.id.clone(), r))
             .collect();
 
-        // Batch-load the owners of non-owned repos so `owner`/`owner_name` can
-        // be resolved to the real owner instead of the requester.
+        // Batch-load the owners of non-owned repos (not the requester) for owner fields.
         let owner_ids: Vec<i32> = repos_map
             .values()
             .filter(|r| r.owner_id != user_id)
@@ -440,26 +406,14 @@ impl RepoService {
 
     /// Create a new repo.
     ///
-    /// `peer` is the device the request came from, when it reported one: the new
-    /// repository's token is issued to it and returned in
-    /// [`RepoInfo::token`], so it shows up under that device immediately instead
-    /// of waiting for the first sync.
+    /// `peer` is the device the request came from: the new repository's token is
+    /// issued to it and returned in [`RepoInfo::token`]. A caller with **no** device
+    /// gets no token — no client is holding one yet — and the shared unattributed
+    /// token is minted by the first sync request that needs one.
     ///
-    /// A caller that reported **no** device (a browser session, a unified API
-    /// key) gets no token here: no client is holding one yet, so minting it would
-    /// only leave the account a credential that can never be used or named.
-    /// Creating a library is not asking to sync it — the sync protocol mints the
-    /// shared unattributed token on the first request that actually needs one
-    /// (`repo-tokens`, `download-info`, `accessible-repos`).
-    ///
-    /// `passwd` is the bare-password creation flow (seahub passes it straight to
-    /// `seafile_api.create_repo`): with no client-supplied `magic`/`random_key`
-    /// the server generates the encryption material at
-    /// `policy.enc_version`. See the body for why ignoring it is not an option.
-    ///
-    /// `pwd_hash` is the verifier triple a client pre-computed (the desktop
-    /// client, when `/api2/server-info/` advertises an algorithm); `policy` is
-    /// what the **server** uses when it has to generate the verifier itself.
+    /// `passwd` is the bare-password flow (`seafile_api.create_repo`): the server
+    /// generates the encryption material at `policy.enc_version`. `pwd_hash` is a
+    /// client-computed verifier triple; `policy` drives server-side generation.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_repo(
         db: &DatabaseConnection,
@@ -481,14 +435,11 @@ impl RepoService {
         sync_token_ttl_days: u64,
     ) -> Result<RepoInfo, AppError> {
         let name = validate_repo_name(name)?;
-        // The client may propose a repo id (the sync clients generate their
-        // own). Only accept a well-formed UUID: the id is part of DNS-free
-        // URL paths, is interpolated into on-disk directory names (temp
-        // uploads, thumbnail cache) and is compared against sync tokens, so a
-        // free-form string such as "../../x" or "/etc/cron.d/y" would escape
-        // the storage root. Anything else is rejected rather than
-        // silently replaced, so a client that expected its own id learns that
-        // it was not used.
+        // The client may propose a repo id (the sync clients generate their own).
+        // Only accept a well-formed UUID: the id is part of URL paths and of on-disk
+        // directory names (temp uploads, thumbnail cache) and is compared against
+        // sync tokens, so "../../x" would escape the storage root. Anything else is
+        // rejected rather than silently replaced.
         let repo_id = match repo_id_opt {
             Some(client_id) => {
                 let parsed = uuid::Uuid::parse_str(client_id.trim())
@@ -501,15 +452,10 @@ impl RepoService {
 
         let mut pwd_hash = pwd_hash.normalized();
 
-        // seahub's `seafile_api.create_repo(name, desc, user, passwd,
-        // enc_version=ENCRYPTED_LIBRARY_VERSION, ...)`: when a client asks for
-        // an encrypted library by sending only a password, the **server**
-        // generates the encryption material. The Android client does exactly
-        // this (`NewRepoViewModel.createNewRepo` posts `name`/`desc`/`passwd`
-        // and then reads `magic`/`random_key`/`salt` back from
-        // `GET /api2/repos/{id}/`), as does the desktop client against a
-        // pre-4.4 server. Treating the password as noise would create a plain
-        // library and silently drop the password the user typed.
+        // seahub's `seafile_api.create_repo(...)`: when a client asks for an encrypted
+        // library with only a password, the **server** generates the material (the
+        // Android client and pre-4.4 desktop clients do exactly this). Treating the
+        // password as noise would create a plain library and silently drop it.
         let client_supplied_keys = magic.as_deref().is_some_and(|m| !m.trim().is_empty())
             || random_key.as_deref().is_some_and(|k| !k.trim().is_empty())
             || pwd_hash.is_present();
@@ -525,8 +471,8 @@ impl RepoService {
                         .into(),
                 ));
             }
-            // enc_version >= 3 uses a per-library random salt; the client reads
-            // it back from the repo object and needs it in every commit.
+            // enc_version >= 3 uses a per-library random salt the client reads back
+            // from the repo object and needs in every commit.
             let repo_salt = if enc_version_val >= 3 {
                 infra::crypto::key_derivation::generate_repo_salt()
             } else {
@@ -535,9 +481,7 @@ impl RepoService {
             if let Some(algo) = policy.pwd_hash_algo.as_deref() {
                 // Seafile 11+: a configured algorithm replaces `magic`
                 // (`seaf_repo_manager_create_new_repo` calls
-                // `seafile_generate_pwd_hash` *instead of*
-                // `seafile_generate_magic`). Seadroid and the web UI then need
-                // the server to be able to verify the password it just hashed.
+                // `seafile_generate_pwd_hash` *instead of* `seafile_generate_magic`).
                 infra::crypto::pwd_hash::validate_params(algo, policy.pwd_hash_params.as_deref())
                     .map_err(AppError::BadRequest)?;
                 let hash = infra::crypto::pwd_hash::derive_pwd_hash(
@@ -581,10 +525,9 @@ impl RepoService {
             };
         }
 
-        // The desktop client sends `enc_version`/`magic`/`random_key` instead
-        // of the legacy `encrypted` flag, so a library carrying encryption
-        // material is encrypted even when the flag is absent (it used to be
-        // created as a plain library, making its files unreadable).
+        // The desktop client sends `enc_version`/`magic`/`random_key` instead of
+        // the legacy `encrypted` flag, so a library carrying encryption material is
+        // encrypted even when the flag is absent.
         let has_enc_material = magic.as_deref().is_some_and(|m| !m.trim().is_empty())
             || random_key.as_deref().is_some_and(|k| !k.trim().is_empty())
             || pwd_hash.is_present();
@@ -595,9 +538,9 @@ impl RepoService {
         };
 
         if encrypted_val == 1 {
-            // The server can only operate encrypted repos of version 2/4 (v1/v3
-            // are rejected by derive_key), and magic/random_key come from the
-            // client — reject a repo whose version/keys the server could never use.
+            // The server can only operate encrypted repos of version 2/4 (v1/v3 are
+            // rejected by derive_key), and magic/random_key come from the client —
+            // reject a repo whose version/keys the server could never use.
             if !matches!(enc_version_val, 2 | 4) {
                 return Err(AppError::BadRequest(
                     "unsupported enc_version (only 2 and 4 are supported)".into(),
@@ -606,9 +549,7 @@ impl RepoService {
             if pwd_hash.is_present() {
                 // The client computed the verifier itself. Validate it the way
                 // `create_repo_common()` does and drop any `magic` it also sent:
-                // upstream writes the commit's `magic` field only when
-                // `!pwd_hash`, and a client that saw both would verify the
-                // password against a value this server never stored.
+                // upstream writes `magic` only when `!pwd_hash`.
                 pwd_hash.validate()?;
                 magic = None;
             } else {
@@ -627,12 +568,9 @@ impl RepoService {
                     "random_key must be 96 hex chars".into(),
                 ));
             }
-            // enc_version 4 uses a per-library random salt that the client
-            // generated; losing it would make the library undecryptable (the
-            // client derives `magic`/`random_key`/`pwd_hash` from it), so
-            // require and store it. (nanofile used to accept v4 and silently
-            // store an empty salt, producing a library the client could not
-            // open.)
+            // enc_version 4 uses a per-library random salt the client generated;
+            // losing it would make the library undecryptable (the client derives
+            // `magic`/`random_key`/`pwd_hash` from it), so require and store it.
             if enc_version_val == 4 && !salt.as_deref().is_some_and(|s| !s.trim().is_empty()) {
                 return Err(AppError::BadRequest(
                     "salt is required for enc_version 4".into(),
@@ -650,8 +588,7 @@ impl RepoService {
             enc_version: enc_version_val as i8,
             magic: magic.clone(),
             random_key: random_key.clone(),
-            // v2 libraries use a fixed salt (empty here); v4 stores the
-            // client-generated (or server-generated) per-library salt.
+            // v2 libraries use a fixed (empty) salt; v4 stores the per-library salt.
             salt: if enc_version_val == 4 {
                 salt.clone().unwrap_or_default()
             } else {
@@ -678,12 +615,9 @@ impl RepoService {
             .await?;
 
         // Issue the repository's sync token, attributed to the creating device
-        // when it reported one. The membership was just created, so the
-        // permission re-check inside the resolver would only repeat it.
-        //
-        // A device-less creator (a browser session, a unified API key) gets no
-        // token: see the note on this function. The unattributed token is minted
-        // on demand instead, by the first sync request that needs one.
+        // when it reported one; the permission re-check inside the resolver would
+        // only repeat the membership just created. A device-less creator gets no
+        // token (see this function's note) — the unattributed one is minted on demand.
         let token_value = match peer {
             Some(peer) => Some(
                 ensure_sync_tokens_for_repos(
@@ -701,12 +635,10 @@ impl RepoService {
         };
 
         let encrypted = encrypted_val == 1;
-        // Everything encryption-related is echoed from the row that was just
-        // written, so the create response can never disagree with what later
-        // reads (and therefore the clients) will see.
+        // Everything encryption-related is echoed from the row just written, so the
+        // create response cannot disagree with what later reads return.
         let crypto = RepoCrypto::from_model(&created);
 
-        // Log repo creation activity (best-effort)
         activity_log::log_activity(
             db, &repo_id, "create", "repo", "/", user_id, None, None, None, None, None,
         )
@@ -728,9 +660,7 @@ impl RepoService {
             type_: "repo".to_string(),
             virtual_: false,
             root: None,
-            // Echo the stored salt so a client that created a v4 library sees
-            // the value its keys were derived from (mirrors the list/get
-            // responses, which include `salt` for `enc_version >= 3`).
+            // Echo the stored salt so a client that created a v4 library sees it.
             salt: crypto.salt.clone(),
             magic: crypto.magic.clone(),
             random_key: crypto.key.clone(),
@@ -859,10 +789,9 @@ impl RepoService {
         let now = chrono::Utc::now().timestamp();
         repos.repo.rename_repo(repo_id, &new_name, now).await?;
 
-        // Log repo rename activity after the update so the detail captures the
-        // new name, while old_path/old_repo_name hold the previous name. The
-        // Android client renders rename events as "old_name => name", so
-        // old_path must be non-null to avoid a client-side crash.
+        // Log after the update so the detail captures the new name, with old_path
+        // holding the previous one. The Android client renders rename events as
+        // "old_name => name", so old_path must be non-null or it crashes.
         activity_log::log_activity(
             db,
             repo_id,
@@ -905,22 +834,19 @@ impl RepoService {
 
         let now = chrono::Utc::now().timestamp();
 
-        // Validate name if provided.
         let validated_name = new_name
             .as_ref()
             .map(|n| validate_repo_name(n))
             .transpose()?;
 
-        // Validate history retention settings (must be >= 0; 0 = unlimited).
+        // Retention settings must be >= 0; 0 = unlimited.
         if history_limit.is_some_and(|v| v < 0) || history_ttl_days.is_some_and(|v| v < 0) {
             return Err(AppError::BadRequest(
                 "history_limit and history_ttl_days must be >= 0".into(),
             ));
         }
 
-        // Only record a rename activity when the name actually changes.
-        // Clients commonly echo the current name back when updating a repo's
-        // description, which must not be logged as a rename.
+        // Only log a rename when the name changes: clients echo the current name back.
         let name_changed = matches!(
             (validated_name.as_deref(), r.name.as_str()),
             (Some(new_name), old) if new_name != old
@@ -938,8 +864,7 @@ impl RepoService {
             )
             .await?;
 
-        // Log the rename activity after the update so the detail captures the
-        // new name, with old_path/old_repo_name holding the previous name.
+        // Log the rename after the update, with old_path holding the previous name.
         if name_changed {
             activity_log::log_activity(
                 db,
@@ -960,14 +885,10 @@ impl RepoService {
         Ok(())
     }
 
-    /// Delete a repo. Only the owner can delete.
-    ///
-    /// The library moves to the trash: its commit graph and FS objects are
-    /// archived so that restoring it brings the files back, while its blocks stay
-    /// on disk (garbage collection keeps the block directory of a library that is
-    /// still listed in the trash). Both the trash entry and the archive are
-    /// load-bearing, so a failure to write either one aborts the delete instead
-    /// of leaving a half-deleted library behind.
+    /// Delete a repo (owner only). The library moves to the trash: its commit graph
+    /// and FS objects are archived so restoring brings the files back, while its
+    /// blocks stay on disk (GC keeps the block directory). Both the trash entry and
+    /// the archive are load-bearing, so a failure to write either aborts the delete.
     pub async fn delete_repo(
         db: &DatabaseConnection,
         repos: &Repositories,
@@ -984,9 +905,8 @@ impl RepoService {
             return Err(AppError::Forbidden);
         }
 
-        // Record deleted repo in trash before cascade-delete: the trash entry is
-        // what makes the archive reachable, and what keeps GC from reclaiming the
-        // library's blocks.
+        // Record the trash entry before the cascade-delete: it is what makes the
+        // archive reachable and keeps GC from reclaiming the library's blocks.
         crate::fs::core::trash::add_deleted_repo(
             repos,
             repo_id,
@@ -997,31 +917,25 @@ impl RepoService {
         )
         .await?;
 
-        // Log repo deletion activity BEFORE deleting the repo
+        // Log the deletion before the repo row goes away.
         activity_log::log_activity(
             db, repo_id, "delete", "repo", "/", user_id, None, None, None, None, None,
         )
         .await;
 
-        // Archive the library's content and delete its rows in one transaction.
         crate::fs::core::repo_archive::archive_and_delete(db, repo_id).await?;
 
-        // The token rows were deleted with the library; this drops the cached
-        // copies so a revoked client cannot keep authenticating from the cache.
+        // Token rows went with the library; drop cached copies so revocation holds.
         repos.sync_token.delete_by_repo(repo_id).await?;
 
-        // API-key bindings cascade with the repository; a key that was only
-        // bound to this library is left inert, so remove it rather than leave a
-        // credential that can never authenticate again.
+        // API-key bindings cascade too; a key left bound only here can never authenticate.
         repos.api_key.delete_bindings_by_repo(repo_id).await?;
 
         Ok(())
     }
 
-    /// Get download info for a repo.
-    ///
-    /// `peer` is the requesting device, when it reported one: the token handed
-    /// back is that device's own, and is attributed to it at issuance.
+    /// Get download info for a repo. `peer` is the requesting device, whose own
+    /// token is returned.
     pub async fn download_info(
         repos: &Repositories,
         repo_id: &str,
@@ -1045,9 +959,8 @@ impl RepoService {
             ensure_sync_token_for(repos, repo_id, user_id, peer, sync_token_ttl_days).await?;
 
         // A `pwd_hash` library must not advertise a `magic`: the desktop client
-        // copies the non-empty fields of this response into the clone task's
-        // `more_info`, and `clone-mgr.c` verifies against `pwd_hash` when (and
-        // only when) an algorithm is present.
+        // copies the non-empty fields into the clone task's `more_info`, and
+        // `clone-mgr.c` verifies against `pwd_hash` only when an algorithm is present.
         let crypto = RepoCrypto::from_model(&r);
 
         Ok(DownloadInfoResponse {
@@ -1082,9 +995,8 @@ impl RepoService {
 
     /// Get an upload link URL for the given repo.
     ///
-    /// `base_url` is the caller-resolved external URL base (Host-aware when
-    /// `site_url` is still the built-in default; see
-    /// [`ServerConfig::download_url_base`]).
+    /// `base_url` is the caller-resolved external URL base (Host-aware while
+    /// `site_url` is still the built-in default).
     pub async fn get_upload_link(
         repos: &Repositories,
         token_manager: &AccessTokenManager,
@@ -1096,14 +1008,13 @@ impl RepoService {
         from: Option<&str>,
         replace: Option<&str>,
     ) -> Result<String, AppError> {
-        // Verify repo exists
         repos
             .repo
             .find_by_id(repo_id)
             .await?
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
-        // Verify caller has write permission on the repo
+        // The link carries a scoped token: check write permission before minting it.
         crate::domain::permission::check_repo_write_permission(
             repos.member.as_ref(),
             repo_id,
@@ -1126,7 +1037,7 @@ impl RepoService {
 
     /// Get an update link URL for the given repo.
     ///
-    /// `base_url` is the caller-resolved external URL base (Host-aware when
+    /// `base_url` is the caller-resolved external URL base (Host-aware while
     /// `site_url` is still the built-in default).
     pub async fn get_update_link(
         repos: &Repositories,
@@ -1138,14 +1049,13 @@ impl RepoService {
         parent_dir: &str,
         from: Option<&str>,
     ) -> Result<String, AppError> {
-        // Verify repo exists
         repos
             .repo
             .find_by_id(repo_id)
             .await?
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
-        // Verify caller has write permission on the repo
+        // The link carries a scoped token, so write permission is checked first.
         crate::domain::permission::check_repo_write_permission(
             repos.member.as_ref(),
             repo_id,
@@ -1167,13 +1077,10 @@ impl RepoService {
 
     /// Batch get sync tokens for multiple repos.
     ///
-    /// Repos the caller has no permission on are silently skipped (matches
-    /// official seahub's `RepoTokensView` behaviour) so desktop clients can
-    /// batch-request without tripping over non-member repos.
-    ///
-    /// `peer` is the requesting device: each repository gets *that device's*
-    /// token, minted with the device already recorded. A caller with no device
-    /// identity shares the single unattributed token per repository.
+    /// Repos the caller has no permission on are silently skipped (matches seahub's
+    /// `RepoTokensView`), so desktop clients can batch-request without tripping over
+    /// non-member repos. `peer` is the requesting device: each repo gets *that
+    /// device's* token; a device-less caller shares the unattributed one.
     pub async fn repo_tokens(
         repos: &Repositories,
         repo_ids: &[&str],
@@ -1183,8 +1090,7 @@ impl RepoService {
     ) -> Result<HashMap<String, String>, AppError> {
         let ids: Vec<String> = repo_ids.iter().map(|s| s.to_string()).collect();
 
-        // Batch-load repos (existence + owner) and memberships so the whole
-        // batch is ~2 queries instead of 1-2 per repo.
+        // Batch-load repos (existence + owner) and memberships: ~2 queries total.
         let repo_map: HashMap<String, repo::Model> = repos
             .repo
             .find_by_ids(&ids)
@@ -1201,12 +1107,11 @@ impl RepoService {
             .iter()
             .copied()
             .filter(|repo_id| {
-                // Repo deleted → skip (was NotFound).
+                // Repo deleted → skip.
                 let Some(repo_model) = repo_map.get(*repo_id) else {
                     return false;
                 };
-                // Owner has access even without a member row; memberships grant
-                // read access. Non-members are skipped (was Forbidden).
+                // Owner has access without a member row; a membership grants read.
                 repo_model.owner_id == user_id || member_repo_ids.contains(*repo_id)
             })
             .map(str::to_string)
@@ -1223,8 +1128,7 @@ impl RepoService {
     ) -> Result<V21RepoListResponse, AppError> {
         let memberships = repos.member.find_by_user_id(user_id).await?;
 
-        // Batch-load all member repos, then the profiles of non-owned repos'
-        // owners, in two queries instead of 1-2 per repo.
+        // Batch-load member repos, then non-owned owners' profiles: two queries.
         let repo_ids: Vec<String> = memberships.iter().map(|m| m.repo_id.clone()).collect();
         let repos_map: HashMap<String, repo::Model> = repos
             .repo
@@ -1326,11 +1230,9 @@ impl RepoService {
         })
     }
 
-    /// The user's default (primary) library.
-    ///
-    /// nanofile does not persist a per-user "default repo" flag (seahub tracks
-    /// this via `UserOptions`), so the earliest owned repo is used as a stable
-    /// proxy for the default library the desktop virtual-drive flow expects.
+    /// The user's default (primary) library: nanofile does not persist a per-user
+    /// "default repo" flag (seahub uses `UserOptions`), so the earliest owned repo
+    /// stands in for the default library the desktop virtual-drive flow expects.
     pub async fn default_repo_id(
         repos: &Repositories,
         user_id: i32,
@@ -1351,14 +1253,12 @@ pub struct LeftPanelRepo {
     pub size_display: String,
 }
 
-/// Query all repos for the given user, returning left-panel data.
 pub async fn load_left_panel_repos(
     repos: &Repositories,
     user_id: i32,
 ) -> Result<Vec<LeftPanelRepo>, AppError> {
     let members = repos.member.find_by_user_id(user_id).await?;
 
-    // Batch-load member repos in one query instead of one per member.
     let repo_ids: Vec<String> = members.iter().map(|m| m.repo_id.clone()).collect();
     let repos_map: HashMap<String, repo::Model> = repos
         .repo
@@ -1381,10 +1281,8 @@ pub async fn load_left_panel_repos(
     Ok(repo_list)
 }
 
-/// Resolve a repo owner's email + display name, using the requester's email
-/// when the requester owns the repo.
-///
-/// `owners` is a pre-fetched id → user map; callers batch-load it once.
+/// Resolve an owner's email + display name, using the requester's email when the
+/// requester owns the repo. `owners` is a pre-fetched id → user map.
 fn resolve_owner(
     owner_id: i32,
     requester_email: &str,
@@ -1407,9 +1305,8 @@ fn resolve_owner(
 /// Validate a repo name before it is persisted.
 ///
 /// Repo names are rendered into inline `<script>` blocks (`|json|safe` in the
-/// toolbar template), so `<`, `>`, `&` and `"` are rejected outright — along
-/// with control characters, path separators and over-long names — to prevent
-/// script breakout.
+/// toolbar template), so `<`, `>`, `&` and `"` are rejected — with control
+/// characters, path separators and over-long names — to prevent script breakout.
 fn validate_repo_name(name: &str) -> Result<String, AppError> {
     let trimmed = name.trim();
     if trimmed.is_empty()

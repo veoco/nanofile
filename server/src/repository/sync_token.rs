@@ -14,18 +14,16 @@ use crate::domain::device::PeerStamp;
 pub trait SyncTokenRepository: Send + Sync {
     /// The token one peer holds for a repository.
     ///
-    /// `peer_id = None` addresses the *unattributed* token — the one minted by
-    /// a caller with no device identity (a browser session, an API key, an
-    /// older client). Every repository has at most one of those per user.
+    /// `peer_id = None` addresses the *unattributed* token, minted by a caller with no device
+    /// identity; every repository has at most one of those per user.
     async fn find_by_repo_user_peer(
         &self,
         repo_id: &str,
         user_id: i32,
         peer_id: Option<&str>,
     ) -> Result<Option<sync_token::Model>, AppError>;
-    /// The same lookup for many repositories in one query (chunked to stay
-    /// under the SQLite variable limit). Used to batch `accessible_repos` and
-    /// `repo_tokens`.
+    /// The same lookup for many repositories in one query, chunked under the SQLite variable
+    /// limit; used to batch `accessible_repos` and `repo_tokens`.
     async fn find_by_repos_user_peer(
         &self,
         repo_ids: &[String],
@@ -39,10 +37,8 @@ pub trait SyncTokenRepository: Send + Sync {
         token: &str,
         repo_id: &str,
     ) -> Result<Option<sync_token::Model>, AppError>;
-    /// Mint a token, recording the device it was issued to (if any) right away.
-    ///
-    /// A token that carries its peer from the start is visible under its device
-    /// in the credential inventory without waiting for the first sync.
+    /// Mint a token, recording the device it was issued to right away, so it shows up under that
+    /// device in the credential inventory without waiting for the first sync.
     async fn create(
         &self,
         repo_id: &str,
@@ -56,35 +52,25 @@ pub trait SyncTokenRepository: Send + Sync {
     /// Delete by the **raw** token value.
     async fn delete_by_token(&self, token: &str) -> Result<(), AppError>;
     async fn delete_by_id(&self, id: i32) -> Result<(), AppError>;
-    /// Every sync token a user holds, newest first, for the credential
-    /// inventory.
-    ///
-    /// The stored value is a ciphertext of a bearer credential, so callers that
-    /// only need to show *what exists* must not reveal it.
+    /// Every sync token a user holds, newest first, for the credential inventory. The stored value
+    /// is a bearer credential ciphertext, so callers that only show what exists must not reveal it.
     async fn list_for_user(&self, user_id: i32) -> Result<Vec<sync_token::Model>, AppError>;
-    /// Revoke one sync token, scoped to its owner: the plain `delete_by_id` is
-    /// not safe to expose.
+    /// Revoke a sync token scoped to its owner: plain `delete_by_id` must not be exposed.
     async fn delete_by_id_and_user(&self, id: i32, user_id: i32) -> Result<u64, AppError>;
     async fn delete_by_user(&self, user_id: i32) -> Result<u64, AppError>;
     async fn delete_by_user_and_peer(&self, user_id: i32, peer_id: &str) -> Result<u64, AppError>;
-    /// Delete a user's token for one repository.
+    /// Delete a user's token for one repository, called when a member loses access to a library.
     ///
-    /// Called when a member loses access to a library: a sync token is bound to
-    /// (repo, user) for up to `sync_token_ttl_days` (a year by default) and the
-    /// sync endpoints re-derive the caller's identity from it, so it must not
-    /// outlive the membership.
+    /// A sync token is bound to (repo, user) for up to `sync_token_ttl_days` (a year by default)
+    /// and the sync endpoints re-derive identity from it, so it must not outlive the membership.
     async fn delete_by_repo_and_user(&self, repo_id: &str, user_id: i32) -> Result<u64, AppError>;
-    /// Attribute an unattributed token to a device.
-    ///
-    /// Answers whether *this* call performed the update, so two devices racing
-    /// for the same unattributed row cannot both believe they won: the loser
-    /// mints its own token instead.
+    /// Attribute an unattributed token to a device, answering whether *this* call performed the
+    /// update, so two devices racing for the same row cannot both believe they won: the loser mints
+    /// its own token instead.
     async fn attach_peer_if_unset(&self, id: i32, peer: &PeerStamp) -> Result<bool, AppError>;
-    /// Refresh the volatile peer columns from a sync request.
-    ///
-    /// Never touches `peer_id` or `peer_name`: a token's device is decided once
-    /// (upstream's `RepoTokenPeerInfo` is insert-once too), so the device that
-    /// happens to sync last cannot take another device's token over.
+    /// Refresh the volatile peer columns from a sync request. Never touches `peer_id` or
+    /// `peer_name`: a token's device is decided once (upstream's `RepoTokenPeerInfo` is insert-once
+    /// too), so the device that syncs last cannot take another device's token over.
     async fn touch_peer(
         &self,
         id: i32,
@@ -92,9 +78,8 @@ pub trait SyncTokenRepository: Send + Sync {
         client_version: Option<String>,
         last_sync_time: i64,
     ) -> Result<(), AppError>;
-    /// Recover the raw token from a stored row. `None` when the ciphertext
-    /// cannot be decrypted (e.g. the server secret changed) — callers must
-    /// treat that as an invalid credential.
+    /// Recover the raw token from a stored row; `None` when the ciphertext cannot be decrypted
+    /// (e.g. the server secret changed), which callers must treat as an invalid credential.
     fn reveal_token(&self, model: &sync_token::Model) -> Option<String>;
 }
 
@@ -272,9 +257,8 @@ impl SyncTokenRepository for DbSyncTokenRepository {
     }
 
     async fn attach_peer_if_unset(&self, id: i32, peer: &PeerStamp) -> Result<bool, AppError> {
-        // The `peer_id IS NULL` filter is the whole point: if another request
-        // attached the row first, this UPDATE matches nothing and the caller
-        // knows it lost the race instead of overwriting the winner.
+        // The `peer_id IS NULL` filter is the whole point: if another request attached the row
+        // first, this UPDATE matches nothing and the caller learns it lost instead of overwriting.
         let result = sync_token::Entity::update_many()
             .filter(sync_token::Column::Id.eq(id))
             .filter(sync_token::Column::PeerId.is_null())
@@ -301,8 +285,7 @@ impl SyncTokenRepository for DbSyncTokenRepository {
             last_sync_time: Set(Some(last_sync_time)),
             ..Default::default()
         };
-        // A request that omits `client_ver` must not erase the version a
-        // previous one recorded, so only write it when it was reported.
+        // A request that omits `client_ver` must not erase the version a previous one recorded.
         if client_version.is_some() {
             update.client_version = Set(client_version);
         }
@@ -319,10 +302,9 @@ impl SyncTokenRepository for DbSyncTokenRepository {
     }
 }
 
-/// Restrict a sync-token query to one peer, or to the unattributed row.
-///
-/// An empty `peer_id` is treated as absent everywhere: a caller with no device
-/// and a caller whose device id is empty both mint the same unattributed row.
+/// Restrict a sync-token query to one peer, or to the unattributed row. An empty `peer_id` is
+/// treated as absent everywhere: a caller with no device and a caller whose device id is empty
+/// both mint the same unattributed row.
 fn peer_query(
     query: sea_orm::Select<sync_token::Entity>,
     peer_id: Option<&str>,
@@ -333,11 +315,9 @@ fn peer_query(
     }
 }
 
-/// One-time migration: encrypt every legacy plaintext sync-token row in place.
-///
-/// Clients keep presenting the same raw token, so this is non-disruptive.
-/// Rows that are already encrypted (prefix [`TOKEN_CIPHER_PREFIX`]) are skipped.
-/// Returns the number of rows rewritten.
+/// One-time migration: encrypt every legacy plaintext sync-token row in place. Clients keep
+/// presenting the same raw token, so this is non-disruptive; rows already carrying
+/// `TOKEN_CIPHER_PREFIX` are skipped. Returns the number of rows rewritten.
 pub async fn encrypt_legacy_sync_tokens(
     db: &DatabaseConnection,
     cipher: &TokenCipher,

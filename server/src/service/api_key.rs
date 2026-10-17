@@ -1,9 +1,6 @@
-//! Management of unified API keys.
-//!
-//! A key is described by capabilities (what it may do), library bindings (where
-//! it may do it, with a per-library read/write ceiling) and an expiry. The
-//! service owns every validation rule so the JSON API and the server-rendered
-//! settings page cannot drift apart.
+//! Management of unified API keys: capabilities, library bindings with a
+//! per-library read/write ceiling, and an expiry. Every validation rule lives
+//! here so the JSON API and the server-rendered settings page cannot drift apart.
 
 use std::collections::HashSet;
 
@@ -16,13 +13,10 @@ use crate::repository::Repositories;
 use crate::repository::api_key::{ApiKeyBinding, CreateApiKeyParams, UpdateApiKeyParams};
 use crate::service::auth::token::generate_api_token;
 
-/// Longest accepted key name.
 const MAX_NAME_LEN: usize = 255;
-/// Number of leading secret characters kept for display.
 const PREFIX_LEN: usize = 8;
 const SECONDS_PER_DAY: i64 = 86_400;
 
-/// How long a new key should live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyExpiry {
     Never,
@@ -30,7 +24,6 @@ pub enum KeyExpiry {
     At(i64),
 }
 
-/// Everything needed to mint a key.
 pub struct NewApiKey {
     pub name: Option<String>,
     pub capabilities: Vec<String>,
@@ -68,7 +61,6 @@ pub struct CreatedApiKey {
     pub secret: String,
 }
 
-/// One grantable capability, for rendering a picker.
 pub struct CatalogEntry {
     pub id: &'static str,
     pub domain: &'static str,
@@ -78,7 +70,6 @@ pub struct CatalogEntry {
     pub enforced_by: Vec<String>,
 }
 
-/// A named starting point offered by the UI.
 pub struct CatalogPreset {
     pub id: &'static str,
     pub capabilities: Vec<&'static str>,
@@ -166,8 +157,8 @@ impl ApiKeyService {
         Ok(view_of(key, owned))
     }
 
-    /// Change a key's metadata. The secret itself is immutable; rotate by
-    /// creating a new key and revoking the old one.
+    /// Change a key's metadata. The secret is immutable: rotate by creating a new
+    /// key and revoking the old one.
     pub async fn update(
         repos: &Repositories,
         config: &AuthConfig,
@@ -202,13 +193,11 @@ impl ApiKeyService {
             .into_iter()
             .map(|binding| (binding.repo_id, binding.permission))
             .collect();
-        // Widening to every library drops the (now meaningless) bindings, so a
-        // key that keeps them does not fail the "all_repos + bindings" check.
+        // Widening drops the old bindings, so "all_repos + bindings" still validates.
         let widening = final_all_repos && requested_repos.is_none();
         let final_repos = requested_repos.unwrap_or(current_repos);
 
-        // Validate the state the key will end up in, so a partial update cannot
-        // combine a new capability set with a stale library scope.
+        // Validate the end state: no partial update may mix new capabilities with a stale scope.
         let to_validate = if widening { Vec::new() } else { final_repos };
         let bindings =
             validate_bindings(repos, user_id, final_all_repos, &to_validate, capabilities).await?;
@@ -236,8 +225,8 @@ impl ApiKeyService {
         if !updated {
             return Err(not_found());
         }
-        // Bindings are rewritten from the validated final state, which keeps the
-        // stored scope and the capability set consistent in one step.
+        // Bindings are rewritten from the validated final state, so stored scope
+        // and capabilities stay consistent in one step.
         repos.api_key.replace_bindings(key_id, &bindings).await?;
         Self::get(repos, user_id, key_id).await
     }
@@ -253,9 +242,8 @@ impl ApiKeyService {
 
 /// The capability catalog and presets, for rendering a picker.
 ///
-/// Entries a non-admin may not grant are filtered out: `key.*` is never
-/// grantable (a key that can mint keys could widen its own access), and
-/// `admin.*` only appears for admins.
+/// `key.*` is never grantable (a key that can mint keys could widen its own
+/// access), and `admin.*` appears only for admins.
 pub fn catalog(is_admin: bool) -> (Vec<CatalogEntry>, Vec<CatalogPreset>) {
     let entries = Capability::ALL
         .iter()
@@ -323,7 +311,6 @@ fn normalize_name(name: Option<String>) -> String {
     }
 }
 
-/// Parse and validate a requested capability set.
 fn validate_capabilities(ids: &[String], is_admin: bool) -> Result<CapabilitySet, AppError> {
     if ids.is_empty() {
         return Err(AppError::BadRequest(
@@ -345,7 +332,6 @@ fn validate_capabilities(ids: &[String], is_admin: bool) -> Result<CapabilitySet
     Ok(set)
 }
 
-/// Parse the capability set already stored on a key.
 fn parse_stored_capabilities(key: &api_key::Model) -> Result<CapabilitySet, AppError> {
     CapabilitySet::from_canonical(&key.capabilities)
         .map_err(|error| AppError::Internal(format!("api key {} has {error}", key.id)))
@@ -384,9 +370,8 @@ async fn validate_bindings(
                 "permission for {repo_id} must be \"r\" or \"rw\""
             )));
         }
-        // Read access is enough to bind: the ceiling limits the key, it does not
-        // grant anything, and the effective permission is recomputed on every
-        // request against live membership.
+        // Read access is enough to bind: the ceiling limits the key and grants nothing,
+        // and the effective permission is recomputed per request against live membership.
         crate::domain::permission::check_repo_read_permission(
             repos.member.as_ref(),
             repo_id,
@@ -394,9 +379,9 @@ async fn validate_bindings(
         )
         .await?;
 
-        // WebDAV has no way to supply an encrypted library's password, so a key
-        // carrying WebDAV access must not be bound to one. This mirrors the
-        // rejection the legacy per-library WebDAV key endpoint performed.
+        // WebDAV cannot supply an encrypted library's password, so a key carrying
+        // WebDAV access must not be bound to one. This mirrors the rejection the
+        // legacy per-library WebDAV key endpoint performed.
         if (capabilities.contains(Capability::WebdavRead)
             || capabilities.contains(Capability::WebdavWrite))
             && let Some(repo) = repos.repo.find_by_id(repo_id).await?
@@ -415,7 +400,6 @@ async fn validate_bindings(
     Ok(bindings)
 }
 
-/// Turn the requested lifetime into an absolute expiry.
 fn resolve_expiry(config: &AuthConfig, expiry: KeyExpiry) -> Result<Option<i64>, AppError> {
     let now = now();
     let max_days = config.api_key_max_ttl_days;
@@ -456,11 +440,9 @@ fn resolve_expiry(config: &AuthConfig, expiry: KeyExpiry) -> Result<Option<i64>,
 }
 
 fn view_of(key: api_key::Model, repos: Vec<(String, String)>) -> ApiKeyView {
-    // The stored list is already canonical; splitting it back is lenient on
-    // purpose, so a row carrying an id this build does not know still lists
-    // instead of failing the whole page. Retired ids are the exception: they can
-    // no longer be granted, so showing them would advertise a power the key does
-    // not have any more.
+    // Splitting the stored list is lenient on purpose, so a row carrying an id this
+    // build does not know still lists; retired ids are the exception, as they can no
+    // longer be granted.
     let capabilities = key
         .capabilities
         .split(',')
@@ -562,10 +544,10 @@ mod tests {
                 .iter()
                 .any(|entry| entry.id == "admin.user.read")
         );
-        // Presets are expanded, so a client can post them back verbatim. The
-        // WebDAV ones stay inside the WebDAV surface: `/dav/...` consults
-        // `webdav.*` plus the library binding and nothing else, so carrying
-        // `file.delete` would hand a mount-only key the REST API.
+        // Presets are expanded, so a client can post them back verbatim. The WebDAV
+        // ones stay inside the WebDAV surface: `/dav/...` consults `webdav.*` plus the
+        // library binding and nothing else, so `file.delete` would hand a mount-only
+        // key the REST API.
         let webdav_ro = presets
             .iter()
             .find(|preset| preset.id == "webdav_ro")

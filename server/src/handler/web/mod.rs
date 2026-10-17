@@ -12,9 +12,8 @@ pub mod upload;
 pub mod upload_link_view;
 pub mod zip_download;
 
-/// The page routes: a share link, an upload link, a file download opened in the
-/// app. These are visited by a browser, so a failure renders the error page
-/// rather than the wire body (see `ui::error_page`).
+/// The page routes (share link, upload link, a file download opened in the app):
+/// visited by a browser, so a failure renders the error page (see `ui::error_page`).
 pub fn web_page_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
@@ -47,19 +46,17 @@ pub fn web_page_routes() -> Router<Arc<AppState>> {
         )
 }
 
-/// The endpoints the frontend calls itself (chunked uploads, block uploads,
-/// progress, the zip task). These keep their wire bodies: the browser parses
-/// them, and the error page would be read as a failed response either way.
+/// The endpoints the frontend calls itself (chunked uploads, block uploads, progress,
+/// the zip task); they keep their wire bodies because the browser parses them.
 pub fn web_api_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/upload-aj/", post(upload::upload_aj))
         .route("/upload-aj/{token}", post(upload::upload_aj_token))
         .route("/upload-api/{token}", post(upload::upload_api))
         .route("/download-api/{token}", get(download::download_api))
-        // Raw file content: opened by a link in the file list and by the media
-        // preview element. It belongs to the wire group, not the page group —
-        // the page group's error middleware rewrites 4xx bodies to HTML, which
-        // dropped the `Content-Range` on a 416 and made `<video>` see a page.
+        // Raw file content, opened by a file-list link or the media preview element; it
+        // belongs to the wire group because the page group's error middleware rewrites
+        // 4xx bodies to HTML, which dropped `Content-Range` on a 416.
         .route(
             "/repos/{repo_id}/files/{*path}",
             get(download::repo_file_download),
@@ -77,9 +74,8 @@ pub fn web_api_routes() -> Router<Arc<AppState>> {
         .route("/idx_progress", get(progress::idx_progress))
         .route(
             "/api/v2.1/repos/{repo_id}/zip-task/",
-            // Pure metadata: a parent dir plus a bounded list of names. Cap the
-            // body far below the app-wide JSON limit so a request cannot make
-            // the handler buffer megabytes of names it will only reject.
+            // Pure metadata: a parent dir plus a bounded list of names, so cap the
+            // body far below the app-wide JSON limit.
             post(zip_download::zip_task_handler).layer(axum::extract::DefaultBodyLimit::max(
                 crate::handler::MAX_SMALL_BODY_BYTES,
             )),

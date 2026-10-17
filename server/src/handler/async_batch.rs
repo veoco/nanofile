@@ -1,9 +1,7 @@
 //! Async batch copy/move, and the progress endpoint the desktop client polls.
 //!
-//! These handlers are compatibility surface: the web UI uses the *synchronous*
-//! batch endpoints, so the only consumer is the official client. The handlers
-//! are therefore thin — validate, submit, answer with a task id — and the
-//! lifecycle belongs entirely to the task system.
+//! Compatibility surface: the web UI uses the *synchronous* batch endpoints, so the only
+//! consumer is the official client and the lifecycle belongs to the task system.
 
 use axum::{
     Json,
@@ -37,8 +35,8 @@ pub async fn async_batch_copy_item(
     auth.ensure_repo_allowed(&body.src_repo_id, true)?;
 
     crate::handler::sanitize_dirent_list(&mut body.src_dirents)?;
-    // The description below indexes `src_dirents[0]`, so an empty list must be
-    // rejected here rather than panicking inside the handler.
+    // The description indexes `src_dirents[0]`, so an empty list must be rejected here
+    // rather than panicking inside the handler.
     if body.src_dirents.is_empty() {
         return Err(AppError::BadRequest("no dirents specified".into()));
     }
@@ -198,10 +196,9 @@ pub async fn query_copy_move_progress(
     Query(query): Query<QueryProgressQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let task_id = query.task_id.unwrap_or_default();
-    // Only the owner may read a task: its description carries file names and
-    // its failure text can carry paths. A task that is missing, expired or
-    // owned by somebody else is reported identically, so the response cannot
-    // be used to probe which ids exist.
+    // Only the owner may read a task: its description carries file names and its failure
+    // text can carry paths. Missing, expired and foreign tasks look identical, so the
+    // response cannot probe which ids exist.
     let run = state
         .tasks
         .store()
@@ -214,7 +211,6 @@ pub async fn query_copy_move_progress(
     Ok(Json(copy_move_progress(&run)))
 }
 
-/// "Copy \"a.txt\"" or "Copy \"a.txt\" and 2 more items".
 fn describe(verb: &str, names: &[String]) -> String {
     match names {
         [only] => format!("{verb} \"{only}\""),

@@ -31,11 +31,10 @@ pub struct SearchFileQuery {
     pub q: String,
 }
 
-/// `GET /api/v2.1/search-file/` — search files/folders within a single repo.
-///
-/// Returns the seahub-compatible shape `{"data": [{"path","size","mtime","type"}]}`
-/// where `type` is `"file"`/`"folder"` and `mtime` is an ISO-8601 string.
-/// This is distinct from the legacy `/api2/search/` (repo-spanning) endpoint.
+/// `GET /api/v2.1/search-file/` — files/folders within one repo, in the
+/// seahub-compatible `{"data": [{"path","size","mtime","type"}]}` shape where `type`
+/// is `"file"`/`"folder"` and `mtime` an ISO-8601 string. Distinct from the legacy
+/// repo-spanning `/api2/search/`.
 pub async fn search_file(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -59,8 +58,7 @@ pub async fn search_file(
     }
 
     let svc = state.search_service();
-    // Filename-only search scoped to the single repo; fetch a large page and
-    // paginate the reshaped result below.
+    // Filename-only, single-repo: fetch one large page, paginate the reshaped result.
     let (results, _total, _has_more) = svc
         .search(
             &q,
@@ -110,9 +108,8 @@ pub async fn search(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<SearchResponse>, AppError> {
     let q = query.q.unwrap_or_default().trim().to_string();
-    // Clamp both bounds: `per_page` is client-controlled and feeds an SQL
-    // LIMIT-looking offset calculation, so an unbounded value is a cheap way to
-    // make the server do the most work it can for one request.
+    // Clamp both bounds: `per_page` is client-controlled and feeds an offset
+    // calculation, so an unbounded value makes the server do maximal work per request.
     let per_page = query
         .per_page
         .unwrap_or(10)

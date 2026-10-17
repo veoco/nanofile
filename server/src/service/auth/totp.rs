@@ -23,27 +23,19 @@ impl TotpManager {
         Ok(totp)
     }
 
-    /// Verify a code, returning the matched TOTP time step.
-    ///
-    /// The step is what makes a code single-use: `totp-rs` accepts the previous,
-    /// current and next step (±30s of clock skew), so a code observed by an
-    /// attacker would otherwise stay valid for up to ~90 seconds. Callers should
-    /// prefer [`Self::verify_and_consume`], which also records the step.
+    /// Verify a code, returning the matched TOTP time step. The step makes a code
+    /// single-use; prefer [`Self::verify_and_consume`], which records it.
     pub fn verify_code(totp: &Totp, code: &str) -> Option<u64> {
         totp.check_current(code)
     }
 
     /// Verify a code and atomically claim its time step.
     ///
-    /// The skew tolerance (`totp-rs` accepts the previous, current and next
-    /// step, so a code stays valid for ~90 s) is what makes a claim necessary:
-    /// a code observed by someone else must not be replayable. Claiming is a
-    /// single conditional UPDATE (`last_used_step < step`), so two concurrent
-    /// submissions of the same code cannot both win — a read-then-write guard
-    /// left exactly that window open.
-    ///
-    /// A storage error fails **closed**: this gates authentication, so an
-    /// unwritable database must not silently disable the replay guard.
+    /// `totp-rs` accepts the previous, current and next step (~90 s), so a code
+    /// observed by someone else must not be replayable. The claim is a single
+    /// conditional UPDATE (`last_used_step < step`), so concurrent submissions of
+    /// the same code cannot both win. A storage error fails **closed**: this gates
+    /// authentication, so an unwritable database must not disable the replay guard.
     pub async fn verify_and_consume(
         repos: &crate::repository::Repositories,
         user_id: i32,

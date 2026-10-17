@@ -15,10 +15,7 @@ impl ExifService {
         Self { repos, block_store }
     }
 
-    /// Extract EXIF metadata from an image file.
-    ///
-    /// Returns a JSON object with EXIF fields that were found, or `null` if
-    /// the file contains no EXIF data.
+    /// Extract EXIF metadata as a JSON object, or `null` when the file has none.
     pub async fn get_exif(&self, repo_id: &str, path: &str) -> Result<serde_json::Value, AppError> {
         // EXIF lives in the APP1 segment near the start of the image, so a
         // bounded read is enough and avoids loading huge files into memory.
@@ -33,19 +30,17 @@ impl ExifService {
         .await
         .map_err(|_| AppError::NotFound("file not found".into()))?;
 
-        // The worker being unavailable is an environment problem, and it has to
-        // be distinguishable from "this image has no EXIF": a refusal from a
-        // worker that is running — a corrupt image, a format it will not read —
-        // is still `null`, but a switch that is off or a host below the minimum
-        // is an error the caller can see rather than a silent empty answer.
+        // The worker being unavailable is an environment problem, distinct from
+        // "this image has no EXIF": a switch that is off or a host below the
+        // minimum is an error the caller sees, not a silent empty answer.
         if let Err(why) = crate::sandbox::available(crate::sandbox::Profile::Images) {
             return Err(AppError::Internal(format!(
                 "EXIF processing is unavailable: {why}"
             )));
         }
 
-        // The child may work for the whole image timeout, so this queues on the
-        // same gate every image path uses; the permit covers the wait below.
+        // May run for the whole image timeout, so queue on the shared image gate;
+        // the permit covers the wait below.
         let _permit = crate::sandbox::jobs::images::acquire_image_permit()
             .await
             .map_err(|e| AppError::Internal(format!("EXIF worker gate failed: {e}")))?;
@@ -54,17 +49,15 @@ impl ExifService {
                 .await
                 .map_err(|e| AppError::Internal(format!("EXIF worker panicked: {e}")))?;
 
-        // A refusal from a running worker is answered as "no EXIF": that is what
-        // a file without any returns.
+        // A refusal from a running worker is answered as "no EXIF".
         match exif_data {
             Ok(json) => Ok(serde_json::from_str(&json).unwrap_or(serde_json::Value::Null)),
             Err(_) => Ok(serde_json::Value::Null),
         }
     }
 
-    /// Parse EXIF bytes and return a JSON object with known tags.
-    ///
-    /// Runs inside the sandbox child, which is why it is reachable from there.
+    /// Parse EXIF bytes into a JSON object of known tags. Runs inside the sandbox
+    /// child, which is why it is reachable from there.
     pub(crate) fn extract_exif(content: &[u8]) -> Result<serde_json::Value, AppError> {
         let mut cursor = Cursor::new(content);
         let exif = match exif::Reader::new().read_from_container(&mut cursor) {
@@ -84,7 +77,6 @@ impl ExifService {
                 "GPSLatitude",
             );
         }
-        // GPS longitude with reference.
         if has_valid_gps(&exif, exif::Tag::GPSLongitude) {
             insert_gps_field(
                 &exif,
@@ -95,7 +87,6 @@ impl ExifService {
             );
         }
 
-        // Standard EXIF tags.
         for tag in [
             exif::Tag::Make,
             exif::Tag::Model,
@@ -121,9 +112,8 @@ impl ExifService {
                             field.display_value().to_string()
                         }
                     }
-                    // Ascii fields that may have multiple values (e.g.
-                    // Software can contain empty trailing entries).
-                    // Join all non-empty values with ", " — no extra quotes.
+                    // Ascii fields may have multiple values (Software can carry
+                    // empty trailing entries); join non-empty ones with ", ".
                     t if t == exif::Tag::Software => {
                         if let exif::Value::Ascii(vals) = &field.value {
                             vals.iter()
@@ -135,7 +125,6 @@ impl ExifService {
                             field.display_value().to_string()
                         }
                     }
-                    // All other tags — use the default display formatter.
                     _ => field.display_value().to_string(),
                 };
                 fields.insert(tag_name, serde_json::Value::String(value));
@@ -157,7 +146,6 @@ fn has_valid_gps(exif: &exif::Exif, coord_tag: exif::Tag) -> bool {
     false
 }
 
-/// Helper: extract a GPS coordinate field combined with its reference.
 fn insert_gps_field(
     exif: &exif::Exif,
     fields: &mut serde_json::Map<String, serde_json::Value>,

@@ -1,8 +1,6 @@
-//! Business logic service layer — all domain-level operations.
+//! Business logic service layer — all domain-level operations, organized by domain.
 //!
-//! Organized by domain (auth, fs, repo, sharing, user, admin, activity).
-//! Services depend on repository traits and domain types; they never
-//! import axum or HTTP concerns directly.
+//! Services depend on repository traits and domain types; they never import axum or HTTP concerns.
 
 pub mod activity;
 pub mod admin;

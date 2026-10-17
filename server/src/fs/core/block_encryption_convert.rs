@@ -1,24 +1,15 @@
 //! One-shot conversion of legacy blocks to versioned at-rest ciphertext.
 //!
-//! In `Lazy` encryption mode new writes are encrypted but pre-existing blocks
-//! stay as they are on disk. Two legacy shapes exist, and both must converge to
-//! the versioned (`NFE1 || key_id || ciphertext || tag`) format before the
-//! server can switch to `On` mode:
-//!
-//! - pre-encryption **plaintext** blocks, and
-//! - header-less **ciphertext** written before the versioned header existed.
+//! In `Lazy` mode new writes are encrypted but pre-existing blocks stay as
+//! they are: either pre-encryption **plaintext**, or header-less **ciphertext**
+//! written before the versioned (`NFE1 || key_id || ciphertext || tag`) header
+//! existed. Both must converge before the server switches to `On`.
 //!
 //! A block is classified by probing the GCM-SIV tag: a body that decrypts is
-//! ciphertext, whose plaintext is re-encrypted (a format change that only adds
-//! the header); anything else is plaintext and is encrypted as-is. Block ids
-//! are `sha1(logical bytes)` and unchanged by the conversion, so Seafile
-//! clients, content-addressed dedup and GC are all unaffected.
-//!
-//! The conversion is idempotent and blocks are immutable (except under GC), so
-//! the set of legacy blocks is fixed and finite. The task therefore runs once:
-//! it walks every block, converts the legacy ones, then writes a marker file in
-//! `block_dir` recording completion. Later runs (startup or manual re-trigger)
-//! see the marker and skip entirely with zero I/O.
+//! ciphertext (re-encrypted, header only); anything else is plaintext and is
+//! encrypted as-is. Block ids are `sha1(logical bytes)` and unchanged, so
+//! Seafile clients, dedup and GC are unaffected. Idempotent, and a marker in
+//! `block_dir` makes later runs skip with zero I/O.
 
 use std::path::Path;
 use std::time::Duration;
@@ -26,28 +17,24 @@ use std::time::Duration;
 use base::error::AppError;
 use infra::storage::DynBlockStorage;
 
-/// One-shot converter for legacy plaintext blocks.
 pub struct BlockEncryptionConverter;
 
 impl BlockEncryptionConverter {
     /// Marker file name, stored directly in `block_dir`.
     const MARKER_FILE: &'static str = ".encryption_converted";
 
-    /// Whether the conversion has already completed (marker file exists).
     pub async fn is_converted(block_dir: &Path) -> bool {
         tokio::fs::try_exists(block_dir.join(Self::MARKER_FILE))
             .await
             .unwrap_or(false)
     }
 
-    /// Convert every legacy plaintext block to ciphertext, in bounded batches
-    /// with a short sleep between batches to keep load smooth. Returns the
-    /// number of blocks converted.
+    /// Convert every legacy plaintext block, in bounded batches with a short
+    /// sleep between them. Returns the number converted.
     ///
-    /// Block ids are streamed from the store through a bounded channel and
-    /// converted as they arrive, so the walk never holds a library's whole id
-    /// list — let alone every library's — in memory. The channel also bounds
-    /// how far the walk can run ahead of the conversion.
+    /// Block ids stream from the store through a bounded channel and are
+    /// converted as they arrive, so the walk never holds a whole library's id
+    /// list in memory and cannot run far ahead of the conversion.
     pub async fn convert_legacy_blocks(
         block_store: &DynBlockStorage,
         batch_limit: usize,
@@ -63,9 +50,8 @@ impl BlockEncryptionConverter {
 
         let mut converted = 0u64;
         for repo_id in repo_ids {
-            // The walk is a separate task because the callback-style
-            // enumeration cannot await the per-block conversion; the bounded
-            // channel is what keeps the two in step.
+            // The walk is a separate task: the callback-style enumeration cannot
+            // await the per-block conversion, so the bounded channel keeps pace.
             let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(batch_limit * 2);
             let store = block_store.clone();
             let walk_repo = repo_id.clone();
@@ -107,9 +93,8 @@ mod tests {
     const MASTER: [u8; 32] = [0x42; 32];
     const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
 
-    /// Build a lazy-mode decorator over a raw store sharing one temp dir, so
-    /// tests can write legacy plaintext via the raw store and inspect on-disk
-    /// ciphertext through it.
+    /// A lazy-mode decorator over a raw store sharing one temp dir, so tests can
+    /// write legacy plaintext via the raw store and inspect on-disk ciphertext.
     fn temp_lazy_store() -> (tempfile::TempDir, DynBlockStorage, Arc<BlockStorage>) {
         let dir = tempfile::tempdir().unwrap();
         let blocks = dir.path().join("data").join("blocks");
@@ -146,10 +131,8 @@ mod tests {
     async fn skips_blocks_already_encrypted() {
         let (_dir, store, raw) = temp_lazy_store();
 
-        // A freshly written block via the decorator is already ciphertext.
         let fresh = b"freshly encrypted block".to_vec();
         let fresh_id = store.write_block(REPO, &fresh).await.unwrap();
-        // A legacy plaintext block.
         let legacy = b"legacy plaintext block".to_vec();
         let legacy_id = raw.write_block(REPO, &legacy).await.unwrap();
 
@@ -161,7 +144,6 @@ mod tests {
         assert_eq!(converted, 1);
         // The already-encrypted block is untouched (still decryptable).
         assert_eq!(store.read_block(REPO, &fresh_id).await.unwrap(), fresh);
-        // The legacy block is now ciphertext.
         assert_eq!(
             raw.read_block(REPO, &legacy_id).await.unwrap().len(),
             legacy.len() + 16 + 6
@@ -172,8 +154,7 @@ mod tests {
     async fn converts_headerless_legacy_ciphertext_without_changing_content() {
         let (_dir, store, raw) = temp_lazy_store();
 
-        // A block written before the versioned header existed: versioned
-        // ciphertext with the 6-byte header stripped.
+        // Versioned ciphertext from before the header: 6-byte header stripped.
         let data = b"headerless legacy ciphertext block".to_vec();
         let id = store.write_block(REPO, &data).await.unwrap();
         let stored = raw.read_block(REPO, &id).await.unwrap();
@@ -192,8 +173,8 @@ mod tests {
             "a header-less ciphertext block needs conversion"
         );
 
-        // Format change only: content and id are unchanged, and the stored bytes
-        // carry the versioned header again.
+        // Format change only: content and id unchanged; the versioned header is
+        // back.
         assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
         let on_disk = raw.read_block(REPO, &id).await.unwrap();
         assert_eq!(&on_disk[..4], b"NFE1");

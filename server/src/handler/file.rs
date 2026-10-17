@@ -20,19 +20,16 @@ use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
 use crate::service::fs::file as file_svc;
 use base::error::AppError;
 
-// Re-export pub(crate) rename function for create_file_v21 use
 pub(crate) use file_svc::rename_entry;
 
 #[derive(Deserialize)]
 pub struct FileQuery {
     pub p: Option<String>,
     pub reuse: Option<i32>,
-    /// `download` (default), `view` or `downloadblks`. Upstream reads
-    /// `op = request.GET.get('op', 'download')` and branches on it
-    /// (`seahub/api2/views.py:3142-3150`).
+    /// `download` (default), `view` or `downloadblks`, branched on as upstream's
+    /// `op = request.GET.get('op', 'download')` (`seahub/api2/views.py:3142-3150`).
     pub op: Option<String>,
-    /// `reloaddir=true` asks the create/rename/move handlers for the affected
-    /// directory's listing instead of a bare `"success"`.
+    /// `reloaddir=true` asks for the affected directory's listing instead of `"success"`.
     pub reloaddir: Option<String>,
 }
 
@@ -92,9 +89,8 @@ pub async fn download_file(
     match query.op.as_deref().unwrap_or("download") {
         "download" | "view" => Ok((resp_headers, Json(url)).into_response()),
         "downloadblks" => {
-            // The iOS client asks for this before a client-side-decrypted
-            // download and reads `file_id`/`blklist`; the shape (and the
-            // `oid` header) matches `seahub/api2/views.py:2524-2549`.
+            // The iOS client asks for this before a client-side-decrypted download and
+            // reads `file_id`/`blklist`; shape matches `seahub/api2/views.py:2524-2549`.
             let block_ids: Vec<String> = if file_fs_id == EMPTY_SHA1 {
                 // A zero-byte file has no blocks, so no library key is needed.
                 Vec::new()
@@ -123,8 +119,7 @@ pub async fn download_file(
                     .unwrap_or_default()
             };
 
-            // Upstream only reports the library's encryption info when there is
-            // a block list to decrypt.
+            // Upstream reports encryption info only when there is a block list.
             let (encrypted, enc_version) = if block_ids.is_empty() {
                 (false, 0)
             } else {
@@ -173,10 +168,8 @@ pub async fn file_post_handler(
     let svc = state.file_service();
 
     if content_type.starts_with("multipart/form-data") {
-        // Stream the multipart body so the file field never has to be buffered
-        // in memory: multer yields fields in boundary order, we write the
-        // `file` field's chunks into blocks on the fly and collect the small
-        // fields (operation/newname/parent_dir/replace) as text.
+        // Stream the multipart body: `file` chunks go to blocks on the fly and the
+        // small fields are collected as text.
         let boundary = multer::parse_boundary(&content_type)
             .map_err(|e| AppError::Internal(format!("invalid multipart boundary: {e}")))?;
         let mut mp = multer::Multipart::new(body.into_data_stream(), boundary);
@@ -188,11 +181,9 @@ pub async fn file_post_handler(
         let mut file_total_size: i64 = 0;
         let mut has_file = false;
 
-        // Encrypted libraries need the password-equivalent block key before any
-        // block is written, so the uploaded bytes are stored as ciphertext
-        // (matching `common/fs-mgr.c:707-721`, which hashes the encrypted
-        // buffer). `repo_id` comes from the path, so this can fail fast before
-        // the body is read.
+        // Encrypted libraries need the password-equivalent block key before any block
+        // is written, so the bytes are stored as ciphertext (matching
+        // `common/fs-mgr.c:707-721`); `repo_id` comes from the path, so this fails fast.
         let enc_key = crate::handler::web::download::upload_block_key(
             &state,
             repo_id,
@@ -234,7 +225,6 @@ pub async fn file_post_handler(
             }
         }
 
-        // A multipart body with `operation=rename` renames an existing entry.
         if fields.get("operation").map(String::as_str) == Some("rename") {
             let newname = fields
                 .get("newname")
@@ -468,10 +458,8 @@ pub struct FileIndexTextQuery {
     pub p: Option<String>,
 }
 
-/// GET /api2/repos/{repo_id}/file/index-text/?p=/path
-///
-/// Retrieve the stored full-text search index content for a file.
-/// Returns `{"content": "..."}` or `{"content": null}` if not indexed.
+/// GET /api2/repos/{repo_id}/file/index-text/?p=/path — the stored full-text index
+/// content, or null when the file is not indexed.
 pub async fn file_index_text(
     access: RepoPathRead,
     State(state): State<Arc<AppState>>,
@@ -501,10 +489,8 @@ pub struct ReindexFileRequest {
     pub p: Option<String>,
 }
 
-/// POST /api2/repos/{repo_id}/file/reindex/
-///
-/// Re-index a single file's content from block storage.
-/// Body: `{"p": "/dir/file.txt"}`
+/// POST /api2/repos/{repo_id}/file/reindex/ — re-index one file from block storage;
+/// body `{"p": "/dir/file.txt"}`.
 pub async fn reindex_file_handler(
     access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
@@ -523,8 +509,7 @@ pub async fn reindex_file_handler(
         .as_ref()
         .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
 
-    // One explicit file, one synchronous answer: the Web UI's right panel asks
-    // "did this become searchable?" and needs a boolean, not a task id.
+    // One explicit file, one synchronous answer: the UI needs a boolean, not a task id.
     let svc = crate::service::index::IndexService::new(
         state.repos.clone(),
         state.block_store.clone(),
@@ -600,7 +585,6 @@ pub async fn create_file_v21(
     let path = safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    // Check for rename operation in multipart body
     if let Some(op) = extract_multipart_field(&bytes, "operation")
         && op == "rename"
     {
@@ -676,9 +660,7 @@ pub async fn file_uploaded_bytes(
         .check_uploaded_bytes(repo_id, query.blockids.as_deref())
         .await;
 
-    // For resumable upload: check if a temp file already exists and return
-    // the actual byte offset.  This takes precedence over the block-count
-    // approach (which is used by the block-level resume protocol).
+    // Resumable upload: a temp file's actual byte offset wins over the block count.
     if let (Some(parent_dir), Some(file_name)) = (&query.parent_dir, &query.file_name) {
         let file_path = base::sanitize::safe_join_path(parent_dir, file_name)
             .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;

@@ -8,10 +8,8 @@ use base::error::AppError;
 
 /// POST /api2/client-login/
 ///
-/// Generate a one-time token for the "view on website" feature.
-/// The sync client calls this to get a token, then opens a browser
-/// to /client-login/?token=... which auto-authenticates the user.
-/// Token is valid for 30 seconds (matching Seahub behavior).
+/// A one-time token for the "view on website" feature, valid 30 seconds (matching
+/// Seahub): the client opens `/client-login/?token=...`, which auto-authenticates.
 pub async fn client_login(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -21,10 +19,10 @@ pub async fn client_login(
     let svc = state.sso_service();
     let token = svc.create_client_login_token(&auth.email).await?;
 
-    // Bind the token to the address that requested it. The desktop client and
-    // the browser it opens share an egress address, so this lets the web handler
-    // tell a genuine "open in browser" flow from a cross-site link that would
-    // otherwise silently log the victim into the attacker's account.
+    // Bind the token to the requesting address. The desktop client and the browser it
+    // opens share an egress address, so the web handler can tell a genuine "open in
+    // browser" flow from a cross-site link that would silently log the victim into the
+    // attacker's account.
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,

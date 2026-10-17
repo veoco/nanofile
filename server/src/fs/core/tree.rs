@@ -7,9 +7,8 @@ use infra::common::EMPTY_SHA1;
 use infra::entity::fs_object;
 use infra::serialization::S_IFDIR;
 
-/// `S_IFMT` / `S_IFDIR` type bits, used like C's `S_ISDIR()`.
-/// `infra::serialization::S_IFDIR` is the bare type (`0o40000`) and cannot be
-/// used as a mask because a dirent may carry permission bits.
+/// `S_IFMT` / `S_IFDIR` type bits, used like C's `S_ISDIR()`. The bare
+/// `infra::serialization::S_IFDIR` cannot mask a dirent that also carries permission bits.
 const S_IFMT: i32 = 0o170000;
 const S_IFDIR_TYPE: i32 = 0o040000;
 
@@ -20,19 +19,14 @@ pub(crate) fn is_dir_mode(mode: i32) -> bool {
 
 /// Read and parse a directory fs_object (FsDirData) from the database.
 ///
-/// `EMPTY_SHA1` is read as an empty directory, which is what it means for an
-/// empty directory — but the same id is also the id of every **zero-byte file**
-/// (`seaf_fs_manager_index_blocks()`), so a caller that got the id from a
-/// dirent must check the entry's mode before descending through it. The path
-/// resolvers below do; see [`resolve_fs_id`].
+/// `EMPTY_SHA1` is read as an empty directory — but it is also the id of every
+/// **zero-byte file** (`seaf_fs_manager_index_blocks()`), so a caller that got the
+/// id from a dirent must check the entry's mode before descending; see [`resolve_fs_id`].
 pub async fn read_fs_dir_data(
     repos: &Repositories,
     repo_id: &str,
     fs_id: &str,
 ) -> Result<FsDirData, AppError> {
-    // The zero hash (all zeros) is a sentinel in seafile's protocol,
-    // used for empty/incomplete directories or when an fs_object
-    // hasn't been fully committed yet. Treat it as an empty directory.
     if fs_id == EMPTY_SHA1 {
         return Ok(FsDirData {
             dirents: vec![],
@@ -45,9 +39,8 @@ pub async fn read_fs_dir_data(
         .find_by_repo_and_fs_id(repo_id, fs_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("fs_object not found: {fs_id}")))?;
-    // Reject a type mismatch rather than parsing by shape alone: this keeps the
-    // single-object reader consistent with `read_fs_dir_data_batch`, which
-    // already filters on `obj_type`.
+    // Reject a type mismatch rather than parsing by shape alone, keeping this reader
+    // consistent with `read_fs_dir_data_batch`, which filters on `obj_type`.
     if obj.obj_type != SEAF_METADATA_TYPE_DIR as i8 {
         return Err(AppError::NotFound(format!(
             "fs_object {fs_id} is not a directory"
@@ -64,9 +57,8 @@ pub async fn read_fs_file_data(
     repo_id: &str,
     fs_id: &str,
 ) -> Result<FsFileData, AppError> {
-    // seafile keeps no object for an empty file: `EMPTY_SHA1` is a sentinel
-    // both sides synthesise into a zero-byte file
-    // (`seaf_fs_manager_get_seafile()` returns an empty Seafile for it).
+    // seafile keeps no object for an empty file: `EMPTY_SHA1` is a sentinel both sides
+    // synthesise into a zero-byte file (`seaf_fs_manager_get_seafile()`).
     if fs_id == EMPTY_SHA1 {
         return Ok(FsFileData {
             block_ids: vec![],
@@ -80,8 +72,7 @@ pub async fn read_fs_file_data(
         .find_by_repo_and_fs_id(repo_id, fs_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("fs_object not found: {fs_id}")))?;
-    // See `read_fs_dir_data`: `read_fs_file_data_batch` filters on `obj_type`,
-    // so the single-object reader must too.
+    // See `read_fs_dir_data`: the batch reader filters on `obj_type`, so this one must too.
     if obj.obj_type != SEAF_METADATA_TYPE_FILE as i8 {
         return Err(AppError::NotFound(format!(
             "fs_object {fs_id} is not a file"
@@ -92,12 +83,10 @@ pub async fn read_fs_file_data(
     Ok(data)
 }
 
-/// SQLite's variable limit (~999) caps `IN` clause width; chunk ID lists so
-/// wide directories never trip it.
+/// SQLite's variable limit (~999) caps `IN` width; chunk ids so wide dirs never trip it.
 const IN_BATCH: usize = 500;
 
-/// Fetch the given fs_objects in one batched `IN` query per chunk, keyed by
-/// fs_id. Missing ids are simply absent from the map.
+/// Fetch the given fs_objects in one batched `IN` query per chunk, keyed by fs_id.
 pub(crate) async fn fetch_fs_object_map(
     repos: &Repositories,
     repo_id: &str,
@@ -116,11 +105,8 @@ pub(crate) async fn fetch_fs_object_map(
     Ok(map)
 }
 
-/// Batch version of `read_fs_dir_data` for a list of directory ids.
-///
-/// `EMPTY_SHA1` sentinels are skipped and non-directory / missing ids are
-/// absent from the result map, mirroring the per-id semantics
-/// (`Err(_) => continue`).
+/// Batch version of `read_fs_dir_data`: `EMPTY_SHA1` sentinels are skipped and
+/// non-directory / missing ids are absent from the map.
 pub async fn read_fs_dir_data_batch(
     repos: &Repositories,
     repo_id: &str,
@@ -144,9 +130,8 @@ pub async fn read_fs_dir_data_batch(
     Ok(out)
 }
 
-/// Batch version of `read_fs_file_data` for a list of file ids. Non-file ids
-/// are absent from the result map; an `EMPTY_SHA1` request yields a synthesized
-/// zero-byte file, mirroring the single-id reader.
+/// Batch version of `read_fs_file_data`; non-file ids are absent, `EMPTY_SHA1` yields a
+/// synthesized zero-byte file.
 pub async fn read_fs_file_data_batch(
     repos: &Repositories,
     repo_id: &str,
@@ -181,11 +166,8 @@ pub async fn read_fs_file_data_batch(
     Ok(out)
 }
 
-/// Traverse the FS tree from root_fs_id following path segments,
-/// returning the fs_id of the final segment.
-///
-/// Path should be absolute (e.g. `/dir/subdir/file.txt`).
-/// Returns the root_fs_id itself if path is "/" or empty.
+/// Traverse the FS tree from `root_fs_id` along an absolute path's segments, returning
+/// the last segment's fs_id. A "/" or empty path returns `root_fs_id` itself.
 pub async fn resolve_fs_id(
     repos: &Repositories,
     repo_id: &str,
@@ -212,9 +194,9 @@ pub async fn resolve_fs_id(
             .find(|d| d.name == *segment)
             .ok_or_else(|| AppError::NotFound(format!("path segment not found: {segment}")))?;
 
-        // A segment that is not the last one has to be a directory: without
-        // this, `/dir/empty.txt/anything` would resolve, because the zero-byte
-        // file's id is `EMPTY_SHA1` and reading it yields an empty directory.
+        // A non-final segment must be a directory: otherwise `/dir/empty.txt/anything`
+        // would resolve, because a zero-byte file's id is `EMPTY_SHA1`, which reads as
+        // an empty directory.
         if i + 1 < segments.len() && !is_dir_mode(entry.mode) {
             return Err(AppError::NotFound(format!("not a directory: {segment}")));
         }
@@ -225,14 +207,13 @@ pub async fn resolve_fs_id(
     Ok(current_fs_id)
 }
 
-/// Resolve a path whose **every** component must be a directory: a parent
-/// directory a write goes into, or a directory to descend into.
+/// Resolve a path whose **every** component must be a directory: a parent directory a
+/// write goes into, or a directory to descend into.
 ///
-/// [`resolve_fs_id`] cannot check the last component, because callers that want
-/// a file's id resolve the same way. The distinction is load-bearing:
-/// `EMPTY_SHA1` is the id of an empty directory *and* of a zero-byte file, so a
-/// write "into" a zero-byte file would otherwise read the sentinel as an empty
-/// directory and rewrite the file's own dirent into a directory.
+/// [`resolve_fs_id`] cannot check the last component, because callers that want a file's
+/// id resolve the same way. The distinction is load-bearing: `EMPTY_SHA1` is the id of
+/// an empty directory *and* of a zero-byte file, so a write "into" a zero-byte file
+/// would otherwise read the sentinel as a directory and rewrite the file's dirent as one.
 pub async fn resolve_dir_fs_id(
     repos: &Repositories,
     repo_id: &str,
@@ -265,12 +246,8 @@ pub async fn resolve_dir_fs_id(
     Ok(current_fs_id)
 }
 
-/// Resolve a file path to its `fs_id` and current `mtime` in a single walk.
-///
-/// The mtime is read from the final hop's parent dirent, so callers that need
-/// both (e.g. thumbnail staleness checks) don't have to re-walk the tree or
-/// re-read the parent directory. Error semantics match [`resolve_fs_id`]:
-/// a missing segment yields `NotFound`; the empty path returns the root.
+/// Resolve a file path to its `fs_id` and current `mtime` in a single walk, mtime coming
+/// from the final hop's parent dirent. Errors match [`resolve_fs_id`].
 pub async fn resolve_file_entry(
     repos: &Repositories,
     repo_id: &str,
@@ -307,14 +284,11 @@ pub async fn resolve_file_entry(
     Ok((entry.id.clone(), entry.mtime))
 }
 
-/// Resolve a path to its `fs_id`, `is_dir`, `size` and `mtime` in a single
-/// walk, reusing an already-resolved root fs_id.
+/// Resolve a path to its `fs_id`, `is_dir`, `size` and `mtime` in a single walk, reusing
+/// an already-resolved root fs_id.
 ///
-/// Like [`resolve_file_entry`], the size and mtime are read from the final
-/// hop's parent dirent, so callers that need the entry's metadata alongside its
-/// fs_id (e.g. WebDAV GET) don't have to re-walk the tree or re-read the parent
-/// directory. Returns `Ok(None)` when the path does not exist; a missing segment
-/// yields `NotFound` (matching [`resolve_fs_id`]).
+/// As in [`resolve_file_entry`], size and mtime come from the final hop's parent dirent.
+/// `Ok(None)` when the path does not exist; a missing segment is `NotFound`.
 pub async fn resolve_file_entry_with_head(
     repos: &Repositories,
     repo_id: &str,
@@ -357,21 +331,17 @@ pub async fn resolve_file_entry_with_head(
 
 /// Batch version of `resolve_fs_id` for many `(root_fs_id, path)` targets.
 ///
-/// Resolves all targets in a shared level-frontier walk: at each depth it
-/// deduplicates the "current directory" ids and fetches them in a single
-/// batched query, so M paths of depth D cost O(D) queries instead of O(M·D).
-/// Directories shared between targets are fetched only once.
+/// One shared level-frontier walk deduplicates the current directory ids at each depth,
+/// so M paths of depth D cost O(D) queries instead of O(M·D).
 ///
-/// The result is aligned with `targets`: `Some(fs_id)` for a fully resolved
-/// path, `None` when any segment is missing (mirroring `resolve_fs_id`'s
-/// `NotFound`), including a root or intermediate id that is `EMPTY_SHA1` or
-/// not a directory.
+/// The result is aligned with `targets`: `Some(fs_id)` when fully resolved, `None` when
+/// any segment is missing (mirroring `resolve_fs_id`'s `NotFound`), including a root or
+/// intermediate id that is `EMPTY_SHA1` or not a directory.
 pub async fn resolve_fs_ids_batch(
     repos: &Repositories,
     repo_id: &str,
     targets: &[(String, String)],
 ) -> Result<Vec<Option<String>>, AppError> {
-    // Pre-parse each target's path into segments.
     let segments: Vec<Vec<String>> = targets
         .iter()
         .map(|(_, path)| {
@@ -478,9 +448,6 @@ mod tests {
         .unwrap();
     }
 
-    /// root ── a(dirA) ── f1.txt(file1)
-    ///      │            └── c(dirC)
-    ///      └── b(dirB)
     async fn seed_tree(db: &sea_orm::DatabaseConnection) {
         insert(db, "root", 3, r#"{"dirents":[{"id":"dirA","mode":16384,"modifier":"","mtime":0,"name":"a","size":0},{"id":"dirB","mode":16384,"modifier":"","mtime":0,"name":"b","size":0}],"type":3,"version":1}"#).await;
         insert(db, "dirA", 3, r#"{"dirents":[{"id":"file1","mode":33188,"modifier":"u","mtime":0,"name":"f1.txt","size":10},{"id":"dirC","mode":16384,"modifier":"","mtime":0,"name":"c","size":0}],"type":3,"version":1}"#).await;
@@ -550,8 +517,6 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_file_entry_returns_fs_id_and_mtime() {
         let db = setup_tree_db().await;
-        // root ── photos ── pic.jpg (mtime 1700000000, non-zero to prove the
-        // parent-dirent mtime is actually read through).
         insert(&db, "root", 3, r#"{"dirents":[{"id":"photos","mode":16384,"modifier":"","mtime":0,"name":"photos","size":0}],"type":3,"version":1}"#).await;
         insert(&db, "photos", 3, r#"{"dirents":[{"id":"pic","mode":33188,"modifier":"u","mtime":1700000000,"name":"pic.jpg","size":99}],"type":3,"version":1}"#).await;
         insert(
@@ -569,18 +534,15 @@ mod tests {
         assert_eq!(fs_id, "pic");
         assert_eq!(mtime, 1700000000);
 
-        // A directory entry resolves to its own fs_id + mtime from the parent.
         let (fs_id, mtime) = resolve_file_entry(&repos, "r", "root", "/photos")
             .await
             .unwrap();
         assert_eq!(fs_id, "photos");
         assert_eq!(mtime, 0);
 
-        // Empty path returns the root.
         let (fs_id, _) = resolve_file_entry(&repos, "r", "root", "/").await.unwrap();
         assert_eq!(fs_id, "root");
 
-        // Missing segment -> NotFound.
         let err = resolve_file_entry(&repos, "r", "root", "/photos/nope.jpg")
             .await
             .unwrap_err();
@@ -590,7 +552,6 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_file_entry_with_head_returns_fs_id_is_dir_size_mtime() {
         let db = setup_tree_db().await;
-        // root ── photos ── pic.jpg (size 99, mtime 1700000000)
         insert(&db, "root", 3, r#"{"dirents":[{"id":"photos","mode":16384,"modifier":"","mtime":0,"name":"photos","size":0}],"type":3,"version":1}"#).await;
         insert(&db, "photos", 3, r#"{"dirents":[{"id":"pic","mode":33188,"modifier":"u","mtime":1700000000,"name":"pic.jpg","size":99}],"type":3,"version":1}"#).await;
         insert(
@@ -602,7 +563,6 @@ mod tests {
         .await;
         let repos = Repositories::new_for_tests(Arc::new(db));
 
-        // A file resolves to its fs_id, is_dir=false, size and mtime.
         let (fs_id, is_dir, size, mtime) =
             resolve_file_entry_with_head(&repos, "r", "root", "/photos/pic.jpg")
                 .await
@@ -613,7 +573,6 @@ mod tests {
         assert_eq!(size, 99);
         assert_eq!(mtime, 1700000000);
 
-        // A directory entry resolves to its own fs_id, is_dir=true.
         let (fs_id, is_dir, _, _) = resolve_file_entry_with_head(&repos, "r", "root", "/photos")
             .await
             .unwrap()
@@ -621,7 +580,6 @@ mod tests {
         assert_eq!(fs_id, "photos");
         assert!(is_dir);
 
-        // Empty path returns the root as a directory.
         let (fs_id, is_dir, _, _) = resolve_file_entry_with_head(&repos, "r", "root", "/")
             .await
             .unwrap()
@@ -629,13 +587,12 @@ mod tests {
         assert_eq!(fs_id, "root");
         assert!(is_dir);
 
-        // Missing path -> Ok(None).
+        // A missing last segment is Ok(None); a missing intermediate one is NotFound.
         let got = resolve_file_entry_with_head(&repos, "r", "root", "/photos/nope.jpg")
             .await
             .unwrap();
         assert!(got.is_none());
 
-        // Missing intermediate segment -> NotFound.
         let err = resolve_file_entry_with_head(&repos, "r", "root", "/nope/pic.jpg")
             .await
             .unwrap_err();

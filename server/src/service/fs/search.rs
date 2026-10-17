@@ -5,20 +5,17 @@ use base::error::AppError;
 use infra::common::EMPTY_SHA1;
 use infra::serialization::S_IFDIR;
 
-/// Cap the total result set so a huge repo can't force a full-tree walk (and
-/// unbounded memory) on every search. Phase 1 (content) and Phase 2 (filename)
-/// share this budget; once it is reached the remaining phases are skipped.
+/// Cap the total result set so a huge repo can't force a full-tree walk (and unbounded memory) on
+/// every search. Phase 1 (content) and Phase 2 (filename) share this budget.
 const MAX_SEARCH_RESULTS: usize = 200;
 
 /// Largest page size the search endpoint accepts.
 ///
-/// 100 matches the official clients: the iOS app requests `per_page=100` and
-/// the Android app 20, and neither expects the server to return more than it
-/// was asked for, so clamping here cannot truncate a client-visible page.
+/// 100 matches the official clients: the iOS app requests `per_page=100` and the Android app 20,
+/// and neither expects more than it asked for, so clamping cannot truncate a client-visible page.
 pub const MAX_SEARCH_PER_PAGE: i32 = 100;
 
-/// Largest page number the search endpoint accepts. Only exists to keep the
-/// computed offset inside `i64`; no real page approaches it.
+/// Largest page number the search endpoint accepts; only keeps the computed offset inside `i64`.
 pub const MAX_SEARCH_PAGE: i32 = 10_000;
 
 /// A single file search result entry.
@@ -29,16 +26,16 @@ pub struct FileSearchResult {
     pub name: String,
     pub oid: String,
     pub last_modified: i64,
-    /// iOS reads `mtime` (numeric), the desktop client reads `last_modified`;
-    /// emit both so every client gets a valid timestamp.
+    /// iOS reads `mtime` (numeric), the desktop client reads `last_modified`; emit both so every
+    /// client gets a valid timestamp.
     pub mtime: i64,
     pub fullpath: String,
     pub size: i64,
     pub is_dir: bool,
     /// URL pointing to the directory containing this file (or the directory itself).
     pub dir_url: String,
-    /// HTML snippet with `<mark>` highlighting around the content match.
-    /// Empty when the result came from a filename-only match.
+    /// HTML snippet with `<mark>` highlighting around the content match; empty for a filename-only
+    /// match.
     pub content_highlight: String,
 }
 
@@ -67,27 +64,24 @@ impl SearchService {
             return Ok((Vec::new(), 0, false));
         }
 
-        // Clamp defensively here as well as at the handler: every caller must
-        // get bounded pagination, and the offset below must not overflow.
+        // Clamp defensively here too: every caller must get bounded pagination, and the offset
+        // below must not overflow.
         let per_page = per_page.clamp(1, MAX_SEARCH_PER_PAGE);
         let page = page.clamp(1, MAX_SEARCH_PAGE);
         let repo_ids = self
             .get_accessible_repo_ids(user_id, search_repo, repo_scope)
             .await?;
-        // No accessible repo ⇒ nothing to search. `repo_ids` is the caller's
-        // access-control allow-list: an empty list must never be handed to the
-        // indexer as "no filter" (that leaked every repo's filenames and
-        // content snippets). The indexer also fails closed on an empty
-        // list; this early return keeps the intent explicit locally.
+        // `repo_ids` is the caller's access-control allow-list: an empty list must never be handed
+        // to the indexer as "no filter" (that leaked every repo's filenames and content snippets).
+        // The indexer also fails closed on an empty list; this early return keeps it explicit here.
         let has_accessible_repos = !repo_ids.is_empty();
 
         let mut seen = std::collections::HashSet::new();
         let mut all_results: Vec<FileSearchResult> = Vec::new();
 
-        // Phase 1: Full-text (content) search via Tantivy — only in full-text
-        // mode. Filename-only mode skips it because the FS tree walk below is
-        // the authoritative filename matcher and covers binary files the index
-        // never sees.
+        // Phase 1: full-text (content) search via Tantivy, in full-text mode only. Filename-only
+        // mode skips it because the FS tree walk below is the authoritative filename matcher and
+        // covers binary files the index never sees.
         if has_accessible_repos
             && !search_filename_only
             && let Some(indexer) = &self.indexer
@@ -97,9 +91,8 @@ impl SearchService {
                 .await
             {
                 Ok(ft_results) => {
-                    // Collect unique hits, then group by repo so the repo
-                    // record + head commit are resolved once per repo and all
-                    // hit paths are resolved in a shared batched walk.
+                    // Unique hits grouped by repo, so the repo record + head commit are resolved
+                    // once per repo and all hit paths in a shared batched walk.
                     let mut unique_hits: Vec<crate::indexer::IndexHit> = Vec::new();
                     for hit in &ft_results {
                         if seen.insert((hit.repo_id.clone(), hit.fullpath.clone())) {
@@ -161,13 +154,10 @@ impl SearchService {
             }
         }
 
-        // Phase 2: Filename search via FS tree walk — always run, since it is
-        // the only complete filename matcher (covers binary/non-indexed files
-        // and performs true substring matching).
-        //
-        // Batch-load all repo records and head commits up front (2 queries
-        // total) instead of one `find_by_id` + `find_by_repo_and_commit_id`
-        // pair per repo (2N round-trips).
+        // Phase 2: filename search via FS tree walk — always run, since it is the only complete
+        // filename matcher (covers binary/non-indexed files and does true substring matching).
+        // Repo records and head commits are batch-loaded up front (2 queries total) instead of a
+        // `find_by_id` + `find_by_repo_and_commit_id` pair per repo (2N round-trips).
         let repos_map: std::collections::HashMap<String, _> = self
             .repos
             .repo
@@ -192,9 +182,8 @@ impl SearchService {
             .map(|c| (c.commit_id.clone(), c))
             .collect();
 
-        // Phase 2 only tops up the budget left over from Phase 1. Once the cap
-        // is reached we stop walking the tree — a huge repo must not force a
-        // full traversal (and unbounded result growth) on every search.
+        // Phase 2 only tops up the budget left over from Phase 1; once the cap is reached the walk
+        // stops, so a huge repo cannot force a full traversal on every search.
         let phase2_budget = MAX_SEARCH_RESULTS.saturating_sub(all_results.len());
         if phase2_budget > 0 {
             for repo_id in &repo_ids {
@@ -226,13 +215,11 @@ impl SearchService {
             }
         }
 
-        // Sort: directories first, then by name
         all_results.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
 
         let total = all_results.len() as i32;
-        // Both operands are already clamped, but compute in `i64` anyway so a
-        // future change to the clamps cannot silently overflow `i32` (a panic
-        // in debug/test builds, a wrapped offset in release).
+        // Both operands are clamped already, but compute in `i64` so a future change to the clamps
+        // cannot silently overflow `i32` (a debug panic, a wrapped offset in release).
         let offset = (i64::from(page) - 1).saturating_mul(i64::from(per_page)) as usize;
         let page_end = offset.saturating_add(per_page as usize);
 
@@ -251,7 +238,6 @@ impl SearchService {
         Ok((results, total, has_more))
     }
 
-    /// Get repo IDs accessible to the user.
     async fn get_accessible_repo_ids(
         &self,
         user_id: i32,
@@ -271,40 +257,34 @@ impl SearchService {
         ids.dedup();
 
         if let Some(filter) = repo_id_filter {
-            // seahub scope keywords ("all"/"mine"/"shared"/"group"/"public")
-            // mean "search across all accessible repos", not a specific repo.
-            // seadroid sends search_repo="all" for global search; treating it
-            // as a repo id would filter out every repo and return no results.
+            // seahub scope keywords ("all"/"mine"/"shared"/"group"/"public") mean "search across
+            // all accessible repos", not a specific repo. Seadroid sends search_repo="all" for
+            // global search; treating it as a repo id would filter out every repo.
             //
-            // seahub lowercases `search_repo` before comparing
-            // (`api2/views.py`: `search_repo = search_repo.lower()`), so the
-            // scope match must be case-insensitive to stay compatible with a
-            // client that sends e.g. "ALL".
+            // seahub lowercases `search_repo` before comparing (`api2/views.py`), so the scope
+            // match must be case-insensitive for a client that sends e.g. "ALL".
             let scope = filter.trim().to_ascii_lowercase();
             let is_scope = matches!(
                 scope.as_str(),
                 "all" | "mine" | "shared" | "group" | "public"
             );
             if !is_scope {
-                // A filter naming a repo the caller cannot access leaves the
-                // list empty, which means "no access" — NOT "no filter". It
-                // must never widen the search (see `search`).
+                // A filter naming a repo the caller cannot access leaves the list empty, which
+                // means "no access" — NOT "no filter". It must never widen the search (see
+                // `search`).
                 ids.retain(|id| id == filter);
             }
         }
 
-        // A key bound to specific libraries searches only those, exactly like
-        // every other listing.
+        // A key bound to specific libraries searches only those, like every other listing.
         ids.retain(|id| repo_scope.allows(id));
 
         Ok(ids)
     }
 
-    /// Resolve file metadata for many fullpaths of a single repo in a shared
-    /// batched walk, returning `None` for paths that no longer resolve.
-    ///
-    /// `repo_name`/`root_id` are resolved once per repo by the caller (see
-    /// [`SearchService::search`]).
+    /// Resolve file metadata for many fullpaths of a single repo in a shared batched walk, returning
+    /// `None` for paths that no longer resolve. `repo_name`/`root_id` are resolved once per repo by
+    /// the caller (see [`SearchService::search`]).
     async fn resolve_file_metadata_batch(
         &self,
         repo_id: &str,
@@ -317,7 +297,6 @@ impl SearchService {
             return vec![None; fullpaths.len()];
         }
 
-        // Pre-compute (name, parent_path) for each fullpath.
         let metas: Vec<(String, String)> = fullpaths
             .iter()
             .map(|fullpath| {
@@ -336,8 +315,7 @@ impl SearchService {
             })
             .collect();
 
-        // Resolve every parent path in one batched walk (a "/" parent resolves
-        // to root_id itself).
+        // Resolve every parent path in one batched walk (a "/" parent resolves to root_id itself).
         let targets: Vec<(String, String)> = metas
             .iter()
             .map(|(_, parent_path)| (root_id.to_string(), parent_path.clone()))
@@ -348,7 +326,6 @@ impl SearchService {
             return vec![None; fullpaths.len()];
         };
 
-        // Batch-read all distinct parent directories.
         let mut parent_ids: Vec<String> = resolved.iter().filter_map(|r| r.clone()).collect();
         parent_ids.sort();
         parent_ids.dedup();
@@ -405,8 +382,8 @@ impl SearchService {
 
 /// Recursively search the FS tree for files/directories whose name contains the keyword.
 ///
-/// Stops early once `results.len()` reaches `max_results`, so a huge repo
-/// doesn't force a full traversal when the budget is already filled.
+/// Stops early once `results.len()` reaches `max_results`, so a huge repo doesn't force a full
+/// traversal when the budget is already filled.
 #[allow(clippy::too_many_arguments)]
 async fn search_fs_tree(
     repos: &Repositories,
@@ -420,8 +397,8 @@ async fn search_fs_tree(
     max_results: usize,
 ) {
     let keyword_lower = keyword.to_lowercase();
-    // Level frontier: each level reads all its directories with one batched
-    // `IN` query (O(#dirs) → O(depth)).
+    // Level frontier: each level reads all its directories with one batched `IN` query
+    // (O(#dirs) → O(depth)).
     let mut frontier: Vec<(String, String)> = vec![(root_fs_id.to_string(), base_path.to_string())];
     let max_depth = crate::fs::core::traversal::max_tree_depth();
     let mut depth = 0usize;

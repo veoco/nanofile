@@ -14,8 +14,8 @@ use base::error::AppError;
 #[derive(Deserialize)]
 pub struct PermissionQuery {
     op: Option<String>,
-    /// 40-hex client id; upstream rejects any other length. (`client_ver` is
-    /// also sent but upstream's version gate is not enforced here.)
+    /// 40-hex client id; upstream rejects any other length (`client_ver` is also sent
+    /// but its version gate is not enforced here).
     client_id: Option<String>,
 }
 
@@ -26,30 +26,22 @@ pub fn permission_routes() -> Router<Arc<AppState>> {
     )
 }
 
-/// seafile-server returns HTTP 200 with empty body on success,
-/// HTTP 403 for no permission, HTTP 444 for deleted repo,
-/// HTTP 445 for corrupted repo.
-///
-/// Checks the user's permission level on the repo. For "upload" ops,
-/// requires write (rw) permission. For "download" ops, requires read (r).
-///
-/// On a 403 the daemon parses the body's `reason` field to distinguish "no
-/// write permission" (a read-permission caller asking to upload) from a generic
-/// access-denied — without it the daemon would report every refusal as an
-/// authentication problem.
+/// seafile-server answers 200 with an empty body on success, 403 for no permission, 444
+/// for a deleted repo and 445 for a corrupted one. "upload" ops require write (rw)
+/// permission, "download" ops read (r). On a 403 the daemon parses the body's `reason`
+/// field to tell "no write permission" from a generic access-denied.
 pub async fn permission_check(
     State(state): State<Arc<AppState>>,
     _auth: SyncAuth,
     Path(repo_id): Path<String>,
     Query(query): Query<PermissionQuery>,
 ) -> Result<Response, AppError> {
-    // Verify repo exists — if not, return 444 (repo deleted) as seaf-daemon expects
     if !state.sync_service().repo_exists(&repo_id).await? {
         return Err(AppError::RepoDeleted);
     }
 
-    // Upstream validates the op and the optional client id before doing any
-    // permission work (`fileserver/sync_api.go:197-216`).
+    // Upstream validates the op and the optional client id before any permission
+    // work (`fileserver/sync_api.go:197-216`).
     match query.op.as_deref() {
         Some("upload") | Some("download") => {}
         _ => return Err(AppError::BadRequest("op is invalid".into())),
@@ -61,8 +53,6 @@ pub async fn permission_check(
         return Err(AppError::BadRequest("client_id is invalid".into()));
     }
 
-    // Check permission based on operation type.
-    // seaf-daemon sends op=upload or op=download.
     match query.op.as_deref() {
         Some("upload") => {
             match crate::domain::permission::check_repo_write_permission(

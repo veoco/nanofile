@@ -12,8 +12,6 @@ use infra::common::DirEntry;
 use infra::common::util::{basename, get_head_root_id, parent_path_from};
 use infra::serialization::S_IFDIR;
 
-// ── Free-standing pub(crate) helpers (used by src/ui/files.rs) ──────────
-
 /// List directory entries by traversing the FS object tree from the head commit.
 pub(crate) async fn list_dir_from_fs_tree(
     repos: &Repositories,
@@ -40,8 +38,8 @@ pub(crate) async fn list_dir_from_fs_tree(
     list_dir_from_root(repos, repo_id, &head.root_id, path).await
 }
 
-/// Like [`list_dir_from_fs_tree`] but reuses an already-resolved root fs_id,
-/// skipping the repo + head commit lookups.
+/// Like [`list_dir_from_fs_tree`], but reuses an already-resolved root fs_id (skips the repo and
+/// head commit lookups).
 pub(crate) async fn list_dir_from_root(
     repos: &Repositories,
     repo_id: &str,
@@ -116,12 +114,10 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
     list_dir_recursive_from_root(repos, repo_id, &head.root_id, path, true).await
 }
 
-/// Like [`list_dir_recursive_from_fs_tree`] but reuses an already-resolved
-/// root fs_id, skipping the repo + head commit lookups.
+/// Like [`list_dir_recursive_from_fs_tree`], but reuses an already-resolved root fs_id.
 ///
-/// `include_modifier_names` controls whether modifier nicknames are batch-fetched
-/// and attached to file entries. WebDAV PROPFIND does not use those fields, so it
-/// passes `false` to skip the `find_by_emails` query on large recursive listings.
+/// `include_modifier_names` controls whether nicknames are batch-fetched for file entries; WebDAV
+/// PROPFIND does not use those fields and passes `false` to skip the `find_by_emails` query.
 pub(crate) async fn list_dir_recursive_from_root(
     repos: &Repositories,
     repo_id: &str,
@@ -140,8 +136,7 @@ pub(crate) async fn list_dir_recursive_from_root(
         }
     };
 
-    // Level frontier: each level reads all its directories with one batched
-    // `IN` query instead of one query per directory.
+    // Level frontier: each level reads all its directories with one batched `IN` query.
     let mut frontier: Vec<(String, String)> = vec![(dir_id.clone(), path.to_string())];
     let mut entries: Vec<DirEntry> = Vec::new();
     let mut modifier_emails: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -206,8 +201,6 @@ pub(crate) async fn list_dir_recursive_from_root(
         frontier = next;
     }
 
-    // Batch-fetch modifier nicknames for all distinct emails in one query.
-    // Skipped when the caller (e.g. WebDAV PROPFIND) does not consume them.
     if include_modifier_names {
         let emails: Vec<String> = modifier_emails.into_iter().collect();
         let nickname_by_email: std::collections::HashMap<String, String> = repos
@@ -234,7 +227,6 @@ pub(crate) async fn list_dir_recursive_from_root(
     Ok((dir_id, entries))
 }
 
-/// Create a directory at the given path.
 pub(crate) async fn create_dir_by_path(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -323,8 +315,6 @@ pub(crate) async fn create_dir_by_path(
     Ok(())
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────
-
 async fn read_fs_dir_data(
     repos: &Repositories,
     repo_id: &str,
@@ -335,20 +325,16 @@ async fn read_fs_dir_data(
         .map_err(|e| AppError::internal(format!("read fs_dir_data failed: {e}")))
 }
 
-// ── DirService ──────────────────────────────────────────────────────────
-
 pub struct DirService {
     repos: Arc<Repositories>,
     db: Arc<DatabaseConnection>,
     indexer: Option<crate::indexer::TextIndexer>,
     /// Where a path change submits the index work it implies.
     scheduler: crate::service::index::IndexScheduler,
-    /// Needed by `create_sub_repo`: the new library's FS objects reference the
-    /// parent library's block ids, so the blocks themselves have to be copied
-    /// into the new library's own block directory.
+    /// Needed by `create_sub_repo`: the new library's FS objects reference the parent library's
+    /// block ids, so the blocks are copied into the new library's own block directory.
     block_store: infra::storage::DynBlockStorage,
-    /// Server config: the global storage cap is needed to charge a sub-repo copy
-    /// against the caller's quota.
+    /// Server config: the global storage cap charges a sub-repo copy to the caller's quota.
     config: crate::settings::RuntimeConfig,
 }
 
@@ -385,7 +371,6 @@ impl DirService {
         list_dir_from_fs_tree(&self.repos, repo_id, path).await
     }
 
-    /// Recursive directory listing.
     pub async fn list_dir_recursive(
         &self,
         repo_id: &str,
@@ -394,7 +379,6 @@ impl DirService {
         list_dir_recursive_from_fs_tree(&self.repos, repo_id, path).await
     }
 
-    /// Create a directory.
     pub async fn create_dir(
         &self,
         repo_id: &str,
@@ -405,7 +389,6 @@ impl DirService {
         create_dir_by_path(self.db(), &self.repos, email, user_id, repo_id, path).await
     }
 
-    /// Rename a directory entry.
     pub async fn rename_dir_entry(
         &self,
         repo_id: &str,
@@ -454,7 +437,7 @@ impl DirService {
                     crate::service::fs::resolve_parent_error(e, "resolve parent failed")
                 })?;
 
-        // Record deleted entry to trash before tree update
+        // Record the trash entry before the tree update.
         crate::fs::core::trash::record_deleted_entry(
             db,
             &self.repos,
@@ -490,7 +473,6 @@ impl DirService {
         )
         .await;
 
-        // Drop orphaned tag rows for the deleted subtree.
         if let Err(e) = self
             .repos
             .file_tag
@@ -503,7 +485,6 @@ impl DirService {
         Ok(())
     }
 
-    /// Move a directory.
     pub async fn move_dir(
         &self,
         repo_id: &str,
@@ -528,7 +509,6 @@ impl DirService {
         .map(|_| ())
     }
 
-    /// Get shared items for a directory.
     pub async fn get_dir_shared_items(
         &self,
         repo_id: &str,
@@ -612,11 +592,9 @@ impl DirService {
 
         copy_fs_tree(&self.repos, repo_id, &new_repo_id, &source_dir_fs_id).await?;
 
-        // `copy_fs_tree` copies the FS objects, which reference the parent
-        // library's block ids. With blocks stored per library those ids do not
-        // exist in the new library's directory, so every download would 404
-        // until the blocks are copied over as well. Do that **before** the
-        // commit, so a failure leaves no library that looks complete but is not.
+        // `copy_fs_tree` copies FS objects that reference the parent library's block ids; blocks
+        // are stored per library, so every download would 404 until they are copied too. Do that
+        // **before** the commit, so a failure leaves no library that looks complete but is not.
         let copied_bytes = match copy_subtree_blocks(
             &self.repos,
             &self.block_store,
@@ -630,8 +608,8 @@ impl DirService {
         {
             Ok(bytes) => bytes,
             Err(e) => {
-                // Roll the half-built library back rather than leaving an empty
-                // one (or, on a quota refusal, one whose blocks are on disk).
+                // Roll the half-built library back rather than leaving it behind, empty or with
+                // blocks already on disk (a quota refusal).
                 let _ = self.repos.member.delete_by_repo(&new_repo_id).await;
                 let _ = self.repos.repo.delete_by_id(&new_repo_id).await;
                 return Err(e);
@@ -648,9 +626,9 @@ impl DirService {
         .await
         .map_err(|e| AppError::Internal(format!("create commit failed: {e}")))?;
 
-        // Charge the duplicated blocks to the new library. Without this the new
-        // repo reported `size = 0`, so `compute_user_usage` never saw the
-        // bytes and repeated sub-repo creation was a free disk amplifier.
+        // Charge the duplicated blocks to the new library: otherwise it reports `size = 0`, so
+        // `compute_user_usage` misses the bytes and repeated sub-repo creation is a free disk
+        // amplifier.
         if copied_bytes > 0
             && let Err(e) =
                 crate::fs::core::adjust_repo_size(&self.repos, &new_repo_id, copied_bytes).await
@@ -659,9 +637,8 @@ impl DirService {
         }
 
         Ok(serde_json::json!({
-            // The desktop client reads `sub_repo_id` to open the new library
-            // (`seahub/api2/views.py:4199`, `desktop/src/api/requests.cpp:388`);
-            // without it the create-library-from-folder flow opened an empty id.
+            // The desktop client reads `sub_repo_id` to open the new library (`api2/views.py:4199`,
+            // `desktop/src/api/requests.cpp:388`); without it the flow opened an empty id.
             "sub_repo_id": new_repo_id,
             "id": new_repo_id,
             "name": dir_name,
@@ -676,7 +653,6 @@ impl DirService {
     }
 
     /// Delete a directory entry (v21 API, used for both files and directories).
-    /// Returns (deleted_size, obj_type_str).
     pub async fn delete_dirent(
         &self,
         repo_id: &str,
@@ -717,8 +693,8 @@ impl DirService {
                 .await
                 .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
 
-        // Resolve the entry size from the parent dirents (files O(1);
-        // directories walk their subtree once) instead of re-resolving the path.
+        // Resolve the entry size from the parent dirents (files O(1); directories walk their subtree
+        // once) instead of re-resolving the path.
         let deleted_size: i64 = match parent_dir_data.dirents.iter().find(|d| d.name == name) {
             Some(entry) if entry.mode & S_IFDIR != 0 => {
                 crate::fs::core::compute_tree_size(&self.repos, repo_id, &entry.id)
@@ -729,7 +705,7 @@ impl DirService {
             None => 0,
         };
 
-        // Trash: record deleted entry before tree update
+        // Trash first: the tree update below removes the dirent.
         if let Some(entry) = parent_dir_data.dirents.iter().find(|d| d.name == name) {
             let obj_type = if entry.mode & S_IFDIR != 0 {
                 "dir"
@@ -770,7 +746,6 @@ impl DirService {
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        // Remove from full-text search index
         if let Some(indexer) = &self.indexer
             && let Err(e) = indexer.delete_file_async(repo_id, path).await
         {
@@ -847,7 +822,6 @@ impl DirService {
             }));
         }
 
-        // Batch-fetch modifier nicknames for all distinct emails in one query.
         let mut nickname_cache: HashMap<String, String> = HashMap::new();
         let modifier_emails: Vec<String> = file_list
             .iter()
@@ -927,9 +901,8 @@ impl DirService {
             .map(|(_, n)| n)
             .unwrap_or("");
 
-        // Resolve the directory in a single tree walk to the parent's dirent
-        // for the mtime. The previous code resolved the full path only to
-        // discard the result, then re-resolved the parent path.
+        // One tree walk to the parent's dirent yields the mtime, without re-resolving the parent
+        // path separately.
         let (_, mtime) =
             crate::fs::core::resolve_file_entry(&self.repos, repo_id, &head_commit.root_id, path)
                 .await
@@ -953,15 +926,9 @@ impl DirService {
     }
 }
 
-// ── Helpers (private) ───────────────────────────────────────────────
-
-/// Copy every block referenced by the subtree rooted at `root_fs_id` from
-/// `src_repo_id` into `dst_repo_id`.
-///
-/// Creating a library from a folder copies the FS objects, and those keep the
-/// parent's block ids — blocks are stored per library, so the bytes have to
-/// follow the ids into the new library's directory. Without this the new
-/// library would look complete but every download would 404.
+/// Copy every block referenced by the subtree rooted at `root_fs_id` from `src_repo_id` into
+/// `dst_repo_id`. Blocks are stored per library, so the copied FS objects keep the parent's block
+/// ids and every download would 404 until the bytes follow them into the new library.
 async fn copy_subtree_blocks(
     repos: &Repositories,
     block_store: &infra::storage::DynBlockStorage,
@@ -975,15 +942,13 @@ async fn copy_subtree_blocks(
         return Ok(0);
     }
 
-    // Level-frontier walk of the source subtree, collecting the block ids of
-    // every file object. `TreeGuard` bounds depth and visits so a corrupt tree
-    // cannot spin here.
+    // Level-frontier walk of the source subtree, collecting every file object's block ids.
+    // `TreeGuard` bounds depth and visits so a corrupt tree cannot spin here.
     let mut frontier = vec![root_fs_id.to_string()];
     let mut seen: HashSet<String> = HashSet::new();
     let mut block_ids: HashSet<String> = HashSet::new();
-    // Sum of the logical file sizes in the subtree, so the copy can be charged
-    // to the owner's quota before any block is written. The walk already parses
-    // each file object, so this costs nothing extra.
+    // Sum of the logical file sizes, so the copy is charged to the owner's quota before any block
+    // is written; the walk already parses each file object, so this costs nothing extra.
     let mut total_size: i64 = 0;
     let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
@@ -1052,16 +1017,15 @@ async fn copy_fs_tree(
     dst_repo_id: &str,
     root_fs_id: &str,
 ) -> Result<(), AppError> {
-    // Level-frontier walk: batch-read each level, batch-skip existing
-    // objects, then batch-insert the rest — instead of three round-trips per
-    // object.
+    // Level-frontier walk: batch-read each level, batch-skip existing objects, then batch-insert
+    // the rest instead of three round-trips per object.
     let mut frontier = vec![root_fs_id.to_string()];
     let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
         guard.enter_level()?;
         guard.visit(frontier.len())?;
-        // Content-addressed storage lets the same fs_id be referenced from
-        // several directories; dedup so each object is fetched/copied once.
+        // Content-addressed storage lets one fs_id be referenced from several directories; dedup
+        // so each object is fetched and copied once.
         let mut seen = HashSet::new();
         frontier.retain(|id| seen.insert(id.clone()));
 

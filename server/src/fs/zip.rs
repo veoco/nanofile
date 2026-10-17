@@ -1,6 +1,5 @@
-//! Streaming ZIP archive helpers, shared by the zip-task handler
-//! (`handler/web/zip_download.rs`) and the shared-link directory view
-//! (`handler/web/share_view.rs`).
+//! Streaming ZIP helpers shared by the zip-task handler and the shared-link
+//! directory view.
 
 use futures::StreamExt;
 use futures::io::AsyncWriteExt;
@@ -18,11 +17,9 @@ use crate::repository::Repositories;
 use base::error::AppError;
 use infra::common::{EMPTY_SHA1, S_IFDIR};
 
-/// A file to be included in a zip archive.
 pub struct ZipFileEntry {
     /// Path within the zip archive (e.g. `"myfolder/file.txt"`).
     pub path_in_zip: String,
-    /// Content block IDs that make up this file's data.
     pub block_ids: Vec<String>,
     /// Uncompressed size in bytes.
     pub size: i64,
@@ -37,7 +34,6 @@ pub struct ZipLimits {
     pub max_bytes: u64,
 }
 
-/// Reject an archive that exceeds the configured entry-count or byte limits.
 fn check_zip_limits(entries: usize, total_bytes: u64, limits: ZipLimits) -> Result<(), AppError> {
     if limits.max_entries > 0 && entries as u64 >= limits.max_entries {
         return Err(AppError::TooManyRequests);
@@ -48,10 +44,9 @@ fn check_zip_limits(entries: usize, total_bytes: u64, limits: ZipLimits) -> Resu
     Ok(())
 }
 
-/// Cap on how many ZIP archives are generated concurrently across the server.
-/// Each stream runs a deflate-heavy writer task plus block reads, so a flood of
-/// large downloads could otherwise saturate CPU and disk. Callers queue on the
-/// semaphore; the permit is released when the stream's writer task finishes.
+/// Cap on concurrent ZIP generation: each stream runs a deflate-heavy writer
+/// plus block reads, so a flood could saturate CPU and disk. Callers queue on
+/// the semaphore; the permit is released when the writer task finishes.
 const MAX_CONCURRENT_ZIPS: usize = 2;
 
 static ZIP_CONCURRENCY: OnceLock<Arc<Semaphore>> = OnceLock::new();
@@ -62,12 +57,8 @@ fn zip_semaphore() -> &'static Arc<Semaphore> {
 
 /// Acquire a permit covering the full zip lifecycle (tree collection + zipping).
 ///
-/// Callers must obtain the permit *before* running `collect_*_entries`, so the
-/// potentially-expensive recursive DB traversal that builds the file list is
-/// also gated — otherwise a flood of independent zip tokens could bypass the
-/// concurrency cap in the collection phase, which is what actually loads the
-/// CPU/DB. Acquiring is queueing, not rejecting, preserving the original
-/// concurrency-limit semantics.
+/// Callers must acquire it *before* `collect_*_entries`, so the recursive DB
+/// traversal is gated too; acquiring queues rather than rejects.
 pub async fn acquire_zip_permit() -> Result<OwnedSemaphorePermit, AppError> {
     zip_semaphore()
         .clone()
@@ -76,11 +67,8 @@ pub async fn acquire_zip_permit() -> Result<OwnedSemaphorePermit, AppError> {
         .map_err(|e| AppError::Internal(format!("zip concurrency gate failed: {e}")))
 }
 
-/// Recursively collect all files under `dir_path`.
-///
-/// `zip_prefix` is the path prefix entries will have inside the archive
-/// (e.g. for a top-level directory `/myfolder`, `zip_prefix` would be
-/// `"myfolder"`).
+/// Recursively collect all files under `dir_path`, prefixing entries with
+/// `zip_prefix`.
 pub async fn collect_dir_entries(
     repos: &Repositories,
     repo_id: &str,
@@ -99,8 +87,8 @@ pub async fn collect_dir_entries(
 
     let mut entries = Vec::new();
     let mut total_bytes: u64 = 0;
-    // Level frontier for directories; file ids are collected per level and
-    // fetched in one batched query (O(#dirs)+O(#files) → O(depth)+1).
+    // Level frontier: file ids are batched per level, so traversal costs
+    // O(depth) queries instead of one per directory.
     let mut frontier: Vec<(String, String)> = vec![(dir_id, zip_prefix.to_string())];
     let mut pending_files: Vec<(String, String)> = Vec::new();
 
@@ -108,8 +96,8 @@ pub async fn collect_dir_entries(
     while !frontier.is_empty() {
         guard.enter_level()?;
         guard.visit(frontier.len())?;
-        // Bail out before the next batched query once the entry cap is clearly
-        // exceeded, bounding both the DB traversal and the pending-file memory.
+        // Bail out before the next batched query once the entry cap is
+        // exceeded, bounding both DB traversal and pending-file memory.
         if limits.max_entries > 0 && pending_files.len() as u64 >= limits.max_entries {
             return Err(AppError::TooManyRequests);
         }
@@ -137,7 +125,6 @@ pub async fn collect_dir_entries(
                 };
 
                 if is_dir {
-                    // Recurse into subdirectory
                     next.push((dirent.id.clone(), entry_path));
                 } else {
                     pending_files.push((dirent.id.clone(), entry_path));
@@ -148,7 +135,6 @@ pub async fn collect_dir_entries(
         frontier = next;
     }
 
-    // Fetch all file block IDs in one batched query.
     if !pending_files.is_empty() {
         let file_ids: Vec<String> = pending_files.iter().map(|(id, _)| id.clone()).collect();
         let file_map = read_fs_file_data_batch(repos, repo_id, &file_ids).await?;
@@ -168,9 +154,8 @@ pub async fn collect_dir_entries(
     Ok(entries)
 }
 
-/// Collect files for a set of selected dirents (names within `parent_dir`).
-///
-/// For each name, if it is a directory the whole subtree is included.
+/// Collect files for the named dirents under `parent_dir`; a directory name
+/// includes its whole subtree.
 pub async fn collect_selected_entries(
     repos: &Repositories,
     repo_id: &str,
@@ -179,7 +164,6 @@ pub async fn collect_selected_entries(
     dirents: &[String],
     limits: ZipLimits,
 ) -> Result<Vec<ZipFileEntry>, AppError> {
-    // Resolve parent_dir to get the listing of items within it
     let parent_dir_id = resolve_fs_id(repos, repo_id, root_fs_id, parent_dir)
         .await
         .map_err(|e| AppError::NotFound(format!("Parent dir not found: {e}")))?;
@@ -193,7 +177,6 @@ pub async fn collect_selected_entries(
     let mut pending_files: Vec<(String, String)> = Vec::new();
 
     for name in dirents {
-        // Find the entry in the parent directory
         let entry = dir_data
             .dirents
             .iter()
@@ -203,8 +186,7 @@ pub async fn collect_selected_entries(
         let is_dir = entry.mode & S_IFDIR != 0;
 
         if is_dir {
-            // Full subdirectory: walk from this dir (limits apply per subtree
-            // and to the aggregate below).
+            // Whole subtree: limits apply to it and to the aggregate below.
             let dir_path = if parent_dir == "/" {
                 format!("/{name}")
             } else {
@@ -220,15 +202,12 @@ pub async fn collect_selected_entries(
             pending_files.push((entry.id.clone(), name.clone()));
         }
 
-        // Re-check the aggregate budget on **every** iteration, not just after
-        // the loop: each directory name expands to a full subtree, so without
-        // this the accumulated entry list can grow without bound (and the
-        // single post-loop check would only run once the memory was already
-        // committed).
+        // Re-check the aggregate budget on **every** iteration: each directory
+        // name expands to a full subtree, so a post-loop check alone would let
+        // memory grow without bound.
         check_zip_limits(all_files.len() + pending_files.len(), total_bytes, limits)?;
     }
 
-    // Fetch all selected file block IDs in one batched query.
     if !pending_files.is_empty() {
         let file_ids: Vec<String> = pending_files.iter().map(|(id, _)| id.clone()).collect();
         let file_map = read_fs_file_data_batch(repos, repo_id, &file_ids).await?;
@@ -251,15 +230,12 @@ pub async fn collect_selected_entries(
 
 /// Stream a zip archive over an HTTP response body.
 ///
-/// Uses `tokio::io::duplex` to create a pipe: the zip writer writes into one
-/// end and the HTTP response reads from the other. `async_zip` writes entries
-/// using **data descriptors** (streaming mode) so no seeking back is needed —
-/// the local file header has zero CRC/size, and the real values are emitted
-/// after the compressed data.
-///
-/// Blocks are read + decrypted with bounded concurrency via
-/// [`stream_blocks`](crate::fs::core::stream_blocks), then written into each
-/// entry in order (the ZIP writer is single-threaded).
+/// A `tokio::io::duplex` pipe connects the writer to the response body.
+/// `async_zip` uses **data descriptors** (streaming mode), so no seeking back
+/// is needed: the local header has zero CRC/size and the real values follow
+/// the data. Blocks are read and decrypted with bounded concurrency by
+/// [`stream_blocks`](crate::fs::core::stream_blocks) and written per entry in
+/// order (the ZIP writer is single-threaded).
 pub fn stream_zip(
     repo_id: String,
     block_store: infra::storage::DynBlockStorage,
@@ -270,25 +246,23 @@ pub fn stream_zip(
     let (duplex_writer, duplex_reader) = tokio::io::duplex(64 * 1024);
 
     tokio::spawn(async move {
-        // The concurrency permit is held for the full lifecycle: it is acquired
-        // by the caller before the collection phase and moved in here, so the
-        // writer task (including error paths) keeps it until it finishes.
+        // The permit is moved in here, so the writer task holds it for the
+        // full lifecycle, including error paths.
         let mut zip = ZipFileWriter::with_tokio(duplex_writer);
 
         for entry in &files {
             let builder =
                 ZipEntryBuilder::new(entry.path_in_zip.clone().into(), Compression::Deflate);
 
-            // Start a streaming entry — local file header has the data_descriptor
-            // flag set, CRC-32 and sizes are zeroed (written later via descriptor).
+            // Streaming entry: data-descriptor mode, CRC-32 and sizes in the
+            // local header stay zero and are written afterwards.
             let mut entry_writer = zip
                 .write_entry_stream(builder)
                 .await
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-            // Read + decrypt blocks with bounded concurrency, write in order.
-            // stream_blocks buffers (default 4) so disk I/O and decryption
-            // overlap across blocks while preserving block order.
+            // Read + decrypt with bounded concurrency and write in order;
+            // stream_blocks buffers so disk I/O and decryption overlap.
             let mut blocks = Box::pin(crate::fs::core::stream_blocks(
                 repo_id.clone(),
                 entry.block_ids.clone(),
@@ -300,15 +274,14 @@ pub fn stream_zip(
                 entry_writer.write_all(&data).await?;
             }
 
-            // Close the entry — this writes the data descriptor
-            // (CRC-32, compressed size, uncompressed size) after the data.
+            // Closing writes the data descriptor (CRC-32 and sizes) after
+            // the data.
             entry_writer
                 .close()
                 .await
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
         }
 
-        // Write central directory and end-of-central-directory record.
         zip.close()
             .await
             .map_err(|e| std::io::Error::other(e.to_string()))?;

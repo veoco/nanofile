@@ -1,7 +1,7 @@
 //! Unified API-key management endpoints.
 //!
-//! These routes are session-only (see the capability table): an API key must
-//! never be able to mint another key, or it could widen its own access.
+//! Session-only (see the capability table): an API key must never be able to mint
+//! another key, or it could widen its own access.
 
 use axum::{
     Json,
@@ -55,10 +55,8 @@ fn repo_permissions(body: Vec<RepoPermissionBody>) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Resolve exactly one lifetime choice.
-///
-/// Requiring an explicit choice keeps "never" from being the silent default of
-/// a client that forgot the field.
+/// Resolve exactly one lifetime choice: requiring an explicit one keeps "never"
+/// from being the silent default of a client that forgot the field.
 fn expiry_of(
     never: bool,
     expires_in_days: Option<u64>,
@@ -99,7 +97,6 @@ fn view_json(view: &ApiKeyView) -> serde_json::Value {
     })
 }
 
-/// GET /api2/api-keys/
 pub async fn list_api_keys(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -109,8 +106,6 @@ pub async fn list_api_keys(
     Ok(Json(json!({ "keys": items })))
 }
 
-/// POST /api2/api-keys/
-///
 /// The plaintext secret is returned exactly once; it is stored hashed and can
 /// never be retrieved again.
 pub async fn create_api_key(
@@ -133,9 +128,8 @@ pub async fn create_api_key(
     )
     .await?;
 
-    // The owner is told about every way a key can appear, not only the Web UI:
-    // a key created through the API is exactly the case they would not see
-    // otherwise. Best-effort, so mail can never fail key creation.
+    // The owner is told about every way a key can appear, not only the Web UI: an
+    // API-created key is exactly the case they would otherwise not see. Best effort.
     state
         .mail
         .notify_api_key_created(auth.user_id, &created.view.name)
@@ -146,7 +140,6 @@ pub async fn create_api_key(
     Ok(Json(response))
 }
 
-/// GET /api2/api-keys/{key_id}/
 pub async fn get_api_key(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -156,7 +149,6 @@ pub async fn get_api_key(
     Ok(Json(view_json(&view)))
 }
 
-/// PUT /api2/api-keys/{key_id}/
 pub async fn update_api_key(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -191,7 +183,6 @@ pub async fn update_api_key(
     Ok(Json(view_json(&view)))
 }
 
-/// DELETE /api2/api-keys/{key_id}/
 pub async fn delete_api_key(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -201,12 +192,10 @@ pub async fn delete_api_key(
     Ok(Json(json!({ "success": true })))
 }
 
-/// GET /api2/api-keys/catalog/
-///
-/// The capability catalog, the presets and the configured lifetime options, so
-/// a client can render the same picker the settings page does. Each capability
-/// carries `enforced_by`, the routes (or WebDAV/sync surfaces) that consult it,
-/// so a client can explain what a grant buys without hard-coding the table.
+/// The capability catalog, presets and lifetime options, so a client renders the same
+/// picker as the settings page. Each capability carries `enforced_by` — the routes (or
+/// WebDAV/sync surfaces) that consult it — so a client can explain what a grant buys
+/// without hard-coding the table.
 pub async fn api_key_catalog(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,

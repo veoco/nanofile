@@ -40,10 +40,7 @@ pub struct IndexFileTextResponse {
     pub status: String,
 }
 
-/// POST /api2/index-file-text/
-///
-/// Update the full-text search index for a specific file with custom text.
-/// Handler is thin: auth → validate → call service → format response.
+/// POST /api2/index-file-text/ — update one file's full-text index with custom text.
 pub async fn index_file_text(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -76,14 +73,9 @@ pub async fn index_file_text(
 
 /// POST /api2/reindex/
 ///
-/// Rebuild the full-text search index for all files in a repository.
-///
-/// Runs as a background job so large repositories don't block the HTTP
-/// response. The task id can be polled via `GET /api2/reindex-progress/`.
-///
-/// Only the repo owner or a server admin may trigger a reindex. A per-repo
-/// dedup lock prevents concurrent reindex of the same repo, and a per-user
-/// rate limiter caps the frequency.
+/// Rebuild a repository's full-text index as a background job polled via
+/// `GET /api2/reindex-progress/`. Owner or admin only; a per-repo dedup lock and a
+/// per-user rate limiter cap the frequency.
 pub async fn reindex(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -91,7 +83,6 @@ pub async fn reindex(
 ) -> Result<Json<ReindexResponse>, AppError> {
     let svc = state.admin_service();
 
-    // Only owner or admin may trigger a full reindex.
     svc.check_repo_admin(&req.repo_id, auth.user_id).await?;
 
     if state.indexer.is_none() {
@@ -100,15 +91,13 @@ pub async fn reindex(
         ));
     }
 
-    // Rate-limit per user to prevent abuse.
     let rl_key = format!("reindex:{}", auth.user_id);
     if state.auth_limiters.reindex.is_limited(&rl_key) {
         return Err(AppError::TooManyRequests);
     }
 
-    // Per-repo dedup: only one reindex at a time per repo. The task system
-    // enforces this from the job's declared dedup key, so there is no second
-    // map to keep in step.
+    // Per-repo dedup: only one reindex at a time per repo, enforced by the task
+    // system from the job's declared dedup key — no second map to keep in step.
     let task_id = state
         .tasks
         .submit_with_details(
@@ -130,11 +119,8 @@ pub async fn reindex(
     }))
 }
 
-/// GET /api2/reindex-progress/
-///
-/// Poll the progress of a background reindex task. Only the task creator
-/// or a server admin may query progress. Completed tasks are purged after
-/// one hour, by the run store's sweeper rather than by this read path.
+/// GET /api2/reindex-progress/ — poll a background reindex task; only its creator or
+/// an admin may query. Completed tasks are purged after an hour by the run store.
 pub async fn reindex_progress(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,

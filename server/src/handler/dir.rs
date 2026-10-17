@@ -23,8 +23,7 @@ pub struct DirQuery {
     pub p: Option<String>,
     pub t: Option<String>,
     pub recursive: Option<String>,
-    /// `reloaddir=true` asks for the affected directory's listing in the
-    /// response body instead of a bare `"success"` (seahub's `reloaddir()`).
+    /// `reloaddir=true` returns the affected directory's listing instead of `"success"`.
     pub reloaddir: Option<String>,
 }
 
@@ -41,14 +40,11 @@ pub(crate) fn parent_dir_of(path: &str) -> String {
     }
 }
 
-/// Build the `reloaddir=true` response: the directory's dirents as a **bare**
-/// JSON array plus the `oid`/`dir_perm` headers seahub's `reloaddir()`
-/// produces (`seahub/api2/views.py:2560-2576`).
-///
-/// The official iOS client's `SeafDir.handleData:` accepts only a bare array or
-/// a `{"dirent_list": […]}` wrapper, so the previous `{"dir_listing": …}`
-/// wrapper left its file list stale — and a rename then reported failure even
-/// though the server had renamed the entry.
+/// Build the `reloaddir=true` response: the dirents as a **bare** JSON array plus the
+/// `oid`/`dir_perm` headers seahub's `reloaddir()` produces
+/// (`seahub/api2/views.py:2560-2576`). The iOS client's `SeafDir.handleData:` accepts
+/// only a bare array or a `{"dirent_list": […]}` wrapper, so a `{"dir_listing": …}`
+/// wrapper left its list stale and a rename reported failure on a server success.
 pub(crate) async fn reload_dir_response(
     state: &AppState,
     repo_id: &str,
@@ -208,9 +204,8 @@ pub async fn dir_post_handler(
         _ => {
             svc.create_dir(repo_id, &path, &access.user.email, access.user.user_id)
                 .await?;
-            // iOS sends `reloaddir=true` and reads the parent listing out of the
-            // body; without it the new folder would not appear until a manual
-            // refresh.
+            // iOS sends `reloaddir=true` and reads the parent listing from the
+            // body; otherwise the new folder would not appear until a refresh.
             if is_true(query.reloaddir.as_deref()) {
                 let parent = parent_dir_of(&path);
                 return reload_dir_response(&state, repo_id, &parent).await;
@@ -347,12 +342,10 @@ pub async fn dir_shared_items(
 
 /// GET /api2/repos/{repo_id}/dir/sub_repo/ — create a library from a folder.
 ///
-/// Registered on `GET` for historical client compatibility, but it mutates
-/// state (it inserts a repository). `AuthUser` skips CSRF for safe methods, so
-/// a browser cookie session would otherwise be enough for a cross-site
-/// `<img src=...>` to create a library in the victim's account. Require the
-/// CSRF token from cookie-authenticated callers; bearer-token callers cannot be
-/// reached cross-site and are unaffected.
+/// Registered on `GET` for client compatibility but it mutates state; `AuthUser` skips
+/// CSRF for safe methods, so a browser cookie session would let a cross-site
+/// `<img src=...>` create a library in the victim's account. Bearer-token callers
+/// cannot be reached cross-site and are unaffected.
 pub async fn create_sub_repo(
     access: RepoPathWrite,
     State(state): State<Arc<AppState>>,
@@ -379,8 +372,6 @@ pub async fn create_sub_repo(
 
     Ok(Json(result))
 }
-
-// ── v2.1 API handlers ───────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct V21DirQuery {

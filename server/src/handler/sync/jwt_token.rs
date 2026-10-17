@@ -9,7 +9,6 @@ use crate::AppState;
 use crate::middleware::auth::SyncAuth;
 use base::error::AppError;
 
-/// Response for the JWT token endpoint.
 /// Seafile format: `{"jwt_token": "..."}`
 #[derive(Serialize)]
 pub struct JwtTokenResponse {
@@ -18,18 +17,14 @@ pub struct JwtTokenResponse {
 
 /// GET /seafhttp/repo/{repo_id}/jwt-token
 ///
-/// Returns a JWT token for accessing the notification server.
-/// The token encodes the repo_id, username (email), and expiration time.
-/// Signed with the configured notification private key using HS256.
-///
-/// This is the endpoint that seaf-cli calls to get a JWT token before
-/// connecting to the notification WebSocket server.
+/// A JWT for the notification server, encoding the repo_id, username (email) and
+/// expiry and signed HS256 with the configured notification private key. seaf-cli
+/// calls this before connecting to the notification WebSocket.
 pub async fn get_jwt_token(
     State(state): State<Arc<AppState>>,
     auth: SyncAuth,
     Path(repo_id): Path<String>,
 ) -> Result<Json<JwtTokenResponse>, AppError> {
-    // Check that notification server is configured.
     if state.notification_manager.is_none() {
         return Err(AppError::NotFound("notification not configured".into()));
     }
@@ -41,9 +36,8 @@ pub async fn get_jwt_token(
         ));
     }
 
-    // The JWT grants access to this repo's notification stream, so it must
-    // only be issued to a member of that repo (defense in depth on top of the
-    // `SyncAuth` path/repo binding).
+    // The JWT grants access to this repo's notification stream, so it must only be
+    // issued to a member (defense in depth on the `SyncAuth` path/repo binding).
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         &repo_id,
@@ -51,7 +45,6 @@ pub async fn get_jwt_token(
     )
     .await?;
 
-    // Get the user's email from the database.
     let user = state
         .repos
         .user
@@ -70,9 +63,8 @@ pub async fn get_jwt_token(
     });
 
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
-    // Sign with the subscription-specific subkey, never the raw notification
-    // key: the raw key also authorises posting events, and this token is handed
-    // to every repository member.
+    // Sign with the subscription-specific subkey, never the raw notification key: the
+    // raw key also authorises posting events, and this token goes to every member.
     let sub_key = crate::notification::keys::subscription_key(private_key);
     let key = jsonwebtoken::EncodingKey::from_secret(&sub_key);
 

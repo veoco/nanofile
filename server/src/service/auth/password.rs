@@ -8,21 +8,17 @@ const HASH_LEN: usize = 32;
 /// Algorithm tag of the versioned hash format written by [`hash_password`].
 const HASH_ALGO: &str = "pbkdf2_sha256";
 
-/// Upper bound accepted when reading an iteration count out of a stored hash,
-/// so a corrupted (or hand-edited) row cannot make verification spin for an
-/// unbounded amount of CPU.
+/// Upper bound accepted when reading an iteration count out of a stored hash, so a
+/// corrupted (or hand-edited) row cannot make verification spin unbounded.
 const MAX_ITERATIONS: u32 = 10_000_000;
 
-/// A syntactically valid hash that can never match, used to equalize login
-/// latency when the user does not exist. Without it a "user not found"
-/// response returns instantly while a wrong-password response runs PBKDF2 for
-/// tens to hundreds of ms, leaking which emails are registered through a
-/// response-time side channel.
+/// A syntactically valid hash that can never match, used to equalize login latency
+/// when the user does not exist: otherwise a "user not found" response returns
+/// instantly while a wrong-password one runs PBKDF2, leaking which emails are
+/// registered through a response-time side channel.
 ///
-/// The cost must match the configured cost, so the count is embedded in the
-/// value rather than baked into a constant: with per-hash iteration counts a
-/// fixed `1000` here would be hundreds of times cheaper than a real hash and
-/// re-open the side channel.
+/// The cost must match the configured cost, so it is embedded in the value rather
+/// than baked into a constant: a fixed cheap count would re-open the side channel.
 pub fn dummy_password_hash(iterations: u32) -> String {
     format!(
         "{HASH_ALGO}${iterations}${}${}",
@@ -37,7 +33,6 @@ fn pbkdf2_hash(password: &[u8], salt: &[u8], iterations: u32) -> [u8; HASH_LEN] 
     key
 }
 
-/// A stored password hash split into its cost and material.
 struct ParsedHash {
     iterations: u32,
     salt: Vec<u8>,
@@ -47,9 +42,8 @@ struct ParsedHash {
 /// Parse a stored hash.
 ///
 /// Current format: `pbkdf2_sha256$<iterations>$<hex salt>$<hex hash>`.
-/// Legacy format: `hex(salt):hex(hash)`, whose cost is not recorded and must be
-/// supplied by the caller — every hash written before the cost was embedded
-/// used the then-current global setting.
+/// Legacy format: `hex(salt):hex(hash)`, whose cost is not recorded and is
+/// supplied by the caller.
 fn parse_hash(password_hash: &str) -> Option<ParsedHash> {
     if let Some(rest) = password_hash.strip_prefix(&format!("{HASH_ALGO}$")) {
         let mut parts = rest.splitn(3, '$');
@@ -66,7 +60,6 @@ fn parse_hash(password_hash: &str) -> Option<ParsedHash> {
         });
     }
 
-    // Legacy `salt:hash`.
     let (salt_hex, hash_hex) = password_hash.split_once(':')?;
     Some(ParsedHash {
         iterations: 0, // filled in by the caller
@@ -77,9 +70,8 @@ fn parse_hash(password_hash: &str) -> Option<ParsedHash> {
 
 /// Hash a password with the given iteration count.
 ///
-/// Format: `pbkdf2_sha256$<iterations>$<hex salt>$<hex hash>`. The count is
-/// stored with the hash so that raising `auth.password_hash_iterations` only
-/// affects newly written hashes instead of invalidating every existing one.
+/// The count is stored with the hash, so raising `auth.password_hash_iterations`
+/// only affects newly written hashes instead of invalidating existing ones.
 pub fn hash_password(password: &str, iterations: u32) -> String {
     let mut salt = [0u8; SALT_LEN];
     rand::rng().fill_bytes(&mut salt);
@@ -92,11 +84,8 @@ pub fn hash_password(password: &str, iterations: u32) -> String {
     )
 }
 
-/// Async wrapper running PBKDF2 off the tokio executor.
-///
-/// Password hashing/verification is CPU-bound (tens to hundreds of ms at the
-/// configured iteration count); running it synchronously inside an async
-/// handler would stall a worker thread and delay unrelated requests.
+/// Async wrapper running PBKDF2 off the tokio executor: hashing is CPU-bound and
+/// would otherwise stall a worker thread and delay unrelated requests.
 pub async fn verify_password_async(
     password: String,
     password_hash: String,
@@ -109,11 +98,9 @@ pub async fn verify_password_async(
 
 /// Async wrapper around [`hash_password`]; see [`verify_password_async`].
 ///
-/// A `spawn_blocking` join error (panic in the task, or a shutting-down
-/// runtime) must not degrade into an empty hash: that would write a credential
-/// nobody can ever verify, locking the account out — and the login path uses
-/// this to re-hash a legacy password on a *successful* login. Fall back to
-/// hashing inline instead; the work is identical, only the thread differs.
+/// A `spawn_blocking` join error must not degrade into an empty hash: the login
+/// path uses this to re-hash a legacy password on a *successful* login, and a
+/// broken hash would lock the account out. Fall back to hashing inline instead.
 pub async fn hash_password_async(password: String, iterations: u32) -> String {
     let inline = password.clone();
     match tokio::task::spawn_blocking(move || hash_password(&password, iterations)).await {
@@ -127,8 +114,8 @@ pub async fn hash_password_async(password: String, iterations: u32) -> String {
 
 /// Verify a password against a stored hash using constant-time comparison.
 ///
-/// The iteration count embedded in `password_hash` wins; `fallback_iterations`
-/// is only used for legacy hashes that predate the embedded count.
+/// The count embedded in `password_hash` wins; `fallback_iterations` is only used
+/// for legacy hashes that predate the embedded count.
 pub fn verify_password(password: &str, password_hash: &str, fallback_iterations: u32) -> bool {
     let Some(parsed) = parse_hash(password_hash) else {
         return false;
@@ -147,8 +134,8 @@ pub fn verify_password(password: &str, password_hash: &str, fallback_iterations:
 /// Whether a stored hash should be rewritten with `current_iterations`.
 ///
 /// True for legacy hashes (no recorded cost) and for hashes whose recorded cost
-/// no longer matches the configured one. Callers rewrite on successful login,
-/// which upgrades the whole user base without a migration or a forced reset.
+/// no longer matches. Callers rewrite on successful login, upgrading the whole
+/// user base without a migration or a forced reset.
 pub fn needs_rehash(password_hash: &str, current_iterations: u32) -> bool {
     match parse_hash(password_hash) {
         Some(parsed) => parsed.iterations == 0 || parsed.iterations != current_iterations,
@@ -156,8 +143,7 @@ pub fn needs_rehash(password_hash: &str, current_iterations: u32) -> bool {
     }
 }
 
-/// Validate password strength.
-/// Returns Ok(()) if the password meets the configured requirements.
+/// Validate password strength; `Ok(())` when the configured requirements are met.
 pub fn validate_password(
     password: &str,
     min_length: u32,
@@ -195,22 +181,17 @@ mod tests {
 
     #[test]
     fn test_validate_password_unicode_meets_min_length() {
-        // 4 Chinese characters, each 3 bytes in UTF-8 → 12 bytes, 4 chars
         assert!(validate_password("密码测试", 4, false).is_ok());
     }
 
     #[test]
     fn test_validate_password_unicode_byte_count_larger_than_char_count() {
-        // 3 Chinese chars + 1 ASCII = 4 chars but 10 bytes
-        // Should pass min_length=4 (char count)
         assert!(validate_password("密码测a", 4, false).is_ok());
-        // Should fail min_length=5 (only 4 chars)
         assert!(validate_password("密码测a", 5, false).is_err());
     }
 
     #[test]
     fn test_validate_password_emoji_count() {
-        // 4 emoji characters (each 4 bytes) = 16 bytes, 4 chars
         assert!(validate_password("😀🎉🚀💡", 4, false).is_ok());
     }
 
@@ -253,8 +234,7 @@ mod tests {
         ));
     }
 
-    /// The cost travels with the hash: changing the configured iteration count
-    /// must not invalidate hashes that were written with a different one.
+    /// The stored cost must win over the current setting.
     #[test]
     fn test_embedded_cost_survives_config_change() {
         let password = "test";
@@ -271,7 +251,6 @@ mod tests {
     #[test]
     fn test_legacy_hash_still_verifies() {
         let password = "legacy_password";
-        // Reproduce the old `hex(salt):hex(hash)` format by hand.
         let salt = [7u8; SALT_LEN];
         let legacy = format!(
             "{}:{}",
@@ -288,7 +267,6 @@ mod tests {
         let modern = hash_password("pw", 1000);
         assert!(!needs_rehash(&modern, 1000));
         assert!(needs_rehash(&modern, 2000), "cost changed");
-        // Legacy hashes have no recorded cost and must be upgraded.
         let salt = [1u8; SALT_LEN];
         let legacy = format!(
             "{}:{}",
@@ -296,7 +274,6 @@ mod tests {
             hex::encode(pbkdf2_hash(b"pw", &salt, 1000))
         );
         assert!(needs_rehash(&legacy, 1000));
-        // Unparseable values are left alone (login will simply fail).
         assert!(!needs_rehash("garbage", 1000));
     }
 
@@ -307,7 +284,6 @@ mod tests {
         let dummy = dummy_password_hash(1000);
         assert!(dummy.starts_with("pbkdf2_sha256$1000$"));
         assert!(!verify_password("anything", &dummy, 1000));
-        // Parsing/using the embedded cost keeps `needs_rehash` meaningful.
         assert!(!needs_rehash(&dummy, 1000));
         assert!(needs_rehash(&dummy, 2000));
     }

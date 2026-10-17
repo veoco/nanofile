@@ -15,7 +15,6 @@ use infra::entity::{deleted_repo, file_trash, repo, repo_member};
 use infra::serialization::S_IFDIR;
 use infra::storage::DynBlockStorage;
 
-/// A single item recorded during batch delete.
 #[derive(Debug, Clone)]
 pub struct TrashItem {
     /// Full path of the deleted item, e.g. "/Documents/report.pdf"
@@ -34,7 +33,6 @@ pub struct TrashListResult {
     pub can_search: bool,
 }
 
-/// A single trash entry in API responses.
 #[derive(Debug, Clone, Serialize)]
 pub struct TrashEntry {
     pub parent_dir: String,
@@ -76,12 +74,9 @@ pub struct CursorTrashResult {
     pub has_more: bool,
 }
 
-/// Insert a single deleted file/dir into `file_trash`.
-///
-/// `path` is the full path (`/dir/file.txt`). `parent_commit_id` is the
-/// commit **before** deletion (the parent still contains the entry).
-///
-/// Best-effort: logs and swallows errors.
+/// Insert a single deleted file/dir into `file_trash`. `path` is the full path
+/// (`/dir/file.txt`); `parent_commit_id` is the commit **before** deletion (the
+/// parent still contains the entry). Best-effort: logs and swallows errors.
 #[allow(clippy::too_many_arguments)]
 pub async fn add_to_trash(
     repos: &Repositories,
@@ -121,11 +116,9 @@ pub async fn add_to_trash(
     Ok(())
 }
 
-/// Record a single deleted entry in the trash table, resolving its id, size
-/// and type from the parent directory data.
-///
-/// Best-effort: failures are logged and swallowed so a trash-record problem
-/// never blocks the actual deletion.
+/// Record a single deleted entry in the trash table, resolving its id, size and
+/// type from the parent directory. Best-effort: failures are logged, not
+/// propagated, so a trash-record problem never blocks the deletion.
 pub async fn record_deleted_entry(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -169,9 +162,7 @@ pub async fn record_deleted_entry(
     }
 }
 
-/// Insert multiple deleted items into `file_trash` in a single batch.
-///
-/// Best-effort: logs and swallows errors.
+/// Insert multiple items in one batch. Best-effort: logs and swallows errors.
 pub async fn add_batch_to_trash(
     repos: &Repositories,
     repo_id: &str,
@@ -207,10 +198,8 @@ pub async fn add_batch_to_trash(
     repos.file_trash.insert_many(models).await
 }
 
-// ── Shared helpers ────────────────────────────────────────────────────
-
-/// Build a condition for trash queries applying keyword, time range,
-/// suffix, and optional user filters on top of a repo filter condition.
+/// Build a condition for trash queries: keyword, time range, suffix and
+/// optional user filters on top of a repo filter.
 fn build_trash_condition(
     repo_condition: Condition,
     query: &str,
@@ -270,10 +259,8 @@ fn build_trash_condition(
     condition
 }
 
-/// Map trash DB rows to `TrashEntry` response values.
-///
-/// When `repo_names` is `Some`, the `repo_name` field is populated from the
-/// lookup table. Otherwise it is left empty.
+/// Map trash rows to `TrashEntry` values. With `repo_names`, `repo_name` is
+/// filled from the lookup table; otherwise it is left empty.
 fn map_trash_rows_to_entries(
     rows: &[file_trash::Model],
     repo_names: Option<&HashMap<String, String>>,
@@ -299,8 +286,6 @@ fn map_trash_rows_to_entries(
         .collect()
 }
 
-// ── Page-based trash listing ──────────────────────────────────────────
-
 /// Page-based trash listing for the `/trash2/` endpoint.
 pub async fn list_trash2(
     repos: &Repositories,
@@ -310,14 +295,11 @@ pub async fn list_trash2(
 ) -> Result<TrashListResult, AppError> {
     let page = page.max(1);
     let per_page = per_page.clamp(1, 100);
-    // Widen before multiplying: `page * per_page` in `u32` would overflow for
-    // large page numbers (panic in debug builds, wrapped offset in release).
+    // Widen before multiplying: `page * per_page` in `u32` would overflow.
     let offset = u64::from(page - 1) * u64::from(per_page);
 
-    // Count total
     let total_count = repos.file_trash.count_by_repo(repo_id).await?;
 
-    // Fetch items
     let rows = repos
         .file_trash
         .find_by_repo_paginated(repo_id, per_page as u64, offset)
@@ -347,8 +329,7 @@ pub async fn search_trash(
 ) -> Result<TrashListResult, AppError> {
     let page = page.max(1);
     let per_page = per_page.clamp(1, 100);
-    // Widen before multiplying: `page * per_page` in `u32` would overflow for
-    // large page numbers (panic in debug builds, wrapped offset in release).
+    // Widen before multiplying: `page * per_page` in `u32` would overflow.
     let offset = u64::from(page - 1) * u64::from(per_page);
 
     let condition = build_trash_condition(
@@ -382,11 +363,9 @@ pub async fn search_trash(
     })
 }
 
-/// Cursor-based trash listing for the `/trash/` endpoint.
-///
-/// `cursor` is an optional `delete_time` value from the last item of
-/// the previous page. Returns items with `delete_time <= cursor`. When
-/// `cursor` is `None`, returns the most recent items.
+/// Cursor-based trash listing for `/trash/`. `cursor` is the previous page's
+/// last `delete_time`: returns items with `delete_time <= cursor`, or the most
+/// recent items when `None`.
 pub async fn list_trash_cursor(
     repos: &Repositories,
     repo_id: &str,
@@ -422,15 +401,12 @@ pub async fn list_trash_cursor(
     Ok(CursorTrashResult { items, has_more })
 }
 
-/// Remove trash records by their primary key IDs.
 async fn delete_trash_records(repos: &Repositories, ids: &[i32]) -> Result<(), AppError> {
     repos.file_trash.delete_by_ids(ids).await
 }
 
-/// Core restore logic. Takes a map of `commit_id -> [paths]` where paths
-/// are the full paths (matching `parent_dir + "/" + obj_name` in trash).
-///
-/// Returns a `RevertResult` with success and failed items.
+/// Core restore logic. `restore_map` is `commit_id -> [paths]`, each path a full
+/// path matching `parent_dir + "/" + obj_name` in trash.
 pub async fn restore_trash_items(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -442,9 +418,7 @@ pub async fn restore_trash_items(
     let mut success = Vec::new();
     let mut failed = Vec::new();
 
-    // Resolve the repo + head commit once (shared by every item) instead of
-    // re-fetching them inside `path_exists_in_tree` / `name_exists_in_parent`
-    // and the main resolve step for each item.
+    // Resolve the repo + head commit once, rather than per item.
     let head_root_id: Option<String> = {
         let repo_record = repos
             .repo
@@ -489,7 +463,7 @@ pub async fn restore_trash_items(
         }
     }
 
-    // Phase B: batch-load trash records per commit, indexed by
+    // Phase B: batch-load trash records per commit, keyed by
     // (commit_id, parent_dir, obj_name).
     let mut commit_ids: Vec<String> = items.iter().map(|i| i.commit_id.clone()).collect();
     commit_ids.sort();
@@ -505,8 +479,8 @@ pub async fn restore_trash_items(
         }
     }
 
-    // Phase C: batch-check which fs_objects exist (EMPTY_SHA1 is always
-    // treated as existing and skipped from the query).
+    // Phase C: batch-check which fs_objects exist; `EMPTY_SHA1` always exists
+    // and is skipped from the query.
     let mut obj_ids: Vec<String> = Vec::new();
     for item in &items {
         if let Some(m) = trash_by_key.get(&(
@@ -525,8 +499,8 @@ pub async fn restore_trash_items(
         .find_existing_fs_ids(repo_id, &obj_ids)
         .await?;
 
-    // Phase D: batch-resolve unique non-"/" parent dirs, then batch-read them
-    // for the name-collision check.
+    // Phase D: batch-resolve the non-"/" parents, then batch-read them for the
+    // name-collision check.
     let mut parent_dirs: Vec<String> = items
         .iter()
         .map(|i| i.parent_dir.clone())
@@ -550,9 +524,8 @@ pub async fn restore_trash_items(
         .values()
         .filter_map(|v| v.clone())
         .collect();
-    // The root's dirents are needed as well: a `/`-level restore has to notice an
-    // existing entry with the same name, and the root id is not in the map above
-    // (only non-"/" parents are resolved there).
+    // The root's dirents are needed too: a `/`-level restore must notice an
+    // existing entry with the same name, and the map above only holds non-"/" parents.
     if let Some(root) = &head_root_id {
         parent_ids.push(root.clone());
     }
@@ -561,8 +534,8 @@ pub async fn restore_trash_items(
     parent_ids.dedup();
     let dir_map = crate::fs::core::read_fs_dir_data_batch(repos, repo_id, &parent_ids).await?;
 
-    // Phase E: sequential commit loop (stateful — each item creates a new
-    // commit, so this cannot be batched).
+    // Phase E: sequential commits — each item creates a new commit, so this
+    // cannot be batched.
     let mut successful_ids: Vec<i32> = Vec::new();
     for item in &items {
         let Some(model) = trash_by_key.get(&(
@@ -618,12 +591,10 @@ pub async fn restore_trash_items(
             }
         };
 
-        // `parent_fs_id` may legitimately be `EMPTY_SHA1`: it is the sentinel of
-        // an existing but *empty* directory, which is exactly what the root of a
-        // library whose last file was deleted is. Restoring into it works (the
-        // readers synthesize an empty directory for the sentinel), and a parent
-        // that genuinely disappeared resolved to `None` above instead of
-        // reaching this point.
+        // `parent_fs_id` may legitimately be `EMPTY_SHA1`: the sentinel of an
+        // existing but *empty* directory, which is what the root of a library whose
+        // last file was deleted is. Restoring into it works (readers synthesize an
+        // empty directory), and a parent that disappeared resolved to `None` above.
 
         if let Some(dir_data) = dir_map.get(&parent_fs_id)
             && dir_data.dirents.iter().any(|d| d.name == item.obj_name)
@@ -636,10 +607,9 @@ pub async fn restore_trash_items(
             continue;
         }
 
-        // Bytes this restore puts back into the tree. The trash row's `size` is
-        // only meaningful for a file — a directory dirent carries no size of its
-        // own — so a directory's subtree is walked here. Measured before the
-        // commit, so a missing object fails the item without mutating anything.
+        // Bytes this restore puts back. The trash row's `size` is only meaningful
+        // for a file — a directory dirent carries none — so a directory's subtree
+        // is walked here, before the commit, so a missing object mutates nothing.
         let entry_size = model.size;
         let restored_size = if is_dir {
             crate::fs::core::compute_tree_size(repos, repo_id, &obj_id).await?
@@ -682,12 +652,10 @@ pub async fn restore_trash_items(
             Ok(_) => {
                 successful_ids.push(trash_id);
 
-                // The commit linked the entry — and, for a directory, its whole
-                // subtree — back into HEAD, so the bytes the delete path
-                // subtracted have to come back with it.
+                // The commit linked the entry (and a directory's whole subtree) back
+                // into HEAD, so the bytes the delete path subtracted come back too.
                 crate::fs::core::adjust_repo_size(repos, repo_id, restored_size).await?;
 
-                // Log activity
                 activity_log::log_activity(
                     db,
                     repo_id,
@@ -726,7 +694,6 @@ pub async fn restore_trash_items(
     Ok(RevertResult { success, failed })
 }
 
-/// Old API restore: single commit_id, multiple paths.
 pub async fn restore_dirents(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -742,7 +709,7 @@ pub async fn restore_dirents(
 }
 
 /// Clean trash items for a repo, optionally keeping items newer than
-/// `keep_days`. Returns the number of deleted rows.
+/// `keep_days`; returns the number of deleted rows.
 pub async fn clean_trash(
     repos: &Repositories,
     repo_id: &str,
@@ -762,7 +729,6 @@ pub async fn clean_trash(
     Ok(0)
 }
 
-/// Collect distinct repo_ids accessible by a user.
 async fn gather_user_repo_ids(repos: &Repositories, user_id: i32) -> Result<Vec<String>, AppError> {
     let member_repos = repos.member.find_by_user_id(user_id).await?;
     let ids: Vec<String> = member_repos
@@ -774,12 +740,10 @@ async fn gather_user_repo_ids(repos: &Repositories, user_id: i32) -> Result<Vec<
     Ok(ids)
 }
 
-/// Build a repo_id → repo_name lookup map.
 async fn build_repo_name_lookup(
     repos: &Repositories,
     repo_ids: &[String],
 ) -> Result<HashMap<String, String>, AppError> {
-    // One batched IN query instead of one query per repo (P3-4).
     let mut names = HashMap::new();
     for r in repos.repo.find_by_ids(repo_ids).await? {
         names.insert(r.id.clone(), r.name);
@@ -787,10 +751,8 @@ async fn build_repo_name_lookup(
     Ok(names)
 }
 
-/// List trash items across all repos the user has access to.
-///
-/// Joins with `repo_members` to find accessible repos, and `repos` to
-/// include the repo name for display.
+/// List trash items across all repos the user can access, including the repo
+/// name for display.
 pub async fn list_trash_for_user(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -800,8 +762,7 @@ pub async fn list_trash_for_user(
 ) -> Result<TrashListResult, AppError> {
     let page = page.max(1);
     let per_page = per_page.clamp(1, 100);
-    // Widen before multiplying: `page * per_page` in `u32` would overflow for
-    // large page numbers (panic in debug builds, wrapped offset in release).
+    // Widen before multiplying: `page * per_page` in `u32` would overflow.
     let offset = u64::from(page - 1) * u64::from(per_page);
 
     let repo_ids = gather_user_repo_ids(repos, user_id).await?;
@@ -838,10 +799,8 @@ pub async fn list_trash_for_user(
     })
 }
 
-/// Search trash across all repos the user has access to.
-///
-/// Supports the same filters as `search_trash` but scoped to repos
-/// the user can access via `repo_members`.
+/// Search trash across all repos the user can access, with the same filters as
+/// `search_trash` but scoped to `repo_members`.
 #[allow(clippy::too_many_arguments)]
 pub async fn search_trash_for_user(
     db: &DatabaseConnection,
@@ -856,8 +815,7 @@ pub async fn search_trash_for_user(
 ) -> Result<TrashListResult, AppError> {
     let page = page.max(1);
     let per_page = per_page.clamp(1, 100);
-    // Widen before multiplying: `page * per_page` in `u32` would overflow for
-    // large page numbers (panic in debug builds, wrapped offset in release).
+    // Widen before multiplying: `page * per_page` in `u32` would overflow.
     let offset = u64::from(page - 1) * u64::from(per_page);
 
     let repo_ids = gather_user_repo_ids(repos, user_id).await?;
@@ -903,9 +861,6 @@ pub async fn search_trash_for_user(
     })
 }
 
-// ─── Repo-level trash ─────────────────────────────────────────────────
-
-/// Add a deleted repo to the trash table.
 pub async fn add_deleted_repo(
     repos: &Repositories,
     repo_id: &str,
@@ -916,8 +871,7 @@ pub async fn add_deleted_repo(
 ) -> Result<(), AppError> {
     let now = chrono::Utc::now().timestamp();
 
-    // Best-effort: if the repo already exists in trash, ignore the error
-    // to preserve the original INSERT OR IGNORE behavior.
+    // Best-effort: skip when already trashed, preserving INSERT OR IGNORE behaviour.
     if repos.deleted_repo.find_by_id(repo_id).await?.is_none() {
         repos
             .deleted_repo
@@ -935,7 +889,6 @@ pub async fn add_deleted_repo(
     Ok(())
 }
 
-/// List repos that a user has deleted.
 pub async fn list_deleted_repos(
     repos: &Repositories,
     user_id: i32,
@@ -943,20 +896,13 @@ pub async fn list_deleted_repos(
     repos.deleted_repo.find_by_owner(user_id).await
 }
 
-/// Restore a repo from trash.
+/// Restore a repo from trash: re-insert it, copy the archived content (commit
+/// graph and FS objects) back, restore the recorded head, recreate owner
+/// membership, drop the archive and the trash entry.
 ///
-/// Re-inserts the repo, copies its archived content (commit graph and FS objects)
-/// back, restores the head commit recorded at delete time, creates owner
-/// membership, and removes it from trash.
-///
-/// A library deleted before its content was archived (an installation that
-/// predates the archive tables) still restores, but comes back empty; that is
-/// reported in the log rather than silently.
-///
-/// Restoring a library that is not in the trash is a 400 with seahub's
-/// `Library does not exist in trash.` message; seahub's permanent-delete
-/// endpoint reports the same condition as a 404, and [`purge_deleted_repo`] does
-/// the same.
+/// A library deleted before its content was archived still restores, but comes
+/// back empty (logged, not silent). Not being in the trash is a 400 with seahub's
+/// `Library does not exist in trash.` message, as [`purge_deleted_repo`] reports 404.
 pub async fn restore_deleted_repo(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -1005,9 +951,8 @@ pub async fn restore_deleted_repo(
             .await?;
     }
 
-    // Bring the library's content back. The copy is one transaction, and the
-    // archive is only dropped once the whole restore has succeeded, so a failure
-    // leaves a state the user can retry instead of a library without content.
+    // The copy is one transaction and the archive is dropped only after the whole
+    // restore succeeds, so a failure leaves a state the user can retry.
     let restored = {
         let txn = db.begin().await?;
         let copied = crate::fs::core::repo_archive::copy_from(&txn, &trashed.repo_id).await?;
@@ -1015,9 +960,8 @@ pub async fn restore_deleted_repo(
         copied
     };
 
-    // The head commit recorded at delete time is only meaningful when the
-    // commit came back with the archive. A library that had content always has a
-    // recorded head, so a missing commit means its content is not recoverable.
+    // The recorded head only works if the commit came back with the archive: a
+    // library that had content always has one, so a missing commit is unrecoverable.
     if let Some(head) = trashed.head_id.as_deref() {
         if repos
             .commit
@@ -1064,13 +1008,10 @@ pub async fn restore_deleted_repo(
             .await?;
     }
 
-    // The library is complete again, so the archive copy is no longer needed.
     crate::fs::core::repo_archive::drop_archive(db, &trashed.repo_id).await?;
 
-    // Remove from trash
     repos.deleted_repo.delete_by_id(repo_id).await?;
 
-    // Log activity
     activity_log::log_activity(
         db, repo_id, "recover", "repo", "/", user_id, None, None, None, None, None,
     )
@@ -1079,18 +1020,13 @@ pub async fn restore_deleted_repo(
     Ok(())
 }
 
-// ─── Purging trashed libraries ────────────────────────────────────────
-
-/// What seahub answers when a library is not in the caller's trash. Both trash
-/// endpoints use this text; only the status differs (400 for a restore, 404 for
-/// a permanent delete).
+/// What seahub answers when a library is not in the caller's trash: both trash
+/// endpoints use this text, only the status differs (400 restore, 404 purge).
 const MISSING_TRASH_ENTRY: &str = "Library does not exist in trash.";
 
-/// Permanently delete a trashed library.
-///
-/// Drops its archived content, its file-level trash rows and its trash entry,
-/// then reclaims its block directory so the space is actually freed. Only the
-/// owner can purge.
+/// Permanently delete a trashed library: drop its archived content, its
+/// file-level trash rows and its trash entry, then reclaim its block directory so
+/// the space is actually freed. Only the owner can purge.
 pub async fn purge_deleted_repo(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -1111,14 +1047,12 @@ pub async fn purge_deleted_repo(
     // The archive is the last copy of the library's content.
     crate::fs::core::repo_archive::drop_archive(db, repo_id).await?;
 
-    // File-level trash entries of a library that is gone for good. Their table
-    // has no foreign key to `repos`, so they would otherwise outlive the library
-    // they point at.
+    // File-level trash entries of a library that is gone for good: their table
+    // has no foreign key to `repos`, so they would otherwise outlive it.
     repos.file_trash.delete_by_repo(repo_id).await?;
 
-    // Remove the trash entry before touching the disk: from here on the library
-    // is unrecoverable, so a crash mid-purge leaves the blocks to the next
-    // garbage collection instead of a trash entry pointing at deleted content.
+    // Remove the trash entry before touching the disk: from here on the library is
+    // unrecoverable, so a crash leaves the blocks to the next garbage collection.
     repos.deleted_repo.delete_by_id(repo_id).await?;
     remove_repo_block_dir(block_store, &trashed.repo_id).await;
 
@@ -1127,9 +1061,7 @@ pub async fn purge_deleted_repo(
 }
 
 /// Permanently delete every library in a user's trash, returning how many were
-/// purged.
-///
-/// Entries are purged one by one, so a failure part way through leaves the
+/// purged. Entries are purged one by one, so a failure part way through leaves the
 /// remaining entries for a retry rather than undoing the whole sweep.
 pub async fn purge_deleted_repos_of_owner(
     db: &DatabaseConnection,
@@ -1146,11 +1078,9 @@ pub async fn purge_deleted_repos_of_owner(
     Ok(purged)
 }
 
-/// Remove a purged library's block directory.
-///
-/// Best effort: garbage collection reclaims the directory of any library that
-/// has neither a `repos` row nor a trash entry, so failing here only delays the
-/// cleanup until the next collection.
+/// Remove a purged library's block directory. Best effort: garbage collection
+/// reclaims the directory of any library with neither a `repos` row nor a trash
+/// entry, so failing here only delays the cleanup.
 async fn remove_repo_block_dir(block_store: &DynBlockStorage, repo_id: &str) {
     let dir = match block_store.repo_dirs().await {
         Ok(dirs) => dirs

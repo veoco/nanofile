@@ -2,7 +2,6 @@ use crate::repository::Repositories;
 use crate::repository::repo::UpdateRepoKeysParams;
 use base::error::AppError;
 
-/// Service for encrypted repo password operations.
 pub struct PasswordService;
 
 impl PasswordService {
@@ -18,14 +17,12 @@ impl PasswordService {
         user_id: i32,
         password: &str,
     ) -> Result<(), AppError> {
-        // Load the repo
         let repo_model = repos
             .repo
             .find_by_id(repo_id)
             .await?
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
-        // Check that it's encrypted
         if repo_model.encrypted == 0 {
             return Err(AppError::BadRequest("repo is not encrypted".into()));
         }
@@ -41,7 +38,7 @@ impl PasswordService {
             ""
         };
 
-        // Set the password (verify + derive + cache)
+        // Verify, derive and cache the key.
         password_manager
             .set_password(
                 repo_id,
@@ -60,13 +57,9 @@ impl PasswordService {
             .await
     }
 
-    /// Change the password for an encrypted repo.
-    ///
-    /// 1. Verify old password
-    /// 2. Generate the new verifier (`pwd_hash` or `magic`) from the new password
-    /// 3. Decrypt random_key with old password -> get secret_key
-    /// 4. Re-encrypt secret_key with new password -> new random_key
-    /// 5. Update the repo's verifier and random_key in DB
+    /// Change the password for an encrypted repo: verify the old one, derive the
+    /// new verifier (`pwd_hash` or `magic`), re-encrypt `random_key` under the new
+    /// password, then store the new verifier and `random_key`.
     pub async fn change_password(
         password_manager: &infra::crypto::password_manager::PasswordManager,
         repos: &Repositories,
@@ -75,7 +68,6 @@ impl PasswordService {
         old_password: &str,
         new_password: &str,
     ) -> Result<(), AppError> {
-        // Load the repo
         let repo_model = repos
             .repo
             .find_by_id(repo_id)
@@ -97,7 +89,7 @@ impl PasswordService {
             ""
         };
 
-        // 1. Verify old password via password_manager
+        // Verify the old password via password_manager.
         password_manager
             .set_password(
                 repo_id,
@@ -115,10 +107,9 @@ impl PasswordService {
             )
             .await?;
 
-        // 2. Regenerate the verifier. A `pwd_hash` library keeps using its
-        //    algorithm and parameters — upstream's `pwd_hash_algo` is a property
-        //    of the library, not of the password — and must stay without a
-        //    `magic` (the commit omits `magic` whenever `pwd_hash` is set).
+        // Regenerate the verifier. A `pwd_hash` library keeps its algorithm and
+        // parameters — upstream's `pwd_hash_algo` is a property of the library, not
+        // of the password — and stays without a `magic`.
         let new_verifier = match repo_model.pwd_hash_algo.as_deref() {
             Some(algo) => {
                 let hash = infra::crypto::pwd_hash::derive_pwd_hash(
@@ -158,7 +149,7 @@ impl PasswordService {
             }
         };
 
-        // 3. Decrypt the old random_key to get the secret key (the actual file key).
+        // Decrypt the old random_key to get the secret key (the actual file key).
         use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
         let old_derived =
             infra::crypto::key_derivation::derive_key(old_password, enc_version, salt)
@@ -172,7 +163,7 @@ impl PasswordService {
             .decrypt_padded_vec::<Pkcs7>(&random_key_bytes)
             .map_err(|e| AppError::BadRequest(format!("failed to decrypt random_key: {e}")))?;
 
-        // 4. Re-encrypt with new password (same format: raw AES-CBC with PKCS7 padding).
+        // Re-encrypt with the new password (same format: raw AES-CBC with PKCS7).
         let new_derived =
             infra::crypto::key_derivation::derive_key(new_password, enc_version, salt)
                 .map_err(|e| AppError::BadRequest(format!("key derivation failed: {e}")))?;
@@ -181,7 +172,6 @@ impl PasswordService {
                 .map_err(|e| AppError::BadRequest(format!("cipher init: {e}")))?;
         let new_random_key = new_cipher.encrypt_padded_vec::<Pkcs7>(&secret_key);
 
-        // 5. Update repo in DB
         repos
             .repo
             .update_repo_keys(
@@ -193,10 +183,9 @@ impl PasswordService {
             )
             .await?;
 
-        // Drop every cached key for this library, not just the caller's:
-        // rotation rewrites the repo-wide verifier/`random_key`, so any other
-        // session still holding the old key must stop being able to decrypt.
-        // (`user_id` is intentionally unused here now.)
+        // Drop every cached key for this library, not just the caller's: rotation
+        // rewrites the repo-wide verifier and `random_key`, so any other session
+        // still holding the old key must stop being able to decrypt.
         let _ = user_id;
         password_manager.remove_repo(repo_id).await;
 

@@ -7,8 +7,7 @@ use tracing::debug;
 
 const TOKEN_EXPIRE_SECS: i64 = 3600; // 1 hour, matching seafile
 
-/// Above this map size, `validate` takes the write lock to purge expired
-/// tokens. Below it, common-path validation is read-lock only.
+/// Above this size `validate` purges under the write lock; below it validation is read-lock only.
 const CLEANUP_THRESHOLD: usize = 10_000;
 
 /// An access token granting permission to upload, update, or download a file.
@@ -17,7 +16,6 @@ pub struct AccessToken {
     pub token: String,
     pub repo_id: String,
     pub user_id: i32,
-    /// Email / username of the user.
     pub username: String,
     /// "upload", "update", or "download"
     pub op: String,
@@ -33,12 +31,8 @@ pub struct AccessToken {
     pub expires_at: i64,
 }
 
-/// In-memory web access token manager.
-///
-/// Generates tokens for the `/upload-api/{token}`, `/update-api/{token}`,
-/// and `/download-api/{token}` endpoints.  Tokens are stored in memory
-/// and expire after `TOKEN_EXPIRE_SECS` (3600 s).  Expired tokens are
-/// cleaned up lazily on access.
+/// In-memory manager for the `/upload-api/{token}`, `/update-api/{token}` and
+/// `/download-api/{token}` bearer tokens; they expire after `TOKEN_EXPIRE_SECS`.
 pub struct AccessTokenManager {
     tokens: RwLock<HashMap<String, AccessToken>>,
 }
@@ -56,9 +50,7 @@ impl AccessTokenManager {
         }
     }
 
-    /// Generate a new token and store it.
-    ///
-    /// Returns the token string (a UUID without hyphens).
+    /// Generate a new token and store it; returns a UUID without hyphens.
     pub fn generate(
         &self,
         repo_id: &str,
@@ -101,10 +93,8 @@ impl AccessTokenManager {
         token
     }
 
-    /// Generate a download token with file metadata.
-    ///
-    /// Like `generate()` but also stores the file's fs_id and name so the
-    /// download-api handler can return the correct Content-Disposition and oid header.
+    /// Like [`Self::generate`], but also stores the fs_id and name the download
+    /// handler needs for the `oid` and `Content-Disposition` headers.
     pub fn generate_download(
         &self,
         repo_id: &str,
@@ -145,14 +135,12 @@ impl AccessTokenManager {
         token
     }
 
-    /// Validate and return the token.  Returns `None` if the token
-    /// doesn't exist or has expired.  Expired tokens are purged lazily,
-    /// only when the map grows past a threshold, so that the common path
-    /// (a valid token) takes a read lock and a single lookup.
+    /// Validate and return a token, or `None` when it is missing or expired.
+    /// Expired entries are purged lazily only above `CLEANUP_THRESHOLD`, so the
+    /// common valid-token path takes just a read lock.
     pub fn validate(&self, token: &str) -> Option<AccessToken> {
         let now = chrono::Utc::now().timestamp();
 
-        // Fast path: read lock + single lookup.
         if let Ok(guard) = self.tokens.read()
             && let Some(entry) = guard.get(token)
             && entry.expires_at > now
@@ -160,8 +148,7 @@ impl AccessTokenManager {
             return Some(entry.clone());
         }
 
-        // Slow path: missing or expired token — take the write lock and
-        // purge expired entries once the map has grown large.
+        // Slow path: missing or expired token; purge once the map has grown large.
         let mut guard = match self.tokens.write() {
             Ok(g) => g,
             Err(poisoned) => {
@@ -182,7 +169,6 @@ impl AccessTokenManager {
         }
     }
 
-    /// Set the upload_link_id on an existing token (used to link uploads back to the source link).
     pub fn set_upload_link_id(&self, token: &str, link_id: i32) {
         if let Ok(mut guard) = self.tokens.write()
             && let Some(entry) = guard.get_mut(token)
@@ -191,7 +177,6 @@ impl AccessTokenManager {
         }
     }
 
-    /// Remove a token from the store (called after successful upload).
     pub fn remove(&self, token: &str) {
         if let Ok(mut guard) = self.tokens.write() {
             guard.remove(token);
@@ -200,11 +185,8 @@ impl AccessTokenManager {
 
     /// Drop every outstanding token belonging to `user_id`.
     ///
-    /// These tokens are capability URLs (valid 1 hour) that the server hands
-    /// out for uploads, updates and downloads. They used to survive a password
-    /// change, a password reset, an account deactivation and a logout, so a
-    /// leaked URL kept working for the rest of its TTL regardless of what the
-    /// account did afterwards. Callers revoke on those events.
+    /// A leaked one-hour capability URL must not keep working after a password
+    /// change, reset, deactivation or logout; callers revoke on those events.
     pub fn revoke_user(&self, user_id: i32) -> usize {
         let mut guard = match self.tokens.write() {
             Ok(g) => g,
@@ -215,11 +197,8 @@ impl AccessTokenManager {
         before - guard.len()
     }
 
-    /// Drop `user_id`'s outstanding tokens for one repository.
-    ///
-    /// Used when a member loses access to a library (unshare, library deleted):
-    /// the token was minted while they were a member, so it must not outlive
-    /// that membership.
+    /// Drop `user_id`'s tokens for one repository (unshare, deleted library): the
+    /// token was minted while they were a member, so it must not outlive it.
     pub fn revoke_user_repo(&self, user_id: i32, repo_id: &str) -> usize {
         let mut guard = match self.tokens.write() {
             Ok(g) => g,
@@ -230,11 +209,8 @@ impl AccessTokenManager {
         before - guard.len()
     }
 
-    /// Drop the tokens minted from the shareable upload link `link_id`.
-    ///
-    /// Deleting an upload link revokes the URLs already handed out from it;
-    /// otherwise the link's own deletion would not stop an uploader that had
-    /// already exchanged it for a token.
+    /// Drop the tokens minted from upload link `link_id`; deleting the link must
+    /// also stop uploaders that already exchanged it for a token.
     pub fn revoke_upload_link(&self, link_id: i32) -> usize {
         let mut guard = match self.tokens.write() {
             Ok(g) => g,

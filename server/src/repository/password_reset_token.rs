@@ -17,8 +17,6 @@ pub trait PasswordResetTokenRepository: Send + Sync {
     ) -> Result<Vec<password_reset_token::Model>, AppError>;
     async fn delete_by_id(&self, id: i32) -> Result<(), AppError>;
 
-    // ── Methods for UI layer refactoring ───────────────────────────────
-    /// Create a new password reset token.
     async fn create(
         &self,
         user_id: i32,
@@ -28,10 +26,9 @@ pub trait PasswordResetTokenRepository: Send + Sync {
     ) -> Result<password_reset_token::Model, AppError>;
     /// Atomically claim a token, returning `true` only for the caller that won.
     ///
-    /// The `used = false` predicate is what makes single-use real: a caller that
-    /// validates first and marks used afterwards leaves a window in which two
-    /// concurrent submissions of the same reset link both pass validation and
-    /// both set a password (last writer wins).
+    /// The `used = false` predicate is what makes single-use real: a caller that validates first
+    /// and marks used afterwards leaves a window in which two concurrent submissions of the same
+    /// reset link both pass validation and both set a password (last writer wins).
     async fn mark_as_used(&self, id: i32) -> Result<bool, AppError>;
 }
 
@@ -102,8 +99,8 @@ impl PasswordResetTokenRepository for DbPasswordResetTokenRepository {
             })
             .exec(self.db.as_ref())
             .await?;
-        // `false` means another request already claimed it (or it does not
-        // exist); either way this caller must not proceed to set a password.
+        // `false` means another request already claimed it (or it does not exist); either way this
+        // caller must not proceed to set a password.
         Ok(result.rows_affected == 1)
     }
 }

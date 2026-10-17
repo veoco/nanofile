@@ -5,29 +5,20 @@ use std::sync::Arc;
 use crate::repository::Repositories;
 use base::error::AppError;
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-/// Default avatar SVG embedded at compile time.
-/// Path relative to this file: ../../../static/img/default-avatar.svg
+/// Default avatar SVG embedded at compile time from `static/img/default-avatar.svg`.
 static DEFAULT_AVATAR: &[u8] = include_bytes!("../../../static/img/default-avatar.svg");
 
 pub const MAX_AVATAR_SIZE: usize = 1024 * 1024; // 1 MB
 const ALLOWED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif"];
 
-// ─── Public utility functions ────────────────────────────────────────────────
-
-/// Return the embedded default-avatar bytes.
 pub fn default_avatar_bytes() -> &'static [u8] {
     DEFAULT_AVATAR
 }
 
-/// Build the avatar URL path used by the rest of the codebase
-/// (activities, groups, share links, etc.).
+/// The avatar URL path used across activities, groups and share links.
 pub fn primary_avatar_url(email: &str, size: u32) -> String {
     format!("/avatars/user/{}/resized/{}/", email, size)
 }
-
-// ─── Service ─────────────────────────────────────────────────────────────────
 
 pub struct AvatarService {
     repos: Arc<Repositories>,
@@ -39,16 +30,13 @@ impl AvatarService {
         Self { repos, avatar_dir }
     }
 
-    /// Compute the on-disk storage directory for a user's avatar files.
-    ///
-    /// Uses the first 16 hex characters of the SHA-256 of the user's email as the
-    /// directory name, matching seafile's `AVATAR_HASH_USERDIRNAMES` behaviour.
+    /// On-disk directory for a user's avatar files: the first 16 hex characters of the SHA-256 of
+    /// the email, matching seafile's `AVATAR_HASH_USERDIRNAMES` behaviour.
     fn avatar_storage_dir(&self, email: &str) -> PathBuf {
         let hash = hex::encode(Sha256::digest(email.as_bytes()));
         self.avatar_dir.join(&hash[..16])
     }
 
-    /// Find an avatar record by email.
     pub async fn find_avatar(
         &self,
         email: &str,
@@ -56,16 +44,13 @@ impl AvatarService {
         self.repos.avatar.find_by_email(email).await
     }
 
-    /// Upload a new avatar for the user. Validates file size and extension,
-    /// persists the original to disk, generates a 256x256 thumbnail, and
-    /// upserts the database record. Returns the avatar URL.
+    /// Validate, store and thumbnail a new avatar; returns its URL.
     pub async fn upload_avatar(
         &self,
         email: &str,
         file_name: String,
         data: Vec<u8>,
     ) -> Result<String, AppError> {
-        // Validate file size
         if data.len() > MAX_AVATAR_SIZE {
             return Err(AppError::BadRequest(format!(
                 "avatar file too large (max {} bytes)",
@@ -73,7 +58,6 @@ impl AvatarService {
             )));
         }
 
-        // Validate file extension
         let ext = file_name
             .rsplit_once('.')
             .map(|(_, e)| e.to_lowercase())
@@ -86,7 +70,6 @@ impl AvatarService {
             )));
         }
 
-        // Determine mime type from extension
         let mime_type = match ext.as_str() {
             "jpg" | "jpeg" => "image/jpeg",
             "png" => "image/png",
@@ -94,37 +77,31 @@ impl AvatarService {
             _ => "image/png",
         };
 
-        // Build storage path
         let storage_dir = self.avatar_storage_dir(email);
         tokio::fs::create_dir_all(&storage_dir)
             .await
             .map_err(|e| AppError::Internal(format!("failed to create avatar dir: {e}")))?;
 
-        // An avatar is a file the account chose, so it is decoded by the sandbox
-        // worker. With the sandbox off — or a host below the minimum — there is
-        // no other path, and the upload is refused rather than stored for the
-        // server to decode later.
+        // An avatar is a file the account chose, so it is decoded by the sandbox worker. With the
+        // sandbox off — or a host below the minimum — there is no other path, and the upload is
+        // refused rather than stored for the server to decode later.
         if let Err(why) = crate::sandbox::available(crate::sandbox::Profile::Images) {
             return Err(AppError::BadRequest(format!(
                 "avatar processing is unavailable: {why}"
             )));
         }
 
-        // Save the original file
         let original_path = storage_dir.join(format!("original.{}", ext));
         tokio::fs::write(&original_path, &data)
             .await
             .map_err(|e| AppError::Internal(format!("failed to save avatar: {e}")))?;
 
-        // The length the record carries, taken before the bytes move into the
-        // worker below.
+        // The length the record carries, taken before the bytes move into the worker below.
         let data_len = data.len() as i32;
 
-        // Generate and save the default-size thumbnail (256x256). The decode
-        // runs in the confined child, which may work for the whole image
-        // timeout, so it takes the same gate the reading path takes and runs off
-        // the runtime: a child spawn is a blocking call and this is an `async
-        // fn`. The permit lives for the block, which is what covers the wait.
+        // Generate and save the 256x256 thumbnail. The decode runs in the confined child, which may
+        // work for the whole image timeout, so it queues on the same gate the reading path takes and
+        // runs off the runtime — a child spawn blocks. The permit covers that wait.
         if let Ok(_permit) = crate::sandbox::jobs::images::acquire_image_permit().await {
             let worker_input = data;
             let squared = tokio::task::spawn_blocking(move || {
@@ -135,11 +112,10 @@ impl AvatarService {
                 let thumbnail_path = storage_dir.join("256.png");
                 let _ = tokio::fs::write(&thumbnail_path, &thumbnail_data).await;
             }
-            // Anything else is non-fatal: the worker may decline a corrupt
-            // image, and the original is already saved.
+            // Anything else is non-fatal: the worker may decline a corrupt image, and the original is
+            // already saved.
         }
 
-        // Upsert avatar database record
         let now = chrono::Utc::now().timestamp();
         self.repos
             .avatar
@@ -163,7 +139,6 @@ impl AvatarService {
         let storage_dir = self.avatar_storage_dir(&avatar.email);
         let thumbnail_path = storage_dir.join(format!("{}.png", size));
 
-        // Fast path — thumbnail already cached on disk
         if thumbnail_path.exists() {
             return tokio::fs::read(&thumbnail_path)
                 .await
@@ -171,8 +146,8 @@ impl AvatarService {
                 .map(|data| (data, "image/png"));
         }
 
-        // A miss starts a confined child that may work for the whole image
-        // timeout, so it queues on the same gate the file-thumbnail path uses.
+        // A miss starts a confined child that may work for the whole image timeout, so it queues on
+        // the same gate the file-thumbnail path uses.
         let _permit = crate::sandbox::jobs::images::acquire_image_permit()
             .await
             .ok()?;
@@ -185,9 +160,8 @@ impl AvatarService {
                 .map(|data| (data, "image/png"));
         }
 
-        // Thumbnail miss — load the original and have the sandbox worker
-        // generate one. The decode is the same hostile-image path as a file
-        // thumbnail, so it runs in the same confined child.
+        // Thumbnail miss: load the original and have the sandbox worker generate one. The decode is
+        // the same hostile-image path as a file thumbnail, in the same confined child.
         let original_path = find_original_path(&storage_dir)?;
         let content = tokio::fs::read(original_path).await.ok()?;
 
@@ -206,15 +180,12 @@ impl AvatarService {
                 Some((thumbnail_data, "image/png"))
             }
             Err(_) => {
-                // Fall back to serving the original at its native size
                 let mime = resolve_mime_from_path(&storage_dir);
                 Some((content, mime))
             }
         }
     }
 }
-
-// ─── Internal helpers ────────────────────────────────────────────────────────
 
 /// Parse the `{size}` parameter — accept a number or the literal `"default"`.
 pub fn resolve_size(size_str: &str) -> u32 {
@@ -225,8 +196,7 @@ pub fn resolve_size(size_str: &str) -> u32 {
     }
 }
 
-/// Find the original uploaded file inside a storage directory by trying known
-/// image extensions in order.
+/// Find the original uploaded file in a storage directory, trying known image extensions in order.
 pub(crate) fn find_original_path(dir: &std::path::Path) -> Option<PathBuf> {
     for ext in &["png", "jpg", "jpeg", "gif"] {
         let path = dir.join(format!("original.{}", ext));
@@ -237,7 +207,6 @@ pub(crate) fn find_original_path(dir: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
-/// Guess the MIME type from the original file extension in a storage directory.
 fn resolve_mime_from_path(dir: &std::path::Path) -> &'static str {
     for ext in &["png", "jpg", "jpeg", "gif"] {
         if dir.join(format!("original.{}", ext)).exists() {

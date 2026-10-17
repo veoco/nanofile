@@ -19,28 +19,21 @@ pub trait FsObjectRepository: Send + Sync {
         repo_id: &str,
         fs_ids: &[String],
     ) -> Result<Vec<fs_object::Model>, AppError>;
-    /// Project only `fs_id` for the given ids of a repo, without loading the
-    /// potentially large `data` JSON column. Returns the set of ids that exist.
+    /// Project only `fs_id`, without loading the large `data` JSON column; returns the ids that exist.
     async fn find_existing_fs_ids(
         &self,
         repo_id: &str,
         fs_ids: &[String],
     ) -> Result<HashSet<String>, AppError>;
     async fn insert_many(&self, models: Vec<fs_object::ActiveModel>) -> Result<(), AppError>;
-    /// Whether any FS object in `repo_id` mentions `block_id`.
-    ///
-    /// Used before deleting a block that an interrupted upload wrote: a
-    /// concurrent commit of identical content can end up referencing that very
-    /// block, and deleting it would corrupt the committed file. The match is a
-    /// substring search over the object JSON, so a false positive only leaves an
-    /// orphan for GC — the safe direction.
+    /// Whether any FS object in `repo_id` mentions `block_id`. Checked before deleting a block
+    /// that an interrupted upload wrote: a concurrent commit of identical content can reference
+    /// that very block, and deleting it would corrupt the committed file. The match is a substring
+    /// search over the object JSON, so a false positive only leaves an orphan for GC: the safe way.
     async fn references_block(&self, repo_id: &str, block_id: &str) -> Result<bool, AppError>;
-    /// Get all fs objects of a single repo (used by garbage collection).
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<fs_object::Model>, AppError>;
-    /// Project only `(id, fs_id)` for every object of a repo, without loading
-    /// the potentially large `data` JSON column (used by garbage collection).
-    /// fs_id is returned as its raw 20-byte SHA-1 to avoid per-element heap
-    /// allocation in the caller's set.
+    /// Project only `(id, fs_id)` for every object of a repo, without the large `data` JSON column
+    /// (used by garbage collection); fs_id comes back as its raw 20-byte SHA-1 to avoid allocations.
     async fn find_ids_and_fs_ids_by_repo_id(
         &self,
         repo_id: &str,
@@ -73,8 +66,7 @@ impl FsObjectRepository for DbFsObjectRepository {
     }
 
     async fn exists_by_repo_and_fs_id(&self, repo_id: &str, fs_id: &str) -> Result<bool, AppError> {
-        // Project only the primary key — the `data` column can be a large JSON
-        // blob that is irrelevant when all we need is existence.
+        // Project only the primary key: the `data` column is a large JSON blob irrelevant to existence.
         let row: Option<(i64,)> = fs_object::Entity::find()
             .select_only()
             .column(fs_object::Column::Id)
@@ -95,9 +87,8 @@ impl FsObjectRepository for DbFsObjectRepository {
             return Ok(Vec::new());
         }
         let mut out = Vec::new();
-        // Chunk the IN list to stay under SQLite's ~999 variable limit — a wide
-        // directory can have thousands of direct children, and a single
-        // unchunked IN query would error.
+        // Chunk the IN list to stay under SQLite's ~999 variable limit; a wide directory can have
+        // thousands of direct children, and one unchunked IN query would error.
         for chunk in fs_ids.chunks(500) {
             out.extend(
                 fs_object::Entity::find()
@@ -134,11 +125,10 @@ impl FsObjectRepository for DbFsObjectRepository {
         if models.is_empty() {
             return Ok(());
         }
-        // `ON CONFLICT DO NOTHING` makes a re-uploaded object a no-op, and a
-        // client that re-sends objects an earlier commit already stored (a
-        // retried sync, or a second commit over the same tree) is legitimate.
-        // sea-orm surfaces "every row conflicted" as `RecordNotInserted`; that
-        // is success here, not an error.
+        // `ON CONFLICT DO NOTHING` makes a re-uploaded object a no-op, and a client re-sending
+        // objects an earlier commit already stored (a retried sync, a second commit over the same
+        // tree) is legitimate. sea-orm reports "every row conflicted" as `RecordNotInserted`,
+        // which is success here.
         match fs_object::Entity::insert_many(models)
             .on_conflict(
                 sea_orm::sea_query::OnConflict::columns([
@@ -165,9 +155,8 @@ impl FsObjectRepository for DbFsObjectRepository {
     }
 
     async fn references_block(&self, repo_id: &str, block_id: &str) -> Result<bool, AppError> {
-        // Only a content id we could actually have written may authorize a
-        // delete; anything else (empty, non-hex, `%`/`_` LIKE metacharacters)
-        // reports "referenced" so a malformed value can never remove a block.
+        // Only a content id we could actually have written may authorize a delete; anything else
+        // (empty, non-hex, `%`/`_` LIKE metacharacters) reports "referenced" so it cannot remove a block.
         if block_id.is_empty() || !block_id.chars().all(|c| c.is_ascii_hexdigit()) {
             return Ok(true);
         }

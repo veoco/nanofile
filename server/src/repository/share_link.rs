@@ -8,7 +8,6 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::share_link;
 
-/// Parameters for creating a share link.
 pub struct CreateShareLinkParams {
     pub repo_id: String,
     pub creator_id: i32,
@@ -34,7 +33,6 @@ pub trait ShareLinkRepository: Send + Sync {
     async fn find_by_id(&self, id: i32) -> Result<Option<share_link::Model>, AppError>;
     async fn find_all(&self) -> Result<Vec<share_link::Model>, AppError>;
     async fn insert(&self, model: share_link::ActiveModel) -> Result<share_link::Model, AppError>;
-    /// Create a share link from typed parameters.
     async fn create_share_link(
         &self,
         params: CreateShareLinkParams,
@@ -45,12 +43,10 @@ pub trait ShareLinkRepository: Send + Sync {
         user_id: i32,
     ) -> Result<DeleteResult, AppError>;
     async fn delete_by_token(&self, token: &str) -> Result<DeleteResult, AppError>;
-    /// Increment the view count for a share link by its ID.
     async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError>;
-    /// Delete expired share links (where expires_at < now).
     async fn delete_expired(&self, now: i64) -> Result<u64, AppError>;
     /// Update share link fields (password, expire_at, description).
-    /// Each field uses `Option<Option<T>>` — None = no change, Some(None) = clear, Some(Some(v)) = set.
+    /// Each field uses `Option<Option<T>>`: None = no change, Some(None) = clear, Some(Some(v)) = set.
     async fn update_share_link_fields(
         &self,
         id: i32,
@@ -154,8 +150,7 @@ impl ShareLinkRepository for DbShareLinkRepository {
     }
 
     async fn increment_view_cnt(&self, id: i32) -> Result<(), AppError> {
-        // Atomic SQL increment: `view_cnt = view_cnt + 1` avoids lost updates
-        // from concurrent read-then-write on the same link.
+        // Atomic `view_cnt = view_cnt + 1` avoids lost updates from concurrent read-then-write.
         share_link::Entity::update_many()
             .filter(share_link::Column::Id.eq(id))
             .col_expr(

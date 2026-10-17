@@ -1,6 +1,4 @@
-//! Password reset service for UI layer refactoring.
-//!
-//! This service handles password reset token creation and validation.
+//! Password reset token creation and validation.
 
 use std::sync::Arc;
 
@@ -14,21 +12,17 @@ use infra::entity::password_reset_token;
 
 /// Result of password reset token creation.
 ///
-/// The caller needs the account and the one-time link to hand the link to its
-/// owner; `None` on both means the address has no account, in which case
-/// nothing was minted and nothing may be sent (that is what keeps the flow from
-/// answering "does this address exist?").
+/// `None` on both `user_id` and `reset_url` means the address has no account:
+/// nothing was minted and nothing may be sent, which is what keeps the flow from
+/// answering "does this address exist?".
 pub struct PasswordResetTokenResult {
-    /// The account the token was minted for.
     pub user_id: Option<i32>,
     /// The one-time reset URL. Never returned over HTTP.
     pub reset_url: Option<String>,
-    /// The account's preferred language, so the message is readable without a
-    /// second lookup.
+    /// The account's preferred language, so the message needs no second lookup.
     pub language: Option<String>,
 }
 
-/// Service handling password reset operations.
 pub struct PasswordResetService {
     repos: Arc<Repositories>,
     /// In-memory capability-URL manager, so a reset also drops the user's
@@ -44,8 +38,7 @@ impl PasswordResetService {
         }
     }
 
-    /// Same as [`Self::new`], but able to revoke in-memory capability URLs on
-    /// reset as well.
+    /// Same as [`Self::new`], but able to revoke in-memory capability URLs on reset.
     pub fn with_token_manager(
         repos: Arc<Repositories>,
         token_manager: Arc<crate::AccessTokenManager>,
@@ -56,20 +49,18 @@ impl PasswordResetService {
         }
     }
 
-    /// Create a password reset token for a user.
-    ///
-    /// Returns no link if the user is not found (to prevent enumeration).
+    /// Create a password reset token for a user; no link is returned when the
+    /// user is not found (to prevent enumeration).
     pub async fn create_reset_token(
         &self,
         email: &str,
         site_url: &str,
     ) -> Result<PasswordResetTokenResult, AppError> {
-        // Look up the user
         let user_record = self.repos.user.find_by_email(email).await?;
 
-        // An unknown address mints nothing and reports nothing: the caller
-        // renders the same generic page either way, which is what keeps the
-        // endpoint from answering "does this account exist?".
+        // An unknown address mints nothing and reports nothing: the caller renders
+        // the same generic page either way, so the endpoint never answers "does
+        // this account exist?".
         let Some(user) = user_record else {
             tracing::info!("Password reset requested for unknown email: {}", email);
             return Ok(PasswordResetTokenResult {
@@ -82,8 +73,7 @@ impl PasswordResetService {
         let now = chrono::Utc::now().timestamp();
         let (raw_token, token_hash) = generate_reset_token();
 
-        // Invalidate any previously issued reset links so old tokens stop
-        // working as soon as a new one is requested.
+        // Invalidate previously issued reset links so old tokens stop working.
         let old_tokens = self
             .repos
             .password_reset_token
@@ -138,8 +128,8 @@ impl PasswordResetService {
     /// Complete the password reset process.
     ///
     /// Claim the token **first**, then set the password: the claim is a single
-    /// conditional UPDATE, so two concurrent submissions of the same link
-    /// cannot both take effect (the loser aborts before writing a password).
+    /// conditional UPDATE, so two concurrent submissions of the same link cannot
+    /// both take effect.
     pub async fn reset_password(
         &self,
         raw_token: &str,
@@ -148,7 +138,6 @@ impl PasswordResetService {
         require_strong_password: bool,
         password_hash_iterations: u32,
     ) -> Result<(), AppError> {
-        // Validate token
         let record = self.validate_token(raw_token).await?;
         let record = match record {
             Some(r) => r,
@@ -159,7 +148,7 @@ impl PasswordResetService {
             }
         };
 
-        // Validate password before claiming, so a weak password does not burn
+        // Validate the password before claiming, so a weak password does not burn
         // the link.
         crate::service::auth::password::validate_password(
             new_password,
@@ -169,8 +158,7 @@ impl PasswordResetService {
         .map_err(AppError::BadRequest)?;
 
         // Claim the token atomically. Losing the race means someone else is
-        // resetting with the same link, so this request must not write a
-        // password — the last writer would otherwise win.
+        // resetting with the same link, so this request must not write a password.
         if !self
             .repos
             .password_reset_token
@@ -182,7 +170,6 @@ impl PasswordResetService {
             ));
         }
 
-        // Update password
         let password_hash = hash_password(new_password, password_hash_iterations);
         self.repos
             .user
@@ -205,10 +192,7 @@ impl PasswordResetService {
     }
 }
 
-// ── Token generation helpers (from auth/password_reset.rs) ────────────────
-
-/// Generate a raw reset token and its SHA-256 hash.
-/// Returns (raw_token, token_hash).
+/// Generate a raw reset token and its SHA-256 hash: `(raw_token, token_hash)`.
 pub fn generate_reset_token() -> (String, String) {
     let mut raw = [0u8; 32];
     rand::rng().fill_bytes(&mut raw);

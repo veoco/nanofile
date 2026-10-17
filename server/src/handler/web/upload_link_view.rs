@@ -13,8 +13,6 @@ use crate::i18n::I18n;
 use crate::service::sharing::share::{UPLOAD_LINK_EXPIRED, UPLOAD_LINK_NOT_FOUND};
 use base::error::AppError;
 
-// ── Templates ─────────────────────────────────────────────────────────────
-
 #[allow(dead_code)]
 #[derive(Template)]
 #[template(path = "web/upload_link_view.html")]
@@ -32,16 +30,10 @@ struct UploadLinkViewTemplate {
 
 use super::share_view::{ShareAccessValidationTemplate, wrong_password_error};
 
-// ── Helpers ───────────────────────────────────────────────────────────────
-
-/// Cookie marking that this browser session has supplied the correct
-/// upload-link password.
-///
-/// Delegates to the shared link-unlock helper so the upload-link and
-/// share-link paths cannot drift: both sign an HMAC over the token (a
-/// plaintext `1` is rejected) and both gain the `Secure` attribute when
-/// `server.site_url` is HTTPS — a cookie that unlocks a password-protected
-/// link must never travel over plaintext.
+/// Marks this browser session as having supplied the correct upload-link
+/// password. Delegates to the shared link-unlock helper so the upload-link and
+/// share-link paths cannot drift: both sign an HMAC over the token (a plaintext
+/// `1` is rejected), and both set `Secure` when `server.site_url` is HTTPS.
 fn upload_link_cookie(state: &AppState, token: &str) -> String {
     use crate::service::auth::csrf::{link_unlock_cookie, upload_link_cookie_name};
     link_unlock_cookie(
@@ -64,22 +56,19 @@ async fn validate_upload_link(
         .await?
         .ok_or_else(|| AppError::NotFound(UPLOAD_LINK_NOT_FOUND.into()))?;
 
-    // Check expiry
     if let Some(exp) = link.expires_at
         && chrono::Utc::now().timestamp() > exp
     {
         return Err(AppError::NotFound(UPLOAD_LINK_EXPIRED.into()));
     }
 
-    // Check repo exists
     if !state.sync_service().repo_exists(&link.repo_id).await? {
         return Err(AppError::NotFound(UPLOAD_LINK_NOT_FOUND.into()));
     }
 
     // The link acts as its creator, so it must stop resolving once the creator
-    // loses access to the library (member removed, account deactivated). The
-    // actual upload path re-checks write permission on the token, but the view
-    // page itself lists directory entries and must not outlive access either.
+    // loses access to the library (member removed, account deactivated); the
+    // view page lists directory entries and must not outlive that access.
     if !crate::service::sharing::share::link_creator_may_access(
         &state.repos,
         link.creator_id,
@@ -94,8 +83,7 @@ async fn validate_upload_link(
     Ok(link)
 }
 
-/// Turn a link lookup failure into the page the visitor sees, exactly as the
-/// share-link view does.
+/// Turn a link lookup failure into the page the visitor sees, as the share view does.
 fn link_error_page(
     state: &AppState,
     err: AppError,
@@ -107,11 +95,11 @@ fn link_error_page(
     }
 }
 
-/// Check whether the supplied password matches the stored hash.
+/// Check the supplied password against the stored hash.
 ///
-/// The password arrives either in the `X-Seafile-Sharelink-Password` header or
-/// as a form field on the POST; it is deliberately never read from the query
-/// string, which would put it into browser history, referrers and request logs.
+/// The password arrives in the `X-Seafile-Sharelink-Password` header or as a
+/// form field on the POST; never in the query string, which would put it into
+/// browser history, referrers and request logs.
 async fn check_password(
     link: &infra::entity::upload_link::Model,
     provided: Option<&str>,
@@ -135,13 +123,11 @@ async fn check_password(
     }
 }
 
-// ── Main GET handler ──────────────────────────────────────────────────────
-
 /// GET /u/{token}/ — show the public upload page.
 ///
-/// Query parameters are deliberately not extracted: the password must arrive
-/// via the `X-Seafile-Sharelink-Password` header, the password form POST, or
-/// the signed unlock cookie — never the URL.
+/// Query parameters are deliberately not extracted: the password arrives via
+/// the `X-Seafile-Sharelink-Password` header, the password form POST, or the
+/// signed unlock cookie — never the URL.
 pub async fn upload_link_view(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -164,8 +150,7 @@ pub async fn upload_link_view(
     )
     .await;
     // The password form POST sets `visited_ufs_{token}`; accept that cookie as
-    // an unlock too, so the redirect back to /u/{token}/ isn't bounced to the
-    // form again.
+    // an unlock too, so the redirect back here is not bounced to the form.
     let cookie_ok = link.password.is_some()
         && crate::service::auth::csrf::has_valid_upload_link_cookie(
             headers.get("cookie").and_then(|v| v.to_str().ok()),
@@ -174,11 +159,9 @@ pub async fn upload_link_view(
         );
     let unlocked = pw_ok || cookie_ok;
 
-    // If password is required but not satisfied, show password form
     if !unlocked {
         // Throttle wrong-password attempts here too: the POST handler has an
-        // IP-keyed limiter, but this GET path can also be handed a password
-        // directly and would otherwise be an unthrottled way to test guesses.
+        // IP-keyed limiter, but this GET path can be handed a password directly.
         if provided_pwd.is_some() {
             super::share_view::record_link_password_failure(&state, &token)?;
         }
@@ -196,7 +179,6 @@ pub async fn upload_link_view(
         return Ok(Html(html).into_response());
     }
 
-    // Build template data
     let dir_name = link
         .path
         .trim_end_matches('/')
@@ -220,8 +202,8 @@ pub async fn upload_link_view(
         .render()
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    // Valid password (provided or previously verified) → mark this session as
-    // authorized so the upload URL API grants a token.
+    // Valid password (provided or previously verified) → mark the session authorized
+    // so the upload URL API grants a token.
     let mut resp = Html(html).into_response();
     if link.password.is_some()
         && pw_ok
@@ -232,8 +214,6 @@ pub async fn upload_link_view(
     }
     Ok(resp)
 }
-
-// ── POST handler for password submission ──────────────────────────────────
 
 /// POST /u/{token}/ — validate the password, set a session flag cookie, then
 /// redirect to the upload page (the password is NOT carried in the URL).
@@ -254,7 +234,6 @@ pub async fn upload_link_view_post(
         .get("password")
         .ok_or_else(|| AppError::BadRequest("password required".into()))?;
 
-    // Rate limit password attempts per client IP.
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
@@ -275,7 +254,7 @@ pub async fn upload_link_view_post(
 
     if !valid {
         // Same per-token cap as the share-link POST path: the IP limiter alone
-        // does not bound a distributed brute force against one link token.
+        // does not bound a distributed brute force against one token.
         crate::handler::web::share_view::record_link_password_failure(&state, &token)?;
         let t = I18n::from_headers(&headers, &state.config().ui.default_language);
         let tpl = ShareAccessValidationTemplate {

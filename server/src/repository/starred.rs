@@ -8,7 +8,6 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::starred_file;
 
-/// Parameters for creating a starred file entry.
 pub struct CreateStarredParams {
     pub repo_id: String,
     pub path: String,
@@ -31,9 +30,8 @@ pub trait StarredRepository: Send + Sync {
         repo_id: &str,
         path: &str,
     ) -> Result<Option<starred_file::Model>, AppError>;
-    /// Batch lookup of starred entries for the given paths (used to stamp the
-    /// `starred` flag for the current page of a file listing instead of loading
-    /// every star the user has in the repo).
+    /// Batch lookup of starred entries for the given paths, to stamp the `starred` flag for the
+    /// current page instead of loading every star the user has in the repo.
     async fn find_by_user_repo_and_paths(
         &self,
         user_id: i32,
@@ -47,11 +45,9 @@ pub trait StarredRepository: Send + Sync {
         path: &str,
     ) -> Result<DeleteResult, AppError>;
     async fn insert(&self, model: starred_file::ActiveModel) -> Result<(), AppError>;
-    /// Create a starred file entry from typed parameters.
     async fn create_starred(&self, params: CreateStarredParams) -> Result<(), AppError>;
 
-    /// After a file/dir rename, update all starred entries that had the old
-    /// path prefix to reflect the new path.
+    /// After a rename, update starred entries that had the old path prefix.
     async fn update_paths_for_rename(
         &self,
         old_path: &str,

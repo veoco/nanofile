@@ -1,23 +1,17 @@
 //! Directory-object order verification and repair (`nanofile verify-dir-order`).
 //!
-//! `fs_id` is the SHA-1 of a directory object's serialized form, so the order of
-//! its `dirents` **is** part of the object's identity. Official clients always
-//! write entries in descending name order (upstream `compare_dirents()` is
-//! `strcmp(b, a)`, and `daemon/vc-utils.c` rebuilds every directory from the
-//! index and sorts it), and they read a stored v1 object back verbatim
-//! (`seaf_fs_manager_get_seafdir_sorted()` only sorts version 0). A directory
-//! stored in any other order therefore carries an id no client can reproduce,
-//! and the next local write in that directory makes the two sides disagree
-//! about a directory neither of them changed.
+//! `fs_id` is the SHA-1 of a serialized directory object, so the `dirents`
+//! order **is** part of its identity: official clients write entries in
+//! descending name order (`compare_dirents()` is `strcmp(b, a)`;
+//! `daemon/vc-utils.c` rebuilds and sorts) and read stored v1 objects verbatim
+//! (`seaf_fs_manager_get_seafdir_sorted()` only sorts version 0), so any other
+//! order has an id no client can reproduce.
 //!
-//! [`DirOrder::run`] walks every directory reachable from a library's HEAD and
-//! reports the objects whose stored order is not canonical, plus structural
-//! findings it deliberately does not repair (dangling `dirent` ids, duplicate
-//! names, unknown modes). With `repair` it appends one ordinary commit per
-//! affected library whose root is the canonical form of the current tree:
-//! nothing in history is rewritten, old objects stay readable, and clients pick
-//! the fix up as a normal update. Running it twice changes nothing the second
-//! time.
+//! [`DirOrder::run`] walks every directory reachable from HEAD, reporting
+//! non-canonical objects plus findings it does not repair (dangling ids,
+//! duplicate names, unknown modes). With `repair` it appends one ordinary
+//! commit per affected library whose root is the canonical form; history stays
+//! intact and a second run is a no-op.
 
 use std::collections::HashMap;
 
@@ -31,25 +25,21 @@ use crate::domain;
 use crate::fs::core::store::store_fs_dir_object;
 use crate::fs::core::traversal::max_tree_depth;
 
-/// `S_IFMT` / `S_IFDIR` / `S_IFREG` type bits, used like C's `S_ISDIR()` /
-/// `S_ISREG()`. `base::common::S_IFREG` carries permission bits (`0100644`), so
-/// it cannot be used as a mask here.
+/// Type bits used like C's `S_ISDIR()` / `S_ISREG()`. `base::common::S_IFREG`
+/// carries permission bits (`0100644`), so it cannot be used as a mask here.
 const S_IFMT: i32 = 0o170000;
 const S_IFDIR_TYPE: i32 = 0o040000;
 const S_IFREG_TYPE: i32 = 0o100000;
 
-/// Description of the one commit a repair run may append.
 const NORMALIZE_DESCRIPTION: &str = "Normalize directory entry order";
 
 /// A directory object stored in an order no official client would compute.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct UnorderedDir {
     pub repo_id: String,
-    /// Path in the library's current tree (the first path the walk reached it
-    /// by; a directory object may be shared by several paths).
+    /// Path in the current tree (first one reached; a dir object may be shared).
     pub path: String,
     pub stored_id: String,
-    /// Id of the same entries serialized in canonical (descending) order.
     pub canonical_id: String,
     pub dirents: usize,
 }
@@ -64,7 +54,6 @@ pub struct StructuralFinding {
     pub detail: String,
 }
 
-/// A library a repair run gave a normalizing commit.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RepoRepair {
     pub repo_id: String,
@@ -73,7 +62,6 @@ pub struct RepoRepair {
     pub dirs_rewritten: usize,
 }
 
-/// What one verification pass found.
 #[derive(Debug, Default, serde::Serialize)]
 pub struct DirOrderReport {
     pub repos_scanned: usize,
@@ -81,19 +69,16 @@ pub struct DirOrderReport {
     pub unordered: Vec<UnorderedDir>,
     pub other: Vec<StructuralFinding>,
     pub repairs: Vec<RepoRepair>,
-    /// Failures: a tree that could not be walked, or a repair whose head swap
-    /// lost a race. The corresponding library was left untouched.
+    /// Failures: an unwalkable tree, or a repair whose head swap lost a race.
     pub repair_errors: Vec<String>,
 }
 
 impl DirOrderReport {
-    /// Whether the pass found anything an operator must act on.
     pub fn has_findings(&self) -> bool {
         !self.unordered.is_empty() || !self.other.is_empty() || !self.repair_errors.is_empty()
     }
 
-    /// Print the report: the machine-readable form when `json`, a summary
-    /// otherwise.
+    /// Print the report: the machine-readable form when `json`, else a summary.
     pub fn print(&self, json: bool) {
         if json {
             match serde_json::to_string_pretty(self) {
@@ -146,12 +131,11 @@ fn short(id: &str) -> &str {
     &id[..id.len().min(12)]
 }
 
-/// The `verify-dir-order` command.
 pub struct DirOrder;
 
 impl DirOrder {
-    /// Check every library (or `repo_filter`) and, when `repair`, append a
-    /// normalizing commit to each affected one.
+    /// Check every library (or `repo_filter`), appending a normalizing commit
+    /// per affected one when `repair`.
     pub async fn run(
         db: &DatabaseConnection,
         repo_filter: Option<&str>,
@@ -237,8 +221,7 @@ impl DirOrder {
     }
 }
 
-/// Walks a library tree once, recording what it finds and returning each
-/// directory's canonical id.
+/// Walks a library tree once, recording findings and returning canonical ids.
 struct Checker<'a> {
     db: &'a DatabaseConnection,
     repo_id: &'a str,
@@ -246,7 +229,6 @@ struct Checker<'a> {
     rewrite: bool,
     /// old object id -> canonical id, so a shared subtree is walked once.
     memo: HashMap<String, String>,
-    /// Objects whose canonical id differs from the stored one.
     rewritten: usize,
 }
 
@@ -285,8 +267,8 @@ impl Checker<'_> {
             .map_err(|e| AppError::internal(format!("fs_object {fs_id}: {e}")))?;
         report.dirs_checked += 1;
 
-        // Structural findings first: they describe the object as stored, before
-        // any child is canonicalized, and the repair never acts on them.
+        // Structural findings come first: they describe the object as stored,
+        // before any child is canonicalized, and repair never acts on them.
         let mut names: HashMap<&str, usize> = HashMap::new();
         for entry in &data.dirents {
             *names.entry(entry.name.as_str()).or_insert(0) += 1;
@@ -311,8 +293,7 @@ impl Checker<'_> {
             }
         }
 
-        // The order as stored, with the children left alone: that is what makes
-        // this object's id one no client can reproduce.
+        // The order as stored, children untouched: no client can reproduce it.
         let canonical_of_stored = canonical_form(&data);
         if canonical_of_stored != fs_id {
             report.unordered.push(UnorderedDir {
@@ -329,15 +310,15 @@ impl Checker<'_> {
                 continue;
             }
             let child_path = join(path, &entry.name);
-            // Content addressing rules out a cycle; the depth guard above still
-            // bounds a corrupt graph, and the memo bounds the work.
+            // Content addressing rules out a cycle; the depth guard and memo
+            // still bound a corrupt graph and the work.
             let child =
                 Box::pin(self.canonicalize(&entry.id, &child_path, depth + 1, report)).await;
             match child {
                 Ok(new_id) => entry.id = new_id,
                 Err(e) => {
-                    // Keep the entry as it is: dropping or inventing one would
-                    // corrupt a tree the operator may still recover from backup.
+                    // Keep the entry: dropping or inventing one would corrupt a
+                    // tree the operator may still recover from backup.
                     report.other.push(StructuralFinding {
                         repo_id: self.repo_id.to_string(),
                         path: child_path,
@@ -362,10 +343,8 @@ impl Checker<'_> {
 }
 
 /// Append the canonicalizing commit and move HEAD to it, but only while HEAD is
-/// still the commit it was computed from (the same compare-and-swap the sync
-/// path uses, `DbRepoRepository::test_and_update_head_commit`).
-///
-/// Returns `Ok(None)` when another writer moved HEAD in between.
+/// still the commit it was computed from (the sync path's compare-and-swap,
+/// `DbRepoRepository::test_and_update_head_commit`); `Ok(None)` if HEAD moved.
 async fn append_normalizing_commit(
     db: &DatabaseConnection,
     repo_row: &repo::Model,
@@ -469,8 +448,7 @@ async fn find_commit(
         .await?)
 }
 
-/// In-repo path of an entry below `dir_path` (which is `/` or has no trailing
-/// slash, as [`DirOrder`] builds them).
+/// In-repo path of an entry below `dir_path` (`/` or no trailing slash).
 fn join(dir_path: &str, name: &str) -> String {
     if dir_path == "/" {
         format!("/{name}")

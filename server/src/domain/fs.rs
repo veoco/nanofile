@@ -1,14 +1,8 @@
-//! FS domain logic — seafile-compatible FS object serialization and fs_id
-//! computation.
-//!
-//! The `FsDirData`, `FsFileData`, `DirEntryData` types are defined in
-//! `base::common`; this module provides the associated computation functions
-//! (JSON serialization + sha1 fs_id).
-//!
-//! The exact byte representation matters: seafile hashes the JSON string into
-//! the FS object id, so it must match `json_dumps(obj, JSON_SORT_KEYS)` byte
-//! for byte (sorted keys, `": "` / `", "` separators, and `modifier`/`size`
-//! only on regular-file dirents).
+//! Serialization and fs_id computation for seafile-compatible FS objects
+//! (`FsDirData`/`FsFileData`/`DirEntryData` live in `base::common`). Bytes
+//! matter: seafile hashes this JSON into the object id, so it must match
+//! `json_dumps(obj, JSON_SORT_KEYS)` exactly — sorted keys, and `modifier`/`size`
+//! present only on regular-file dirents.
 
 use base::common::{DirEntryData, FsDirData, FsFileData};
 use sha1::{Digest, Sha1};
@@ -17,17 +11,15 @@ use sha1::{Digest, Sha1};
 const S_IFMT: i32 = 0o170000;
 const S_IFREG_TYPE: i32 = 0o100000;
 
-/// Quote a string the way jansson does by default (no `JSON_ENSURE_ASCII`):
-/// UTF-8 passes through and only `"`, `\` and control characters are escaped.
-/// `serde_json`'s escaping matches jansson for everything that can appear in an
-/// FS object (ids are hex, filenames are validated without control chars).
+/// Quote a string the way jansson does by default (no `JSON_ENSURE_ASCII`): UTF-8
+/// passes through and only `"`, `\` and control characters are escaped, matching
+/// `serde_json` for everything that can appear in an FS object.
 fn json_string(s: &str) -> String {
     serde_json::to_string(s).expect("serializing a string cannot fail")
 }
 
-/// Serialize one directory entry like seafile's `add_to_dirent_array()`:
-/// alphabetical keys (`JSON_SORT_KEYS`) and `modifier`/`size` present **only
-/// for regular files** (`S_ISREG`).
+/// Serialize one directory entry like `add_to_dirent_array()`: sorted keys, and
+/// `modifier`/`size` present **only for regular files** (`S_ISREG`).
 fn dirent_to_json(d: &DirEntryData) -> String {
     let is_regular = d.mode & S_IFMT == S_IFREG_TYPE;
 
@@ -52,8 +44,7 @@ fn dirent_to_json(d: &DirEntryData) -> String {
     out
 }
 
-/// Serialize a directory FS object exactly like seafile's `seaf_dir_to_json()`
-/// (`json_dumps(obj, JSON_SORT_KEYS)`).
+/// Serialize a directory object like `seaf_dir_to_json()` (sorted keys).
 pub fn dir_to_json(data: &FsDirData) -> String {
     let mut out = String::with_capacity(64);
     out.push_str("{\"dirents\": [");
@@ -71,8 +62,7 @@ pub fn dir_to_json(data: &FsDirData) -> String {
     out
 }
 
-/// Serialize a file FS object exactly like seafile's `create_seafile_json()`
-/// (`json_dumps(obj, JSON_SORT_KEYS)`).
+/// Serialize a file object like `create_seafile_json()` (sorted keys).
 pub fn file_to_json(data: &FsFileData) -> String {
     let mut out = String::with_capacity(64 + data.block_ids.len() * 44);
     out.push_str("{\"block_ids\": [");
@@ -92,10 +82,7 @@ pub fn file_to_json(data: &FsFileData) -> String {
     out
 }
 
-/// Compute the SHA1 hex digest (fs_id) of an FS object JSON string.
-///
-/// This is the core identity function for seafile FS objects:
-/// `fs_id = sha1_hex(json_dumps(obj, JSON_SORT_KEYS))`.
+/// The fs_id of an FS object: `sha1_hex(json_dumps(obj, JSON_SORT_KEYS))`.
 pub fn compute_fs_id(json: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(json.as_bytes());
@@ -103,29 +90,20 @@ pub fn compute_fs_id(json: &str) -> String {
 }
 
 /// Sort directory entries into seafile's canonical order: descending by name,
-/// i.e. upstream's `compare_dirents()` (`strcmp(b, a)` in `common/fs-mgr.c`).
+/// i.e. upstream's `compare_dirents()` (`strcmp(b, a)` in `common/fs-mgr.c`),
+/// as every official client writes them (`daemon/vc-utils.c`).
 ///
-/// This is the order every official client writes (`daemon/vc-utils.c`
-/// "Sort dirents in descending order"), and since `fs_id` is the SHA-1 of the
-/// serialized object, the order *is* the identity: a directory stored in any
-/// other order has an id no client can reproduce. nanofile's own write paths
-/// (REST, WebDAV, the Web UI, system commits) build `dirents` in insertion
-/// order, so they must call this before `compute_dir()` (see
-/// `fs::core::store::store_fs_dir_object`). The merge sorts its inputs and
-/// output through the same function.
+/// `fs_id` is the SHA-1 of the serialized object, so the order *is* the identity;
+/// write paths building `dirents` in insertion order must sort first, and the
+/// merge sorts its inputs and output the same way.
 pub fn sort_dirents_desc(dirents: &mut [DirEntryData]) {
     dirents.sort_by(|a, b| b.name.cmp(&a.name));
 }
 
-/// Compute the fs_id and JSON for a directory.
-///
-/// Returns `None` for empty directories: their id is the `EMPTY_SHA1` sentinel
-/// and no object is persisted (`seaf_dir_save()` skips them).
-///
-/// Serialization is byte-for-byte faithful to the order the caller passes:
-/// stored objects are hashed exactly as they arrived, so re-sorting here would
-/// silently change the id of an object already on disk. Callers that build
-/// entries themselves go through [`sort_dirents_desc`] first.
+/// Compute the fs_id and JSON for a directory; `None` for empty ones, whose id is
+/// the `EMPTY_SHA1` sentinel and which are not persisted (`seaf_dir_save()` skips
+/// them). Entries are hashed in the order given — re-sorting here would change an
+/// id already on disk.
 pub fn compute_dir(data: &FsDirData) -> Option<(String, String)> {
     if data.dirents.is_empty() {
         return None;
@@ -135,11 +113,9 @@ pub fn compute_dir(data: &FsDirData) -> Option<(String, String)> {
     Some((fs_id, json))
 }
 
-/// Compute the fs_id and JSON for a file.
-///
-/// Returns `None` for zero-byte files: their id is the `EMPTY_SHA1` sentinel
-/// and no `seafile` object exists (`seaf_fs_manager_index_blocks()` sets the id
-/// to all zeros for a zero-size file).
+/// Compute the fs_id and JSON for a file; `None` for zero-byte ones, whose id is
+/// the `EMPTY_SHA1` sentinel and which have no object
+/// (`seaf_fs_manager_index_blocks()` sets the id to zeros).
 pub fn compute_file(data: &FsFileData) -> Option<(String, String)> {
     if data.size == 0 {
         return None;
@@ -149,24 +125,13 @@ pub fn compute_file(data: &FsFileData) -> Option<(String, String)> {
     Some((fs_id, json))
 }
 
-// ── Note: store_dir_data / store_file_data moved to fs::core::store ─────
-// These were previously here but have been moved to `crate::fs::core::store`
-// (store_fs_dir_object / store_fs_file_object) to keep domain pure.
-// This module now contains only pure computation functions.
-
-/// Whether the in-repo path `dst` is `src` itself or lies inside `src`.
+/// Whether the in-repo path `dst` is `src` itself or lies inside `src`, used to
+/// reject "move a directory into its own subtree".
 ///
-/// Used to reject "move a directory into its own subtree". The FS tree update
-/// is a two-phase (remove-from-old-parent, then add-to-new-parent) sequence
-/// with a commit in between, so a destination inside the moved subtree no
-/// longer exists once phase 1 is durable: phase 2 then fails *after* the
-/// subtree has already disappeared from HEAD, leaving no trash entry and a 500.
-/// The WebDAV MOVE/COPY handler guarded this case; the REST and sync move
-/// endpoints did not.
-///
-/// Both arguments are canonical in-repo paths (`/`-rooted, no `..`/`.` and no
-/// trailing slash except for the root itself), as produced by
-/// `base::sanitize::safe_normalize_path`.
+/// The FS tree update is two-phase (remove from the old parent, commit, add to the
+/// new one), so a destination inside the moved subtree is already gone: phase 2
+/// fails *after* the subtree left HEAD, leaving no trash entry and a 500. Both
+/// arguments are canonical in-repo paths from `base::sanitize::safe_normalize_path`.
 pub fn is_self_or_subpath(src: &str, dst: &str) -> bool {
     if dst == src {
         return true;

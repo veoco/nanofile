@@ -7,7 +7,6 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::repo_tag;
 
-/// A tag definition within a repo.
 pub struct TagInput {
     pub name: String,
     pub color: String,
@@ -16,8 +15,7 @@ pub struct TagInput {
 #[async_trait]
 pub trait RepoTagRepository: Send + Sync {
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<repo_tag::Model>, AppError>;
-    /// Paginated variant of `find_by_repo_id` with the same stable ordering
-    /// (created_at, id), pushing limit/offset down to SQL.
+    /// Paginated variant with the same stable ordering (created_at, id), pushed down to SQL.
     async fn find_by_repo_id_paginated(
         &self,
         repo_id: &str,
@@ -25,20 +23,17 @@ pub trait RepoTagRepository: Send + Sync {
         offset: usize,
     ) -> Result<Vec<repo_tag::Model>, AppError>;
     async fn find_by_id(&self, id: i32) -> Result<Option<repo_tag::Model>, AppError>;
-    /// Fetch multiple tags by id in one query (chunked for SQLite).
     async fn find_by_ids(&self, ids: &[i32]) -> Result<Vec<repo_tag::Model>, AppError>;
     async fn find_by_repo_and_name(
         &self,
         repo_id: &str,
         name: &str,
     ) -> Result<Option<repo_tag::Model>, AppError>;
-    /// Fetch tags by name in one batched query (chunked for SQLite).
     async fn find_by_names(
         &self,
         repo_id: &str,
         names: &[String],
     ) -> Result<Vec<repo_tag::Model>, AppError>;
-    /// Create a tag, returning the created row.
     async fn create(
         &self,
         repo_id: &str,
@@ -54,7 +49,6 @@ pub trait RepoTagRepository: Send + Sync {
     async fn update(&self, id: i32, name: &str, color: &str) -> Result<(), AppError>;
     /// Delete a tag (file_tags referencing it are removed via FK cascade).
     async fn delete_by_id(&self, id: i32) -> Result<(), AppError>;
-    /// Delete several tags in one batched query (chunked for SQLite).
     async fn delete_by_ids(&self, ids: &[i32]) -> Result<(), AppError>;
 }
 
@@ -175,9 +169,8 @@ impl RepoTagRepository for DbRepoTagRepository {
         let db = self.db.as_ref();
         let now = chrono::Utc::now().timestamp();
 
-        // Deduplicate names (first-seen color wins) so a single name is looked
-        // up and inserted only once — a duplicate would collide with the
-        // unique (repo_id, name) index.
+        // Deduplicate names (first-seen color wins) so each name is looked up and inserted once;
+        // a duplicate would collide with the unique (repo_id, name) index.
         let mut name_to_color: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for item in items {
@@ -187,14 +180,12 @@ impl RepoTagRepository for DbRepoTagRepository {
         }
         let names: Vec<String> = name_to_color.keys().cloned().collect();
 
-        // One batched lookup for existing rows.
         let existing = self.find_by_names(repo_id, &names).await?;
         let existing_names: std::collections::HashSet<&str> =
             existing.iter().map(|t| t.name.as_str()).collect();
 
-        // One batched insert for the missing names. SQLite has no multi-row
-        // RETURNING, so we re-query all names below instead of reading back the
-        // inserted rows.
+        // One batched insert for the missing names. SQLite has no multi-row RETURNING, so
+        // re-query all names below instead of reading back the inserted rows.
         let to_insert: Vec<repo_tag::ActiveModel> = name_to_color
             .iter()
             .filter(|(name, _)| !existing_names.contains(name.as_str()))
@@ -210,12 +201,10 @@ impl RepoTagRepository for DbRepoTagRepository {
             repo_tag::Entity::insert_many(to_insert).exec(db).await?;
         }
 
-        // Re-query all names to get consistent rows (existing + inserted).
         let all = self.find_by_names(repo_id, &names).await?;
         let by_name: std::collections::HashMap<String, repo_tag::Model> =
             all.into_iter().map(|t| (t.name.clone(), t)).collect();
 
-        // Reassemble in input order, preserving the "reuse existing" semantics.
         let mut out: Vec<repo_tag::Model> = Vec::with_capacity(items.len());
         for item in items {
             if let Some(tag) = by_name.get(&item.name) {

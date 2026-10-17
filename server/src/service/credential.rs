@@ -1,14 +1,9 @@
 //! The account's credential inventory: everything long-lived it holds.
 //!
-//! A user can hold four kinds of credential, and before this service only two
-//! of them could be listed (`api_keys` had a page, client sessions had the
-//! devices page). Sync tokens — one row per library per device, 365 days by
-//! default — and 90-day 2FA device trusts had no read path at all, so the
-//! owner could neither see them nor revoke one.
-//!
-//! The views below are deliberate: they carry metadata only. A `sync_tokens`
-//! row holds a ciphertext of a bearer credential that this server can decrypt,
-//! so serialising the model would hand the inventory the same power as the token
+//! Four kinds: browser sessions, client device sessions, repository sync tokens
+//! and 2FA device trusts. The views carry metadata only: a `sync_tokens` row
+//! holds a ciphertext of a bearer credential this server can decrypt, so
+//! serialising the model would hand the inventory the same power as the token
 //! itself. Nothing here touches that column.
 
 use std::collections::HashMap;
@@ -19,7 +14,6 @@ use crate::repository::Repositories;
 use crate::ui::user_agent;
 use base::error::AppError;
 
-/// Which list a revocation addresses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialKind {
     /// A browser session, by `api_tokens` row id.
@@ -31,7 +25,6 @@ pub enum CredentialKind {
 }
 
 impl CredentialKind {
-    /// Parse the form value the page sends back.
     pub fn from_id(value: &str) -> Option<Self> {
         match value {
             "browser_session" => Some(CredentialKind::BrowserSession),
@@ -42,8 +35,7 @@ impl CredentialKind {
     }
 
     /// Revoking a *client* is addressed by device, not by row id, because one
-    /// device owns several credentials (its session, its sync tokens and its
-    /// 2FA trust) that all have to go together. It keeps its own route.
+    /// device owns several credentials that all have to go together.
     pub const fn id(self) -> &'static str {
         match self {
             CredentialKind::BrowserSession => "browser_session",
@@ -53,7 +45,6 @@ impl CredentialKind {
     }
 }
 
-/// A client application's session, grouped by device.
 #[derive(Debug, Clone)]
 pub struct ClientSessionView {
     pub platform: String,
@@ -65,18 +56,15 @@ pub struct ClientSessionView {
     pub is_desktop_client: bool,
 }
 
-/// A session a browser holds.
 #[derive(Debug, Clone)]
 pub struct BrowserSessionView {
     pub id: i32,
-    /// The login this session came from, already translated for display by the
-    /// page from [`BrowserSessionView::source`].
+    /// The login this session came from, translated for display by the page.
     pub source: SessionSource,
-    /// What the browser looked like, e.g. `Chrome · macOS`. Empty when the
-    /// login carried no usable `User-Agent`.
+    /// What the browser looked like, e.g. `Chrome · macOS`; empty without a
+    /// usable `User-Agent`.
     pub client: String,
     pub created_ts: i64,
-    /// Whether this is the session the reader is using.
     pub is_current: bool,
 }
 
@@ -100,9 +88,8 @@ pub struct SyncTokenView {
     pub created_ts: i64,
     pub last_sync_ts: Option<i64>,
     pub expires_at: Option<i64>,
-    /// The client identifier the token was minted for, when the protocol
-    /// carried one. This is what links a token to a device, because a device
-    /// name is display text and can be shared by two machines.
+    /// The client identifier the token was minted for. This is what links a token
+    /// to a device, because a device name is display text two machines can share.
     pub peer_id: Option<String>,
 }
 
@@ -120,7 +107,6 @@ impl SyncTokenView {
             .is_some_and(|expires| expires > now && expires - now <= EXPIRING_SOON_SECS)
     }
 
-    /// Whether the token has never synced, or has not synced recently.
     pub fn is_stale(&self, now: i64) -> bool {
         match self.last_sync_ts {
             None => self.created_ts <= now - STALE_SECS,
@@ -129,24 +115,18 @@ impl SyncTokenView {
     }
 }
 
-/// A sync token that has not synced for this long is worth questioning.
 const STALE_SECS: i64 = 30 * 24 * 60 * 60;
 
-/// How close to expiry a token has to be for the summary to flag it.
 const EXPIRING_SOON_SECS: i64 = 7 * 24 * 60 * 60;
 
 /// A device a client holds, with everything else that device owns.
 ///
-/// The page is organised around devices rather than around credential kinds,
-/// because "what can this machine still do to my account?" is the question the
-/// owner actually has. A device is keyed by `platform` + `device_id` — stable
-/// identifiers a client reports — and never by its name, which is display text
-/// two machines can legitimately share.
-///
-/// A repository has one sync token *per device*: it is issued to the device
-/// that asked for it, or claimed by the first device to use one minted without
-/// a device identity. A token without an owner (or whose device no longer has
-/// a session) is listed separately by the page.
+/// The page is organised around devices, not credential kinds, because "what can
+/// this machine still do to my account?" is the owner's question. A device is
+/// keyed by `platform` + `device_id` — identifiers a client reports — never by
+/// its name, which is display text two machines can legitimately share. A
+/// library has one sync token per device; a token whose device has no session is
+/// listed separately by the page.
 #[derive(Debug, Clone)]
 pub struct DeviceGroup {
     pub platform: String,
@@ -158,14 +138,12 @@ pub struct DeviceGroup {
     pub is_desktop_client: bool,
     /// Sync tokens whose `peer_id` is this device's `device_id`.
     pub sync_tokens: Vec<SyncTokenView>,
-    /// The 2FA trusts whose `device_id` is this device's `device_id`. Usually
-    /// one, but a row left by an older build (which minted a new trust per
-    /// login) still belongs to this device rather than to the page's
-    /// "unknown device" section.
+    /// The 2FA trusts whose `device_id` is this device's `device_id`. Usually one,
+    /// but a row left by an older build still belongs to this device rather than
+    /// to the page's "unknown device" section.
     pub device_trusts: Vec<DeviceTrustView>,
 }
 
-/// A device that may skip the second factor.
 #[derive(Debug, Clone)]
 pub struct DeviceTrustView {
     pub id: i32,
@@ -175,11 +153,9 @@ pub struct DeviceTrustView {
     pub expires_at: i64,
 }
 
-/// The at-a-glance state of the inventory, for the summary strip.
-///
-/// Counts only, plus the two flags an owner can act on: whether two-factor is
-/// on at all, and how many sync tokens are expired or have gone quiet. The
-/// page turns those into a warning that links to the thing to fix.
+/// The at-a-glance state of the inventory, for the summary strip: counts, plus
+/// the two flags an owner can act on (two-factor on at all, and how many sync
+/// tokens are expired or have gone quiet).
 #[derive(Debug, Clone, Default)]
 pub struct CredentialSummary {
     pub browser_sessions: usize,
@@ -189,13 +165,12 @@ pub struct CredentialSummary {
     pub device_trusts: usize,
     pub expired_sync_tokens: usize,
     pub stale_sync_tokens: usize,
-    /// Whether the account has two-factor enabled. Filled in by the page, not
-    /// derived here: this service deliberately reads no 2FA state.
+    /// Whether the account has two-factor enabled. Filled in by the page, not here:
+    /// this service deliberately reads no 2FA state.
     pub two_fa_enabled: bool,
 }
 
 impl CredentialSummary {
-    /// Whether anything in the inventory deserves a warning line.
     pub fn has_warning(&self) -> bool {
         !self.two_fa_enabled || self.expired_sync_tokens > 0 || self.stale_sync_tokens > 0
     }
@@ -209,14 +184,13 @@ pub struct CredentialInventory {
     pub sync_tokens: Vec<SyncTokenView>,
     pub device_trusts: Vec<DeviceTrustView>,
     /// One entry per client device, carrying the sync tokens and 2FA trust that
-    /// belong to it. Sync tokens whose `peer_id` matches no device stay out of
-    /// this list and are listed separately by the page.
+    /// belong to it. Unmatched tokens stay out and are listed separately.
     pub devices: Vec<DeviceGroup>,
-    /// API keys are managed on their own page; the inventory only links there,
-    /// so this is a count rather than a second implementation.
+    /// API keys are managed on their own page; this is a count, not a second
+    /// implementation.
     pub api_key_count: usize,
-    /// The summary strip's numbers, computed here so the page does not have to
-    /// re-derive the same rules from the raw lists.
+    /// The summary strip's numbers, computed here so the page does not re-derive
+    /// the same rules.
     pub summary: CredentialSummary,
 }
 
@@ -230,8 +204,8 @@ impl CredentialInventory {
             && self.api_key_count == 0
     }
 
-    /// Which bulk actions the page can offer, and how many rows each would
-    /// remove. A count of zero means the action is not worth showing.
+    /// How many other browser sessions a bulk revoke would remove; zero means the
+    /// action is not worth showing.
     pub fn other_browser_sessions(&self) -> usize {
         self.browsers.iter().filter(|b| b.is_other()).count()
     }
@@ -239,10 +213,9 @@ impl CredentialInventory {
 
 /// Which set of credentials a bulk revoke addresses.
 ///
-/// It used to also carry `AllSyncTokens`. That action was retired: the page
-/// shows sync tokens grouped by the device that owns them and lists only the
-/// leftovers with no known device, so a button that deleted *every* token
-/// looked like it belonged to the list underneath it while doing far more.
+/// There is deliberately no "every sync token": the page lists sync tokens grouped
+/// by owning device, so such a button would look like it belonged to the list
+/// underneath it while doing far more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BulkRevoke {
     /// Every browser session except the one asking.
@@ -250,7 +223,6 @@ pub enum BulkRevoke {
 }
 
 impl BulkRevoke {
-    /// Parse the form value the page sends back.
     pub fn from_id(value: &str) -> Option<Self> {
         match value {
             "sign_out_others" => Some(BulkRevoke::OtherBrowserSessions),
@@ -274,10 +246,8 @@ impl CredentialService {
         Self { repos }
     }
 
-    /// Everything `user_id` holds, ready to render.
-    ///
-    /// `current_session_id` is the row the reader is using, marked so they can
-    /// tell it apart before revoking anything.
+    /// Everything `user_id` holds, ready to render. `current_session_id` is the row
+    /// the reader is using, marked so they can tell it apart before revoking.
     pub async fn inventory(
         &self,
         user_id: i32,
@@ -288,9 +258,7 @@ impl CredentialService {
         let trusts = self.repos.s2fa_token.list_for_user(user_id).await?;
         let key_count = self.repos.api_key.find_by_user(user_id).await?.len();
 
-        // One query for every library named by a sync token, instead of one per
-        // row: an account syncing twenty libraries would otherwise pay twenty
-        // round trips to render one page.
+        // One query for every library named by a sync token, not one per row.
         let repo_ids: Vec<String> = tokens.iter().map(|t| t.repo_id.clone()).collect();
         let repo_names: HashMap<String, String> = self
             .repos
@@ -307,9 +275,8 @@ impl CredentialService {
         };
 
         for session in sessions {
-            // An unknown source is treated as a browser session: the safe
-            // direction is to show it in the wrong group, because it stays
-            // visible and revocable either way.
+            // An unknown source is treated as a browser session: showing it in the
+            // wrong group still leaves it visible and revocable.
             let source = SessionSource::from_id(&session.source).unwrap_or(SessionSource::Web);
             if source.is_browser() {
                 inventory.browsers.push(BrowserSessionView {
@@ -326,8 +293,7 @@ impl CredentialService {
             } else {
                 let platform = session.platform.clone().unwrap_or_default();
                 let device_id = session.device_id.clone().unwrap_or_default();
-                // One device owns one session row per login, so collapse the
-                // repeats the way the devices page always has.
+                // One device owns one session row per login; collapse the repeats.
                 if inventory
                     .clients
                     .iter()
@@ -389,8 +355,8 @@ impl CredentialService {
 
     /// Revoke one credential, scoped to its owner.
     ///
-    /// Every branch passes `user_id`, so an id that reached the page from
-    /// somewhere else cannot delete another account's row.
+    /// Every branch passes `user_id`, so an id from somewhere else cannot delete
+    /// another account's row.
     pub async fn revoke(
         &self,
         user_id: i32,
@@ -417,9 +383,8 @@ impl CredentialService {
                     .await?
             }
         };
-        // Zero means the row was not this user's, or was already gone. Both are
-        // "there is nothing here for you", and saying so is better than
-        // reporting a success the caller cannot observe.
+        // Zero means the row was not this user's, or was already gone: both are
+        // "there is nothing here for you", not a success the caller cannot observe.
         if removed == 0 {
             return Err(AppError::NotFound("no such credential".into()));
         }
@@ -428,12 +393,12 @@ impl CredentialService {
 
     /// Revoke every credential in a set, scoped to its owner.
     ///
-    /// `keep_session_id` is decided by the caller from the authenticated
-    /// session, never from a form field: signing yourself out by accident is
-    /// the one outcome this action must not have.
+    /// `keep_session_id` is decided by the caller from the authenticated session,
+    /// never from a form field: signing yourself out by accident is the one outcome
+    /// this action must not have.
     ///
-    /// Returns how many rows were removed; zero is not an error, because
-    /// "there was nothing left to revoke" is a state the page can report.
+    /// Returns how many rows were removed; zero is not an error, because "there was
+    /// nothing left to revoke" is a state the page can report.
     pub async fn revoke_bulk(
         &self,
         user_id: i32,
@@ -454,9 +419,8 @@ impl CredentialService {
 /// Group credentials by the device that holds them.
 ///
 /// A device is identified by `platform` + `device_id`, the two values a client
-/// reports and cannot accidentally share. Its name is display text only: two
-/// machines can both call themselves "laptop", and merging them would hide one
-/// device's credentials behind the other's.
+/// reports and cannot accidentally share; its name is display text only, and
+/// merging two "laptop"s would hide one device's credentials behind the other's.
 fn group_devices(
     clients: &[ClientSessionView],
     tokens: &[SyncTokenView],
@@ -492,7 +456,6 @@ fn group_devices(
         .collect()
 }
 
-/// The summary strip's numbers, from the lists already assembled.
 fn summarize(inventory: &CredentialInventory, now: i64) -> CredentialSummary {
     CredentialSummary {
         browser_sessions: inventory.browsers.len(),
@@ -588,9 +551,9 @@ mod tests {
         let what = BulkRevoke::OtherBrowserSessions;
         assert_eq!(BulkRevoke::from_id(what.id()), Some(what));
         assert_eq!(BulkRevoke::from_id("delete_everything"), None);
-        // The retiree: a form that still posts the old action must not be
-        // accepted, because a button that deletes every token looked like it
-        // only deleted the unowned ones listed under it.
+        // The retiree: a form that still posts the old action must not be accepted,
+        // because that button deleted every token, not only the unowned ones listed
+        // under it.
         assert_eq!(BulkRevoke::from_id("revoke_sync_tokens"), None);
     }
 
@@ -700,9 +663,8 @@ mod tests {
     }
 
     /// A row minted by an older build, which added a trust per login instead of
-    /// replacing the device's, must still be shown under its device. Otherwise
-    /// it reaches the page's "unknown device" section, which is exactly where a
-    /// known device must never appear.
+    /// replacing the device's, must still be shown under its device; otherwise it
+    /// reaches the "unknown device" section, where a known device must never appear.
     #[test]
     fn every_trust_of_a_device_is_attached_to_it() {
         let trust = |id: i32| DeviceTrustView {
@@ -731,8 +693,6 @@ mod tests {
 
     #[test]
     fn expiry_and_staleness_have_the_expected_boundaries() {
-        // `token()` mints at t=1000, so `now` is far enough ahead that the
-        // "never synced" token counts as stale.
         let now = 10 * STALE_SECS;
         // No expiry means never, which is the opposite of expired.
         let forever = token(1, None, Some(now), None);
@@ -750,8 +710,8 @@ mod tests {
         let later = token(4, None, Some(now), Some(now + EXPIRING_SOON_SECS + 1));
         assert!(!later.expires_soon(now));
 
-        // Never synced: stale once the token itself is old enough. `token()`
-        // mints at t=1000, which is older than any threshold below.
+        // Never synced: stale once the token itself is old enough (`token()` mints
+        // at t=1000, older than any threshold below).
         assert!(token(5, None, None, None).is_stale(now));
         assert!(!token(6, None, Some(now - 60), None).is_stale(now));
         assert!(token(7, None, Some(now - STALE_SECS - 1), None).is_stale(now));
@@ -804,8 +764,8 @@ mod tests {
             "the expired token is not also counted as stale"
         );
         assert_eq!(inventory.other_browser_sessions(), 1);
-        // Two-factor is filled in by the page, so the summary alone cannot say
-        // the account is healthy.
+        // Two-factor is filled in by the page, so the summary alone cannot say the
+        // account is healthy.
         assert!(!inventory.summary.two_fa_enabled);
         assert!(inventory.summary.has_warning());
 

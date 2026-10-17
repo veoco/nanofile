@@ -19,8 +19,8 @@ pub struct CreateCommitParams {
     pub description: String,
     pub ctime: i64,
     pub version: i8,
-    /// Set on a commit the server created by merging a client's upload with a
-    /// newer HEAD; `None` for every normal commit.
+    /// Set on a commit the server created by merging a client's upload with a newer HEAD; `None`
+    /// for every normal commit.
     pub new_merge: Option<bool>,
     /// Set when that merge had to rename a conflicting entry (`SFConflict`).
     pub conflict: Option<bool>,
@@ -40,8 +40,8 @@ pub trait CommitRepository: Send + Sync {
         repo_id: &str,
         limit: Option<u64>,
     ) -> Result<Vec<commit::Model>, AppError>;
-    /// Fetch several commits by their Seafile commit-id (SHA1) strings in one
-    /// query, chunked to stay under SQLite's variable limit.
+    /// Fetch several commits by their Seafile commit-id (SHA1) in one query, chunked under the
+    /// SQLite variable limit.
     async fn find_by_commit_ids(
         &self,
         commit_ids: &[String],
@@ -49,7 +49,6 @@ pub trait CommitRepository: Send + Sync {
     async fn insert(&self, model: commit::ActiveModel) -> Result<commit::Model, AppError>;
     async fn find_all_ordered_by_ctime_desc(&self) -> Result<Vec<commit::Model>, AppError>;
     async fn insert_commit(&self, params: CreateCommitParams) -> Result<commit::Model, AppError>;
-    /// Delete commits by their primary key ids (used by history pruning).
     async fn delete_many_by_ids(&self, ids: Vec<i64>) -> Result<(), AppError>;
 }
 
@@ -98,8 +97,8 @@ impl CommitRepository for DbCommitRepository {
     ) -> Result<Vec<commit::Model>, AppError> {
         let mut query = commit::Entity::find()
             .filter(commit::Column::RepoId.eq(repo_id))
-            // Secondary sort by auto-increment id so commits created within the
-            // same second (identical ctime) come back in a stable order.
+            // Secondary sort by auto-increment id so commits with identical ctime come back in a
+            // stable order.
             .order_by_desc(commit::Column::Ctime)
             .order_by_desc(commit::Column::Id);
         if let Some(l) = limit {

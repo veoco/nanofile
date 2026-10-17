@@ -4,14 +4,11 @@ use crate::domain;
 use base::common::{EMPTY_SHA1, FsDirData, FsFileData};
 use base::error::AppError;
 
-/// Compute fs_id, serialize, and INSERT OR IGNORE into fs_objects.
-/// Returns the fs_id (or `EMPTY_SHA1` for empty directories).
-///
-/// Entries are sorted into seafile's canonical (descending) order first:
-/// `fs_id` is the SHA-1 of the serialized object, so a directory written in any
-/// other order carries an id no official client can reproduce. This is the one
-/// funnel every server-side directory write goes through, including the REST,
-/// WebDAV and Web UI paths, which append entries in insertion order.
+/// Store a directory object (`INSERT OR IGNORE`) and return its fs_id
+/// (`EMPTY_SHA1` when empty). Entries are sorted into seafile's canonical
+/// descending order first: the fs_id is the SHA-1 of the serialized object, so
+/// any other order carries an id no client can reproduce. Every directory write
+/// funnels through here, including insertion-order appends from REST and WebDAV.
 pub async fn store_fs_dir_object(
     db: &DatabaseConnection,
     repo_id: &str,
@@ -38,11 +35,9 @@ pub async fn store_fs_dir_object(
     Ok(fs_id)
 }
 
-/// Compute fs_id, serialize, and INSERT OR IGNORE into fs_objects.
-///
-/// A zero-byte file has no `seafile` object in seafile: its id is the
+/// Store a file object (`INSERT OR IGNORE`); a zero-byte file keeps the
 /// `EMPTY_SHA1` sentinel (see `seaf_fs_manager_index_blocks()`), so nothing is
-/// stored and every caller sees the same id a client computes locally.
+/// stored and every caller sees the id a client computes locally.
 pub async fn store_fs_file_object(
     db: &DatabaseConnection,
     repo_id: &str,

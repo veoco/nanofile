@@ -15,9 +15,8 @@ use crate::middleware::auth::AuthUser;
 use crate::service::sharing::{link, share};
 use base::error::AppError;
 
-/// Custom deserializer that maps JSON `null` to `Some(None)` and a present
-/// value to `Some(Some(v))`, while a missing field remains `None` (via
-/// `#[serde(default)]`). This distinguishes "don't update" from "set to null".
+/// Map JSON `null` to `Some(None)` and a value to `Some(Some(v))`; a missing
+/// field stays `None` (via `#[serde(default)]`) — "don't update" vs "set null".
 fn deserialize_nullable<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -38,10 +37,8 @@ pub struct CreateLinkRequest {
     pub description: Option<String>,
 }
 
-/// Extract the request body as a generic value, accepting either a JSON object
-/// or an `application/x-www-form-urlencoded` body. The desktop client sends
-/// form-encoded data (`repo_id`, `path`, `password`, `expiration_time`) to the
-/// share/upload link creation endpoints, while web/Android send JSON.
+/// Accept a JSON object or an `application/x-www-form-urlencoded` body; the
+/// desktop client posts form-encoded link data while web/Android send JSON.
 pub struct JsonOrForm(serde_json::Value);
 
 impl<S> FromRequest<S> for JsonOrForm
@@ -74,8 +71,6 @@ where
     }
 }
 
-/// Convert a JSON-or-form body value into `CreateLinkRequest`, mapping the
-/// desktop's `expiration_time` (ISO datetime) onto `expire_days`.
 fn parse_link_request(v: &serde_json::Value) -> Result<CreateLinkRequest, AppError> {
     let get_str = |k: &str| v.get(k).and_then(|x| x.as_str()).map(|s| s.to_string());
     let get_i64 = |k: &str| {
@@ -103,8 +98,7 @@ fn parse_link_request(v: &serde_json::Value) -> Result<CreateLinkRequest, AppErr
     })
 }
 
-/// Normalize `expiration_time` (ISO datetime) into `expire_days` when the
-/// latter is absent, matching seahub's handling of both fields.
+/// Normalize `expiration_time` into `expire_days` when absent (seahub parity).
 fn resolve_expire_days(req: &CreateLinkRequest) -> Result<Option<i64>, AppError> {
     if req.expire_days.is_some() {
         return Ok(req.expire_days);
@@ -149,9 +143,7 @@ pub struct UpdateLinkRequest {
 
 /// GET /api/v2.1/share-links/
 ///
-/// Optional query params (matching seafile API contract):
-/// - `repo_id` — filter by repo
-/// - `path` — filter by exact path (used with `repo_id`)
+/// Optional filters: `repo_id`, and `path` (exact path, used with `repo_id`).
 pub async fn list_share_links_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -291,8 +283,7 @@ pub async fn get_share_link_v21(
 
 /// POST /api/v2.1/multi-share-links/
 ///
-/// Creates a share link (behaves identically to POST /api/v2.1/share-links/).
-/// Android client uses this endpoint.
+/// Identical to POST /api/v2.1/share-links/; used by the Android client.
 pub async fn create_multi_share_link_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -387,9 +378,7 @@ pub async fn update_share_link_v21(
 
 /// GET /api/v2.1/upload-links/
 ///
-/// Optional query params (matching seafile API contract):
-/// - `repo_id` — filter by repo
-/// - `path` — filter by exact path (used with `repo_id`)
+/// Optional filters: `repo_id`, and `path` (exact path, used with `repo_id`).
 pub async fn list_upload_links_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -519,9 +508,7 @@ pub async fn update_upload_link_v21(
 
 /// DELETE /api/v2.1/upload-links/{token}/
 ///
-/// Returns bare `true` (not a JSON object) because the Android client's
-/// DialogService.deleteUploadLink() uses `Single<Boolean>` and the
-/// SupportResponseConverter's TypeAdapter<Boolean> cannot parse an object.
+/// Returns bare `true` (not an object): the Android client parses this as `Single<Boolean>`.
 pub async fn delete_upload_link_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -542,26 +529,20 @@ pub async fn delete_upload_link_v21(
 
 /// GET /api/v2.1/upload-links/{token}/upload/
 ///
-/// Validates the upload link and returns a short-lived upload URL.
-/// Anyone with the token can call this (password checked via query param).
+/// Returns a short-lived upload URL for anyone holding the token.
 pub async fn get_upload_link_upload_url_v21(
     headers: axum::http::HeaderMap,
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // The server-wide kill switch must gate this token mint as well: without it
-    // an already-shared upload-link token could still be turned into an upload
-    // URL while anonymous links are disabled.
+    // The server-wide kill switch must gate this token mint too: otherwise a
+    // shared token still yields an upload URL while anonymous links are disabled.
     crate::middleware::ensure_share_links_enabled(&state)?;
 
-    // No CSRF guard here on purpose: the capability under attack is the link
-    // token itself, which anyone holding it can already exchange for an upload
-    // URL, so a cross-site GET adds nothing — while the public upload page
-    // (`public-upload.js`) legitimately calls this with `credentials:
-    // same-origin` and no CSRF header when a logged-in user opens their own
-    // link.
+    // No CSRF guard on purpose: the capability is the link token itself, which a
+    // holder can already exchange, and `public-upload.js` legitimately calls this
+    // with `credentials: same-origin` and no CSRF header.
 
-    // Look up the upload link
     let link = state
         .repos
         .upload_link
@@ -569,16 +550,14 @@ pub async fn get_upload_link_upload_url_v21(
         .await?
         .ok_or_else(|| AppError::NotFound("Upload link not found".into()))?;
 
-    // Check expiry
     if let Some(exp) = link.expires_at
         && chrono::Utc::now().timestamp() > exp
     {
         return Err(AppError::NotFound("Upload link has expired".into()));
     }
 
-    // Password-protected links require the `visited_ufs_{token}` session flag,
-    // set by the web password form (matches seahub). This prevents bypassing
-    // the password to obtain an upload token.
+    // Password-protected links need the `visited_ufs_{token}` session flag set
+    // by the web password form (matching seahub), or the password is bypassed.
     if link.password.is_some()
         && !crate::service::auth::csrf::has_valid_upload_link_cookie(
             headers.get("cookie").and_then(|v| v.to_str().ok()),
@@ -589,7 +568,6 @@ pub async fn get_upload_link_upload_url_v21(
         return Err(AppError::Forbidden);
     }
 
-    // Check repo still exists
     let repo = state
         .repos
         .repo
@@ -597,10 +575,9 @@ pub async fn get_upload_link_upload_url_v21(
         .await?
         .ok_or_else(|| AppError::NotFound("Repository not found".into()))?;
 
-    // An anonymous upload link cannot write ciphertext into an encrypted
-    // library (no per-user key cache entry exists for the visitor), so refuse
-    // to mint an upload token for one. The official clients never offer this
-    // action for encrypted libraries.
+    // An anonymous upload link cannot write ciphertext into an encrypted library
+    // (no per-user key cache entry for the visitor), so refuse to mint a token;
+    // official clients never offer this action for encrypted libraries.
     if repo.encrypted != 0 {
         return Err(AppError::BadRequest(
             "upload links are not supported for encrypted libraries".into(),
@@ -608,9 +585,8 @@ pub async fn get_upload_link_upload_url_v21(
     }
     let _repo = repo;
 
-    // The uploaded token acts as the link's creator, so minting it requires that
-    // the creator still has write access (defence in depth: the token endpoint
-    // re-checks this as well).
+    // The upload token acts as the link's creator, so minting it requires that
+    // the creator still has write access (the token endpoint re-checks this too).
     if !crate::service::sharing::share::link_creator_may_access(
         &state.repos,
         link.creator_id,
@@ -622,7 +598,6 @@ pub async fn get_upload_link_upload_url_v21(
         return Err(AppError::Forbidden);
     }
 
-    // Get the creator's username for the token
     let creator = state
         .repos
         .user
@@ -630,7 +605,6 @@ pub async fn get_upload_link_upload_url_v21(
         .await?
         .ok_or_else(|| AppError::Internal("Creator not found".into()))?;
 
-    // Generate a short-lived upload access token
     let upload_token = state.token_manager.generate(
         &link.repo_id,
         link.creator_id,

@@ -8,23 +8,17 @@ use crate::AppState;
 use crate::service::auth::sso::PollResult;
 use base::error::AppError;
 
-/// Longest accepted `shib_*` device parameter.
-///
-/// The values are stored verbatim in `sso_login_tokens` and rendered on the
-/// confirmation page; the official desktop client sends a hostname and an OS
-/// name, so anything longer is not a legitimate client.
+/// Longest accepted `shib_*` device parameter: values are stored verbatim and rendered
+/// on the confirmation page, and the desktop client sends only a hostname and OS name.
 const MAX_SSO_PARAM_LEN: usize = 128;
 
 /// POST /api2/client-sso-link/
 ///
-/// Anonymous per the official protocol: seadroid and iOS post with no body and
-/// no auth header (so every parameter here is optional), while the desktop
-/// client sends `shib_*` device params on the query string. Returns the full
-/// browser link the client opens.
-///
-/// Being anonymous and writing a row per call, this needs a rate limit: without
-/// one a trivial loop fills `sso_login_tokens` for an hour at a time and each
-/// insert takes the single SQLite writer lock.
+/// Anonymous per the official protocol: seadroid and iOS post with no body and no auth
+/// header (so every parameter is optional) while the desktop client sends `shib_*`
+/// params on the query string; returns the browser link. Writing a row per anonymous
+/// call, it needs a rate limit or a trivial loop fills `sso_login_tokens` — each insert
+/// taking the single SQLite writer lock.
 pub async fn client_sso_link(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
@@ -59,11 +53,10 @@ pub async fn client_sso_link(
         )
         .await?;
 
-    // Never trust the Host header for the SSO link — a forged Host redirects
-    // the browser to an attacker-controlled domain and leaks the SSO token.
-    // Use the configured site_url directly (no Host fallback, unlike download
-    // links). When site_url is still the default, the link points at loopback,
-    // which is unreachable for remote clients but never attacker-controlled.
+    // Never trust the Host header for the SSO link — a forged Host redirects the
+    // browser to an attacker-controlled domain and leaks the SSO token — so use the
+    // configured site_url (no Host fallback). A default site_url points at loopback:
+    // unreachable for remote clients, never attacker-controlled.
     let link = format!(
         "{}/client-sso/{token}/",
         state.config().server.site_url.trim_end_matches('/')
@@ -74,10 +67,9 @@ pub async fn client_sso_link(
 
 /// GET /api2/client-sso-link/{token}/
 ///
-/// Anonymous status poll. Response shape matches seahub's `ClientSSOLink.get`:
-/// `{"status":"waiting"}` while pending, `{"status":"success","username":...,"apiToken":...}`
-/// once the browser confirmed (note the camelCase `apiToken`), and
-/// `{"status":"error"}` when the completion window expired. Unknown tokens → 404.
+/// Anonymous status poll shaped like seahub's `ClientSSOLink.get`: `{"status":"waiting"}`,
+/// `{"status":"success","username":...,"apiToken":...}` (camelCase) once the browser
+/// confirmed, or `{"status":"error"}` after the window; unknown tokens → 404.
 pub async fn poll_sso_link(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,

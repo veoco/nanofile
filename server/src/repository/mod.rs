@@ -1,10 +1,7 @@
 //! Repository traits and implementations for data access.
 //!
-//! Each module defines a trait interface and a `Db*` implementation that
-//! wraps the underlying SeaORM entity queries. This decouples service-layer
-//! code from the persistence framework and entity module, making it easier
-//! to test business logic with mock repositories and to split into
-//! base/infra crates (Phase 4).
+//! Each module defines a trait interface and a `Db*` implementation over SeaORM queries, which
+//! decouples service code from the persistence framework and lets business logic be tested with mocks.
 
 pub mod activity;
 pub mod api_key;
@@ -81,7 +78,6 @@ use crate::repository::user_2fa_backup_code::*;
 
 use base::error::AppError;
 
-/// Bundles all repository implementations for convenient injection into services.
 pub struct Repositories {
     pub user: Arc<dyn UserRepository>,
     pub repo: Arc<dyn RepoRepository>,
@@ -115,15 +111,11 @@ pub struct Repositories {
     pub password_reset_token: Arc<dyn PasswordResetTokenRepository>,
     pub user_2fa_backup_code: Arc<dyn User2faBackupCodeRepository>,
     pub file_lock_timestamp: Arc<dyn FileLockTimestampRepository>,
-    /// Per-server quota accounting state (committed-usage snapshots and
-    /// uncommitted-block reservations). Owned here rather than kept in
-    /// process-global statics so it always describes this database; several
-    /// servers can share one process.
+    /// Per-server quota accounting state (committed-usage snapshots and uncommitted-block
+    /// reservations). Owned here, not in process-global statics, so it describes this database.
     pub quota_cache: Arc<infra::quota_cache::QuotaCache>,
-    /// At most one write per interval for the two "when was this last used?"
-    /// columns the auth path updates. They live on the database handle rather
-    /// than in process-global state because they describe writes to *this*
-    /// database (see [`throttle`]).
+    /// At most one write per interval for the two "when was this last used?" columns the auth path
+    /// updates; on the database handle because they describe writes to *this* database (see [`throttle`]).
     pub peer_info_writes: throttle::WriteThrottle,
     pub key_usage_writes: throttle::WriteThrottle,
 }
@@ -140,8 +132,8 @@ impl Repositories {
         token_cipher: Arc<infra::crypto::token_encryption::TokenCipher>,
         totp_cipher: Arc<infra::crypto::totp_encryption::TotpCipher>,
     ) -> Self {
-        // The same cipher is shared by the sync-token store and the SSO flow;
-        // both need a recoverable (not hashed) server-side token.
+        // The same cipher is shared by the sync-token store and the SSO flow; both need a
+        // recoverable (not hashed) server-side token.
         let sso_token_cipher = token_cipher.clone();
         Self {
             peer_info_writes: throttle::WriteThrottle::new(throttle::PEER_INFO_WRITE_INTERVAL),
@@ -188,9 +180,8 @@ impl Repositories {
         }
     }
 
-    /// Test-only constructor: derives the repository ciphers from an empty
-    /// master key. Production must call [`Repositories::new`] with ciphers
-    /// derived from the configured server secret.
+    /// Test-only constructor: derives the repository ciphers from an empty master key. Production
+    /// must call [`Repositories::new`] with ciphers derived from the configured server secret.
     #[cfg(test)]
     pub fn new_for_tests(db: Arc<DatabaseConnection>) -> Self {
         Self::new(
@@ -202,8 +193,7 @@ impl Repositories {
         )
     }
 
-    /// Compute total storage usage for a user (sum of all owned repo sizes,
-    /// computed in SQL rather than pulling every repo row).
+    /// Total storage usage for a user, summed in SQL rather than by pulling every repo row.
     pub async fn compute_user_usage(&self, user_id: i32) -> Result<i64, AppError> {
         self.repo.sum_size_by_owner(user_id).await
     }

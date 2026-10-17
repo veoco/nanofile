@@ -1,19 +1,14 @@
-//! Permission checking — business rules for repo access control.
-//!
-//! These functions encode pure business logic (who can read/write a repo).
-//! The actual data retrieval is delegated to `MemberRepository` via trait,
-//! keeping this module free of infrastructure concerns.
+//! Pure business rules for repo access control; data retrieval is delegated to
+//! `MemberRepository`, so this module stays free of infrastructure concerns.
 
 use crate::repository::Repositories;
 use crate::repository::member::MemberRepository;
 use base::AppError;
 
-/// The libraries an account-wide query may return.
-///
-/// A session (or a key bound to every library) is unrestricted, which is what
-/// [`RepoScope::all`] means. A key bound to specific libraries narrows every
-/// listing to those, so `starred`, `activities`, `search` and the link lists
-/// cannot describe libraries the key was not given.
+/// The libraries an account-wide query may return. A session (or a key bound to
+/// every library) is unrestricted; a bound key narrows every listing to its own
+/// libraries, so `starred`, `activities`, `search` and the link lists cannot
+/// describe libraries it was not given.
 #[derive(Clone, Debug, Default)]
 pub struct RepoScope(Option<std::collections::HashSet<String>>);
 
@@ -35,7 +30,6 @@ impl RepoScope {
         }
     }
 
-    /// Drop the ids this scope excludes.
     pub fn intersect(
         &self,
         ids: std::collections::HashSet<String>,
@@ -52,12 +46,9 @@ impl RepoScope {
     }
 }
 
-/// Repo ids `user_id` can currently access: the libraries they own plus every
-/// library a membership row grants them, narrowed by `scope`.
-///
-/// Used by the listing endpoints (starred items, activities, search) to
-/// intersect a user-specific table with live access, so a row that refers to a
-/// library the user has since been removed from does not keep leaking its name,
+/// Repo ids `user_id` can currently access: owned libraries plus every membership
+/// grant, narrowed by `scope`. Listing endpoints use it so a row referring to a
+/// library the user has since been removed from cannot keep leaking its name,
 /// paths or modification times.
 pub async fn accessible_repo_ids(
     repos: &Repositories,
@@ -77,11 +68,9 @@ pub async fn accessible_repo_ids(
     Ok(scope.intersect(ids))
 }
 
-/// Check if `user_id` has write (`rw`) permission on the repo.
-///
-/// The repo owner always has full access. Members are checked against
-/// `repo_member.permission`. Non-members and read-only members are
-/// rejected with `AppError::Forbidden`.
+/// Check if `user_id` has write (`rw`) permission on the repo. The owner always
+/// has full access; members are checked against `repo_member.permission`, and
+/// non-members and read-only members are rejected with `AppError::Forbidden`.
 pub async fn check_repo_write_permission(
     member_repo: &dyn MemberRepository,
     repo_id: &str,
@@ -99,9 +88,7 @@ pub async fn check_repo_write_permission(
     }
 }
 
-/// Check if `user_id` is the owner of the repo.
-///
-/// Member management (sharing / modifying / removing members) is owner-only:
+/// Check if `user_id` is the owner of the repo. Member management is owner-only:
 /// an rw member must not be able to impersonate the owner. Non-owners are
 /// rejected with `AppError::Forbidden`.
 pub async fn check_repo_owner(
@@ -120,10 +107,8 @@ pub async fn check_repo_owner(
     }
 }
 
-/// Check if `user_id` has read permission on the repo.
-///
-/// The repo owner always has access. Any member (r or rw) has access.
-/// Non-members are rejected with `AppError::Forbidden`.
+/// Check if `user_id` has read permission on the repo. The owner always has
+/// access and any member (r or rw) has access; non-members get `Forbidden`.
 pub async fn check_repo_read_permission(
     member_repo: &dyn MemberRepository,
     repo_id: &str,

@@ -1,10 +1,7 @@
-//! Authorization model for unified API keys.
-//!
-//! A key carries two orthogonal things: the *capabilities* it may exercise, and
-//! the *libraries* it may touch, each with a read/write ceiling. Effective access
-//! is the strictest of the three inputs involved in a request: the route's
-//! required capability, the key's per-library ceiling, and the caller's library
-//! membership (checked separately by the auth layer).
+//! Authorization model for unified API keys: the *capabilities* a key may
+//! exercise and the *libraries* it may touch, each with a read/write ceiling.
+//! Effective access is the strictest of the route's required capability, the
+//! key's per-library ceiling and the caller's membership (checked by auth).
 
 use std::collections::HashMap;
 
@@ -55,14 +52,10 @@ pub struct KeyAuthority {
 }
 
 impl KeyAuthority {
-    /// Resolve a stored row into an authority.
-    ///
-    /// A stored capability id that is no longer in the catalog is an internal
-    /// error rather than a silently dropped grant: a key must never end up
-    /// *more* permissive than what the database says, and an unreadable grant is
-    /// a data bug worth surfacing. Retired ids are the one exception — see
-    /// [`CapabilitySet::parse_stored`]: they name grants nothing ever enforced,
-    /// so dropping them keeps an older key working without widening it.
+    /// Resolve a stored row into an authority. An unknown stored capability id is
+    /// an internal error, never a silently dropped grant: a key must not end up
+    /// *more* permissive than the database says. Retired ids are the exception —
+    /// see [`CapabilitySet::parse_stored`]: they name grants nothing enforced.
     pub fn from_lookup(lookup: &ApiKeyLookup) -> Result<Self, AppError> {
         let ids: Vec<String> = lookup
             .key
@@ -95,9 +88,7 @@ impl KeyAuthority {
     }
 
     /// Whether the key covers `repo_id`, optionally requiring write access.
-    ///
-    /// This is a scope check only: a key bound to a library the caller is not a
-    /// member of still passes here and is rejected by the membership check.
+    /// Scope check only: library membership is enforced separately.
     pub fn allows_repo(&self, repo_id: &str, need_write: bool) -> bool {
         if self.all_repos {
             return true;
@@ -203,9 +194,8 @@ mod tests {
 
     #[test]
     fn retired_stored_capabilities_are_dropped_not_rejected() {
-        // A key minted from the `full` preset by an older build names grants no
-        // build ever enforced. Dropping them keeps the key usable; it cannot make
-        // the key more permissive, because nothing consults them.
+        // Retired ids name grants no build ever enforced; dropping them keeps an
+        // old key usable without widening it, because nothing consults them.
         let authority = KeyAuthority::from_lookup(&lookup(
             "file.read,invitation.write,history.manage",
             false,

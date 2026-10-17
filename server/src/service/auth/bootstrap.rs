@@ -1,16 +1,10 @@
 //! The first account an installation ever has.
 //!
-//! Two entry points create it: the first-run setup page (which knows the
-//! password the operator just typed), and the `[admin_init]` block a
-//! configuration file may carry (which knows the password from that file).
-//! Both used to inline the same `user::ActiveModel` insert, and both now go
-//! through [`create_first_admin`] so the password policy and the columns an
-//! administrator needs cannot differ between them.
-//!
-//! `nanofile adduser` deliberately does *not* come through here: it is an
-//! operator tool with its own output, `--regular` and "already exists"
-//! semantics, and making it start enforcing the web policy would change what an
-//! existing script does.
+//! Both entry points that create it — the first-run setup page and the
+//! `[admin_init]` configuration block — go through [`create_first_admin`], so the
+//! password policy and the administrator columns cannot differ between them.
+//! `nanofile adduser` deliberately stays out: it is an operator tool with its own
+//! output and "already exists" semantics.
 
 use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 
@@ -20,8 +14,7 @@ use infra::entity::user;
 
 use super::password::{hash_password_async, validate_password};
 
-/// The password policy an account created before anybody could sign in is
-/// subject to.
+/// The password policy for an account created before anybody could sign in.
 #[derive(Debug, Clone, Copy)]
 pub struct AdminPolicy {
     pub password_min_length: u32,
@@ -41,10 +34,8 @@ impl AdminPolicy {
 
 /// Create the first administrator, applying the configured password policy.
 ///
-/// The plaintext is hashed here and never returned: the setup page creates the
-/// account directly rather than writing an `[admin_init] password` into the
-/// configuration file, so the password the operator typed lives only in the
-/// request body and in this function's stack.
+/// The plaintext is hashed here and never returned, so the password the operator
+/// typed lives only in the request body and this function's stack.
 ///
 /// Returns the new account's id.
 pub async fn create_first_admin(

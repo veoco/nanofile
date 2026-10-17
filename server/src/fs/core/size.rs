@@ -6,10 +6,8 @@ use infra::serialization::S_IFDIR;
 
 use crate::fs::core::{read_fs_dir_data, read_fs_dir_data_batch, resolve_fs_id};
 
-/// Compute the total size of all files in a repository by recursively
-/// traversing the FS tree from the repo's head commit.
-///
-/// Returns 0 if the repo has no commits yet or the tree is empty.
+/// Compute the total size of all files in the repo's HEAD tree. Returns 0 when
+/// there is no commit or the tree is empty.
 pub async fn compute_repo_size(repos: &Repositories, repo_id: &str) -> Result<i64, AppError> {
     let repo_record = repos
         .repo
@@ -31,8 +29,7 @@ pub async fn compute_repo_size(repos: &Repositories, repo_id: &str) -> Result<i6
     compute_tree_size(repos, repo_id, &head.root_id).await
 }
 
-/// Recursively walk a directory tree (starting at root_fs_id) and sum
-/// up all file sizes.
+/// Walk the directory tree rooted at `root_fs_id` and sum file sizes.
 pub async fn compute_tree_size(
     repos: &Repositories,
     repo_id: &str,
@@ -43,8 +40,7 @@ pub async fn compute_tree_size(
     }
 
     let mut total: i64 = 0;
-    // Level frontier: each level reads all its directories with one batched
-    // `IN` query (O(#dirs) → O(depth)).
+    // Level frontier: one batched `IN` query per level (O(#dirs) → O(depth)).
     let mut frontier: Vec<String> = vec![root_fs_id.to_string()];
 
     let mut guard = crate::fs::core::traversal::TreeGuard::new();
@@ -75,10 +71,8 @@ pub async fn compute_tree_size(
 }
 
 /// Adjust a repo's stored size by `delta` bytes.
-///
-/// If `repo.size` is 0 (never computed), falls back to a full traversal
-/// via `compute_repo_size()` to get a correct baseline.  Otherwise
-/// applies the delta incrementally.
+/// If `repo.size` is 0 (never computed), falls back to a full traversal for a
+/// correct baseline; otherwise applies the delta incrementally.
 pub async fn adjust_repo_size(
     repos: &Repositories,
     repo_id: &str,
@@ -100,9 +94,8 @@ pub async fn adjust_repo_size(
     Ok(())
 }
 
-/// Look up a single file/dir entry in the FS tree and return its total
-/// size.  For a file this is the `DirEntryData.size` field; for a
-/// directory the subtree is walked recursively via `compute_tree_size`.
+/// Total size of the entry at `path`: the stored size for a file, a recursive
+/// traversal for a directory.
 pub async fn get_entry_total_size(
     repos: &Repositories,
     repo_id: &str,

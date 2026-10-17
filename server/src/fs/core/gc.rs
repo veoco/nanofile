@@ -8,20 +8,17 @@ use infra::storage::DynBlockStorage;
 
 const SECS_PER_DAY: i64 = 86_400;
 
-/// Returned when a pass stopped at a checkpoint because the run was asked to
-/// stop. The job body maps it back onto a cancellation rather than a failure.
+/// Returned when the pass stopped at a checkpoint on request; mapped back to a cancellation.
 pub const ABORTED: &str = "gc stopped at a checkpoint";
 
 /// Tunables for one garbage-collection pass.
 #[derive(Debug, Clone, Copy)]
 pub struct GcPolicy {
     /// Blocks written less than this many seconds ago are never deleted, even
-    /// when the reference snapshot does not mention them. `0` disables the
-    /// window.
+    /// when the snapshot does not mention them. `0` disables the window.
     pub min_block_age_secs: u64,
-    /// Re-read each repository's head immediately before deleting its blocks
-    /// and skip that repository when the head moved after the snapshot was
-    /// taken.
+    /// Re-read each repository's head right before deleting its blocks and skip
+    /// that repository when the head moved after the snapshot was taken.
     pub verify_head: bool,
 }
 
@@ -34,9 +31,8 @@ impl GcPolicy {
         }
     }
 
-    /// No grace window and no head re-check: the pre-grace behaviour, which is
-    /// what a test that asserts reachability wants (its blocks were just
-    /// written, so the grace window would spare them).
+    /// No grace window and no head re-check: what a reachability test wants (its
+    /// blocks were just written, so the grace window would spare them).
     pub fn immediate() -> Self {
         Self {
             min_block_age_secs: 0,
@@ -45,10 +41,9 @@ impl GcPolicy {
     }
 }
 
-/// How many block deletions may run between checkpoints.
-///
-/// Bounded by count rather than time so the interval is trivially predictable;
-/// a deletion is an unlink, so the batch is short.
+/// How many block deletions may run between checkpoints. Bounded by count rather
+/// than time so the interval is predictable; a deletion is an unlink, so batches
+/// are short.
 const CHECKPOINT_EVERY_BLOCKS: usize = 256;
 
 /// Ask the run to stop, if there is a run to ask.
@@ -57,8 +52,8 @@ async fn checkpoint(ctx: Option<&crate::tasks::context::JobContext>) -> Result<(
         return Ok(());
     };
     ctx.checkpoint().await.map_err(|failure| match failure {
-        // Mapped back onto a cancellation by the job body, which is the only
-        // place that knows which of the two terminal states applies.
+        // The job body maps this back onto a cancellation: only it knows which
+        // terminal state applies.
         JobFailure::Cancelled | JobFailure::TimedOut => AppError::OperationFailed(ABORTED.into()),
         JobFailure::App(e) => e,
     })
@@ -67,21 +62,16 @@ async fn checkpoint(ctx: Option<&crate::tasks::context::JobContext>) -> Result<(
 pub struct GcManager;
 
 impl GcManager {
-    /// Garbage-collect every repository: delete each repository's own
-    /// unreachable blocks, and remove block directories whose repository no
-    /// longer exists.
+    /// Garbage-collect every repository: delete its unreachable blocks and remove
+    /// block directories whose repository no longer exists.
     ///
-    /// With the per-repository block layout there is no cross-repository
-    /// sharing, so a block is deletable as soon as it is unreachable from every
-    /// retained commit **of its own repository** (`history_limit` /
-    /// `history_ttl_days` retained history plus the current head). That makes
-    /// this pass both simpler and more precise than the previous global live
-    /// set: collecting repository A can never affect repository B's blocks.
+    /// With per-repository block layout there is no cross-repository sharing, so a
+    /// block is deletable once unreachable from every retained commit of its own
+    /// repository (history_limit / history_ttl_days plus the current head).
     ///
-    /// Reachability alone is not enough to authorize a delete: an upload writes
-    /// its blocks *before* the commit that references them, so a block can be
-    /// genuinely live while being absent from the snapshot this pass works from.
-    /// [`GcPolicy`] carries the two guards that cover that window.
+    /// Reachability alone does not authorize a delete: an upload writes blocks
+    /// *before* the commit that references them, so a block can be live while
+    /// absent from the snapshot — [`GcPolicy`] carries the two guards for that window.
     pub async fn garbage_collect(
         repos: &Repositories,
         block_store: &DynBlockStorage,
@@ -90,12 +80,9 @@ impl GcManager {
         Self::garbage_collect_with(repos, block_store, policy, None).await
     }
 
-    /// The same pass, but interruptible.
-    ///
-    /// `ctx` is the running job's context: a pass is a walk over repositories,
-    /// so it checks in at every repository boundary and after each batch of
-    /// block deletions. That is what lets a GC pass step aside for load —
-    /// nothing outside the job can suspend it.
+    /// The same pass, but interruptible: `ctx` is the running job's context, and
+    /// the pass checks in at every repository boundary and after each batch of
+    /// block deletions, which is what lets it step aside for load.
     pub async fn garbage_collect_with(
         repos: &Repositories,
         block_store: &DynBlockStorage,
@@ -107,12 +94,10 @@ impl GcManager {
         let mut removed = 0u64;
 
         for repo_model in &all_repos {
-            // A repository boundary is the natural place to wait: the whole
-            // previous repository is done, so stopping here leaves the pass in
-            // a state a later run can simply continue from.
+            // A repository boundary is the natural place to wait: the previous
+            // repository is done, so a later run can simply continue from here.
             checkpoint(ctx).await?;
-            // GC needs every commit (history_limit + TTL + reachable-set
-            // collection), so it passes `None` to fetch all rows.
+            // GC needs every commit, so it passes `None` to fetch all rows.
             let commits = repos
                 .commit
                 .find_by_repo_id_ordered_by_ctime_desc(&repo_model.id, None)
@@ -128,9 +113,8 @@ impl GcManager {
                 now,
             );
 
-            // Block ids referenced by the retained history of this repository.
-            // The set is per repository (there is no cross-repository sharing),
-            // so it is rebuilt for each one.
+            // Block ids referenced by this repository's retained history; rebuilt
+            // per repository because there is no cross-repository sharing.
             let mut alive_blocks: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
             let reachable = Self::collect_repo_alive_blocks(
@@ -142,18 +126,17 @@ impl GcManager {
             )
             .await?;
 
-            // Prune only repos that have retention limits; unlimited repos are
-            // left untouched (all of their history is live).
+            // Only repos with retention limits are pruned; an unlimited repo's
+            // history is all live.
             if repo_model.history_limit != 0 || repo_model.history_ttl_days != 0 {
                 removed += Self::prune_repo(repos, repo_model, &commits, &keep, reachable).await?;
             }
 
-            // Delete this repository's unreachable blocks. Stream disk blocks so
-            // the full on-disk list is never materialised; only the orphan
-            // subset (usually tiny) is collected for deletion.
+            // Stream the disk blocks so the full list is never materialised; only
+            // the orphan subset (usually tiny) is collected for deletion.
             block_store.invalidate_exists_cache();
-            // The callback is a `'static` trait object, so the live set and
-            // orphan collector are shared through Arc rather than borrowed.
+            // A `'static` callback can't borrow, so the live set and orphan
+            // collector are shared through Arc rather than borrowed.
             let alive_blocks = std::sync::Arc::new(alive_blocks);
             let orphan_blocks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
             let (alive_ref, orphan_ref) = (alive_blocks.clone(), orphan_blocks.clone());
@@ -169,10 +152,9 @@ impl GcManager {
                 .await?;
             let orphan_blocks = orphan_blocks.lock().unwrap().clone();
 
-            // The snapshot above was taken before the enumeration. A commit that
-            // landed since then can reference a block this pass classified as an
-            // orphan, so re-read the head and leave the repository alone when it
-            // moved. Placed as late as possible to keep the window narrow.
+            // A commit that landed since the snapshot can reference a block this pass
+            // classified as an orphan, so re-read the head and leave the repository
+            // alone when it moved. Placed as late as possible to keep the window narrow.
             if policy.verify_head && Self::repo_head_moved(repos, repo_model).await? {
                 tracing::warn!(
                     repo_id = %repo_model.id,
@@ -185,15 +167,13 @@ impl GcManager {
             let mut deleted = 0u64;
             let mut skipped_fresh = 0u64;
             for (index, id) in orphan_blocks.iter().enumerate() {
-                // Deleting can be a long tail on a repository with many
-                // orphans, so check in periodically rather than only between
-                // repositories.
+                // Many orphans can make a long tail, so check in periodically
+                // rather than only between repositories.
                 if index % CHECKPOINT_EVERY_BLOCKS == 0 {
                     checkpoint(ctx).await?;
                 }
-                // The second guard: a block written at or after the snapshot may
-                // belong to an upload whose commit is not visible yet. Deleting
-                // it would corrupt that upload, so leave it for a later pass.
+                // Second guard: a block written at or after the snapshot may belong to
+                // an upload whose commit is not visible yet — leave it for a later pass.
                 if policy.min_block_age_secs > 0
                     && block_store
                         .block_modified_secs(&repo_model.id, id)
@@ -222,9 +202,8 @@ impl GcManager {
         Ok(removed)
     }
 
-    /// Whether the repository's head differs from the snapshot this pass read.
-    ///
-    /// A repository that disappeared entirely counts as moved: its blocks are no
+    /// Whether the repository's head differs from the snapshot this pass read. A
+    /// repository that disappeared entirely counts as moved: its blocks are no
     /// longer this pass's to judge (the orphan-directory sweep handles them).
     async fn repo_head_moved(
         repos: &Repositories,
@@ -238,11 +217,10 @@ impl GcManager {
 
     /// Remove block directories whose repository no longer exists.
     ///
-    /// Deleting a repository removes its rows (cascading to commits and
-    /// fs_objects) but leaves its block files, so without this sweep the hashed
-    /// directory would stay on disk forever. Directories whose id is still in
-    /// the trash table are kept: restoring a deleted library reuses the same
-    /// repository id.
+    /// Deleting a repository removes its rows (cascading to commits and fs_objects)
+    /// but leaves its block files, which would otherwise stay on disk forever.
+    /// Directories whose id is still in the trash table are kept: restoring a
+    /// deleted library reuses the same repository id.
     async fn sweep_orphan_repo_dirs(
         repos: &Repositories,
         block_store: &DynBlockStorage,
@@ -271,12 +249,11 @@ impl GcManager {
         Ok(removed)
     }
 
-    /// Compute the set of commit ids (by DB primary key) to retain, newest-first.
-    ///
-    /// `history_limit > 0` keeps the newest N commits; `history_ttl_days > 0`
-    /// keeps any commit newer than the cutoff. With both at 0 the repo is
-    /// unlimited, so **every** commit (and every block reachable from it) is
-    /// retained — otherwise its blocks would be mis-identified as orphans.
+    /// Compute the set of commit ids (by DB primary key) to retain.
+    /// `history_limit > 0` keeps the newest N; `history_ttl_days > 0` keeps
+    /// commits newer than the cutoff. With both at 0 the repo is unlimited, so
+    /// **every** commit is retained — otherwise its blocks would be
+    /// mis-identified as orphans.
     fn compute_keep_commits(
         commits: &[commit::Model],
         history_limit: i32,
@@ -306,9 +283,8 @@ impl GcManager {
     }
 
     /// Collect the block ids referenced by any file reachable from the retained
-    /// commits of a single repo into `alive_blocks`. The per-repository block
-    /// layout means this set is exactly the set of blocks that repository is
-    /// allowed to keep, so it doubles as the authorization-relevant live set.
+    /// commits of one repo. The per-repository layout makes this exactly the set of
+    /// blocks that repository may keep, i.e. the authorization-relevant live set.
     async fn collect_repo_alive_blocks(
         repos: &Repositories,
         repo_id: &str,
@@ -343,10 +319,9 @@ impl GcManager {
         Ok(reachable)
     }
 
-    /// Prune one repo's history according to its retention settings, deleting
-    /// fs_object and commit rows that are no longer reachable from any retained
-    /// commit. Runs only for repos with retention limits; the caller supplies
-    /// the full commit list and the already-computed kept-set.
+    /// Prune one repo's history per its retention settings, deleting fs_object and
+    /// commit rows no longer reachable from any retained commit. The caller
+    /// supplies the full commit list and the kept-set.
     async fn prune_repo(
         repos: &Repositories,
         repo_model: &repo::Model,
@@ -358,9 +333,8 @@ impl GcManager {
             return Ok(0);
         }
 
-        // Delete fs objects of this repo that are no longer reachable. Only
-        // project (id, fs_id) — the `data` JSON can be large and is irrelevant
-        // for computing orphans.
+        // Delete no-longer-reachable fs objects. Only project (id, fs_id): the
+        // `data` JSON can be large and is irrelevant for computing orphans.
         let all_fs = repos
             .fs_object
             .find_ids_and_fs_ids_by_repo_id(&repo_model.id)
@@ -375,7 +349,6 @@ impl GcManager {
             repos.fs_object.delete_many_by_ids(inactive_ids).await?;
         }
 
-        // Delete the pruned commit rows.
         let pruned_ids: Vec<i64> = commits
             .iter()
             .filter(|c| !keep.contains(&c.id))
@@ -388,10 +361,9 @@ impl GcManager {
         Ok(removed as u64)
     }
 
-    /// Decode a 40-char hex SHA-1 (block id or fs id) to its raw 20 bytes, so
-    /// sets can be stored compactly without per-element heap allocation.
-    /// `list_blocks` / `for_each_block` only yield validated 40-hex ids, so
-    /// this cannot fail; a corrupt id decodes to all-zeroes.
+    /// Decode a 40-char hex SHA-1 (block id or fs id) to its raw 20 bytes, so sets
+    /// need no per-element heap allocation. Callers only pass validated 40-hex ids,
+    /// so this cannot fail; a corrupt id decodes to all-zeroes.
     fn decode_sha1_hex(hex_str: &str) -> [u8; 20] {
         let mut buf = [0u8; 20];
         let _ = hex::decode_to_slice(hex_str, &mut buf);
@@ -399,8 +371,7 @@ impl GcManager {
     }
 
     /// Breadth-first walk from `root_id`, adding every reachable fs_id to
-    /// `collected`. Directory objects are fetched level by level in a single
-    /// batched query instead of one query per object.
+    /// `collected`; each level's directory objects are fetched in one batched query.
     async fn collect_fs_ids(
         repos: &Repositories,
         repo_id: &str,
@@ -417,8 +388,8 @@ impl GcManager {
         while !frontier.is_empty() {
             guard.enter_level()?;
             guard.visit(frontier.len())?;
-            // `fetch_fs_object_map` chunks the IN list to stay under SQLite's
-            // variable limit, unlike `find_by_repo_and_fs_ids` which does not.
+            // `fetch_fs_object_map` chunks the IN list under SQLite's variable limit;
+            // `find_by_repo_and_fs_ids` does not.
             let objs =
                 crate::fs::core::tree::fetch_fs_object_map(repos, repo_id, &frontier).await?;
             let mut next = Vec::new();
@@ -428,9 +399,8 @@ impl GcManager {
                         .map_err(|e| AppError::internal(e.to_string()))?;
                     for entry in &dir_data.dirents {
                         let is_new = collected.insert(Self::decode_sha1_hex(&entry.id));
-                        // Only directories have children to recurse into; use
-                        // the dirent's `mode` bit so file objects are never
-                        // fetched just to discover they aren't directories.
+                        // Only directories have children; use the dirent's `mode` bit
+                        // so file objects are never fetched just to be ruled out.
                         if is_new && entry.mode & S_IFDIR != 0 {
                             next.push(entry.id.clone());
                         }
@@ -448,21 +418,18 @@ impl GcManager {
 mod tests {
     use super::*;
 
-    /// The fixture repo id used by `setup_gc_test_db`.
     const REPO: &str = "test-repo";
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
     use std::sync::Arc;
 
-    /// A throwaway filesystem-backed block store. Returns the `TempDir` so it
-    /// stays alive for the whole test.
+    /// A throwaway filesystem-backed block store; the `TempDir` keeps it alive.
     fn temp_block_store() -> (tempfile::TempDir, DynBlockStorage) {
         let dir = tempfile::tempdir().unwrap();
         let store = infra::storage::new_block_store(dir.path());
         (dir, store)
     }
 
-    /// In-memory SQLite with the minimal schema + a seeded repo/commits/
-    /// fs_objects for GC.
+    /// In-memory SQLite with the minimal schema and a seeded repo for GC.
     async fn setup_gc_test_db(
         history_limit: i32,
         history_ttl_days: i32,
@@ -538,7 +505,6 @@ mod tests {
         db
     }
 
-    /// Insert a commit row.
     async fn insert_commit(
         db: &sea_orm::DatabaseConnection,
         commit_id: &str,
@@ -587,16 +553,14 @@ mod tests {
         i64::try_get(&row, "", "c").unwrap() as u64
     }
 
-    /// GC with `history_limit = 1` should keep the newest commit, drop the
-    /// older commits, and delete fs objects that are no longer reachable from
-    /// any kept commit.
+    /// With `history_limit = 1` the newest commit is kept, older commits are
+    /// dropped, and fs objects unreachable from any kept commit are deleted.
     #[tokio::test]
     async fn test_gc_prunes_old_history_and_orphaned_fs_objects() {
         let db = setup_gc_test_db(1, 0).await;
         let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
 
-        // Three commits, newest first by ctime:
         //   c1 (a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 → b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1), c2 (a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2), c3 (a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3 → b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2)
         insert_commit(&db, "c1", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 3000).await;
         insert_commit(&db, "c2", "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", 2000).await;
@@ -623,17 +587,14 @@ mod tests {
         let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::immediate())
             .await
             .expect("gc succeeds");
-        // Only the two fs objects reachable solely from c3 are orphaned.
         assert_eq!(removed, 2);
 
-        // Newest commit retained; c2/c3 pruned.
         assert_eq!(count_rows(&db, "commits").await, 1);
         // a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 + b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1 remain; a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3 + b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 deleted.
         assert_eq!(count_rows(&db, "fs_objects").await, 2);
     }
 
-    /// Repos with both retention settings at 0 are unlimited and must be left
-    /// untouched — even when they have multiple old commits.
+    /// Repos with both retention settings at 0 are unlimited and must not be touched.
     #[tokio::test]
     async fn test_gc_skips_unlimited_repos() {
         let db = setup_gc_test_db(0, 0).await;
@@ -658,15 +619,13 @@ mod tests {
         assert_eq!(count_rows(&db, "fs_objects").await, 1);
     }
 
-    /// With only a TTL set, commits older than the window are pruned and their
-    /// unreachable fs objects removed.
+    /// With only a TTL set, old commits and their unreachable fs objects are pruned.
     #[tokio::test]
     async fn test_gc_prunes_by_ttl() {
         let db = setup_gc_test_db(0, 1).await; // 1-day TTL
         let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
 
-        // now (today) is used by GC; old commit is > 1 day old, new one is recent.
         insert_commit(
             &db,
             "c-new",
@@ -706,8 +665,7 @@ mod tests {
         assert_eq!(count_rows(&db, "fs_objects").await, 2);
     }
 
-    /// An orphan block (not referenced by any surviving file) is deleted, while
-    /// a block referenced by a live file object survives.
+    /// An orphan block is deleted, while a block referenced by a live file survives.
     #[tokio::test]
     async fn test_gc_deletes_orphan_block_keeps_referenced_block() {
         let db = setup_gc_test_db(0, 0).await; // unlimited → nothing pruned
@@ -748,9 +706,7 @@ mod tests {
         );
     }
 
-    /// A block referenced by a retained commit's file is not deleted even when
-    /// another (older) commit that also referenced it is pruned — i.e. shared
-    /// blocks survive as long as any final reachable reference remains.
+    /// A shared block survives as long as any retained commit still references it.
     #[tokio::test]
     async fn test_gc_keeps_block_referenced_by_retained_commit() {
         let db = setup_gc_test_db(1, 0).await; // history_limit = 1
@@ -812,15 +768,13 @@ mod tests {
         );
     }
 
-    /// When the TTL window retains no commits at all (all history expired),
-    /// every fs_object of the repo becomes unreachable and is pruned.
+    /// When the TTL retains no commits at all, every fs_object of the repo is pruned.
     #[tokio::test]
     async fn test_gc_prunes_all_when_no_commits_kept() {
         let db = setup_gc_test_db(0, 1).await; // 1-day TTL
         let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
 
-        // Both commits are older than the 1-day TTL window, so keep is empty.
         let old = chrono::Utc::now().timestamp() - 172_800; // 2 days ago
         insert_commit(&db, "c1", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", old).await;
         insert_commit(&db, "c2", "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2", old).await;
@@ -842,15 +796,13 @@ mod tests {
         let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::immediate())
             .await
             .expect("gc succeeds");
-        // Both fs objects and both commits are orphaned and pruned.
         assert_eq!(removed, 2);
         assert_eq!(count_rows(&db, "commits").await, 0);
         assert_eq!(count_rows(&db, "fs_objects").await, 0);
     }
 
-    /// Backdate a block file's mtime so the grace window can be exercised
-    /// without waiting an hour. Blocks are content-addressed and the on-disk
-    /// path is private to the store, so the file is found by name.
+    /// Backdate a block's mtime to exercise the grace window. Blocks are content-addressed
+    /// and the on-disk path is private to the store, so the file is found by name.
     fn backdate_block(dir: &std::path::Path, block_id: &str, age_secs: u64) {
         let mut stack = vec![dir.to_path_buf()];
         while let Some(current) = stack.pop() {
@@ -875,9 +827,8 @@ mod tests {
         panic!("block {block_id} not found under {}", dir.display());
     }
 
-    /// The grace window spares a block written around the time the reference
-    /// snapshot was taken — it may belong to an upload whose commit is not
-    /// visible yet — while an orphan older than the window is still deleted.
+    /// The grace window spares a fresh block (it may belong to an in-flight upload)
+    /// while an older orphan is still deleted.
     #[tokio::test]
     async fn test_gc_grace_window_spares_fresh_blocks_only() {
         let db = setup_gc_test_db(0, 0).await; // unlimited → nothing pruned
@@ -887,8 +838,7 @@ mod tests {
         let kept_id = store.write_block(REPO, b"kept content").await.unwrap();
         let fresh_id = store.write_block(REPO, b"fresh orphan").await.unwrap();
         let stale_id = store.write_block(REPO, b"stale orphan").await.unwrap();
-        // One orphan is aged past the window; the other keeps its just-written
-        // mtime, which is what a block from an in-flight upload looks like.
+        // Age one orphan past the window; the other keeps its just-written mtime.
         backdate_block(dir.path(), &stale_id, 2 * 3600);
 
         insert_commit(&db, "c1", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", 3000).await;
@@ -925,8 +875,7 @@ mod tests {
             "an orphan older than the window must still be deleted"
         );
 
-        // Disabling the window makes the spared orphan deletable, which is the
-        // pre-grace behaviour the reachability tests rely on.
+        // Disabling the window makes the spared orphan deletable.
         let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::immediate())
             .await
             .expect("gc succeeds");
@@ -937,8 +886,7 @@ mod tests {
         );
     }
 
-    /// A pass with a context stops as soon as the run is asked to stop, rather
-    /// than running to completion and then reporting the cancellation.
+    /// A pass with a context stops as soon as the run is asked to stop.
     #[tokio::test]
     async fn an_interruptible_pass_stops_at_a_checkpoint() {
         let db = setup_gc_test_db(0, 0).await;
@@ -969,8 +917,8 @@ mod tests {
         }
     }
 
-    /// The head re-check compares the live row against the snapshot the pass
-    /// started from, and treats a vanished repository as moved.
+    /// The head re-check compares the live row against the snapshot and treats a
+    /// vanished repository as moved.
     #[tokio::test]
     async fn test_repo_head_moved_detects_changes_since_the_snapshot() {
         let db = setup_gc_test_db(0, 0).await;

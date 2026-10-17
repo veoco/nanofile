@@ -4,11 +4,8 @@ use crate::indexer::{DocMeta, DocStatus, TextIndexer};
 use crate::repository::Repositories;
 use base::error::AppError;
 
-/// Index/reindex administration: who may touch a library's index, and the
-/// manual text-injection endpoint.
-///
-/// The pipeline itself lives in [`crate::service::index`]; this type is the
-/// access-control layer in front of it.
+/// Index/reindex administration: who may touch a library's index, and the manual text-injection
+/// endpoint. The pipeline itself lives in [`crate::service::index`].
 pub struct AdminService {
     repos: Arc<Repositories>,
 }
@@ -18,7 +15,6 @@ impl AdminService {
         Self { repos }
     }
 
-    /// Verify that the authenticated user can access a repository.
     pub async fn check_repo_access(
         &self,
         repo_id: &str,
@@ -44,9 +40,8 @@ impl AdminService {
         Ok(repo_model)
     }
 
-    /// Verify that the user is the repo owner or a server admin.
-    /// Stricter than `check_repo_access` — used for heavy operations
-    /// (full-text reindex) that must not be triggerable by read-only members.
+    /// Verify that the user is the repo owner or a server admin. Stricter than `check_repo_access` —
+    /// used for heavy operations (full-text reindex) that read-only members must not trigger.
     pub async fn check_repo_admin(
         &self,
         repo_id: &str,
@@ -72,11 +67,9 @@ impl AdminService {
         Ok(repo_model)
     }
 
-    /// Index a single file with custom extracted text.
-    ///
-    /// The document is pinned at [`DocMeta::MANUAL_VERSION`], which is what
-    /// stops the automatic backfill from overwriting text a client supplied for
-    /// a format the server cannot parse itself.
+    /// Index a single file with custom extracted text, pinned at [`DocMeta::MANUAL_VERSION`] so the
+    /// automatic backfill does not overwrite text a client supplied for a format the server cannot
+    /// parse itself.
     pub async fn index_file_text(
         &self,
         indexer: &TextIndexer,

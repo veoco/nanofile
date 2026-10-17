@@ -11,7 +11,6 @@ use infra::activity_log;
 use infra::common::util::{generate_unique_filename, join_path};
 use infra::serialization::S_IFDIR;
 
-/// Parse colon-separated file_names into a Vec<String>.
 pub fn parse_file_names(s: &str) -> Vec<String> {
     if s.is_empty() {
         return vec![];
@@ -21,8 +20,6 @@ pub fn parse_file_names(s: &str) -> Vec<String> {
         .map(|n| n.to_string())
         .collect()
 }
-
-// ── FileOpsService ─────────────────────────────────────────────────────
 
 pub struct FileOpsService {
     db: Arc<DatabaseConnection>,
@@ -52,8 +49,6 @@ impl FileOpsService {
     }
 
     /// Batch delete files/directories from a parent directory.
-    ///
-    /// Returns an optional directory listing (if caller wants reloaddir).
     pub async fn batch_delete(
         &self,
         repo_id: &str,
@@ -68,9 +63,8 @@ impl FileOpsService {
 
         let db = self.db();
 
-        // Resolve the parent dir and its ancestor chain once, so the tree
-        // update below walks ancestors in O(d) instead of re-resolving every
-        // level from the root (O(d²)). NotFound propagates as 404.
+        // Resolve the parent dir and its ancestor chain once, so the tree update
+        // below walks ancestors in O(d). NotFound propagates as 404.
         let (parent_fs_id, ancestor_chain) =
             FileOps::resolve_fs_id_chain(&self.repos, repo_id, parent_dir).await?;
 
@@ -78,8 +72,8 @@ impl FileOpsService {
             .await
             .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
 
-        // Sum sizes from the parent dirents instead of re-resolving each path
-        // (files are O(1); directories walk their subtree once).
+        // Sum sizes from the parent dirents: files are O(1), directories walk
+        // their subtree once.
         let mut total_deleted: i64 = 0;
         for entry in file_names
             .iter()
@@ -94,12 +88,10 @@ impl FileOpsService {
         }
 
         let names_to_delete = file_names.to_vec();
-        // O(1) membership lookup for the per-entry retain filter below,
-        // instead of Vec::contains's O(n) scan per retained entry.
+        // O(1) membership set for the retain filter below, not an O(n) Vec scan.
         let names_to_delete_set: std::collections::HashSet<&str> =
             names_to_delete.iter().map(String::as_str).collect();
 
-        // Record trash
         let trash_head_commit_id: Option<String> = self
             .repos
             .repo
@@ -158,7 +150,6 @@ impl FileOpsService {
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        // Log activity
         for name in file_names {
             let fp = join_path(parent_dir, name);
             let entry = parent_data.dirents.iter().find(|d| d.name == *name);
@@ -179,7 +170,6 @@ impl FileOpsService {
             .await;
         }
 
-        // Remove from full-text search index
         if let Some(indexer) = &self.indexer {
             for name in file_names {
                 let fp = join_path(parent_dir, name);
@@ -194,9 +184,8 @@ impl FileOpsService {
         Ok(())
     }
 
-    /// Batch copy files/directories within the same repo.
-    ///
-    /// Returns a list of `(obj_name, parent_dir, repo_id)` results.
+    /// Batch copy files/directories within the same repo; returns the
+    /// `(obj_name, parent_dir, repo_id)` results.
     pub async fn batch_copy(
         &self,
         repo_id: &str,
@@ -212,8 +201,8 @@ impl FileOpsService {
 
         let db = self.db();
 
-        // Resolve the source parent dir (chain unused here — the destination
-        // tree update below carries the ancestor chain).
+        // Resolve the source parent dir; its chain is unused, the destination
+        // tree update below carries the ancestor chain.
         let (src_parent_fs_id, _) =
             FileOps::resolve_fs_id_chain(&self.repos, repo_id, src_parent_dir).await?;
 
@@ -245,11 +234,10 @@ impl FileOpsService {
         let (dst_parent_fs_id, dst_ancestor_chain) =
             FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir).await?;
 
-        // Reject copying a directory into its own subtree. The copy is a
+        // Reject copying a directory into its own subtree: the copy is a
         // reference copy (the new entry points at the source's fs_id), so
-        // `/a` → `/a/b` would create a cycle in the FS tree: every tree walk
-        // (client included) would then recurse through it forever. WebDAV's
-        // COPY rejects this; the REST/sync paths did not.
+        // `/a` -> `/a/b` would create a cycle every tree walk recurses through
+        // forever. WebDAV's COPY rejects this; the REST/sync paths did not.
         for entry in &new_entries {
             if entry.mode & S_IFDIR == 0 {
                 continue;
@@ -327,7 +315,6 @@ impl FileOpsService {
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        // Log activity
         for entry in &entries_to_add {
             let fp = join_path(dst_dir, &entry.name);
             let obj_type = if entry.mode & S_IFDIR != 0 {
@@ -351,9 +338,8 @@ impl FileOpsService {
             .await;
         }
 
-        // Copied entries point at the same fs objects, so the new paths carry
-        // the same content identity. Reading that content back is the index
-        // job's business, not this response's.
+        // Copied entries share the source's fs objects, so the new paths carry
+        // the same content identity; reading it back is the index job's business.
         if self.scheduler.is_enabled() {
             let targets: Vec<IndexTarget> = entries_to_add
                 .iter()
@@ -372,11 +358,8 @@ impl FileOpsService {
 
     /// Batch move files/directories within the same repo.
     ///
-    /// Uses a two-commit approach:
-    /// 1. Remove from source directory, create commit
-    /// 2. Add to destination directory, create commit
-    ///
-    /// Returns a list of `(obj_name, parent_dir, repo_id)` results.
+    /// Two commits: remove from the source dir and commit, then add to the
+    /// destination dir and commit; returns the batch results.
     pub async fn batch_move(
         &self,
         repo_id: &str,
@@ -393,7 +376,7 @@ impl FileOpsService {
         let db = self.db();
 
         // Resolve the source parent dir and its ancestor chain once, so the
-        // step-1 tree update walks ancestors in O(d) instead of O(d²).
+        // step-1 tree update walks ancestors in O(d).
         let (src_parent_fs_id, src_ancestor_chain) =
             FileOps::resolve_fs_id_chain(&self.repos, repo_id, src_parent_dir).await?;
 
@@ -422,16 +405,14 @@ impl FileOpsService {
             });
         }
 
-        // Reject destinations that the remove-then-add sequence below would
-        // destroy before the second phase needs them:
+        // Reject destinations that remove-then-add would destroy before phase 2:
         //
-        // * `dst_dir == src_parent_dir`: moving items into the directory they
-        //   already live in is a no-op request that only invites conflict
+        // * `dst_dir == src_parent_dir`: a no-op that only invites conflict
         //   renaming; report it instead of silently rewriting names.
-        // * a moved directory's own subtree: phase 1 commits the removal, so
-        //   the destination would no longer resolve in phase 2 — the subtree
-        //   would disappear from HEAD with no trash entry and a 500 to the
-        //   client (WebDAV guards this; the REST/sync paths did not).
+        // * a moved directory's own subtree: phase 1 commits the removal, so the
+        //   destination no longer resolves in phase 2 — the subtree would vanish
+        //   from HEAD with no trash entry and a 500 to the client (WebDAV guards
+        //   this; the REST/sync paths did not).
         if dst_dir == src_parent_dir {
             return Err(AppError::BadRequest(
                 "cannot move items into their current directory".into(),
@@ -454,8 +435,7 @@ impl FileOpsService {
         let _ = FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir).await?;
 
         // Step 1: Remove entries from source
-        // O(1) membership lookup for the per-entry retain filter below,
-        // instead of Vec::contains's O(n) scan per retained entry.
+        // O(1) membership set for the retain filter below, not an O(n) Vec scan.
         let src_names_for_closure: std::collections::HashSet<&str> =
             entries_to_move.iter().map(|e| e.name.as_str()).collect();
 
@@ -495,8 +475,7 @@ impl FileOpsService {
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
         // Step 2: Add entries to destination.
-        // resolve_fs_id_chain reads the repo's latest head commit (the one
-        // created by step 1), matching the previous new_head_root behaviour.
+        // resolve_fs_id_chain reads the newest head commit, the one step 1 made.
         let (new_dst_fs_id, dst_ancestor_chain) =
             FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir).await?;
 
@@ -553,7 +532,6 @@ impl FileOpsService {
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        // Log activity
         for entry in &entries_to_add {
             let old_fp = join_path(src_parent_dir, &entry.name);
             let new_fp = join_path(dst_dir, &entry.name);
@@ -578,9 +556,8 @@ impl FileOpsService {
             .await;
         }
 
-        // Update full-text search index. Deleting the old entries is cheap and
-        // stays synchronous; writing the new paths is scheduled, since it reads
-        // each file's content.
+        // Update full-text search index: deleting the old paths is cheap and
+        // stays synchronous; writing the new ones is scheduled (it reads content).
         if let Some(indexer) = &self.indexer {
             for entry in &entries_to_move {
                 let old_fp = join_path(src_parent_dir, &entry.name);

@@ -1,10 +1,8 @@
 //! Periodic cleanup of expired bearer/one-time tokens.
 //!
-//! Several token tables are only ever validated lazily, so nothing removed
-//! rows once they expired. Anonymous endpoints in particular mint
-//! `sso_login_tokens` (and the web login flow mints `client_login_tokens`),
-//! which an unauthenticated caller could grow without bound. This module
-//! deletes expired rows hourly from the scheduler.
+//! Token tables are validated lazily, so expired rows would otherwise accumulate. Anonymous
+//! endpoints in particular mint `sso_login_tokens` (and web login mints `client_login_tokens`),
+//! which an unauthenticated caller could grow without bound; the scheduler deletes rows hourly.
 
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
@@ -14,11 +12,10 @@ use infra::entity::{
     sync_token,
 };
 
-/// Client-login tokens are single-use and short-lived; anything older than an
-/// hour is certainly unusable (they carry no expiry column).
+/// Client-login tokens are single-use and short-lived; anything older than an hour is certainly
+/// unusable (they carry no expiry column).
 const CLIENT_LOGIN_STALE_SECS: i64 = 3600;
 
-/// Delete expired/used token rows and return the number of rows removed.
 pub async fn delete_expired_tokens(db: &DatabaseConnection, now: i64) -> Result<u64, AppError> {
     let mut total: u64 = 0;
 
@@ -36,9 +33,8 @@ pub async fn delete_expired_tokens(db: &DatabaseConnection, now: i64) -> Result<
         .await?
         .rows_affected;
 
-    // Unified API keys may also expire. A cached lookup checks `expires_at`
-    // before use, so a row that outlives its expiry by up to one cleanup cycle
-    // is still rejected.
+    // Unified API keys may also expire. A cached lookup checks `expires_at` before use, so a row
+    // that outlives its expiry by up to one cleanup cycle is still rejected.
     total += api_key::Entity::delete_many()
         .filter(api_key::Column::ExpiresAt.is_not_null())
         .filter(api_key::Column::ExpiresAt.lt(now))

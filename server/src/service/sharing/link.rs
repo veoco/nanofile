@@ -8,8 +8,6 @@ use crate::service::auth::token::{generate_share_link_token, generate_upload_lin
 use base::error::AppError;
 use infra::entity::upload_link;
 
-// ── Response types ────────────────────────────────────────────────────
-
 #[derive(Serialize)]
 pub struct UploadLinkInfo {
     pub token: String,
@@ -19,8 +17,7 @@ pub struct UploadLinkInfo {
     pub created_at: i64,
 }
 
-/// Build an absolute upload-link URL, matching seahub's
-/// `gen_shared_upload_link()` (`{service_url}/u/d/{token}/`).
+/// Absolute upload-link URL, matching seahub's `gen_shared_upload_link()` (`{service_url}/u/d/{token}/`).
 fn upload_link_url(token: &str, base_url: &str) -> String {
     let base = base_url.trim_end_matches('/');
     format!("{base}/u/{token}/")
@@ -50,8 +47,6 @@ fn upload_link_obj_name(path: &str) -> String {
             .unwrap_or_else(|| path.to_string())
     }
 }
-
-// ── Upload link operations (v2) ───────────────────────────────────────
 
 pub async fn list_upload_links(
     repos: &Repositories,
@@ -96,13 +91,12 @@ async fn create_upload_link_impl(
     )
     .await?;
 
-    // An encrypted library cannot be written through an anonymous link: the
-    // server stores ciphertext, which needs the password-equivalent library key
-    // held in the per-user password cache, and an anonymous visitor has no
-    // cache entry. The official clients already hide the upload-link action for
-    // encrypted libraries (desktop `file-table.cpp:386`, Android
-    // `BottomSheetMenuManager:365`), so this matches their expectation. Mirrors
-    // the share-link guard in `sharing::share`.
+    // An encrypted library cannot be written through an anonymous link: the server stores
+    // ciphertext, which needs the password-equivalent library key held in the per-user password
+    // cache, and an anonymous visitor has no cache entry. The official clients already hide the
+    // upload-link action for encrypted libraries (desktop `file-table.cpp:386`, Android
+    // `BottomSheetMenuManager:365`), so this matches their expectation. Mirrors the share-link guard
+    // in `sharing::share`.
     let repo_model = repos
         .repo
         .find_by_id(repo_id)
@@ -162,9 +156,8 @@ pub async fn delete_upload_link(
     user_id: i32,
     token_manager: Option<&Arc<crate::AccessTokenManager>>,
 ) -> Result<(), AppError> {
-    // Resolve the row first: deleting the link must also revoke the upload
-    // tokens already minted from it, otherwise someone who exchanged the link
-    // for a token can keep uploading for the token's remaining TTL.
+    // Resolve the row first: deleting the link must also revoke the upload tokens already minted from
+    // it, otherwise someone who exchanged the link for a token can keep uploading for its remaining TTL.
     let link = repos.upload_link.find_by_token(token).await?;
     repos
         .upload_link
@@ -178,8 +171,6 @@ pub async fn delete_upload_link(
     }
     Ok(())
 }
-
-// ── Upload link operations (v21) ──────────────────────────────────────
 
 pub async fn list_upload_links_v21(
     repos: &Repositories,
@@ -263,7 +254,6 @@ pub async fn delete_upload_link_v21_by_token(
     user_id: i32,
     token_manager: Option<&Arc<crate::AccessTokenManager>>,
 ) -> Result<bool, AppError> {
-    // Find the link by token first, then delete by id
     let link = repos
         .upload_link
         .find_by_token(token)
@@ -303,7 +293,6 @@ pub async fn get_upload_link_v21(
         return Err(AppError::NotFound("Upload link not found".into()));
     }
 
-    // Check if repo still exists
     let repo_model = repos
         .repo
         .find_by_id(&link.repo_id)
@@ -338,7 +327,6 @@ pub async fn update_upload_link_v21(
     password: Option<Option<String>>,
     description: Option<Option<String>>,
 ) -> Result<bool, AppError> {
-    // Convert expire_days to expire_at timestamp
     let expire_at: Option<Option<i64>> = if let Some(Some(days)) = expire_days {
         let now = chrono::Utc::now().timestamp();
         Some(Some(now + days * 86400))
@@ -371,7 +359,6 @@ pub async fn list_upload_links_for_repo_v21(
 ) -> Result<Vec<serde_json::Value>, AppError> {
     let links = repos.upload_link.find_by_repo_id(repo_id).await?;
 
-    // Look up repo name
     let repo_name = repos
         .repo
         .find_by_id(repo_id)
@@ -381,7 +368,6 @@ pub async fn list_upload_links_for_repo_v21(
 
     let items: Vec<serde_json::Value> = links
         .into_iter()
-        // Only the caller's own links: an upload token grants anonymous write.
         .filter(|l| l.creator_id == creator_id)
         .map(|l| {
             let obj_name = upload_link_obj_name(&l.path);
@@ -423,14 +409,12 @@ pub async fn clean_invalid_upload_links_v21(
     for link in &links {
         let mut should_delete = false;
 
-        // Check if expired
         if let Some(exp) = link.expires_at
             && chrono::Utc::now().timestamp() > exp
         {
             should_delete = true;
         }
 
-        // Check if repo still exists
         if !should_delete && !existing.contains(link.repo_id.as_str()) {
             should_delete = true;
         }
@@ -453,8 +437,6 @@ pub fn increment_upload_view_cnt(repos: Arc<Repositories>, link_id: i32) {
         let _ = repos.upload_link.increment_view_cnt(link_id).await;
     });
 }
-
-// ── Smart link ────────────────────────────────────────────────────────
 
 pub fn get_smart_link(base_url: &str, repo_id: &str, path: &str) -> String {
     format!("{}/api2/repos/{}/file/?p={}", base_url, repo_id, path)

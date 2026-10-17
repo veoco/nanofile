@@ -1,29 +1,15 @@
-//! Outbound email: settings, message rendering, the retry queue and delivery.
+//! Outbound email: settings, rendering, the retry queue and delivery.
 //!
-//! # Shape of the subsystem
-//!
-//! * [`settings`] — the effective SMTP settings, read from the layered
-//!   configuration (environment, config file, saved row); see
-//!   [`crate::settings`].
-//! * [`message`] — rendering a kind into subject + text + HTML and assembling
-//!   the raw RFC 5322 message.
+//! * [`settings`] — effective SMTP settings from the layered configuration.
+//! * [`message`] — a kind rendered into subject + text + HTML, and the raw RFC 5322 message.
 //! * [`queue`] — the outbox table: queueing, claiming, backoff, retention.
 //! * [`transport`] — SMTP with mandatory certificate validation.
-//! * [`detect`] — whether a login is from a device/browser the account has not
-//!   used before.
+//! * [`detect`] — whether a login is from an unused device or browser.
 //!
-//! # Rules every caller can rely on
-//!
-//! * **Nothing here can fail a request.** Notifications are queued and sent in
-//!   the background; a delivery failure is recorded on the queue row and in the
-//!   log, never returned to the user.
-//! * **The master switch is in the config file.** [`Mailer::ready`] is false
-//!   unless `config.email.enabled` is set *and* the SMTP settings are complete,
-//!   and while it is false nothing is minted, queued or sent — which is what
-//!   keeps the password-reset flow from pretending to work.
-//! * **A reset link is never stored in the clear.** The rendered message is
-//!   encrypted with the same domain-separated cipher as repository sync tokens
-//!   and is wiped from the row as soon as the message is delivered.
+//! Nothing here can fail a request: notifications are queued and sent in the
+//! background, and a delivery failure is recorded on the queue row and in the log.
+//! While [`Mailer::ready`] is false nothing is minted, queued or sent, which keeps
+//! the password-reset flow honest; a reset link is never stored in the clear.
 
 pub mod detect;
 pub mod i18n;
@@ -46,17 +32,13 @@ pub use i18n::MailStrings;
 pub use message::MailParams;
 pub use settings::{EmailSettings, TlsMode};
 
-/// Scheduler task name for the outbox drainer.
-///
-/// A constant because three places must agree on it: the registration in
-/// `scheduler_setup`, the admin page's "deliver now" button, and the task list
-/// that button's label is read from.
+/// Scheduler task name for the outbox drainer. Three places must agree on it: the
+/// scheduler registration, the admin page's button and the task list it reads a
+/// label from.
 pub const TASK_NAME: &str = "email delivery";
 
-/// What a message is for. The persisted form is [`MailKind::id`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MailKind {
-    /// The password-reset link itself.
     PasswordReset,
     /// A client device signed in for the first time.
     NewDevice,
@@ -88,12 +70,10 @@ impl MailKind {
         }
     }
 
-    /// Parse a persisted identifier.
     pub fn from_id(value: &str) -> Option<Self> {
         MailKind::ALL.into_iter().find(|kind| kind.id() == value)
     }
 
-    /// The locale key prefix, for the admin page's row labels.
     pub const fn i18n_key(self) -> &'static str {
         match self {
             MailKind::PasswordReset => "admin.email_kind_password_reset",
@@ -105,11 +85,7 @@ impl MailKind {
     }
 }
 
-/// A reason a message could not be delivered.
-///
-/// Carried as text because that is exactly what the queue row and the log
-/// record; converting it into an [`AppError`] is for the one caller that shows
-/// a failure to an administrator (the test message).
+/// A reason a message could not be delivered, as the text the queue row and log record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailError(String);
 
@@ -137,22 +113,17 @@ impl From<MailError> for AppError {
     }
 }
 
-/// The mail subsystem, held on `AppState`.
-///
-/// It keeps the configuration *handle*, not a copy: a setting saved at
-/// `/sysadmin/settings/email/` is read by the very next delivery, and there is
-/// no cache to invalidate because there is no second source of truth.
+/// The mail subsystem, held on `AppState`. It keeps the configuration *handle*, not
+/// a copy, so no cache exists to invalidate.
 pub struct Mailer {
     repos: Arc<Repositories>,
     cipher: Arc<TokenCipher>,
     config: crate::settings::RuntimeConfig,
-    /// Wakes the outbox worker the moment a message is queued, so a
-    /// notification does not wait out the retry tick.
+    /// Wakes the outbox worker the moment a message is queued, so a notification
+    /// does not wait out the retry tick.
     ///
-    /// A permit, not a queue: `notify_one` stores one if nobody is waiting, and
-    /// a drain that finds the outbox empty is harmless, so no signal needs to
-    /// survive two drains. That is what makes it safe to call from the queueing
-    /// path, which must not block or fail because delivery is busy.
+    /// A permit, not a queue: `notify_one` stores one if nobody is waiting, and an
+    /// empty drain is harmless, which is what makes it safe on the queueing path.
     wake: Arc<tokio::sync::Notify>,
 }
 
@@ -170,28 +141,22 @@ impl Mailer {
         }
     }
 
-    /// Ask the outbox worker to drain now.
-    ///
-    /// Called when a message is queued and by the administrator's "deliver
-    /// queued mail" button. Cheap and infallible: a signal that arrives while
-    /// the worker is draining is remembered, so a message queued during a drain
-    /// is not left for the retry tick.
+    /// Ask the outbox worker to drain now; called when a message is queued and by the
+    /// admin's "deliver queued mail" button. Cheap and infallible: a signal arriving
+    /// while the worker drains is remembered.
     pub fn nudge(&self) {
         self.wake.notify_one();
     }
 
-    /// Wait until somebody asks for a drain.
     pub async fn wait_for_nudge(&self) {
         self.wake.notified().await;
     }
 
-    /// Whether `[email] enabled` is set. Says nothing about whether the SMTP
-    /// settings are complete — that is [`Self::ready`].
+    /// Whether `[email] enabled` is set; the SMTP settings may still be incomplete.
     pub fn config_enabled(&self) -> bool {
         self.config.get().email.enabled
     }
 
-    /// This server's public URL, for links and prose in a body.
     pub fn site_url(&self) -> String {
         self.config.get().server.site_url.clone()
     }
@@ -201,27 +166,20 @@ impl Mailer {
         message::message_id_domain(&self.site_url())
     }
 
-    /// The default UI language, used when a recipient has no preference.
     pub fn default_language(&self) -> String {
         self.config.get().ui.default_language.clone()
     }
 
-    /// The settings in force for this process right now.
-    ///
-    /// One snapshot read: a save at `/sysadmin/settings/email/` replaces the
-    /// snapshot, so the very next delivery uses it and no cache has to be
-    /// invalidated.
+    /// The settings in force now: one snapshot read, so a save is used next delivery.
     pub fn settings(&self) -> EmailSettings {
         EmailSettings::from_config(&self.config.get())
     }
 
-    /// Whether a message could be delivered right now.
     pub fn ready(&self) -> bool {
         self.settings().ready()
     }
 
-    /// Whether this kind should be sent: the subsystem must be ready and the
-    /// kind's switch on.
+    /// Whether the subsystem is ready and the kind's switch is on.
     pub fn allows(&self, kind: MailKind) -> bool {
         let settings = self.settings();
         settings.ready() && settings.allows(kind)
@@ -229,10 +187,8 @@ impl Mailer {
 
     /// Send one message from the admin page and report the result.
     ///
-    /// The only synchronous send in the subsystem, and deliberately so: an
-    /// administrator clicking "send test" is waiting for exactly this answer.
-    /// Notifications go the other way (queued, backgrounded) because a user's
-    /// login must not wait on SMTP.
+    /// The only synchronous send: an administrator clicking "send test" waits for this
+    /// answer, while notifications are queued because a login must not wait on SMTP.
     pub async fn send_test(&self, to: &str, language: Option<&str>) -> Result<(), AppError> {
         let settings = self.settings();
         if !settings.enabled {
@@ -280,8 +236,7 @@ impl Mailer {
         if delivered {
             return Ok(());
         }
-        // Report the recorded reason rather than a generic failure: the
-        // administrator is about to go and fix it.
+        // Report the recorded reason rather than a generic failure.
         let reason = self
             .repos
             .email_message
@@ -294,9 +249,8 @@ impl Mailer {
 
     /// Queue a notification and try to deliver it in the background.
     ///
-    /// Returns immediately. Every failure path (mail disabled, the kind switched
-    /// off, an unparseable recipient, a database error) is logged and swallowed:
-    /// no notification is worth failing a sign-in over.
+    /// Returns immediately; every failure path (mail disabled, kind switched off, bad
+    /// recipient, database error) is logged and swallowed.
     pub async fn notify(
         &self,
         kind: MailKind,
@@ -319,8 +273,7 @@ impl Mailer {
         params: MailParams,
     ) -> Result<(), AppError> {
         let settings = self.settings();
-        // Cheapest checks first: while mail is off — the default — a login
-        // costs nothing at all, not even an address validation.
+        // Cheapest checks first: with mail off (the default) a login costs nothing.
         if !settings.ready() || !settings.allows(kind) {
             return Ok(());
         }
@@ -335,10 +288,8 @@ impl Mailer {
         let now = chrono::Utc::now().timestamp();
         self.queue(&settings, kind, to, user_id, language, &params, now)
             .await?;
-        // One delivery path: the outbox worker takes the row from here, so
-        // there is no second attempt racing this one for the same message. The
-        // report compiles and the message is on its way before the caller's
-        // request finishes, because the worker is already waiting.
+        // One delivery path: the outbox worker takes the row from here, so nothing
+        // races this attempt for the same message.
         self.nudge();
         Ok(())
     }
@@ -352,8 +303,7 @@ impl Mailer {
         device_name: &str,
         ip: &str,
     ) {
-        // The identifier is only for matching; the reader wants the name the
-        // client reported, falling back to the platform when it reported none.
+        // The identifier is only for matching; the reader wants the reported name.
         let device = if device_name.trim().is_empty() {
             if device_id.trim().is_empty() {
                 platform
@@ -374,10 +324,6 @@ impl Mailer {
     }
 
     /// Tell the owner that a browser they had not used signed in.
-    ///
-    /// The browser is described the same way the credentials page describes it,
-    /// so the recipient can match the message against what they see in
-    /// *Settings → Credentials*.
     pub async fn notify_new_login(&self, user_id: i32, user_agent: Option<&str>, ip: &str) {
         let browser = user_agent
             .map(crate::ui::user_agent::describe)
@@ -401,12 +347,8 @@ impl Mailer {
             .await;
     }
 
-    /// Notify an account, resolving the recipient from the user row.
-    ///
-    /// One place that decides which address and which language a notification
-    /// goes to: `users.email` is the unique login identity, and a preferred
-    /// language makes the message readable — an unset preference falls back to
-    /// the site default inside [`MailStrings::get`].
+    /// Notify an account, resolving the recipient from the user row; an unset
+    /// language falls back to the site default inside [`MailStrings::get`].
     async fn notify_for_user(&self, kind: MailKind, user_id: i32, mut params: MailParams) {
         let user = match self.repos.user.find_by_id(user_id).await {
             Ok(Some(user)) => user,
@@ -429,12 +371,8 @@ impl Mailer {
         .await;
     }
 
-    /// Send the password-reset link.
-    ///
-    /// Same shape as [`Self::notify`], but the caller has already established
-    /// that the reset flow is available, and the link is only good for this
-    /// message: it is rendered once, encrypted into the queue and never kept in
-    /// the clear — which is what the old code's dropped `reset_url` was missing.
+    /// Send the password-reset link, rendered once, encrypted into the queue and
+    /// never kept in the clear.
     pub async fn send_password_reset(
         &self,
         to: &str,
@@ -458,8 +396,7 @@ impl Mailer {
     pub async fn drain_once(&self) -> Result<queue::DrainReport, AppError> {
         let settings = self.settings();
         if !settings.ready() {
-            // Not an error: the drainer runs on a timer and mail may simply be
-            // switched off or paused at the moment.
+            // Not an error: the drainer runs on a timer and mail may simply be off.
             return Ok(queue::DrainReport::default());
         }
         let now = chrono::Utc::now().timestamp();
@@ -473,21 +410,10 @@ impl Mailer {
         .await
     }
 
-    /// Report at startup how outbound mail is configured.
-    ///
-    /// Two failures are worth a log line every time the server starts, because
-    /// both are silent from the outside:
-    ///
-    /// * password reset is enabled while mail is not — the request form accepts
-    ///   an address, answers "if that address is registered…", and never sends
-    ///   anything;
-    /// * mail is enabled but the settings cannot deliver — nothing will ever
-    ///   arrive and the queue only fills up.
-    ///
-    /// Which *source* each value came from — and whether the config file is
-    /// being superseded by a saved setting — is reported by the settings service
-    /// (`SettingsService::log_startup_diagnostics`), which is the only place
-    /// that knows.
+    /// Report at startup how outbound mail is configured. Two failures are worth a log
+    /// line every start because both are silent from outside: password reset enabled
+    /// while mail is off, and mail enabled but unable to deliver. Which *source* each
+    /// value came from is reported by `SettingsService::log_startup_diagnostics`.
     pub fn log_startup_diagnostics(&self) {
         let config = self.config.get();
         if !config.email.enabled {
@@ -541,7 +467,6 @@ impl Mailer {
         Ok(true)
     }
 
-    /// Render and queue one message, returning the row.
     async fn queue(
         &self,
         settings: &EmailSettings,
@@ -663,8 +588,8 @@ mod tests {
         assert_eq!(mailer.drain_once().await.unwrap().attempted(), 0);
     }
 
-    /// Disabled, enabled-but-incomplete, and paused are three ways to be not
-    /// ready; each has to keep the reset flow closed.
+    /// Disabled, enabled-but-incomplete and paused are three ways to be not ready;
+    /// each keeps the reset flow closed.
     #[tokio::test]
     async fn readiness_needs_the_switch_and_complete_settings() {
         let mut config = Config::default();
@@ -683,8 +608,8 @@ mod tests {
         assert!(!mailer.ready(), "paused stops delivery");
     }
 
-    /// A settings save replaces the configuration snapshot; the very next
-    /// delivery must read it. This is what removed the old 30-second cache.
+    /// A settings save replaces the configuration snapshot and the very next delivery
+    /// must read it.
     #[tokio::test]
     async fn a_settings_change_is_visible_to_the_next_delivery() {
         let (_repos, mailer, runtime) = mailer_with_handle(ready_config()).await;
@@ -728,9 +653,8 @@ mod tests {
         );
     }
 
-    /// Queueing a message wakes the outbox worker. This is what replaced the
-    /// 30-second poll: a notification is delivered when it is queued, not at the
-    /// next tick.
+    /// Queueing a message wakes the outbox worker, so a notification is delivered
+    /// when it is queued, not at the next tick.
     #[tokio::test]
     async fn queueing_a_message_wakes_the_outbox_worker() {
         let (_repos, mailer) = mailer_with(ready_config()).await;
@@ -751,8 +675,7 @@ mod tests {
             .expect("queueing a message wakes the worker");
     }
 
-    /// A nudge that arrives while nobody is waiting is remembered, so a message
-    /// queued while the worker is mid-drain is not left for the retry tick.
+    /// A nudge that arrives while nobody is waiting is remembered.
     #[tokio::test]
     async fn a_nudge_is_not_lost_while_the_worker_is_busy() {
         let (_repos, mailer) = mailer_with(ready_config()).await;
@@ -798,8 +721,8 @@ mod tests {
         );
     }
 
-    /// A queued notification that cannot be delivered lands in the table as a
-    /// failed row with the reason, and its body is still encrypted.
+    /// A queued notification that cannot be delivered lands in the table as a failed
+    /// row with the reason, its body still encrypted.
     #[tokio::test]
     async fn an_undeliverable_notification_leaves_an_auditable_row() {
         let (repos, mailer) = mailer_with(ready_config()).await;
@@ -823,8 +746,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Two drains with an explicit clock: the first retries with a backoff,
-        // the second (after that backoff) is the last attempt allowed.
+        // Two drains with an explicit clock: the first retries with a backoff, the
+        // second is the last attempt allowed.
         let settings = mailer.settings();
         let cipher = TokenCipher::from_master_key(b"test-secret");
         let start = chrono::Utc::now().timestamp();

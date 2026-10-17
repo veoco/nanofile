@@ -12,11 +12,8 @@ use base::error::AppError;
 
 /// GET /seafhttp/repo/{repo_id}/quota-check/?delta={delta}
 ///
-/// Called by seaf-daemon at the start of every upload to check whether the
-/// upload would exceed the server's quota. Real seafile-server returns:
-/// - 200 OK (quota allows the delta)
-/// - 400 Bad Request (invalid delta parameter)
-/// - 443 No Quota (quota exceeded)
+/// Called by seaf-daemon before every upload. Real seafile-server answers 200 (the
+/// delta fits), 400 (invalid delta) or 443 (no quota).
 pub fn quota_routes() -> Router<Arc<AppState>> {
     Router::new().route("/{repo_id}/quota-check/", axum::routing::get(check_quota))
 }
@@ -49,7 +46,6 @@ async fn check_quota(
         .parse::<i64>()
         .map_err(|_| AppError::BadRequest("Invalid delta parameter.".into()))?;
 
-    // Look up the repo owner to check their quota.
     let repo_record = state
         .repos
         .repo

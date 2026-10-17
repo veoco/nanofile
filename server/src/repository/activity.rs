@@ -46,7 +46,6 @@ impl DbActivityRepository {
     }
 }
 
-/// Apply the `op_user` and single-repo filters to a query.
 fn apply_extra_filters(
     mut query: sea_orm::Select<activity::Entity>,
     user_id: Option<i32>,
@@ -72,17 +71,13 @@ impl ActivityRepository for DbActivityRepository {
         limit: u64,
         direct_user_id: Option<i32>,
     ) -> Result<Vec<activity::Model>, AppError> {
-        // The original access control was `(repo_id IN accessible) OR
-        // (user_id = requesting user)`. SQLite's OR optimization can't merge
-        // two different indexes (repo_id vs user_id), so it fell back to a
-        // full table scan. Split it into two index-friendly, disjoint branches:
-        //   A: repo_id IN (accessible)         → idx_activities_repo_created
-        //   B: user_id = requester AND repo_id NOT IN (accessible)
-        //                                        → idx_activities_user_created
-        // Branch B's NOT IN makes A and B disjoint (each row has one repo_id),
-        // so results can be merged without dedup.
+        // The original access control was `(repo_id IN accessible) OR (user_id = requester)`, which
+        // SQLite cannot serve from two different indexes, so it fell back to a full table scan.
+        // Split it into two index-friendly, disjoint branches:
+        //   A: repo_id IN (accessible) -> idx_activities_repo_created
+        //   B: user_id = requester AND repo_id NOT IN (accessible) -> idx_activities_user_created
+        // Branch B's NOT IN makes A and B disjoint (each row has one repo_id), so no dedup is needed.
         if repo_ids.is_empty() && direct_user_id.is_none() {
-            // No access condition — match everything (current behavior).
             let query = apply_extra_filters(activity::Entity::find(), user_id, repo_id);
             return Ok(query
                 .order_by_desc(activity::Column::CreatedAt)
@@ -92,10 +87,9 @@ impl ActivityRepository for DbActivityRepository {
                 .await?);
         }
 
-        // Each branch fetches the top (offset+limit) by created_at; merging the
-        // branches by created_at and slicing the page is correct because any
-        // row in the global top (offset+limit) is within its own branch's top
-        // (offset+limit).
+        // Each branch fetches the top (offset+limit) by created_at; merging by created_at and
+        // slicing the page is correct because any row in the global top (offset+limit) is within
+        // its own branch's top (offset+limit).
         let need = offset.saturating_add(limit);
         let mut merged: Vec<activity::Model> = Vec::new();
 
@@ -131,7 +125,6 @@ impl ActivityRepository for DbActivityRepository {
             );
         }
 
-        // Merge-sort by created_at desc, then slice the requested page.
         merged.sort_by_key(|m| std::cmp::Reverse(m.created_at));
         Ok(merged
             .into_iter()
@@ -152,8 +145,8 @@ impl ActivityRepository for DbActivityRepository {
             return Ok(query.count(self.db.as_ref()).await?);
         }
 
-        // Disjoint branches (repo_id IN vs user_id = requester AND repo_id NOT
-        // IN), so the total is the sum of the two indexed counts.
+        // Disjoint branches (repo_id IN vs user_id = requester AND repo_id NOT IN), so the total is
+        // the sum of the two indexed counts.
         let mut total = 0u64;
         if !repo_ids.is_empty() {
             for chunk in repo_ids.chunks(IN_BATCH) {

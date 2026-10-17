@@ -9,7 +9,6 @@ use base::error::AppError;
 use infra::entity::file_tag;
 use infra::entity::repo_tag;
 
-/// A tag attached to a file, with the tag's display details joined in.
 #[derive(Clone, Debug)]
 pub struct TagOnPath {
     pub file_path: String,
@@ -26,8 +25,7 @@ pub trait FileTagRepository: Send + Sync {
         repo_id: &str,
         file_path: &str,
     ) -> Result<Vec<file_tag::Model>, AppError>;
-    /// Files carrying a tag, in stable id order. `start`/`limit` push
-    /// pagination down to SQL; `None` returns everything (default).
+    /// Files carrying a tag, in stable id order; `start`/`limit` push pagination down to SQL.
     async fn find_by_repo_and_tag_id(
         &self,
         repo_id: &str,
@@ -36,14 +34,12 @@ pub trait FileTagRepository: Send + Sync {
         limit: Option<usize>,
     ) -> Result<Vec<file_tag::Model>, AppError>;
     async fn delete_by_id(&self, id: i32) -> Result<(), AppError>;
-    /// Replace the tags of a single file path with the given set.
     async fn set_for_path(
         &self,
         repo_id: &str,
         file_path: &str,
         tag_ids: &[i32],
     ) -> Result<(), AppError>;
-    /// Replace the tags of several file paths in one batched write.
     async fn set_for_paths(
         &self,
         repo_id: &str,
@@ -58,7 +54,6 @@ pub trait FileTagRepository: Send + Sync {
         new_path: &str,
         repo_id: &str,
     ) -> Result<(), AppError>;
-    /// Batch fetch tag details for the given paths (used by the file browser).
     async fn find_tag_details_by_paths(
         &self,
         repo_id: &str,
@@ -138,8 +133,8 @@ impl FileTagRepository for DbFileTagRepository {
             .exec(db)
             .await?;
 
-        // Dedupe ids: callers may pass duplicates, which would otherwise create
-        // duplicate rows (file_tags has no unique constraint).
+        // Dedupe ids: duplicates would otherwise create duplicate rows (file_tags has no unique
+        // constraint).
         let unique: std::collections::HashSet<i32> = tag_ids.iter().copied().collect();
         if unique.is_empty() {
             return Ok(());
@@ -170,8 +165,8 @@ impl FileTagRepository for DbFileTagRepository {
         }
         let db = self.db.as_ref();
 
-        // Delete existing rows for all paths in one batched DELETE (chunked to
-        // stay under SQLite's variable limit).
+        // Delete existing rows for all paths in one batched DELETE, chunked under SQLite's
+        // variable limit.
         const IN_BATCH: usize = 500;
         let paths: Vec<&str> = entries.iter().map(|(p, _)| p.as_str()).collect();
         for chunk in paths.chunks(IN_BATCH) {
@@ -182,7 +177,6 @@ impl FileTagRepository for DbFileTagRepository {
                 .await?;
         }
 
-        // Expand and dedupe (file_path, tag_id) pairs, then insert once.
         let mut seen: std::collections::HashSet<(String, i32)> = std::collections::HashSet::new();
         let now = chrono::Utc::now().timestamp();
         let mut models: Vec<file_tag::ActiveModel> = Vec::new();

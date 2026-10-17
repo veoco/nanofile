@@ -3,7 +3,6 @@ use std::sync::Arc;
 use crate::repository::Repositories;
 use base::error::AppError;
 
-/// Information about a user for the admin user management page.
 #[derive(serde::Serialize)]
 pub struct UserAdminInfo {
     pub id: i32,
@@ -16,7 +15,6 @@ pub struct UserAdminInfo {
     pub last_login_at: Option<i64>,
 }
 
-/// Service for admin user management operations.
 pub struct AdminUserService {
     repos: Arc<Repositories>,
 }
@@ -26,7 +24,6 @@ impl AdminUserService {
         Self { repos }
     }
 
-    /// List all users with their storage usage.
     pub async fn list_users(&self) -> Result<Vec<UserAdminInfo>, AppError> {
         let users = self.repos.user.find_all().await?;
 
@@ -58,7 +55,6 @@ impl AdminUserService {
         Ok(result)
     }
 
-    /// Compute the total storage used by a user (sum of owned repo sizes).
     pub async fn compute_usage(&self, user_id: i32) -> Result<i64, AppError> {
         self.repos.compute_user_usage(user_id).await
     }
@@ -82,7 +78,6 @@ impl AdminUserService {
         Ok(())
     }
 
-    /// Update a user's admin status, active status, and storage quota.
     pub async fn update_user(
         &self,
         user_id: i32,
@@ -96,16 +91,13 @@ impl AdminUserService {
             .user
             .update_storage_quota(user_id, storage_quota)
             .await?;
-        // Deactivating an account must revoke the anonymous links it created
-        // immediately, not after the creator-access cache expires.
+        // Deactivating an account must revoke the anonymous links it created immediately.
         crate::service::sharing::share::invalidate_link_creator_cache(user_id, None);
         Ok(())
     }
 
-    /// Delete a user by ID.
     pub async fn delete_user(&self, user_id: i32) -> Result<(), AppError> {
-        // Drop any cached link-authorization decisions for this account before
-        // its rows disappear.
+        // Drop cached link-authorization decisions before this account's rows disappear.
         crate::service::sharing::share::invalidate_link_creator_cache(user_id, None);
         self.repos.user.delete_user(user_id).await?;
         Ok(())

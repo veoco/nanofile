@@ -1,23 +1,16 @@
 //! Deciding whether an event is *new* enough to notify about.
 //!
-//! Both predicates answer the same product question — "would the owner be
-//! surprised by this?" — and both are deliberately conservative: when the
-//! available evidence cannot tell one device/browser from another, nothing is
-//! sent. A missed notification is a nuisance; a notification for every login
-//! trains the owner to ignore them.
-//!
-//! The predicates take the account's existing sessions as a slice rather than
-//! querying, so they are pure and testable, and so the caller can skip loading
-//! them entirely when notifications are off.
+//! Both predicates are deliberately conservative: when the evidence cannot tell one device/browser
+//! from another, nothing is sent — a missed notification is a nuisance, one per login trains the
+//! owner to ignore them. They take the account's sessions as a slice, so they stay pure and testable.
 
 use infra::entity::api_token;
 
 use crate::domain::session_source::SessionSource;
 use crate::ui::user_agent;
 
-/// The source of a stored session, treating an unrecognised value as a browser
-/// session — the same safe direction the credential inventory takes, because a
-/// browser session is the common case and the two checks never overlap.
+/// A stored session's source; an unrecognised value counts as a browser session — the safe
+/// direction, since a browser session is the common case and the two checks never overlap.
 fn source_of(row: &api_token::Model) -> SessionSource {
     SessionSource::from_id(&row.source).unwrap_or(SessionSource::Web)
 }
@@ -26,13 +19,11 @@ fn trimmed(value: Option<&str>) -> &str {
     value.unwrap_or("").trim()
 }
 
-/// Whether this client device has never signed in before.
+/// Whether this client device has never signed in before, matched on `(platform, device_id)` — the
+/// same pair the credentials page groups sessions by.
 ///
-/// A device is identified by the `(platform, device_id)` pair the client
-/// reports, which is also how the credentials page groups sessions. Either
-/// field missing means the client did not identify itself, and an unidentified
-/// client is not evidence of a new device — the desktop client's "view on
-/// website" handoff and every older client that sends no device info land here.
+/// A missing field means the client did not identify itself, and an unidentified client is not
+/// evidence of a new device: the desktop "view on website" handoff and older clients land here.
 pub fn is_new_device(prior: &[api_token::Model], platform: &str, device_id: &str) -> bool {
     let platform = platform.trim();
     let device_id = device_id.trim();
@@ -47,15 +38,12 @@ pub fn is_new_device(prior: &[api_token::Model], platform: &str, device_id: &str
 
 /// Whether this browser has never signed in before.
 ///
-/// The comparison uses the same human-readable label the credentials page shows
-/// (`user_agent::describe`), not the raw header: a browser update changes the
-/// raw string on nearly every release, and notifying on that would be spam.
-/// Only browser sessions are considered — a client's stored `User-Agent` is its
-/// HTTP library, which says nothing about which browser signed in.
+/// Compares the human-readable label the credentials page shows (`user_agent::describe`), not the raw
+/// header: a browser update changes that string on nearly every release, and notifying on it would be
+/// spam. Only browser sessions count — a client's `User-Agent` is its HTTP library.
 pub fn is_new_browser(prior: &[api_token::Model], current_agent: Option<&str>) -> bool {
     let Some(current_agent) = current_agent.filter(|value| !value.trim().is_empty()) else {
-        // No `User-Agent` at all: every session would look alike, so there is
-        // no way to tell "new" from "the same as before".
+        // No `User-Agent` at all: every session would look alike, so "new" is undecidable.
         return false;
     };
     let current = user_agent::describe(current_agent);
@@ -126,7 +114,6 @@ mod tests {
     #[test]
     fn a_browser_is_new_only_the_first_time() {
         let prior = vec![session(SessionSource::Web, None, None, Some(FIREFOX))];
-        // The same browser label, even from a newer release, is not "new".
         let newer = FIREFOX.replace("129.0", "131.0");
         assert!(!is_new_browser(&prior, Some(&newer)));
         assert!(is_new_browser(&prior, Some(CHROME)));
@@ -135,8 +122,7 @@ mod tests {
 
     #[test]
     fn a_client_session_never_makes_a_browser_look_known() {
-        // A client stores its HTTP library's agent, which must not be mistaken
-        // for a browser fingerprint.
+        // A client stores its HTTP library's agent; it must not pass for a browser fingerprint.
         let prior = vec![session(
             SessionSource::Client,
             Some("linux"),
@@ -156,8 +142,7 @@ mod tests {
 
     #[test]
     fn the_client_login_handoff_counts_as_a_browser_session() {
-        // It sets the session cookie from a real browser, so its agent really
-        // does describe one.
+        // It sets the session cookie from a real browser, so its agent does describe one.
         let prior = vec![session(
             SessionSource::WebClientLogin,
             None,

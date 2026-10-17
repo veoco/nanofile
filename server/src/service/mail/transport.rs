@@ -1,10 +1,7 @@
-//! The SMTP transport: how a rendered message actually leaves the process.
-//!
-//! Split from [`super::message`] so the message builder can be tested without a
-//! socket, and so the one place that decides TLS/authentication is small enough
-//! to read in full. Certificate validation is always on: there is deliberately
-//! no "accept any certificate" switch, because a mail server that hands a reset
-//! link to a man in the middle is worse than one that refuses to send.
+//! The SMTP transport: how a rendered message actually leaves the process, split from
+//! [`super::message`] so the builder can be tested without a socket. Certificate validation is always
+//! on — there is deliberately no "accept any certificate" switch, because a mail server that hands a
+//! reset link to a man in the middle is worse than one that refuses to send.
 
 use std::time::Duration;
 
@@ -19,12 +16,9 @@ use lettre::transport::smtp::extension::ClientId;
 use super::MailError;
 use super::settings::{EmailSettings, TlsMode};
 
-/// A transport bound to one snapshot of the settings.
-///
-/// Rebuilt per attempt rather than cached: a connection pool would keep working
-/// after the administrator changed the host, and `lettre`'s pool feature is off
-/// for that reason. One connection per attempt is exactly the volume a
-/// notification system produces.
+/// A transport bound to one snapshot of the settings, rebuilt per attempt rather than cached: a
+/// connection pool would keep working after the administrator changed the host, and `lettre`'s pool
+/// feature is off for that reason. One connection per attempt is the volume a notifier produces.
 pub struct MailTransport {
     inner: AsyncSmtpTransport<Tokio1Executor>,
     timeout: Duration,
@@ -33,10 +27,8 @@ pub struct MailTransport {
 impl MailTransport {
     /// Build a transport for these settings.
     ///
-    /// `hello_name` is the domain announced in `EHLO`; it cannot come from the
-    /// machine's hostname because the `hostname` feature is off, and the site
-    /// URL is a better answer anyway (a container's hostname means nothing to
-    /// the relay).
+    /// `hello_name` is the domain announced in `EHLO`; it cannot come from the machine's hostname
+    /// because the `hostname` feature is off, and a container's hostname means nothing to the relay.
     pub fn new(settings: &EmailSettings, hello_name: &str) -> Result<Self, MailError> {
         let host = settings.host.trim();
         if host.is_empty() {
@@ -74,9 +66,8 @@ impl MailTransport {
 
     /// Send raw RFC 5322 bytes to one recipient.
     ///
-    /// The envelope is derived from the settings and the recipient rather than
-    /// from the message headers, so a `Bcc`-like header injected into a body
-    /// cannot add recipients.
+    /// The envelope comes from the settings and the recipient, not the message headers, so a `Bcc`-like
+    /// header injected into a body cannot add recipients.
     pub async fn send_raw(&self, from: &str, to: &str, raw: Vec<u8>) -> Result<(), MailError> {
         let from_address: Address = from
             .trim()
@@ -89,9 +80,8 @@ impl MailTransport {
         let envelope = Envelope::new(Some(from_address), vec![to_address])
             .map_err(|e| MailError::new(format!("invalid envelope: {e}")))?;
 
-        // The builder's own timeout covers the socket; this outer bound also
-        // covers a server that accepts the connection and then stalls during
-        // the conversation, so a login request can never wait forever on mail.
+        // The builder's own timeout covers the socket; this outer bound also covers a server that
+        // accepts the connection and then stalls, so a login request can never wait forever on mail.
         let send = self.inner.send_raw(&envelope, &raw);
         match tokio::time::timeout(self.timeout, send).await {
             Ok(Ok(_)) => Ok(()),
@@ -121,11 +111,8 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::{TcpListener, TcpStream};
 
-    /// A scripted SMTP server good enough for one delivery.
-    ///
-    /// Written by hand rather than pulled from a crate so the test can assert on
-    /// exactly what the client sent — including whether it tried to authenticate
-    /// or upgrade to TLS — without a network or a fixture binary.
+    /// A scripted SMTP server good enough for one delivery, hand-written so the test can assert on
+    /// exactly what the client sent — including whether it tried to authenticate or upgrade to TLS.
     struct SmtpStub {
         port: u16,
         received: Arc<Mutex<Vec<String>>>,
@@ -157,7 +144,6 @@ mod tests {
             self.received.lock().unwrap().clone()
         }
 
-        /// Everything between `DATA` and the terminating dot.
         fn data(&self) -> String {
             self.commands()
                 .iter()
@@ -229,9 +215,8 @@ mod tests {
         }
     }
 
-    /// The client must not talk TLS or authenticate on its own initiative: a
-    /// server that advertises neither must still receive the message, and no
-    /// credentials may be volunteered.
+    /// The client must not talk TLS or authenticate on its own initiative: a server that advertises
+    /// neither must still receive the message, and no credentials may be volunteered.
     #[tokio::test]
     async fn delivers_a_message_and_never_upgrades_on_its_own() {
         let stub = SmtpStub::start("250 OK").await;
@@ -314,7 +299,6 @@ mod tests {
 
     #[tokio::test]
     async fn an_unreachable_server_fails_instead_of_hanging() {
-        // Port 1 is not listening, and the settings bound the attempt.
         let mut settings = plaintext_settings(1);
         settings.timeout_secs = 2;
         let transport = MailTransport::new(&settings, "localhost").expect("transport");

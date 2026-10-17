@@ -1,24 +1,14 @@
 //! In-memory TTL cache decorators for token lookups.
 //!
-//! The sync protocol issues many small authenticated requests (check-blocks,
-//! get-block, fs-id-list, …). Every one of those requests looked up the token
-//! in the DB, adding a per-request round-trip + SQLite lock wait on the hottest
-//! path. These decorators cache `find_by_token` results keyed by the raw token
-//! string so the hot path short-circuits to memory.
+//! Each authenticated sync request would otherwise pay a DB lookup plus SQLite lock wait; these
+//! decorators cache `find_by_token` by raw token so the hot path short-circuits to memory.
 //!
-//! # Correctness / security
-//!
-//! - TTL (5 min) bounds staleness.
-//! - A cached entry whose `expires_at` has passed is evicted on read.
-//! - Any `create`/`delete*` clears the whole cache (rare operations), so a
-//!   regenerated or revoked token takes effect immediately.
-//! - `attach_peer_if_unset`/`touch_peer` do **not** clear the cache: they run on
-//!   the sync path and only touch peer fields that the auth layer never reads
-//!   from the cached model. Which request wins an attribution is decided by the
-//!   conditional UPDATE against the database, never by a cached value.
-//! - The auth layer still checks user existence + `is_active` against the DB on
-//!   every request, so a stale cached token cannot authenticate a deleted or
-//!   deactivated account (defense in depth).
+//! Correctness and security: the TTL (5 min) bounds staleness and an entry past its `expires_at`
+//! is evicted on read; any `create`/`delete*` clears the whole cache so a regenerated or revoked
+//! token takes effect immediately; `attach_peer_if_unset`/`touch_peer` deliberately do not clear
+//! it, because the auth layer never reads peer fields from the cached model and the conditional
+//! UPDATE decides attribution; and the auth layer still checks user existence plus `is_active`
+//! against the DB on every request, so a stale token cannot authenticate a deleted account.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -37,7 +27,6 @@ use super::api_key::{
 use super::api_token::{ApiTokenRepository, CreateSessionTokenParams};
 use super::sync_token::SyncTokenRepository;
 
-/// How long a cached `find_by_token` result is considered fresh.
 const TOKEN_CACHE_TTL: Duration = Duration::from_secs(300);
 
 struct CachedEntry<T> {
@@ -45,7 +34,6 @@ struct CachedEntry<T> {
     cached_at: Instant,
 }
 
-/// A small TTL key-value cache with eviction on read for stale entries.
 struct TokenCache<T> {
     entries: Mutex<HashMap<String, CachedEntry<T>>>,
     ttl: Duration,
@@ -59,9 +47,7 @@ impl<T: Clone> TokenCache<T> {
         }
     }
 
-    /// Return a fresh cached value for `key`, or `None` if absent/expired.
-    /// `is_valid` lets the caller add value-specific validity (e.g. token
-    /// expiry); a value failing it is evicted.
+    /// Fresh cached value for `key`, or `None`; a value failing `is_valid` is evicted.
     fn get(&self, key: &str, is_valid: impl Fn(&T) -> bool) -> Option<T> {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let entry = entries.get(key)?;
@@ -165,7 +151,6 @@ impl SyncTokenRepository for CachingSyncTokenRepository {
             .inner
             .create(repo_id, user_id, token, peer, now, expires_at)
             .await;
-        // A regenerated token may shadow a cached one for the same device.
         self.cache.clear();
         result
     }
@@ -189,15 +174,13 @@ impl SyncTokenRepository for CachingSyncTokenRepository {
     }
 
     async fn list_for_user(&self, user_id: i32) -> Result<Vec<sync_token::Model>, AppError> {
-        // Not cached: an enumeration goes straight to the database, and the
-        // cache holds per-credential lookups rather than lists.
+        // Not cached: the cache holds per-credential lookups rather than lists.
         self.inner.list_for_user(user_id).await
     }
 
     async fn delete_by_id_and_user(&self, id: i32, user_id: i32) -> Result<u64, AppError> {
         let result = self.inner.delete_by_id_and_user(id, user_id).await;
-        // Clearing here is what makes the revocation bite immediately rather
-        // than after the cache TTL.
+        // Clearing now makes the revocation bite immediately rather than after the cache TTL.
         self.cache.clear();
         result
     }
@@ -210,8 +193,6 @@ impl SyncTokenRepository for CachingSyncTokenRepository {
 
     async fn delete_by_repo_and_user(&self, repo_id: &str, user_id: i32) -> Result<u64, AppError> {
         let result = self.inner.delete_by_repo_and_user(repo_id, user_id).await;
-        // Clearing here is what makes a revocation bite immediately rather than
-        // after the cache TTL.
         self.cache.clear();
         result
     }
@@ -223,9 +204,8 @@ impl SyncTokenRepository for CachingSyncTokenRepository {
     }
 
     async fn attach_peer_if_unset(&self, id: i32, peer: &PeerStamp) -> Result<bool, AppError> {
-        // Deliberately does not clear the cache: peer info is not consulted by
-        // authentication, and this runs on the first sync of every token. The
-        // conditional UPDATE is what decides who wins, never a cached value.
+        // Deliberately does not clear the cache: peer info is not consulted by authentication
+        // and this runs on the first sync of every token. The conditional UPDATE decides who wins.
         self.inner.attach_peer_if_unset(id, peer).await
     }
 
@@ -236,8 +216,7 @@ impl SyncTokenRepository for CachingSyncTokenRepository {
         client_version: Option<String>,
         last_sync_time: i64,
     ) -> Result<(), AppError> {
-        // Same reason as `attach_peer_if_unset`: a cached row's peer columns do
-        // not affect any authorization decision.
+        // Same reason as `attach_peer_if_unset`: peer columns do not affect authorization.
         self.inner
             .touch_peer(id, peer_ip, client_version, last_sync_time)
             .await
@@ -395,16 +374,11 @@ impl ApiTokenRepository for CachingApiTokenRepository {
 
 /// Cache decorator for unified API-key lookups.
 ///
-/// A key authenticates every request its client makes, including the many small
-/// `/seafhttp/` calls, so the key row and its library bindings are cached as one
-/// value. Any mutation clears the whole cache, so a revoked, edited or rebound
-/// key takes effect immediately; `touch_last_used` deliberately does not, since
-/// the auth path never reads `last_used_at` from the cached value.
-///
-/// Binding changes made through another `Repositories` handle (a second server
-/// on the same database) are not observed until the TTL expires; the auth layer
-/// still re-checks user state and library membership against the database on
-/// every request, which is what actually revokes access.
+/// The key row and its library bindings are cached as one value; any mutation clears the cache so
+/// a revoked, edited or rebound key takes effect immediately, while `touch_last_used` does not
+/// because the auth path never reads `last_used_at` from the cached value. Binding changes via
+/// another `Repositories` handle are not observed until the TTL expires, but the auth layer
+/// re-checks user state and library membership against the DB on every request.
 pub struct CachingApiKeyRepository {
     inner: Arc<dyn ApiKeyRepository>,
     cache: TokenCache<ApiKeyLookup>,
@@ -453,7 +427,6 @@ impl ApiKeyRepository for CachingApiKeyRepository {
 
     async fn create(&self, params: CreateApiKeyParams) -> Result<api_key::Model, AppError> {
         let result = self.inner.create(params).await;
-        // A newly issued key must be usable immediately.
         self.cache.clear();
         result
     }
@@ -465,7 +438,6 @@ impl ApiKeyRepository for CachingApiKeyRepository {
         params: UpdateApiKeyParams,
     ) -> Result<bool, AppError> {
         let result = self.inner.update_metadata(key_id, user_id, params).await;
-        // New capabilities, expiry or library scope must apply at once.
         self.cache.clear();
         result
     }
@@ -479,7 +451,6 @@ impl ApiKeyRepository for CachingApiKeyRepository {
 
     async fn delete_by_id(&self, key_id: i32) -> Result<bool, AppError> {
         let result = self.inner.delete_by_id(key_id).await;
-        // A revoked key must stop authenticating immediately.
         self.cache.clear();
         result
     }
@@ -550,8 +521,7 @@ mod tests {
 
     use super::*;
 
-    /// Minimal in-memory `SyncTokenRepository` recording how many times the
-    /// DB-backed `find_by_token` was called.
+    /// In-memory `SyncTokenRepository` that counts DB-backed `find_by_token` calls.
     struct MockSyncTokenRepo {
         db_calls: Arc<AtomicUsize>,
     }
@@ -705,11 +675,9 @@ mod tests {
             db_calls: db_calls.clone(),
         }));
 
-        // Warm the cache.
         repo.find_by_token("tok-1").await.unwrap().unwrap();
         assert_eq!(db_calls.load(Ordering::SeqCst), 1);
 
-        // Deleting the token invalidates the cached entry → next lookup goes to DB.
         repo.delete_by_token("tok-1").await.unwrap();
         repo.find_by_token("tok-1").await.unwrap().unwrap();
         assert_eq!(
@@ -718,7 +686,6 @@ mod tests {
             "delete must clear the cache"
         );
 
-        // Same for create (a regenerated token shadows any stale cached one).
         repo.create("repo-1", 7, "tok-2".to_string(), None, 0, None)
             .await
             .unwrap();

@@ -12,8 +12,7 @@ use crate::service::repo::service::RepoCrypto;
 use base::common::EMPTY_SHA1;
 use base::error::AppError;
 
-/// A commit is a small JSON document (commit id, root/parent ids, message);
-/// a few KB in practice. Cap the request to avoid unbounded buffering.
+/// A commit is a small JSON document (a few KB); this caps the request buffer.
 const MAX_COMMIT_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Serialize)]
@@ -46,19 +45,16 @@ pub async fn get_head_commit(
 ) -> Result<Json<HeadCommitResponse>, AppError> {
     let svc = state.sync_service();
 
-    // Upstream `get_head_commit_cb()` checks that the library still exists
-    // *before* anything else and answers 444 (SEAF_HTTP_RES_REPO_DELETED) when
-    // it is gone, not 404. The desktop client turns 444 into
-    // SYNC_ERROR_ID_SERVER_REPO_DELETED and offers to remove the local copy
-    // (`sync-mgr.c: on_repo_deleted_on_server`), while 404 only becomes a
-    // generic server error that it retries forever.
+    // Upstream `get_head_commit_cb()` answers 444 (SEAF_HTTP_RES_REPO_DELETED) for a
+    // deleted library, not 404: the desktop client turns 444 into
+    // SYNC_ERROR_ID_SERVER_REPO_DELETED and offers to drop the local copy
+    // (`sync-mgr.c: on_repo_deleted_on_server`), while 404 is retried forever.
     let repo_model = svc
         .find_repo(&repo_id)
         .await?
         .ok_or(AppError::RepoDeleted)?;
 
-    // Defense in depth: `SyncAuth` also binds the token to the URL repo (see
-    // `fs_id_list` in `sync/fs.rs`).
+    // Defense in depth: `SyncAuth` also binds the token to the URL repo.
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         &repo_id,
@@ -81,9 +77,7 @@ pub async fn get_commit(
     auth: SyncAuth,
     Path((repo_id, commit_id)): Path<(String, String)>,
 ) -> Result<Vec<u8>, AppError> {
-    // Membership check (see `get_head_commit`). The commit body carries repo
-    // metadata (name, description, creator), so it must not be readable
-    // cross-repo.
+    // Membership check: the commit body carries repo metadata, so no cross-repo reads.
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         &repo_id,
@@ -97,14 +91,12 @@ pub async fn get_commit(
         .await?
         .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
-    // `seaf_commit_to_data()` only writes the encryption block for an
-    // encrypted library; inside it `magic` is written only when the library has
-    // no `pwd_hash`, `key` for `enc_version >= 2` and `salt` for
-    // `enc_version >= 3`. None of that is optional: an official client's
-    // `commit_from_json_object()` returns NULL when `enc_version` is 3/4 and
-    // `salt` is missing, and `clone-mgr.c` verifies the password against
-    // `pwd_hash` whenever `pwd_hash_algo` is present. `RepoCrypto` owns those
-    // rules so the create/list/download-info paths cannot drift from this one.
+    // `seaf_commit_to_data()` writes the encryption block only for an encrypted
+    // library, and inside it `magic` only without `pwd_hash`, `key` only for
+    // `enc_version >= 2` and `salt` only for `enc_version >= 3`. None is optional: a
+    // client returns NULL from `commit_from_json_object()` when `enc_version` is 3/4
+    // and `salt` is missing, and `clone-mgr.c` verifies `pwd_hash` when the algorithm
+    // is present. `RepoCrypto` owns those rules so no path can drift.
     let crypto = RepoCrypto::from_model(&repo_model);
     let encrypted = crypto.encrypted;
 
@@ -173,9 +165,8 @@ pub async fn get_commit(
         pwd_hash_algo: crypto.pwd_hash_algo,
         pwd_hash_params: crypto.pwd_hash_params,
         version: commit_model.version as i32,
-        // Both flags are written as the integer 1, never as `true`: the clients
-        // read them with `json_object_get_int_member()` →
-        // `json_integer_value()`, which returns 0 for a JSON boolean.
+        // Both flags are written as the integer 1, never `true`: clients read them with
+        // `json_object_get_int_member()`, which returns 0 for a JSON boolean.
         conflict: commit_model.conflict.map(i32::from),
         new_merge: commit_model.new_merge.map(i32::from),
     };
@@ -190,8 +181,7 @@ pub async fn put_commit(
     Path((repo_id, _commit_id)): Path<(String, String)>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
-    // Writing commit objects mutates the repo's object store; a read-only
-    // member must not be able to inject data. Checked before the body is read.
+    // A read-only member must not inject commit objects; checked before the body is read.
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
         &repo_id,
@@ -248,11 +238,10 @@ pub async fn update_branch(
         .update_branch(&repo_id, new_head, _auth.user_id, &commit_desc)
         .await?;
 
-    // The blocks and FS objects this client uploaded are now referenced by the
-    // new head, so drop its uncommitted-block reservation for the repo. Blocks
-    // it uploaded but never committed are left to GC — the reservation was what
-    // bounded the write loop, and holding it after a commit would double-count
-    // the bytes that are now part of the repo's size.
+    // The blocks and FS objects this client uploaded are now referenced by the new
+    // head, so drop its uncommitted-block reservation for the repo; blocks uploaded
+    // but never committed are left to GC, and holding the reservation after a commit
+    // would double-count bytes that are now part of the repo's size.
     crate::service::fs::quota::release_repo_reservation(&state.repos, _auth.user_id, &repo_id);
     // The commit changed the repo's size, so the cached per-user usage snapshot
     // must not be reused by the next quota check.

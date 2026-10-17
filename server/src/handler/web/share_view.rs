@@ -23,14 +23,9 @@ use infra::entity::share_link;
 
 /// Resolve a client-supplied sub-path against a share link's root path.
 ///
-/// `safe_join_path` alone only clamps `..` to the **repo** root, so `?p=../../`
-/// could climb above the shared directory. This additionally requires the
-/// resolved path to stay inside the shared subtree (delegating the whole repo
-/// link, whose root is `/`, keeps every path inside).
-///
-/// Every share handler that turns client input into a repo path must go through
-/// this function — resolving via ad-hoc string concatenation is what allowed a
-/// `..` dirent to escape a directory share.
+/// `safe_join_path` only clamps `..` to the **repo** root, so this additionally
+/// requires the result to stay inside the shared subtree; every share handler
+/// that turns client input into a repo path must go through here.
 fn resolve_share_subpath(link: &share_link::Model, requested: &str) -> Result<String, AppError> {
     let resolved = base::sanitize::safe_join_path(&link.path, requested)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
@@ -47,8 +42,6 @@ fn resolve_share_subpath(link: &share_link::Model, requested: &str) -> Result<St
     Ok(resolved)
 }
 
-// ── Templates ─────────────────────────────────────────────────────────────
-
 #[derive(Template)]
 #[template(path = "web/share_view.html")]
 struct ShareViewTemplate {
@@ -64,8 +57,7 @@ struct ShareViewTemplate {
     pub description: Option<String>,
 }
 
-/// The link password gate, shared by the file, folder and upload-link handlers
-/// — one definition, so the three cannot drift.
+/// The link password gate, shared by the file, folder and upload-link handlers.
 #[allow(dead_code)]
 #[derive(Template)]
 #[template(path = "web/share_access_validation.html")]
@@ -77,17 +69,13 @@ pub struct ShareAccessValidationTemplate {
     pub form_action: String,
 }
 
-/// The gate's error value: the localized message when a password was actually
-/// supplied, `None` for the plain first render of the form (a request that
-/// carries no password is not a failure).
+/// The gate's error value: the localized message when a password was supplied,
+/// `None` on the plain first render (no password is not a failure).
 pub(crate) fn wrong_password_error(provided_pwd: Option<&str>, t: &'static I18n) -> Option<String> {
     provided_pwd.map(|_| t.tr("pub.incorrect_password").to_string())
 }
 
-// ── Handler helpers ───────────────────────────────────────────────────────
-
-/// Rate-limit anonymous share-link downloads per client IP (these endpoints
-/// are reachable with just the share token and no login).
+/// Rate-limit anonymous share-link downloads per client IP.
 fn check_share_download_rate(
     state: &Arc<AppState>,
     addr: &SocketAddr,
@@ -107,13 +95,11 @@ fn check_share_download_rate(
 }
 
 /// Rate-limit failed share-link password attempts, keyed by the link token
-/// rather than client IP. The IP-based limiter (in the POST handler) can be
-/// bypassed by spreading attempts across many IPs; a per-token cap stops a
-/// distributed brute force against a single link.
+/// rather than client IP: an IP-based limiter is bypassed by spreading attempts
+/// across many addresses, while a per-token cap bounds brute force per link.
 ///
-/// Every password-protected entry point must call this on a wrong password —
-/// it is shared with the upload-link view so the cap cannot be bypassed by
-/// switching to another endpoint that accepts the same password.
+/// Every password-protected entry point must call this on a wrong password; it
+/// is shared with the upload-link view so switching endpoints cannot bypass the cap.
 pub(super) fn record_link_password_failure(
     state: &Arc<AppState>,
     token: &str,
@@ -128,10 +114,9 @@ pub(super) fn record_link_password_failure(
 
 /// Whether a password-protected share link is unlocked for this request.
 ///
-/// Accepts either the password itself (via the `X-Seafile-Sharelink-Password`
-/// header or `?password=`, both of which predate the cookie) or the signed
-/// unlock cookie issued after a successful password POST. The cookie is what
-/// lets the server stop putting the password into page links and redirects.
+/// Accepts the password itself (via the `X-Seafile-Sharelink-Password` header or
+/// `?password=`, both of which predate the cookie) or the signed unlock cookie
+/// issued after a successful password POST, which keeps the password out of links.
 fn share_link_unlocked(
     state: &Arc<AppState>,
     token: &str,
@@ -152,10 +137,8 @@ fn share_link_unlocked(
 
 /// Turn a link lookup failure into the page the visitor sees.
 ///
-/// The two link failures are worded differently — "turned off" and "expired"
-/// are not the same thing to the person holding the link — while a lookup that
-/// failed for another reason (the database, say) stays a 500 rather than being
-/// dressed up as a dead link.
+/// "Turned off" and "expired" read differently to the link holder, while any
+/// other lookup failure stays a 500 rather than being dressed up as a dead link.
 fn link_error_page(
     state: &AppState,
     err: AppError,
@@ -167,7 +150,6 @@ fn link_error_page(
     }
 }
 
-/// Resolve file metadata from the repo.
 async fn resolve_file_meta(
     repos: &crate::repository::Repositories,
     repo_id: &str,
@@ -177,8 +159,6 @@ async fn resolve_file_meta(
         .await
         .map_err(|_| AppError::NotFound("File not found".into()))
 }
-
-// ── Main GET handler ──────────────────────────────────────────────────────
 
 /// GET /f/{token}/ — show HTML preview or download file.
 pub async fn shared_file_view(
@@ -195,11 +175,9 @@ pub async fn shared_file_view(
         Err(err) => return link_error_page(&state, err, &headers),
     };
 
-    // Password check. The password is accepted only from the
-    // `X-Seafile-Sharelink-Password` header or the signed unlock cookie the
-    // password form sets — never from the query string, which would put the
-    // password into browser history, referrers and request logs. A `?password=`
-    // parameter is therefore ignored entirely.
+    // Password check: only the `X-Seafile-Sharelink-Password` header or the signed
+    // unlock cookie set by the password form — never `?password=`, which would put
+    // it into browser history, referrers and request logs.
     let provided_pwd = headers
         .get("X-Seafile-Sharelink-Password")
         .and_then(|v| v.to_str().ok());
@@ -210,16 +188,12 @@ pub async fn shared_file_view(
     )
     .await?;
 
-    // If password is required but not provided, show password form
     let unlocked = share_link_unlocked(&state, &token, &headers, pw_ok);
     if link.password.is_some() && !unlocked {
-        // Only count genuine failures — a request that supplies no password is
-        // just the initial render of the form.
+        // Only count genuine failures: a request without a password is the first render.
         if provided_pwd.is_some() {
             record_link_password_failure(&state, &token)?;
         }
-        // A wrong password supplied via the header gets the form back with the
-        // error; a plain GET just gets the form.
         let t = I18n::from_headers(&headers, &state.config().ui.default_language);
         let tpl = ShareAccessValidationTemplate {
             t,
@@ -234,7 +208,6 @@ pub async fn shared_file_view(
         return Ok(Html(html).into_response());
     }
 
-    // Handle ?dl=1 — download the file directly
     if params.get("dl").map(|s| s.as_str()) == Some("1") {
         check_share_download_rate(&state, &addr, &headers)?;
         let (file_data, block_ids) =
@@ -266,7 +239,6 @@ pub async fn shared_file_view(
         ));
     }
 
-    // Show HTML preview page
     let (_file_data, _block_ids) =
         resolve_file_meta(&state.repos, &link.repo_id, &link.path).await?;
 
@@ -285,9 +257,8 @@ pub async fn shared_file_view(
         .unwrap_or_else(|| "?".to_string());
     let file_size = _file_data.size;
 
-    // Deliberately no password in the download URL: the browser carries the
-    // signed unlock cookie instead, so the password never lands in page links,
-    // history or logs.
+    // No password in the download URL: the browser carries the signed unlock
+    // cookie instead, so it never lands in page links, history or logs.
     let download_url = format!("/f/{}/?dl=1", link.token);
 
     let tpl = ShareViewTemplate {
@@ -309,8 +280,6 @@ pub async fn shared_file_view(
     Ok(Html(html).into_response())
 }
 
-// ── POST handler for password submission ──────────────────────────────────
-
 /// POST /f/{token}/ — validate password, redirect with password in URL.
 pub async fn shared_file_view_post(
     State(state): State<Arc<AppState>>,
@@ -330,7 +299,6 @@ pub async fn shared_file_view_post(
         .get("password")
         .ok_or_else(|| AppError::BadRequest("password required".into()))?;
 
-    // Rate limit password attempts per client IP.
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
@@ -350,10 +318,8 @@ pub async fn shared_file_view_post(
     .await;
 
     if !valid {
-        // Token-dimension cap on top of the existing IP cap, so distributed
-        // brute force against one link can't slip under the IP-based limit.
+        // Token-dimension cap on top of the IP cap, so distributed brute force is bounded.
         record_link_password_failure(&state, &token)?;
-        // Show password form again with error
         let t = I18n::from_headers(&headers, &state.config().ui.default_language);
         let tpl = ShareAccessValidationTemplate {
             t,
@@ -368,8 +334,7 @@ pub async fn shared_file_view_post(
         return Ok(Html(html).into_response());
     }
 
-    // Hand the browser a signed unlock cookie instead of echoing the password
-    // back in the URL.
+    // Hand the browser a signed unlock cookie instead of echoing the password in the URL.
     let cookie = crate::service::auth::csrf::link_unlock_cookie(
         &crate::service::auth::csrf::share_link_cookie_name(&token),
         &token,
@@ -386,8 +351,6 @@ pub async fn shared_file_view_post(
     )
         .into_response())
 }
-
-// ── Directory share ──────────────────────────────────────────────────
 
 #[derive(Template)]
 #[template(path = "web/shared_dir_view.html")]
@@ -435,13 +398,11 @@ pub async fn shared_dir_view(
         Err(err) => return link_error_page(&state, err, &headers),
     };
 
-    // Only handle directory shares
     if link.s_type != "d" {
         return Err(AppError::NotFound("Not a directory share link".into()));
     }
 
-    // Password check (same as file share): header or signed cookie only, never
-    // the query string.
+    // Password check as for file shares: header or signed cookie only, never the query.
     let provided_pwd = headers
         .get("X-Seafile-Sharelink-Password")
         .and_then(|v| v.to_str().ok());
@@ -454,8 +415,7 @@ pub async fn shared_dir_view(
 
     let unlocked = share_link_unlocked(&state, &token, &headers, pw_ok);
     if link.password.is_some() && !unlocked {
-        // Count only genuine failures: a request that supplies no password is
-        // just the initial render of the password form.
+        // Count only genuine failures: a request without a password is the first render.
         if provided_pwd.is_some() {
             record_link_password_failure(&state, &token)?;
         }
@@ -473,7 +433,6 @@ pub async fn shared_dir_view(
         return Ok(Html(html).into_response());
     }
 
-    // Get repo head commit
     let repo_model = state
         .repos
         .repo
@@ -490,7 +449,6 @@ pub async fn shared_dir_view(
         .await?
         .ok_or_else(|| AppError::Internal("Head commit not found".into()))?;
 
-    // Handle ?dl=1 — download entire directory as ZIP
     if params.get("dl").map(|s| s.as_str()) == Some("1") {
         check_share_download_rate(&state, &addr, &headers)?;
         let dir_name = link
@@ -547,8 +505,7 @@ pub async fn shared_dir_view(
 
     crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
-    // Resolve the current directory path, clamped to the shared subtree
-    // (guards against `?p=../other-dir` leaving the share).
+    // Resolve the requested directory, clamped to the shared subtree (no `?p=../other-dir`).
     let sub_path = params.get("p").map(|s| s.as_str()).unwrap_or("/");
     let current_path = resolve_share_subpath(&link, sub_path)?;
 
@@ -565,7 +522,6 @@ pub async fn shared_dir_view(
         .await
         .map_err(|_| AppError::NotFound("Directory not found".into()))?;
 
-    // Build entry list
     let mut entries: Vec<DirEntryInfo> = Vec::new();
     for dirent in &dir_data.dirents {
         let is_dir = dirent.mode & S_IFDIR != 0;
@@ -594,7 +550,6 @@ pub async fn shared_dir_view(
         });
     }
 
-    // Sort: directories first, then files, alphabetically
     entries.sort_by(|a, b| {
         if a.is_dir != b.is_dir {
             b.is_dir.cmp(&a.is_dir)
@@ -603,9 +558,8 @@ pub async fn shared_dir_view(
         }
     });
 
-    // Paginate on the sorted list so a huge folder doesn't render one
-    // multi-MB page. `total` still drives the summary count; only the current
-    // page slice is sent to the template.
+    // Paginate on the sorted list so a huge folder doesn't render one multi-MB
+    // page; `total` still drives the summary count.
     let total = entries.len();
     const PER_PAGE: usize = 200;
     let page = params
@@ -625,8 +579,7 @@ pub async fn shared_dir_view(
 
     let t = I18n::from_headers(&headers, &state.config().ui.default_language);
 
-    // `current_path` is repo-absolute, so the trail is taken relative to the
-    // share's own root — the share URL is the "root" crumb.
+    // `current_path` is repo-absolute, so the trail is relative to the share root.
     let share_root =
         base::sanitize::safe_normalize_path(&link.path).unwrap_or_else(|_| "/".to_string());
     let relative = current_path
@@ -635,8 +588,7 @@ pub async fn shared_dir_view(
     let breadcrumbs = crate::ui::files::breadcrumbs_for(relative);
 
     let dir_name = if current_path == "/" {
-        // A whole-repo share has no folder name of its own; "/" reads as a
-        // path, not a title.
+        // A whole-repo share has no folder name of its own; "/" reads as a path.
         t.tr("pub.root").to_string()
     } else {
         current_path
@@ -664,8 +616,7 @@ pub async fn shared_dir_view(
 
     let item_count = total;
 
-    // No password in any generated URL: the signed unlock cookie carries the
-    // authorisation, so links stay clean (and out of logs/history).
+    // No password in generated URLs: the signed unlock cookie carries the authorisation.
     let download_url = format!("/d/{}/?dl=1", link.token);
     let tpl = SharedDirViewTemplate {
         t,
@@ -695,9 +646,7 @@ pub async fn shared_dir_view(
 
 /// GET /d/{token}/files/{*path} — download a file from a shared directory.
 ///
-/// Query parameters are deliberately not extracted: the password must arrive
-/// via the `X-Seafile-Sharelink-Password` header or the signed unlock cookie,
-/// never the URL.
+/// The password arrives in the header or the signed unlock cookie, never the URL.
 pub async fn shared_dir_file_view(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -739,9 +688,8 @@ pub async fn shared_dir_file_view(
 
     check_share_download_rate(&state, &addr, &headers)?;
 
-    // Combine the share path with the requested file path, clamped to the
-    // shared subtree. A plain string join would let `..` (or an absolute path)
-    // escape the shared directory once the tree contains such a dirent.
+    // Combine the share path with the requested path, clamped to the shared
+    // subtree: a plain join would let `..` or an absolute path escape the share.
     let full_path = resolve_share_subpath(&link, &file_path)?;
 
     let (file_data, block_ids) = resolve_file_meta(&state.repos, &link.repo_id, &full_path).await?;
@@ -769,8 +717,6 @@ pub async fn shared_dir_file_view(
     ))
 }
 
-// ── POST handler for directory share password ─────────────────────────
-
 /// POST /d/{token}/ — validate password, redirect with password in URL.
 pub async fn shared_dir_view_post(
     State(state): State<Arc<AppState>>,
@@ -790,7 +736,6 @@ pub async fn shared_dir_view_post(
         .get("password")
         .ok_or_else(|| AppError::BadRequest("password required".into()))?;
 
-    // Rate limit password attempts per client IP.
     let client_ip = crate::middleware::effective_client_ip(
         &addr,
         &headers,
@@ -810,10 +755,8 @@ pub async fn shared_dir_view_post(
     .await;
 
     if !valid {
-        // The IP-keyed limiter above can be bypassed by spreading attempts over
-        // many addresses, so the per-token cap is the control that actually
-        // bounds guessing against one link. The GET/file paths already record
-        // it; the POST path used to be the hole.
+        // The IP limiter above can be bypassed across many addresses, so the
+        // per-token cap is what actually bounds guessing against one link.
         record_link_password_failure(&state, &token)?;
         let t = I18n::from_headers(&headers, &state.config().ui.default_language);
         let tpl = ShareAccessValidationTemplate {
@@ -829,8 +772,7 @@ pub async fn shared_dir_view_post(
         return Ok(Html(html).into_response());
     }
 
-    // Hand the browser a signed unlock cookie instead of echoing the password
-    // back in the URL.
+    // Hand the browser a signed unlock cookie instead of echoing the password in the URL.
     let cookie = crate::service::auth::csrf::link_unlock_cookie(
         &crate::service::auth::csrf::share_link_cookie_name(&token),
         &token,

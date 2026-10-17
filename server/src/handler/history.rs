@@ -19,9 +19,8 @@ pub struct HistoryQuery {
     pub commit_id: String,
 }
 
-/// `GET /api2/repo_history_changes/{repo_id}/?commit_id=`
-///
-/// Returns the file changes introduced by a specific commit.
+/// `GET /api2/repo_history_changes/{repo_id}/?commit_id=` — the file changes a
+/// specific commit introduced.
 pub async fn repo_history_changes(
     path: RepoPathRead,
     State(state): State<Arc<AppState>>,
@@ -47,10 +46,9 @@ pub struct FileHistoryQuery {
     pub limit: Option<i64>,
 }
 
-/// `GET /api/v2.1/repos/{repo_id}/file/history/?p=&limit=`
-///
-/// Returns the version history of a single file (newest first), in the seahub
-/// `FileHistoryView` envelope `{data, page, page_next}`.
+/// `GET /api/v2.1/repos/{repo_id}/file/history/?p=&limit=` — one file's version
+/// history (newest first) in seahub's `FileHistoryView` `{data, page, page_next}`
+/// envelope, always one page.
 pub async fn get_file_history_v21(
     path: RepoPathRead,
     State(state): State<Arc<AppState>>,
@@ -76,10 +74,8 @@ pub struct RevisionQuery {
     pub commit_id: Option<String>,
 }
 
-/// `GET /api/v2.1/repos/{repo_id}/file/revision/?p=&commit_id=`
-///
-/// Streams the file content as it existed at the given commit (for download or
-/// preview). Mirrors seahub's `FileRevision` endpoint.
+/// `GET /api/v2.1/repos/{repo_id}/file/revision/?p=&commit_id=` — the file content
+/// at the given commit, for download or preview (seahub's `FileRevision`).
 pub async fn get_file_revision_v21(
     path: RepoPathRead,
     State(state): State<Arc<AppState>>,
@@ -132,10 +128,8 @@ pub struct RestoreQuery {
     pub commit_id: Option<String>,
 }
 
-/// `POST /api/v2.1/repos/{repo_id}/file/revision/restore/?p=&commit_id=`
-///
-/// Restores a file to a historical version by pointing the file's dirent at
-/// the target commit's fs_id and committing the change.
+/// `POST .../file/revision/restore/?p=&commit_id=` — point the file's dirent at the
+/// target commit's fs_id and commit that change.
 pub async fn restore_file_revision_v21(
     path: RepoPathWrite,
     State(state): State<Arc<AppState>>,
@@ -163,7 +157,6 @@ pub async fn restore_file_revision_v21(
     Ok(ok_json())
 }
 
-/// Routes nested under `/api/v2.1` by `routes.rs`.
 pub fn file_history_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(

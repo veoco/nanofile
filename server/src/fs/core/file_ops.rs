@@ -14,15 +14,13 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use tokio::sync::Mutex;
 
-/// Per-repo mutexes to prevent concurrent read-modify-write races
-/// on FS tree directories. Without this, two concurrent requests
-/// modifying the same directory can lose entries (one overwrites
-/// the other's changes before a commit is created).
+/// Per-repo mutexes serializing FS tree read-modify-write. Without them two
+/// concurrent requests on one directory can lose entries before a commit lands.
 static REPO_WRITE_LOCKS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Acquire the per-repo write lock. Blocks until no other FS tree
-/// mutation is in progress for the given repo.
+/// Acquire the per-repo write lock, blocking until no other FS tree mutation is
+/// in progress for that repo.
 pub(crate) async fn acquire_repo_lock(repo_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
     let mut map = REPO_WRITE_LOCKS.lock().await;
     let lock = map
@@ -33,38 +31,25 @@ pub(crate) async fn acquire_repo_lock(repo_id: &str) -> tokio::sync::OwnedMutexG
     guard
 }
 
-/// Sentinel value indicating that no ancestor chain was pre-computed.
-/// Callers that don't have an ancestor chain pass this to
-/// `update_dir_tree_and_commit` / `update_dir_tree_no_commit`;
-/// the walk_up_ancestors function will fall back to on-demand
-/// path resolution for each ancestor level.
+/// Sentinel for "no pre-computed ancestor chain": `walk_up_ancestors` then
+/// resolves each ancestor level on demand.
 pub(crate) const EMPTY_ANCESTOR_CHAIN: &[(String, String)] = &[];
 
 pub struct FileOps;
 
 impl FileOps {
-    /// Stream bytes from `stream` through the CDC chunker and write each
-    /// resulting block to the content-addressed block store, returning the
-    /// `block_ids` (in chunk order), the aggregate `total_size`, and the
-    /// subset of `block_ids` that were **newly written** by this call — the
-    /// block-sequence twin of `create_file`'s in-memory chunking, so a
-    /// resumable upload never has to hold the whole file in memory.
+    /// Stream bytes through the CDC chunker, write each block to the
+    /// content-addressed store, and return `(block_ids, total_size,
+    /// new_block_ids)` — the blocks **newly written** by this call, so a caller
+    /// whose quota check fails can clean up only its own blocks (deduped blocks
+    /// are excluded) without holding the file in memory.
     ///
-    /// When `enc_key` is `Some((key, iv))`, each block is encrypted with a
-    /// deterministic IV before writing (matching `create_file`), yielding
-    /// `block_id == sha1(encrypted_block)` so Seafile sync clients can still
-    /// re-derive the content-addressed ids for encrypted repos.
-    ///
-    /// The `new_block_ids` return value lets the caller clean up blocks that
-    /// this upload created if a subsequent quota check fails — without
-    /// risking deletion of blocks shared with other files (deduped blocks
-    /// are excluded).
-    /// Feed `(idx, block)` pairs from `producer` to a bounded concurrent writer
-    /// that persists them to the block store, so the producer's read loop never
-    /// blocks on disk I/O. `buffered(4)` keeps block ids in input order (like
-    /// `create_file`), and the bounded channel back-pressures the producer when
-    /// the disk is the bottleneck. Returns `block_ids` in order plus the
-    /// producer's `total_size`.
+    /// `enc_key` encrypts each block with a deterministic IV (matching
+    /// `create_file`), yielding `block_id == sha1(encrypted_block)` so Seafile
+    /// sync clients can re-derive the ids for encrypted repos. `producer` feeds
+    /// `(idx, chunk)` pairs to a bounded concurrent writer; `buffered(4)`
+    /// preserves input order and the channel back-pressures the producer when
+    /// the disk is the bottleneck.
     pub(crate) async fn stream_blocks_pipelined<F, Fut>(
         store: &DynBlockStorage,
         repo_id: &str,
@@ -77,7 +62,6 @@ impl FileOps {
     {
         const CONCURRENCY: usize = 4;
 
-        // The writer task needs owned handles and key material.
         let store = store.clone();
         let repo_id = repo_id.to_string();
         let enc_key_owned: Option<(Vec<u8>, Vec<u8>)> =
@@ -96,8 +80,7 @@ impl FileOps {
                 async move {
                     let (block_id, was_new) = match &enc_key {
                         Some((key, iv)) => {
-                            // AES-CBC is CPU-bound; run it on the blocking pool
-                            // so the async writer task doesn't stall the worker.
+                            // AES-CBC is CPU-bound: keep it off the async worker.
                             let key = key.clone();
                             let iv = iv.clone();
                             let blk = blk.clone();
@@ -183,11 +166,10 @@ impl FileOps {
         .await
     }
 
-    /// Commit a file whose blocks have already been written to the block
-    /// store into the repo: create the fs_object, then perform the read-modify-
-    /// write of the FS tree and the commit. The streaming uploader writes
-    /// blocks direct from the wire and then commits the resulting `block_ids`
-    /// without ever holding the whole file in memory.
+    /// Commit a file whose blocks are already in the block store: create the
+    /// fs_object, then read-modify-write the FS tree and the commit. The
+    /// streaming uploader writes blocks straight from the wire and never holds
+    /// the whole file in memory.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_file_from_blocks(
         db: &DatabaseConnection,
@@ -213,10 +195,8 @@ impl FileOps {
         // Serialize the FS tree mutation (read-modify-write + commit).
         let _lock = acquire_repo_lock(repo_id).await;
 
-        // Resolve the parent directory and build an ancestor chain for
-        // walk_up_ancestors to avoid O(d²) re-resolution.
+        // Resolve the parent, pre-computing the ancestor chain to avoid O(d²) re-resolution.
         let (parent_fs_id, ancestor_chain) = if parent_path == "/" {
-            // Find root via repo head commit, or create empty root fs_object for empty repo
             let repo_model = repos.repo.find_by_id(repo_id).await?;
             if let Some(commit_id) = repo_model.as_ref().and_then(|r| r.head_commit_id.clone()) {
                 let commit_ent = repos
@@ -244,13 +224,10 @@ impl FileOps {
 
         let mut dirents = parent_data.dirents;
 
-        // When replacing an existing file, keep the old entry untouched if the
-        // content is identical (same file fs_id and size). That leaves the
-        // directory hash (and thus the root) unchanged, so `create_commit`
-        // dedups and no redundant commit is created. Without this, a
-        // same-content re-upload would overwrite `mtime` and produce a
-        // spurious new commit whenever the two uploads land in different
-        // seconds.
+        // An identical replace (same fs_id and size) leaves the old entry
+        // untouched, so the directory hash — and thus the commit id — is
+        // unchanged and no spurious commit appears when the re-upload lands in a
+        // different second.
         let mut identical_replace = false;
         if replace {
             identical_replace = dirents
@@ -261,12 +238,11 @@ impl FileOps {
             }
         }
 
-        // Name this upload is actually stored under. `replace=0` (the official
-        // default: Android/iOS "keep both", the desktop uploader, and a plain
-        // WebDAV-less POST) must *keep* the existing entry and store the new
-        // file under a unique name, exactly like seafile's `genUniqueName()`
-        // (`server/fileserver/fileop.go:2407-2434`). Overwriting in place is
-        // reserved for `replace=1` / the update endpoints.
+        // Name this upload is stored under. `replace=0` is the official default
+        // (Android/iOS "keep both", the desktop uploader, a plain POST) and must
+        // keep the existing entry, storing the new file under a unique name like
+        // seafile's `genUniqueName()` (`server/fileserver/fileop.go:2407-2434`);
+        // overwriting in place is reserved for `replace=1` / the update endpoints.
         let effective_name = if identical_replace {
             name.to_string()
         } else if !replace && dirents.iter().any(|d| d.name == name) {
@@ -294,7 +270,6 @@ impl FileOps {
         let new_dir_fs_id =
             crate::fs::core::store_fs_dir_object(db, repo_id, &new_dir_data).await?;
 
-        // Walk up to root, updating all ancestor directories
         let root_fs_id = if parent_path == "/" {
             new_dir_fs_id.clone()
         } else {
@@ -312,10 +287,8 @@ impl FileOps {
         let repo_model = repos.repo.find_by_id(repo_id).await?;
         let parent_commit_id = repo_model.as_ref().and_then(|r| r.head_commit_id.clone());
 
-        // Identical re-upload leaves the FS tree unchanged: the head commit
-        // already reflects this state. Skip creating a redundant commit
-        // (matches official seafile and avoids a commit_id collision when a
-        // duplicate write lands in the same second).
+        // Identical re-upload leaves the FS tree unchanged, so skip the redundant
+        // commit (also avoids a commit_id collision within the same second).
         if let Some(head_id) = parent_commit_id.as_deref() {
             let head_commit = repos
                 .commit
@@ -374,9 +347,8 @@ impl FileOps {
             return Err(AppError::NotFound("repo not found".into()));
         }
 
-        // Same compare-and-swap as `create_commit`: the per-repo lock above
-        // serializes REST writes only, so a client upload can have advanced HEAD
-        // since it was read. Overwriting it would drop that upload silently.
+        // Same compare-and-swap as `create_commit`: the per-repo lock serializes
+        // REST writes only, so an upload may have advanced HEAD since it was read.
         if !repos
             .repo
             .test_and_update_head_commit(repo_id, parent_commit_id.as_deref(), &commit_id)
@@ -387,22 +359,17 @@ impl FileOps {
             )));
         }
 
-        // Fire repo-update notification through the global broadcast channel.
-        // Without this, the Seafile client won't know about the new file until
-        // its next poll cycle, causing a noticeable sync delay.
+        // Notify clients through the broadcast channel; otherwise the Seafile
+        // client learns about the file only on its next poll.
         events::publish_repo_update(repo_id, commit_id);
 
         Ok((file_fs_id, effective_name))
     }
 
-    /// Walk up the directory tree from immediate_parent_path to root,
-    /// updating each ancestor's FsDirData to reference the new child fs_id.
-    /// Returns the new root fs_id.
-    ///
-    /// `ancestor_chain` is an optional list of `(path, fs_id)` pairs for
-    /// intermediate directories, ordered from root down to
-    /// `immediate_parent_path`'s parent. When provided, `resolve_fs_id` is
-    /// avoided for each level, reducing O(d²) resolve to O(d).
+    /// Walk from the immediate parent up to root, rewriting each ancestor's
+    /// `FsDirData` to reference the new child fs_id; returns the new root fs_id.
+    /// `ancestor_chain` (root-down `(path, fs_id)` pairs) turns each level's
+    /// `resolve_fs_id` into a lookup, reducing O(d²) to O(d).
     pub(crate) async fn walk_up_ancestors(
         repos: &Repositories,
         db: &DatabaseConnection,
@@ -414,28 +381,23 @@ impl FileOps {
         let mut current_child_fs_id = new_immediate_parent_fs_id.to_string();
         let mut current_child_path = immediate_parent_path.to_string();
 
-        // Build a path→fs_id map from the ancestor chain for O(1) lookups.
-        // When the chain is empty (caller didn't provide one), falls through
-        // to on-demand resolve_fs_id for each ancestor level.
+        // Path→fs_id map for O(1) lookups; an empty chain falls through to
+        // on-demand `resolve_fs_id` per level.
         let chain_map: std::collections::HashMap<&str, &str> = ancestor_chain
             .iter()
             .map(|(p, id)| (p.as_str(), id.as_str()))
             .collect();
 
         loop {
-            // Split into parent path and child name
             let (parent_path, child_name) = match current_child_path.rsplit_once('/') {
                 Some(("", name)) => ("/".to_string(), name.to_string()),
                 Some((parent, name)) => (parent.to_string(), name.to_string()),
                 None => {
-                    // current_child_path is "/" — we are at root
                     return Ok(current_child_fs_id);
                 }
             };
 
-            // Find the ancestor's current fs_id.
-            // When ancestor_chain was provided, look up the parent_path
-            // from the chain instead of re-resolving from root.
+            // Use the chain when it has this level, else resolve from root.
             let ancestor_fs_id = if parent_path == "/" {
                 Self::resolve_root_fs_id(repos, repo_id).await?
             } else {
@@ -445,11 +407,9 @@ impl FileOps {
                 }
             };
 
-            // Read ancestor's FsDirData
             let mut ancestor_data =
                 Self::read_dir_fs_object(repos, repo_id, &ancestor_fs_id).await?;
 
-            // Find and update the child entry, or add if not present
             let mut found = false;
             for entry in &mut ancestor_data.dirents {
                 if entry.name == child_name {
@@ -460,9 +420,8 @@ impl FileOps {
             }
 
             if !found {
-                // Child was created by create_dir which always updates FsDirData
-                // now — this branch should not be reached. Fall back gracefully
-                // with S_IFDIR defaults.
+                // `create_dir` always records the child, so this is a defensive
+                // fallback using S_IFDIR defaults.
                 ancestor_data.dirents.push(DirEntryData {
                     id: current_child_fs_id.clone(),
                     mode: infra::serialization::S_IFDIR,
@@ -473,16 +432,13 @@ impl FileOps {
                 });
             }
 
-            // Create new fs_object for ancestor
             let new_ancestor_fs_id =
                 crate::fs::core::store_fs_dir_object(db, repo_id, &ancestor_data).await?;
 
-            // If we reached root, return
             if parent_path == "/" {
                 return Ok(new_ancestor_fs_id);
             }
 
-            // Move up
             current_child_fs_id = new_ancestor_fs_id;
             current_child_path = parent_path;
         }
@@ -507,7 +463,6 @@ impl FileOps {
     }
 
     /// Resolve a path to its fs_id by walking the FS tree from root.
-    /// Delegates to `tree::resolve_fs_id` after resolving root fs_id.
     async fn resolve_fs_id(
         repos: &Repositories,
         repo_id: &str,
@@ -521,13 +476,9 @@ impl FileOps {
     }
 
     /// Resolve a path to its fs_id, also returning the fs_id of every
-    /// intermediate directory from root down to the last component.
-    ///
-    /// The returned vector is ordered from root outward, e.g. for path
-    /// `"/a/b/c"`: `[("/a", fs_a), ("/a/b", fs_b), ("/a/b/c", fs_c)]`.
-    ///
-    /// This can be passed to `walk_up_ancestors` to avoid re-resolving
-    /// each ancestor from root, reducing O(d²) to O(d).
+    /// intermediate directory root-down, e.g. for `"/a/b/c"`:
+    /// `[("/a", fs_a), ("/a/b", fs_b), ("/a/b/c", fs_c)]`. Feeding this to
+    /// `walk_up_ancestors` reduces O(d²) to O(d).
     pub(crate) async fn resolve_fs_id_chain(
         repos: &Repositories,
         repo_id: &str,
@@ -555,10 +506,9 @@ impl FileOps {
                 .ok_or_else(|| {
                     AppError::NotFound(format!("path component '{}' not found in '{}'", part, path))
                 })?;
-            // Every component of a *directory* path has to be a directory: a
-            // zero-byte file's id is `EMPTY_SHA1`, which `read_fs_dir_data`
-            // reads back as an empty directory, so without this check a file
-            // name in the middle (or at the end) of the path would resolve.
+            // Every component of a directory path must be a directory: a
+            // zero-byte file's id is `EMPTY_SHA1`, which `read_fs_dir_data` reads
+            // back as an empty directory, so a file name would otherwise resolve.
             if !crate::fs::core::tree::is_dir_mode(found.mode) {
                 return Err(AppError::NotFound(format!(
                     "not a directory: '{}' in '{}'",
@@ -572,16 +522,9 @@ impl FileOps {
         Ok((current_fs_id, chain))
     }
 
-    /// Apply a transformation to a parent directory's FsDirData entries,
-    /// update the FS tree (walk up ancestors to root), create a new commit,
-    /// and update the repo HEAD.
-    ///
-    /// Parameters:
-    /// - `parent_path`: path of the parent directory (e.g. "/dir", "/")
-    /// - `parent_fs_id`: the parent directory's fs_id **before** modification
-    /// - `update_fn`: closure that modifies `&mut Vec<DirEntryData>` in-place
-    /// - `description`: commit description
-    ///
+    /// Apply `update_fn` to the parent directory's entries, persist the tree up
+    /// to the root, create a commit and update HEAD. `parent_fs_id` is the parent
+    /// id **before** modification.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn update_dir_tree_and_commit(
         db: &DatabaseConnection,
@@ -610,12 +553,9 @@ impl FileOps {
         Ok(root_fs_id)
     }
 
-    /// Apply a transformation to a parent directory's FsDirData entries,
-    /// update the FS tree (walk up ancestors to root), but do NOT create
-    /// a commit. Returns the new root_fs_id.
-    ///
-    /// Useful for multi-step operations (e.g. move) where the caller wants
-    /// to update several parts of the tree before creating a single commit.
+    /// Same as `update_dir_tree_and_commit` without the commit, so a multi-step
+    /// operation (e.g. move) can update several parts of the tree and commit
+    /// once. Returns the new root fs_id.
     pub(crate) async fn update_dir_tree_no_commit(
         db: &DatabaseConnection,
         repos: &Repositories,
@@ -637,9 +577,8 @@ impl FileOps {
         .await
     }
 
-    /// Shared body of the two `update_dir_tree_*` helpers: lock the repo,
-    /// apply `update_fn` to the parent directory, persist it and walk up the
-    /// ancestor chain to recompute the root fs_id.
+    /// Shared body of the two `update_dir_tree_*` helpers: lock the repo, apply
+    /// `update_fn`, persist and walk up the ancestors to get the root fs_id.
     async fn apply_tree_update(
         db: &DatabaseConnection,
         repos: &Repositories,
@@ -684,10 +623,8 @@ impl FileOps {
         let repo_model = repos.repo.find_by_id(repo_id).await?;
         let parent_commit_id = repo_model.as_ref().and_then(|r| r.head_commit_id.clone());
 
-        // Skip a commit when the tree didn't actually change. Defensive: a
-        // no-op delete/move/rename would otherwise produce a commit_id
-        // collision (unique (repo_id, commit_id)) when issued in the same
-        // second with an unchanged root.
+        // Skip a commit when the tree didn't change: a no-op delete/move/rename
+        // would otherwise collide on the unique (repo_id, commit_id) key.
         if let Some(head_id) = parent_commit_id.as_deref() {
             let head_commit = repos
                 .commit
@@ -748,12 +685,10 @@ impl FileOps {
         let commit_id_clone = commit_id.clone();
 
         // Move HEAD only while it is still the commit this tree was computed
-        // from. A client upload (the sync path does read-modify-CAS itself) or
-        // another REST request can advance HEAD between the read at the top of
-        // this function and this write; overwriting it would silently drop
-        // whatever that writer committed. Report the race instead — the tree
-        // here was built from the old HEAD, so re-committing it as-is is not an
-        // option, and the caller can re-read and retry.
+        // from. A client upload or another REST request can advance HEAD between
+        // the read above and this write; overwriting it would silently drop that
+        // commit, so report the race instead — the tree was built from the old
+        // HEAD, and the caller can re-read and retry.
         if !repos
             .repo
             .test_and_update_head_commit(repo_id, parent_commit_id.as_deref(), &commit_id_clone)
@@ -764,7 +699,6 @@ impl FileOps {
             )));
         }
 
-        // Fire repo-update notification through the global broadcast channel.
         events::publish_repo_update(repo_id, commit_id_clone);
 
         Ok(())
@@ -791,8 +725,7 @@ impl FileOps {
 mod tests {
     use super::*;
 
-    /// Every block operation is scoped to a repository; the tests use one fixed
-    /// id because the pipeline itself is what is under test.
+    /// Block operations are repo-scoped; the pipeline itself is what is under test.
     const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
 
     fn temp_store() -> (tempfile::TempDir, DynBlockStorage) {
@@ -825,15 +758,13 @@ mod tests {
         futures::stream::iter(items)
     }
 
-    /// The streaming path must emit exactly the block ids that the whole-buffer
-    /// `create_file` chunking produces, in order, for a file that spans more
-    /// than one CDC block. (Many-block pipeline ordering is covered by
-    /// `test_stream_blocks_pipelined_many_blocks_in_order`.)
+    /// The streaming path must emit exactly the ids the whole-buffer
+    /// `create_file` chunking produces, in order, for a multi-block file.
     #[tokio::test]
     async fn test_write_stream_blocks_matches_create_file_chunking() {
         let (_dir, store) = temp_store();
-        // 12 MiB of pseudo-random data spans two CDC blocks at seafile's
-        // 8 MiB/6 MiB/10 MiB defaults (the first block hits the 10 MiB max).
+        // 12 MiB spans two CDC blocks at seafile's 8/6/10 MiB defaults (the first
+        // hits the 10 MiB max).
         let data = pseudo_data(12 * 1024 * 1024 + 123);
 
         // Reference: create_file's whole-buffer chunking.
@@ -857,9 +788,8 @@ mod tests {
         assert_eq!(total as usize, data.len());
     }
 
-    /// Directly exercise the pipeline with more blocks than the channel
-    /// capacity plus the in-flight window (8 + 4), so full-load ordering and
-    /// content addressing are both verified.
+    /// More blocks than the channel capacity plus the in-flight window (8 + 4),
+    /// so full-load ordering and content addressing are both verified.
     #[tokio::test]
     async fn test_stream_blocks_pipelined_many_blocks_in_order() {
         let (_dir, store) = temp_store();
@@ -876,7 +806,6 @@ mod tests {
             .unwrap();
         assert_eq!(ids.len(), 12);
         assert_eq!(total, 12 * 128);
-        // All blocks were newly written (fresh store).
         assert_eq!(new_ids.len(), 12);
         // Content addressing: each block id round-trips to its bytes in order.
         for (i, id) in ids.iter().enumerate() {
@@ -887,7 +816,6 @@ mod tests {
         }
     }
 
-    /// A stream that errors mid-way must surface as a request failure.
     #[tokio::test]
     async fn test_write_stream_blocks_error_propagation() {
         let (_dir, store) = temp_store();

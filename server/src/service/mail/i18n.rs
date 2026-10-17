@@ -1,12 +1,9 @@
 //! Translations for outbound mail.
 //!
-//! Deliberately a second dictionary rather than more keys in
-//! [`crate::i18n::I18n`]: that one is serialized into `window.__T` on every
-//! page, and mail bodies are long, HTML-bearing and useless to the browser.
-//!
-//! The recipient's stored language (`users.language`) picks the table; an
-//! unset or unsupported value falls back to the configured default UI
-//! language, and then to English — the same resolution the Web UI uses.
+//! A second dictionary rather than more keys in [`crate::i18n::I18n`], which is serialized into
+//! `window.__T` on every page while mail bodies are long, HTML-bearing and useless to the browser. The
+//! recipient's stored `users.language` picks the table, falling back to the default UI language and
+//! then English.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -27,7 +24,6 @@ static MAIL_ZH: MailStrings = MailStrings {
     dict: &EMAIL_ZH,
 };
 
-/// One language's mail strings.
 pub struct MailStrings {
     /// `en` or `zh`, for the `Content-Language`-style bookkeeping and tests.
     pub lang: &'static str,
@@ -35,9 +31,8 @@ pub struct MailStrings {
 }
 
 impl MailStrings {
-    /// The table for a language tag, falling back to the site default and then
-    /// to English. An unsupported tag must never leave a message untranslated
-    /// in a way the reader cannot act on, so there is no "unknown" table.
+    /// The table for a language tag, falling back to the site default and then to English: an
+    /// unsupported tag must never leave a message untranslated in a way the reader cannot act on.
     pub fn get(lang: Option<&str>, default_lang: &str) -> &'static MailStrings {
         let resolved = lang
             .and_then(crate::i18n::I18n::normalize_lang)
@@ -48,13 +43,11 @@ impl MailStrings {
         }
     }
 
-    /// Translate a key; a missing key returns the key itself, like the page
-    /// dictionary does, so an untranslated string is obvious instead of blank.
+    /// Translate a key; a missing key returns the key itself, so an untranslated string is obvious.
     pub fn tr<'k>(&self, key: &'k str) -> &'k str {
         (**self.dict).get(key).map(String::as_str).unwrap_or(key)
     }
 
-    /// Translate and substitute `{name}` placeholders.
     pub fn trf<'k>(&self, key: &'k str, args: &[(&'k str, String)]) -> String {
         let mut out = self.tr(key).to_string();
         for (name, value) in args {
@@ -75,9 +68,8 @@ impl MailStrings {
 mod tests {
     use super::*;
 
-    /// Both mail dictionaries must define the same keys, for the same reason the
-    /// page locales do: a key that ships in one language only renders as its own
-    /// identifier in the other.
+    /// Both mail dictionaries must define the same keys: a key that ships in one
+    /// language only renders as its own identifier in the other.
     #[test]
     fn mail_locales_define_the_same_keys() {
         let en = MailStrings::get(Some("en"), "en");
@@ -104,8 +96,8 @@ mod tests {
 
     #[test]
     fn the_source_dictionary_is_not_empty() {
-        // 5 kinds x (subject, html, text) + brand, footer and the two layout
-        // parts; a lower count means a TOML mistake emptied part of the file.
+        // 5 kinds x (subject, html, text) + brand, footer, two layout parts: a lower count means a
+        // TOML mistake emptied part of the file.
         assert!(
             EMAIL_EN.len() >= 19,
             "email_en.toml parsed into only {} entries — a TOML mistake would \

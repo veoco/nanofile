@@ -1,37 +1,21 @@
 //! Functional capability catalog for the unified API-key system.
 //!
-//! A key is not "an account token" or "a WebDAV token"; it is a set of
-//! independently grantable capabilities, each naming one feature of the API.
-//! The table in [`ROUTES`] maps every `/api2` and `/api/v2.1` route to the
-//! capability it needs, so enforcement lives at one point
-//! ([`crate::middleware::auth::AuthUser`]) instead of being re-stated by every
-//! handler.
+//! A key is a set of independently grantable capabilities. `ROUTES` maps every
+//! `/api2` and `/api/v2.1` route to the capability it needs, so enforcement lives
+//! at one point ([`crate::middleware::auth::AuthUser`]) instead of in every
+//! handler. Every credential is classified, not only keys: a session satisfies
+//! every capability because it *is* the account, so the table records what a route
+//! needs of a key plus the routes closed to keys ([`RouteAccess::SessionOnly`]).
 //!
-//! Every credential is classified, not only keys. A session satisfies every
-//! capability because it *is* the account, so what the table really records is
-//! "what does this route need of a key", plus the routes that are closed to keys
-//! altogether ([`RouteAccess::SessionOnly`]).
-//!
-//! Three properties matter and are covered by tests:
-//!
-//! * **Write implies read.** Granting `file.write` without `file.read` would
-//!   produce a key that can upload but not list, so the implication closure is
-//!   expanded when capabilities are parsed.
-//! * **Unknown means denied.** [`required_access`] answering `None` for a route
-//!   a caller is reaching is a hard 403, so a newly added route fails closed
-//!   until it is classified.
-//! * **Capabilities are stable ids.** They are persisted as a canonical
-//!   comma-separated list, so the enum's discriminants are an in-memory detail
-//!   while [`Capability::id`] is the on-disk contract.
+//! Capabilities are stable ids persisted as a canonical comma-separated list:
+//! [`Capability::id`] is the on-disk contract, not the enum discriminant.
 
 use axum::http::Method;
 
 /// One independently grantable feature of the API.
 ///
-/// The declaration order defines the bit index in [`CapabilitySet`]; never
-/// reorder or remove a variant without also migrating stored capability lists
-/// (the persisted form is [`Capability::id`], not the discriminant, so
-/// reordering is safe as long as ids stay).
+/// The declaration order defines the bit index in [`CapabilitySet`], so never
+/// reorder a variant; the persisted form is [`Capability::id`], not the index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Capability {
     AccountRead,
@@ -139,10 +123,8 @@ impl CapabilityDomain {
 impl Capability {
     /// Every capability, in discriminant order.
     ///
-    /// Only capabilities with an enforcement point appear here: the catalog is
-    /// what the management UI and `/api2/api-keys/catalog/` offer, and offering
-    /// a grant nothing consults would be a lie. Ids that were removed for that
-    /// reason are listed in [`RETIRED_IDS`].
+    /// Only capabilities with an enforcement point appear here: offering a grant
+    /// nothing consults would be a lie (removed ids live in [`RETIRED_IDS`]).
     pub const ALL: [Capability; 40] = [
         Capability::AccountRead,
         Capability::AccountWrite,
@@ -186,7 +168,6 @@ impl Capability {
         Capability::KeyWrite,
     ];
 
-    /// Stable identifier used in the database and over the API.
     pub const fn id(self) -> &'static str {
         match self {
             Capability::AccountRead => "account.read",
@@ -232,17 +213,14 @@ impl Capability {
         }
     }
 
-    /// Parse a persisted identifier.
     pub fn from_id(id: &str) -> Option<Capability> {
         Capability::ALL.iter().copied().find(|c| c.id() == id)
     }
 
-    /// Whether `id` names a capability this build retired.
     pub fn is_retired(id: &str) -> bool {
         RETIRED_IDS.contains(&id)
     }
 
-    /// Index into [`CapabilitySet`]'s bit set.
     const fn bit(self) -> u128 {
         1u128 << (self as u32)
     }
@@ -286,9 +264,7 @@ impl Capability {
     }
 
     /// Whether granting this capability lets the caller change server state.
-    ///
-    /// Drives the "read-only" presets and the UI's read/write labelling; it is
-    /// not itself an enforcement rule (enforcement is per route).
+    /// Drives presets and labels only; enforcement itself is per route.
     pub const fn is_write(self) -> bool {
         !matches!(
             self,
@@ -313,38 +289,28 @@ impl Capability {
         )
     }
 
-    /// Whether this capability is granted to a non-admin user at all.
+    /// Whether this capability is granted only to sessions.
     ///
-    /// `key.*` is reserved: a key may never manage keys, because a key that can
-    /// mint keys can grant itself more than it holds. `admin.*` is grantable
-    /// only by an admin (checked by the service, which knows the caller).
+    /// `key.*` is reserved: a key that can mint keys could grant itself more than
+    /// it holds. `admin.*` is grantable only by an admin (the service checks).
     pub const fn is_reserved_to_sessions(self) -> bool {
         matches!(self, Capability::KeyRead | Capability::KeyWrite)
     }
 }
 
-/// Identifiers that used to be grantable and are not any more.
+/// Identifiers that were once grantable and are not any more.
 ///
-/// A capability is only offered while something actually enforces it. These
-/// never had one, or lost the routes that had it:
+/// A capability is offered only while something enforces it: `invitation.*` was
+/// a session-only admin feature with no route, `history.manage` had nothing
+/// beyond `history.read`/`history.write`, and `member.*`/`group.read` guarded
+/// sharing and groups that are gone (the remaining group routes are stubs gated
+/// on `library.read`, as is `related-users`).
 ///
-/// * `invitation.read` / `invitation.write` — invitations are a Web-UI,
-///   session-only, admin feature; there is no invitation route in [`ROUTES`]
-///   (the [`CapabilityDomain::Invitation`] grouping stays for the day there is).
-/// * `history.manage` — history has exactly two powers, reading a version's
-///   history (`history.read`) and restoring one (`history.write`); nothing else
-///   consults it.
-/// * `member.read` / `member.write` / `group.read` — they guarded user-to-user
-///   library sharing and group management, both of which are gone. The two
-///   group routes that remain are stateless compatibility stubs gated on
-///   `library.read`; `related-users` moved to `library.read` too.
-///
-/// A stored list may still name them, because a key minted from the `full` or
-/// `readonly_all` preset before this build carries them. Such ids are *dropped*
-/// on parse (see [`CapabilitySet::parse_stored`]) — dropping a grant nothing
-/// consults cannot make a key more permissive than the database says, which is
-/// the property the strict parse otherwise protects. Client input stays strict:
-/// [`CapabilitySet::parse`] rejects a retired id rather than accepting a no-op.
+/// A stored list may still name them: a key minted from `full` or `readonly_all`
+/// before this build carries them. Stored lists drop such ids
+/// ([`CapabilitySet::parse_stored`]) — a grant nothing consults cannot make a key
+/// more permissive — while client input remains strict ([`CapabilitySet::parse`]
+/// rejects a retired id rather than accepting a no-op).
 pub const RETIRED_IDS: &[&str] = &[
     "invitation.read",
     "invitation.write",
@@ -354,11 +320,9 @@ pub const RETIRED_IDS: &[&str] = &[
     "group.read",
 ];
 
-/// Capabilities implied by another capability.
-///
-/// The closure is applied on parse, so a stored list never needs to contain the
-/// implied entries. Keeping "write implies read" here (rather than in the UI)
-/// means a client that posts only `file.write` still gets `file.read`.
+/// Capabilities implied by another capability, applied on parse so a stored list
+/// never needs the implied entries: a client posting only `file.write` still gets
+/// `file.read`.
 const IMPLICATIONS: &[(Capability, &[Capability])] = &[
     (Capability::AccountWrite, &[Capability::AccountRead]),
     (Capability::DeviceWrite, &[Capability::DeviceRead]),
@@ -400,9 +364,8 @@ fn implied_by(capability: Capability) -> &'static [Capability] {
 
 /// A set of capabilities, stored in memory as a bit set.
 ///
-/// `u128` comfortably covers the catalog (40 today); adding a 129th capability
-/// would be a compile-time error at [`Capability::bit`], which is the intended
-/// prompt to widen the type together with the persisted format.
+/// `u128` covers the catalog (40 today); a 129th capability fails to compile at
+/// `Capability::bit`, prompting a widening together with the persisted format.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CapabilitySet(u128);
 
@@ -449,12 +412,11 @@ impl CapabilitySet {
         self.0 & other.0 == other.0
     }
 
-    /// Parse a persisted identifier list and expand the implication closure.
+    /// Parse an identifier list and expand the implication closure.
     ///
     /// An unknown id is an error rather than a silent drop: a typo must not
-    /// produce a key that quietly lacks the access its creator intended. This is
-    /// the path for *client input*; stored lists go through
-    /// [`CapabilitySet::parse_stored`], which additionally tolerates retirement.
+    /// produce a key lacking the access its creator intended. Client input path;
+    /// stored lists use [`CapabilitySet::parse_stored`], which tolerates retirement.
     pub fn parse(ids: &[String]) -> Result<CapabilitySet, UnknownCapability> {
         let mut set = CapabilitySet::EMPTY;
         for id in ids {
@@ -468,11 +430,8 @@ impl CapabilitySet {
 
     /// Parse an identifier list that came out of the database.
     ///
-    /// Retired ids ([`RETIRED_IDS`]) are dropped instead of rejected, so a key
-    /// minted before a capability was retired keeps working with everything this
-    /// build can still enforce. Dropping a grant that nothing consults can never
-    /// make a key more permissive than its row, which is what the strict parse
-    /// protects; an id that is neither live nor retired is still an error.
+    /// Retired ids ([`RETIRED_IDS`]) are dropped, so a key minted before a
+    /// retirement keeps working; one that is neither live nor retired is an error.
     pub fn parse_stored(ids: &[String]) -> Result<CapabilitySet, UnknownCapability> {
         let live: Vec<String> = ids
             .iter()
@@ -516,56 +475,45 @@ impl CapabilitySet {
         CapabilitySet::parse_stored(&ids)
     }
 
-    /// Render the canonical on-disk form.
     pub fn to_canonical(&self) -> String {
         self.to_ids().join(",")
     }
 }
 
-/// What a route requires of the caller.
-///
-/// This is the complete policy: it is consulted for every credential, not only
-/// for keys (see `Credential::allows_route`).
+/// What a route requires of the caller; consulted for every credential, not only
+/// keys (see `Credential::allows_route`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteAccess {
     /// No credential: a public endpoint, or a handler that authenticates the
-    /// request itself (for example `POST /api2/device-wiped/`, which reads the
-    /// token from either a form field or a header).
+    /// request itself (e.g. `POST /api2/device-wiped/`).
     Public,
-    /// Any valid credential is enough. Used for probes such as
-    /// `GET /api2/auth/ping/`, which only answers "is this token accepted".
+    /// Any valid credential is enough; used for probes such as `/api2/auth/ping/`.
     AnyAuthenticated,
-    /// The account itself is required; API keys are rejected. Used for the
-    /// authentication plumbing (login/logout, client login, SSO) and for key
-    /// management itself: a key that can mint keys could grant itself more than
-    /// it holds.
+    /// The account itself; API keys are rejected. Covers login/logout, SSO and key
+    /// management: a key that can mint keys could grant itself more than it holds.
     SessionOnly,
-    /// A key needs this capability; a session satisfies it because a session is
-    /// the account, not a subset of it.
+    /// A key needs this capability; a session satisfies it because it *is* the
+    /// account, not a subset of it.
     Capability(Capability),
 }
 
 /// Route classification table.
 ///
-/// `{name}` matches exactly one non-empty path segment. The table covers every
-/// `/api2` and `/api/v2.1` route (see the coverage test in
-/// `server/tests/capability_coverage_test.rs`); a route that is missing here is
-/// denied to every credential, which is the intended failure direction.
+/// `{name}` matches exactly one non-empty segment; the table covers every `/api2`
+/// and `/api/v2.1` route (see `server/tests/capability_coverage_test.rs`). A
+/// route missing here is denied to every credential, the intended failure.
 #[allow(clippy::type_complexity)]
 const ROUTES: &[(&str, &str, RouteAccess)] = &[
-    // ── Authentication plumbing ──────────────────────────────────────────
     ("POST", "/api2/auth-token/", RouteAccess::Public),
     ("GET", "/api2/auth/ping/", RouteAccess::AnyAuthenticated),
     ("POST", "/api2/logout-device/", RouteAccess::SessionOnly),
     ("GET", "/api2/ping/", RouteAccess::Public),
     ("GET", "/api2/server-info/", RouteAccess::Public),
-    // device-wiped reads the token from a form field or the Authorization
-    // header itself, so it never reaches `AuthUser`.
+    // device-wiped reads its token from the form or header, never reaching `AuthUser`.
     ("POST", "/api2/device-wiped/", RouteAccess::Public),
     ("POST", "/api2/client-sso-link/", RouteAccess::Public),
     ("GET", "/api2/client-sso-link/{token}/", RouteAccess::Public),
     ("POST", "/api2/client-login/", RouteAccess::SessionOnly),
-    // ── Account / devices / notifications ────────────────────────────────
     (
         "GET",
         "/api2/account/info/",
@@ -607,10 +555,8 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api2/devices/",
         RouteAccess::Capability(Capability::DeviceWrite),
     ),
-    // The credential inventory. It answers a wider question than
-    // `/api2/devices/` -- browser sessions and sync tokens are not devices --
-    // but it is the same management surface, so it is governed by the same
-    // capability rather than by one minted for a single endpoint.
+    // Credential inventory: wider than `/api2/devices/` (sessions and sync tokens
+    // are not devices) but the same management surface, so the same capability.
     (
         "GET",
         "/api2/credentials/",
@@ -626,7 +572,6 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api2/unseen_messages/",
         RouteAccess::Capability(Capability::NotificationRead),
     ),
-    // ── Library metadata ─────────────────────────────────────────────────
     (
         "GET",
         "/api2/repos/",
@@ -712,7 +657,6 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api/v2.1/deleted-repos/{repo_id}/",
         RouteAccess::Capability(Capability::LibraryDelete),
     ),
-    // ── Files and directories ────────────────────────────────────────────
     (
         "GET",
         "/api2/repos/{repo_id}/dir/",
@@ -843,17 +787,14 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api/v2.1/repos/{repo_id}/zip-task/",
         RouteAccess::Capability(Capability::FileRead),
     ),
-    // The web UI's file-content endpoint lives outside the API namespaces but
-    // serves the same bytes as `GET /api2/repos/{id}/file/`, so it is a read.
+    // Outside the API namespaces, but serves the same bytes as `/api2/.../file/`.
     (
         "GET",
         "/repos/{repo_id}/files/{*path}",
         RouteAccess::Capability(Capability::FileRead),
     ),
-    // ── Upload / download capability URLs ────────────────────────────────
     // These answer with a bearer URL (or a block link), so they are write-level
-    // even though two of them are served on GET: a read-only key must not be
-    // able to mint a credential that can upload.
+    // even on GET: a read-only key must not be able to mint an upload credential.
     (
         "GET",
         "/api2/repos/{repo_id}/upload-link/",
@@ -879,7 +820,6 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/",
         RouteAccess::Capability(Capability::FileWrite),
     ),
-    // ── Batch file operations ────────────────────────────────────────────
     (
         "POST",
         "/api2/repos/{repo_id}/fileops/delete/",
@@ -935,7 +875,6 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api/v2.1/query-copy-move-progress/",
         RouteAccess::Capability(Capability::FileRead),
     ),
-    // ── Trash and history ────────────────────────────────────────────────
     (
         "GET",
         "/api/v2.1/repos/{repo_id}/trash/",
@@ -986,7 +925,6 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api/v2.1/repos/{repo_id}/file/revision/restore/",
         RouteAccess::Capability(Capability::HistoryWrite),
     ),
-    // ── Sharing: links, members, groups ──────────────────────────────────
     (
         "GET",
         "/api2/shared-links/",
@@ -1102,7 +1040,6 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api/v2.1/repos/{repo_id}/related-users/",
         RouteAccess::Capability(Capability::LibraryRead),
     ),
-    // ── Metadata and tags ────────────────────────────────────────────────
     (
         "GET",
         "/api/v2.1/repos/{repo_id}/metadata/",
@@ -1168,7 +1105,6 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api/v2.1/repos/{repo_id}/metadata/file-tags/",
         RouteAccess::Capability(Capability::TagWrite),
     ),
-    // ── Discovery: starred, activities, search ───────────────────────────
     (
         "GET",
         "/api2/starredfiles/",
@@ -1224,9 +1160,8 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api2/index-file-text/",
         RouteAccess::Capability(Capability::SearchWrite),
     ),
-    // ── Sync token issuance ──────────────────────────────────────────────
-    // The minted sync token is a full read/write library credential, so
-    // issuance is write-level: a read-only key must not be able to obtain one.
+    // The minted sync token is a full read/write library credential, so issuance
+    // is write-level: a read-only key must not be able to obtain one.
     (
         "GET",
         "/api2/repo-tokens/",
@@ -1237,7 +1172,6 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api2/repos/{repo_id}/download-info/",
         RouteAccess::Capability(Capability::SyncToken),
     ),
-    // ── Misc ─────────────────────────────────────────────────────────────
     (
         "GET",
         "/api/v2.1/smart-link/",
@@ -1263,10 +1197,8 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
         "/api2/admin/users/{user_id}/",
         RouteAccess::Capability(Capability::AdminUserWrite),
     ),
-    // ── Unified key management ───────────────────────────────────────────
-    // Session-only, including the read-only catalog: a key that can mint keys
-    // could grant itself more than it holds, so no part of the management
-    // surface accepts key authentication.
+    // Session-only, catalog included: a key that can mint keys could grant itself
+    // more than it holds, so no part of this surface accepts key authentication.
     ("GET", "/api2/api-keys/catalog/", RouteAccess::SessionOnly),
     ("GET", "/api2/api-keys/", RouteAccess::SessionOnly),
     ("POST", "/api2/api-keys/", RouteAccess::SessionOnly),
@@ -1277,17 +1209,15 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
 
 /// Classify a request path for the credential guard.
 ///
-/// Returns `None` when the path is outside the classified API surface or is not
-/// in [`ROUTES`]. Callers enforcing access must treat `None` as denied: a route
-/// added without a classification then fails closed instead of silently
-/// accepting every credential.
+/// `None` means the path is outside the classified surface or absent from
+/// `ROUTES`; callers must treat that as denied, so a new unclassified route fails
+/// closed instead of accepting every credential.
 pub fn required_access(method: &Method, path: &str) -> Option<RouteAccess> {
     if !is_classified_prefix(path) {
         return None;
     }
-    // Preflight requests are answered by the CORS layer and never reach a
-    // handler with credentials; classifying them as "any credential" keeps a
-    // stray OPTIONS from being reported as an unknown route.
+    // Preflights are answered by the CORS layer; classifying them as "any
+    // credential" keeps a stray OPTIONS from being reported as an unknown route.
     if method == Method::OPTIONS {
         return Some(RouteAccess::AnyAuthenticated);
     }
@@ -1307,16 +1237,12 @@ pub fn required_access(method: &Method, path: &str) -> Option<RouteAccess> {
 
 /// Human-readable list of the enforcement points that consult `capability`.
 ///
-/// This is the catalog's own documentation: the management UI renders it as a
-/// tooltip and `/api2/api-keys/catalog/` returns it, so "what does granting this
-/// actually buy?" is answered by the route table instead of by a comment that can
-/// drift. Entries are method + path literals (language-neutral, so they need no
-/// translation). Every capability in [`Capability::ALL`] has at least one entry —
-/// enforced by `every_catalog_capability_has_an_enforcement_point`.
+/// The management UI renders it as a tooltip and `/api2/api-keys/catalog/` returns
+/// it, so "what does granting this buy?" is answered by the route table itself.
+/// Every capability in [`Capability::ALL`] has at least one entry.
 pub fn enforced_by(capability: Capability) -> Vec<String> {
-    // Two surfaces are authenticated on their own and never reach the route
-    // table: WebDAV's Basic-auth extractor and the sync protocol's `/seafhttp`
-    // guard. Both read-only method sets are named explicitly.
+    // Two surfaces authenticate on their own and never reach the route table:
+    // WebDAV's Basic-auth extractor and the sync protocol's `/seafhttp` guard.
     match capability {
         Capability::WebdavRead => {
             return vec!["GET|HEAD|PROPFIND|REPORT /dav/{repo_id}/…".to_string()];
@@ -1340,16 +1266,14 @@ fn is_classified_prefix(path: &str) -> bool {
         || path.starts_with("/api2/")
         || path == "/api/v2.1"
         || path.starts_with("/api/v2.1/")
-        // The unified web file-content endpoint is served outside the API
-        // namespaces but also accepts an API key, so it has to be classified
-        // rather than falling through to "deny".
+        // The web file-content endpoint is outside the API namespaces but accepts
+        // an API key, so it must be classified rather than fall through to "deny".
         || path.starts_with("/repos/")
 }
 
 /// Whether `path` matches a `{name}`-style pattern.
 ///
-/// `{name}` matches exactly one non-empty segment; a trailing `{*name}`
-/// (axum's catch-all) matches one or more remaining segments.
+/// `{name}` matches one non-empty segment; `{*name}` matches the remaining ones.
 fn pattern_matches(pattern: &str, path: &str) -> bool {
     let pattern_segments: Vec<&str> = pattern.trim_matches('/').split('/').collect();
     let path_segments: Vec<&str> = path.trim_matches('/').split('/').collect();
@@ -1362,8 +1286,7 @@ fn pattern_matches(pattern: &str, path: &str) -> bool {
             return false;
         };
         if segment.starts_with('{') && segment.ends_with('}') {
-            // A placeholder never matches an empty segment, so a doubled slash
-            // cannot satisfy a parameter position.
+            // A placeholder never matches an empty segment (doubled slash).
             if actual.is_empty() {
                 return false;
             }
@@ -1374,8 +1297,7 @@ fn pattern_matches(pattern: &str, path: &str) -> bool {
     pattern_segments.len() == path_segments.len()
 }
 
-/// Prefer the pattern with more literal (non-placeholder) characters, so a
-/// specific route registered after a broader one still wins.
+/// Prefer the pattern with more literal characters, so a specific route wins.
 fn specificity(pattern: &str) -> usize {
     pattern
         .trim_matches('/')
@@ -1387,11 +1309,10 @@ fn specificity(pattern: &str) -> usize {
 
 /// Whether a `/seafhttp/...` request mutates repository state.
 ///
-/// The sync protocol has no route table of its own here (its paths arrive both
-/// in full and prefix-stripped form, because axum's `nest` rewrites the URI), so
-/// the classification is by method with an explicit list of read-only POSTs.
-/// Anything unrecognised counts as a write, so a read-only key fails closed on a
-/// new endpoint.
+/// The sync protocol has no route table here (paths arrive both in full and
+/// prefix-stripped form), so this classifies by method plus an explicit list of
+/// read-only POSTs; anything unrecognised is a write, so a read-only key fails
+/// closed on a new endpoint.
 pub fn requires_sync_write(method: &Method, path: &str) -> bool {
     if method == Method::GET || method == Method::HEAD {
         return false;
@@ -1408,9 +1329,8 @@ pub fn requires_sync_write(method: &Method, path: &str) -> bool {
 
 /// Whether a WebDAV method mutates repository state.
 ///
-/// `PROPFIND`/`REPORT` are reads that a plain method check would miss; every
-/// other method — including ones this server does not implement — counts as a
-/// write, so a read-only key fails closed.
+/// `PROPFIND`/`REPORT` are reads; every other method, including unimplemented
+/// ones, counts as a write so a read-only key fails closed.
 pub fn webdav_requires_write(method: &str) -> bool {
     !matches!(method, "GET" | "HEAD" | "OPTIONS" | "PROPFIND" | "REPORT")
 }
@@ -1421,15 +1341,13 @@ pub struct Preset {
     pub capabilities: &'static [Capability],
 }
 
-/// Presets are convenience only; they expand to ordinary capability sets, and
-/// the user can edit any of them before saving.
+/// Presets are convenience only: they expand to ordinary capability sets and the
+/// user can edit any of them before saving.
 ///
 /// A preset stays within its own surface. `webdav_*` is the sharpest case: the
-/// `/dav/...` guard consults only `webdav.*` plus the key's library binding
-/// (`webdav_requires_write`), so a preset that also carried `file.*` or
-/// `library.read` would silently hand a WebDAV key the REST API of the bound
-/// libraries — including `file.delete`. Rebuilding a key as a REST client is a
-/// deliberate extra tick, not part of "mount this library".
+/// `/dav/...` guard consults only `webdav.*` plus the library binding, so adding
+/// `file.*` or `library.read` would hand a WebDAV key the REST API of the bound
+/// libraries, including `file.delete`.
 pub const PRESETS: &[Preset] = &[
     Preset {
         id: "sync_client_rw",
@@ -1590,8 +1508,7 @@ mod tests {
             assert_eq!(Capability::from_id(capability.id()), Some(capability));
         }
         assert_eq!(Capability::from_id("file.upload"), None);
-        // A retired id is not in the catalog any more, but is still recognised
-        // as retired rather than as a typo.
+        // A retired id is out of the catalog but still recognised as retired.
         for id in RETIRED_IDS {
             assert_eq!(
                 Capability::from_id(id),
@@ -1698,8 +1615,7 @@ mod tests {
 
     #[test]
     fn retired_ids_are_dropped_from_stored_lists_but_rejected_as_input() {
-        // A key minted by an older build carries these; it keeps working, with
-        // exactly the capabilities this build can still enforce.
+        // A key minted by an older build keeps working with what we can enforce.
         let parsed = CapabilitySet::from_canonical("invitation.read,file.read,history.manage")
             .expect("stored lists tolerate retirement");
         assert_eq!(parsed, set(&["file.read"]));
@@ -1719,8 +1635,7 @@ mod tests {
     fn every_catalog_capability_has_an_enforcement_point() {
         for capability in Capability::ALL {
             // `key.*` is reserved to sessions and never granted (the management
-            // routes are `SessionOnly`), so it is not part of the picker's
-            // promise.
+            // routes are `SessionOnly`), so it is outside the picker's promise.
             if capability.is_reserved_to_sessions() {
                 continue;
             }
@@ -1752,9 +1667,8 @@ mod tests {
                 );
             }
         }
-        // Every live capability is enforced either by the route table or by one
-        // of the four non-table surfaces named in `enforced_by`. `key.*` is the
-        // deliberate exception: it is reserved to sessions and never granted.
+        // Every live capability is enforced by the table or by one of the four
+        // non-table surfaces; `key.*` is the deliberate exception, reserved.
         let non_table = [
             Capability::SyncRead,
             Capability::SyncWrite,
@@ -1806,9 +1720,8 @@ mod tests {
         let ci = preset_set("ci_upload");
         assert!(ci.contains(Capability::FileWrite));
         assert!(ci.contains(Capability::UploadLinkWrite));
-        // `sync.token` mints a full read/write credential for the bound
-        // libraries (see the comment on `/api2/repo-tokens/`), which an upload
-        // preset must not hand out.
+        // `sync.token` mints a full read/write credential for the bound libraries
+        // (see `/api2/repo-tokens/`), which an upload preset must not hand out.
         assert!(!ci.contains(Capability::SyncToken));
         assert!(!ci.contains(Capability::SyncRead));
         assert!(!ci.contains(Capability::SyncWrite));

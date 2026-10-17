@@ -13,13 +13,11 @@ const TOKEN_LEN: usize = 40;
 
 /// Verify a sync token that the client supplied in the request **body**.
 ///
-/// A few sync endpoints (`folder-perm`, `locked-files`) carry the token in
-/// their JSON payload rather than in a header, so they never go through
-/// `SyncAuth`. They must still apply the same rules: the token has to belong to
-/// the requested repo, be unexpired, and belong to a user that still exists and
-/// is active. Checking only "the row exists" would let an expired token — or one
-/// whose owner was deactivated — keep working until the hourly cleanup pass
-/// happened to delete it.
+/// `folder-perm` and `locked-files` carry the token in JSON rather than a header,
+/// so they never go through `SyncAuth` and must apply the same rules here: the
+/// token must belong to the repo, be unexpired, and belong to an active user.
+/// Checking only "the row exists" would let an expired or deactivated token keep
+/// working until the hourly cleanup.
 pub async fn verify_body_sync_token(
     repos: &crate::repository::Repositories,
     repo_id: &str,
@@ -45,7 +43,6 @@ pub async fn verify_body_sync_token(
 }
 
 /// Return the sync token the caller should use for one repository, or create it.
-///
 /// Requires read permission on the repo (a sync token grants repo access).
 pub async fn ensure_sync_token_for(
     repos: &Repositories,
@@ -74,19 +71,12 @@ pub async fn ensure_sync_token_for(
 /// Resolve the sync token of many repositories at once.
 ///
 /// A token belongs to one `(repository, user, device)`; the caller has already
-/// checked that the user may read every repository. Resolution per repository:
-///
-/// 1. the device's own token is reused;
-/// 2. failing that, an *unattributed* token — one minted by a caller with no
-///    device identity, or left by a build that never recorded a peer — is
-///    claimed for this device;
-/// 3. failing that, a fresh token is minted with the device already recorded,
-///    so the credential inventory shows it under its device before the first
-///    sync. A caller with no device (a browser session or an API key) shares
-///    the single unattributed token per repository, as it always has.
-///
-/// The two loads are batched so an account syncing twenty libraries pays two
-/// queries rather than forty.
+/// checked read permission for every repo. Per repo: the device's own token is
+/// reused; failing that, an *unattributed* token (minted by a caller with no device
+/// identity) is claimed for this device; failing that, a fresh token is minted with
+/// the device already recorded. A caller with no device shares the single
+/// unattributed token per repository, as it always has. The two loads are batched,
+/// so syncing twenty libraries costs two queries rather than forty.
 pub async fn ensure_sync_tokens_for_repos(
     repos: &Repositories,
     repo_ids: &[String],
@@ -133,8 +123,8 @@ pub async fn ensure_sync_tokens_for_repos(
     Ok(tokens)
 }
 
-/// The token to use for one repository, given the candidate rows already
-/// loaded. See [`ensure_sync_tokens_for_repos`] for the rules.
+/// The token for one repository given the already loaded rows; see
+/// [`ensure_sync_tokens_for_repos`] for the rules.
 #[allow(clippy::too_many_arguments)]
 async fn resolve_repo_token(
     repos: &Repositories,
@@ -146,7 +136,6 @@ async fn resolve_repo_token(
     now: i64,
     sync_token_ttl_days: u64,
 ) -> Result<String, AppError> {
-    // 1. The device's own token wins.
     if let Some(row) = own {
         if let Some(raw) = reusable(repos, row, now) {
             return Ok(raw);
@@ -154,7 +143,6 @@ async fn resolve_repo_token(
         repos.sync_token.delete_by_id(row.id).await?;
     }
 
-    // 2. An unattributed token may be claimed; with no device it is shared.
     if let Some(row) = unattributed {
         if let Some(raw) = reusable(repos, row, now) {
             match peer {
@@ -163,9 +151,9 @@ async fn resolve_repo_token(
                     if repos.sync_token.attach_peer_if_unset(row.id, peer).await? {
                         return Ok(raw);
                     }
-                    // A concurrent request attached it first. If it became ours
-                    // (a retry of our own request), reuse it; otherwise it now
-                    // belongs to another device and we mint our own.
+                    // A concurrent request attached it first. If it became ours (a
+                    // retry of our request), reuse it; otherwise it belongs to
+                    // another device and we mint our own.
                     if let Some(mine) = repos
                         .sync_token
                         .find_by_repo_user_peer(repo_id, user_id, Some(&peer.id))
@@ -190,7 +178,6 @@ async fn resolve_repo_token(
         }
     }
 
-    // 3. Mint a fresh token, attributed to this device when there is one.
     let token_value = generate_sync_token();
     let expires_at = (sync_token_ttl_days > 0).then(|| now + sync_token_ttl_days as i64 * 86400);
     if let Err(error) = repos
@@ -198,9 +185,8 @@ async fn resolve_repo_token(
         .create(repo_id, user_id, token_value.clone(), peer, now, expires_at)
         .await
     {
-        // Two concurrent requests for the same device may both reach here; the
-        // unique `(repo, user, peer)` index lets only one insert through, and
-        // the loser can simply use the row the winner created.
+        // Two concurrent requests may both reach here; the unique `(repo, user, peer)`
+        // index lets only one insert through, and the loser uses the winner's row.
         if let Some(peer) = peer
             && let Some(mine) = repos
                 .sync_token
@@ -215,8 +201,8 @@ async fn resolve_repo_token(
     Ok(token_value)
 }
 
-/// The raw value of a row that is still usable, or `None` when it is expired or
-/// its ciphertext cannot be decrypted (the server secret changed).
+/// The raw value of a row that is still usable, or `None` when expired or its
+/// ciphertext cannot be decrypted (the server secret changed).
 fn reusable(repos: &Repositories, row: &sync_token::Model, now: i64) -> Option<String> {
     if row.expires_at.is_some_and(|expires| now > expires) {
         return None;
@@ -258,9 +244,8 @@ pub fn generate_backup_code() -> String {
 
 /// Compute the SHA-256 hash of a bearer token for database storage.
 ///
-/// Tokens are 160-bit random values, so a fast hash (not a slow KDF) is used —
-/// the purpose is only to prevent an attacker who reads the database from
-/// obtaining the raw token, which is infeasible to invert at that entropy.
+/// Tokens are 160-bit random values, so a fast hash suffices — the purpose is only
+/// to keep raw tokens out of a leaked database, which is infeasible to invert.
 pub fn hash_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
@@ -269,19 +254,15 @@ pub fn hash_token(token: &str) -> String {
 
 /// Revoke every credential for a user, optionally keeping the acting session.
 ///
-/// Mirrors seahub's `clear_token()` on password change/reset: account API
-/// tokens, unified API keys (WebDAV keys included), 2FA device-trust tokens and
-/// **all** repository sync tokens are dropped, so a stolen credential cannot
-/// survive the remediation. The acting
-/// session can be preserved via `keep_session_token` (the equivalent of
-/// seahub's `update_session_auth_hash`) so the user is not logged out of the
-/// browser they just used.
+/// Mirrors seahub's `clear_token()` on password change/reset: API tokens, unified
+/// API keys (WebDAV keys included), 2FA device-trust tokens, **all** repository
+/// sync tokens and outstanding reset links are dropped, so a stolen credential
+/// cannot survive the remediation. `keep_session_token` preserves the acting
+/// session (seahub's `update_session_auth_hash`).
 ///
-/// `token_manager` additionally drops the in-memory capability URLs
-/// (`/download-api/…`, `/upload-api/…`, `/blks/…`) this user still holds. They
-/// are bearer capabilities with a one-hour TTL, and leaving them alive meant a
-/// leaked upload/download URL outlived the password change that was supposed to
-/// revoke it. Pass `None` only where no manager is reachable.
+/// `token_manager` additionally drops this user's in-memory one-hour capability
+/// URLs (`/download-api/…`, `/upload-api/…`, `/blks/…`), so a leaked URL does not
+/// outlive the password change. Pass `None` only where no manager is reachable.
 pub async fn revoke_all_credentials(
     repos: &crate::repository::Repositories,
     token_manager: Option<&Arc<crate::AccessTokenManager>>,
@@ -299,13 +280,12 @@ pub async fn revoke_all_credentials(
     }
     repos.s2fa_token.delete_by_user(user_id).await?;
     repos.sync_token.delete_by_user(user_id).await?;
-    // Unified API keys include the WebDAV-scoped ones, which used to survive a
-    // password change because they lived in their own table with no TTL.
+    // Unified API keys include the WebDAV-scoped ones, which live in their own
+    // table with no TTL.
     repos.api_key.delete_by_user(user_id).await?;
 
-    // Outstanding password-reset links are credentials too: a reset link that
-    // survives a password change (or a competing reset) keeps offering account
-    // takeover for the rest of its 3-day TTL.
+    // Outstanding reset links are credentials too: one that survives a password
+    // change keeps offering account takeover for the rest of its 3-day TTL.
     for token in repos.password_reset_token.find_by_user(user_id).await? {
         repos.password_reset_token.delete_by_id(token.id).await?;
     }
@@ -341,7 +321,6 @@ mod tests {
     #[test]
     fn test_generate_backup_code_entropy() {
         let code = generate_backup_code();
-        // 10 bytes → 20 hex chars = 80 bits of entropy.
         assert_eq!(code.len(), 20);
         assert!(code.chars().all(|c| c.is_ascii_hexdigit()));
     }

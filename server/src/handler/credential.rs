@@ -1,16 +1,9 @@
 //! The account's credential inventory over the JSON API.
 //!
-//! The same data the settings page shows, for scripts and for clients that want
-//! to audit themselves. Two things are deliberate:
-//!
-//! * **Sync tokens are described, never revealed.** Their row holds a
-//!   ciphertext this server can decrypt, so returning the model would hand out
-//!   the same power as the credential. Only metadata crosses this boundary.
-//! * **`GET /api2/devices/` answers the same question.** It is the
-//!   Seafile-compatible surface, so it keeps the field names it always had and
-//!   gained a `kind` tag per entry: a client that ignores `kind` sees the extra
-//!   credentials rather than a changed shape. This endpoint exists as the
-//!   versioned, self-describing form of the same data.
+//! Two invariants: **sync tokens are described, never revealed** (their row holds a
+//! ciphertext this server can decrypt, so only metadata crosses this boundary), and
+//! **`GET /api2/devices/` answers the same question** in its Seafile-compatible shape
+//! with a per-entry `kind` tag — this is its versioned, self-describing form.
 
 use axum::{
     Json,
@@ -35,16 +28,14 @@ pub fn credential_routes() -> axum::Router<Arc<AppState>> {
         )
 }
 
-/// GET /api2/credentials/
-///
 /// Everything long-lived the account holds. Requires `device.read`.
 pub async fn list_credentials(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let service = CredentialService::new(state.repos.clone());
-    // No "current session" marker: this surface has no browser to point at, and
-    // an API key cannot be a session.
+    // No "current session" marker: this surface has no browser, and an API key is not a
+    // session.
     let inventory = service.inventory(auth.user_id, None).await?;
 
     Ok(Json(json!({
@@ -97,15 +88,12 @@ pub async fn list_credentials(
                 "expires_at": trust.expires_at,
             }))
             .collect::<Vec<_>>(),
-        // API keys are managed under `/api2/api-keys/`, which is session-only.
-        // This is a count so an inventory can tell whether any exist without
-        // opening a second, weaker path to the key surface.
+        // API keys live under `/api2/api-keys/`, which is session-only; a count tells an
+        // inventory whether any exist without a weaker second path.
         "api_key_count": inventory.api_key_count,
     })))
 }
 
-/// DELETE /api2/credentials/{kind}/{id}/
-///
 /// Revoke one credential. Requires `device.write`. A client *device* is still
 /// revoked through `DELETE /api2/devices/`, because one device owns several
 /// credentials that have to go together.

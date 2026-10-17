@@ -1,14 +1,11 @@
-//! ZIP download module — Seafile-compatible batch download as streaming zip.
+//! ZIP download module — Seafile-compatible batch download as a streaming zip.
 //!
-//! Implements:
-//! - `POST /api/v2.1/repos/{repo_id}/zip-task/` — request a zip download token
-//! - `GET /zip/{token}` — download the zip (streamed via `async_zip` + data descriptors)
+//! `POST /api/v2.1/repos/{repo_id}/zip-task/` mints a token, and
+//! `GET /zip/{token}` streams the archive.
 //!
-//! The ZIP stream uses **data descriptors** (`GeneralPurposeFlag.data_descriptor = true`)
-//! so that each file entry's CRC-32 and sizes are written *after* the compressed data,
-//! allowing true streaming without seeking back to patch the local file header.
-//! See `async_zip::base::write::entry_stream::EntryStreamWriter::close()` for the
-//! data-descriptor write (CRC-32 → compressed size → uncompressed size).
+//! The stream uses **data descriptors** (CRC-32 and sizes written *after* the
+//! compressed data) so entries stream without seeking back to patch local file
+//! headers; see `async_zip::base::write::entry_stream::EntryStreamWriter::close()`.
 
 use axum::{
     body::Body,
@@ -28,44 +25,36 @@ use crate::fs::zip::{
 use crate::middleware::auth::AuthUser;
 use base::error::AppError;
 
-// ── Data types ─────────────────────────────────────────────────────────
-
 /// Task info stored per zip-token.
 #[allow(dead_code)]
 struct ZipTaskInfo {
     repo_id: String,
-    /// Who requested the archive. Re-checked when the token is consumed, so a
-    /// user whose access was revoked (or whose account was deactivated) during
-    /// the token's one-hour TTL cannot still download the archive.
+    /// Who requested the archive; re-checked when the token is consumed so a user
+    /// whose access was revoked (or account deactivated) within the one-hour TTL
+    /// cannot still download it.
     user_id: i32,
     files: Vec<ZipFileEntry>,
-    // zip display name (without .zip extension)
     zip_name: String,
     created_at: i64,
 }
 
-// ── In-memory token store ──────────────────────────────────────────────
-
-/// Unconsumed zip-download tokens, bounded by **both** a count and a byte
-/// budget.
+/// Unconsumed zip-download tokens, bounded by **both** a count and a byte budget.
 ///
-/// The byte budget is the one that decides memory use: a token carries the full
-/// entry list, and `ZipFileEntry::block_ids` is a per-file vector of 40-char
-/// ids, so `max_zip_entries` entries times concurrently-held tokens reaches
-/// gigabytes on a directory of large files. A count cap alone would not stop
-/// that.
+/// The byte budget decides memory use: a token carries the full entry list, and
+/// `block_ids` is a per-file vector of 40-char ids, so a count cap alone would let
+/// `max_zip_entries` entries times concurrently-held tokens reach gigabytes.
 #[derive(Default)]
 struct ZipTaskRegistry {
     tasks: HashMap<String, ZipTaskInfo>,
-    /// Sum of [`ZipTaskInfo::entry_bytes`] over `tasks`, kept in step with
-    /// every insert and removal so the budget check is O(1).
+    /// Sum of [`ZipTaskInfo::entry_bytes`] over `tasks`, kept in step with every
+    /// insert and removal so the budget check is O(1).
     bytes: usize,
 }
 
 impl ZipTaskInfo {
-    /// Rough heap footprint of one registry entry, used only for the byte
-    /// budget. Deliberately an over-estimate: it counts the struct, the map key
-    /// and every owned string (including each block id).
+    /// Rough heap footprint of one registry entry, for the byte budget only.
+    /// Deliberately an over-estimate: counts the struct, the map key and every
+    /// owned string (including each block id).
     fn entry_bytes(token: &str, info: &Self) -> usize {
         let files: usize = info
             .files
@@ -89,8 +78,7 @@ impl ZipTaskInfo {
 }
 
 impl ZipTaskRegistry {
-    /// Drop tokens older than [`ZIP_TASK_TTL_SECS`], returning their bytes to
-    /// the budget and the number of entries dropped.
+    /// Drop tokens older than [`ZIP_TASK_TTL_SECS`] and return how many went.
     fn sweep(&mut self, now: i64) -> usize {
         let mut dropped = 0usize;
         let mut freed = 0usize;
@@ -106,10 +94,8 @@ impl ZipTaskRegistry {
         dropped
     }
 
-    /// Insert a token, evicting oldest-first until both budgets hold.
-    ///
-    /// Returns `false` when the entry alone exceeds `max_bytes`, which is a
-    /// request that can never be satisfied rather than one to wait for.
+    /// Insert a token, evicting oldest-first until both budgets hold. Returns
+    /// `false` when the entry alone exceeds `max_bytes` (never satisfiable).
     fn insert(
         &mut self,
         token: String,
@@ -159,8 +145,7 @@ impl ZipTaskRegistry {
 static ZIP_TASKS: OnceLock<Mutex<ZipTaskRegistry>> = OnceLock::new();
 
 /// TTL for an unconsumed zip task, and a hard cap on how many may be held at
-/// once. The byte budget in [`ZipTaskRegistry`] is the binding limit in
-/// practice.
+/// once; the byte budget in [`ZipTaskRegistry`] is the binding limit in practice.
 const ZIP_TASK_TTL_SECS: i64 = 3600;
 const MAX_ZIP_TASKS: usize = 1000;
 
@@ -168,11 +153,8 @@ fn zip_tasks() -> &'static Mutex<ZipTaskRegistry> {
     ZIP_TASKS.get_or_init(|| Mutex::new(ZipTaskRegistry::default()))
 }
 
-/// Remove zip tasks older than `ZIP_TASK_TTL_SECS`. Called on new task
-/// creation and periodically by the scheduler so abandoned tasks don't
-/// accumulate.
 /// Drop expired zip tokens, reporting how many were dropped so the cleanup job
-/// can say what it did.
+/// can say what it did; called on task creation and periodically by the scheduler.
 pub fn cleanup_expired(now: i64) -> usize {
     match zip_tasks().lock() {
         Ok(mut registry) => registry.sweep(now),
@@ -207,28 +189,23 @@ pub struct ZipTaskResponse {
     pub zip_token: String,
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────
-
 /// Determine the zip filename (without extension) based on the request.
 #[allow(unused_variables)]
 fn determine_zip_name(parent_dir: &str, dirents: &[String]) -> String {
     if dirents.len() == 1 {
-        // Single directory download → use directory name
         dirents[0].trim_end_matches('/').to_string()
     } else {
-        // Multi-file download → use date-based name (matching seahub convention)
+        // Multi-file download keeps seahub's date-based convention.
         let now = chrono::Local::now();
         format!("documents-export-{}", now.format("%Y-%m-%d"))
     }
 }
 
-// ── Handlers ───────────────────────────────────────────────────────────
-
 /// Parse the `zip-task` payload from either a JSON body or `multipart/form-data`.
 ///
-/// The official web frontend posts `FormData` with `parent_dir` and a repeated
-/// `dirents` field (`seafile-api.js`, `seahub/api2/endpoints/zip_task.py`), so a
-/// JSON-only extractor made the browser's multi-select download fail with 415.
+/// The official frontend posts `FormData` with a repeated `dirents` field
+/// (`seahub/api2/endpoints/zip_task.py`), so a JSON-only extractor made the
+/// browser's multi-select download fail with 415.
 async fn parse_zip_task_request(
     headers: &axum::http::HeaderMap,
     body: axum::body::Body,
@@ -272,14 +249,8 @@ async fn parse_zip_task_request(
         .map_err(|e| AppError::BadRequest(format!("invalid JSON body: {e}")))
 }
 
-/// `POST /api/v2.1/repos/{repo_id}/zip-task/`
-///
-/// Accepts form data:
-/// - `parent_dir` — the directory containing the items to download
-/// - `dirents` — one or more file/folder names within `parent_dir`
-///
-/// Returns `{ "zip_token": "<uuid>" }` which the client can then pass to
-/// `GET /zip/{token}` to receive the actual zip stream.
+/// `POST /api/v2.1/repos/{repo_id}/zip-task/` — mint a `zip_token` for
+/// `GET /zip/{token}`, taking `parent_dir` and one or more `dirents`.
 pub async fn zip_task_handler(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -288,7 +259,6 @@ pub async fn zip_task_handler(
     body: axum::body::Body,
 ) -> Result<JsonResponse<ZipTaskResponse>, AppError> {
     let mut payload = parse_zip_task_request(&headers, body).await?;
-    // Verify read permission
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         &repo_id,
@@ -297,9 +267,7 @@ pub async fn zip_task_handler(
     .await?;
 
     // Bound and de-duplicate the requested names before any tree walk: each
-    // directory name triggers a full recursive traversal while holding one of
-    // the (few) global ZIP permits, so an unbounded list is a memory and
-    // availability hazard, not just wasted work.
+    // directory triggers a recursive traversal while holding a global ZIP permit.
     crate::handler::sanitize_dirent_list(&mut payload.dirents)?;
 
     if payload.dirents.is_empty() {
@@ -308,16 +276,13 @@ pub async fn zip_task_handler(
         ));
     }
 
-    // Resolve head commit root
     let root_fs_id = infra::common::util::get_head_root_id(&state.db, &repo_id).await?;
 
-    // Gate the expensive collection phase (recursive DB traversal) so a flood
-    // of zip tokens can't bypass the global concurrency cap. The permit is held
-    // as a scoped guard for the duration of the walk and dropped after.
+    // Gate the expensive recursive collection phase so a flood of zip tokens
+    // cannot bypass the global concurrency cap; the guard holds for the walk.
     let _permit = acquire_zip_permit().await?;
 
-    // Collect files (recursively for directories), bounded by the configured
-    // per-archive entry/byte caps (429 when exceeded).
+    // Collect files recursively, bounded by the per-archive entry/byte caps (429).
     let files = collect_selected_entries(
         &state.repos,
         &repo_id,
@@ -339,8 +304,7 @@ pub async fn zip_task_handler(
     let token = generate_token();
     let now = now_secs();
 
-    // Purge abandoned tasks and enforce the count/byte budgets. The count is
-    // the cleanup job's business, not this request's.
+    // Purge abandoned tasks, then enforce the registry's count/byte budgets.
     let _ = cleanup_expired(now);
     {
         let max_bytes = state.config().storage.max_zip_task_bytes as usize;
@@ -367,17 +331,12 @@ pub async fn zip_task_handler(
     Ok(JsonResponse(ZipTaskResponse { zip_token: token }))
 }
 
-/// `GET /zip/{token}`
-///
-/// Streams the zip archive for a previously requested zip-task token.
-/// The response has:
-/// - `Content-Type: application/zip`
-/// - `Content-Disposition: attachment; filename="<name>.zip"`
+/// `GET /zip/{token}` — stream the archive for a previously minted token as
+/// `application/zip` with a `Content-Disposition: attachment` filename.
 pub async fn zip_download_handler(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Response, AppError> {
-    // Look up the task
     let task = {
         let mut registry = zip_tasks()
             .lock()
@@ -408,9 +367,7 @@ pub async fn zip_download_handler(
     }
 
     // Check if repo is encrypted and if password is set (for the user who created the task)
-    // For simplicity with token-based access, we handle this case separately.
-    // The token-based download doesn't carry user identity, so encrypted repos
-    // without cached password will fail here.
+    // The token carries no user identity, so an encrypted repo cannot be served here.
     let dec_key: Option<(Vec<u8>, Vec<u8>)> = {
         let repo_model = state
             .repos
@@ -422,11 +379,6 @@ pub async fn zip_download_handler(
         if repo_model.encrypted == 0 {
             None
         } else {
-            // Encrypted repo: try to get from password manager
-            // We don't have a user_id here, so we check all cached passwords.
-            // This is a limitation — for encrypted repos, the two-step token flow
-            // won't work. Users should use the direct download API instead.
-            // For now, return an error for encrypted repos.
             return Err(AppError::BadRequest(
                 "Zip download for encrypted repos is not supported via token. \
                  Use the direct download API instead."
@@ -437,8 +389,7 @@ pub async fn zip_download_handler(
 
     let zip_filename = format!("{}.zip", task.zip_name);
 
-    // Acquire a permit for the streaming phase; moved into stream_zip and held
-    // for the writer task's full lifecycle.
+    // Held for the writer task's full lifecycle once moved into `stream_zip`.
     let permit = acquire_zip_permit().await?;
     let stream = stream_zip(
         task.repo_id.clone(),
@@ -464,8 +415,6 @@ pub async fn zip_download_handler(
 
     Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response())
 }
-
-// ── JsonResponse wrapper ───────────────────────────────────────────────
 
 /// Wraps a serializable value into an `axum::Json` response.
 pub struct JsonResponse<T: serde::Serialize>(pub T);
@@ -502,8 +451,7 @@ mod registry_tests {
         ZipTaskInfo::entry_bytes(token, &info(files, 0))
     }
 
-    /// The byte budget — not the token count — is what bounds memory: once it
-    /// is reached, the oldest tokens are evicted to make room.
+    /// The byte budget, not the token count, bounds memory: the oldest is evicted.
     #[test]
     fn byte_budget_evicts_the_oldest_tokens() {
         let mut registry = ZipTaskRegistry::default();
@@ -521,9 +469,8 @@ mod registry_tests {
         assert!(registry.bytes <= one * 2, "the tally stays within budget");
     }
 
-    /// An archive whose listing alone exceeds the whole budget can never be
-    /// served from memory, so it is refused rather than evicting everything
-    /// else to make room for something that still would not fit.
+    /// An archive whose listing alone exceeds the whole budget is refused rather
+    /// than evicting everything else for something that still would not fit.
     #[test]
     fn an_oversized_token_is_refused_without_evicting() {
         let mut registry = ZipTaskRegistry::default();
@@ -541,8 +488,7 @@ mod registry_tests {
         );
     }
 
-    /// The count cap evicts rather than failing, and consuming a token returns
-    /// its bytes to the budget.
+    /// The count cap evicts rather than failing; `take` frees the entry's bytes.
     #[test]
     fn count_cap_evicts_and_take_frees_bytes() {
         let mut registry = ZipTaskRegistry::default();
@@ -563,8 +509,7 @@ mod registry_tests {
         assert!(registry.take("t1").is_none());
     }
 
-    /// Expiry returns the bytes too, so the budget cannot be pinned by
-    /// abandoned tokens.
+    /// Expiry returns the bytes too, so abandoned tokens cannot pin the budget.
     #[test]
     fn sweep_drops_expired_tokens_and_their_bytes() {
         let mut registry = ZipTaskRegistry::default();

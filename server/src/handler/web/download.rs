@@ -15,10 +15,9 @@ use base::error::AppError;
 /// Reject a capability token whose owner is no longer an active account.
 ///
 /// The `/download-api/{token}`, `/blks/{token}/…` and `/upload-api/{token}`
-/// endpoints authenticate with an in-memory token rather than `AuthUser`, so
-/// they never saw the `is_active` check every other surface applies. A
-/// deactivated account kept read (and write) access for the token's remaining
-/// TTL — exactly the window an administrator deactivates an account to close.
+/// endpoints authenticate with an in-memory token rather than `AuthUser`, so they
+/// never saw the `is_active` check every other surface applies — a deactivated
+/// account kept access for the token's remaining TTL.
 pub(crate) async fn ensure_token_user_active(
     state: &AppState,
     user_id: i32,
@@ -35,11 +34,8 @@ pub(crate) async fn ensure_token_user_active(
     Ok(())
 }
 
-/// Helper: get decryption key for an encrypted repo if password is set.
-///
-/// Returns `None` if the repo is not encrypted, or `Some(Some((key, iv)))` if
-/// the password is cached, or `RepoPasswdRequired` error if the repo is
-/// encrypted but no password has been set.
+/// Decryption key for an encrypted repo: `None` when unencrypted, the cached
+/// `(key, iv)` when the password is set, else `RepoPasswdRequired`.
 pub(crate) async fn get_decryption_key_for_repo(
     state: &AppState,
     repo_id: &str,
@@ -73,42 +69,34 @@ pub(crate) async fn get_decryption_key_for_repo(
     }
 }
 
-/// Resolve the block cipher key for a **write** into `repo_id` made by
-/// `user_id`, or reject the write before any block is stored.
+/// Resolve the block cipher key for a **write** into `repo_id` by `user_id`, or
+/// reject the write before any block is stored.
 ///
 /// Symmetric with [`get_decryption_key_for_repo`] (AES-256-CBC uses the same
-/// key/IV in both directions). An encrypted library's key lives only in the
-/// server-side password cache, which the official clients warm through
-/// `POST /api2/repos/{id}/?op=setpassword` / `.../set-password/` before
-/// uploading — iOS refreshes it every 300 s (`SeafUploadOperation.m:109-118`),
-/// well inside this server's 3600 s cache TTL. Writing without it would store
-/// plaintext in a library whose owner expects ciphertext, so a cold cache is a
-/// hard error: `RepoPasswdRequired` (440) is exactly the status Android and iOS
-/// map to "Library password is needed" and then retry after re-warming.
+/// key/IV both ways). An encrypted library's key lives only in the server-side
+/// password cache that the official clients warm via `?op=setpassword` before
+/// uploading (iOS refreshes every 300 s, inside this server's 3600 s TTL), so a
+/// cold cache is a hard error: `RepoPasswdRequired` (440) is what Android and iOS
+/// map to "Library password is needed". Writing without it would store plaintext
+/// in a library whose owner expects ciphertext.
 ///
 /// `anonymous_link` marks a request authenticated only by a shareable upload
-/// link. Such a caller has no `user_id` whose password cache could hold the
-/// key, so an encrypted library is rejected outright — matching the official
-/// clients, which hide the upload-link action for encrypted libraries
-/// (`seafile-client/src/filebrowser/file-table.cpp:386`,
-/// `seadroid/.../BottomSheetMenuManager.java:365`).
+/// link: no `user_id`'s cache can hold the key, so an encrypted library is
+/// refused outright, matching the official clients that hide upload-link actions
+/// for encrypted libraries.
 pub(crate) async fn upload_block_key(
     state: &AppState,
     repo_id: &str,
     user_id: i32,
     anonymous_link: bool,
 ) -> Result<Option<(Vec<u8>, Vec<u8>)>, AppError> {
-    // Every upload path funnels through here, so this is also where the
-    // token-only paths get the `is_active` check the rest of the server
-    // applies. Without it a deactivated account could keep writing until its
-    // access token expired.
+    // Every upload path funnels through here, so this is also where the token-only
+    // paths get the `is_active` check the rest of the server applies.
     ensure_token_user_active(state, user_id).await?;
 
     // The server-wide kill switch has to reach the token consumers too: with
-    // anonymous links disabled, an upload URL that was minted (or is still in
-    // its one-hour TTL) before the switch was flipped must stop accepting
-    // writes. `ensure_share_links_enabled` only guarded the pages and the
-    // creation endpoints.
+    // anonymous links disabled, an already-minted upload URL (still within its
+    // TTL) must stop accepting writes, not just stop being created.
     if anonymous_link && !state.config().server.share_link_enabled {
         return Err(AppError::Forbidden);
     }
@@ -135,21 +123,19 @@ pub(crate) async fn upload_block_key(
 
 #[derive(Deserialize)]
 pub struct RepoFileQuery {
-    /// `?dl=1` forces `Content-Disposition: attachment` (download). Kept for
-    /// nanofile's own web UI, which predates `op`.
+    /// `?dl=1` forces `Content-Disposition: attachment` (download); nanofile's
+    /// own web UI uses it.
     pub dl: Option<String>,
     /// `view` (inline) or `download` (attachment), matching seahub's
-    /// `FILE_SERVER_ROOT/repos/{id}/files/{path}?op=…` contract. The web
-    /// download button builds `?op=download`; a missing `op` keeps the old
-    /// inline-by-default behaviour.
+    /// `FILE_SERVER_ROOT/repos/{id}/files/{path}?op=…` contract. A missing `op`
+    /// keeps the old inline-by-default behaviour.
     pub op: Option<String>,
 }
 
 /// GET /repos/{repo_id}/files/{*path} — the unified web file-content endpoint.
 ///
-/// Serves the raw bytes with Range support and a strong ETag, so browsers can
-/// inline images/video, download with `?dl=1`, and revalidate with
-/// `If-None-Match` (304) instead of re-downloading large originals.
+/// Serves raw bytes with Range support and a strong ETag, so browsers can inline
+/// media, download with `?dl=1`, and revalidate with `If-None-Match` (304).
 pub async fn repo_file_download(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -157,16 +143,12 @@ pub async fn repo_file_download(
     Query(query): Query<RepoFileQuery>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    // Normalize through the shared sanitizer exactly like the sibling
-    // `{*path}` handlers (`ui/files.rs`, the share view, WebDAV) instead of
-    // concatenating a leading slash. Resolution below matches dirent names
-    // literally, so a malformed path such as `..` or a NUL byte can only ever
-    // 404 today — but a raw capture that skips validation is the kind of
-    // sibling-path divergence that turns into path confusion later.
+    // Normalize through the shared sanitizer like the sibling `{*path}` handlers
+    // instead of concatenating a leading slash: a raw capture that skips
+    // validation is how sibling-path divergence turns into path confusion.
     let normalized = base::sanitize::safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    // Check read permission (matching seahub's check_folder_permission behavior).
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         &repo_id,
@@ -174,7 +156,6 @@ pub async fn repo_file_download(
     )
     .await?;
 
-    // Check if repo is encrypted and if password is set
     let dec_key = get_decryption_key_for_repo(&state, &repo_id, auth.user_id).await?;
 
     let (file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &normalized)
@@ -187,11 +168,9 @@ pub async fn repo_file_download(
         .unwrap_or("download")
         .to_string();
 
-    // Strong ETag: the block IDs are content-addressed, so identical content
-    // always yields the same validator and any edit changes it. Hash the ids
-    // incrementally instead of joining them into one large intermediate string
-    // (a file with tens of thousands of blocks would otherwise allocate a
-    // multi-hundred-KB buffer just to build the validator).
+    // Strong ETag: the block ids are content-addressed, so identical content
+    // always yields the same validator and any edit changes it. Hash them
+    // incrementally rather than joining them into one large string.
     use sha1::Digest;
     let mut hasher = sha1::Sha1::new();
     for id in &block_ids {
@@ -202,8 +181,7 @@ pub async fn repo_file_download(
 
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
 
-    // Conditional request: a matching validator with no Range → 304, skipping
-    // the block reads entirely. Range requests must still stream their slice.
+    // A matching validator with no Range means 304, skipping the block reads.
     let if_none_match = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok());
@@ -216,11 +194,9 @@ pub async fn repo_file_download(
         return Ok(StatusCode::NOT_MODIFIED.into_response());
     }
 
-    // seahub's `accessV2CB` distinguishes `op=view` (inline) from
-    // `op=download` (attachment); the official web frontend's download button
-    // sends `?op=download`, and ignoring it made the browser open files inline.
-    // `?dl=1` is nanofile's older alias for the same thing, and an absent `op`
-    // keeps the previous "let the browser decide" behaviour.
+    // seahub's `accessV2CB` distinguishes `op=view` (inline) from `op=download`
+    // (attachment), and the official frontend's download button sends the latter.
+    // `?dl=1` is nanofile's older alias; an absent `op` lets the browser decide.
     let content_disposition = match query.op.as_deref() {
         None | Some("") => {
             if query.dl.as_deref() == Some("1") {
@@ -259,11 +235,8 @@ pub async fn repo_file_download(
     ))
 }
 
-/// GET /download-api/{token} — Token-authenticated file download.
-///
-/// Step B of the two-step download flow: the client first obtains a download
-/// URL from `GET /api2/repos/{id}/file/?op=download`, then GETs this endpoint
-/// to receive the raw file bytes.
+/// GET /download-api/{token} — token-authenticated file download, step B of the
+/// two-step flow (the client first obtains a download URL, then GETs this).
 pub async fn download_api(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
@@ -278,7 +251,6 @@ pub async fn download_api(
         return Err(AppError::BadRequest("token not valid for download".into()));
     }
 
-    // Re-check that user still has read permission on the repo.
     // Permissions may have been revoked between token issuance and use.
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
@@ -291,7 +263,6 @@ pub async fn download_api(
     let path = info.parent_dir.clone();
     let filename = info.file_name.as_deref().unwrap_or("download").to_string();
 
-    // Check if repo is encrypted and if password is set
     let dec_key = get_decryption_key_for_repo(&state, &repo_id, info.user_id).await?;
 
     let (file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)

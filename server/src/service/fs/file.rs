@@ -15,13 +15,10 @@ use infra::common::util::{
 };
 use infra::serialization::{S_IFDIR, S_IFREG};
 
-// ── Rename entry (pub(crate), shared by file and dir services) ───────────
-
 /// Rename a file or directory entry in place.
 ///
-/// `is_dir` controls the commit description, activity type and error wording.
-/// Both files and directories have their new name validated so a directory
-/// cannot be renamed to a value containing `/` or `..`.
+/// `is_dir` controls the commit description, activity type and error wording. The new name is
+/// validated for both kinds, so a directory cannot be renamed to a value containing `/` or `..`.
 pub(crate) async fn rename_entry(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -76,10 +73,9 @@ pub(crate) async fn rename_entry(
         },
         crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
-            // Match on the name, not on `child_id`: `EMPTY_SHA1` is the id of
-            // every empty directory *and* every zero-byte file, so an id match
-            // can rename a sibling that shares it. Names are unique within a
-            // directory, and `old_name` is the entry the caller asked for.
+            // Match on the name, not on `child_id`: `EMPTY_SHA1` is the id of every empty
+            // directory *and* every zero-byte file, so an id match can rename a sibling that
+            // shares it. Names are unique within a directory, and `old_name` is the entry asked for.
             if let Some(d) = dirents.iter_mut().find(|d| d.name == old_name) {
                 d.name = new_name.to_string();
             }
@@ -119,7 +115,6 @@ pub(crate) async fn rename_entry(
     )
     .await;
 
-    // Update starred items with the new path (dirs move all items inside).
     if let Err(e) = repos
         .starred
         .update_paths_for_rename(path, &new_path, repo_id)
@@ -128,7 +123,6 @@ pub(crate) async fn rename_entry(
         tracing::warn!("Failed to update starred path for {path}: {e}");
     }
 
-    // Sync file tags to the new path.
     if let Err(e) = repos
         .file_tag
         .update_paths_for_rename(path, &new_path, repo_id)
@@ -140,13 +134,10 @@ pub(crate) async fn rename_entry(
     Ok(())
 }
 
-// ── Move entry (shared by file and dir services) ─────────────────────────
-
 /// Update the full-text index after a path changed.
 ///
-/// A file needs its old document dropped and a new one at the new path; a
-/// directory stands for every file underneath it, so it needs a subtree walk
-/// that a single path cannot express. No-op when indexing is disabled.
+/// A file needs its old document dropped and a new one at the new path; a directory stands for
+/// every file underneath it, so it needs a subtree walk. No-op when indexing is disabled.
 #[allow(clippy::too_many_arguments)]
 async fn update_index_on_path_change(
     repos: &Repositories,
@@ -181,9 +172,8 @@ async fn update_index_on_path_change(
         return;
     }
 
-    // The path changed but the content did not, so the new document carries the
-    // same fs_id. Dropping the old document is cheap and stays here; the new one
-    // is scheduled so the read happens off the rename request.
+    // The path changed but the content did not, so the new document carries the same fs_id.
+    // Dropping the old document is cheap; the new one is scheduled off this request.
     if let Some(indexer) = indexer
         && let Err(e) = indexer.delete_file_async(repo_id, old_path).await
     {
@@ -201,12 +191,11 @@ async fn update_index_on_path_change(
         .await;
 }
 
-/// Move a file or directory to a new parent directory using the two-phase
-/// commit sequence (remove from old parent, commit, re-add to new parent).
+/// Move a file or directory to a new parent directory using the two-phase commit sequence (remove
+/// from old parent, commit, re-add to new parent).
 ///
-/// `is_dir` controls the commit description, activity type and error wording.
-/// A moved directory's subtree is re-indexed here; a moved file's index update
-/// is left to the caller.
+/// `is_dir` controls the commit description, activity type and error wording. A moved directory's
+/// subtree is re-indexed here; a moved file's index update is left to the caller.
 pub(crate) async fn move_entry(
     db: &DatabaseConnection,
     repos: &Repositories,
@@ -249,18 +238,15 @@ pub(crate) async fn move_entry(
     let entry_mode = entry.mode;
     let entry_size = entry.size;
 
-    // new_parent_dir should already be validated by handler, but we use
-    // safe_normalize_path for defensive programming. If it fails, it's an
-    // internal error (handler bug).
+    // The handler validates `new_parent_dir`, but normalize it defensively; failure is an internal
+    // error (handler bug).
     let new_parent_path = base::sanitize::safe_normalize_path(new_parent_dir)
         .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
 
-    // Reject a move into the entry itself or into its own subtree *before* any
-    // mutation. The tree update below removes the entry from its old parent and
-    // commits, then adds it to the destination; a destination inside the moved
-    // subtree is destroyed by the first commit, so the second phase would fail
-    // after the subtree had already vanished from HEAD (no trash entry, 500 to
-    // the client). WebDAV rejects this case explicitly; this path did not.
+    // Reject a move into the entry itself or its own subtree *before* any mutation: phase 1 commits
+    // the removal, and a destination inside the moved subtree would be destroyed by it, so phase 2
+    // would fail after the subtree left HEAD (no trash entry, 500 to the client). WebDAV rejects
+    // this case explicitly; this path did not.
     if crate::domain::fs::is_self_or_subpath(path, &new_parent_path) {
         return Err(AppError::BadRequest(if is_dir {
             "cannot move a directory into itself".into()
@@ -303,20 +289,12 @@ pub(crate) async fn move_entry(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    // Destination directory object:
-    //
-    // * A destination on the path from the root down to the entry's own parent
-    //   — the entry's current directory (`/a/b` → `/a`), or an ancestor of it
-    //   (`/a/b/f` → `/a`) — was rewritten by phase 1: the removal updated the
-    //   entry's parent and then every ancestor's dirent along the way. The
-    //   pre-removal id is stale there and still points at the subtree *with* the
-    //   entry, so phase 2 would copy that stale subtree back and leave the
-    //   entry at both the old and the new path.
-    // * Every other destination is untouched by removing the source (the guard
-    //   above rules out a destination inside the moved subtree), so reuse the
-    //   id resolved before the removal. Re-resolving *those* from the new HEAD —
-    //   what this used to do unconditionally — is exactly what failed once the
-    //   removal was already durable, losing the subtree from HEAD.
+    // Destination directory object. A destination on the path from the root down to the entry's own
+    // parent (its current directory `/a/b` → `/a`, or an ancestor `/a/b/f` → `/a`) was rewritten by
+    // phase 1: the pre-removal id is stale there and still points at the subtree *with* the entry,
+    // so reusing it would leave the entry at both paths. Every other destination is untouched by the
+    // removal (the guard above rules out one inside the moved subtree), so the pre-removal id is
+    // reused; re-resolving those from the new HEAD failed once the removal was already durable.
     let new_dst_fs_id = if crate::domain::fs::is_self_or_subpath(&new_parent_path, parent_path) {
         let new_head_root = get_head_root_id(db, repo_id).await?;
         crate::fs::core::resolve_dir_fs_id(repos, repo_id, &new_head_root, &new_parent_path)
@@ -391,7 +369,6 @@ pub(crate) async fn move_entry(
     )
     .await;
 
-    // Sync file tags to the new path (dirs move all items inside).
     if let Err(e) = repos
         .file_tag
         .update_paths_for_rename(path, &new_path, repo_id)
@@ -402,8 +379,6 @@ pub(crate) async fn move_entry(
 
     Ok(new_path)
 }
-
-// ── FileService ─────────────────────────────────────────────────────────
 
 pub struct FileService {
     repos: Arc<Repositories>,
@@ -446,14 +421,10 @@ impl FileService {
 
     /// Delete blocks that a failed upload wrote and that nothing references.
     ///
-    /// `only_new` comes from `write_block_with_id_tracked`, which reports a block
-    /// as new for exactly one writer — but a *concurrent* upload of identical
-    /// content can still receive the same id (`was_new == false`, so it is not in
-    /// that upload's cleanup set) and go on to commit a file that references it.
-    /// Deleting unconditionally would then remove a block a committed file needs.
-    /// Each candidate is therefore checked against the FS objects: a false
-    /// positive (a block id that merely appears as a substring elsewhere) only
-    /// leaves an orphan for GC, which is the safe direction.
+    /// A block reported as new by `write_block_with_id_tracked` can still be referenced by a
+    /// concurrent upload of identical content, so deleting unconditionally would remove a block a
+    /// committed file needs. Each candidate is checked against the FS objects; a false positive (an
+    /// id that merely appears as a substring elsewhere) only leaves an orphan for GC, the safe side.
     async fn cleanup_uncommitted_blocks(&self, repo_id: &str, ids: &[String]) {
         for id in ids {
             match self.fs_object_references_block(repo_id, id).await {
@@ -476,7 +447,6 @@ impl FileService {
         }
     }
 
-    /// Whether any FS object in `repo_id` lists `block_id`.
     async fn fs_object_references_block(
         &self,
         repo_id: &str,
@@ -488,7 +458,6 @@ impl FileService {
             .await
     }
 
-    /// Generate a download URL and return the file_fs_id.
     pub async fn get_download_info(
         &self,
         repo_id: &str,
@@ -522,12 +491,10 @@ impl FileService {
         self.config.get().server.download_url_base(host_header)
     }
 
-    /// Build a download API URL.
     fn build_download_url(&self, token: &str, host_header: Option<&str>) -> String {
         format!("{}/download-api/{token}", self.build_url_base(host_header))
     }
 
-    /// Build a block download URL.
     fn build_block_download_url(
         &self,
         token: &str,
@@ -541,7 +508,6 @@ impl FileService {
         )
     }
 
-    /// Get a block download link.
     pub async fn get_block_download_link(
         &self,
         repo_id: &str,
@@ -558,17 +524,13 @@ impl FileService {
         Ok(self.build_block_download_url(&token, file_id, block_id, host_header))
     }
 
-    /// Commit a file whose blocks have already been written to the block store
-    /// (e.g. by a streaming uploader) into a repo. Handles old-size detection,
-    /// storage-quota checks, directory creation, repo-size adjustment, activity
-    /// logging and background full-text indexing in one place; the actual block
-    /// I/O was already done by the caller, so the whole file never had to be
-    /// buffered in memory.
+    /// Commit a file whose blocks are already in the block store (e.g. from a streaming uploader):
+    /// old-size detection, quota, directory creation, repo-size adjustment, activity log and
+    /// background indexing, with the block I/O already done by the caller.
     ///
-    /// `new_block_ids` is the subset of `block_ids` that were newly written by
-    /// this upload (not deduped). On quota failure they are removed so they
-    /// don't linger as orphan blocks — safe because no other file references
-    /// them yet. Deduped blocks are never deleted.
+    /// `new_block_ids` is the subset newly written by this upload (not deduped); on quota failure
+    /// they are removed so they don't linger as orphan blocks — safe because no other file
+    /// references them yet. Deduped blocks are never deleted.
     #[allow(clippy::too_many_arguments)]
     pub async fn upload_file_committed_stream(
         &self,
@@ -589,14 +551,12 @@ impl FileService {
         let fp = base::sanitize::safe_join_path(target_dir, filename)
             .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
 
-        // Detect the existing entry to decide old-size / replace / op_type.
         let size_result = crate::fs::core::get_entry_total_size(&self.repos, repo_id, &fp).await;
         let old_size = size_result.ok().unwrap_or(0);
         let replace_eff = replace;
         let old_size_eff = if replace_eff { old_size } else { 0 };
 
-        // Check storage quota against the (now known) file size. On failure,
-        // remove newly-written blocks so they don't accumulate as orphans
+        // On quota failure, remove newly-written blocks so they don't accumulate as orphans
         // (GC is disabled by default). Deduped blocks are left alone.
         if let Some(uid) = user_id
             && let Err(e) = crate::service::fs::quota::check_upload_quota(
@@ -631,28 +591,22 @@ impl FileService {
         .await
         .map_err(|e| AppError::Internal(format!("upload failed: {e}")))?;
 
-        // Without `replace` the commit lands under a unique name (`name (1).ext`),
-        // so the activity entry and the search index must use the effective path,
-        // not the requested one.
+        // Without `replace` the commit lands under a unique name (`name (1).ext`), so the activity
+        // entry and the search index must use the effective path, not the requested one.
         let effective_fp = base::sanitize::safe_join_path(target_dir, &effective_name)
             .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
 
-        // Adjust repo size (delta = new_size - old_size).
         crate::fs::core::adjust_repo_size(&self.repos, repo_id, total_size - old_size_eff).await?;
 
-        // The bytes are now part of the repo's committed `size`, which
-        // `user_usage` counts, so drop this uploader's uncommitted-block
-        // reservation for the repo: keeping it would double-count the file and
-        // would also keep counting blocks that stayed orphaned (those are GC's
-        // business, not the quota's). The cached usage snapshot is dropped too,
-        // so an upload that starts right after this commit sees the new total
-        // instead of the pre-commit one (check-then-write race).
+        // The bytes are now part of the repo's committed `size`, which `user_usage` counts, so drop
+        // this uploader's uncommitted-block reservation (keeping it would double-count the file and
+        // keep counting orphaned blocks, which are GC's business). The cached usage snapshot is
+        // dropped too, so the next upload sees the new total instead of the pre-commit one.
         if let Some(uid) = user_id {
             crate::service::fs::quota::release_repo_reservation(&self.repos, uid, repo_id);
             crate::service::fs::quota::invalidate_user(&self.repos, uid);
         }
 
-        // Log activity.
         if let Some(uid) = user_id {
             let op_type = if replace_eff { "edit" } else { "create" };
             activity_log::log_activity(
@@ -671,11 +625,9 @@ impl FileService {
             .await;
         }
 
-        // The file is saved; indexing it is a separate piece of work. Rather
-        // than read the content back on this request's time, schedule an
-        // `index-files` run for it — the job owns the read, the extraction and
-        // the index write, and the backfill picks the file up if the run is
-        // lost.
+        // The file is saved; indexing it is separate work, scheduled as an `index-files` run so the
+        // content read happens off this request (the job also owns extraction and the index write,
+        // and the backfill picks the file up if the run is lost).
         if self.scheduler.is_enabled() {
             let target =
                 crate::service::index::IndexTarget::new(effective_fp.clone(), Some(fs_id.clone()));
@@ -687,11 +639,8 @@ impl FileService {
         Ok((fs_id, effective_name))
     }
 
-    /// Recursively create any missing directory components below `path`.
-    ///
-    /// Resolves the root once and walks down one level at a time, reading only
-    /// the current directory, instead of re-resolving the whole prefix from
-    /// root per level (O(d²) resolve → O(d)).
+    /// Recursively create any missing directory components below `path`: resolve the root once and
+    /// walk down a level at a time, instead of re-resolving the whole prefix per level (O(d²) → O(d)).
     async fn ensure_dir_recursive(
         &self,
         repo_id: &str,
@@ -740,9 +689,8 @@ impl FileService {
                         &next,
                     )
                     .await?;
-                    // A freshly created directory has no fs_object yet (the
-                    // EMPTY_SHA1 sentinel); read_fs_dir_data treats it as an
-                    // empty dir, so the walk can continue into it.
+                    // A freshly created directory has no fs_object yet (the EMPTY_SHA1 sentinel);
+                    // read_fs_dir_data treats it as an empty dir, so the walk can continue into it.
                     current_fs_id = EMPTY_SHA1.to_string();
                 }
             }
@@ -752,12 +700,9 @@ impl FileService {
         Ok(())
     }
 
-    /// Adjust repo size and log activity — the shared tail of the block-commit
-    /// upload path (`upload_blks_api`). The caller resolves the entry state
-    /// (`file_exists` / `old_size`) from the parent dirents it already holds.
-    ///
-    /// `op_type` is derived from whether the file actually exists, not from a
-    /// client-supplied `replace` flag.
+    /// Adjust repo size and log activity — the shared tail of the block-commit upload path
+    /// (`upload_blks_api`). The caller resolves `file_exists` / `old_size` from the parent dirents.
+    /// `op_type` comes from whether the file actually exists, not from a client-supplied `replace`.
     pub async fn finalize_upload(
         &self,
         repo_id: &str,
@@ -811,8 +756,8 @@ impl FileService {
                     crate::service::fs::resolve_parent_error(e, "resolve parent failed")
                 })?;
 
-        // Resolve the entry size from the parent dirents (files O(1);
-        // directories walk their subtree once) instead of re-resolving the path.
+        // Resolve the entry size from the parent dirents (files O(1); directories walk their subtree
+        // once) instead of re-resolving the path.
         let parent_data = crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
             .await
             .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
@@ -824,7 +769,7 @@ impl FileService {
             None => 0,
         };
 
-        // Record deleted entry to trash before tree update
+        // Record the trash entry first: the tree update below removes the dirent.
         trash::record_deleted_entry(db, &self.repos, repo_id, path, name, email, &parent_fs_id)
             .await;
 
@@ -858,7 +803,6 @@ impl FileService {
         )
         .await;
 
-        // Drop orphaned tag rows for the deleted path.
         if let Err(e) = self
             .repos
             .file_tag
@@ -897,7 +841,6 @@ impl FileService {
         Ok(())
     }
 
-    /// Move a file.
     pub async fn move_file(
         &self,
         repo_id: &str,
@@ -951,8 +894,8 @@ impl FileService {
             .find(|e| e.name == file_name)
             .ok_or_else(|| AppError::NotFound("file not found".into()))?;
 
-        // The entry's mode (from the parent dirent) tells us the type, so the
-        // separate resolve_fs_id + fs_object read is unnecessary.
+        // The dirent's mode tells the type, so the separate resolve_fs_id + fs_object read is
+        // unnecessary.
         if entry.mode & S_IFDIR != 0 {
             return Err(AppError::BadRequest(
                 "path is a directory, not a file".into(),
@@ -968,8 +911,8 @@ impl FileService {
             .map(|u| u.email)
             .unwrap_or_else(|| entry.modifier.clone());
 
-        // Read access is guaranteed by the handler; `permission` distinguishes
-        // write from read-only (matching seahub's FileDetailView).
+        // Read access is guaranteed by the handler; `permission` distinguishes write from read-only
+        // (matching seahub's FileDetailView).
         let permission = if crate::domain::permission::check_repo_write_permission(
             self.repos.member.as_ref(),
             repo_id,
@@ -1016,7 +959,6 @@ impl FileService {
         }))
     }
 
-    /// Lock or unlock a file.
     pub async fn lock_file(
         &self,
         repo_id: &str,
@@ -1161,9 +1103,8 @@ impl FileService {
         repo_id: &str,
         token: &str,
     ) -> Result<(Vec<(String, i32)>, i64), AppError> {
-        // The token arrives in the request body here, so this path never sees
-        // `SyncAuth`; apply the same rules (repo binding, expiry, active user)
-        // instead of merely checking that a row exists.
+        // The token arrives in the request body, so this path never sees `SyncAuth`; apply the same
+        // rules (repo binding, expiry, active user) instead of merely checking that a row exists.
         let token_valid =
             crate::service::auth::token::verify_body_sync_token(&self.repos, repo_id, token)
                 .await?;
@@ -1177,11 +1118,9 @@ impl FileService {
             None
         };
 
-        // The token proves it was issued for this repo, not that its owner is
-        // still a member: someone removed while the token was still valid (up to
-        // a year) would keep reading the library's locked-file paths. The token
-        // arrives in the body, so this path never sees `SyncAuth` and has to
-        // re-check membership itself.
+        // The token proves it was issued for this repo, not that its owner is still a member:
+        // someone removed while the token was still valid (up to a year) would keep reading the
+        // library's locked-file paths. This path never sees `SyncAuth`, so it re-checks membership.
         if let Some(user_id) = token_user_id {
             crate::domain::permission::check_repo_read_permission(
                 self.repos.member.as_ref(),
@@ -1308,9 +1247,8 @@ impl FileService {
         Ok((file_fs_id, mtime))
     }
 
-    /// Check uploaded bytes for resumable upload.
-    /// Count how many of the client-supplied block ids already exist **in this
-    /// repository**. Scoping the lookup to the repository is what keeps the
+    /// Check uploaded bytes for resumable upload: count how many of the client-supplied block ids
+    /// already exist **in this repository**. Scoping the lookup to the repo is what keeps the
     /// endpoint from being a cross-library existence oracle.
     pub async fn check_uploaded_bytes(&self, repo_id: &str, blockids: Option<&str>) -> i64 {
         let Some(blockids_str) = blockids else {

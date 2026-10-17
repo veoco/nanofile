@@ -1,16 +1,9 @@
 //! The device a request came from, as far as the server can tell.
 //!
-//! A client that logs in through `POST /api2/auth-token/` may report its
-//! platform, a stable `device_id`, a human-readable name and its version, and
-//! the sync protocol reports the same `device_id` as the `client_id` query
-//! parameter. Those values are what the credential inventory groups
-//! credentials by, and what a sync token records as its peer info so the token
-//! can be shown under the device that holds it.
-//!
-//! A browser session, a unified API key and an older client that reported
-//! nothing carry no identity. `None` is the honest answer there: the token is
-//! minted unattributed and claimed the first time a device actually syncs with
-//! it.
+//! A login reports platform, `device_id`, name and version, and the sync protocol
+//! reports the same id as `client_id`; credentials are grouped by those values. A
+//! session, an API key or an older client that reported nothing carries no
+//! identity: its token is minted unattributed and claimed on first sync.
 
 /// A device identity the server learned from the authenticated request.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,10 +17,9 @@ pub struct DeviceIdentity {
 }
 
 impl DeviceIdentity {
-    /// Build one from the fields a client may have reported.
-    ///
-    /// An empty or missing `device_id` is not an identity — two devices would
-    /// then be indistinguishable — so that case yields `None`.
+    /// Build one from the fields a client may have reported. An empty or missing
+    /// `device_id` is not an identity — two devices would be indistinguishable —
+    /// so that case yields `None`.
     pub fn new(
         platform: Option<String>,
         device_id: Option<String>,
@@ -53,9 +45,7 @@ impl DeviceIdentity {
     }
 }
 
-/// The device fields a sync token row stores.
-///
-/// Separate from [`DeviceIdentity`] because `platform` is a property of the
+/// The device fields a sync token row stores; `platform` is a property of the
 /// session, not of the token.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PeerStamp {

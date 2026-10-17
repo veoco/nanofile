@@ -13,21 +13,17 @@ use crate::handler::{MAX_SMALL_BODY_BYTES, ok_json, read_body_limited};
 use crate::middleware::auth::AuthUser;
 use crate::service::repo::password::PasswordService;
 use crate::service::repo::service;
-use base::error::AppError;
-use infra::common::util::extract_multipart_field;
-// Re-export response types for api module re-exports
 pub use crate::service::repo::service::{
     DownloadInfoResponse, RepoInfo, V21RepoInfo, V21RepoListResponse,
 };
+use base::error::AppError;
+use infra::common::util::extract_multipart_field;
 
 /// Accept an integer that may arrive as a JSON number or as a string.
 ///
-/// The official clients send this endpoint as
-/// `application/x-www-form-urlencoded` (and, for the Android client,
-/// `multipart/form-data`), where every value is a string. The desktop client in
-/// particular sends `enc_version` as `QString::number(enc_version)`, i.e.
-/// `"4"` — deserializing that into `i32` used to fail the whole request with a
-/// 500 for every encrypted-library creation.
+/// Official clients send form/multipart bodies where every value is a string
+/// (the desktop client sends `enc_version` as `"4"` via `QString::number`), so a
+/// strict `i32` would reject the request.
 fn de_int_or_string<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -66,18 +62,15 @@ pub struct CreateRepoRequest {
     pub enc_version: Option<i32>,
     pub magic: Option<String>,
     pub random_key: Option<String>,
-    /// Per-library random salt for `enc_version` 4 libraries (empty/ignored for
-    /// v2, which uses a fixed salt). The desktop client sends it for v3/v4.
+    /// Per-library random salt for `enc_version` 4 libraries; ignored for v2 (fixed salt).
     pub salt: Option<String>,
-    /// `pwd_hash` verifier triple a client pre-computed when
-    /// `/api2/server-info/` advertised an algorithm. When `pwd_hash_algo` is
-    /// present the client omits `magic` entirely, and the library is identified
-    /// by this triple from then on.
+    /// `pwd_hash` verifier triple a client pre-computed when `/api2/server-info/`
+    /// advertised an algorithm; when `pwd_hash_algo` is present the client omits
+    /// `magic` and the library is identified by this triple from then on.
     pub pwd_hash_algo: Option<String>,
     pub pwd_hash_params: Option<String>,
     pub pwd_hash: Option<String>,
-    /// Sent by clients that let the server hash the password instead of
-    /// pre-computing `magic`/`random_key`.
+    /// Sent by clients that let the server hash the password instead of `magic`.
     pub passwd: Option<String>,
 }
 
@@ -121,17 +114,10 @@ pub async fn create_repo(
     headers: HeaderMap,
     bytes: Bytes,
 ) -> Result<(StatusCode, Json<RepoInfo>), AppError> {
-    // Support JSON (web frontend), form-encoded (desktop client), and
-    // multipart/form-data (Android client) bodies.
+    // Support JSON (web), form-encoded (desktop) and multipart/form-data (Android).
     //
-    // Both parse failures must be client errors (400). A plain `?` on the JSON
-    // branch used to go through `From<serde_json::Error>` → `Internal`, which
-    // turned the desktop client's string-typed `enc_version` into a 500 for
-    // every encrypted-library creation.
-    //
-    // The branch is chosen by content type rather than by trying each parser in
-    // turn: a form body whose `enc_version` is not a number must report *that*,
-    // not fall through to the multipart parser and claim `name required`.
+    // Both parse failures must be 400; the branch is chosen by content type so a
+    // bad form field is reported instead of falling through to the multipart parser.
     let content_type = headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
@@ -140,12 +126,9 @@ pub async fn create_repo(
         serde_json::from_slice(&bytes)
             .map_err(|e| AppError::BadRequest(format!("invalid JSON body: {e}")))?
     } else if content_type.contains("multipart/form-data") {
-        // The Android client sends multipart/form-data
-        // (`NewRepoViewModel.createNewRepo`: `name`, optional `desc`, and a
-        // bare `passwd` for an encrypted library). Every field the other
-        // encodings accept has to be read here too — this branch used to look
-        // at `name`/`desc` only, which silently dropped the password and
-        // created a plain library.
+        // The Android client sends multipart/form-data with `name`, optional
+        // `desc` and a bare `passwd` for an encrypted library; every field the
+        // other encodings accept must be read here too.
         let field = |name: &str| extract_multipart_field(&bytes, name);
         CreateRepoRequest {
             name: field("name").ok_or_else(|| AppError::BadRequest("name required".into()))?,
@@ -162,8 +145,7 @@ pub async fn create_repo(
             passwd: field("passwd"),
         }
     } else {
-        // Default (and explicit `application/x-www-form-urlencoded`): the
-        // desktop client's format.
+        // Default (and explicit `application/x-www-form-urlencoded`): desktop client.
         serde_urlencoded::from_bytes::<CreateRepoRequest>(&bytes)
             .map_err(|e| AppError::BadRequest(format!("invalid form body: {e}")))?
     };
@@ -211,8 +193,7 @@ pub async fn get_repo(
 
 /// `POST /api2/repos/{repo_id}/?op=rename`
 ///
-/// Accepts `repo_name` from JSON, form-urlencoded, or multipart/form-data
-/// (Android client sends multipart with part `name="repo_name"`).
+/// `repo_name` arrives as JSON, form-urlencoded or multipart (`name="repo_name"`).
 pub async fn rename_repo(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -220,13 +201,11 @@ pub async fn rename_repo(
     Query(params): Query<HashMap<String, String>>,
     req: axum::http::Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Verify op=rename
     match params.get("op").map(|s| s.as_str()) {
         Some("rename") => {}
         _ => return Err(AppError::BadRequest("invalid operation".into())),
     }
 
-    // Parse repo_name from body, trying JSON, form-urlencoded, then multipart
     let (_parts, body) = req.into_parts();
     let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
 
@@ -254,9 +233,7 @@ struct UpdateRepoRequest {
     history_ttl_days: Option<i32>,
 }
 
-/// `POST /api2/repos/{repo_id}/?op=update`
-///
-/// Updates repo name and/or description. Only the owner can update.
+/// `POST /api2/repos/{repo_id}/?op=update` — update name/description (owner only).
 pub async fn update_repo(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -286,9 +263,7 @@ pub async fn update_repo(
     Ok(Json(serde_json::Value::String("success".to_string())))
 }
 
-/// `POST /api2/repos/{repo_id}/`
-///
-/// Dispatches to the appropriate handler based on the `op` query parameter.
+/// `POST /api2/repos/{repo_id}/` — dispatch on the `op` query parameter.
 pub async fn repo_post_handler(
     auth: AuthUser,
     state: State<Arc<AppState>>,
@@ -302,32 +277,26 @@ pub async fn repo_post_handler(
         Some("setpassword") => set_repo_password_v2(auth, state, Path(repo_id), req).await,
         Some("checkpassword") => check_repo_password_v2(auth, state, Path(repo_id), req).await,
         // The official desktop client sets a library password with a bare
-        // `POST /api2/repos/{id}/` carrying form field `password` and **no**
-        // `op` (`seafile-client/src/api/requests.cpp:701-711`). Route that form
-        // to the same service as `?op=setpassword`; anything else without an
-        // `op` keeps the original "invalid operation" answer.
+        // `POST /api2/repos/{id}/` carrying form field `password` and no `op`
+        // (`requests.cpp:701-711`); route that to the same service as `?op=setpassword`.
         _ => set_repo_password_bare(auth, state, Path(repo_id), req).await,
     }
 }
 
 /// A wrong library password, in the shape each client recognises.
 ///
-/// The official clients disagree on how to signal "wrong library password":
-/// the desktop Qt client branches on the **status** (400 →
-/// "Incorrect password", `set-repo-password-dialog.cpp:57-60`), while iOS
-/// branches on `error_msg == "Incorrect password"`
-/// (`SeafRepos.m:250-256`). Returning 400 with that exact message satisfies
-/// both. The v2.1 endpoint (`/api/v2.1/repos/{id}/set-password/`) keeps its 440
-/// because Android maps that status (`ExceptionUtils.java:209-217`).
+/// The desktop Qt client branches on the 400 status (`set-repo-password-dialog.cpp:57-60`)
+/// while iOS matches `error_msg == "Incorrect password"` (`SeafRepos.m:250-256`);
+/// both are satisfied by this. The v2.1 endpoint keeps its 440 because Android
+/// maps that status (`ExceptionUtils.java:209-217`).
 fn incorrect_password() -> AppError {
     AppError::BadRequest("Incorrect password".into())
 }
 
 /// `POST /api2/repos/{repo_id}/` — the desktop client's password-set form.
 ///
-/// Identical to [`set_repo_password_v2`] except that a missing `password` field
-/// falls back to the historical "invalid operation" error, so a bare POST that
-/// is not a password submission still gets the descriptive answer.
+/// Differs from [`set_repo_password_v2`] only in returning "invalid operation"
+/// when no `password` field is present.
 pub async fn set_repo_password_bare(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -346,10 +315,8 @@ pub async fn set_repo_password_bare(
     set_repo_password_with_body(&state, auth.user_id, &repo_id, &bytes).await
 }
 
-/// `POST /api2/repos/{repo_id}/?op=setpassword`
-///
-/// Set the password for an encrypted repo (v2 API). iOS calls this form
-/// (`SeafRepos.m:237`); its failure handling reads the `error_msg` body.
+/// `POST /api2/repos/{repo_id}/?op=setpassword` — set an encrypted repo's password
+/// (v2 API). iOS calls this form and reads `error_msg` on failure.
 pub async fn set_repo_password_v2(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -364,12 +331,9 @@ pub async fn set_repo_password_v2(
 
 /// Shared body of the v2 set-password surfaces.
 ///
-/// Membership is checked before the password is even looked at. This endpoint
-/// verifies the supplied password against the stored `magic` and returns a
-/// distinguishable answer for a hit, so without that gate it would be a password
-/// oracle for any authenticated non-member who knows the repo id. The KDF is
-/// fixed by the wire protocol at a low iteration count, so the per-(user, repo)
-/// limiter below is the practical brute-force control.
+/// Membership is checked first, otherwise this is a password oracle for any
+/// authenticated non-member; the per-(user, repo) limiter below is the brute-force
+/// control, since the wire protocol fixes a low KDF iteration count.
 async fn set_repo_password_with_body(
     state: &Arc<AppState>,
     user_id: i32,
@@ -412,9 +376,9 @@ async fn set_repo_password_with_body(
         return Err(e);
     }
 
-    // A correct password clears the budget: clients re-submit the cached
-    // password repeatedly (Android's download worker does so per download), so
-    // successes must never accumulate.
+    // A correct password clears the budget: clients re-submit the cached password
+    // repeatedly (Android's download worker per download), so successes must not
+    // accumulate.
     state
         .auth_limiters
         .clear_repo_password_failures(user_id, repo_id);
@@ -422,20 +386,16 @@ async fn set_repo_password_with_body(
     Ok(ok_json())
 }
 
-/// `POST /api2/repos/{repo_id}/?op=checkpassword`
+/// `POST /api2/repos/{repo_id}/?op=checkpassword` — check an encrypted repo's
+/// password (v2 API).
 ///
-/// Check if a password is valid for an encrypted repo (v2 API).
+/// Verifies a caller-supplied `magic` (the password-equivalent the client derives
+/// locally), so it is a password oracle and is metered with the same per-(user,
+/// repo) limiter as `?op=setpassword`.
 ///
-/// This endpoint verifies a caller-supplied `magic` (the password-equivalent
-/// value the client derives locally), so it is a password oracle and is metered
-/// with the same per-(user, repo) limiter as `?op=setpassword` and the v2.1
-/// `set-password` endpoint.
-///
-/// A `pwd_hash` library (Seafile 11+) has no `magic` at all and is answered with
-/// a 400 here. Upstream cannot check one either — `seaf_passwd_manager_check_passwd`
-/// `strcmp`s against an empty `repo->magic`, which always fails and surfaces as a
-/// 500 — and no official client calls this operation, so the only clients that
-/// unlock a `pwd_hash` library go through `set-password` above.
+/// A `pwd_hash` library has no `magic` and is answered with a 400; upstream cannot
+/// check one either (`strcmp` against an empty `repo->magic` always fails and
+/// surfaces as a 500), and no official client calls this operation.
 pub async fn check_repo_password_v2(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -462,7 +422,6 @@ pub async fn check_repo_password_v2(
 
     let magic = parse_body_field(&bytes, "magic", "magic required")?;
 
-    // Load the repo
     let repo_model = state
         .repos
         .repo
@@ -495,8 +454,7 @@ pub async fn check_repo_password_v2(
     }
 }
 
-/// Extract a field from a POST body using the standard triple probe
-/// (JSON → form-urlencoded → multipart/form-data).
+/// Extract a field from a POST body via the JSON → form → multipart probe.
 fn parse_body_field(bytes: &[u8], field: &str, error_msg: &str) -> Result<String, AppError> {
     infra::common::util::extract_body_field(bytes, field)
         .ok_or_else(|| AppError::BadRequest(error_msg.into()))
@@ -597,28 +555,23 @@ pub async fn get_update_link(
     Ok(Json(url))
 }
 
-/// `GET /api2/repo-tokens/?repos=id1,id2`
-///
-/// Batch get sync tokens for multiple repos.
+/// `GET /api2/repo-tokens/?repos=id1,id2` — batch sync tokens for the listed repos.
 pub async fn repo_tokens(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<HashMap<String, String>>, AppError> {
-    // Minting (or handing back) a `sync_token_ttl_days`-long repository token is
-    // a state change served on GET, so a cross-site navigation carrying the
-    // session cookie must not be able to trigger it. Bearer callers are
-    // unaffected — the official clients all authenticate with `Authorization:
-    // Token`, and a cross-site request cannot set that header.
+    // Minting a long-lived repo token is a state change served on GET, so a
+    // cross-site navigation carrying the session cookie must not trigger it;
+    // bearer callers are unaffected (cross-site requests cannot set that header).
     crate::middleware::require_csrf_for_cookie_session(&headers, &state.csrf_secret)?;
 
     let repos_param = params
         .get("repos")
         .ok_or_else(|| AppError::BadRequest("repos parameter required".into()))?;
-    // A key bound to specific libraries may only mint tokens for those; other
-    // ids are dropped rather than rejected, matching the service's behaviour
-    // for libraries the caller cannot see.
+    // A key bound to specific libraries may only mint tokens for those; other ids
+    // are dropped rather than rejected, matching the service's visibility rules.
     let scope = auth.repo_scope();
     let repo_ids: Vec<&str> = repos_param
         .split(',')
@@ -677,9 +630,7 @@ pub async fn delete_repo_v21(
 }
 
 /// `GET /api2/default-repo/` — the user's default (primary) library.
-///
-/// Returns `{"exists": true, "repo_id": <id>}` when the user has a library,
-/// otherwise `{"exists": false}` (matching seahub's `DefaultRepoView`).
+/// Returns `{"exists": bool, "repo_id": <id>}` (matching seahub's `DefaultRepoView`).
 pub async fn get_default_repo(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -692,10 +643,8 @@ pub async fn get_default_repo(
     }
 }
 
-/// `POST /api2/default-repo/` — find-or-create the default library.
-///
-/// Returns `{"repo_id": <id>}`. Creates a "My Library" repo when the user has
-/// no owned repo yet (matching seahub's default library name).
+/// `POST /api2/default-repo/` — find-or-create the default library, creating
+/// "My Library" when the user owns no repo yet (seahub's default name).
 pub async fn create_default_repo(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,

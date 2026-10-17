@@ -28,8 +28,7 @@ pub fn block_routes() -> Router<Arc<AppState>> {
         )
 }
 
-/// Validate that a block_id is exactly 40 lowercase hex characters.
-/// Matches seafile-server's is_object_id_valid() behavior.
+/// Validate that block_id is 40 lowercase hex chars (seafile's is_object_id_valid()).
 fn validate_block_id(block_id: &str) -> Result<(), AppError> {
     if block_id.len() != 40
         || !block_id
@@ -50,12 +49,10 @@ pub async fn check_blocks(
     Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<Json<Vec<String>>, AppError> {
-    // `SyncAuth` only proves the token was issued for this repo; it does not
-    // re-check membership, so a member removed while their (year-long) token was
-    // still valid kept a block-existence oracle for the library. Every other
-    // sync endpoint re-checks, and the client only calls this with write intent
-    // (it follows `permission-check?op=upload`), so write permission is the
-    // right bar.
+    // `SyncAuth` only proves the token was issued for this repo, not that the user is
+    // still a member, so without this a removed member's year-long token kept a
+    // block-existence oracle. The client calls this with write intent only, so write
+    // permission is the right bar.
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
         &repo_id,
@@ -67,7 +64,6 @@ pub async fn check_blocks(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
 
-    // Try JSON array first, then fall back to URL-encoded form
     let block_ids: Vec<String> = if let Ok(arr) = serde_json::from_slice::<Vec<String>>(&data) {
         arr
     } else {
@@ -118,9 +114,8 @@ pub async fn get_block(
 ) -> Result<Vec<u8>, AppError> {
     validate_block_id(&block_id)?;
 
-    // Defense in depth: the block store is global and content-addressed, so
-    // without an explicit membership check a token bound to repo A could read
-    // any block whose id it knows (see `fs_id_list` in `sync/fs.rs`).
+    // Defense in depth: the block store is global and content-addressed, so without a
+    // membership check a token bound to repo A could read any block whose id it knows.
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         &repo_id,
@@ -135,9 +130,8 @@ pub async fn get_block(
         .await
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                // The block is not part of *this* library (or was pruned):
-                // with the per-library layout, "absent" is also the answer for
-                // a block id that exists in a library the caller cannot read.
+                // Not part of *this* library (or pruned); per-library layout, so
+                // "absent" also answers for a block that exists elsewhere.
                 AppError::NotFound("block not found".into())
             } else {
                 AppError::internal(e.to_string())
@@ -153,8 +147,7 @@ pub async fn put_block(
 ) -> Result<StatusCode, AppError> {
     validate_block_id(&block_id)?;
 
-    // Writing a block mutates the repo's object store; a read-only member must
-    // not be able to inject data. Checked before the body is buffered.
+    // Writing a block mutates the object store; checked before the body is buffered.
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
         &repo_id,
@@ -164,8 +157,7 @@ pub async fn put_block(
 
     let data = read_body_limited(body, MAX_BLOCK_UPLOAD_BYTES).await?;
 
-    // Verify the data hash matches the URL block_id.
-    // The seaf-daemon sends PUT with block_id = SHA1 of (encrypted) block data.
+    // Verify the hash: the seaf-daemon sends PUT with block_id = SHA1 of the data.
     let computed = sha1_hex(&data);
     if computed != block_id {
         return Err(AppError::BadRequest(format!(
@@ -174,12 +166,10 @@ pub async fn put_block(
         )));
     }
 
-    // Charge the block against the user's quota as an **uncommitted** write.
-    // Comparing against committed usage alone was ineffective here: content
-    // addressing means writing a block never changes any repo's `size`, so
-    // every distinct block passed and `put_block` + never-commit accumulated
-    // blocks without bound. The reservation is released when the branch update
-    // commits the blocks into a file.
+    // Charge the block against the user's quota as an **uncommitted** write: content
+    // addressing means writing a block never changes any repo's `size`, so comparing
+    // committed usage alone let `put_block` + never-commit accumulate blocks without
+    // bound. The reservation is released when the branch update commits the blocks.
     crate::service::fs::quota::reserve_block_bytes(
         &state.repos,
         auth.user_id,
@@ -228,7 +218,6 @@ pub async fn get_block_map(
 
     let block_store = state.block_store.clone();
 
-    // Extract block IDs as strings for concurrent processing
     let block_id_strs: Vec<String> = block_ids
         .iter()
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
@@ -244,9 +233,8 @@ pub async fn get_block_map(
             .buffered(16)
             .collect::<Vec<_>>()
             .await;
-        // A missing block is an error, not a zero-length block: upstream
-        // answers 500 (`sync_api.go:303-307`), and a 0 length makes a seadrive
-        // client compute wrong block offsets.
+        // A missing block is an error, not a zero-length one: upstream answers 500
+        // (`sync_api.go:303-307`), and 0 makes a seadrive client compute wrong offsets.
         let mut out = Vec::with_capacity(sizes.len());
         for size in sizes {
             out.push(
@@ -256,10 +244,9 @@ pub async fn get_block_map(
         out
     };
 
-    // A file object whose blocks do not add up to its declared size cannot be
-    // mapped onto offsets: a client that slices its download (or its resume
-    // point) from these sizes would drop or duplicate bytes at the seam. Fail
-    // the request instead of handing out offsets that cannot be right.
+    // A file object whose blocks do not add up to its declared size cannot be mapped
+    // onto offsets: a client slicing its download from these sizes would drop or
+    // duplicate bytes at the seam.
     if let Some(declared) = json_val.get("size").and_then(|v| v.as_i64()) {
         let actual: i64 = block_sizes.iter().sum();
         if actual != declared {

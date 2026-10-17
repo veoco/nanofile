@@ -9,14 +9,13 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::email_message::{self, Status};
 
-/// Parameters for queueing one message.
 #[derive(Clone, Debug)]
 pub struct NewEmailMessage {
     pub kind: String,
     pub to_address: String,
     pub user_id: Option<i32>,
     pub subject: String,
-    /// Ciphertext of the rendered body — never the plaintext.
+    /// Ciphertext of the rendered body, never the plaintext.
     pub body_enc: String,
     pub created_at: i64,
 }
@@ -25,13 +24,11 @@ pub struct NewEmailMessage {
 pub trait EmailMessageRepository: Send + Sync {
     async fn insert(&self, message: NewEmailMessage) -> Result<email_message::Model, AppError>;
     async fn find_by_id(&self, id: i32) -> Result<Option<email_message::Model>, AppError>;
-    /// Newest first, optionally restricted to one status.
     async fn list_recent(
         &self,
         limit: u64,
         status: Option<Status>,
     ) -> Result<Vec<email_message::Model>, AppError>;
-    /// One page of the outbox, newest first.
     async fn list_recent_page(
         &self,
         status: Option<Status>,
@@ -39,27 +36,22 @@ pub trait EmailMessageRepository: Send + Sync {
         offset: u64,
     ) -> Result<Vec<email_message::Model>, AppError>;
     async fn count_by_status(&self) -> Result<HashMap<String, u64>, AppError>;
-    /// Pending rows whose backoff has elapsed, oldest deadline first.
     async fn due_pending(
         &self,
         now: i64,
         limit: u64,
     ) -> Result<Vec<email_message::Model>, AppError>;
 
-    /// Take ownership of an attempt by incrementing `attempts` and holding a
-    /// lease until `lease_until`.
+    /// Take ownership of an attempt by incrementing `attempts` and holding a lease until
+    /// `lease_until`.
     ///
-    /// `expected_attempts` is the value the caller read, and the update only
-    /// applies while it still holds — a compare-as-swap. That alone is not
-    /// enough to make the claim exclusive: because `due_pending` re-reads
-    /// `attempts`, a second drain that queries *after* the first claim commits
-    /// sees the incremented value and its own swap succeeds, so both send.
-    /// Requiring the lease to be absent or expired closes that window.
+    /// `expected_attempts` makes this a compare-and-swap, but that alone is not exclusive:
+    /// `due_pending` re-reads `attempts`, so a second drain querying after the first claim commits
+    /// sees the incremented value and its swap also succeeds. Requiring the lease to be absent or
+    /// expired closes that window; the counter is bumped by the claim rather than after the send, so
+    /// a process that dies mid-delivery still counts the attempt.
     ///
-    /// `false` means the row moved on (claimed and leased elsewhere, no longer
-    /// pending, or its backoff has not elapsed), so the caller must not send.
-    /// The counter is bumped by the claim rather than after the send so a
-    /// process that dies mid-delivery still counts the attempt.
+    /// `false` means the row moved on, so the caller must not send.
     async fn claim(
         &self,
         id: i32,
@@ -68,33 +60,25 @@ pub trait EmailMessageRepository: Send + Sync {
         lease_until: i64,
     ) -> Result<bool, AppError>;
 
-    /// Extend a held lease, so a slow delivery is not reaped and re-sent while
-    /// it is still in flight.
+    /// Extend a held lease, so a slow delivery is not reaped and re-sent mid-flight.
     async fn renew_lease(&self, id: i32, lease_until: i64) -> Result<(), AppError>;
 
-    /// Clear leases that expired without the attempt completing, returning how
-    /// many rows became claimable again.
-    ///
-    /// A lease expires when the process holding it died mid-send. The row was
-    /// left pending with its attempt counted, so clearing the lease is all that
-    /// is needed for the next drain to pick it up.
+    /// Clear leases that expired without the attempt completing, returning how many rows became
+    /// claimable again. An expired lease means the holder died mid-send; the row is still pending
+    /// with its attempt counted, so clearing the lease is all the next drain needs.
     async fn reap_expired_leases(&self, now: i64) -> Result<u64, AppError>;
-    /// Delivered: clear the ciphertext — a delivered body must not survive in
-    /// the database — and record the delivery time.
+    /// Delivered: record the time and clear the ciphertext, which must not survive in the database.
     async fn mark_sent(&self, id: i32, sent_at: i64) -> Result<(), AppError>;
-    /// This attempt failed. `Some(next_attempt_at)` keeps the row pending for a
-    /// retry; `None` gives up and marks it failed.
+    /// This attempt failed: `Some(next)` keeps the row pending for a retry, `None` marks it failed.
     async fn mark_attempt_failed(
         &self,
         id: i32,
         next_attempt_at: Option<i64>,
         error: &str,
     ) -> Result<(), AppError>;
-    /// Put a failed row back in the queue for a manual retry.
     async fn requeue(&self, id: i32, now: i64) -> Result<bool, AppError>;
 
     async fn delete_by_id(&self, id: i32) -> Result<bool, AppError>;
-    /// Delete every finished (sent or failed) row, returning how many.
     async fn delete_finished(&self) -> Result<u64, AppError>;
     /// Retention: drop sent rows older than `sent_before`, failed rows older
     /// than `failed_before`, and the oldest finished rows beyond `max_finished`.
@@ -132,10 +116,9 @@ impl EmailMessageRepository for DbEmailMessageRepository {
             body_enc: Set(Some(message.body_enc)),
             status: Set(Status::Pending.id().to_string()),
             attempts: Set(0),
-            // Due immediately: the caller attempts delivery right after
-            // queueing, and a restart has to find it retryable too.
+            // Due immediately: the caller attempts delivery right after queueing, and a restart
+            // has to find it retryable too.
             next_attempt_at: Set(message.created_at),
-            // Unclaimed until a drain takes it.
             lease_until: Set(None),
             last_error: Set(None),
             created_at: Set(message.created_at),
@@ -185,9 +168,8 @@ impl EmailMessageRepository for DbEmailMessageRepository {
     }
 
     async fn count_by_status(&self) -> Result<HashMap<String, u64>, AppError> {
-        // Three counts instead of a GROUP BY: the status set is closed and
-        // small, and this keeps the result independent of how the database
-        // reports aggregate rows.
+        // Three counts instead of a GROUP BY: the status set is closed and small, and this keeps
+        // the result independent of how the database reports aggregate rows.
         let mut counts = HashMap::new();
         for status in [Status::Pending, Status::Sent, Status::Failed] {
             let count = email_message::Entity::find()
@@ -226,7 +208,6 @@ impl EmailMessageRepository for DbEmailMessageRepository {
             .filter(email_message::Column::Status.eq(Status::Pending.id()))
             .filter(email_message::Column::Attempts.eq(expected_attempts))
             .filter(email_message::Column::NextAttemptAt.lte(now))
-            // Free, or a lease that has already run out.
             .filter(
                 email_message::Column::LeaseUntil
                     .is_null()
@@ -278,12 +259,11 @@ impl EmailMessageRepository for DbEmailMessageRepository {
                 status: Set(Status::Sent.id().to_string()),
                 sent_at: Set(Some(sent_at)),
                 last_error: Set(None),
-                // The attempt is over, so the lease that covered it must go:
-                // leaving it set would keep a *different* concern — the retry
-                // deadline — from being honoured.
+                // The attempt is over, so the covering lease must go; leaving it set would keep
+                // the retry deadline from being honoured.
                 lease_until: Set(None),
-                // The rendered body — which for a password reset contains the
-                // one-time link — must not outlive delivery.
+                // The rendered body (for a password reset it contains the one-time link) must not
+                // outlive delivery.
                 body_enc: Set(None),
                 ..Default::default()
             })
@@ -300,9 +280,8 @@ impl EmailMessageRepository for DbEmailMessageRepository {
     ) -> Result<(), AppError> {
         let (status, next) = match next_attempt_at {
             Some(next) => (Status::Pending, next),
-            // Kept as `failed` rather than deleted: the admin page shows the
-            // reason, and the encrypted body stays until retention prunes it so
-            // a manual retry can still deliver.
+            // Kept as `failed` rather than deleted: the admin page shows the reason, and the
+            // encrypted body stays until retention prunes it so a manual retry can still deliver.
             None => (Status::Failed, 0),
         };
         email_message::Entity::update_many()
@@ -311,9 +290,8 @@ impl EmailMessageRepository for DbEmailMessageRepository {
                 status: Set(status.id().to_string()),
                 next_attempt_at: Set(next),
                 last_error: Set(Some(error.to_string())),
-                // Released on every outcome: the lease covers the in-flight
-                // window only, and holding it past that would delay the retry
-                // the backoff just scheduled.
+                // Released on every outcome: the lease covers the in-flight window only, and
+                // holding it would delay the retry the backoff just scheduled.
                 lease_until: Set(None),
                 ..Default::default()
             })
@@ -370,8 +348,7 @@ impl EmailMessageRepository for DbEmailMessageRepository {
                 .rows_affected;
         }
 
-        // Cap the table as a whole, oldest first, so a mail loop cannot grow it
-        // without bound however recent the rows are.
+        // Cap the table as a whole, oldest first, so a mail loop cannot grow it without bound.
         let finished = email_message::Entity::find()
             .filter(Self::finished_filter())
             .order_by_desc(email_message::Column::Id)

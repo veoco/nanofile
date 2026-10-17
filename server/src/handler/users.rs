@@ -108,7 +108,6 @@ async fn create_user(
     )
     .await?;
 
-    // Fetch the newly created user to return full info.
     let created = state
         .repos
         .user
@@ -155,7 +154,6 @@ async fn update_user(
     )
     .await?;
 
-    // Fetch updated user
     let updated = state
         .repos
         .user

@@ -12,8 +12,6 @@ use crate::middleware::repo_extractor::RepoPathRead;
 use crate::middleware::repo_extractor::RepoPathWrite;
 use base::error::AppError;
 
-// ── metadata config ────────────────────────────────────────────────────────
-
 pub async fn get_metadata_config(
     path: RepoPathRead,
     State(state): State<Arc<AppState>>,
@@ -36,8 +34,6 @@ pub async fn update_metadata_config(
     Ok(ok_json())
 }
 
-// ── file records ───────────────────────────────────────────────────────────
-
 #[derive(Deserialize)]
 pub struct RecordQuery {
     pub parent_dir: Option<String>,
@@ -45,8 +41,8 @@ pub struct RecordQuery {
     pub file_name: Option<String>,
 }
 
-/// GET /metadata/record/ — seafile mobile clients resolve a file's record_id
-/// here using `parent_dir` + `file_name`.
+/// GET /metadata/record/ — mobile clients resolve a file's record_id from `parent_dir`
+/// + `file_name`.
 pub async fn get_metadata_record(
     path: RepoPathRead,
     State(state): State<Arc<AppState>>,
@@ -83,24 +79,19 @@ pub async fn update_metadata_record(
     Ok(ok_json())
 }
 
-// ── tags ───────────────────────────────────────────────────────────────────
-
 #[derive(Deserialize)]
 pub struct TagsQuery {
     pub start: Option<u32>,
     pub limit: Option<u32>,
 }
 
-/// Largest `limit` the tag endpoints accept. Mobile clients ask for 1000, so
-/// the cap sits exactly there: it bounds one request's memory without
-/// truncating a client-visible page.
+/// Largest `limit` the tag endpoints accept: mobile clients ask for 1000, so the cap
+/// sits there — one request's memory, without truncating a client-visible page.
 const MAX_TAG_LIMIT: u32 = 1000;
-/// Largest `start` offset the tag endpoints accept. Only exists so the value
-/// cannot reach SQL as an absurd OFFSET.
+/// Largest `start` offset, so the value cannot reach SQL as an absurd OFFSET.
 const MAX_TAG_START: u32 = 10_000_000;
 
-/// GET /metadata/tags/ — list all repo tags (mobile clients pass
-/// `start=0&limit=1000`).
+/// GET /metadata/tags/ — list all repo tags (mobile clients pass `start=0&limit=1000`).
 pub async fn get_repo_tags(
     path: RepoPathRead,
     State(state): State<Arc<AppState>>,
@@ -131,8 +122,7 @@ pub async fn create_repo_tags(
     Ok(Json(result))
 }
 
-/// PUT /metadata/tags/ — rename/recolor tags from
-/// `{tags_data: [{tag_id, tag: {_tag_name, _tag_color}}]}`.
+/// PUT /metadata/tags/ — rename/recolor tags: `{tags_data: [{tag_id, tag: {...}}]}`.
 pub async fn update_repo_tags(
     path: RepoPathWrite,
     State(state): State<Arc<AppState>>,
@@ -164,8 +154,7 @@ pub async fn delete_repo_tags(
     Ok(ok_json())
 }
 
-/// PUT /metadata/file-tags/ — set a file's tags from
-/// `{file_tags_data: [{record_id, tags: [tag_id, ...]}]}` (empty array clears).
+/// PUT /metadata/file-tags/ — set a file's tags: `{file_tags_data: [{record_id, tags}]}`.
 pub async fn set_file_tags(
     path: RepoPathWrite,
     State(state): State<Arc<AppState>>,
@@ -181,10 +170,8 @@ pub async fn set_file_tags(
     Ok(ok_json())
 }
 
-/// GET /metadata/tag-files/{tag_id}/ — files carrying a tag.
-///
-/// Uses a manual path tuple because the route has two path parameters, which
-/// `RepoPathRead` cannot extract.
+/// GET /metadata/tag-files/{tag_id}/ — files carrying a tag (manual path tuple: two
+/// params, which `RepoPathRead` cannot extract).
 pub async fn get_tag_files(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -207,8 +194,6 @@ pub async fn get_tag_files(
     let result = svc.get_tag_files(&repo_id, tag_id, start, limit).await?;
     Ok(Json(result))
 }
-
-// ── tags-status (enable/disable the tag feature) ───────────────────────────
 
 pub async fn get_tags_status(
     path: RepoPathRead,
@@ -251,8 +236,6 @@ pub async fn delete_tags_status(
         .await?;
     Ok(ok_json())
 }
-
-// ── related users / misc ───────────────────────────────────────────────────
 
 pub async fn related_users(
     path: RepoPathRead,

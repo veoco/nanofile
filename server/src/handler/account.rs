@@ -19,7 +19,6 @@ pub struct RegisterForm {
 
 #[derive(Deserialize)]
 pub struct UpdateAccountInfo {
-    /// New display name / nickname.
     pub name: String,
 }
 
@@ -47,10 +46,8 @@ pub async fn get_account_info(
     Ok(Json(info))
 }
 
-/// PUT /api2/account/info/ — update the user's display name/nickname.
-///
-/// The Seafile client sends `{"name": "new nickname"}`, where `name`
-/// is the new display name. We store it in the `display_name` column.
+/// PUT /api2/account/info/ — the Seafile client sends `{"name": "new nickname"}`;
+/// it is stored in the `display_name` column.
 pub async fn update_account_info(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -73,9 +70,9 @@ pub async fn register_user(
     State(state): State<Arc<AppState>>,
     Form(form): Form<RegisterForm>,
 ) -> Result<StatusCode, AppError> {
-    // Account creation via the API is admin-only (matches seahub's
-    // `IsAdminUser`). Anonymous/self registration goes through the UI flow,
-    // which enforces invitation codes and rate limits.
+    // Account creation via the API is admin-only (seahub's `IsAdminUser`); anonymous
+    // self-registration goes through the UI flow, which enforces invitation codes and
+    // rate limits.
     let user_record = state
         .repos
         .user
@@ -86,9 +83,8 @@ pub async fn register_user(
         return Err(AppError::Forbidden);
     }
 
-    // The configured password policy applies here too. Registration, the
-    // self-service change form and the reset flow all enforce it; this
-    // admin-only path used to accept a one-character password.
+    // The configured password policy applies here too, as on every other password
+    // path; this admin-only one must not be an exception.
     crate::service::auth::password::validate_password(
         &form.password,
         state.config().auth.password_min_length,

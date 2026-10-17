@@ -1,21 +1,8 @@
 //! What authenticated a request, and the authorization that follows from it.
 //!
-//! Two questions have to be answered for every request: *who is calling*, and
-//! *what is this caller allowed to do*. Before this type existed a single field
-//! answered both, and answered the second one by omission:
-//!
-//! ```ignore
-//! pub struct AuthUser {
-//!     // `None` meant both "this is a session" and "this credential is not
-//!     // subject to the capability table".
-//!     pub key: Option<KeyAuthority>,
-//! }
-//! ```
-//!
-//! Two meanings behind one absence is easy to get wrong, and the route guard
-//! could only be applied to the `Some` half — a session silently skipped it.
-//! Naming the credential makes each rule explicit and applies the route table
-//! to every caller:
+//! Every request answers two questions: *who is calling*, and *what may this
+//! caller do*. Naming the credential makes each rule explicit and applies the
+//! route table to every caller:
 //!
 //! * [`Credential::Session`] *is* the account, so it satisfies every capability
 //!   — but it is also the only credential the key-management surface accepts,
@@ -33,27 +20,20 @@ use crate::domain::permission::RepoScope;
 /// How a request authenticated.
 #[derive(Clone, Debug)]
 pub enum Credential {
-    /// A browser session, or the account-level token a client obtained by
-    /// logging in.
-    ///
-    /// This is the account itself: it satisfies every capability, and it is the
+    /// A browser session, or the account-level token a client obtained by logging
+    /// in. This is the account itself: it satisfies every capability and is the
     /// only credential allowed on the key-management surface.
     Session,
-    /// A unified API key, created in *Settings → API Keys*.
-    ///
-    /// A key is a subset of its owner's account: the capability set it carries,
-    /// narrowed further per library by its bindings.
+    /// A unified API key: a subset of its owner's account, the capability set it
+    /// carries narrowed further per library by its bindings.
     Key(KeyAuthority),
-    /// A repository-scoped sync token, issued by `GET /api2/repo-tokens/`.
-    ///
-    /// Accepted only by the sync protocol (`/seafhttp/…`), which checks its
-    /// library binding itself. The API surfaces refuse it outright: a leaked
-    /// library credential must not read the whole account.
+    /// A repository-scoped sync token, issued by `GET /api2/repo-tokens/`. Only the
+    /// sync protocol (`/seafhttp/…`) accepts it, checking its library binding
+    /// itself; the API surfaces refuse a leaked token outright.
     SyncToken,
 }
 
 impl Credential {
-    /// The key behind the request, when there is one.
     pub fn key(&self) -> Option<&KeyAuthority> {
         match self {
             Credential::Key(authority) => Some(authority),
@@ -70,22 +50,18 @@ impl Credential {
         }
     }
 
-    /// Whether this credential satisfies what a route requires.
-    ///
-    /// This is the whole of the "which credential may reach which route" policy;
-    /// [`crate::middleware::auth::enforce_route_access`] adds the per-library
-    /// ceiling on top.
+    /// Whether this credential satisfies what a route requires — the whole
+    /// "which credential may reach which route" policy;
+    /// `crate::middleware::auth::enforce_route_access` adds the ceiling on top.
     pub fn allows_route(&self, access: RouteAccess) -> bool {
         match access {
-            // The handler authenticates the request itself, or the answer is
-            // the same for every caller that got this far.
+            // The handler authenticates itself, or the answer is the same for all.
             RouteAccess::Public | RouteAccess::AnyAuthenticated => true,
-            // Key management is reserved to the account itself: a key that
-            // could mint keys could widen its own access. A sync token is not
-            // an account credential and is refused here too.
+            // Key management is reserved to the account: a key that could mint
+            // keys could widen its own access, and a sync token is refused too.
             RouteAccess::SessionOnly => matches!(self, Credential::Session),
-            // A session is the account, so it satisfies every capability. A key
-            // must actually carry the capability it is asked for.
+            // A session is the account and satisfies every capability; a key must
+            // carry the one it is asked for.
             RouteAccess::Capability(capability) => match self {
                 Credential::Key(authority) => authority.has(capability),
                 Credential::Session => true,
@@ -94,14 +70,11 @@ impl Credential {
         }
     }
 
-    /// Whether the per-library ceiling allows this request.
-    ///
-    /// Only keys carry a ceiling; every other credential is the account itself.
+    /// Whether the per-library ceiling allows this request; only keys carry one.
     pub fn allows_repo(&self, repo_id: &str, need_write: bool) -> bool {
         match self {
             Credential::Key(authority) => authority.allows_repo(repo_id, need_write),
-            // A sync token is bound to exactly one library by construction, and
-            // the sync extractor enforces that binding before this is reached.
+            // A sync token is bound to one library, and the extractor checks it.
             Credential::Session | Credential::SyncToken => true,
         }
     }
@@ -109,9 +82,8 @@ impl Credential {
     /// The libraries an account-wide listing may return.
     pub fn repo_scope(&self) -> RepoScope {
         match self {
-            // A key bound to specific libraries narrows every listing its owner
-            // makes through it, so a "list everything" page cannot leak the ids
-            // of libraries the key was not given.
+            // A bound key narrows every listing its owner makes through it, so no
+            // "list everything" page can leak libraries it was not given.
             Credential::Key(authority) if !authority.all_repos => {
                 RepoScope::only(authority.bound_repo_ids().map(str::to_string))
             }
@@ -154,8 +126,7 @@ mod tests {
         .expect("authority")
     }
 
-    /// The account itself satisfies every capability — the route table says
-    /// what a *key* needs, not what a session needs.
+    /// The route table says what a *key* needs, not what a session needs.
     #[test]
     fn a_session_satisfies_every_capability() {
         let session = Credential::Session;
@@ -169,8 +140,7 @@ mod tests {
         assert!(session.allows_route(RouteAccess::AnyAuthenticated));
     }
 
-    /// Only the account itself may manage keys: a key must not be able to mint
-    /// a key with wider access than it holds.
+    /// Only the account itself may manage keys: a key must not mint a wider key.
     #[test]
     fn only_a_session_may_manage_keys() {
         assert!(Credential::Session.allows_route(RouteAccess::SessionOnly));
@@ -186,13 +156,11 @@ mod tests {
         let key = Credential::Key(authority("file.read", true, &[]));
         assert!(key.allows_route(RouteAccess::Capability(Capability::FileRead)));
         assert!(!key.allows_route(RouteAccess::Capability(Capability::FileWrite)));
-        // Public/any-authenticated routes do not consume a capability.
         assert!(key.allows_route(RouteAccess::Public));
         assert!(key.allows_route(RouteAccess::AnyAuthenticated));
     }
 
-    /// A repository-scoped token is not an account credential: if it ever
-    /// reached the API surfaces it would be refused, not promoted.
+    /// A repository-scoped token is refused by the API surfaces, not promoted.
     #[test]
     fn a_sync_token_satisfies_no_capability() {
         let token = Credential::SyncToken;
@@ -210,13 +178,11 @@ mod tests {
         let unlimited = Credential::Key(authority("file.read", true, &[]));
         assert!(unlimited.allows_repo("anything", true));
 
-        // Neither a session nor a sync token has a ceiling.
         assert!(Credential::Session.allows_repo("anything", true));
         assert!(Credential::SyncToken.allows_repo("anything", true));
     }
 
-    /// A bound key narrows account-wide listings to its own libraries; every
-    /// other credential leaves them unrestricted.
+    /// A bound key narrows account-wide listings; no other credential does.
     #[test]
     fn only_a_bound_key_narrows_the_listing_scope() {
         let bound = Credential::Key(authority("library.read", false, &[("a", "r"), ("b", "rw")]));

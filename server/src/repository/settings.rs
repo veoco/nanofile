@@ -13,23 +13,18 @@ use base::error::AppError;
 use infra::entity::settings;
 use infra::settings::SettingRow;
 
-/// Read and write the settings rows as a whole map.
-///
-/// The whole table is a few dozen rows and every reader needs all of them (the
-/// layering is decided per key), so there is no per-key read path to maintain.
+/// Read and write the settings rows as a whole map. The table is a few dozen rows and every reader
+/// needs all of them (layering is decided per key), so there is no per-key read path.
 #[async_trait]
 pub trait SettingsRepository: Send + Sync {
-    /// Every stored value, keyed the way the catalog names it.
     async fn load_all(&self) -> Result<BTreeMap<String, SettingRow>, AppError>;
-    /// Insert or replace the given values, stamping each with `now`/`updated_by`.
     async fn upsert_many(
         &self,
         values: &BTreeMap<String, String>,
         updated_by: Option<i32>,
         now: i64,
     ) -> Result<(), AppError>;
-    /// Drop the rows for `keys`, so those settings fall back to the config file
-    /// (or the built-in default) again.
+    /// Drop the rows for `keys`, so those settings fall back to the config file or built-in default.
     async fn delete_keys(&self, keys: &[String]) -> Result<usize, AppError>;
 }
 
@@ -84,8 +79,8 @@ impl SettingsRepository for DbSettingsRepository {
             })
             .collect();
 
-        // One statement for the batch, and one transaction around it: a save
-        // that touches several keys must not leave half of them applied.
+        // One statement for the batch, in one transaction: a save that touches several keys must
+        // not leave half of them applied.
         let txn = self.db.begin().await?;
         settings::Entity::insert_many(models)
             .on_conflict(

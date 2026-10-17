@@ -14,17 +14,14 @@ pub struct AccountInfo {
     pub nickname: Option<String>,
     #[serde(rename = "id")]
     pub id: i32,
-    /// Space used in bytes (sum of owned repo sizes).
     pub usage: i64,
     /// Storage quota in bytes. -1 means unlimited.
     pub total: i64,
     /// Absolute URL to the user's avatar (seahub `avatar_url` compatibility).
     pub avatar_url: String,
-    /// The user's contact email. nanofile has no separate contact-email
-    /// profile, so this mirrors `email`.
+    /// The user's contact email; nanofile has no separate contact-email profile, so it mirrors `email`.
     pub contact_email: String,
-    /// Space usage as a percentage string (e.g. `"6.0382327%"`), matching
-    /// seahub's `space_usage` field.
+    /// Space usage as a percentage string (e.g. `"6.0382327%"`), matching seahub's field.
     pub space_usage: String,
 }
 
@@ -37,7 +34,6 @@ impl AccountService {
         Self { repos }
     }
 
-    /// Fetch account info for a user, computing usage from owned repos.
     pub async fn get_account_info(
         &self,
         user_id: i32,
@@ -82,7 +78,6 @@ impl AccountService {
         })
     }
 
-    /// Update the user's display name / nickname.
     pub async fn update_account_info(
         &self,
         user_id: i32,
@@ -155,14 +150,12 @@ impl AccountService {
         Ok(())
     }
 
-    /// Sum of repo sizes owned by a user.
     async fn compute_usage(&self, user_id: i32) -> Result<i64, AppError> {
         self.repos.compute_user_usage(user_id).await
     }
 }
 
-/// Format space usage as a percentage string, matching seahub's `space_usage`
-/// (e.g. `"6.0382327%"`, or `"0%"` when no quota is set / unlimited).
+/// Format space usage as a percentage string, matching seahub's `space_usage` (`"0%"` when unlimited).
 fn format_space_usage(usage: i64, total: i64) -> String {
     if total > 0 {
         format!("{}%", usage as f64 / total as f64 * 100.0)

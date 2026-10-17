@@ -1,8 +1,7 @@
 //! Data access for unified API keys.
 //!
-//! A key is looked up by the hash of the presented secret. The auth path also
-//! needs the key's library bindings, so [`ApiKeyRepository::find_by_presented`]
-//! returns both in one step and the caching decorator can store the pair.
+//! A key is looked up by the hash of the presented secret; the auth path also needs its library
+//! bindings, so [`ApiKeyRepository::find_by_presented`] returns both in one step for the decorator.
 
 use async_trait::async_trait;
 use sea_orm::{
@@ -18,7 +17,6 @@ use infra::entity::{api_key, api_key_repo};
 /// SQLite binds at most ~999 parameters per statement.
 const IN_BATCH: usize = 500;
 
-/// One library binding to persist alongside a key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApiKeyBinding {
     pub repo_id: String,
@@ -26,14 +24,12 @@ pub struct ApiKeyBinding {
     pub permission: String,
 }
 
-/// A key together with its library bindings.
 #[derive(Clone, Debug)]
 pub struct ApiKeyLookup {
     pub key: api_key::Model,
     pub bindings: Vec<api_key_repo::Model>,
 }
 
-/// Parameters for creating a key.
 pub struct CreateApiKeyParams {
     pub user_id: i32,
     pub name: String,
@@ -49,10 +45,8 @@ pub struct CreateApiKeyParams {
     pub bindings: Vec<ApiKeyBinding>,
 }
 
-/// Fields an update may change.
-///
-/// `None` leaves a field untouched. For `expires_at` the outer `Option`
-/// distinguishes "leave it" from the inner `None`, which means "never expires".
+/// Fields an update may change. `None` leaves a field untouched; for `expires_at` the outer
+/// `Option` distinguishes "leave it" from the inner `None`, which means "never expires".
 #[derive(Default)]
 pub struct UpdateApiKeyParams {
     pub name: Option<String>,
@@ -63,19 +57,16 @@ pub struct UpdateApiKeyParams {
 
 #[async_trait]
 pub trait ApiKeyRepository: Send + Sync {
-    /// Resolve a presented secret, returning the key and its bindings.
     async fn find_by_presented(&self, raw: &str) -> Result<Option<ApiKeyLookup>, AppError>;
     async fn find_by_id_and_user(
         &self,
         key_id: i32,
         user_id: i32,
     ) -> Result<Option<api_key::Model>, AppError>;
-    /// Load a key regardless of owner (repo owners and admins manage keys they
-    /// did not create).
+    /// Load a key regardless of owner: repo owners and admins manage keys they did not create.
     async fn find_by_id(&self, key_id: i32) -> Result<Option<api_key::Model>, AppError>;
     async fn find_by_user(&self, user_id: i32) -> Result<Vec<api_key::Model>, AppError>;
     async fn create(&self, params: CreateApiKeyParams) -> Result<api_key::Model, AppError>;
-    /// Apply metadata changes. Returns whether a row matched.
     async fn update_metadata(
         &self,
         key_id: i32,
@@ -93,22 +84,19 @@ pub trait ApiKeyRepository: Send + Sync {
         &self,
         key_ids: &[i32],
     ) -> Result<Vec<api_key_repo::Model>, AppError>;
-    /// Replace a key's library bindings atomically.
     async fn replace_bindings(
         &self,
         key_id: i32,
         bindings: &[ApiKeyBinding],
     ) -> Result<(), AppError>;
-    /// Drop every binding that points at a deleted library, then delete the
-    /// now-unbound keys. Returns the number of bindings removed.
+    /// Drop a deleted library's bindings, then any key left unbound; returns bindings removed.
     async fn delete_bindings_by_repo(&self, repo_id: &str) -> Result<u64, AppError>;
-    /// Drop one user's bindings for a library and delete any key left without
-    /// bindings. Returns the number of bindings removed.
+    /// Drop one user's bindings for a library and delete any key left without bindings; returns
+    /// the number of bindings removed.
     ///
-    /// Not part of the current revocation policy: removing a member keeps their
-    /// bindings, because every request re-checks membership (so the key is inert
-    /// while they are out) and re-adding them legitimately restores the key they
-    /// already hold. Available for an explicit purge.
+    /// Not part of the current revocation policy: removing a member keeps their bindings, because
+    /// every request re-checks membership (the key is inert while they are out) and re-adding them
+    /// restores the key they already hold. Available for an explicit purge.
     async fn delete_bindings_for_repo_user(
         &self,
         repo_id: &str,
@@ -116,8 +104,7 @@ pub trait ApiKeyRepository: Send + Sync {
     ) -> Result<u64, AppError>;
     /// Delete keys that are not `all_repos` and have no bindings left.
     async fn delete_orphan_bound_keys(&self) -> Result<u64, AppError>;
-    /// Record last use. Called on the hot path, so it must not invalidate the
-    /// auth cache (the cached model's `last_used_at` is never read for auth).
+    /// Record last use on the hot path, so it must not invalidate the auth cache.
     async fn touch_last_used(&self, key_id: i32, ts: i64) -> Result<(), AppError>;
 }
 
@@ -207,9 +194,8 @@ impl ApiKeyRepository for DbApiKeyRepository {
         }
         .insert(&txn)
         .await?;
-        // A key that is not `all_repos` without bindings would be inert; the
-        // service validates that, and the transaction keeps the pair consistent
-        // if the binding insert fails.
+        // A key that is not `all_repos` without bindings would be inert; the service validates
+        // that, and the transaction keeps the pair consistent if the binding insert fails.
         Self::insert_bindings(&txn, model.id, &params.bindings).await?;
         txn.commit().await?;
         Ok(model)
@@ -241,8 +227,7 @@ impl ApiKeyRepository for DbApiKeyRepository {
             active.expires_at = Set(expires_at);
             any_change = true;
         }
-        // `update_many` with no SET values would emit invalid SQL; an update
-        // that changes nothing is reported as a match instead.
+        // `update_many` with no SET values emits invalid SQL; a no-op update is reported as a match.
         if !any_change {
             return Ok(self.find_by_id_and_user(key_id, user_id).await?.is_some());
         }

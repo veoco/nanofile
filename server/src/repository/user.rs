@@ -12,10 +12,8 @@ use infra::entity::user;
 #[async_trait]
 pub trait UserRepository: Send + Sync {
     async fn find_by_id(&self, user_id: i32) -> Result<Option<user::Model>, AppError>;
-    /// Fetch several users by id in one query (for list pages with N+1 lookups).
     async fn find_by_ids(&self, user_ids: &[i32]) -> Result<Vec<user::Model>, AppError>;
     async fn find_by_email(&self, email: &str) -> Result<Option<user::Model>, AppError>;
-    /// Fetch several users by email in one query (for directory listings).
     async fn find_by_emails(&self, emails: &[String]) -> Result<Vec<user::Model>, AppError>;
     async fn find_by_email_like(&self, pattern: &str) -> Result<Vec<user::Model>, AppError>;
     async fn exists_by_email(&self, email: &str) -> Result<bool, AppError>;
@@ -34,17 +32,13 @@ pub trait UserRepository: Send + Sync {
     -> Result<(), AppError>;
     async fn touch_last_login(&self, user_id: i32, now: i64) -> Result<(), AppError>;
 
-    // Admin methods
     async fn find_all(&self) -> Result<Vec<user::Model>, AppError>;
     async fn update_is_admin(&self, user_id: i32, is_admin: bool) -> Result<(), AppError>;
     async fn update_is_active(&self, user_id: i32, is_active: bool) -> Result<(), AppError>;
     async fn update_storage_quota(&self, user_id: i32, quota: Option<i64>) -> Result<(), AppError>;
     async fn delete_user(&self, user_id: i32) -> Result<(), AppError>;
 
-    // ── Methods for UI layer refactoring ───────────────────────────────
-    /// Update the user's password hash.
     async fn update_password(&self, user_id: i32, password_hash: String) -> Result<(), AppError>;
-    /// Create a new user with an inviter.
     async fn create_with_inviter(
         &self,
         email: String,
@@ -113,9 +107,8 @@ impl UserRepository for DbUserRepository {
     }
 
     async fn find_by_email_like(&self, pattern: &str) -> Result<Vec<user::Model>, AppError> {
-        // `LIKE ... ESCAPE '\'` so `%`/`_` in the caller's pattern are matched
-        // literally instead of acting as wildcards (sea-orm's `like` has no
-        // ESCAPE clause). The pattern is bound as a value, not interpolated.
+        // `LIKE ... ESCAPE '\'` so `%`/`_` in the caller's pattern match literally instead of acting
+        // as wildcards (sea-orm's `like` has no ESCAPE clause); the pattern is bound as a value.
         Ok(user::Entity::find()
             .filter(Expr::cust_with_values(
                 "email LIKE ? ESCAPE '\\'",
@@ -126,8 +119,7 @@ impl UserRepository for DbUserRepository {
     }
 
     async fn exists_by_email(&self, email: &str) -> Result<bool, AppError> {
-        // Project only the primary key — avoid pulling `password_hash` and the
-        // rest of the row just to check for existence.
+        // Project only the primary key: avoid pulling `password_hash` just to check existence.
         let row: Option<(i32,)> = user::Entity::find()
             .select_only()
             .column(user::Column::Id)

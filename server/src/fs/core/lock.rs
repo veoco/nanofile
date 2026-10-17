@@ -10,9 +10,8 @@ use infra::entity::{file_lock_timestamp, fs_object, locked_file};
 /// SQLite has a ~999 bound on bound parameters; chunk IN / NOT IN lists.
 const IN_BATCH: usize = 500;
 
-/// Walk the FS tree of a commit and check whether any file in the tree
-/// is locked by a different user. Returns `AppError::Locked(path)` with
-/// 403 if a lock conflict is found.
+/// Walk the FS tree of a commit and check whether any file in it is locked by a
+/// different user, returning `AppError::Locked(path)` (403) on conflict.
 ///
 /// The seafile-daemon parses the 403 body with regex `"File (.+) is locked"`
 /// and emits `SYNC_ERROR_ID_FILE_LOCKED`.
@@ -26,12 +25,8 @@ pub async fn check_commit_file_locks(
         return Ok(());
     }
 
-    // Quick skip: if no file locks exist for this repo, skip the expensive
-    // full-tree BFS entirely.  The `idx_locked_files_repo_path` index makes
-    // this count(*) O(log n) instead of O(files in tree).
-    //
-    // Most users never use file locking, so this eliminates the vast majority
-    // of the traversal cost.
+    // Quick skip: when the repo has no file locks, skip the full-tree BFS
+    // entirely; `idx_locked_files_repo_path` makes count(*) O(log n).
     let lock_count = locked_file::Entity::find()
         .filter(locked_file::Column::RepoId.eq(repo_id))
         .count(db)
@@ -40,8 +35,7 @@ pub async fn check_commit_file_locks(
         return Ok(());
     }
 
-    // Load every lock for the repo once and index it by path; previously each
-    // file in the tree issued its own locked_file query.
+    // Load every lock for the repo once, indexed by path.
     let locks: std::collections::HashMap<String, i32> = locked_file::Entity::find()
         .filter(locked_file::Column::RepoId.eq(repo_id))
         .all(db)
@@ -50,8 +44,7 @@ pub async fn check_commit_file_locks(
         .map(|l| (l.path, l.user_id))
         .collect();
 
-    // Level frontier: each level reads all its fs_objects with one batched
-    // `IN` query instead of one query per file/directory.
+    // Level frontier: one batched `IN` query per level instead of per entry.
     let mut frontier: Vec<(String, String)> = vec![(root_id.to_string(), String::new())];
 
     let mut guard = crate::fs::core::traversal::TreeGuard::new();
@@ -74,7 +67,6 @@ pub async fn check_commit_file_locks(
 
             match obj.obj_type {
                 1 => {
-                    // File — check if locked by another user
                     if let Some(&owner) = locks.get(path)
                         && owner != user_id
                     {
@@ -123,8 +115,7 @@ async fn fetch_objects_batched(
     Ok(map)
 }
 
-/// Upsert the file lock timestamp for a repo (used by clients for cache invalidation).
-/// Creates a new record if one doesn't exist, updates the timestamp if it does.
+/// Upsert the repo's lock timestamp (clients use it for cache invalidation).
 pub async fn upsert_lock_timestamp(db: &DatabaseConnection, repo_id: &str) -> Result<(), AppError> {
     let now = chrono::Utc::now().timestamp();
     let existing = file_lock_timestamp::Entity::find()
@@ -157,12 +148,10 @@ mod tests {
     use super::*;
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
 
-    /// Helper: create an in-memory SQLite database with the minimal schema
-    /// needed for `check_commit_file_locks`.
+    /// In-memory SQLite database with the minimal schema for the checks below.
     async fn setup_lock_test_db() -> DatabaseConnection {
         let db = Database::connect("sqlite::memory:").await.unwrap();
 
-        // Create required tables
         db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "
@@ -246,8 +235,7 @@ mod tests {
         db
     }
 
-    /// check_commit_file_locks should return Ok(()) immediately when no
-    /// locked_files records exist for the repo (no tree traversal).
+    /// An empty tree returns Ok(()) without traversal.
     #[tokio::test]
     async fn test_check_locks_skip_when_no_locks() {
         let db = setup_lock_test_db().await;
@@ -256,14 +244,11 @@ mod tests {
         assert!(result.is_ok(), "empty tree should always succeed");
     }
 
-    /// check_commit_file_locks should skip full tree traversal when the
-    /// locked_files table has no entries for this repo (even if the tree
-    /// itself has many files).
+    /// Skipped tree walk when the repo has no locks, even for a populated tree.
     #[tokio::test]
     async fn test_check_locks_skips_tree_walk_for_unlocked_repo() {
         let db = setup_lock_test_db().await;
 
-        // Seed a root dir with a file
         db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             r#"
@@ -285,17 +270,15 @@ mod tests {
         .await
         .unwrap();
 
-        // No locked_files records → should skip tree walk and return Ok
         let result = check_commit_file_locks(&db, "test-repo", "root-fs-id", 1).await;
         assert!(result.is_ok(), "should skip tree walk when no locks exist");
     }
 
-    /// check_commit_file_locks should find a lock conflict.
+    /// Detects a lock conflict.
     #[tokio::test]
     async fn test_check_locks_detects_conflict() {
         let db = setup_lock_test_db().await;
 
-        // Root dir with a file
         db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             r#"
@@ -317,7 +300,6 @@ mod tests {
         .await
         .unwrap();
 
-        // Commit
         db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "
@@ -328,7 +310,6 @@ mod tests {
         .await
         .unwrap();
 
-        // Insert a lock record for this file by user 2
         db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "

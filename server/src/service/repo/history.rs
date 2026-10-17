@@ -35,7 +35,6 @@ pub struct DirChange {
     pub path: String,
 }
 
-/// Walk an FS tree and collect all file paths with their size info.
 async fn collect_files(
     repos: &Repositories,
     repo_id: &str,
@@ -52,8 +51,7 @@ async fn collect_files(
         return Ok(()); // Already visited this dir
     }
 
-    // Level frontier: each level reads all its directories with one batched
-    // `IN` query (O(#dirs) → O(depth)), mirroring `compute_tree_size`.
+    // Level frontier: each level reads all its dirs in one batched IN query.
     let mut frontier: Vec<(String, String)> = vec![(root_id.to_string(), prefix.to_string())];
     let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
@@ -76,10 +74,8 @@ async fn collect_files(
                 };
 
                 if entry.mode == S_IFREG || entry.size > 0 {
-                    // File entry
                     files.insert(child_path.clone(), entry.size);
                 } else if entry.mode == S_IFDIR {
-                    // Directory entry - schedule for the next level
                     if visited.insert(entry.id.clone()) {
                         next.push((entry.id.clone(), child_path));
                     }
@@ -95,20 +91,18 @@ async fn collect_files(
     Ok(())
 }
 
-/// Service for repo history-related operations.
 pub struct HistoryService;
 
 impl HistoryService {
     /// Returns the file changes introduced by a specific commit.
     ///
-    /// This compares the FS objects of the commit's root directory against
-    /// those of its parent commit (or returns all files for the initial commit).
+    /// Compares the FS objects of the commit's root against its parent's, or
+    /// returns every file for the initial commit.
     pub async fn get_history_changes(
         repos: &Repositories,
         repo_id: &str,
         commit_id: &str,
     ) -> Result<HistoryChangesResponse, AppError> {
-        // Find the commit
         let c = repos
             .commit
             .find_by_repo_and_commit_id(repo_id, commit_id)
@@ -120,7 +114,6 @@ impl HistoryService {
         let mut modified_files = Vec::new();
         let renamed_files = Vec::new();
 
-        // Collect files from the current commit
         let mut current_files: HashMap<String, i64> = HashMap::new();
         Box::pin(collect_files(
             repos,
@@ -133,7 +126,6 @@ impl HistoryService {
         .await?;
 
         if let Some(parent_id) = &c.parent_id {
-            // Find parent commit to get its root_id
             let parent_commit = repos
                 .commit
                 .find_by_repo_and_commit_id(repo_id, parent_id)
@@ -151,7 +143,6 @@ impl HistoryService {
             ))
             .await?;
 
-            // Compare to find changes
             for (path, size) in &current_files {
                 match parent_files.get(path) {
                     None => {
@@ -179,7 +170,6 @@ impl HistoryService {
                 }
             }
         } else {
-            // Initial commit — all files are "new"
             for (path, size) in &current_files {
                 new_files.push(FileChange {
                     path: path.clone(),
@@ -219,18 +209,18 @@ pub struct FileHistoryItem {
 impl HistoryService {
     /// Return the version history of a single file, newest first.
     ///
-    /// Walks the repo's commits newest→oldest and records each commit whose
-    /// file content (`fs_id`) differs from the previously recorded one; stops
-    /// as soon as the path no longer resolves (the file's creation commit).
+    /// Walks commits newest→oldest and records each one whose file content
+    /// (`fs_id`) differs from the previously recorded one; stops as soon as the
+    /// path no longer resolves (the file's creation commit).
     pub async fn get_file_history(
         repos: &Repositories,
         repo_id: &str,
         path: &str,
         limit: u64,
     ) -> Result<Vec<FileHistoryItem>, AppError> {
-        // Fetch a conservative multiple of `limit` commits: the walk below may
-        // skip commits where this path's content didn't change, so exactly
-        // `limit` commits might not yield `limit` revisions.
+        // Fetch a conservative multiple of `limit`: the walk skips commits where
+        // this path's content did not change, so `limit` commits may not yield
+        // `limit` revisions.
         let commits = repos
             .commit
             .find_by_repo_id_ordered_by_ctime_desc(repo_id, Some(limit.saturating_mul(2)))
@@ -242,15 +232,13 @@ impl HistoryService {
             .unwrap_or(path)
             .to_string();
 
-        // Resolve the same path against every commit root in one batched walk
-        // instead of O(depth) queries per commit.
+        // Resolve the same path against every commit root in one batched walk.
         let targets: Vec<(String, String)> = commits
             .iter()
             .map(|c| (c.root_id.clone(), path.to_string()))
             .collect();
         let resolved = resolve_fs_ids_batch(repos, repo_id, &targets).await?;
 
-        // Walk newest→oldest, keeping each revision whose content changed.
         let mut kept: Vec<(usize, String)> = Vec::new(); // (commit index, fs_id)
         let mut last_fs_id: Option<String> = None;
         for (idx, fs_id_opt) in resolved.into_iter().enumerate() {
@@ -267,7 +255,6 @@ impl HistoryService {
             kept.push((idx, fs_id));
         }
 
-        // Batch-fetch the sizes of all distinct kept fs_ids.
         let fs_ids: Vec<String> = kept.iter().map(|(_, fs_id)| fs_id.clone()).collect();
         let size_map = read_fs_file_data_batch(repos, repo_id, &fs_ids).await?;
 
@@ -348,9 +335,9 @@ impl HistoryService {
         let now = chrono::Utc::now().timestamp();
         let target_size = target_file.size;
 
-        // Repointing the dirent also changes the library's size, which is
-        // maintained incrementally: the entry's size before the update is the
-        // only place the "old" value is still available.
+        // Repointing the dirent also changes the library's size, which is maintained
+        // incrementally: the entry's size before the update is the only place the
+        // "old" value is still available.
         let mut previous_size: Option<i64> = None;
 
         FileOps::update_dir_tree_and_commit(

@@ -10,20 +10,14 @@ use infra::common::util::{basename, get_head_root_id, parent_path_from, timestam
 use infra::entity::repo_tag;
 use infra::serialization::S_IFDIR;
 
-/// Metadata-service-compatible helpers and operations.
-///
-/// The public API mirrors seafile's metadata service subset used by the mobile
-/// clients (`GET/PUT metadata/`, `GET/PUT metadata/record/`, `GET metadata/tags/`,
-/// `PUT metadata/file-tags/`). File records are addressed by a `record_id`
-/// derived from the file path (hex-encoded), so no persistent record table is
-/// required.
+/// Seafile metadata-service subset used by the mobile clients; file records are
+/// addressed by a path-derived hex `record_id`, so no record table is needed.
 pub struct MetadataService {
     db: Arc<DatabaseConnection>,
     repos: Arc<Repositories>,
     config: crate::settings::RuntimeConfig,
 }
 
-/// Resolved filesystem information for a single path.
 struct FileInfo {
     size: i64,
     mtime: i64,
@@ -38,8 +32,6 @@ impl MetadataService {
     ) -> Self {
         Self { db, repos, config }
     }
-
-    // ── record_id helpers ─────────────────────────────────────────────────
 
     /// Derive an opaque, reversible `record_id` from a full file path.
     pub fn record_id_from_path(path: &str) -> String {
@@ -72,8 +64,6 @@ impl MetadataService {
         }
         Ok(path)
     }
-
-    // ── metadata config ───────────────────────────────────────────────────
 
     /// GET /metadata/ — config including the `tags_enabled` flag.
     pub async fn get_metadata_config(&self, repo_id: &str) -> Result<serde_json::Value, AppError> {
@@ -108,8 +98,6 @@ impl MetadataService {
             .await
     }
 
-    // ── file records ──────────────────────────────────────────────────────
-
     /// GET /metadata/record/ — build a metadata-service-style record for a file.
     pub async fn get_file_record(
         &self,
@@ -141,7 +129,6 @@ impl MetadataService {
             "_tags": tags,
         });
 
-        // Merge stored metadata fields (description/status/custom columns).
         let stored = self
             .repos
             .metadata_record
@@ -189,8 +176,6 @@ impl MetadataService {
             .await
     }
 
-    // ── tags ──────────────────────────────────────────────────────────────
-
     /// GET /metadata/tags/ — list repo tags (metadata-service `results` shape).
     pub async fn list_repo_tags(
         &self,
@@ -198,8 +183,7 @@ impl MetadataService {
         start: usize,
         limit: usize,
     ) -> Result<serde_json::Value, AppError> {
-        // Paginate in SQL (stable created_at, id order) instead of loading all
-        // tags into memory and slicing.
+        // Paginate in SQL (stable created_at, id order) rather than slicing in memory.
         let all = self
             .repos
             .repo_tag
@@ -245,7 +229,6 @@ impl MetadataService {
             return Ok(());
         };
 
-        // Parse all items up front.
         let mut items: Vec<(i32, String, String)> = Vec::new();
         for item in arr {
             let Some(tag_id) = item.get("tag_id").and_then(|v| v.as_str()) else {
@@ -268,8 +251,7 @@ impl MetadataService {
             return Ok(());
         }
 
-        // Batch-load existing tags by id and by name (two queries) instead of
-        // one find_by_id + one find_by_repo_and_name per item.
+        // Batch-load existing tags by id and name (two queries) instead of one per item.
         let ids: Vec<i32> = items.iter().map(|(id, _, _)| *id).collect();
         let by_id: std::collections::HashMap<i32, repo_tag::Model> = self
             .repos
@@ -289,8 +271,7 @@ impl MetadataService {
             .map(|t| (t.name, t.id))
             .collect();
 
-        // Validate all renames before writing any: reject a rename that collides
-        // with an existing tag or with another item in this same request.
+        // Validate every rename first: no collision with an existing tag or a peer item.
         let mut target_name_owner: std::collections::HashMap<String, i32> =
             std::collections::HashMap::new();
         for (id, name, _) in &items {
@@ -312,7 +293,6 @@ impl MetadataService {
             target_name_owner.insert(name.clone(), *id);
         }
 
-        // Apply the renames.
         for (id, name, color) in &items {
             if by_id.get(id).is_some_and(|t| t.repo_id == repo_id) {
                 self.repos.repo_tag.update(*id, name, color).await?;
@@ -338,7 +318,6 @@ impl MetadataService {
             return Ok(());
         }
 
-        // Batch-load tags once and filter by repo ownership in memory.
         let to_delete: Vec<i32> = self
             .repos
             .repo_tag
@@ -394,10 +373,8 @@ impl MetadataService {
         Ok(())
     }
 
-    /// GET /metadata/tag-files/{tag_id}/ — files carrying a tag.
-    ///
-    /// `start`/`limit` paginate the tagged-file list in SQL; `None` (no query
-    /// params) keeps the original behavior of returning every file.
+    /// GET /metadata/tag-files/{tag_id}/ — files carrying a tag; `start`/`limit`
+    /// paginate the list in SQL, and `None` returns every file.
     pub async fn get_tag_files(
         &self,
         repo_id: &str,
@@ -419,8 +396,7 @@ impl MetadataService {
             .find_by_repo_and_tag_id(repo_id, tag_id, start, limit)
             .await?;
 
-        // Resolve the head root once, then batch-resolve every file's info and
-        // tags instead of issuing several queries per link.
+        // Resolve the head root once, then batch-resolve every file's info and tags.
         let head_root_id = get_head_root_id(self.db.as_ref(), repo_id).await?;
         let paths: Vec<String> = links.iter().map(|l| l.file_path.clone()).collect();
         let infos = self
@@ -461,8 +437,6 @@ impl MetadataService {
         }
         Ok(serde_json::json!({ "results": results, "metadata": [] }))
     }
-
-    // ── helpers ───────────────────────────────────────────────────────────
 
     async fn tags_for_path(
         &self,
@@ -541,9 +515,8 @@ impl MetadataService {
         }))
     }
 
-    /// Batch version of `resolve_file_info`: resolve `(size, mtime, modifier)`
-    /// for many paths in a shared level-frontier walk. `None` for paths that
-    /// are `/`, empty, directories, or no longer resolve.
+    /// Batch `resolve_file_info` over a shared level-frontier walk; `None` for
+    /// paths that are `/`, empty, directories, or no longer resolve.
     async fn resolve_file_infos_batch(
         &self,
         repo_id: &str,
@@ -602,9 +575,8 @@ impl MetadataService {
         Ok(results)
     }
 
-    /// Related users for a repo, as `{email, name, contact_email, avatar_url}`
-    /// objects (matching seahub's `get_user_common_info` shape consumed by the
-    /// mobile clients' file-profile dialog).
+    /// Related users as `{email, name, contact_email, avatar_url}` objects, matching
+    /// seahub's `get_user_common_info` shape consumed by the mobile clients.
     pub async fn related_users(&self, repo_id: &str) -> Result<Vec<serde_json::Value>, AppError> {
         let members = self.repos.member.find_by_repo_id(repo_id).await?;
         let user_ids: Vec<i32> = members.into_iter().map(|m| m.user_id).collect();
@@ -627,7 +599,7 @@ impl MetadataService {
             .collect())
     }
 
-    /// Get metadata records (existing minimal endpoint, kept as-is).
+    /// List stored key-value metadata records for a repo.
     pub async fn get_metadata_records(
         &self,
         repo_id: &str,
@@ -660,10 +632,9 @@ impl MetadataService {
     }
 }
 
-/// Validate a client-supplied tag color, falling back to the default gray on
-/// anything that isn't a plain `#RGB` / `#RRGGBB` hex value. The color is later
-/// inlined into a template `style` attribute, so restricting it to hex digits
-/// closes the CSS-injection vector.
+/// Validate a client-supplied tag color, falling back to gray unless it is a
+/// plain `#RGB`/`#RRGGBB` hex value: it is inlined into a template `style`
+/// attribute, so restricting it to hex digits closes the CSS-injection vector.
 fn sanitize_tag_color(color: Option<&str>) -> String {
     let c = color.unwrap_or("#e6e6e6").trim();
     let ok = (c.len() == 4 || c.len() == 7)
@@ -685,11 +656,9 @@ fn hex_val(b: u8) -> Option<u8> {
     }
 }
 
-/// System columns for a file record, mirroring seahub's
-/// `METADATA_TABLE_SYS_COLUMNS` subset that the mobile clients render in the
-/// file-profile dialog/editor. `type` values must match seadroid's `ColumnType`
-/// constants (`_file_modifier` uses `text`; the client rewrites it to
-/// `collaborator` internally).
+/// System columns for a file record: seahub's `METADATA_TABLE_SYS_COLUMNS`
+/// subset; `type` values match seadroid's `ColumnType` constants (`_file_modifier`
+/// is `text`, which the client rewrites to `collaborator` internally).
 fn system_columns() -> Vec<serde_json::Value> {
     vec![
         serde_json::json!({"key": "_size", "name": "_size", "type": "number"}),
@@ -713,8 +682,7 @@ fn tag_to_json(tag: &repo_tag::Model) -> serde_json::Value {
     })
 }
 
-/// Split a full path into (parent_dir, file_name). Parent dir is `/` for root
-/// files.
+/// Split a path into `(parent_dir, file_name)`; the parent of a root file is `/`.
 fn split_path(path: &str) -> (String, String) {
     let name = basename(path);
     let parent = parent_path_from(path);
@@ -742,17 +710,12 @@ mod tests {
 
     #[test]
     fn falls_back_on_missing_or_invalid() {
-        // Missing color uses the default.
         assert_eq!(sanitize_tag_color(None), "#e6e6e6");
-        // Empty / whitespace.
         assert_eq!(sanitize_tag_color(Some("")), "#e6e6e6");
         assert_eq!(sanitize_tag_color(Some("   ")), "#e6e6e6");
-        // Not a leading '#'.
         assert_eq!(sanitize_tag_color(Some("e6e6e6")), "#e6e6e6");
-        // Wrong length.
         assert_eq!(sanitize_tag_color(Some("#ab")), "#e6e6e6");
         assert_eq!(sanitize_tag_color(Some("#aabbccdd")), "#e6e6e6");
-        // Non-hex characters.
         assert_eq!(sanitize_tag_color(Some("#e6e6eg")), "#e6e6e6");
         // CSS-injection attempts.
         assert_eq!(

@@ -28,22 +28,18 @@ pub trait SsoLoginTokenRepository: Send + Sync {
         &self,
         params: CreateSsoLoginTokenParams,
     ) -> Result<sso_login_token::Model, AppError>;
-    /// Record that the browser opened `/client-sso/{token}/` (start of the
-    /// 300s completion window).
+    /// Record that the browser opened `/client-sso/{token}/` (start of the 300s completion window).
     async fn mark_accessed(&self, token: &str, accessed_at: i64) -> Result<(), AppError>;
-    /// Mark the SSO flow successful with the completed username and API token.
     async fn complete(&self, token: &str, username: &str, api_token: &str) -> Result<(), AppError>;
-    /// Delete a link row (expired links are removed when they are first seen).
+    /// Delete a link row; expired links are removed when first seen.
     async fn delete_by_token(&self, token: &str) -> Result<(), AppError>;
 }
 
 pub struct DbSsoLoginTokenRepository {
     db: Arc<DatabaseConnection>,
-    /// The API token minted by [`complete`](Self::complete) is a live bearer
-    /// credential, and unlike the token in `api_tokens` it cannot be hashed:
-    /// the polling client must receive the raw value. It is therefore encrypted
-    /// at rest so a database copy (backup, disk image) does not hand out
-    /// long-lived tokens.
+    /// The API token minted by [`complete`](Self::complete) is a live bearer credential that, unlike
+    /// `api_tokens`, cannot be hashed: the polling client must receive the raw value. It is
+    /// encrypted at rest so a database copy does not hand out long-lived tokens.
     token_cipher: Arc<TokenCipher>,
 }
 
@@ -61,10 +57,9 @@ impl SsoLoginTokenRepository for DbSsoLoginTokenRepository {
             .one(self.db.as_ref())
             .await?;
 
-        // Hand callers the plaintext token. A value that cannot be decrypted
-        // (rotated server secret, tampered row) is treated as "no token yet"
-        // rather than an internal error, so the flow reports `error` to the
-        // client instead of a 500.
+        // Hand callers the plaintext token. A value that cannot be decrypted (rotated server secret,
+        // tampered row) is treated as "no token yet" rather than an internal error, so the flow
+        // reports `error` to the client instead of a 500.
         Ok(record.map(|mut record| {
             if let Some(stored) = record.api_token.take() {
                 match self.token_cipher.decrypt(&stored) {

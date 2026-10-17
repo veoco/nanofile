@@ -12,9 +12,8 @@ use infra::storage::DynBlockStorage;
 
 pub struct Downloader;
 
-/// Decrypt a block on the blocking thread pool. AES-CBC is CPU-bound, so
-/// running it inline on the async executor would stall other tasks sharing the
-/// worker thread.
+/// Decrypt a block on the blocking pool: AES-CBC is CPU-bound and would stall
+/// the async worker.
 async fn decrypt_block_offload(
     data: Vec<u8>,
     key: &[u8],
@@ -22,8 +21,7 @@ async fn decrypt_block_offload(
 ) -> Result<Vec<u8>, std::io::Error> {
     let key = key.to_vec();
     let iv = iv.to_vec();
-    // `decrypt_block` returns `Box<dyn Error>` (not `Send`), so map it to a
-    // `String` inside the blocking closure to keep the join handle `Send`.
+    // `decrypt_block` returns a non-`Send` `Box<dyn Error>`; map it to `String` in here.
     tokio::task::spawn_blocking(move || decrypt_block(&data, &key, &iv).map_err(|e| e.to_string()))
         .await
         .map_err(|e| std::io::Error::other(e.to_string()))?
@@ -31,9 +29,7 @@ async fn decrypt_block_offload(
 }
 
 impl Downloader {
-    /// Read at most the first `max_bytes` of a file's content. Returns fewer
-    /// bytes when the file is smaller. Used by previews and thumbnails so a
-    /// huge file can't be loaded fully into memory.
+    /// Read at most `max_bytes` of a file, for previews that must not load it whole.
     pub async fn download_file_limited(
         repos: &Repositories,
         repo_id: &str,
@@ -44,8 +40,7 @@ impl Downloader {
     ) -> Result<Vec<u8>, AppError> {
         let (file_data, block_ids) = Self::download_file_stream(repos, repo_id, path).await?;
 
-        // Clamp from below before the cast: a negative `size` would otherwise
-        // wrap to `usize::MAX` and abort the request with a capacity overflow.
+        // Clamp before the cast: a negative `size` would wrap to `usize::MAX` and overflow.
         let mut out = Vec::with_capacity(file_data.size.max(0).min(max_bytes as i64) as usize);
         for block_id in &block_ids {
             if out.len() >= max_bytes {
@@ -72,10 +67,7 @@ impl Downloader {
         Ok(out)
     }
 
-    /// Read at most `max_bytes` of a file's content given its block IDs
-    /// directly — the caller already resolved the file, so no tree walk or
-    /// fs_object lookup is needed here. Returns fewer bytes when the file is
-    /// smaller. Used by thumbnails after a single `resolve_file_entry`.
+    /// Read at most `max_bytes` from known block IDs, skipping the tree walk.
     pub async fn read_file_limited_from_blocks(
         repo_id: &str,
         block_store: &DynBlockStorage,
@@ -84,8 +76,7 @@ impl Downloader {
         dec_key: Option<(&[u8], &[u8])>,
         max_bytes: usize,
     ) -> Result<Vec<u8>, AppError> {
-        // See `download_file_limited`: clamp before casting so a negative size
-        // cannot wrap into a `usize::MAX` capacity hint.
+        // As in `download_file_limited`: clamp before casting.
         let mut out = Vec::with_capacity(size.max(0).min(max_bytes as i64) as usize);
         for block_id in block_ids {
             if out.len() >= max_bytes {
@@ -113,9 +104,6 @@ impl Downloader {
     }
 
     /// Resolve a file's block IDs without reading their content.
-    ///
-    /// Returns `(FsFileData, Vec<block_id>)` so the caller can stream
-    /// blocks individually without loading the entire file into memory.
     pub async fn resolve_blocks(
         repos: &Repositories,
         repo_id: &str,
@@ -129,8 +117,6 @@ impl Downloader {
         repo_id: &str,
         path: &str,
     ) -> Result<(FsFileData, Vec<String>), AppError> {
-        // Resolve the path to a file fs_id by walking the FS tree from the
-        // repo's head commit.
         let repo_model = repos
             .repo
             .find_by_id(repo_id)
@@ -148,9 +134,8 @@ impl Downloader {
         Self::resolve_blocks_from_root(repos, repo_id, &head_commit.root_id, path).await
     }
 
-    /// Resolve a file's block IDs from an already-resolved root fs_id, skipping
-    /// the repo + head commit lookups. Callers that already resolved the head
-    /// (e.g. WebDAV) reuse it here instead of re-querying.
+    /// Resolve block IDs from an already-resolved root fs_id; callers like WebDAV reuse
+    /// their head here instead of re-querying.
     pub async fn resolve_blocks_from_root(
         repos: &Repositories,
         repo_id: &str,
@@ -166,11 +151,7 @@ impl Downloader {
     }
 }
 
-/// Build a streaming body that reads and yields blocks one at a time.
-///
-/// `block_ids` — list of block SHA-1 hashes to stream.
-/// `block_store` — content-addressed block storage backend.
-/// `enc_key` — optional decryption key (None = plaintext blocks).
+/// Stream the given blocks one at a time as the response body.
 pub fn stream_blocks(
     repo_id: String,
     block_ids: Vec<String>,
@@ -196,14 +177,11 @@ pub fn stream_blocks(
     .buffered(4)
 }
 
-/// Parse a single-range `Range` request header against a known total size.
-///
-/// Handles `bytes=start-end`, `bytes=start-` and `bytes=-suffix`. Returns `None`
-/// for malformed / multiple-range / unsatisfiable headers — the caller should
-/// then serve the full body with status 200 instead of 206.
+/// Parse a single-range `Range` header (`bytes=start-end`, `bytes=start-`, `bytes=-suffix`)
+/// against a known total size. `None` for malformed, multiple-range or unsatisfiable
+/// input — the caller then serves the full body with status 200 instead of 206.
 pub fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
     let spec = header.trim().strip_prefix("bytes=")?;
-    // Only single ranges are supported; multiple ranges fall back to 200.
     if spec.contains(',') {
         return None;
     }
@@ -215,7 +193,6 @@ pub fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
     let end_s = end_s.trim();
 
     if start_s.is_empty() {
-        // Suffix form: last N bytes.
         let n: u64 = end_s.parse().ok()?;
         if n == 0 {
             return None;
@@ -238,12 +215,8 @@ pub fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
     Some((start, end))
 }
 
-/// Stream only the byte range `[start, end]` (inclusive) of a file that is
-/// stored as a sequence of blocks.
-///
-/// Blocks are read sequentially and their byte offsets tracked cumulatively, so
-/// no block-size metadata is required. Blocks entirely before `start` are read
-/// and skipped; streaming stops once `end` is reached.
+/// Stream only the byte range `[start, end]` (inclusive) of a block-stored file.
+/// Block offsets are tracked cumulatively, so no block-size metadata is required.
 pub fn range_stream(
     repo_id: String,
     block_ids: Vec<String>,
@@ -253,8 +226,6 @@ pub fn range_stream(
     end: u64,
 ) -> impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + 'static {
     let iter = block_ids.into_iter();
-    // Track the cumulative byte offset starting from the file's first block.
-    // (`start`/`end` are captured by the `move` closure below.)
     futures::stream::unfold((iter, 0u64, false), move |(mut iter, mut pos, done)| {
         let store = block_store.clone();
         let repo_id = repo_id.clone();
@@ -264,24 +235,21 @@ pub fn range_stream(
                 return None;
             }
 
-            // Fast-forward past blocks that lie entirely before `start`, but
-            // only when the reported sizes are known to be logical byte
-            // offsets: the `Range` response is sliced by them, and nothing is
-            // read while skipping, so a size that is even slightly off shifts
-            // every byte after it (an at-rest decorator that mis-sized
-            // header-less legacy blocks made clients' segmented downloads drop
-            // bytes at the seam).
+            // Fast-forward past blocks before `start` only when the reported sizes are
+            // known to be logical byte offsets: the response is sliced by them and
+            // nothing is read while skipping, so a size that is even slightly off shifts
+            // every byte after it (an at-rest decorator mis-sized header-less legacy
+            // blocks and segmented downloads dropped bytes at the seam).
             //
-            // - E2EE downloads report ciphertext lengths (padding included),
-            //   which are not logical offsets, so `enc_key` disables the skip.
-            // - A store that cannot guarantee `block_size == read_block().len()`
-            //   must not be trusted to skip either.
+            // - E2EE reports ciphertext lengths (padding included), not logical offsets,
+            //   so `enc_key` disables the skip.
+            // - A store that cannot guarantee `block_size == read_block().len()` must not
+            //   be trusted to skip either.
             let mut expected_block_len: Option<u64> = None;
             if key.is_none() && store.logical_sizes_are_exact() && pos < start {
                 loop {
-                    // Peek the next block id without cloning the whole remaining
-                    // iterator (cloning `IntoIter` copies every remaining entry,
-                    // which is O(N²) for a large prefix skip).
+                    // Peek the next id without cloning the iterator: cloning `IntoIter`
+                    // copies every remaining entry, which is O(N²) for a large prefix skip.
                     let next_id = match iter.as_slice().first().cloned() {
                         Some(id) => id,
                         None => return Some((Ok(bytes::Bytes::new()), (iter, pos, true))),
@@ -291,9 +259,7 @@ pub fn range_stream(
                         _ => break, // fall through to the read path
                     };
                     if pos + size > start {
-                        // The size that stopped the skip is also the offset
-                        // accounting for this block; keep it so the read path can
-                        // catch a store whose reported sizes drift.
+                        // The size that stopped the skip is this block's start offset.
                         expected_block_len = Some(size);
                         break; // next block intersects the range
                     }
@@ -323,10 +289,9 @@ pub fn range_stream(
             };
             let data = bytes::Bytes::from(data);
 
-            // The prefix skip decided this block's start offset from its
-            // reported size. If the bytes do not match that size, the offsets
-            // are wrong and every byte of the response would be shifted: fail
-            // the request instead of serving a silently mangled range.
+            // The prefix skip derived this block's start offset from its reported size;
+            // a length mismatch means every byte of the response would be shifted, so
+            // fail instead of serving a silently mangled range.
             if let Some(expected) = expected_block_len
                 && data.len() as u64 != expected
             {
@@ -351,7 +316,6 @@ pub fn range_stream(
             let rel_start = start.saturating_sub(block_start);
             let rel_end = (end + 1).saturating_sub(block_start);
             if rel_start >= len {
-                // Block lies entirely before the requested range — skip.
                 return Some((Ok(bytes::Bytes::new()), (iter, pos, done)));
             }
             let take = rel_end.min(len) - rel_start.min(len);
@@ -365,9 +329,8 @@ pub fn range_stream(
     })
 }
 
-/// RFC 5987 percent-encode a filename for `filename*=utf-8''...`.
-/// Keeps ASCII alphanumerics and `!#$&+-.^_`|~` unencoded, everything else
-/// becomes `%XX` (UTF-8 bytes), matching the official fileserver.
+/// RFC 5987 percent-encode a filename for `filename*=utf-8''...`, matching the
+/// official fileserver: ASCII alphanumerics and `!#$&+-.^_`|~` stay raw, else `%XX`.
 fn rfc5987_encode(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     for b in name.bytes() {
@@ -380,12 +343,10 @@ fn rfc5987_encode(name: &str) -> String {
     out
 }
 
-/// ASCII-only fallback for the `filename=` parameter when the real name has
-/// non-ASCII characters. The raw UTF-8 bytes would make the header value
-/// invalid (`HeaderValue::from_str` accepts only visible ASCII), which used to
-/// drop the whole disposition to a bare `attachment` — losing the filename.
-/// Keeps the ASCII part (usually the extension) so legacy clients still get
-/// something useful; the full name travels via `filename*=utf-8''…`.
+/// ASCII-only fallback for the `filename=` parameter: `HeaderValue::from_str` accepts
+/// only visible ASCII, so raw UTF-8 would drop the whole disposition to a bare
+/// `attachment`. Keeps the ASCII part (usually the extension); the full name travels
+/// via `filename*=`.
 fn ascii_fallback(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     for c in name.chars() {
@@ -401,10 +362,8 @@ fn ascii_fallback(name: &str) -> String {
     }
 }
 
-/// Build a `Content-Disposition` value in the official fileserver format
-/// (see fileserver/fileop.go): both the RFC 5987 encoded filename (for
-/// Safari, which cannot parse raw UTF-8) and the raw filename are sent.
-/// `attachment` selects `attachment` vs `inline` disposition.
+/// Build a `Content-Disposition` value like the official fileserver: both the RFC 5987
+/// name (Safari cannot parse raw UTF-8) and the raw filename are sent.
 pub fn content_disposition(filename: &str, attachment: bool) -> String {
     let mode = if attachment { "attachment" } else { "inline" };
     // Quote / backslash in the raw filename must not break the header value.
@@ -426,29 +385,17 @@ pub struct FileDownloadParams {
     pub repo_id: String,
     pub block_ids: Vec<String>,
     pub block_store: DynBlockStorage,
-    /// Optional decryption key (key, iv) — passed through to the streamers.
     pub enc_key: Option<(Vec<u8>, Vec<u8>)>,
-    /// Total file size in bytes (used for `Content-Length` / `Content-Range`).
     pub total_size: u64,
     pub content_type: &'static str,
-    /// `attachment; filename="..."` to force download, `None` for inline.
     pub content_disposition: Option<String>,
-    /// Raw value of the request's `Range` header, if any.
     pub range_header: Option<String>,
     /// Strong validator (e.g. `"<sha1-of-blocks>"`) sent as `ETag` so browsers
     /// can revalidate with `If-None-Match` instead of re-downloading the body.
     pub etag: Option<String>,
 }
 
-/// Build a streaming file response honoring a single `Range` request.
-///
-/// A satisfiable `Range` header yields `206 Partial Content` with
-/// `Content-Range` and a slice stream; otherwise the full body is served with
-/// `200 OK`. Both cases advertise `Accept-Ranges: bytes` and set
-/// `Content-Length`, so download managers can display progress and resume an
-/// interrupted transfer with a follow-up `Range` request.
-/// Strong validator for a file body, derived from its content-addressed block
-/// list: identical content always yields the same ETag and any edit changes it.
+/// Strong validator for a file body: identical content always yields the same ETag.
 pub fn blocks_etag(block_ids: &[String]) -> String {
     use sha1::Digest;
     let mut hasher = sha1::Sha1::new();
@@ -459,6 +406,9 @@ pub fn blocks_etag(block_ids: &[String]) -> String {
     format!("\"{}\"", hex::encode(hasher.finalize()))
 }
 
+/// Build a streaming file response honoring a single `Range` request: a satisfiable
+/// range yields `206` with `Content-Range`, otherwise the full body with `200`. Both
+/// advertise `Accept-Ranges: bytes` and `Content-Length` so downloads can resume.
 pub fn file_download_response(p: FileDownloadParams) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -466,9 +416,8 @@ pub fn file_download_response(p: FileDownloadParams) -> Response {
         HeaderValue::from_static(p.content_type),
     );
     headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-    // Content is immutable for a given set of block IDs, so a long private
-    // cache window plus a strong ETag lets browsers skip re-downloading large
-    // originals across repeat views (matching the thumbnail cache policy).
+    // Content is immutable for a given set of block IDs, so a long private cache
+    // window plus a strong ETag lets browsers skip re-downloading large originals.
     headers.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=604800"),
@@ -508,10 +457,8 @@ pub fn file_download_response(p: FileDownloadParams) -> Response {
                 )
                     .into_response();
             }
-            // A `Range` that does not describe a satisfiable single range is
-            // 416 for a non-empty file, exactly as upstream's `doFileRange`
-            // does — it never silently serves the whole file instead. A
-            // zero-length file has no range to satisfy and stays 200.
+            // An unsatisfiable single range is 416 for a non-empty file, as upstream's
+            // `doFileRange` does; a zero-length file has no range and stays 200.
             None if p.total_size > 0 => {
                 headers.insert(
                     header::CONTENT_RANGE,
@@ -620,7 +567,6 @@ mod tests {
 
     #[tokio::test]
     async fn range_stream_skips_earlier_blocks() {
-        // Three blocks of 40 bytes each → file content is bytes 0..120.
         let mut blocks = HashMap::new();
         let mut content = Vec::new();
         for (i, id) in ["a", "b", "c"].iter().enumerate() {
@@ -633,22 +579,18 @@ mod tests {
         });
         let ids = vec!["a".to_string(), "b".to_string(), "c".to_string()];
 
-        // Range spans the middle block and part of the last block.
         let got = collect_range(store.clone(), ids.clone(), 50, 99).await;
         assert_eq!(got, &content[50..100]);
 
-        // Open-ended range in the last block (end == total - 1, as parse_range yields).
         let got = collect_range(store.clone(), ids.clone(), 110, 119).await;
         assert_eq!(got, &content[110..120]);
 
-        // Range starting at 0 → full content.
         let got = collect_range(store, ids, 0, 119).await;
         assert_eq!(got, content);
     }
 
     #[test]
     fn parse_range_full() {
-        // No header → caller serves full body; parse_range on a nil header is None.
         assert_eq!(parse_range("", 1000), None);
     }
 
@@ -676,16 +618,12 @@ mod tests {
 
     #[test]
     fn parse_range_invalid() {
-        // Start beyond total → unsatisfiable.
         assert_eq!(parse_range("bytes=1000-", 1000), None);
         assert_eq!(parse_range("bytes=2000-3000", 1000), None);
-        // Malformed.
         assert_eq!(parse_range("bytes=abc-", 1000), None);
         assert_eq!(parse_range("bytes=5", 1000), None);
         assert_eq!(parse_range("items=0-99", 1000), None);
-        // Multiple ranges → unsupported.
         assert_eq!(parse_range("bytes=0-99,200-299", 1000), None);
-        // Zero-length file.
         assert_eq!(parse_range("bytes=0-", 0), None);
     }
 
@@ -705,8 +643,7 @@ mod tests {
     #[test]
     fn content_disposition_non_ascii_name_uses_ascii_fallback() {
         let d = content_disposition("中文报告.txt", true);
-        // The whole value must be valid ASCII so HeaderValue::from_str accepts
-        // it (previously the raw UTF-8 bytes dropped it to a bare `attachment`).
+        // The whole value must be valid ASCII for HeaderValue::from_str.
         assert!(
             HeaderValue::from_str(&d).is_ok(),
             "must be a valid header: {d}"
@@ -734,8 +671,6 @@ mod tests {
         );
     }
 
-    // ── At-rest block formats vs. range offsets ─────────────────────────────
-
     /// Deterministic pseudo-random bytes; only the lengths matter here.
     fn pseudo_block(seed: u64, len: usize) -> Vec<u8> {
         let mut x: u64 = 0x9E37_79B9_7F4A_7C15 ^ seed.wrapping_mul(0x9E37_79B9);
@@ -749,10 +684,8 @@ mod tests {
             .collect()
     }
 
-    /// Write `plaintexts` into an at-rest-encrypting store over a temp
-    /// directory, then rewrite the first `legacy` blocks in the pre-`NFE1`
-    /// header-less format — what a deployment that encrypted blocks before the
-    /// versioned header existed left on disk.
+    /// Write `plaintexts` into an at-rest-encrypting store, then rewrite the first
+    /// `legacy` blocks in the pre-`NFE1` header-less format deployments left on disk.
     async fn at_rest_fixture(
         plaintexts: &[Vec<u8>],
         legacy: usize,
@@ -784,10 +717,9 @@ mod tests {
         (dir, store, ids)
     }
 
-    /// A `Range` starting after header-less legacy blocks must deliver the
-    /// exact tail. The incident: the at-rest store reported every legacy block
-    /// 6 bytes short, so a client that segmented its download by those offsets
-    /// (three skipped blocks) lost 18 bytes at the seam.
+    /// A `Range` starting after header-less legacy blocks must deliver the exact tail:
+    /// the store reported every legacy block 6 bytes short, so a client segmenting by
+    /// those offsets lost 18 bytes at the seam.
     #[tokio::test]
     async fn range_stream_keeps_offsets_with_headerless_at_rest_blocks() {
         let plaintexts: Vec<Vec<u8>> = [4096usize, 8192, 8192, 2048]
@@ -798,16 +730,14 @@ mod tests {
         let (_dir, store, ids) = at_rest_fixture(&plaintexts, 3).await;
         let content: Vec<u8> = plaintexts.concat();
 
-        // The offset a correct client derives from the block layout: the start
-        // of the 4th block. The buggy sizes put it 18 bytes earlier, which is
-        // where an offset-based client actually resumed from.
+        // The offset a correct client derives from the block layout: the start of the
+        // 4th block. The buggy sizes put it 18 bytes earlier — where clients resumed.
         let start = plaintexts[..3].iter().map(|d| d.len() as u64).sum::<u64>();
         let got = collect_range(store, ids, start, content.len() as u64 - 1).await;
         assert_eq!(got, content[start as usize..]);
     }
 
-    /// The same slice, through the response builder the file-download handlers
-    /// use, so status/headers and the stream are covered together.
+    /// The same slice through the response builder, so status/headers are covered too.
     #[tokio::test]
     async fn file_range_response_serves_the_requested_slice_for_headerless_blocks() {
         let plaintexts: Vec<Vec<u8>> = [4096usize, 8192, 8192, 2048]
@@ -838,8 +768,7 @@ mod tests {
     }
 
     /// A store whose reported sizes are six bytes short must not be trusted to
-    /// skip blocks: the skip turns those sizes into offsets and nothing is read
-    /// while skipping.
+    /// skip: the skip turns those sizes into offsets and reads nothing meanwhile.
     #[derive(Debug)]
     struct InexactSizeStore(MockStore);
 
@@ -893,8 +822,7 @@ mod tests {
         let store: DynBlockStorage = Arc::new(InexactSizeStore(MockStore {
             blocks: Mutex::new(blocks),
         }));
-        // Starting in the 4th block would skip three blocks; with sizes that
-        // are six bytes short each, skipping would serve from 18 bytes ahead.
+        // Sizes six bytes short each: skipping three blocks would serve 18 bytes ahead.
         let got = collect_range(store, ids, 120, 159).await;
         assert_eq!(got, content[120..]);
     }

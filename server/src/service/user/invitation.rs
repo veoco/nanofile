@@ -5,10 +5,8 @@ use crate::repository::Repositories;
 use base::error::AppError;
 use infra::entity::invitation_code;
 
-/// Invitation code info returned by the service.
-///
-/// The two timestamps go out raw so the page can render them in the viewer's
-/// timezone; the service does no date formatting of its own.
+/// Invitation code info returned by the service; the timestamps go out raw so the page renders them
+/// in the viewer's timezone.
 pub struct InvitationInfo {
     pub code: String,
     pub bound_email: Option<String>,
@@ -35,8 +33,7 @@ impl InvitationService {
             .find_by_creator_id(creator_id)
             .await?;
 
-        // Batch-load the users referenced by used_by in one query instead of
-        // one find_by_id per used invitation.
+        // Batch-load the referenced users in one query instead of one per invitation.
         let used_by_ids: Vec<i32> = codes.iter().filter_map(|c| c.used_by).collect();
         let email_by_id: HashMap<i32, String> = self
             .repos
@@ -64,7 +61,6 @@ impl InvitationService {
         Ok(invitations)
     }
 
-    /// Generate a new invitation code.
     pub async fn generate_invitation(
         &self,
         creator_id: i32,
@@ -73,7 +69,6 @@ impl InvitationService {
         let code_str = invitation_code::generate_invitation_code();
         let now = chrono::Utc::now().timestamp();
 
-        // Trim and validate email if provided.
         let email = email
             .map(|e| e.trim().to_string())
             .filter(|e| !e.is_empty());
@@ -84,7 +79,6 @@ impl InvitationService {
             .await
     }
 
-    /// Delete an invitation code owned by a user.
     pub async fn delete_invitation(&self, creator_id: i32, id: i32) -> Result<(), AppError> {
         self.repos
             .invitation_code

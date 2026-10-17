@@ -1,36 +1,16 @@
 //! Server-side three-way merge of FS trees (`common/merge-new.c` upstream).
 //!
-//! `PUT /repo/{id}/commit/HEAD` is the last step of a client's upload. When the
-//! uploaded commit's parent is no longer the repo's HEAD — two devices synced the
-//! same library at the same time — upstream does **not** reject the upload: it
-//! merges the uploaded tree with the current HEAD on the server
-//! (`fast_forward_or_merge()`, `server/http-server.c`) and records the result as a
-//! merge commit with two parents. This module is that merge.
+//! `PUT /repo/{id}/commit/HEAD` merges instead of rejecting when the uploaded
+//! commit's parent is no longer HEAD (`fast_forward_or_merge()`).
 //!
-//! Faithfulness notes, all of which have bitten upstream readers before:
-//!
-//! * The merge never changes file *contents*. Every output entry is a copy of a
-//!   dirent that exists in the head tree or in the uploaded ("remote") tree; the
-//!   only mutation is a rename when a conflict has to preserve both versions
-//!   (`SFConflict` names) and the id of a recursively merged sub-directory.
-//! * Directory entry lists are stored in **descending** name order
-//!   (`compare_dirents()` is `strcmp(b, a)` in `common/fs-mgr.c`), and the merge
-//!   walk depends on that order to match names across the three trees. We sort
-//!   each input defensively: nanofile also writes directory objects from its own
-//!   REST paths, where nothing guarantees the order. Sorting the *inputs* is
-//!   safe because a directory object's id is the hash of its serialized form —
-//!   re-sorting a loaded object and writing it back would produce a different id.
-//!   Server-side writers now canonicalize before storing
-//!   (`store_fs_dir_object`); the sorts here stay because an input can be a
-//!   historical object stored before that, and because the id of the *input*
-//!   must not be recomputed.
-//! * `threeway_merge()` renames the remote entry **in place** and
-//!   `merge_directories()` then sees the renamed slot. The order of the two
-//!   phases and the in-place rename are reproduced here because a D/F conflict
-//!   (`file → dir` / `dir → file`) depends on it.
-//! * The conflict name embeds the last modifier of the *remote* tree's copy of
-//!   the file and that entry's mtime, formatted in local time
-//!   (`gen_conflict_path()` / `get_file_modifier_mtime()` in `common/vc-common.c`).
+//! Invariants: file contents never change — every output entry is a copy of a
+//! head or remote dirent, mutated only by an `SFConflict` rename or a merged
+//! sub-directory id. Entry lists are stored in **descending** name order
+//! (`compare_dirents()` is `strcmp(b, a)`) and the walk depends on it; inputs
+//! are sorted defensively because nanofile also writes directory objects where
+//! nothing guarantees that order (sorting inputs, unlike rewriting an object,
+//! does not change its id). `threeway_merge()` renames the remote entry in place
+//! before `merge_directories()` sees it: D/F conflicts depend on that order.
 
 use std::collections::HashMap;
 
@@ -44,9 +24,9 @@ use crate::repository::Repositories;
 use base::common::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 
-/// `S_IFMT`, `S_IFREG` and `S_IFDIR` type bits, used like C's `S_ISREG()` /
-/// `S_ISDIR()`. `base::common::S_IFREG` carries the permission bits
-/// (`0100644`), so it cannot be used as a mask here.
+/// `S_IFMT` / `S_IFREG` / `S_IFDIR` type bits, like C's `S_ISREG()` / `S_ISDIR()`.
+/// `base::common::S_IFREG` carries the permission bits (`0100644`), so it cannot
+/// be the mask here.
 const S_IFMT: i32 = 0o170000;
 const S_IFREG_TYPE: i32 = 0o100000;
 const S_IFDIR_TYPE: i32 = 0o040000;
@@ -61,37 +41,29 @@ fn is_dir(mode: i32) -> bool {
 
 /// Result of merging one directory.
 pub struct MergeOutcome {
-    /// Root of the merged tree. `EMPTY_SHA1` when nothing is left in it, in
-    /// which case no object is stored (like `seaf_dir_save()`).
+    /// Root of the merged tree; `EMPTY_SHA1` when nothing is left, in which case
+    /// no object is stored (like `seaf_dir_save()`).
     pub merged_root: String,
-    /// Whether the merge had to rename a conflicting entry, i.e. upstream's
-    /// `opt.conflict` and the `conflict` flag of the merge commit.
+    /// Whether the merge renamed a conflicting entry (upstream's `opt.conflict`,
+    /// the `conflict` flag of the merge commit).
     pub conflict: bool,
-    /// Whether the merge kept an entry one side had *deleted or renamed* while
-    /// the other side changed it (`threeway_merge()`'s "deleted in head and
-    /// changed in remote → keep remote's version", and its mirror; the mask 3 /
-    /// 5 directory recursions that keep the old name). Upstream records no flag
-    /// for these, but the kept copy sits at a path the deleting device never
-    /// saved to: the commit may be a plain auto-merge with `conflict` unset and
-    /// still contain such a path, so the merge result has to say so on its own.
+    /// Whether the merge kept an entry one side had *deleted or renamed* while the
+    /// other side changed it (the mask 3 / 5 directory recursions also keep the old
+    /// name). Upstream records no flag for these, but the kept copy sits at a path
+    /// the deleting device never saved to, so a plain auto-merge with `conflict`
+    /// unset can still contain such a path.
     pub kept_deleted: bool,
-    /// Number of directories the merge walked (upstream's `opt.visit_dirs`,
-    /// which it logs for debugging).
+    /// Number of directories the merge walked (upstream's `opt.visit_dirs`).
     pub visit_dirs: usize,
 }
 
 /// Merge `remote_root` (the tree the client just uploaded, whose base commit is
 /// `base_root`) with the repository's current `head_root`, three-way against
-/// `base_root` as the common ancestor.
-///
-/// `base_root == EMPTY_SHA1` means "there is no common ancestor" and is treated
-/// as an empty tree — upstream cannot reach that state because it creates a
-/// "Created library" commit for every new library, while nanofile starts a
-/// library with no HEAD at all.
-///
-/// A missing or non-directory object is a hard error (upstream returns -1, which
-/// the callback turns into a 500): by the time the branch is advanced, every
-/// object the three trees reference has been received.
+/// `base_root`. `base_root == EMPTY_SHA1` means "no common ancestor" and is treated
+/// as an empty tree (upstream cannot reach that state; nanofile starts a library
+/// with no HEAD at all). A missing or non-directory object is a hard error, like
+/// upstream's -1: by the time the branch is advanced, every referenced object has
+/// been received.
 pub async fn merge_trees(
     repos: &Repositories,
     db: &DatabaseConnection,
@@ -114,9 +86,7 @@ pub async fn merge_trees(
         nicknames: HashMap::new(),
     };
 
-    // Upstream requires all three roots to exist (`seaf_merge_trees()`); an
-    // `EMPTY_SHA1` root is the empty tree and is synthesized by
-    // `read_fs_dir_data`.
+    // Upstream requires all three roots to exist (`seaf_merge_trees()`).
     let base = read_dir(repos, repo_id, base_root).await?;
     let head = read_dir(repos, repo_id, head_root).await?;
     let remote = read_dir(repos, repo_id, remote_root).await?;
@@ -147,8 +117,8 @@ struct MergeCtx<'a> {
     repos: &'a Repositories,
     db: &'a DatabaseConnection,
     repo_id: &'a str,
-    /// Root of the remote (client-supplied) commit, used to look up the last
-    /// modifier of a conflicting file.
+    /// Root of the remote commit, used to look up the last modifier of a
+    /// conflicting file.
     remote_root: &'a str,
     remote_creator_name: &'a str,
     conflict: bool,
@@ -156,25 +126,22 @@ struct MergeCtx<'a> {
     visit_dirs: usize,
     guard: TreeGuard,
     /// modifier email → nickname, cached for the whole merge (upstream keeps the
-    /// same cache in `opt->email_to_nickname`). `None` = no user with that
-    /// email, in which case the email itself is used.
+    /// same cache in `opt->email_to_nickname`); `None` means no such user.
     nicknames: HashMap<String, Option<String>>,
 }
 
-/// The file-slot decision for one name group (upstream `threeway_merge()`,
-/// n = 3). Pure so the decision table can be unit-tested without a database.
+/// The file-slot decision for one name group (upstream `threeway_merge()`, n = 3);
+/// pure so the decision table can be unit-tested without a database.
 #[derive(Debug, PartialEq, Eq)]
 enum FileAction {
     /// Emit these entries verbatim.
     Emit(Vec<DirEntryData>),
-    /// Conflict: keep `keep` (the head side, absent in the D/F case) and rename
-    /// `remote` with a `SFConflict` name.
+    /// Conflict: keep `keep` (the head side) and rename `remote` with an `SFConflict` name.
     ConflictFile {
         keep: Option<DirEntryData>,
         remote: DirEntryData,
     },
-    /// D/F conflict in which the *directory* in slot `rename_slot` is renamed
-    /// (`merge_conflict_dirname()`); `emit` is the head-side file.
+    /// D/F conflict: rename the directory in slot `rename_slot`; `emit` is the head file.
     ConflictDir {
         emit: DirEntryData,
         rename_slot: usize,
@@ -190,8 +157,7 @@ enum DirAction {
     Emit(usize),
     /// Emit nothing (the directory is deleted in the merged tree).
     Delete,
-    /// Merge the sub-directories recursively, then emit slot `emit_slot` with
-    /// the merged id patched in.
+    /// Merge the sub-directories recursively, then emit slot `emit_slot` with the merged id.
     Recurse { emit_slot: usize },
 }
 
@@ -207,11 +173,9 @@ fn threeway_merge_files(slots: &[Option<DirEntryData>; 3]) -> FileAction {
             return FileAction::Emit(vec![head.clone()]);
         }
         if base.as_ref().is_some_and(|b| b.id == head.id) {
-            // Unchanged in head, changed in remote.
             return FileAction::Emit(vec![remote.clone()]);
         }
         if base.as_ref().is_some_and(|b| b.id == remote.id) {
-            // Unchanged in remote, changed in head.
             return FileAction::Emit(vec![head.clone()]);
         }
         // Both sides changed the same file: keep both, renaming remote's copy.
@@ -223,7 +187,6 @@ fn threeway_merge_files(slots: &[Option<DirEntryData>; 3]) -> FileAction {
 
     if let (Some(base), None, Some(remote)) = (&base, &head, &remote) {
         if base.id == remote.id {
-            // Deleted in head, unchanged in remote: stay deleted.
             return FileAction::Nothing;
         }
         if d1.is_some() {
@@ -240,7 +203,6 @@ fn threeway_merge_files(slots: &[Option<DirEntryData>; 3]) -> FileAction {
 
     if let (Some(base), Some(head), None) = (&base, &head, &remote) {
         if base.id == head.id {
-            // Deleted in remote, unchanged in head: stay deleted.
             return FileAction::Nothing;
         }
         if d2.is_some() {
@@ -251,13 +213,11 @@ fn threeway_merge_files(slots: &[Option<DirEntryData>; 3]) -> FileAction {
                 rename_slot: 2,
             };
         }
-        // Deleted in remote and changed in head: keep head's version.
         return FileAction::Emit(vec![head.clone()]);
     }
 
     if let (None, None, Some(remote)) = (&base, &head, &remote) {
         if d1.is_none() {
-            // Added in remote.
             return FileAction::Emit(vec![remote.clone()]);
         }
         if d0.is_some_and(|d| d.id == d1.unwrap().id) {
@@ -274,7 +234,6 @@ fn threeway_merge_files(slots: &[Option<DirEntryData>; 3]) -> FileAction {
 
     if let (None, Some(head), None) = (&base, &head, &remote) {
         if d2.is_none() {
-            // Added in head.
             return FileAction::Emit(vec![head.clone()]);
         }
         if d0.is_some_and(|d| d.id == d2.unwrap().id) {
@@ -289,9 +248,8 @@ fn threeway_merge_files(slots: &[Option<DirEntryData>; 3]) -> FileAction {
         };
     }
 
-    // `base && !head && !remote`: deleted in both — nothing to emit. The
-    // remaining combinations cannot happen: a name group always has at least
-    // one slot, and every case with a present slot is handled above.
+    // `base && !head && !remote`: deleted in both — nothing to emit. Every other
+    // combination has a present slot and is handled above.
     FileAction::Nothing
 }
 
@@ -310,9 +268,7 @@ fn merge_directories_action(slots: &[Option<DirEntryData>; 3]) -> Result<DirActi
         // `g_return_val_if_reached(-1)`: the caller only calls this when at
         // least one slot is a directory.
         0 => return Err(AppError::Internal("merge: empty dir group".into())),
-        // Head and remote are not directories: nothing to merge.
         1 => DirAction::Delete,
-        // Only head is a directory.
         2 => DirAction::Emit(1),
         // Base and head are directories.
         3 => {
@@ -323,7 +279,6 @@ fn merge_directories_action(slots: &[Option<DirEntryData>; 3]) -> Result<DirActi
                 DirAction::Recurse { emit_slot: 1 }
             }
         }
-        // Only remote is a directory.
         4 => DirAction::Emit(2),
         // Base and remote are directories.
         5 => {
@@ -354,11 +309,8 @@ fn merge_directories_action(slots: &[Option<DirEntryData>; 3]) -> Result<DirActi
     Ok(action)
 }
 
-/// `gen_conflict_path()` (`common/vc-common.c:584`).
-///
-/// The time string is passed in so the pure formatting (in particular the
-/// leading-dot and extension-splitting rules) can be unit-tested without a
-/// timezone.
+/// `gen_conflict_path()` (`common/vc-common.c:584`). `time_buf` is passed in so the
+/// formatting (leading-dot and extension-splitting rules) tests without a timezone.
 pub(crate) fn gen_conflict_path(
     origin_path: &str,
     modifier: Option<&str>,
@@ -382,17 +334,15 @@ fn format_local_time(mtime: i64) -> String {
     use chrono::TimeZone;
     match chrono::Local.timestamp_opt(mtime, 0).single() {
         Some(t) => t.format("%Y-%m-%d-%H-%M-%S").to_string(),
-        // `localtime()` would hand `strftime` a NULL `tm` and crash; there is no
-        // sensible name to build, so fall back to the raw timestamp.
+        // `localtime()` would hand `strftime` a NULL `tm` and crash; use the raw timestamp.
         None => mtime.to_string(),
     }
 }
 
 impl MergeCtx<'_> {
-    /// Nickname of a `modifier` email, i.e. seahub's `email2nickname()`
-    /// (`get_nickname_by_modifier()`): the nicknames the conflict filename
-    /// embeds. Falls back to the email itself, which is what upstream does when
-    /// the seahub lookup fails.
+    /// Nickname of a `modifier` email (seahub's `email2nickname()`, embedded in the
+    /// conflict filename); falls back to the email itself, as upstream does when the
+    /// seahub lookup fails.
     async fn nickname_for(&mut self, email: &str) -> Result<String, AppError> {
         if let Some(cached) = self.nicknames.get(email) {
             return Ok(cached.clone().unwrap_or_else(|| email.to_string()));
@@ -407,13 +357,9 @@ impl MergeCtx<'_> {
         Ok(nickname.unwrap_or_else(|| email.to_string()))
     }
 
-    /// `get_file_modifier_mtime()` for `version > 0`
-    /// (`get_file_modifier_mtime_v1()`, `common/vc-common.c:499`): the last
-    /// modifier and mtime of `path` in the *remote* tree.
-    ///
-    /// `Ok(None)` is upstream's "walk succeeded but the entry is not there"
-    /// (a NULL modifier with mtime 0); `Err` is the "walk failed" case, for
-    /// which the caller substitutes the committer and the current time.
+    /// `get_file_modifier_mtime_v1()` (`common/vc-common.c:499`): the last modifier
+    /// and mtime of `path` in the *remote* tree. `Ok(None)` means "walked, entry not
+    /// there" (NULL modifier, mtime 0); `Err` makes the caller use the committer.
     async fn file_modifier_mtime(&self, path: &str) -> Result<Option<(String, i64)>, AppError> {
         let (parent, filename) = match path.rfind('/') {
             Some(i) => (&path[..i], &path[i + 1..]),
@@ -461,8 +407,7 @@ impl MergeCtx<'_> {
         ))
     }
 
-    /// `merge_conflict_dirname()` (`common/merge-new.c:86`): always the remote
-    /// commit's author and the current time.
+    /// `merge_conflict_dirname()`: always the remote commit's author and now.
     fn conflict_dir_name(&self, name: &str) -> String {
         gen_conflict_path(
             name,
@@ -473,11 +418,9 @@ impl MergeCtx<'_> {
 }
 
 /// `merge_trees_recursive()` (`common/merge-new.c:597`): merge the three
-/// directories at one level and return the merged directory's id.
-///
-/// `basedir` is the merged result's path prefix for this level (no leading
-/// slash, `""` at the root, ending with `/` below the root); it is only used to
-/// build conflict names.
+/// directories at one level and return the merged directory's id. `basedir` is the
+/// result's path prefix here (no leading slash, `""` at the root, ending in `/`
+/// below it), only used to build conflict names.
 async fn merge_dir(
     ctx: &mut MergeCtx<'_>,
     depth: usize,
@@ -502,8 +445,7 @@ async fn merge_dir(
     let mut merged: Vec<DirEntryData> = Vec::new();
 
     loop {
-        // "Largest" name among the three cursors, i.e. the next name in
-        // descending order.
+        // The "largest" name among the three cursors: the next one in descending order.
         let mut first_name: Option<String> = None;
         for (i, tree) in trees.iter().enumerate() {
             if let Some(dent) = tree.as_ref().and_then(|t| t.dirents.get(cursors[i]))
@@ -536,11 +478,9 @@ async fn merge_dir(
         // Merge the file slots of this level.
         if n_files > 0 {
             let action = threeway_merge_files(&slots);
-            // "Deleted in head and changed in remote → keep remote's version"
-            // and its mirror emit an entry the other side had deleted (or
-            // renamed away). Upstream records no flag for that, yet the entry
-            // lands at a path the deleting device never saved to, so the caller
-            // needs to know (see `MergeOutcome::kept_deleted`).
+            // The "deleted on one side, changed on the other" cases emit an entry
+            // the deleting device never saved to; upstream records no flag for that,
+            // so the caller needs to know (see `MergeOutcome::kept_deleted`).
             if matches!(action, FileAction::Emit(_))
                 && slots[0].is_some()
                 && (slots[1].is_none() != slots[2].is_none())
@@ -565,8 +505,7 @@ async fn merge_dir(
                         .as_ref()
                         .ok_or_else(|| AppError::Internal("merge: missing dir slot".into()))?;
                     let name = ctx.conflict_dir_name(&dir.name);
-                    // Rename in place: `merge_directories()` below sees the new
-                    // name (and uses it to build the children's `basedir`).
+                    // Rename in place so the recursion below sees the new name.
                     slots[rename_slot].as_mut().unwrap().name = name;
                     merged.push(emit);
                     ctx.conflict = true;
@@ -579,10 +518,8 @@ async fn merge_dir(
             match merge_directories_action(&slots)? {
                 DirAction::Delete => {}
                 DirAction::Emit(slot) => {
-                    // `mask 2` / `mask 4` with a base entry on the other side:
-                    // one device deleted or replaced the directory while this
-                    // one kept a directory at the name. Same class as the file
-                    // case above.
+                    // `mask 2` / `mask 4` with a base entry on the other side: one
+                    // device deleted the directory while this one kept it.
                     let other = if slot == 1 { 2 } else { 1 };
                     if slots[0].is_some() && slots[other].is_none() {
                         ctx.kept_deleted = true;
@@ -592,17 +529,14 @@ async fn merge_dir(
                     }
                 }
                 DirAction::Recurse { emit_slot } => {
-                    // `mask 3` / `mask 5` recursion: the recursion runs with the
-                    // other side's slot empty, so the merged directory keeps the
-                    // old name with whatever the surviving side changed inside
-                    // it — a whole directory a device had deleted or renamed.
+                    // `mask 3` / `mask 5` recursion runs with the other side's slot
+                    // empty, keeping the old name and the surviving side's changes.
                     let other = if emit_slot == 1 { 2 } else { 1 };
                     if slots[other].is_none() {
                         ctx.kept_deleted = true;
                     }
-                    // Upstream takes the last directory slot's name as the
-                    // child prefix; every slot here shares the same name, but a
-                    // slot renamed above is the one that ends up in the result.
+                    // Upstream takes the last directory slot's name as the child
+                    // prefix; a slot renamed above is the one that ends up in the result.
                     let mut dirname = "";
                     for slot in slots.iter().flatten() {
                         if is_dir(slot.mode) {
@@ -787,7 +721,6 @@ mod tests {
 
     #[test]
     fn files_deleted_in_head() {
-        // Unchanged in remote -> stays deleted.
         assert_eq!(
             threeway_merge_files(&group(
                 Some(file("base", "f")),
@@ -796,7 +729,6 @@ mod tests {
             )),
             FileAction::Nothing
         );
-        // Changed in remote -> keep remote's version.
         assert_eq!(
             threeway_merge_files(&group(
                 Some(file("base", "f")),
@@ -837,8 +769,7 @@ mod tests {
             )),
             FileAction::Emit(vec![file("head", "f")])
         );
-        // Remote turned the name into a directory -> head's file kept, remote's
-        // directory renamed.
+        // Remote made the name a directory -> head's file kept, remote's dir renamed.
         assert_eq!(
             threeway_merge_files(&group(
                 Some(file("base", "f")),
@@ -854,14 +785,12 @@ mod tests {
 
     #[test]
     fn files_added_on_one_side() {
-        // Added in remote, no head entry at all.
         assert_eq!(
             threeway_merge_files(&group(None, None, Some(file("remote", "f")))),
             FileAction::Emit(vec![file("remote", "f")])
         );
-        // Same, but base is a directory whose contents head left unchanged, so
-        // `merge_directories()` deletes the directory and remote's file keeps
-        // the name.
+        // Same, but base is a directory head left unchanged, so the directory is
+        // deleted and remote's file keeps the name.
         assert_eq!(
             threeway_merge_files(&group(
                 Some(dir("samedir", "f")),
@@ -870,12 +799,10 @@ mod tests {
             )),
             FileAction::Emit(vec![file("remote", "f")])
         );
-        // Added in head.
         assert_eq!(
             threeway_merge_files(&group(None, Some(file("head", "f")), None)),
             FileAction::Emit(vec![file("head", "f")])
         );
-        // Same, but remote left the directory it replaced unchanged.
         assert_eq!(
             threeway_merge_files(&group(
                 Some(dir("samedir", "f")),

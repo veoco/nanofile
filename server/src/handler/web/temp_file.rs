@@ -1,11 +1,7 @@
-// ─── TempFileManager ─────────────────────────────────────────────────────
+//! In-memory index over `{temp_dir}/upload/` for resumable/chunked uploads.
 //!
-//! Manages temporary files for resumable/chunked uploads.
-//!
-//! Uses an in-memory `HashMap` to track active uploads; on server restart
-//! all leftover temp files in `{temp_dir}/upload/` are wiped clean.
-//!
-//! Thread-safe (Arc<RwLock<...>>), designed for concurrent chunk writes.
+//! Entry map and reserved-byte total share one write lock, so the quota is
+//! enforced atomically with admission; leftover files are wiped on restart.
 
 use std::collections::HashMap;
 use std::io::{Seek, SeekFrom, Write};
@@ -22,26 +18,20 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
-/// Manages per-upload temporary files on disk with an in-memory index.
 #[derive(Clone)]
 pub struct TempFileManager {
     inner: Arc<Inner>,
 }
 
-/// Active temp uploads plus the running total of their declared sizes. Both
-/// live under one write lock so the reserved-bytes quota is enforced
-/// atomically with the entry map.
+/// Active temp uploads plus their declared sizes, both under one write lock so
+/// the reserved-bytes quota is enforced atomically with the entry map.
 struct ActiveUploads {
-    /// (repo_id, file_path_in_repo) → active temp file entry
     entries: HashMap<(String, String), TempFileEntry>,
-    /// Sum of declared `file_size` over active entries.
     reserved_bytes: u64,
 }
 
 struct Inner {
-    /// All active temp uploads.
     active: RwLock<ActiveUploads>,
-    /// Root directory for upload temp files, e.g. `data/temp`
     temp_dir: PathBuf,
     /// Cap on concurrent active uploads (0 = unlimited).
     max_uploads: u64,
@@ -54,43 +44,32 @@ struct TempFileEntry {
     /// Total file size as declared in the first Content-Range header
     file_size: u64,
     created_at: Instant,
-    /// Uploading user, once the caller binds it. Used to release the block
+    /// Uploading user, once the caller binds it; used to release the block
     /// reservation when the upload is abandoned.
     owner: Option<i32>,
     /// Blocks written by this upload that no commit references yet, so
     /// `abort`/`cleanup_stale` can delete them instead of leaving orphans.
     new_block_ids: Vec<String>,
-    /// Per-upload CDC streaming state. An in-order resumable upload streams
-    /// each chunk straight into blocks as it arrives (see `feed_stream`), so
-    /// the final chunk commits without re-reading the whole temp file.
+    /// Per-upload CDC streaming state; see `feed_stream`.
     stream: Arc<Mutex<Option<UploadStream>>>,
 }
 
-/// Incremental CDC state for one resumable upload.
-///
-/// `feed_stream` feeds in-order chunks through a [`Chunker`] and writes the
-/// completed blocks to the block store, accumulating their ids. Any chunk that
-/// arrives out of order (or with a write failure) flips `broken`, after which
-/// the upload falls back to the plain temp-file assembly path.
+/// Incremental CDC state for one resumable upload. An out-of-order chunk or a
+/// block-write failure flips `broken`, after which the upload falls back to the
+/// plain temp-file assembly path.
 struct UploadStream {
-    /// Active chunker; created on the first in-order feed.
     chunker: Option<Chunker>,
     /// Bytes successfully fed into `chunker` so far (the in-order prefix).
     next_offset: u64,
-    /// Block ids for the completed blocks produced so far, in order.
     block_ids: Vec<String>,
-    /// Block ids that were **newly written** by this upload (not deduped).
-    /// Tracked so the caller can clean them up on quota failure without
-    /// deleting blocks shared with other files.
+    /// Block ids that were **newly written** by this upload (not deduped), so
+    /// quota failures can clean them up without deleting shared blocks.
     new_block_ids: Vec<String>,
     /// `(block_id, logical length)` for every block the streaming path wrote, in
-    /// order. The fast commit re-checks these against the store before using
-    /// them: a block that is missing or shorter than what was streamed cannot
-    /// reproduce the file, so the upload must fall back to assembling the temp
-    /// file instead of committing a file object that cannot be read back.
+    /// order; the fast commit re-checks these against the store and falls back
+    /// to assembling the temp file if one is missing or shorter than streamed.
     streamed_blocks: Vec<(String, u64)>,
-    /// Total declared file size, copied from the entry so the stream is
-    /// self-contained once the map lock is released.
+    /// Declared file size, copied from the entry so the stream is self-contained.
     file_size: u64,
     /// Set on the first out-of-order chunk or block-write failure.
     broken: bool,
@@ -110,23 +89,17 @@ pub enum FeedOutcome {
 
 /// Filesystem-safe subdirectory name for a repo's in-progress uploads.
 ///
-/// `repo_id` reaches this module from multipart fields and URL segments, so it
-/// must not be used as a path segment: `../../../../tmp/x` or `/etc/cron.d/y`
-/// would resolve outside `{temp_dir}/upload/`. Hashing it keeps uploads
-/// separated per repo without any path semantics.
+/// `repo_id` is client input (`../../../../tmp/x` reaches here), so it must not be
+/// used as a path segment; hashing keeps uploads separated without path semantics.
 fn repo_dir_name(repo_id: &str) -> String {
     infra::crypto::fs_id::sha1_hex(repo_id.as_bytes())
 }
 
 /// Delete blocks an abandoned upload wrote and no commit references.
 ///
-/// Best effort: a failure is logged and the block is left for GC. Only the ids
-/// this upload *newly wrote* are tracked (`write_block_with_id_tracked` reports
-/// a block as new for exactly one writer), but even those can have become
-/// referenced since: a concurrent upload of identical content sees
-/// `was_new == false`, is not tracked, and can go on to commit a file that
-/// references the same block. Every candidate is therefore re-checked against
-/// the FS objects, and a check that fails keeps the block.
+/// Best effort, and only blocks this upload newly wrote are tracked; a concurrent
+/// identical upload may have committed one since, so each candidate is re-checked
+/// against the FS objects and kept when referenced or when the check fails.
 async fn delete_uncommitted_blocks(
     repos: &crate::repository::Repositories,
     store: &DynBlockStorage,
@@ -153,11 +126,9 @@ async fn delete_uncommitted_blocks(
 }
 
 impl TempFileManager {
-    /// Create a new manager and clean up any leftover temp files from a
-    /// previous run by removing `{temp_dir}/upload/` entirely.
-    ///
-    /// `max_uploads` and `max_bytes` bound concurrent active uploads (count)
-    /// and the sum of their declared sizes (bytes); `0` disables each limit.
+    /// Create a new manager, wiping `{temp_dir}/upload/` from a previous run.
+    /// `max_uploads`/`max_bytes` bound active uploads and their declared sizes;
+    /// `0` disables each limit.
     pub async fn new(temp_dir: PathBuf, max_uploads: u64, max_bytes: u64) -> Self {
         let upload_dir = temp_dir.join("upload");
         if upload_dir.exists() {
@@ -184,13 +155,10 @@ impl TempFileManager {
     }
 
     /// Return or create the temp file path for a given upload.
-    /// On first call for a given (repo_id, file_path), creates a new unique
-    /// temp file and records it in the in-memory index.
     ///
-    /// Rejects the upload with `ErrorKind::QuotaExceeded` when the configured
-    /// active-upload count or total reserved-bytes cap would be exceeded, so an
-    /// attacker (e.g. an anonymous upload link) cannot pile up unbounded temp
-    /// files on disk or entries in memory by starting abandoned uploads.
+    /// Rejects with `ErrorKind::QuotaExceeded` past the configured active-upload
+    /// count or reserved-bytes cap, so an attacker (e.g. an anonymous upload link)
+    /// cannot pile up unbounded temp files or entries by starting abandoned uploads.
     pub async fn get_or_create(
         &self,
         repo_id: &str,
@@ -227,14 +195,12 @@ impl TempFileManager {
         fs::create_dir_all(&dir).await?;
 
         let tmp_path = dir.join(Uuid::new_v4().to_string());
-        // Defense in depth: `repo_dir_name` removes all path semantics from the
-        // identifier, but assert the invariant anyway so a future refactor
-        // cannot silently reintroduce a traversal.
+        // Defence in depth: `repo_dir_name` has removed all path semantics, but
+        // the invariant is asserted anyway so a refactor cannot reintroduce a traversal.
         debug_assert!(
             tmp_path.starts_with(&self.inner.temp_dir),
             "temp upload path escaped temp_dir: {tmp_path:?}"
         );
-        // Create an empty file so other chunks can open it for writing
         fs::write(&tmp_path, &[]).await?;
 
         guard.reserved_bytes += file_size;
@@ -261,8 +227,6 @@ impl TempFileManager {
         Ok(tmp_path)
     }
 
-    /// Record which user owns this upload, so an abandoned upload can release
-    /// its block reservation.
     pub async fn bind_owner(&self, repo_id: &str, file_path: &str, user_id: i32) {
         let key = (repo_id.to_string(), file_path.to_string());
         let mut guard = self.inner.active.write().await;
@@ -271,8 +235,6 @@ impl TempFileManager {
         }
     }
 
-    /// Remember blocks written by the caller that no commit references yet, so
-    /// an abort or a stale-cleanup can delete them instead of leaving orphans.
     pub async fn record_new_blocks(&self, repo_id: &str, file_path: &str, ids: &[String]) {
         if ids.is_empty() {
             return;
@@ -284,13 +246,12 @@ impl TempFileManager {
         }
     }
 
-    /// Write `data` at `offset` into the temp file identified by
-    /// (repo_id, file_path).  The file must already exist (via
-    /// `get_or_create`).
+    /// Write `data` at `offset` into the temp file for (repo_id, file_path); the
+    /// file must already exist (via `get_or_create`).
     ///
-    /// Rejects with `ErrorKind::InvalidInput` when the chunk would extend past
-    /// the file's declared size — otherwise a client could write at an
-    /// arbitrary offset and create a huge sparse file on disk.
+    /// Rejects with `ErrorKind::InvalidInput` when the chunk would extend past the
+    /// declared size — otherwise a client could create a huge sparse file at an
+    /// arbitrary offset.
     pub async fn write_chunk(
         &self,
         repo_id: &str,
@@ -332,15 +293,13 @@ impl TempFileManager {
         Ok(())
     }
 
-    /// Stream an in-order chunk through the upload's CDC chunker and persist
-    /// any completed blocks, so a fully in-order resumable upload can commit
-    /// on the final chunk without re-reading the assembled temp file.
+    /// Stream an in-order chunk through the upload's CDC chunker and persist any
+    /// completed blocks, so a fully in-order upload can commit on the final chunk
+    /// without re-reading the assembled temp file.
     ///
-    /// The chunk is only consumed when it is strictly contiguous with the
-    /// previously streamed prefix (`offset == next_offset`). Any other chunk —
-    /// out of order, overlapping, or re-sent — disables streaming for the
-    /// upload; correctness is preserved by the always-written temp file, which
-    /// the caller falls back to on the final chunk.
+    /// The chunk is only consumed when strictly contiguous with the streamed
+    /// prefix (`offset == next_offset`); any other chunk disables streaming, and
+    /// the always-written temp file remains the fallback.
     pub async fn feed_stream(
         &self,
         store: &DynBlockStorage,
@@ -391,8 +350,7 @@ impl TempFileManager {
                     }
                 }
                 Err(_) => {
-                    // The chunker has advanced but the block is lost; disable
-                    // streaming and rely on the temp file for assembly.
+                    // The chunker advanced but the block is lost; disable streaming.
                     state.broken = true;
                     return FeedOutcome::Broken;
                 }
@@ -408,16 +366,15 @@ impl TempFileManager {
         }
     }
 
-    /// Consume the fully-streamed block ids for an upload, if it streamed the
-    /// whole file in order.
+    /// Consume the fully-streamed block ids for an upload, if it streamed the whole
+    /// file in order.
     ///
-    /// Returns `Some((block_ids, total_size, new_block_ids))` only when the
-    /// stream is intact and covered the entire declared file (`next_offset ==
-    /// file_size == expected_size`). `new_block_ids` is the subset of
-    /// `block_ids` that were newly written by this upload, so the caller can
-    /// clean them up on quota failure. `expected_size` is a defensive
-    /// cross-check against a client changing `file_size` mid-upload. Otherwise
-    /// returns `None` and the caller falls back to reading the temp file.
+    /// Returns `Some((block_ids, total_size, new_block_ids))` only when the stream
+    /// is intact and covered the entire declared file; `new_block_ids` is the subset
+    /// this upload newly wrote (so quota failures can clean it up), and
+    /// `expected_size` is a defensive cross-check against a client changing
+    /// `file_size` mid-upload. Otherwise returns `None` and the caller falls back to
+    /// reading the temp file.
     pub async fn take_streamed_blocks(
         &self,
         store: &DynBlockStorage,
@@ -462,11 +419,9 @@ impl TempFileManager {
             }
         }
 
-        // The fast path skips the temp-file assembly, so it must confirm what
-        // the streaming path wrote is still intact: every block present at the
-        // length that was streamed, and the streamed bytes covering the whole
-        // declared file. Anything else falls back to the temp file, whose
-        // `total_size == file_size` check then decides.
+        // The fast path skips temp-file assembly, so it must confirm what streaming
+        // wrote is still intact: every block present at the streamed length and the
+        // streamed bytes covering the whole file, else fall back to the temp file.
         let streamed_len: u64 = state.streamed_blocks.iter().map(|(_, len)| *len).sum();
         if streamed_len != state.file_size {
             tracing::warn!(
@@ -503,8 +458,7 @@ impl TempFileManager {
         ))
     }
 
-    /// How many bytes have been written to the temp file so far?
-    /// Returns `None` when no temp file exists for this upload.
+    /// Bytes written to the temp file so far (`None` when no temp file exists).
     pub async fn get_uploaded_bytes(&self, repo_id: &str, file_path: &str) -> Option<u64> {
         let key = (repo_id.to_string(), file_path.to_string());
         let tmp_path = {
@@ -517,9 +471,8 @@ impl TempFileManager {
         }
     }
 
-    /// Read the complete temp file into memory.
-    /// The caller should call this only after the last chunk has been
-    /// written (i.e. the file is fully assembled).
+    /// Read the complete temp file into memory; only valid once the last chunk has
+    /// been written (the file is fully assembled).
     pub async fn read_complete(&self, repo_id: &str, file_path: &str) -> Option<Vec<u8>> {
         let key = (repo_id.to_string(), file_path.to_string());
         let tmp_path = {
@@ -529,9 +482,8 @@ impl TempFileManager {
         fs::read(&tmp_path).await.ok()
     }
 
-    /// Stream the assembled temp file from disk in bounded chunks, so the
-    /// final chunk-assembly path never has to read the whole file into memory.
-    /// Returns `None` when no active temp file exists for this upload.
+    /// Stream the assembled temp file in bounded chunks, so the assembly path never
+    /// reads the whole file into memory. `None` when no active temp file exists.
     pub async fn read_stream(
         &self,
         repo_id: &str,
@@ -558,8 +510,6 @@ impl TempFileManager {
         )
     }
 
-    /// Mark an upload as finished: remove the in-memory record and delete
-    /// the temporary file from disk.
     pub async fn finish(&self, repo_id: &str, file_path: &str) {
         let key = (repo_id.to_string(), file_path.to_string());
         let tmp_path = {
@@ -575,13 +525,12 @@ impl TempFileManager {
         }
     }
 
-    /// Abort an upload: remove its temp file, delete the blocks it wrote that
-    /// no commit references, and release its block reservation.
+    /// Abort an upload: remove its temp file, delete the blocks it wrote that no
+    /// commit references, and release its block reservation.
     ///
-    /// Clients have no protocol-level abort (a cancelled upload is purely local
-    /// to seaf-daemon and the Qt client), so this is only reached from nanofile's
-    /// own failure paths; the periodic [`Self::cleanup_stale`] covers clients
-    /// that simply stop sending chunks.
+    /// Clients have no protocol-level abort (a cancelled upload is purely local to
+    /// seaf-daemon and the Qt client), so this is only reached from nanofile's own
+    /// failure paths; [`Self::cleanup_stale`] covers clients that stop sending chunks.
     pub async fn abort(
         &self,
         repos: &crate::repository::Repositories,
@@ -610,13 +559,12 @@ impl TempFileManager {
         }
     }
 
-    /// Remove active uploads that have been idle longer than `ttl`, delete their
-    /// temp files and any blocks they wrote that no commit references, and
-    /// release their block reservations. Called periodically by the scheduler so
-    /// abandoned resumable uploads don't leak memory, disk or quota.
+    /// Drop uploads idle longer than `ttl`, deleting their temp files and any
+    /// blocks they wrote that no commit references, and releasing their block
+    /// reservations. Called periodically so abandoned resumable uploads don't leak
+    /// memory, disk or quota.
     ///
-    /// Returns how many uploads were dropped, so the pass that called this can
-    /// report what it did rather than a bare "ok".
+    /// Returns how many uploads were dropped.
     pub async fn cleanup_stale(
         &self,
         repos: &crate::repository::Repositories,
@@ -627,8 +575,8 @@ impl TempFileManager {
         let stale: Vec<(String, PathBuf, Option<i32>, Vec<String>)> = {
             let mut guard = self.inner.active.write().await;
             let mut removed = Vec::new();
-            // Collect the stale keys first so the closure doesn't borrow both
-            // `entries` and `reserved_bytes` from `guard` at once.
+            // Collect keys first so the closure doesn't borrow `entries` and
+            // `reserved_bytes` from `guard` at once.
             let stale_keys: Vec<(String, String)> = guard
                 .entries
                 .iter()
@@ -638,8 +586,8 @@ impl TempFileManager {
             for key in stale_keys {
                 if let Some(e) = guard.entries.remove(&key) {
                     guard.reserved_bytes -= e.file_size;
-                    // The key carries the repo id; the on-disk directory name is
-                    // only a hash of it, so it cannot be recovered from the path.
+                    // The key carries the repo id; the on-disk dir name is only a
+                    // hash of it, so it cannot be recovered from the path.
                     removed.push((key.0, e.tmp_path, e.owner, e.new_block_ids));
                 }
             }
@@ -658,15 +606,12 @@ impl TempFileManager {
         dropped
     }
 
-    /// The total file size declared when the upload was started.
     pub async fn get_file_size(&self, repo_id: &str, file_path: &str) -> Option<u64> {
         let key = (repo_id.to_string(), file_path.to_string());
         let guard = self.inner.active.read().await;
         guard.entries.get(&key).map(|e| e.file_size)
     }
 }
-
-// ─── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -700,7 +645,6 @@ mod tests {
         let path = "/f.bin";
         mgr.get_or_create(repo, path, 10).await.unwrap();
 
-        // Writing at offset 9 with 2 bytes extends past the declared size 10.
         let result = mgr.write_chunk(repo, path, 9, b"xx").await;
         assert_eq!(
             result.err().map(|e| e.kind()),
@@ -745,7 +689,6 @@ mod tests {
         mgr.get_or_create(repo, "/a.txt", 100).await.unwrap();
         mgr.finish(repo, "/a.txt").await;
 
-        // After finishing the first upload, a new one fits the quota again.
         assert!(mgr.get_or_create(repo, "/b.txt", 100).await.is_ok());
         mgr.finish(repo, "/b.txt").await;
     }
@@ -759,15 +702,12 @@ mod tests {
         let tmp = mgr.get_or_create(repo, path, 100).await.unwrap();
         assert!(tmp.exists());
 
-        // Write first half
         mgr.write_chunk(repo, path, 0, b"hello ").await.unwrap();
         assert_eq!(mgr.get_uploaded_bytes(repo, path).await, Some(6));
 
-        // Write second half at offset 6
         mgr.write_chunk(repo, path, 6, b"world").await.unwrap();
         assert_eq!(mgr.get_uploaded_bytes(repo, path).await, Some(11));
 
-        // Read back
         let data = mgr.read_complete(repo, path).await.unwrap();
         assert_eq!(&data, b"hello world");
 
@@ -848,10 +788,7 @@ mod tests {
         mgr.finish(repo, path).await;
     }
 
-    // ── Streaming (in-transit CDC) tests ─────────────────────────────────
-
-    /// Deterministic pseudo-random bytes (same generator as the `file_ops`
-    /// tests) so a fixture spanning multiple CDC blocks is reproducible.
+    /// Deterministic pseudo-random bytes, matching the `file_ops` test generator.
     fn pseudo_data(len: usize) -> Vec<u8> {
         let mut x: u64 = 0x9E3779B97F4A7C15;
         (0..len)
@@ -864,16 +801,14 @@ mod tests {
             .collect()
     }
 
-    /// A throwaway block store backed by a temp dir.
     fn temp_store() -> (tempfile::TempDir, DynBlockStorage) {
         let dir = tempfile::tempdir().unwrap();
         let store = infra::storage::new_block_store(dir.path());
         (dir, store)
     }
 
-    /// Chunk `data` with a fresh `Chunker` and write each block to `store`,
-    /// mirroring `FileOps::write_stream_blocks`. Returns the reference ids that
-    /// an in-order streaming upload must reproduce exactly.
+    /// Chunk `data` and store each block, mirroring `FileOps::write_stream_blocks`;
+    /// returns the ids an in-order streaming upload must reproduce exactly.
     async fn reference_block_ids(store: &DynBlockStorage, data: &[u8]) -> Vec<String> {
         const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
         let mut chunker = Chunker::new(data.len());
@@ -888,9 +823,8 @@ mod tests {
         ids
     }
 
-    /// In-order chunks stream straight into blocks: the produced block ids
-    /// match whole-file chunking exactly, so the final chunk can commit without
-    /// re-reading the temp file.
+    /// In-order chunks yield exactly the whole-file block ids, so the final chunk
+    /// commits without re-reading the temp file.
     #[tokio::test]
     async fn test_feed_stream_in_order_matches_whole_file_chunking() {
         let mgr = manager().await;
@@ -908,7 +842,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Feed the data as 8192-byte in-order slices (like web chunk uploads).
         let mut fed = 0usize;
         while fed < data.len() {
             let end = (fed + 8192).min(data.len());
@@ -932,8 +865,7 @@ mod tests {
         mgr.finish(repo, path).await;
     }
 
-    /// A chunk that skips the prefix (offset > next_offset) disables streaming;
-    /// the final assembly falls back to the temp file.
+    /// A chunk that skips the prefix disables streaming; assembly falls back to the temp file.
     #[tokio::test]
     async fn test_feed_stream_out_of_order_marks_broken() {
         let mgr = manager().await;
@@ -955,8 +887,7 @@ mod tests {
         mgr.finish(repo, path).await;
     }
 
-    /// Re-sending an already-fed offset (a retry) is not contiguous either and
-    /// must disable streaming.
+    /// Re-sending an already-fed offset (a retry) is not contiguous and disables streaming.
     #[tokio::test]
     async fn test_feed_stream_duplicate_chunk_marks_broken() {
         let mgr = manager().await;
@@ -1003,13 +934,12 @@ mod tests {
         mgr.finish(repo, path).await;
     }
 
-    /// A block-store write failure must disable streaming (the temp file stays
-    /// the source of truth), not panic.
+    /// A block-store write failure disables streaming (the temp file stays the
+    /// source of truth) instead of panicking.
     #[tokio::test]
     async fn test_feed_stream_block_write_failure_marks_broken() {
         let mgr = manager().await;
-        // A store whose base path is a regular file: the first write's
-        // `ensure_dirs` fails, so `write_block` errors.
+        // A store whose base path is a regular file: the first write's `ensure_dirs` fails.
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("not-a-dir");
         std::fs::write(&file_path, b"x").unwrap();
@@ -1017,9 +947,8 @@ mod tests {
 
         let repo = "stream-repo-wfail";
         let path = "/f.bin";
-        // Larger than one max-size CDC block (seafile default 10 MiB) so at
-        // least one block is emitted by the first feed, forcing a block write
-        // to be attempted.
+        // Larger than one max-size CDC block (seafile default 10 MiB) so the first
+        // feed emits a block and attempts a write.
         let data = pseudo_data(10 * 1024 * 1024 + 1);
 
         mgr.get_or_create(repo, path, data.len() as u64)

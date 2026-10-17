@@ -11,7 +11,6 @@ use crate::service::auth::totp::TotpManager;
 use base::error::AppError;
 use infra::rate_limit::{LoginKeys, LoginRateLimiter};
 
-/// A trimmed `Some` only when the client actually reported a value.
 fn non_empty(value: &Option<String>) -> Option<String> {
     value
         .as_deref()
@@ -24,34 +23,24 @@ fn non_empty(value: &Option<String>) -> Option<String> {
 pub enum LoginResult {
     /// Login succeeded. Includes the API token and an optional S2FA device trust token.
     Success {
-        /// The account the token belongs to, so a caller can act on the login
-        /// (notify the owner, record an audit line) without re-resolving the
-        /// submitted identifier — which may differ from the stored one in case.
+        /// The account the token belongs to, so a caller need not re-resolve the
+        /// submitted identifier (which may differ from the stored one in case).
         user_id: i32,
         api_token: String,
         s2fa_token: Option<String>,
-        /// Whether `(platform, device_id)` had never signed in before.
-        ///
-        /// Decided here, before the new session row exists, because this is the
-        /// only place that both knows the device identity and sees the account's
-        /// sessions first. The handler turns it into a notification: the service
-        /// layer stays free of any mail dependency.
+        /// Whether `(platform, device_id)` had never signed in before, decided
+        /// before the new session row exists. The handler turns it into a
+        /// notification, keeping the service layer free of any mail dependency.
         new_device: bool,
     },
-    /// Rate limited — too many failed attempts.
     RateLimited,
-    /// Invalid username or password.
     BadCredentials,
-    /// User account is disabled.
     AccountDisabled,
-    /// The user has 2FA enabled and needs to provide an OTP.
     TwoFactorRequired,
-    /// The user provided an OTP, but it was invalid.
     TwoFactorInvalid,
 }
 
-/// Service handling login authentication including rate limiting
-/// and two-factor / S2FA device trust flows.
+/// Service handling login authentication, rate limiting and two-factor flows.
 pub struct LoginService {
     repos: Arc<Repositories>,
     password_hash_iterations: u32,
@@ -75,15 +64,6 @@ impl LoginService {
     }
 
     /// Attempt to authenticate a user with the given credentials.
-    ///
-    /// Arguments:
-    /// - `username`: the user's email / login name
-    /// - `password`: the plaintext password
-    /// - `client_ip`: IP address for rate-limit key scoping
-    /// - `s2fa_header`: optional `X-Seafile-S2FA` header (device trust token)
-    /// - `otp`: optional `X-Seafile-OTP` header (TOTP code)
-    /// - `trust_device`: whether the client requested a device trust token
-    /// - `platform`, `device_id`, `device_name`, `client_version`: device metadata stored with the API token
     pub async fn authenticate(
         &self,
         username: &str,
@@ -97,23 +77,19 @@ impl LoginService {
         device_name: Option<String>,
         client_version: Option<String>,
     ) -> Result<LoginResult, AppError> {
-        // ── Rate limit keys ──────────────────────────────────────────────
-        // Client address, (address, account) pair, and the limiter's
-        // distinct-account spray counter. Deliberately NO username-only key:
-        // that would let anyone lock a victim out of their own account from an
-        // unrelated address.
+        // Client address, (address, account) pair, and the distinct-account spray
+        // counter. Deliberately NO username-only key: that would let anyone lock a
+        // victim out of their own account from an unrelated address.
         let login_keys = LoginKeys::new(client_ip, username);
 
         if self.login_rate_limiter.is_login_blocked(&login_keys) {
             return Ok(LoginResult::RateLimited);
         }
 
-        // ── Record failure helper ─────────────────────────────────────────
         let record_failure = || {
             self.login_rate_limiter.record_login_failure(&login_keys);
         };
 
-        // ── Find user ─────────────────────────────────────────────────────
         let user_record = match self.repos.user.find_by_email(username).await? {
             Some(u) => u,
             None => {
@@ -131,7 +107,6 @@ impl LoginService {
             }
         };
 
-        // ── Verify password ───────────────────────────────────────────────
         if !verify_password_async(
             password.to_string(),
             user_record.password_hash.clone(),
@@ -143,13 +118,11 @@ impl LoginService {
             return Ok(LoginResult::BadCredentials);
         }
 
-        // ── Check if user is active ───────────────────────────────────────
         if !user_record.is_active {
             record_failure();
             return Ok(LoginResult::AccountDisabled);
         }
 
-        // ── Two-factor authentication ──────────────────────────────────────
         let mut skip_2fa = false;
         let mut issued_s2fa_token: Option<String> = None;
 
@@ -158,7 +131,6 @@ impl LoginService {
         if let Some(tfa) = two_fa
             && tfa.enabled
         {
-            // --- S2FA device trust token check ---
             if let Some(s2fa_token_val) = s2fa_header {
                 let now = chrono::Utc::now().timestamp();
                 self.repos
@@ -205,11 +177,9 @@ impl LoginService {
                             use crate::repository::s2fa_token::CreateS2faTokenParams;
                             let s2fa_token_value = generate_s2fa_token();
                             let now = chrono::Utc::now().timestamp();
-                            // One trust per device. The previous row was this same
-                            // device's last trust, already superseded by the one
-                            // about to be issued, and keeping it would make the
-                            // credential page count more trusted devices than the
-                            // account has.
+                            // One trust per device: the previous row is superseded
+                            // by the one about to be issued, and keeping it would
+                            // inflate the trusted-device count.
                             if let Some(id) = device_id.as_deref().filter(|id| !id.is_empty()) {
                                 self.repos
                                     .s2fa_token
@@ -237,12 +207,10 @@ impl LoginService {
             }
         }
 
-        // ── Login succeeded — create API token ─────────────────────────────
         self.login_rate_limiter.clear_login_failure(&login_keys);
 
-        // Upgrade the stored hash if it predates the embedded cost or was
-        // written with a different one. Best-effort: a failed write must not
-        // block a correct password.
+        // Upgrade the stored hash if its cost predates the configured one.
+        // Best-effort: a failed write must not block a correct password.
         if needs_rehash(&user_record.password_hash, self.password_hash_iterations) {
             let upgraded =
                 hash_password_async(password.to_string(), self.password_hash_iterations).await;
@@ -259,8 +227,8 @@ impl LoginService {
             }
         }
 
-        // Ask before inserting: the session about to be created is the *new*
-        // row, and counting it would make every login look familiar.
+        // Ask before inserting: the session about to be created is the new row,
+        // and counting it would make every login look familiar.
         let new_device = match (non_empty(&platform), non_empty(&device_id)) {
             (Some(platform), Some(device_id)) => {
                 !self
@@ -269,8 +237,8 @@ impl LoginService {
                     .has_session_for_device(user_record.id, &platform, &device_id)
                     .await?
             }
-            // A client that did not identify its device cannot be compared with
-            // anything, so it is never announced as new.
+            // A client with no device identity cannot be compared with anything,
+            // so it is never announced as new.
             _ => false,
         };
 
@@ -293,9 +261,8 @@ impl LoginService {
                 device_name,
                 client_version,
                 is_pending: false,
-                // A client application holds this token, not a browser. Its
-                // `User-Agent` is the client library's, so the device fields
-                // above are what identify it.
+                // A client application, not a browser, holds this token; its
+                // `User-Agent` is the client library's, so the device fields identify it.
                 source: SessionSource::Client,
                 user_agent: None,
             })

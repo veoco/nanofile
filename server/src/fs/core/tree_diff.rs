@@ -13,11 +13,9 @@ pub struct FsChange {
     pub op_type: &'static str,
     /// `"file"` or `"dir"`
     pub obj_type: &'static str,
-    /// Absolute path of the affected entry (e.g. `/docs/intro.md`).
     pub path: String,
     /// File size in bytes (0 for directories).
     pub size: i64,
-    /// fs_object ID (SHA1).
     pub obj_id: String,
     /// Previous path for rename/move operations.
     pub old_path: Option<String>,
@@ -29,12 +27,9 @@ pub struct FsChange {
     pub superseded: bool,
 }
 
-/// Walk an FS tree from `root_fs_id` using a level frontier (no recursion)
-/// and populate `out` with every entry's path → (DirEntryData).
-/// Directories are included too.
-///
-/// Each level reads all its directories with one batched `IN` query instead
-/// of one query per directory (O(#dirs) → O(depth)).
+/// Walk an FS tree from `root_fs_id` level by level without recursion, filling
+/// `path → DirEntryData`. Each level reads its directories in one batched `IN` query,
+/// so cost is O(depth) not O(#dirs).
 async fn collect_entries(
     repos: &Repositories,
     repo_id: &str,
@@ -74,7 +69,6 @@ async fn collect_entries(
                 };
                 out.insert(entry_path.clone(), entry.clone());
 
-                // Push subdirectories onto the next frontier level.
                 if entry.mode & 0o40000 != 0 {
                     next.push(Frame {
                         fs_id: entry.id.clone(),
@@ -89,18 +83,15 @@ async fn collect_entries(
     Ok(())
 }
 
-/// Compare two FS tree snapshots and return the list of changes.
-///
-/// `old_root_id` should be `None` when there is no previous tree (first
-/// commit or empty repo) – in that case every entry in the new tree is
-/// reported as `"create"`.
+/// Compare two FS tree snapshots and return the list of changes. `old_root_id` is `None`
+/// when there is no previous tree (first commit or empty repo) and every entry in the new
+/// tree is reported as `"create"`.
 pub async fn diff_trees(
     repos: &Repositories,
     repo_id: &str,
     old_root_id: Option<&str>,
     new_root_id: &str,
 ) -> Result<Vec<FsChange>, AppError> {
-    // If there is no old tree or it is the empty sentinel, everything is new.
     let no_old_tree = old_root_id.is_none() || old_root_id == Some(EMPTY_SHA1);
 
     if no_old_tree {
@@ -121,20 +112,17 @@ pub async fn diff_trees(
                 }
             })
             .collect();
-        // Sort by path depth so parents come before children.
         changes.sort_by(|a, b| a.path.cmp(&b.path));
         return Ok(changes);
     }
 
     let old_root = old_root_id.unwrap();
 
-    // Incremental diff: walk only the subtrees whose object ids differ between
-    // old and new, instead of materialising both whole trees. A frame pairs the
-    // old and new directory at one path; an absent side means the whole subtree
-    // is new (created) or gone (deleted). Delete changes are emitted as soon as
-    // an old-only entry is found; renames/moves are matched afterwards by
-    // obj_id. A delete whose obj_id is re-emitted at a new path is then marked
-    // `superseded` so consumers can tell it apart from a real delete.
+    // Incremental diff: walk only subtrees whose object ids differ instead of
+    // materialising both whole trees. A frame pairs the old and new directory at one
+    // path; an absent side means the whole subtree is new or gone. Deletes are emitted
+    // as found, then renames/moves are matched by obj_id and a delete whose obj_id is
+    // re-emitted at a new path is marked `superseded`.
     struct Frame {
         old_fs_id: Option<String>,
         new_fs_id: String,
@@ -142,13 +130,10 @@ pub async fn diff_trees(
     }
 
     let mut changes: Vec<FsChange> = Vec::new();
-    // New entries pending rename/move matching, then create fallback.
     let mut created: Vec<(String, DirEntryData)> = Vec::new();
-    // Old paths removed from the tree. Deletes are collected here instead of
-    // being pushed into `changes` straight away: a delete found by a later
-    // descent can still turn out to be the old side of a rename/move, and the
-    // matching pass below must be able to see every delete before it consumes
-    // one. They are merged into `changes` afterwards.
+    // Old paths removed from the tree, collected rather than pushed straight into
+    // `changes`: a delete found later can still be the old side of a rename/move, and the
+    // matching pass must see every delete before consuming one.
     let mut pending_deletes: Vec<FsChange> = Vec::new();
     // obj_id → old-side entries removed from their path, for rename/move matching.
     let mut obj_to_deleted: HashMap<String, Vec<(String, DirEntryData)>> = HashMap::new();
@@ -181,15 +166,12 @@ pub async fn diff_trees(
         let mut next: Vec<Frame> = Vec::new();
 
         for frame in &frontier {
-            // A present id that fails to resolve (not a directory / missing)
-            // is treated as absent, matching the batch-map `continue` semantics
-            // of the full-tree walk.
+            // A present id that fails to resolve (not a directory / missing) counts as absent.
             let old_dir = frame.old_fs_id.as_ref().and_then(|oid| old_map.get(oid));
             let new_dir = new_map.get(&frame.new_fs_id);
 
             match (old_dir, new_dir) {
                 (None, Some(new_dir)) => {
-                    // Old side missing → the whole new subtree is created.
                     for entry in &new_dir.dirents {
                         let path = join_path(&frame.prefix, &entry.name);
                         created.push((path.clone(), entry.clone()));
@@ -203,7 +185,6 @@ pub async fn diff_trees(
                     }
                 }
                 (Some(old_dir), None) => {
-                    // New side missing → the whole old subtree is deleted.
                     for entry in &old_dir.dirents {
                         let path = join_path(&frame.prefix, &entry.name);
                         pending_deletes.push(delete_change(&path, entry));
@@ -227,11 +208,9 @@ pub async fn diff_trees(
                         .map(|d| (d.name.as_str(), d))
                         .collect();
 
-                    // Old-only entries are removed from this directory first.
-                    // They must be recorded before the new entries are examined:
-                    // whether a new directory is a reused (unchanged) object
-                    // depends on what this frame is dropping, and a renamed
-                    // directory's entry is one of them.
+                    // Old-only entries are recorded first: whether a new directory is a
+                    // reused (unchanged) object depends on what this frame drops, and a
+                    // renamed directory's entry is one of them.
                     let mut deleted_here: Vec<(String, DirEntryData)> = Vec::new();
                     for old_entry in &old_dir.dirents {
                         if new_dir.dirents.iter().any(|e| e.name == old_entry.name) {
@@ -248,9 +227,8 @@ pub async fn diff_trees(
                             });
                         }
                     }
-                    // Index this frame's removed entries by object id, so a new
-                    // entry carrying one of those ids is recognised as a
-                    // rename/move.
+                    // Index this frame's removed entries by object id, so a new entry
+                    // carrying one of those ids is recognised as a rename/move.
                     let mut deleted_by_id: HashMap<&str, &DirEntryData> = HashMap::new();
                     for (_, entry) in &deleted_here {
                         deleted_by_id.entry(entry.id.as_str()).or_insert(entry);
@@ -279,19 +257,17 @@ pub async fn diff_trees(
                                     prefix: path,
                                 });
                             }
-                            // A different old path dropped this exact directory
-                            // object: a rename/move of the whole subtree. The
-                            // pairing pass reports the directory itself, so do
-                            // not descend — its contents are byte-identical.
+                            // A different old path dropped this exact directory object: a
+                            // rename/move of the whole subtree whose contents are
+                            // byte-identical, so do not descend — the pairing pass reports it.
                             None if new_is_dir && deleted_entry.is_some() => {
                                 created.push((path.clone(), new_entry.clone()));
                             }
-                            // Same path or new path, but not a reused directory:
-                            // a create, or an edit when a file replaced a file.
+                            // Not a reused directory: a create, or an edit when a file
+                            // replaced a file.
                             _ => {
                                 let old_was_dir = old_entry.is_some_and(|d| d.mode & 0o40000 != 0);
                                 if old_entry.is_none() {
-                                    // Genuinely new path.
                                     created.push((path.clone(), new_entry.clone()));
                                 }
                                 if new_is_dir {
@@ -312,8 +288,7 @@ pub async fn diff_trees(
                                         old_path: None,
                                         superseded: false,
                                     });
-                                    // If the old side was a directory, its
-                                    // subtree is gone and must be deleted.
+                                    // If the old side was a directory, its subtree is gone.
                                     if old_was_dir {
                                         next.push(Frame {
                                             old_fs_id: Some(old_entry.id.clone()),
@@ -333,20 +308,17 @@ pub async fn diff_trees(
         frontier = next;
     }
 
-    // Deletes are emitted only now, after the walk has seen the whole changed
-    // tree, so the rename/move matching below can pair against every one of
-    // them regardless of the order the frontier happened to visit them in.
+    // Deletes are emitted only now, so the rename/move matching below can pair
+    // against every one of them regardless of the frontier's visit order.
     changes.extend(pending_deletes);
 
-    // Match creates against deleted entries by obj_id to detect renames/moves,
-    // mirroring seafevents' `CommitDiffer(handle_rename=True)`: an entry that
-    // moved to a new path is reported once, as a rename (same parent directory)
-    // or a move (different parent directory). When an obj_id appears on several
-    // deleted paths, the last-collected path wins (deterministic frame order).
+    // Match creates against deleted entries by obj_id to detect renames/moves, mirroring
+    // seafevents' `CommitDiffer(handle_rename=True)`: an entry moved to a new path is
+    // reported once, as a rename (same parent) or a move (different parent). Several
+    // deleted paths for one obj_id: the last-collected wins, in deterministic frame order.
     let mut superseded_ids: Vec<String> = Vec::new();
-    // Directory objects reused under a new path. Every entry below them moved
-    // with the directory, so the deletes recorded under their old path are
-    // superseded too.
+    // Directory objects reused under a new path; every entry below them moved with
+    // the directory, so the deletes under their old path are superseded too.
     let mut reused_dir_old_paths: Vec<String> = Vec::new();
     for (path, entry) in created {
         let is_dir = entry.mode & 0o40000 != 0;
@@ -384,17 +356,15 @@ pub async fn diff_trees(
         }
     }
 
-    // Mark the delete of each matched old path. The delete stays in the result
-    // (the indexer needs it to drop the old path) but is flagged so that
-    // activity logging can skip it: a rename is one event, not rename + delete.
+    // Mark the delete of each matched old path: it stays in the result (the indexer needs
+    // it to drop the old path) but is flagged so activity logging skips it.
     if !superseded_ids.is_empty() {
         for c in changes.iter_mut() {
             if c.op_type != "delete" {
                 continue;
             }
-            // A delete is superseded when its own object was re-emitted at a new
-            // path, or when it sits under a directory that was: the whole
-            // subtree moved with that directory.
+            // Superseded when the object itself was re-emitted at a new path, or when
+            // it sits under a directory that was: the whole subtree moved with it.
             let under_reused_dir = reused_dir_old_paths.iter().any(|dir| {
                 c.path.len() > dir.len()
                     && c.path.starts_with(dir.as_str())
@@ -420,8 +390,7 @@ fn join_path(prefix: &str, name: &str) -> String {
     }
 }
 
-/// Extract the parent directory of an absolute path (`"/"` for a top-level
-/// entry).
+/// Extract the parent directory of an absolute path (`"/"` for a top-level entry).
 fn parent_dir(path: &str) -> &str {
     match path.rsplit_once('/') {
         None => "/",
@@ -507,8 +476,7 @@ mod tests {
         )
     }
 
-    /// Reference full-tree diff (the pre-incremental implementation) for
-    /// equivalence checks against the incremental path.
+    /// Reference full-tree diff for equivalence checks against the incremental path.
     async fn diff_trees_full(
         repos: &Repositories,
         repo_id: &str,
@@ -523,10 +491,8 @@ mod tests {
         collect_entries(repos, repo_id, new_root_id, "", &mut new_entries).await?;
 
         let mut changes = Vec::new();
-        // Old paths not present in the new tree, plus old directory objects
-        // that survived at the same path with a changed id. Both are candidate
-        // old sides of a rename/move; the matching pass below consumes the ones
-        // that were actually reused.
+        // Old paths absent from the new tree, plus old directory objects that survived at
+        // the same path with a changed id: both are candidate old sides of a rename/move.
         let mut obj_to_deleted: HashMap<&str, Vec<(&str, &DirEntryData)>> = HashMap::new();
         for (path, entry) in &old_entries {
             let is_dir = entry.mode & 0o40000 != 0;
@@ -553,10 +519,8 @@ mod tests {
             }
         }
 
-        // Paths whose subtree must not be re-reported: a directory object reused
-        // at another path is byte-identical, so everything beneath it is
-        // unchanged and the rename/move of the directory alone describes the
-        // whole move.
+        // Paths whose subtree must not be re-reported: a directory object reused at
+        // another path is byte-identical, so its rename/move alone describes the move.
         let mut reused_dirs: Vec<(String, &DirEntryData, &str)> = Vec::new();
         let mut superseded_ids: Vec<&str> = Vec::new();
         for (path, entry) in &new_entries {
@@ -597,9 +561,7 @@ mod tests {
             }
         }
 
-        // Everything beneath a reused directory object is unchanged, so it must
-        // not be re-reported. Mirrors the incremental walk's decision not to
-        // descend into such a directory.
+        // Everything beneath a reused directory object is unchanged: never re-report it.
         let in_reused_subtree = |path: &str| {
             reused_dirs.iter().any(|(new_path, _, _)| {
                 path.len() > new_path.len()
@@ -645,9 +607,7 @@ mod tests {
         assert_eq!(inc, full, "incremental != full\nfull={full:?}\ninc={inc:?}");
     }
 
-    /// Assert exactly which changes a diff produces, as
-    /// `"op_type obj_type path[ old_path]"`, plus whether the entry is a
-    /// superseded delete.
+    /// Assert the exact changes as `"op_type obj_type path[ old_path]"` plus supersededness.
     async fn assert_changes(
         repos: &Repositories,
         old_root: &str,
@@ -737,9 +697,7 @@ mod tests {
         assert_incremental_matches_full(&repos, "root-old", "root-new").await;
     }
 
-    /// A file moved to a different directory is a `move`, not a `rename`
-    /// (matching seafevents' `commit_differ.py`, which compares the parent
-    /// directory).
+    /// A file moved to another directory is a `move`, not a `rename`, matching seafevents.
     #[tokio::test]
     async fn test_diff_file_move_to_other_dir_is_move() {
         let db = setup_diff_db().await;
@@ -785,9 +743,8 @@ mod tests {
         insert_dir(&db, "root-new", &[("d1", true, "e")]).await;
         insert_dir(&db, "d1", &[("f1", false, "a.txt")]).await;
         assert_incremental_matches_full(&repos, "root-old", "root-new").await;
-        // The child directory object is reused unchanged, so the rename alone
-        // describes the whole move: no per-child move events. The deletes of
-        // the old path and of the entries under it are all superseded.
+        // The child directory object is reused unchanged, so the rename alone describes the
+        // move: no per-child move events, and the old path's deletes are all superseded.
         assert_changes(
             &repos,
             "root-old",
@@ -810,9 +767,8 @@ mod tests {
         insert_dir(&db, "root-new", &[("d2", true, "e")]).await;
         insert_dir(&db, "d2", &[("f1", false, "a.txt"), ("f3", false, "c.txt")]).await;
         assert_incremental_matches_full(&repos, "root-old", "root-new").await;
-        // The dir object id changed (a child was added), so the directory
-        // itself is no longer a rename: it is reported as a delete + create.
-        // The unchanged child keeps its id and is still matched as a move.
+        // The dir object id changed (a child was added), so the directory is reported as a
+        // delete + create; the unchanged child keeps its id and is still matched as a move.
         assert_changes(
             &repos,
             "root-old",
@@ -848,9 +804,7 @@ mod tests {
         assert_incremental_matches_full(&repos, "root-old", "root-new").await;
     }
 
-    /// When a directory is renamed and one of its subdirectories keeps its
-    /// object id, the subdirectory's contents did not change either, so they
-    /// must not be reported as moves.
+    /// A renamed directory's subdirectory that keeps its object id is not reported as moves.
     #[tokio::test]
     async fn test_diff_nested_unchanged_dir_not_reported() {
         let db = setup_diff_db().await;
