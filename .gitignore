@@ -18,6 +18,9 @@ server/static/css/app.css
 server/static/js/*.bundle.js
 tailwindcss
 node_modules/
+# VitePress build output and cache; `docs/node_modules/` is covered above.
+docs/.vitepress/cache/
+docs/.vitepress/dist/
 e2e/test-results/
 e2e/playwright-report/
 /test-results/
