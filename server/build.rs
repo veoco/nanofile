@@ -1,15 +1,10 @@
-/// build.rs — Nanofile build script
-///
-/// Three code-generation steps run here:
-///   1. Tailwind CSS: `static/css/input.css` → `static/css/app.css`
-///      (optional — falls back to a placeholder if Tailwind is unavailable)
-///   2. esbuild JS: `frontend/entries/*.js` → `static/js/*.bundle.js`
-///      (required — the frontend is written as ES modules and must be bundled
-///      into plain IIFE scripts so inline template scripts keep working)
-///   3. Tray icons (`tray` feature only): `static/img/favicon.svg` →
-///      `$OUT_DIR/tray_icon_*.rgba` (+ `$OUT_DIR/nanofile.ico` and, on Windows,
-///      the version resources embedded via winresource) — see the "Tray icons"
-///      section below
+/// Nanofile build script: three generation steps.
+///   1. Tailwind CSS: `static/css/input.css` -> `static/css/app.css` (optional; a placeholder
+///      is written when Tailwind is unavailable).
+///   2. esbuild JS: `frontend/entries/*.js` -> `static/js/*.bundle.js` (required, so inline
+///      template scripts keep working).
+///   3. Tray icons (`tray` feature): rasterized from `static/img/favicon.svg`; on Windows the
+///      version resources are embedded via winresource.
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -20,10 +15,8 @@ fn main() {
         .unwrap_or(0);
     println!("cargo:rustc-env=NANOFILE_BUILD_TS={}", ts);
 
-    // Only regenerate the CSS/JS when one of their inputs changes.
-    // src/ is included because Tailwind v4 scans Rust string literals for
-    // class names (e.g. file_icon_color) — without it a class change there
-    // would leave app.css stale until an unrelated rebuild.
+    // Regenerate the CSS/JS only when an input changes; src/ is included because Tailwind v4
+    // scans Rust literals for class names, and a change there would otherwise leave CSS stale.
     println!("cargo:rerun-if-changed=static/css/input.css");
     println!("cargo:rerun-if-changed=templates/");
     println!("cargo:rerun-if-changed=frontend/");
@@ -34,8 +27,6 @@ fn main() {
     build_js();
     build_tray_icons();
 }
-
-// ─── Tailwind CSS ────────────────────────────────────────────────────────────
 
 fn build_css() {
     let project_root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -55,9 +46,8 @@ fn build_css() {
         return;
     }
 
-    // No Tailwind available — fall back to a placeholder so the build still
-    // succeeds with an unstyled UI (matches the documented "optional Tailwind"
-    // setup in the README and the module doc comment above).
+    // No Tailwind available: fall back to a placeholder so the build still succeeds with an
+    // unstyled UI (the "optional Tailwind" setup documented in docs/dev/frontend.md).
     eprintln!("warning: Tailwind CSS unavailable; UI will be unstyled.");
     let _ = std::fs::write(
         &output_path,
@@ -90,8 +80,6 @@ fn run_tailwind(cmd: &str, extra_args: &[&str], input: &Path, output: &Path) -> 
         }
     }
 }
-
-// ─── esbuild JS ──────────────────────────────────────────────────────────────
 
 fn build_js() {
     if let Some(bin) = which_binary("esbuild")
@@ -144,8 +132,6 @@ fn run_esbuild_with(cmd: &str, extra_args: &[&str]) -> bool {
     }
 }
 
-// ─── Binary discovery ────────────────────────────────────────────────────────
-
 /// Try a standalone binary named `name` (project root, then PATH).
 fn which_binary(name: &str) -> Option<String> {
     let project_root = std::env::var("CARGO_MANIFEST_DIR").ok()?;
@@ -173,8 +159,7 @@ fn which_binary(name: &str) -> Option<String> {
     })
 }
 
-/// Try `node_modules/.bin/{name}` (installed via npm). Checks the crate root
-/// first, then the workspace root (one level up).
+/// Try `node_modules/.bin/{name}` in the crate root, then the workspace root.
 fn which_node_bin(name: &str) -> Option<(&'static str, Vec<&'static str>)> {
     let crate_root = std::env::var("CARGO_MANIFEST_DIR").ok()?;
 
@@ -194,24 +179,15 @@ fn which_node_bin(name: &str) -> Option<(&'static str, Vec<&'static str>)> {
     None
 }
 
-// ─── Tray icons (`tray` feature only) ────────────────────────────────────────
+// The repository ships no binary icon assets: the tray and Windows exe assets are rasterized
+// from `static/img/favicon.svg` into the two theme variants (straight-alpha 32x32, chosen by
+// `src/tray/theme.rs`), a template image for the macOS menu bar (which inverts it itself), and
+// `nanofile.ico` (every size the shell asks for, the largest a PNG frame, the favicon rim kept
+// so the tile survives a dark shell).
 //
-// The repository ships no binary icon assets: everything the tray and the
-// Windows exe need is rasterized here from `static/img/favicon.svg`:
-//   - `$OUT_DIR/tray_icon_on_light.rgba`
-//   - `$OUT_DIR/tray_icon_on_dark.rgba`   — straight-alpha 32×32 pixels for the
-//     two desktop themes, chosen at runtime by `src/tray/theme.rs` and included
-//     by `src/tray/icon.rs` via `include_bytes!`
-//   - `$OUT_DIR/tray_icon_template.rgba`  — the same glyph with no tile, for the
-//     macOS menu bar, which inverts a template image itself
-//   - `$OUT_DIR/nanofile.ico` — the Windows exe icon: every size the shell asks
-//     for (`icon_gen::EXE_ICON_SIZES`), the largest one a PNG frame, with the
-//     favicon's rim turned on so the tile survives a dark shell
-//
-// The mark is pure geometry (a rect plus a glyph path), so rasterizing it needs
-// no font and cannot vary with the build machine's installed fonts. The tray
-// variants differ only in the two fills, which `icon_gen::recolor` substitutes
-// into the favicon — so the tray cannot drift from the tab.
+// The mark is pure geometry, so rasterizing needs no font and cannot vary with the build
+// machine. The tray variants differ only in fills, substituted by `icon_gen::recolor`, so the
+// tray cannot drift from the tab.
 
 #[cfg(feature = "tray")]
 #[path = "src/tray/icon_gen.rs"]
@@ -236,24 +212,17 @@ fn build_tray_icons() {
             .unwrap_or_else(|e| panic!("tray: failed to write {name}: {e}"));
     }
 
-    // The exe icon is one static asset shown by Explorer and the taskbar, so it
-    // keeps the plain brand mark — a file icon cannot follow the shell theme.
-    // That is what `exe_mark` is for: the favicon's rim, painted out everywhere
-    // else, outlines the graphite tile on a dark shell.
-    //
-    // Assembled on every platform rather than only on Windows: the rasters, the
-    // AND mask and the PNG frame are platform-independent, so a Linux tray build
-    // (the one CI job that runs this) exercises them instead of leaving the whole
-    // path to a Windows-only build.
+    // The exe icon keeps the plain brand mark: a file icon cannot follow the shell theme. The
+    // favicon's rim, painted out elsewhere, outlines the graphite tile on a dark shell.
+    // Assembled on every platform so the Linux tray CI job exercises this path, not only a
+    // Windows build.
     let mut images = Vec::new();
     for &size in &icon_gen::EXE_ICON_SIZES {
-        // Per size: the rim is asked for in device pixels, so its geometry
-        // depends on the edge length being rasterized (see `exe_mark`).
+        // Per size: the rim is in device pixels, so its geometry depends on the edge length.
         let exe_mark = icon_gen::exe_mark(&svg, size);
         let pixmap = rasterize_svg(exe_mark.as_bytes(), size);
         let payload = if size == icon_gen::EXE_ICON_PNG_SIZE {
-            // Vista and later read the largest entry as a PNG frame; as a DIB it
-            // would be a 256 KiB entry that nothing scales from.
+            // Vista+ reads the largest entry as a PNG frame; a DIB would be a 256 KiB unused entry.
             pixmap
                 .encode_png()
                 .expect("tray: failed to encode the 256px exe icon frame")
@@ -282,9 +251,8 @@ fn build_tray_icons() {
 #[cfg(not(feature = "tray"))]
 fn build_tray_icons() {}
 
-/// Rasterizes an SVG into a `size × size` pixmap, fitting the whole SVG centered
-/// into the square.
-///
+/// Rasterizes an SVG into a `size × size` pixmap, fitting it centered. A non-browser rasterizer
+/// skips the favicon's `prefers-color-scheme` block, so callers pass a recolored variant.
 /// A non-browser rasterizer skips the favicon's `prefers-color-scheme` block, so
 /// callers pass a [`icon_gen::recolor`]-ed variant whose literal fills already
 /// carry the colours they want.
@@ -308,9 +276,8 @@ fn rasterize_svg(svg: &[u8], size: u32) -> tiny_skia::Pixmap {
     pixmap
 }
 
-/// The pixmap with straight instead of tiny-skia's premultiplied alpha: what
-/// both the tray consumers and an ICO DIB expect. (`Pixmap::encode_png`
-/// demultiplies on its own, so the PNG frame does not go through here.)
+/// Straight instead of tiny-skia's premultiplied alpha, as the tray and an ICO DIB expect.
+/// (`encode_png` demultiplies on its own, so the PNG frame does not go through here.)
 #[cfg(feature = "tray")]
 fn straight_alpha(pixmap: &tiny_skia::Pixmap) -> Vec<u8> {
     let mut out = Vec::with_capacity(pixmap.data().len());

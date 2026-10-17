@@ -2,41 +2,40 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Nanofile is a self-hosted file sync and sharing server. It implements the Seafile sync protocol and APIs, so the official Seafile desktop and mobile clients connect to it directly, and it includes its own web interface without a separate seaf-server + seahub stack.
+Nanofile is a self-hosted file sync and sharing server. It implements the Seafile
+sync protocol and APIs, so the official Seafile desktop and mobile clients connect
+to it directly, and it ships its own web interface without a separate seaf-server +
+seahub stack.
+
+**Documentation:** <https://veoco.github.io/nanofile/> · [中文](https://veoco.github.io/nanofile/zh/)
 
 ## Features
 
-- **File sync**: desktop and mobile clients keep libraries in sync automatically, as with an official Seafile server.
-- **Web interface**: browse, preview, download, star, activity feed, trash.
-- **Sharing**: share links with optional password, expiry and view count; anonymous upload links.
-- **Sign-in security**: TOTP two-factor authentication, trusted devices, login lockout. API keys let third-party tools (WebDAV, sync clients) connect without sharing the account password.
-- **Admin console**: users, quotas, mail delivery and system settings.
-- **Other**: encrypted libraries, full-text search with Chinese tokenization, file history and trash, background garbage collection.
+- **File sync** — the official Seafile clients keep libraries in sync automatically.
+- **Web interface** — browse, preview, download, star, activity feed and trash.
+- **Sharing** — share links with a password, an expiry and a view count; anonymous upload links.
+- **Sign-in security** — TOTP two-factor authentication, trusted devices, login lockout and API keys.
+- **Admin console** — users, quotas, email delivery, system settings and background tasks.
+- **Confined parsing** — document, image, EXIF and media parsing runs in bounded child processes.
 
 ## Quick start
 
-Build from source:
+Requirements: a stable Rust toolchain (edition 2024) and Node.js (CI uses 24).
+`ffmpeg` is optional and enables media thumbnails.
 
 ```bash
 npm install                       # frontend bundler (esbuild is required)
-cargo build --release -p server   # binary is `nanofile`, not `server`
+cargo build --release -p server   # the binary is target/release/nanofile
 ./target/release/nanofile
 ```
 
-**First run.** A start that was given no configuration file and has no `NANOFILE_*`
-environment variable — a double-clicked Windows binary, or this one run from a
-terminal — is an installation nobody has set up yet, so it runs the **first-run
-setup** instead of the server: it serves a one-time page, prints its address
-(`http://127.0.0.1:8082/setup/<token>`) and, in a desktop build, opens it in a
-browser.
-The page creates the first administrator and decides the listen address, the
-external URL, the data directory and whether stored blocks are encrypted.
-Submitting it writes `~/.nanofile/config.toml` (owner-only) and starts the server
-on the same port. Every later start reads that file; delete it to run the setup
-again.
+A start with no configuration file and no `NANOFILE_*` variable runs the first-run
+setup: it serves a one-time page at `http://127.0.0.1:8082/setup/<token>`, creates
+the first administrator, writes `~/.nanofile/config.toml` and starts the server on
+the same port. Delete that file to run the setup again.
 
-To keep the configuration in the source tree, or to deploy non-interactively,
-manage the file yourself — a configuration file means the setup never runs:
+To manage the configuration yourself instead, a config file keeps the setup from
+running:
 
 ```bash
 cp config.toml.example config.toml
@@ -44,40 +43,20 @@ chmod 600 config.toml             # it holds the master secret
 ./target/release/nanofile --config config.toml
 ```
 
-The server listens on http://localhost:8082. An admin account is required and can be created with the CLI (the setup page does this for you on a first run):
+The server listens on <http://localhost:8082>. Create an administrator (the setup
+page does this on a first run):
 
 ```bash
-# password prompt
 ./target/release/nanofile adduser --email admin@example.com
-# or non-interactive
-printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@example.com --password-stdin
 ```
 
-`--regular` creates a non-admin account. A prebuilt container image is described under **Deploy with Docker**.
+`--regular` creates a non-admin account. More in the
+[getting started guide](https://veoco.github.io/nanofile/guide/getting-started).
 
-## Usage
+## Docker
 
-### Users
-`adduser` creates an account, admin by default. Invitation-code registration can be enabled in `[auth]` for self-registration.
-
-### Sharing
-Selecting a file or folder in the web file browser and choosing "Share" produces a share link, which supports a password, an expiry and a view count. Anonymous upload links accept uploads into a library without an account. Setting `share_link_enabled` to false disables anonymous share and upload links, and existing links stop resolving.
-
-### Email notifications
-Mail is off until SMTP is configured. Two places configure it: the web admin page "System Settings → Email" (host, port, account, password, sender, then `enabled`), or environment variables such as `NANOFILE_EMAIL_ENABLED=1` and `NANOFILE_EMAIL_HOST=…`.
-
-Once enabled, the server sends: password-reset links, new-device and new-browser sign-in notices, and a notice when an API key is created. Password values can be read from a file through a `*_FILE` variable (`NANOFILE_EMAIL_PASSWORD_FILE`), which keeps them out of the command line and process list.
-
-### Account security
-"Settings → Security" enables two-factor authentication and issues backup codes. "Settings → Sessions & Credentials" lists the devices signed in to the account, its repository sync tokens and its API keys, each individually revocable. Changing the password revokes other devices, sync tokens and all API keys.
-
-## Deploy with Docker
-
-The image is a `scratch` container holding only the `nanofile` binary, with no config file or data directory. It runs as uid/gid `1000:1000`, so the mounted data volume must be writable by that user.
-
-Both recipes below set `NANOFILE_*` variables, which is what keeps a container out of the first-run setup. A container started with **no** environment variables at all does enter it — the setup URL goes to the container's stdout, so `docker logs <name>` has the page address. That address is `127.0.0.1`, and the page has no TLS of its own: on a remote host, forward the port (an SSH tunnel is the simple answer) rather than exposing it. The image has no `HOME` either, which leaves the setup nowhere to write `~/.nanofile/config.toml`; on that path pass `--config` and set `HOME` yourself.
-
-The master secret is generated once and kept: it encrypts sessions, mail and at-rest blocks. Rotating it logs out every session, breaks sync clients and makes encrypted blocks unreadable.
+The image is a `scratch` container holding only the binary. It runs as uid/gid
+`1000:1000`, so the data volume must be writable by that user.
 
 ```bash
 mkdir -p data
@@ -87,275 +66,43 @@ chmod 600 nanofile-secret
 docker run -d --name nanofile \
   -p 8082:8082 \
   -v "$PWD/data:/data" \
-  -v "$PWD/config.toml:/etc/nanofile/config.toml:ro" \
-  -v "$PWD/nanofile-secret:/run/secrets/nanofile-secret:ro" \
-  -e NANOFILE_CONFIG=/etc/nanofile/config.toml \
-  -e NANOFILE_DATABASE_URL='sqlite:/data/nanofile.db?mode=rwc' \
-  -e NANOFILE_STORAGE_BLOCK_DIR=/data/blocks \
-  -e NANOFILE_STORAGE_TEMP_DIR=/data/temp \
-  -e NANOFILE_INDEX_INDEX_DIR=/data/index \
-  -e NANOFILE_SERVER_SECRET_KEY="$(cat nanofile-secret)" \
-  ghcr.io/<owner>/nanofile:latest
-```
-
-A config file is optional; built-in defaults fill the rest:
-
-```bash
-docker run -d --name nanofile \
-  -p 8082:8082 \
-  -v "$PWD/data:/data" \
   -e NANOFILE_DATABASE_URL='sqlite:/data/nanofile.db?mode=rwc' \
   -e NANOFILE_STORAGE_BLOCK_DIR=/data/blocks \
   -e NANOFILE_STORAGE_TEMP_DIR=/data/temp \
   -e NANOFILE_SERVER_SECRET_KEY="$(cat nanofile-secret)" \
-  ghcr.io/<owner>/nanofile:latest
+  ghcr.io/veoco/nanofile:latest
 ```
 
-`nanofile-secret` is the value generated above and is reused across starts.
+The master secret is generated once and reused: rotating it logs out every
+session, breaks sync clients and makes encrypted blocks unreadable. See the
+[Docker guide](https://veoco.github.io/nanofile/guide/docker) for the config-file
+variant, the first-run caveat and upgrade permissions.
 
-## Configuration
+## Documentation
 
-Settings have built-in defaults, and there are two places to change one:
-
-- **The web interface**: "System Settings → Settings" renders every setting — the file-only ones as a value with no control — one page per area (Server, Security, Authentication, Rate limits, Storage, Encryption, Maintenance, Sandbox, Email, Notifications, Advanced), filterable in the browser by name, config key, description or `NANOFILE_*` variable.
-- **`config.toml` and `NANOFILE_*` environment variables**: copy `config.toml.example`. The template deliberately holds only what a page cannot store at all (the master secret, the database URL, the at-rest encryption mode, the first-start admin, the log file) plus the few values that have to be decided before the interface is reachable (external URL, listener, state directories, language). Environment variables always win and are never written back to the file, so container deployments rely on them.
-
-Layering, highest first: an environment variable, the config file, the value saved at "System Settings", the built-in default.
-
-Where the config file is looked for, first match wins: `--config <path>`, `NANOFILE_CONFIG`, `./config.toml` (the historical default, kept so an existing deployment keeps reading the file it always did), and `~/.nanofile/config.toml` — the per-user file the first-run setup writes. Any `NANOFILE_*` environment variable counts as configuring the installation, so it suppresses the first-run setup even when no file exists; the only exceptions are the variables that decide nothing about the configuration (`NANOFILE_DOTENV`, `NANOFILE_TEST_FFMPEG_PATH`, `NANOFILE_BUILD_TS`).
-
-Frequently changed keys:
-
-- `site_url`: the external URL (HTTPS domain). It controls the `Secure` attribute on session cookies, enables HSTS, and is used to build share links.
-- Bind address and port (`[server]` `addr` / `port`): default `0.0.0.0:8082`.
-- Storage directories (`[storage]`): default under `data/` in the binary's directory. Relative paths resolve against the binary's directory; absolute paths place state elsewhere.
-- `secret_key`: the master key (see **Deploy with Docker**).
-- Storage caps: the open resumable uploads may declare 32 GiB in total and one archive may build 8 GiB by default; `0` on the Storage page (or in `[storage]`) removes either cap.
-
-Most settings apply immediately; the listener, transfer limits and cache directories apply at the next start. Every row of the settings pages says where its value came from, which `NANOFILE_*` variable overrides it — the pages are also the reference for the variable names — and whether changing it needs a restart.
-
-"System Settings → Task Management" is two pages. **Task list** puts the server's load measurements first — requests in flight, jobs running, queued tasks, database connections, workers busy and live tasks — because they are what explains a run that is waiting, and then the runs themselves: what is running now, and what the server actually did. The finished list holds the runs with something to report — a failure, or work that was done — so a cleanup pass that finds nothing to do does not bury them; it can be narrowed to one job and to what succeeded or failed, and each filter keeps the other. Each run row names the job and its verdict, the account that submitted it, and right-aligned columns for when it finished and how long it took; a failed run carries the job's own error on the row, and the run id, the job's own summary and the full error are one disclosure away. How long history is kept is stated above the list. **Registered tasks** lists every job and long-lived service this server has registered, grouped by how each one comes to run; each row says when it runs and what it does in words, and carries the same right-aligned columns for the job's last run — read back from the history, so a restart does not make every job look like it has never run. Opening a row shows its lifetime counters, which count every tick including the ones that found nothing to do, and the policies it runs under — its priority, concurrency cap, timeout, retry, whether it waits for a quiet server, how finely it can be interrupted, and what a crash leaves behind. A job or service whose subsystem is switched off is named there with the switch that would bring it back, and a run can be triggered by hand from its row where that means something.
-
-The **Restart server** button in the settings page's header restarts the server in place: the process, the tray icon and the listening port stay the same, but the settings table, database connections, caches and background tasks are all rebuilt, so every "needs a restart" row takes effect immediately (and the administrator's session survives). The log level and file caps, and whether the desktop tray exists and in which language, are decided before the process starts: those are marked "needs a full process restart" and are only applied by stopping and starting the process.
-
-A key the file does not mention keeps its built-in default; the file is never rewritten, so what you write is what stays on disk (the one exception is `[logging] file`, which a desktop run resolves next to the binary and records there so every later run uses the same file).
-
-Sections: `[server]` networking and feature switches; `[database]` connection; `[storage]` directories and quotas; `[auth]` login, password and rate limits; `[ui]` language; `[email]` mail; `[admin_init]` first-start admin; `[logging]` logs; `[gc]` garbage collection; `[index]` search; `[sandbox]` the confinement over untrusted parsing; `[notification]` notifications; `[tasks]` background tasks; `[settings]` how the file and the saved settings layer. The template lists only the keys a settings page cannot store, or that have to be decided before it is reachable; every other key, its `NANOFILE_*` variable and where its value came from are on "System Settings → Settings".
-
-## Sandbox
-
-Everything that parses content a user supplied runs in a separate process with a
-memory bound, a CPU bound and a wall-clock timeout, never inside the server:
-document text extraction for the search index, image thumbnails, media thumbnails
-(through `ffmpeg`), EXIF and avatar processing. The child bounds and confines
-itself before it reads a request and prints what it established; the server
-decides from that report rather than from what it asked for.
-
-The resource bound is the one item no setting may give up: a child that cannot
-establish it is refused by both sides, because a parser bomb or an unbounded loop
-is the failure this exists to prevent. Everything these features parse is pure
-Rust (`lopdf`, `office_oxide`, `zip`, `image`, `kamadak-exif`), and the one
-external program any profile starts is the media helper, so the file, network and
-process layers are deliberate defense in depth against a parser bug rather than
-the bound that keeps the server up.
-
-The admin's **Sandbox** page lists what this host actually gives: one band per
-profile it measured, one row per protection, and a state badge on each band saying
-whether that profile runs. Nothing is summarised above them — no grade, and no
-verdict sentence either, because both would only restate what the badges and the
-rows already say. Each row says what the item is, whether it is in place, how much it matters
-and what its absence opens:
-
-- **Resource bound** (memory and CPU everywhere, plus descriptors and file size on
-  Linux and macOS) — the one item no feature may run without, and the page marks
-  it as required.
-- **File access** — paths cannot be read or written. The item that keeps a parser
-  out of the server user's data, and the one whose absence the page names rather
-  than treating the other layers as substitutes for it.
-- **Network access** and **starting programs** — refinements on top of a
-  files-confined host, never replacements for one.
-
-The platform's own residuals are listed beside the item they weaken: macOS's
-parser profiles deny the fork outright and narrow the exec to the child's own
-image; the Windows container reads the system tree it loads from, and its Job
-Object bounds memory and CPU time where it has no descriptor or file-size bound;
-and the media worker is granted the libraries it needs as well as the helper
-itself.
-
-The media worker has a band of its own, and it is the one whose list is incomplete
-by design: it exists to start a program, and every way of starting one copies the
-process first, so its process item cannot exist and the page says **Not
-applicable** rather than reporting a gap. What bounds it instead is the file layer
-and the time limits, which bound the copies. On Linux and macOS the file layer
-decides `exec` per path — the helper and the interpreter the kernel runs before
-it, never a directory — while on Windows the container does not restrict which
-readable program may run, so only the Job Object's process count and the timeout
-bound a compromised helper.
-
-Its file item carries its own notes, because a helper is a program with
-libraries: it may read the libraries beside it (one file at a time), the system
-library directories, and — on macOS, and only when the helper actually lives
-there — the package-manager tree it is installed under (`/opt/homebrew`,
-`/usr/local` or `/opt/local`). Nothing bounds how many processes the helper may
-create. On Linux the media child may not call `setsid`/`setpgid`, so a copy it
-makes cannot leave the process group the parent kills; on macOS nothing denies
-those calls, so a copy can leave that group and the only bound left is the CPU
-limit each copy carries and the parent's timeout — not the number of copies. The
-page says that too rather than leaving it to be inferred.
-
-One setting governs it. `sandbox.enabled` is the master switch: with it off, none
-of those features run, and nothing falls back to parsing inside the server
-process. A document skipped while the switch is off is recorded as a retryable
-failure rather than a verdict on its bytes, so turning the switch back on
-re-indexes it.
-
-Everything above the resource bound is the platform's answer rather than a
-setting, and the page's rows are measured from confined children, so it cannot
-advertise a layer this host does not have. Each profile's band carries its own
-state — running, switched off, or unavailable on this host — and each item that is
-missing is named with what its absence means. A host that cannot establish the
-bound at all runs none of these features: that item is required, and no setting
-may run a parser unbounded.
-
-**On Windows the container is attempted, and a host that refuses it falls back to
-the bound.** The AppContainer is the only mechanism that adds the files and
-network items there, and creating one needs a registry profile and package access
-on the worker's own image. A host that confines every command it runs — a
-development or agent environment — refuses exactly that, and the child dies in
-its loader with nothing to diagnose. So a Windows launch that cannot create one
-applies the Job Object, the restricted token and the process mitigations and
-reports `files=open`, and the container is not asked for again in that process.
-The page names what is missing either way.
-
-`storage.ffmpeg_path` names the helper the media profile may execute. Saving it
-re-resolves the grant through the same hook as the master switch above, so the
-next media request runs the binary that was just configured. On Windows the
-container is granted the helper's file *and the libraries beside it*, never a
-directory: its token keeps `SeChangeNotifyPrivilege`, so the walk to the file is
-not checked, while writing a DACL on a directory re-imposes inheritance on
-everything below it. The helper's standard streams are pipes rather than the
-null device, because a container may refuse to open that device and the refusal
-would read as "the helper cannot run". A helper that can only run in the plain
-container — its read access coming from `ALL APPLICATION PACKAGES`, which the
-less privileged container makes the check ignore — is run there instead: the
-opt-out is given up (`lpac=off` in the report and on the page) and the container
-kept. A container may need the Landlock syscalls allowed for every item to be in place.
-
-The confinement is tested where it is used, not only where it is described. Every
-platform this project ships runs the whole Rust suite on every push — Linux x86_64
-and arm64, macOS arm64, Windows amd64 — and the four Linux targets with no runner
-(two musl, two loongarch64) are compiled on every push as well. Each profile's
-report is asserted in one place, `server/tests/sandbox_probe_test.rs`: the items
-from the typed report, and the platform's own mechanism tokens beside them. The
-report is not the whole answer: each profile also has to do its job under the
-confinement it claims, judged by its product rather than by a process that
-started. The probe parses every structured format it carries and compares the
-**whole** text each parser returns, the images child's reply is
-checked against the pixels it was given, and the media child reads a file the
-parent wrote, decodes a frame from it and hands back the encoded thumbnail. That
-media pipeline — upload, scratch file, confined child, thumbnail — is run end to
-end as well, because the helper is the one program the sandbox executes and a host
-that could start it and do nothing else would otherwise pass. A document whose
-text is near the size cap is extracted whole in the confined child, the marker at
-its end included, so the resource limits are measured as sufficient rather than
-merely installed. A host where the worker cannot run at all has to refuse an
-avatar, an EXIF read and a thumbnail rather than decode them in the server
-process. The released binary and the published image run the same probe, which is
-the only place the sandbox runs in `FROM scratch`. On Linux the refusals are put
-to the running kernel: the filter is installed in a child that then makes the
-calls a parser must not be able to make, each beside the same call in the same
-kind of process without the filter, so a refusal that comes from the process's own
-privileges cannot pass for the sandbox.
-
-What the sandbox does not defend against is not asserted to hold: a kernel
-vulnerability, and another process running as the same user. The tests are about
-the confinement this server builds rather than about the kernel underneath it.
-
-## Security
-
-- When the server runs behind an HTTPS reverse proxy, `site_url` is set to the HTTPS address. That setting controls the `Secure` cookie attribute and HSTS. Sessions, share passwords and API tokens are bearer credentials.
-- The default bind address is `0.0.0.0`. Where only a reverse proxy should reach the server, `127.0.0.1` plus a closed firewall port restricts it.
-- Behind a reverse proxy, `trusted_proxies` decides which peer addresses may supply `CF-Connecting-IP` / `X-Forwarded-For` for the client IP. Without it those headers are ignored, so every client collapses to the proxy address and per-IP rate limits become one shared bucket. Entries may be an exact IP, a CIDR range, or a keyword (`loopback`, `private`, `link-local`, `unique-local`).
-- Behind a Cloudflare Tunnel (`cloudflared`), the origin sees a loopback or private peer. Set `trusted_proxies = ["private"]` and bind the origin to `127.0.0.1` (or isolate it on the Docker network); Cloudflare then supplies the visitor in `CF-Connecting-IP`, which is preferred over `X-Forwarded-For`. Only trust `private` when nothing else can reach the origin, or a LAN peer could forge the header.
-- Encrypted libraries require the library password for uploads as well as reads. Without it, web preview and download return 440, and anonymous upload links cannot be created for or used against an encrypted library.
-- A password change, deactivation or device wipe revokes every credential the account holds: other devices, sync clients and API keys, plus unused reset links.
-- Release builds refuse to start without `secret_key`. A zero-configuration start never reaches that refusal: it runs the first-run setup, which generates a strong key and persists it. Debug builds with an explicit config that omits the key still generate an ephemeral one, so sessions do not survive a restart; `NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` does the same for a zero-config start and covers local and CI use.
-
-## Command line
-
-```
-nanofile [--config <path>]           start the server (default)
-nanofile [--config <path>] adduser   create a user (admin by default; --regular for a normal user)
-                                     password: interactive, or --password-stdin / --password-file <path>
-nanofile [--config <path>] migrate-blocks [--dry-run]
-                                     move from the shared block directory to the per-library layout
-                                     (normally done automatically at startup; --dry-run previews only)
-nanofile [--config <path>] verify-blocks [--dry-run] [--repair] [--repo <id>] [--json]
-                                     hash every stored block against its content-addressed id, and check
-                                     every file object's blocks against the size it declares. Read-only
-                                     unless --repair is given; --repair quarantines blocks that fail the
-                                     id check under {block_dir}/.quarantine/ (their bytes are kept) so a
-                                     client holding a good copy re-uploads them. Exits non-zero when it
-                                     finds anything to act on.
-```
-
-Windows service control (administrator rights required):
-
-```
-nanofile [--config <path>] service install [--account virtual|system|network|<name>]
-                                     register an auto-start service (starts at boot, no login)
-                                     default account: NT SERVICE\Nanofile (see below)
-nanofile [--config <path>] service uninstall  stop, remove it and take its access back
-nanofile [--config <path>] service status     report the registration and its account (exit code 0 when installed)
-nanofile [--config <path>] service run        what the SCM calls; running it by hand exits with an error
-```
-
-`service install` means the same thing as the tray's "Start at boot (admin)"
-item: it also removes this installation's "Start at login" entry, so the two
-cannot both start Nanofile. A named account needs `--password`,
-`--password-stdin` or the interactive prompt.
-
-## Desktop tray and Windows service
-
-Binaries built with `--features tray` carry a system tray menu: **Start at login** (a per-user entry, so it starts once somebody logs in), **Start at boot (admin)** on Windows — see below — plus open the web UI, open the config file and quit.
-
-**Start at boot (admin)** registers an auto-start service with the Service Control Manager, so it starts at boot with **no login at all**, which is what an unattended machine needs. `nanofile service install` does the same from a command line, including the retirement of the login entry.
-
-- Enabling it asks for administrator rights; dismissing the prompt changes nothing. Before the prompt, the tray checks that the service could actually serve (config file, every data directory, the log directory, `ffmpeg`, the port): a check that cannot pass is named and refuses the install, and the advisories are confirmed first.
-- **The service runs as `NT SERVICE\Nanofile`**, a per-service virtual account: no password, its own SID, no shared identity, and network access as the computer account. That is the account Microsoft recommends over `LocalSystem`, which stays available as `--account system` for a deployment whose directories a virtual account cannot be granted access to (`--account network` and a named account are also accepted). The account is named in the confirmation, reported by `service status`, and logged at every start.
-- Installing **grants that account modify access** to the state directories, the log directory and the config file — a service identity starts with access to nothing — and removing the service takes the grant back. A directory it may not write is refused before anything is registered, rather than failing at the next boot.
-- The two automatic-start options are alternatives: registering the service removes the "Start at login" entry (the confirmation says so), and the tray disables that item while the service is registered. Removing the service enables the item again but does **not** re-create the entry: after that, Nanofile starts automatically only if you ask for it.
-- Both registrations record absolute paths, so they outlive a move. A login entry whose recorded executable or config file is gone is repointed at the running copy the next time the tray starts (a healthy entry, or one this build cannot read, is left alone) — but never while the service has replaced it. A service registration that points at a folder which no longer exists is named as such in the confirmation before it is repointed. And naming a config file that does not exist (`--config`, or `NANOFILE_CONFIG`) is a refused start rather than a silent fall back to built-in defaults — which would have quietly served a different database on a different port.
-- It takes effect at the **next system start**; the tray copy running now keeps serving. Handing the port over immediately is not reliable on Windows, where a just-closed connection stays in `TIME_WAIT` for minutes and the new process would fail to bind.
-- While it runs, starting the tray by hand gives you a "client mode" tray: it brings up no second server, and **Quit stops the service** — the same thing Quit means in an ordinary tray, where it stops the server. It restarts at the next boot, and the tray can also install/remove the service from that menu.
-- A service has no desktop, so there is no tray icon; logs go to `nanofile.log` next to the executable. The service start logs its account, executable, config path, working directory and the result of every directory check, and refuses to start (exit code 2) rather than failing later with an unnamed error.
-
-## Data directory
-
-State lives under the binary's directory in `data/` by default, since relative paths resolve against that directory. A section can name absolute paths instead.
-
-The first-run setup decides this once: it suggests `~/.nanofile/data` (next to the configuration file it is about to write), offers `data/` next to the binary when that directory already exists so an installation whose configuration file was deleted keeps its state, and records the result as **absolute** paths in `~/.nanofile/config.toml`. Relative paths in a configuration file you write yourself keep resolving against the binary's directory.
-
-```
-data/
-├── nanofile.db        # database (WAL mode, mode 0600)
-├── nanofile.db-wal    # WAL journal
-├── blocks/            # file blocks: repos/{sha1(repo_id)}/{2-hex prefix}/{40-hex SHA-1}
-├── temp/              # upload staging
-├── thumbnails/        # thumbnail cache
-├── avatars/           # avatars
-└── index/             # full-text search index
-```
+| | |
+|---|---|
+| [Getting started](https://veoco.github.io/nanofile/guide/getting-started) | Build, first run, administrator |
+| [Configuration](https://veoco.github.io/nanofile/guide/configuration) | Config file, `NANOFILE_*`, settings pages |
+| [Sandbox](https://veoco.github.io/nanofile/guide/sandbox) | What is confined, and what is not |
+| [Security](https://veoco.github.io/nanofile/guide/security) | Reverse proxy, TLS, secret key |
+| [CLI reference](https://veoco.github.io/nanofile/reference/cli) | Every operator command |
+| [Development](https://veoco.github.io/nanofile/dev/architecture) | Architecture, testing, CI |
 
 ## Development
 
-**Architecture**: a Cargo workspace of four crates — `base` (base types), `infra` (database, storage, crypto, config), `server` (HTTP, sync protocol, WebDAV, web interface), `migration` (database migrations). Dependency direction: `base → infra → server`.
+The project is a Cargo workspace of four crates: `base` (domain types), `infra`
+(database, storage, crypto, config), `server` (HTTP, sync protocol, WebDAV, web UI)
+and `migration`. Dependencies flow `base → infra → server`.
 
-**Frontend**: the web interface is server-rendered (Askama) with Tailwind CSS and modular JavaScript under `server/frontend/`. `server/build.rs` bundles `frontend/entries/*.js` into the binary with esbuild (required; Tailwind optional). Frontend changes require a `cargo build`; there is no hot reload.
+```bash
+cargo test --workspace
+node --test "server/frontend/**/*.test.js"
+```
 
-**Testing**: `cargo test --workspace` for Rust, `node --test "server/frontend/**/*.test.js"` for frontend units, and `cd e2e && npx playwright test` for browser end-to-end. CI runs the workspace suite on Linux x86_64 and arm64, macOS arm64 and Windows amd64, and `cargo clippy --workspace --all-targets -- -D warnings` on all three of those platforms; the `tray` feature is linted and its unit tests run on all three too, and the cross builds of the four Linux targets without a runner deny clippy's lints as well; `cargo fmt --check` runs on Linux.
-
-**CI and releases**: `ci.yml` runs on every push and pull request: the whole Rust suite on four platforms, lint on three of them, a compile check of the Linux targets that have no runner, and the frontend, e2e and audit jobs. `nightly.yml` builds multi-architecture images daily (`:edge`) and smoke-tests the sandbox of every native artifact and of the published image; `release.yml` does the same and publishes versioned images and a GitHub release on a version tag.
+See [Testing](https://veoco.github.io/nanofile/dev/testing) and
+[Contributing](https://veoco.github.io/nanofile/dev/contributing) for the browser
+suite, the platform matrix and the dependency rules.
 
 ## License
 

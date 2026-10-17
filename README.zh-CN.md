@@ -4,28 +4,30 @@
 
 Nanofile 是一个可自行部署的文件同步与分享服务。它兼容 Seafile 的同步协议与接口，官方桌面端、移动端客户端可直接连接；同时自带网页界面，无需另装 seaf-server + seahub。
 
+**文档：** <https://veoco.github.io/nanofile/zh/> · [English](https://veoco.github.io/nanofile/)
+
 ## 功能
 
-- **文件同步**：与官方 Seafile 服务器一致，桌面端与移动端客户端自动同步资料库。
-- **网页端**：浏览、预览、下载、收藏，以及动态与回收站。
-- **分享**：分享链接支持密码与过期时间；支持匿名上传链接。
-- **登录安全**：两步验证（TOTP）、受信设备、登录失败锁定。第三方工具（WebDAV、同步客户端）可用 API 密钥接入，无需共享账号密码。
-- **管理后台**：用户、配额、邮件与系统设置。
-- **其他**：资料库加密、全文搜索（含中文分词）、历史版本与回收站、后台垃圾回收。
+- **文件同步** —— 官方 Seafile 桌面端与移动端客户端自动同步资料库。
+- **网页端** —— 浏览、预览、下载、收藏，以及动态与回收站。
+- **分享** —— 分享链接支持密码、过期时间与查看次数；支持匿名上传链接。
+- **登录安全** —— 两步验证（TOTP）、受信设备、登录失败锁定与 API 密钥。
+- **管理后台** —— 用户、配额、邮件、系统设置与后台任务。
+- **受限解析** —— 文档、图片、EXIF 与媒体解析都在有界子进程中运行。
 
 ## 快速开始
 
-从源码构建：
+环境要求：稳定的 Rust 工具链（edition 2024）与 Node.js（CI 使用 24）。`ffmpeg` 可选，用于媒体缩略图。
 
 ```bash
 npm install                       # 前端打包工具（esbuild 必需）
-cargo build --release -p server   # 产物是 nanofile（不是 server）
+cargo build --release -p server   # 产物是 target/release/nanofile
 ./target/release/nanofile
 ```
 
-**首次运行。** 既没有指定配置文件、环境里也没有任何 `NANOFILE_*` 变量时（例如 Windows 下直接双击、或从终端直接运行），这属于尚未初始化的安装，因此不会直接启动服务，而是进入**首次初始化**：起一个一次性页面，把地址（`http://127.0.0.1:8082/setup/<token>`）打印出来，桌面版还会自动用浏览器打开。在页面里创建第一个管理员，并决定监听地址、外部访问地址、数据目录，以及是否对文件块做静态加密。提交后会写出 `~/.nanofile/config.toml`（仅属主可读写），并在同一个端口上启动服务。之后每次启动都读这个文件；删掉它即可重新初始化。
+既没有配置文件、环境里也没有任何 `NANOFILE_*` 变量时，会进入首次初始化：起一个一次性页面 `http://127.0.0.1:8082/setup/<token>`，创建第一个管理员，写出 `~/.nanofile/config.toml`，并在同一个端口上启动服务。删掉该文件即可重新初始化。
 
-如果你想自己管理配置文件（或做非交互部署），按下面的方式准备 —— 只要存在配置文件就不会进入初始化：
+如果想自己管理配置，只要存在配置文件就不会进入初始化：
 
 ```bash
 cp config.toml.example config.toml
@@ -33,40 +35,17 @@ chmod 600 config.toml             # 文件里存有主密钥
 ./target/release/nanofile --config config.toml
 ```
 
-服务监听 http://localhost:8082。管理员账号也可以直接用 CLI 创建（首次初始化时设置页会替你做这件事）：
+服务监听 <http://localhost:8082>。创建管理员（首次初始化时设置页会替你做）：
 
 ```bash
-# 交互式输入密码
 ./target/release/nanofile adduser --email admin@example.com
-# 或免交互
-printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@example.com --password-stdin
 ```
 
-`--regular` 创建普通用户账号。预构建容器镜像见「用 Docker 部署」。
+`--regular` 创建普通用户。更多见[快速开始](https://veoco.github.io/nanofile/zh/guide/getting-started)。
 
-## 使用
+## Docker
 
-### 用户
-`adduser` 创建账号，默认为管理员；`[auth]` 中可开启邀请码注册，由用户自行注册。
-
-### 分享
-在网页文件浏览器选中文件或文件夹并选择"分享"，生成分享链接，可设访问密码、过期时间与查看次数。匿名上传链接允许无账号上传到资料库。`share_link_enabled` 设为 false 后，匿名分享与上传链接全部失效，已存在的链接不再可用。
-
-### 邮件通知
-邮件通知默认不可用，需先配置 SMTP。配置位置有两处：网页后台"系统设置 → 邮件"（填写 host、端口、账号、密码、发件人等并开启 `enabled`），或环境变量（如 `NANOFILE_EMAIL_ENABLED=1`、`NANOFILE_EMAIL_HOST=…`）。
-
-启用后发送的邮件包括：密码重置链接、新设备/新浏览器登录提醒、新建 API 密钥通知。密码类值可通过 `*_FILE` 环境变量从文件读取（如 `NANOFILE_EMAIL_PASSWORD_FILE`），不出现在命令行与进程列表中。
-
-### 账号安全
-"设置 → 安全"开启两步验证并保存备用码；"设置 → 会话与凭据"列出账号当前登录的设备、资料库同步令牌与 API 密钥，可逐个吊销。改密码会吊销其他设备的会话、同步令牌与全部 API 密钥。
-
-## 用 Docker 部署
-
-镜像为 `scratch` 容器，仅含 `nanofile` 一个二进制，无配置文件与数据目录，以 `1000:1000` 运行，挂载的数据卷需对该用户可写。
-
-下面两条示例都设置了 `NANOFILE_*` 变量，因此不会进入首次初始化。若容器**完全不带**环境变量启动，则会进入：初始化页面的地址会打印到容器 stdout，用 `docker logs <名称>` 即可取到。该地址是 `127.0.0.1`，且页面本身不带 TLS：远程主机请做端口转发（最简单的是 SSH 隧道），不要把它直接暴露出去。镜像里也没有 `HOME`，初始化无处写 `~/.nanofile/config.toml`；这种场景请自己传 `--config` 并设置 `HOME`。
-
-主密钥（`secret_key`）生成一次并长期保存：它用于加密会话、邮件与静态块。更换后所有会话登出、同步客户端失效、已加密块无法解密。
+镜像为 `scratch` 容器，仅含二进制，以 uid/gid `1000:1000` 运行，挂载的数据卷需对该用户可写。
 
 ```bash
 mkdir -p data
@@ -76,172 +55,36 @@ chmod 600 nanofile-secret
 docker run -d --name nanofile \
   -p 8082:8082 \
   -v "$PWD/data:/data" \
-  -v "$PWD/config.toml:/etc/nanofile/config.toml:ro" \
-  -v "$PWD/nanofile-secret:/run/secrets/nanofile-secret:ro" \
-  -e NANOFILE_CONFIG=/etc/nanofile/config.toml \
-  -e NANOFILE_DATABASE_URL='sqlite:/data/nanofile.db?mode=rwc' \
-  -e NANOFILE_STORAGE_BLOCK_DIR=/data/blocks \
-  -e NANOFILE_STORAGE_TEMP_DIR=/data/temp \
-  -e NANOFILE_INDEX_INDEX_DIR=/data/index \
-  -e NANOFILE_SERVER_SECRET_KEY="$(cat nanofile-secret)" \
-  ghcr.io/<owner>/nanofile:latest
-```
-
-配置文件可选，其余由内置默认值填充：
-
-```bash
-docker run -d --name nanofile \
-  -p 8082:8082 \
-  -v "$PWD/data:/data" \
   -e NANOFILE_DATABASE_URL='sqlite:/data/nanofile.db?mode=rwc' \
   -e NANOFILE_STORAGE_BLOCK_DIR=/data/blocks \
   -e NANOFILE_STORAGE_TEMP_DIR=/data/temp \
   -e NANOFILE_SERVER_SECRET_KEY="$(cat nanofile-secret)" \
-  ghcr.io/<owner>/nanofile:latest
+  ghcr.io/veoco/nanofile:latest
 ```
 
-`nanofile-secret` 为上方生成、跨启动复用的持久值。
+主密钥生成一次并长期保存：更换后所有会话登出、同步客户端失效、已加密块无法解密。配置文件方式、容器内首次初始化的注意事项与升级权限见 [Docker 部署](https://veoco.github.io/nanofile/zh/guide/docker)。
 
-## 配置
+## 文档
 
-设置都有内置默认值，改一个设置有两个入口：
-
-- **网页界面**："系统设置 → 设置"渲染了每一个设置（只能写文件的那些显示为不可编辑的值），按服务器、安全、身份验证、速率限制、存储、加密、维护、沙盒、邮件、通知、高级分页，并可在浏览器里按名称、配置键、说明或 `NANOFILE_*` 变量名筛选。
-- **`config.toml` 与 `NANOFILE_*` 环境变量**：复制 `config.toml.example`。模板刻意只保留两类键——网页无法保存的（主密钥、数据库 URL、静态加密模式、首启管理员、日志文件），以及必须在网页可达之前就定下来的（对外地址、监听、状态目录、语言）。环境变量始终优先，且永不写回文件，因此容器部署主要依赖环境变量。
-
-分层顺序（高到低）：环境变量、配置文件、"系统设置"保存的值、内置默认值。
-
-配置文件的查找顺序（先命中先得）：`--config <路径>`、`NANOFILE_CONFIG`、`./config.toml`（历史默认值，保证已有部署继续读原来的文件）、`~/.nanofile/config.toml`（首次初始化写出的用户级文件）。只要设置了任何 `NANOFILE_*` 环境变量，就视为已配置，即使没有配置文件也不会进入首次初始化；唯一的例外是不决定配置本身的几个变量（`NANOFILE_DOTENV`、`NANOFILE_TEST_FFMPEG_PATH`、`NANOFILE_BUILD_TS`）。
-
-常用项：
-
-- `site_url`：对外访问地址（HTTPS 域名），决定会话 cookie 的 `Secure` 属性与 HSTS 是否启用，也用于生成分享链接。
-- 绑定地址与端口（`[server]` 的 `addr`/`port`）：默认 `0.0.0.0:8082`。
-- 存储目录（`[storage]`）：默认位于二进制所在目录的 `data/` 下；相对路径相对于二进制所在目录解析，绝对路径可放到其他位置。
-- `secret_key`：主密钥（见「用 Docker 部署」）。
-- 存储上限：进行中的断点续传合计默认最多声明 32 GiB，单个压缩包默认最多 8 GiB；在存储页（或 `[storage]`）把对应项设为 `0` 即取消上限。
-
-大部分设置立即生效；监听地址、传输上限、缓存目录等在"重启"后生效。设置页每一行都会说明取值的来源、覆盖它的 `NANOFILE_*` 变量名（因此这些页面也是变量名的速查表），以及修改后是否需要重启。
-
-网页"系统设置 → 任务管理"分为两页。**任务列表**先给出服务器负载——在途请求、运行中任务、排队任务、数据库连接、工作线程占用与活跃任务，因为它们才解释得清一个作业为什么在等——然后才是运行本身：正在运行的作业，以及服务器真正做过的事。已完成列表只保留有内容可报的运行（失败，或确实做了事），因此"什么都没找到"的定时清理不会把它们淹没；列表可以按任务、按成功／失败筛选，且两个筛选条件互不覆盖。每一个运行行都给出作业名与结果、提交者，以及右对齐的完成时间与耗时两列；失败的运行把作业自己的报错直接显示在行内，运行 ID、作业自报的摘要与完整报错放在行内展开里。历史保留多久写在列表上方。**已注册的任务**列出本服务器注册的每一个作业与常驻服务，并按各自的触发方式分组；每一行说明它什么时候运行、做什么，并用同样的右对齐列给出上次运行——它是从历史里读回来的，所以重启后不会让每个作业都看起来从未运行过。展开一行可以看到它的累计计数（每次触发都计入，包括什么都没找到的那些）与运行策略——优先级、并发上限、超时、重试、是否会等待服务器空闲、能以什么粒度中断、崩溃后会留下什么。子系统未开启的作业或服务也会在这里列出，并说明开启哪个开关能让它回来；可以手动运行的作业，行内就有触发按钮。
-
-设置页页头的**「重启服务」**按钮会就地重启服务：进程、托盘图标与监听端口都不变，但设置表、数据库连接、缓存与后台任务全部重建，因此"需重启"的项会立即生效（管理员会话保持有效）。日志级别/文件上限以及桌面托盘是否显示、托盘语言在进程启动前就已决定，只有**完全重启进程**才能生效，页面会单独标注。
-
-配置文件中没写的键使用内置默认值；服务器**不会改写配置文件**，你写的什么样就一直是什么样（唯一例外是 `[logging] file`：桌面运行会把解析出的日志路径记进去，好让后续每次启动都用同一个文件）。
-
-配置段：`[server]` 网络与功能开关；`[database]` 数据库连接；`[storage]` 存储目录与配额；`[auth]` 登录/密码/限流；`[ui]` 语言；`[email]` 发信；`[admin_init]` 首次启动自动建管理员；`[logging]` 日志；`[gc]` 垃圾回收；`[index]` 搜索；`[sandbox]` 不可信解析的沙盒；`[notification]` 通知；`[tasks]` 后台任务；`[settings]` 文件与已保存设置的分层策略。模板只列出网页无法保存、或必须在网页可达之前定下的键；其余键、它们对应的 `NANOFILE_*` 变量名与取值来源都在"系统设置 → 设置"里。
-
-## 沙盒
-
-所有解析用户提供内容的功能都在独立子进程中运行，带有内存上限、CPU 上限与墙钟超时，不在服务器进程内：搜索索引的文档正文提取、图片缩略图、媒体缩略图（经 `ffmpeg`）、EXIF 与头像处理。子进程在读取请求之前先自我约束并自我限制，然后打印它实际建立的保护；服务器按这份报告决策，而不是按它提出的要求。
-
-资源边界是唯一任何设置都不能放弃的一项：建立不了它的子进程会被父子两侧同时拒绝，因为解析炸弹或死循环正是这套机制要防的失败。这些功能解析的东西全是纯 Rust（`lopdf`、`office_oxide`、`zip`、`image`、`kamadak-exif`），唯一会启动的外部程序是媒体 helper，因此文件、网络与进程三层是刻意叠加的纵深防御，用来防解析器自身的漏洞，而不是维持服务器存活的那道边界。
-
-管理后台的 **沙盒** 页面列出本机实际给出了什么：每个被实测的 profile 一个分组，每项保护一行，每个分组带一个状态徽章说明该 profile 是否在运行。页面不在它们之上再做总结——既没有"等级"，也没有结论句，因为两者都只是把徽章与行里已经写着的东西再说一遍。每一行说明这一项是什么、是否就位、有多重要，以及缺了它意味着什么：
-
-- **资源边界**（各平台都有内存与 CPU，Linux 与 macOS 上还包括句柄与文件大小）—— 没有任何功能可以在缺少它的情况下运行，页面把它标为"必选"。
-- **文件访问** —— 路径不可读也不可写。这一项把解析器挡在服务器用户的数据之外，页面在它缺失时直接点名，而不会把其他层当作它的替代品。
-- **网络访问** 与 **启动程序** —— 建立在"文件已隔离"之上的加固，永远不能替代文件层。
-
-本平台固有的残余注在它们所削弱的那一项旁边：macOS 的解析器 profile 直接拒绝 `fork`，并把 `exec` 收窄到子进程自身的镜像；Windows 容器可读取它启动所需的系统目录，其 Job Object 约束内存与 CPU 时间，但没有句柄与文件大小的等价物；媒体 worker 除 helper 本身外还被授予它所需的库。
-
-**Windows 上的容器会被尝试，被拒绝时退回资源边界。** AppContainer 是该平台唯一能补上文件与网络两项的机制，而创建它需要在注册表写入 profile，并在 worker 自身镜像上给出包访问权限。一个约束自己所有子命令的主机沙盒（开发或 agent 环境）恰恰会拒绝这些，子进程随后死在加载器里且没有任何可诊断的信息。因此建不出容器的 Windows 启动会改为应用 Job Object、受限令牌与进程缓解策略并报告 `files=open`，并且在该进程内不再重复申请容器。两种情况下页面都会列出缺了什么。
-
-媒体 worker 有自己的一组分组，也是唯一按设计就列不全的一组：它的存在意义就是启动程序，而任何启动程序的方式都要先复制进程，因此"启动程序与进程"这一项对它不可能成立，页面写 **不适用** 而不是记成缺失。约束它的是文件层与时间限制（约束副本数）。在 Linux 与 macOS 上文件层按路径决定 `exec`——只放行 helper 与内核为它启动的解释器，绝不放行任何目录；而在 Windows 上容器并不限制可执行哪个可读程序，因此只有 Job Object 的进程数与超时能约束被攻陷的 helper。
-
-媒体 profile 的"文件访问"一项带有自己的注记，因为 helper 是带库的程序：它可以读取 helper 旁边的库文件（逐个文件授权）、系统库目录，以及在 macOS 上——**且仅当 helper 确实安装在该目录下时**——它链接的打包管理器目录（`/opt/homebrew`、`/usr/local`、`/opt/local`）。没有任何机制限制 helper 能创建多少进程。在 Linux 上媒体子进程不得调用 `setsid`/`setpgid`，因此它复制出的副本无法脱离父进程杀掉的进程组；而在 macOS 上没有任何机制拒绝这两个调用，副本可以脱离该进程组，剩下的唯一约束是每个副本自身的 CPU 上限与父进程的超时，而不是副本数量。页面也会这样说明，而不是任由读者去推断。
-
-一个设置决定其行为。`sandbox.enabled` 是总开关：关闭后上述功能一律不运行，也不会回退到服务器进程内解析；关闭期间跳过的文档记为可重试状态，重新打开后会被重新索引。
-
-资源边界之上的一切都由平台决定，而不是配置项，页面上每一行都来自一个真正被约束过的子进程，因此它无法宣称本机没有的保护。每个 profile 的分组带自己的状态——运行中、已关闭、或本机不可用——缺失的每一项都会点名，并说明缺了它意味着什么。如果一台主机连资源边界都建立不了，这些功能一律不运行：这一项是强制项，没有任何设置能让解析器不设边界地跑。
-
-`storage.ffmpeg_path` 指定媒体 profile 可以执行的辅助程序。保存它会通过与上面的总开关相同的钩子重新解析这份授权，因此下一次媒体请求执行的就是刚配置的二进制。在 Windows 上，容器只会被授予 helper 的文件**以及它旁边的库文件**，绝不涉及目录：它的令牌保留了 `SeChangeNotifyPrivilege`，所以到达该文件的路径不会被检查，而在目录上写入 DACL 会把继承关系重新施加到其下所有对象上。helper 的标准流使用管道而不是空设备，因为容器可能拒绝打开该设备，而这种拒绝看起来就像“helper 起不来”。如果 helper 只能在普通容器下运行——它的读权限来自 `ALL APPLICATION PACKAGES`，而更严格的容器变体会让访问检查忽略该 principal——媒体 profile 就改在普通容器里运行它：放弃该变体（报告与页面上记为 `lpac=off`），容器本身保留。容器中可能需要放行 Landlock 系统调用，四项才能全部就位。
-
-沙盒是在**使用它的地方**被测的，而不只是在描述它的地方。本项目交付的每个平台在**每次推送**时都跑完整的 Rust 测试套件——Linux x86_64 与 arm64、macOS arm64、Windows amd64——另外四个没有 runner 的 Linux 目标（两个 musl、两个 loongarch64）每次推送都会编译一遍。每个 profile 的报告只在**一处**断言，即 `server/tests/sandbox_probe_test.rs`：四项保护取自类型化的 report，平台自身的机制 token 排在旁边。报告并不是全部答案：每个 profile 还必须在它声称的约束下完成本职工作，判定依据是**产物**而不是「进程起来了」——probe 会解析它携带的每一种结构化格式并比对解析器返回的**全文**，图片子进程的回复会对照交给它的像素，媒体子进程则读取父进程写下的文件、从中解码一帧并交回编码后的缩略图。整条媒体流水线——上传、scratch 文件、受限子进程、缩略图——同样端到端跑一遍，因为 helper 是沙盒唯一会执行的程序，一台只能把它启动起来、别的什么也做不了的机器否则就会蒙混过关。文本接近上限的文档会在受限子进程里被完整抽出（含末尾标记），因此资源限制是按「够用」来测的，而不只是「装上了」。worker 完全起不来的机器上，头像上传、EXIF 读取与缩略图都必须拒绝，而不是退回服务器进程内解码。发布出去的二进制与镜像也会跑同一份 probe，那也是沙盒唯一一次在 `FROM scratch` 里运行。Linux 上这些拒绝会被交给正在运行的内核验证：把过滤器装进一个子进程，再让它发起解析器绝不该发起的调用；每个调用都配一个同样进程、但不装过滤器的对照，因此「因为本进程自身权限而被拒」不可能冒充沙盒。
-
-沙盒不防的东西不会被断言为成立：内核漏洞，以及以同一用户运行的其他进程。这些测试针对的是本服务自己建立的约束，而不是它下面的内核。
-
-## 安全
-
-- 部署在 HTTPS 反向代理后时，将 `site_url` 设为 HTTPS 地址。该设置决定会话 cookie 的 `Secure` 属性与 HSTS 是否启用。会话、分享密码与 API 密钥均为持有即有效的凭据。
-- 默认绑定 `0.0.0.0`；仅由反向代理访问时，改用 `127.0.0.1` 并关闭防火墙对应端口。
-- 反向代理后需设置 `trusted_proxies`，它决定哪些对端地址提供的 `CF-Connecting-IP` / `X-Forwarded-For` 会被采信。未设置时这些头一律被忽略，所有客户端都会塌缩成代理地址，按 IP 的限流退化为同一个桶。每项可填具体 IP、CIDR 网段，或关键字（`loopback`、`private`、`link-local`、`unique-local`）。
-- 经 Cloudflare Tunnel（cloudflared）暴露时，源站看到的对端是回环或私有地址。设置 `trusted_proxies = ["private"]` 并把源站绑定到 `127.0.0.1`（或在 Docker 网络中隔离），Cloudflare 会通过 `CF-Connecting-IP` 提供真实访客 IP，其优先级高于 `X-Forwarded-For`。只有在源站无法被其他来源访问时才可信任 `private`，否则同网段设备可伪造该头。
-- 加密资料库上传同样需要资料库密码；未提供时网页预览与下载返回 440，匿名上传链接不可用于加密库。
-- 改密码、停用账号或远程擦除会吊销该账号持有的全部登录：其他设备、同步客户端、API 密钥，以及未使用的重置链接。
-- release 构建在未设置 `secret_key` 时拒绝启动；但零配置启动根本走不到这个报错：它会先进入首次初始化，生成强密钥并持久化。debug 构建在**显式给出**配置却缺少密钥时仍会临时生成（会话无法跨重启保留）；`NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` 让零配置启动也走这条临时密钥路径，仅用于本地与 CI。
-
-## 命令行
-
-```
-nanofile [--config <path>]          启动服务器（默认）
-nanofile [--config <path>] adduser  建用户（默认管理员；--regular 建普通用户）
-                                    密码：交互输入，或 --password-stdin / --password-file <path>
-nanofile [--config <path>] migrate-blocks [--dry-run]
-                                     把旧版"所有库共用一个块目录"迁移成"每个库独立目录"
-                                     （一般启动时自动做；--dry-run 只预览不执行）
-nanofile [--config <path>] verify-blocks [--dry-run] [--repair] [--repo <id>] [--json]
-                                     逐块校验 sha1(id) 是否与内容一致，并校验每个文件对象
-                                     "各块字节和 == 声明大小"。默认只读；--repair 会把校验失败的块
-                                     隔离到 {block_dir}/.quarantine/（保留字节不删除），
-                                     让持有正确副本的客户端重新上传。有发现时退出码非 0。
-```
-
-Windows 服务（需管理员权限）：
-
-```
-nanofile [--config <path>] service install [--account virtual|system|network|<账号>]
-                                     注册为自动启动的 Windows 服务（开机即运行，无需登录）
-                                     默认账号：NT SERVICE\Nanofile（见下）
-nanofile [--config <path>] service uninstall  停止、删除该服务，并回收它的目录权限
-nanofile [--config <path>] service status     查询注册状态与运行账号（已注册退出码 0）
-nanofile [--config <path>] service run        SCM 调用，手工执行会直接报错退出
-```
-
-`service install` 与托盘菜单「开机启动（管理员）」含义一致：同样会移除本安装的「登录启动」项，
-避免两者同时启动。指定具体账号时需要 `--password`、`--password-stdin` 或交互输入密码。
-
-## 桌面与 Windows 服务
-
-`--features tray` 构建的二进制带系统托盘菜单：**登录启动**（写入当前用户注册表 `Run` 项，登录后启动）、Windows 上的**开机启动（管理员）**（见下）、打开网页、打开配置文件、退出。
-
-**开机启动（管理员）**会向 SCM 注册一个自动启动的服务，**开机即启动，不需要任何人登录**，适合无人值守的机器；命令行 `nanofile service install` 等价，并且同样会移除「登录启动」项。
-
-- 勾选后会弹出管理员授权提示（注册服务需要管理员权限），取消授权不会产生任何改动。弹授权提示**之前**会先检查这个服务是否真能跑起来（配置文件、各个数据目录、日志目录、`ffmpeg`、端口）：过不了的检查会点名并拒绝注册，需要注意的项会先让你确认。
-- **服务以 `NT SERVICE\Nanofile` 运行**——每服务独立的虚拟账号：无密码、独立 SID、不与他人共用身份，访问网络时以机器账号身份。这是微软推荐的做法（而不是 `LocalSystem`）；`LocalSystem` 仍可通过 `--account system` 指定，用于虚拟账号拿不到权限的目录场景，也支持 `--account network` 或具体账号。账号会写在确认框里、由 `service status` 报告、并在每次启动时记入日志。
-- 安装时会**为该账号授予**各个数据目录、日志目录与配置文件的修改权限（服务身份默认什么都访问不了），卸载服务时会回收；如果有目录它写不了，会在注册之前拒绝，而不是等到下次开机才失败。
-- 两种自启方式是二选一：注册服务会移除「登录启动」项（确认框会说明），服务注册期间托盘禁用该菜单项。**卸载服务只会让该菜单项恢复可用，不会自动把自启项加回来**：之后是否自动启动由你决定。
-- 两种注册都记录绝对路径，因此会"活过"一次移动：登录自启项指向的可执行文件或配置文件已不存在时，下次启动托盘会自动改为指向当前这份（健康项、或本版本读不懂的项，一律不动）——但服务已经接管时不会这么做；服务注册指向的目录已不存在时，确认框会明确说明再改写。另外，显式指定的配置文件不存在（`--config` 或 `NANOFILE_CONFIG`）会**拒绝启动**，而不是悄悄退回内置默认值——那会以另一个端口、另一个数据库启动一个貌似的服务。
-- **从下次系统启动开始生效**：当前这份托盘程序继续提供服务。不让服务立刻接管端口，是因为 Windows 下刚关闭的连接会停留在 `TIME_WAIT` 数分钟，新进程绑定同一端口会失败。
-- 服务运行时手动打开托盘程序会进入"客户端模式"：不再启动第二份服务，且**点「退出」会停止该服务**——与普通托盘里"退出即停服务器"的含义一致；服务会在下次开机再次启动。该菜单同样可以安装/卸载服务。
-- 服务模式没有桌面，因此不会显示托盘图标；日志写入二进制旁的 `nanofile.log`。服务启动时会记录账号、可执行文件、配置文件、工作目录，以及每一条目录检查的结果；预检不过时会直接拒绝启动（退出码 2），而不是稍后抛一个不带路径的错误。
-
-## 数据目录
-
-默认数据位于二进制所在目录的 `data/`，相对路径均相对该目录解析；配置段可指定绝对路径。
-
-首次初始化会把这个位置定下来：默认建议 `~/.nanofile/data`（与它即将写出的配置文件同目录）；如果二进制旁已经存在 `data/`，则默认沿用该目录——配置文件被删、数据还在的安装不会因此看起来"数据丢了"；并把结果以**绝对路径**写进 `~/.nanofile/config.toml`。自己写的配置文件里的相对路径仍然以二进制所在目录为基准。
-
-```
-data/
-├── nanofile.db        # 数据库（WAL 模式，权限 0600）
-├── nanofile.db-wal    # WAL 日志
-├── blocks/            # 文件块：repos/{库id的sha1}/{2位前缀}/{40位SHA-1}
-├── temp/              # 上传临时文件
-├── thumbnails/        # 缩略图缓存
-├── avatars/           # 头像
-└── index/             # 全文搜索索引
-```
+| | |
+|---|---|
+| [快速开始](https://veoco.github.io/nanofile/zh/guide/getting-started) | 构建、首次运行、管理员 |
+| [配置](https://veoco.github.io/nanofile/zh/guide/configuration) | 配置文件、`NANOFILE_*`、设置页 |
+| [沙盒](https://veoco.github.io/nanofile/zh/guide/sandbox) | 约束了什么、没约束什么 |
+| [安全](https://veoco.github.io/nanofile/zh/guide/security) | 反向代理、TLS、主密钥 |
+| [命令行](https://veoco.github.io/nanofile/zh/reference/cli) | 全部运维命令 |
+| [开发](https://veoco.github.io/nanofile/zh/dev/architecture) | 架构、测试、CI |
 
 ## 开发
 
-**架构**：Cargo workspace，四个 crate——`base`（基础类型）、`infra`（数据库/存储/加密/配置）、`server`（HTTP 服务、同步协议、WebDAV、Web 界面）、`migration`（数据库迁移）。依赖方向 `base → infra → server`。
+项目是包含四个 crate 的 Cargo workspace：`base`（领域类型）、`infra`（数据库、存储、加密、配置）、`server`（HTTP、同步协议、WebDAV、网页界面）与 `migration`。依赖方向 `base → infra → server`。
 
-**前端**：网页由 Askama 服务端渲染 + Tailwind + `server/frontend/` 下的模块化 JS 组成。`server/build.rs` 用 esbuild 把 `frontend/entries/*.js` 打包进二进制（esbuild 必需，Tailwind 可选）。改前端后需重新 `cargo build`，无热重载。
+```bash
+cargo test --workspace
+node --test "server/frontend/**/*.test.js"
+```
 
-**测试**：`cargo test --workspace`（Rust）、`node --test "server/frontend/**/*.test.js"`（前端）、`cd e2e && npx playwright test`（浏览器端到端）。CI 在 Linux x86_64 与 arm64、macOS arm64、Windows amd64 上跑完整的 workspace 套件，在这三个平台上都跑 `cargo clippy --workspace --all-targets -- -D warnings`；`tray` feature 在这三个平台都做 lint 与单元测试，四个没有 runner 的 Linux 目标则在交叉构建里同时做 clippy 级 lint；`cargo fmt --check` 只在 Linux 跑。
-
-**CI 与发布**：`ci.yml` 在每次 push/PR 时运行：四平台完整 Rust 套件、其中三平台的 lint、没有 runner 的 Linux 目标的编译检查，以及前端、e2e 与依赖审计作业。`nightly.yml` 每日构建多架构镜像（`:edge`），并对每个原生产物与已推送镜像的沙盒做冒烟；`release.yml` 同样冒烟，并在版本 tag 上发布带版本号的镜像与 GitHub Release。
+浏览器套件、平台矩阵与依赖规则见[测试](https://veoco.github.io/nanofile/zh/dev/testing)与[贡献指南](https://veoco.github.io/nanofile/zh/dev/contributing)。
 
 ## 许可证
 
