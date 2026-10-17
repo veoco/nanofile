@@ -3,10 +3,9 @@ use serde::{Deserialize, Serialize};
 
 /// One library binding of an [`api_key`](super::api_key).
 ///
-/// `permission` is a ceiling, not the effective permission: a request is
-/// allowed only when the key's capabilities, this ceiling and the caller's
-/// library membership all agree. `"r"` downgrades every write capability to a
-/// denial for this library.
+/// `permission` is a ceiling, not the effective permission: a request needs the
+/// key's capabilities, this ceiling and library membership to agree; `"r"` denies
+/// writes for this library.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "api_key_repos")]
 pub struct Model {

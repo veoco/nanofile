@@ -1,13 +1,10 @@
-//! Shared constants and types for the nanofile ecosystem.
+//! Constants and wire types shared by every crate.
 //!
-//! This module is split across crate boundaries:
-//! - The actual code lives here in `base`
-//! - `infra` re-exports it and adds `util` functions
-//! - `server` accesses everything via `crate::common::*`
+//! `infra` re-exports them with its `util` helpers; `server` reaches them as
+//! `crate::common::*`.
 
-/// SHA1 sentinel for empty directories (seafile convention).
-/// seafile-server's seaf_dir_new() forces this when entries are NULL;
-/// seaf_dir_save() skips persistence for this value.
+/// SHA1 sentinel for an empty directory: upstream forces it when entries are
+/// NULL and skips persistence for this value.
 pub const EMPTY_SHA1: &str = "0000000000000000000000000000000000000000";
 
 /// S_IFREG (0100644) — regular file.
@@ -32,8 +29,8 @@ pub struct DirEntry {
     pub size: i64,
     pub mtime: i64,
     pub permission: String,
-    /// Last modifier email (empty string if unknown). Files only in the
-    /// original seafile protocol, but we store it for all entry types.
+    /// Last modifier email (empty when unknown). Upstream records it for files;
+    /// nanofile stores it for every entry.
     #[serde(default)]
     pub modifier: String,
     /// Parent directory path. Present only in recursive listings.
@@ -46,8 +43,6 @@ pub struct DirEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modifier_contact_email: Option<String>,
 }
-
-// ── FS object types (Seafile storage format) ──────────────────────────────
 
 /// A single entry in a directory listing (storage format).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -1,8 +1,7 @@
-//! Common constants, types, and utility functions.
+//! Common constants, types and utilities.
 //!
-//! Constants and domain types are re-exported from `base` so that
-//! the `crate::common::*` path works consistently across all crates.
-//! Utility functions live here in `infra`.
+//! Domain types are re-exported from `base`, so `crate::common::*` works across all
+//! crates; the utility functions live here.
 
 pub use base::common::{
     CommitData, DirEntry, DirEntryData, EMPTY_SHA1, FsDirData, FsFileData, S_IFDIR, S_IFREG,

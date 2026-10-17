@@ -6,9 +6,8 @@ use serde::{Deserialize, Serialize};
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
-    /// Stored token value: `enc1:<hex>` AEAD ciphertext of the raw token
-    /// (see [`infra::crypto::token_encryption`]). Legacy rows may still hold
-    /// the plaintext 40-hex token until the startup migration rewrites them.
+    /// `enc1:<hex>` AEAD ciphertext of the raw token (see `infra::crypto::token_encryption`).
+    /// Legacy rows may hold the plaintext 40-hex token until the startup migration.
     #[sea_orm(unique, not_null, length = 128)]
     pub token: String,
     #[sea_orm(not_null, length = 36)]
@@ -18,16 +17,11 @@ pub struct Model {
     #[sea_orm(not_null)]
     pub created_at: i64,
     pub expires_at: Option<i64>,
-    /// The device's ccnet ID (client_id from sync URL query params).
-    /// Used to link sync tokens to a specific device for remote unlink.
+    /// The device's ccnet ID, linking the token to a device for remote unlink.
     pub peer_id: Option<String>,
-    /// Human-readable device name (e.g. "my-laptop").
     pub peer_name: Option<String>,
-    /// IP address of the device during sync.
     pub peer_ip: Option<String>,
-    /// Seafile client version string.
     pub client_version: Option<String>,
-    /// Timestamp of most recent sync request.
     pub last_sync_time: Option<i64>,
 }
 

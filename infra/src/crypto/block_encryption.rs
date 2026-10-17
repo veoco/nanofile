@@ -1,27 +1,15 @@
-//! Server-side transparent at-rest encryption for file blocks (AES-256-GCM-SIV).
+//! Server-side transparent at-rest encryption for blocks (AES-256-GCM-SIV).
 //!
-//! Unlike the client-side Seafile CBC encryption in [`super::random_key`], this
-//! module encrypts every block at rest on the server. It chooses AES-GCM-SIV
-//! because:
+//! AES-GCM-SIV is deterministic (the same plaintext gives the same ciphertext, so
+//! content-addressed dedup still works; blocks are content-addressed anyway, so
+//! "these two are equal" is already public), authenticated (a 128-bit tag detects
+//! tampering, and doubles as the lazy-mode discriminator) and length-preserving
+//! (no padding; versioned ciphertext is `len + 16 + 6`, legacy `len + 16`). Sizing
+//! by the versioned constant alone under-reports legacy blocks by six bytes.
 //!
-//! - **Deterministic**: encrypting the same plaintext twice yields the same
-//!   ciphertext, so content-addressed block dedup (`block_id = sha1(logical
-//!   bytes)`) still works. Blocks are content-addressed anyway, so "these two
-//!   blocks are equal" is already public information.
-//! - **Authenticated**: a 128-bit tag is appended, so on-disk tampering is
-//!   detected on read. Under `lazy` migration mode the tag check doubles as a
-//!   cheap discriminator between newly-encrypted and legacy plaintext blocks.
-//! - **Length-preserving**: GCM-SIV adds no padding, so the logical size never
-//!   needs a full decrypt — only the leading bytes that identify the format.
-//!   Versioned ciphertext is `plaintext.len() + 16 + 6` (tag + `NFE1 || key_id`
-//!   header); the header-less legacy format is `plaintext.len() + 16`. Sizing a
-//!   block by the versioned constant alone under-reports legacy blocks by six
-//!   bytes, which shifts every offset a client derives from it (see
-//!   [`BlockCipher::plaintext_len`]).
-//!
-//! The 12-byte nonce is fixed to all-zeros. GCM-SIV is nonce-misuse-resistant:
-//! reusing a nonce only leaks whether two plaintexts are equal — which is
-//! already public via content addressing.
+//! The 12-byte nonce is all zeros: GCM-SIV is nonce-misuse-resistant, and reusing
+//! a nonce only leaks whether two plaintexts are equal, which content addressing
+//! already makes public.
 
 use aes_gcm_siv::aead::{Aead, KeyInit};
 use aes_gcm_siv::{Aes256GcmSiv, Nonce};
@@ -32,8 +20,7 @@ pub const TAG_LEN: usize = 16;
 
 /// Magic prefix identifying a versioned (`NFE1`) ciphertext.
 pub const MAGIC: &[u8; 4] = b"NFE1";
-/// Active key id. Only `0` exists today (no rotation support), but the field
-/// lets a future key-rotation scheme identify which key encrypted a block.
+/// Active key id (only `0`; the field allows future key rotation).
 pub const ACTIVE_KEY_ID: u16 = 0;
 /// Length of the versioned header: magic (4) + key id (2).
 pub const HEADER_LEN: usize = 6;
@@ -48,8 +35,7 @@ const HKDF_INFO_BLOCK_DEK: &[u8] = b"nanofile/block-dek/v1";
 /// Length of the derived block data-encryption key (AES-256).
 const DEK_LEN: usize = 32;
 
-/// A symmetric authenticated-encryption handle for server-side block at-rest
-/// encryption. Cheap to construct and safe to clone; holds the 32-byte DEK.
+/// Authenticated-encryption handle for block at-rest encryption; cheap to clone.
 #[derive(Clone)]
 pub struct BlockCipher {
     cipher: Aes256GcmSiv,
@@ -63,11 +49,9 @@ impl std::fmt::Debug for BlockCipher {
 }
 
 impl BlockCipher {
-    /// Derive a [`BlockCipher`] from the server master key via HKDF-SHA256.
-    ///
-    /// The master key is ≥ 32 bytes of high entropy held out-of-band (env /
-    /// `*_FILE`). No random salt is mixed in, keeping encryption deterministic
-    /// so content-addressed dedup is preserved.
+    /// Derive the cipher from the master key via HKDF-SHA256. The master key is
+    /// high-entropy and held out-of-band; no random salt is mixed in, keeping
+    /// encryption deterministic so dedup is preserved.
     pub fn from_master_key(master_key: &[u8]) -> Self {
         let hkdf = hkdf::Hkdf::<sha2::Sha256>::new(Some(HKDF_SALT), master_key);
         let mut dek = [0u8; DEK_LEN];
@@ -75,16 +59,13 @@ impl BlockCipher {
             .expect("DEK length is within HKDF output bound");
         let cipher =
             Aes256GcmSiv::new_from_slice(&dek).expect("32-byte key is valid for AES-256-GCM-SIV");
-        // The key schedule inside `Aes256GcmSiv` cannot be scrubbed, but the
-        // raw DEK buffer should not linger on the stack either.
+        // The cipher's key schedule cannot be scrubbed, but clear the raw DEK buffer.
         dek.zeroize();
         Self { cipher }
     }
 
-    /// Encrypt `plaintext`, returning `NFE1 || key_id || ciphertext || tag`.
-    ///
-    /// The versioned header lets a future key rotation identify the key that
-    /// produced a block; `decrypt` still accepts header-less legacy ciphertext.
+    /// Encrypt `plaintext` into `NFE1 || key_id || ciphertext || tag`; the header lets a
+    /// future rotation identify the key, while `decrypt` still accepts legacy ciphertext.
     pub fn encrypt(&self, plaintext: &[u8]) -> Vec<u8> {
         let nonce = Nonce::from(NONCE);
         let body = self
@@ -98,39 +79,29 @@ impl BlockCipher {
         out
     }
 
-    /// Whether `stored` carries the versioned (`NFE1 || key_id`) header, i.e.
-    /// was written by this cipher rather than being pre-encryption plaintext.
+    /// Whether `stored` carries the versioned header, i.e. was written by this cipher
+    /// rather than being pre-encryption plaintext.
     ///
-    /// Callers that must tolerate legacy plaintext blocks (the `lazy`
-    /// migration mode) use this to decide *by format* whether a decryption
-    /// failure means "legacy plaintext" or "corrupt/tampered ciphertext" — a
-    /// failure on a block that does have the header must never be mistaken for
-    /// plaintext.
+    /// Lazy-mode callers use this to decide *by format* whether a decryption failure
+    /// means "legacy plaintext" or "corrupt ciphertext"; a failure on a block that does
+    /// have the header must never be taken for plaintext.
     pub fn looks_encrypted(stored: &[u8]) -> bool {
         stored.len() >= HEADER_LEN && &stored[..4] == MAGIC
     }
 
-    /// Logical (plaintext) length of a stored block, derived from its on-disk
-    /// format alone — no decryption.
+    /// Logical length of a stored block, derived from its format alone — no decryption.
     ///
-    /// `stored_prefix` may be the whole stored block or just its leading
-    /// [`HEADER_LEN`] bytes (only the magic decides the format) while
-    /// `stored_len` is the block's real on-disk length, so a caller can size a
-    /// large block from a short read.
+    /// `stored_prefix` may be the whole block or just its leading [`HEADER_LEN`] bytes
+    /// (only the magic decides the format); `stored_len` is the real on-disk length, so
+    /// a caller can size a large block from a short read.
     ///
-    /// Versioned ciphertext carries the header *and* the tag; the header-less
-    /// legacy format carries only the tag. Assuming the versioned overhead for
-    /// a header-less block therefore under-reports it by [`HEADER_LEN`] — which
-    /// is exactly what the store wrapper must not do, because clients compute
-    /// block offsets from the sizes it reports.
+    /// Versioned ciphertext carries the header *and* the tag, header-less legacy only
+    /// the tag; assuming the versioned overhead under-reports legacy blocks by
+    /// [`HEADER_LEN`], which shifts every client-computed offset.
     ///
-    /// Returns `Err` for an unknown versioned key id, or when `stored_len`
-    /// cannot hold the overhead the format implies (a truncated or non-cipher
-    /// block), so a reported size can never come from an underflow.
-    ///
-    /// A header-less block is treated as legacy *ciphertext* (tag only). That
-    /// matches `On` mode, where every read decrypts; a header-less block that
-    /// held bare plaintext would fail authentication anyway.
+    /// Returns `Err` for an unknown key id or when `stored_len` cannot hold the implied
+    /// overhead (truncated block), so a size never comes from an underflow. A
+    /// header-less block is legacy ciphertext; bare plaintext would fail authentication.
     pub fn plaintext_len(
         stored_prefix: &[u8],
         stored_len: usize,
@@ -149,11 +120,9 @@ impl BlockCipher {
             .ok_or(aes_gcm_siv::aead::Error)
     }
 
-    /// Decrypt a value produced by [`BlockCipher::encrypt`].
-    ///
-    /// Accepts both the versioned (`NFE1 || key_id`) format written by this
-    /// version and the header-less legacy format from earlier deployments.
-    /// Returns `Err` on tag mismatch (tampered, wrong key) or an unknown key id.
+    /// Decrypt a value produced by [`BlockCipher::encrypt`], accepting the versioned and
+    /// header-less legacy formats. `Err` on tag mismatch (tampered, wrong key) or an
+    /// unknown key id.
     pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, aes_gcm_siv::aead::Error> {
         let nonce = Nonce::from(NONCE);
         if Self::looks_encrypted(ciphertext) {
@@ -269,8 +238,7 @@ mod tests {
             data.len()
         );
 
-        // Header-less legacy ciphertext: tag only, so the logical size is the
-        // stored size minus TAG_LEN (not minus the versioned overhead).
+        // Header-less legacy ciphertext: tag only, so subtract TAG_LEN, not the header.
         let legacy = versioned[HEADER_LEN..].to_vec();
         assert_eq!(
             BlockCipher::plaintext_len(&legacy, legacy.len()).unwrap(),

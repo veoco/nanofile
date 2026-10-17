@@ -2,25 +2,16 @@ use sea_orm_migration::prelude::*;
 
 /// Drop the two sandbox settings this release retired.
 ///
-/// `sandbox.min_level` was the grade a host had to reach before any parsing
-/// feature ran, and `sandbox.windows_container` decided whether a Windows launch
-/// should ask for its AppContainer. Neither is a decision any more: the resource
-/// bound is the one thing a child must establish and it is read back from the
-/// child's own report, while the layers above it — files, the network, process
-/// creation, the container — are what the platform can supply. Nothing reads
-/// either key, so the rows are invisible to the settings page and to every
-/// resolution path; but they are also values an operator cannot see, change or
-/// delete, and a row that looks like configuration while doing nothing is worse
-/// than no row at all.
+/// `sandbox.min_level` and `sandbox.windows_container` are no longer decisions: the
+/// resource bound is read back from the child's own report, and the layers above it are
+/// what the platform can supply. Nothing reads either key, so the rows are invisible to
+/// the page and every resolution path — but an operator cannot see, change or delete
+/// them, and a row that looks like configuration while doing nothing is worse than no
+/// row.
 ///
 /// The keys are **frozen literals on purpose**, like `index.sandbox` in
-/// `m20260926_000001`: the point is to remove what an older release wrote, not to
-/// agree with whatever the catalog happens to list today. A future retirement
-/// adds its own key here — and nothing else, because the table is otherwise
-/// schemaless by design.
-///
-/// There is no `down`: the values described a model the new one cannot express,
-/// so inventing them back would be a lie.
+/// `m20260926_000001`: remove what an older release wrote, not what the catalog lists
+/// today. There is no `down`: inventing the values back would be a lie.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -93,8 +84,7 @@ mod tests {
     async fn drops_only_the_retired_keys() {
         let (_dir, db) = before_this_migration().await;
 
-        // The values an older release could have written, including the one a
-        // rename had already rewritten: the key goes whatever it holds.
+        // The values an older release could have written; the key goes whatever it holds.
         insert(&db, "sandbox.min_level", "limits").await;
         insert(&db, "sandbox.windows_container", "true").await;
         insert(&db, "sandbox.enabled", "true").await;

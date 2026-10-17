@@ -1,10 +1,8 @@
 //! The environment layer, end to end.
 //!
-//! A single test in its own binary on purpose: environment variables are
-//! process-global, so a second test in this file could run concurrently and see
-//! half of this one's overrides. `server/tests` covers the integration paths;
-//! this pins the contract the admin UI depends on — which variable feeds which
-//! setting, and which catalog keys report the environment as their origin.
+//! A single test in its own binary: environment variables are process-global, so a
+//! second test could see half of this one's overrides. `server/tests` covers the
+//! integration paths; this pins which variable feeds which setting and origin.
 
 use std::collections::BTreeSet;
 
@@ -14,9 +12,7 @@ fn every_catalog_env_variable_is_read_and_tracked() {
     let path = dir.path().join("config.toml");
     std::fs::write(&path, "[server]\nport = 8082\n").unwrap();
 
-    // One variable per value shape the catalog can parse, including keys that
-    // had no environment support before this change and are documented as if
-    // they did.
+    // One variable per value shape, including keys newly given environment support.
     let overrides = [
         ("NANOFILE_SERVER_SHARE_LINK_ENABLED", "false"),
         ("NANOFILE_SERVER_TRUST_REQUEST_HOST", "false"),
@@ -54,8 +50,7 @@ fn every_catalog_env_variable_is_read_and_tracked() {
     assert!(config.email.paused);
     assert_eq!(config.sync.verify_fs_objects, "log");
     assert_eq!(config.logging.max_backups, 9);
-    // The unparsable port kept its configured value and is not reported as
-    // environment-supplied.
+    // The unparsable port kept its value and is not reported as environment-supplied.
     assert_eq!(config.server.port, 8082);
 
     let expected: BTreeSet<&str> = overrides.iter().map(|(name, _)| *name).collect();

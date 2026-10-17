@@ -5,22 +5,18 @@ use sea_orm::{ConnectOptions, Database, DatabaseBackend, DatabaseConnection};
 
 use crate::config::DatabaseConfig;
 
-/// File name of the SQLite database in `url`, or `None` for other backends,
-/// in-memory databases and URLs that name no file. See
-/// [`crate::config::sqlite_url_file`] for how the URL is split.
+/// File name of the SQLite database in `url` (see [`crate::config::sqlite_url_file`]).
 fn sqlite_file_path(url: &str) -> Option<&str> {
     crate::config::sqlite_url_file(url).map(|(file, _)| file)
 }
 
-/// Create the directory holding the SQLite file when it does not exist yet.
+/// Create the SQLite parent directory if it does not exist yet.
 ///
-/// SQLite creates the database file but never its parent directory, so the
-/// shipped default (`sqlite:data/nanofile.db?mode=rwc`) fails with
-/// `unable to open database file` (code 14) in an installation that has no
-/// `data/` directory yet — a freshly unpacked release archive, or a
-/// login-started instance started before anything else created it. An existing
-/// directory keeps its mode: the database may deliberately live in a shared
-/// location, and tightening it would lock other services out.
+/// SQLite creates the database file but never its parent, so the shipped
+/// default (`sqlite:data/nanofile.db?mode=rwc`) fails in an installation with
+/// no `data/` directory. An existing directory keeps its mode: the database may
+/// deliberately live in a shared location, and tightening it would lock other
+/// services out.
 fn create_sqlite_parent_dir(url: &str) {
     let Some(parent) = sqlite_file_path(url)
         .map(Path::new)
@@ -30,8 +26,7 @@ fn create_sqlite_parent_dir(url: &str) {
         return;
     };
     if let Err(e) = crate::common::util::ensure_private_dir_only_if_created(parent) {
-        // Not fatal: report it and let the connection attempt produce the real
-        // error, which names the database it could not open.
+        // Not fatal: the connection attempt produces the real error.
         tracing::warn!(
             dir = %parent.display(),
             "could not create the database directory: {e}"
@@ -39,15 +34,12 @@ fn create_sqlite_parent_dir(url: &str) {
     }
 }
 
-/// Restrict the SQLite database file and its `-wal` / `-shm` sidecars to the
-/// owning user.
+/// Restrict the SQLite file and its `-wal` / `-shm` sidecars to the owner.
 ///
-/// The main file is created first (with `0600`) so SQLite derives the sidecar
-/// modes from it, and all three are restricted again afterwards because the
-/// sidecars are created lazily on the first write — after any permission change
-/// that only touched the main file. The WAL can contain password hashes,
-/// session-token hashes and plaintext share tokens, so none of them may be
-/// group- or world-readable.
+/// The sidecars are created lazily on the first write, after a permission
+/// change that only touched the main file, so all three are restricted again
+/// afterwards. The WAL can contain password hashes, session-token hashes and
+/// plaintext share tokens, so none may be group- or world-readable.
 #[cfg(unix)]
 fn restrict_sqlite_files(url: &str) {
     use std::os::unix::fs::PermissionsExt;
@@ -55,8 +47,7 @@ fn restrict_sqlite_files(url: &str) {
         return;
     };
     if !std::path::Path::new(path).exists() {
-        // Best effort: if this fails (read-only mount, `mode=ro`) SQLite will
-        // report the real error when connecting.
+        // Best effort: SQLite reports the real error on connect.
         let _ = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -75,17 +66,14 @@ fn restrict_sqlite_files(url: &str) {
 fn restrict_sqlite_files(_url: &str) {}
 
 pub async fn establish_connection(config: &DatabaseConfig) -> anyhow::Result<DatabaseConnection> {
-    // Before connecting, so the database file and the `-wal` / `-shm` files
-    // SQLite creates inherit a private mode rather than the process umask — and
-    // so the directory they live in exists at all.
+    // Before connecting, so the database file and sidecars inherit a private mode
+    // and their directory exists.
     create_sqlite_parent_dir(&config.url);
     restrict_sqlite_files(&config.url);
 
-    // Build the pool with the per-connection SQLite options attached via
-    // `map_sqlx_sqlite_opts` so the PRAGMAs below apply to EVERY connection the
-    // pool opens (not just the first). `journal_mode`/`synchronous` are
-    // persistent, but `busy_timeout`, `cache_size`, `temp_store` and `mmap_size`
-    // are per-connection and must be re-applied on each new connection.
+    // `map_sqlx_sqlite_opts` applies these PRAGMAs to every pool connection:
+    // `journal_mode`/`synchronous` persist, but `busy_timeout`, `cache_size`,
+    // `temp_store` and `mmap_size` are per-connection.
     let mut opts = ConnectOptions::new(config.url.as_str());
     opts.max_connections(config.max_connections)
         .sqlx_logging(false)
@@ -98,11 +86,9 @@ pub async fn establish_connection(config: &DatabaseConfig) -> anyhow::Result<Dat
                 .pragma("temp_store", "MEMORY")
                 .pragma("mmap_size", "268435456")
         });
-    // Name the file that could not be opened: SQLite's own `unable to open
-    // database file` (code 14) says nothing about *which* path was tried, which
-    // is the one thing an operator needs when a relative path resolved
-    // somewhere unexpected. The configured URL itself is never printed — it can
-    // carry credentials for a non-SQLite backend.
+    // Name the file that could not be opened: SQLite's code 14 says nothing about
+    // which path was tried. The configured URL is never printed — it can carry
+    // credentials for a non-SQLite backend.
     let db =
         Database::connect(opts)
             .await
@@ -114,8 +100,7 @@ pub async fn establish_connection(config: &DatabaseConfig) -> anyhow::Result<Dat
                 None => "failed to connect to the database".to_string(),
             })?;
 
-    // Restrict the database files again: the sidecars may have been created by
-    // the connection above.
+    // The sidecars may have been created by the connection above.
     if db.get_database_backend() == DatabaseBackend::Sqlite {
         restrict_sqlite_files(&config.url);
     }
@@ -156,11 +141,8 @@ mod tests {
         }
     }
 
-    /// Regression: SQLite creates the database file but never the directory
-    /// above it, so the shipped relative default used to fail with
-    /// `unable to open database file` (code 14) in an installation that has no
-    /// `data/` directory yet — a freshly unpacked release archive, or a
-    /// login-started instance that runs outside the installation directory.
+    /// Regression: SQLite never creates the directory above the database file, so
+    /// the shipped relative default failed in a fresh install without `data/`.
     #[tokio::test]
     async fn connects_to_a_database_in_a_directory_that_does_not_exist_yet() {
         let dir = tempfile::tempdir().unwrap();
@@ -175,8 +157,7 @@ mod tests {
         db.close().await.unwrap();
     }
 
-    /// The error has to name the file that could not be opened: SQLite's own
-    /// `unable to open database file` (code 14) leaves an operator guessing
+    /// The error must name the file: SQLite's code 14 leaves the operator guessing
     /// which path a relative configuration resolved to.
     #[tokio::test]
     async fn reports_which_database_file_could_not_be_opened() {
@@ -214,8 +195,7 @@ mod tests {
         assert_eq!(mode, 0o700, "a created state directory must be owner-only");
     }
 
-    /// The database may deliberately live in a shared directory; creating its
-    /// parent must not tighten a directory someone else owns.
+    /// Creating the parent must not tighten a directory someone else owns.
     #[cfg(unix)]
     #[test]
     fn leaves_an_existing_directory_mode_alone() {

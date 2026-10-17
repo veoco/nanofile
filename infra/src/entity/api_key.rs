@@ -3,15 +3,10 @@ use serde::{Deserialize, Serialize};
 
 /// A unified API key.
 ///
-/// One row can carry any combination of capabilities (the catalog lives in
-/// `server::domain::capability`), optionally narrowed to a set of libraries with
-/// a per-library read/write ceiling. The secret itself is
-/// never stored: `key_hash` is `hex(sha256(raw))`, so a leaked database does not
-/// yield a usable credential and the plaintext is shown to its creator exactly
-/// once.
-///
-/// `capabilities` is the canonical, sorted, comma-separated identifier list
-/// produced by `CapabilitySet::to_canonical`.
+/// One row carries any combination of capabilities, optionally narrowed to libraries
+/// with a read/write ceiling. The secret is never stored: `key_hash` is
+/// `hex(sha256(raw))`, so a leaked database yields no usable credential and the
+/// plaintext is shown once. Capabilities are the canonical sorted comma list.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "api_keys")]
 pub struct Model {
@@ -23,15 +18,13 @@ pub struct Model {
     pub name: String,
     #[sea_orm(unique, not_null, length = 64)]
     pub key_hash: String,
-    /// First characters of the plaintext, kept so the owner can tell two keys
-    /// apart in the UI. `NULL` for rows migrated from the legacy per-library
-    /// WebDAV key table, whose hashes cannot be reversed into a prefix.
+    /// First characters of the plaintext, so the owner can tell two keys apart. `NULL`
+    /// for rows migrated from the legacy WebDAV key table (hashes cannot be reversed).
     pub key_prefix: Option<String>,
     #[sea_orm(not_null)]
     pub capabilities: String,
-    /// When true the key applies to every library its owner can access, and
-    /// `api_key_repos` must be empty for it. When false at least one binding is
-    /// required.
+    /// When true the key applies to every library its owner can access and
+    /// `api_key_repos` must be empty; when false at least one binding is required.
     #[sea_orm(not_null, default_value = false)]
     pub all_repos: bool,
     #[sea_orm(not_null)]

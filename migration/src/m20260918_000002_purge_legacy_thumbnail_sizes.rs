@@ -5,24 +5,15 @@ pub struct Migration;
 
 /// Drop thumbnail cache rows for sizes the web UI no longer requests.
 ///
-/// The UI used to ask for `size=256` tiles; it now asks for 48 (list icon) and
-/// 640 (grid / gallery / drawer). Every 256 row is therefore unreachable, and
-/// each one pins a PNG on disk — ~45-105 KB per photo depending on content, so
-/// tens of GB across a large library.
+/// The UI now asks for 48 (list icon) and 640 (grid / gallery / drawer); every 256 row
+/// is unreachable and pins a PNG on disk. Only rows can be removed here — a migration
+/// has no access to the configured thumbnail directory — so the bytes are removed by
+/// `service::fs::thumbnail::purge_legacy_cache_files` on first start, marker-guarded.
+/// The halves are independent and neither is required to serve a request (a missing
+/// entry is regenerated).
 ///
-/// Only the rows can be removed from here: a schema migration has no access to
-/// the configured thumbnail directory. The bytes are removed by
-/// `service::fs::thumbnail::purge_legacy_cache_files`, which runs once on the
-/// first start of the new binary and is marker-guarded. The two halves are
-/// deliberately independent: whichever runs first leaves the cache in a
-/// consistent state, and neither is required for the thumbnail endpoint to
-/// serve a request (a missing entry is simply regenerated).
-///
-/// The size literals are **frozen on purpose**. They were the UI's sizes when
-/// this migration shipped, and a migration must not change what it deletes when
-/// `thumbnail_util::THUMBNAIL_SIZE_*` is edited later — an installation that
-/// upgrades from an old release still has to lose its 256 rows even if a future
-/// UI asks for 800.
+/// The size literals are **frozen on purpose**: a migration must not change what it
+/// deletes when `THUMBNAIL_SIZE_*` is edited later.
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -33,8 +24,7 @@ impl MigrationTrait for Migration {
         Ok(())
     }
 
-    /// Nothing to undo: these rows described a cache, and the files they
-    /// pointed at are gone. A re-requested size is regenerated on demand.
+    /// Nothing to undo: these rows described a cache; a re-requested size is regenerated.
     async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
         Ok(())
     }
@@ -45,11 +35,8 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
     use sea_orm_migration::MigratorTrait;
 
-    /// A database migrated up to — but not including — this migration.
-    ///
-    /// The stop point is this migration's own position in the chain, not
-    /// `len() - 1`: the latter silently becomes "everything including this one"
-    /// as soon as another migration is appended after it.
+    /// A database migrated to this migration's own chain position, not `len() - 1` (which
+    /// silently becomes "everything including this one" when a migration is appended).
     async fn before_this_migration() -> (tempfile::TempDir, DatabaseConnection) {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = crate::tests_support::connect(&crate::tests_support::file_uri(
@@ -80,16 +67,13 @@ mod tests {
             .collect()
     }
 
-    /// The rows the current UI still asks for survive; every other size — the
-    /// old 256 among them — is dropped. Sizes are compared as a set, so an
-    /// installation that also cached 384/512 (older clients, manual probing)
-    /// is cleaned up by the same statement.
+    /// The current UI's sizes survive, every other size — including 256 — is dropped. Sizes
+    /// are compared as a set, so 384/512 from older clients are cleaned up too.
     #[tokio::test]
     async fn drops_every_size_the_ui_no_longer_requests() {
         let (_dir, db) = before_this_migration().await;
 
-        // Rows written by the old UI (256) and by other callers of the same
-        // endpoint, with the retained sizes mixed in.
+        // Rows from the old UI (256) and other callers, with retained sizes mixed in.
         db.execute_unprepared("PRAGMA foreign_keys = OFF")
             .await
             .expect("disable foreign keys for the raw insert");

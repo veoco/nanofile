@@ -1,9 +1,8 @@
 //! The legacy `webdav_keys` table is moved into the unified key store.
 //!
-//! The move is what lets existing WebDAV clients keep the secret they already
-//! hold: the digest is copied verbatim rather than recomputed, and each key
-//! becomes a `webdav.*`-capable row bound to its library, so a migrated key
-//! still cannot reach `/api2`.
+//! The digest is copied verbatim, so existing WebDAV clients keep their secret, and
+//! each key becomes a `webdav.*`-capable row bound to its library (still not valid
+//! for `/api2`).
 
 use migration::{Migrator, MigratorTrait};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
@@ -11,8 +10,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 /// The migration that performs the move under test.
 const MOVE: &str = "m20260912_000001_migrate_webdav_keys_into_api_keys";
 
-/// How many migrations run before `name`: the `steps` argument that leaves the
-/// database in the state immediately preceding it.
+/// The `steps` argument that leaves the database just before `name`.
 fn steps_before(name: &str) -> u32 {
     Migrator::migrations()
         .iter()
@@ -51,8 +49,7 @@ async fn legacy_webdav_keys_become_unified_keys() {
     ))
     .await;
 
-    // Stop immediately before the move. The index is looked up by name rather
-    // than assumed to be the last migration, so adding a later one cannot
+    // Stop immediately before the move, looked up by name so a later migration cannot
     // silently turn this into "after the move".
     Migrator::up(&db, Some(steps_before(MOVE)))
         .await
@@ -82,7 +79,6 @@ async fn legacy_webdav_keys_become_unified_keys() {
     .await
     .expect("seed legacy keys");
 
-    // Run the move.
     Migrator::up(&db, None).await.expect("apply the move");
 
     assert_eq!(
@@ -143,7 +139,6 @@ async fn legacy_webdav_keys_become_unified_keys() {
         "a read-only key must not gain write access"
     );
 
-    // Each key keeps its library and the same ceiling.
     assert_eq!(
         count(
             &db,
@@ -167,7 +162,6 @@ async fn legacy_webdav_keys_become_unified_keys() {
         1
     );
 
-    // The legacy table is gone; the sync-token table is untouched.
     assert!(!table_exists(&db, "webdav_keys").await);
     assert!(
         table_exists(&db, "sync_tokens").await,
@@ -206,9 +200,8 @@ async fn orphaned_webdav_keys_are_dropped() {
     .await
     .expect("seed repo");
 
-    // Disable FK enforcement so the orphaned row can be inserted — this
-    // mirrors the real-world cause of the bug: SQLite defaults to FKs off,
-    // so deleting a repo or user left dangling webdav_keys rows.
+    // FKs off to insert the orphaned row: SQLite defaults to FKs off, so deleting a repo
+    // or user left dangling `webdav_keys` rows in the wild.
     db.execute_unprepared("PRAGMA foreign_keys = OFF")
         .await
         .expect("disable FKs for seeding");
@@ -228,7 +221,6 @@ async fn orphaned_webdav_keys_are_dropped() {
         .await
         .expect("re-enable FKs for the migration");
 
-    // The move must not abort on the orphaned row.
     Migrator::up(&db, None).await.expect("apply the move");
 
     assert_eq!(
@@ -273,9 +265,8 @@ async fn rerun_after_partial_failure_succeeds() {
     .await
     .expect("seed legacy key");
 
-    // Simulate a previous failed run: a row was already copied into api_keys
-    // (key_prefix IS NULL, the migration's marker) but the migration then
-    // aborted before dropping webdav_keys.
+    // A previous failed run already copied the row into `api_keys` (`key_prefix IS NULL`
+    // marks it) but aborted before dropping `webdav_keys`.
     db.execute_unprepared(&format!(
         "INSERT INTO api_keys (user_id, name, key_hash, key_prefix, capabilities, all_repos, created_at, expires_at, last_used_at) \
          VALUES (1, 'rclone', '{HASH_RW}', NULL, 'webdav.read,webdav.write', 0, 100, NULL, 200)"
@@ -289,7 +280,6 @@ async fn rerun_after_partial_failure_succeeds() {
     .await
     .expect("seed leftover binding");
 
-    // Re-running the move must not choke on the leftover row.
     Migrator::up(&db, None).await.expect("apply the move");
 
     assert_eq!(
@@ -327,9 +317,8 @@ async fn duplicate_digest_across_libraries_merges_into_one_key() {
     .await
     .expect("seed user");
 
-    // Two libraries, same owner. The owner used the same WebDAV secret for
-    // both — the old schema allowed that because its unique index was on
-    // (repo_id, user_id, key_hash), not key_hash alone.
+    // Two libraries, same owner and same WebDAV secret: the old unique index was on
+    // `(repo_id, user_id, key_hash)`, not `key_hash` alone.
     let repo_a = "11111111-2222-3333-4444-555555555555";
     let repo_b = "22222222-3333-4444-5555-666666666666";
     db.execute_unprepared(&format!(
@@ -350,7 +339,6 @@ async fn duplicate_digest_across_libraries_merges_into_one_key() {
 
     Migrator::up(&db, None).await.expect("apply the move");
 
-    // One api_key, two library bindings.
     assert_eq!(
         count(&db, "SELECT COUNT(*) AS n FROM api_keys").await,
         1,
@@ -362,7 +350,6 @@ async fn duplicate_digest_across_libraries_merges_into_one_key() {
         "each legacy library gets its own binding"
     );
 
-    // The rw occurrence widens the key's capabilities beyond the ro one.
     let caps = db
         .query_one_raw(Statement::from_string(
             DbBackend::Sqlite,
@@ -377,7 +364,6 @@ async fn duplicate_digest_across_libraries_merges_into_one_key() {
         "the broader of the two permissions wins"
     );
 
-    // Each binding keeps its own ceiling.
     assert_eq!(
         count(
             &db,

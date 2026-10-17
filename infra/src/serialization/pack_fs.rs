@@ -2,9 +2,8 @@ use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use std::io::{Read, Write};
 
-/// Maximum decompressed size for a single fs object. An fs object is a small
-/// JSON document describing a directory's entries; anything larger is a
-/// decompression-bomb attempt (far above real objects, far below OOM territory).
+/// Max decompressed fs-object size (a small JSON document); larger is a
+/// decompression-bomb attempt.
 const MAX_FS_OBJECT_BYTES: u64 = 64 * 1024 * 1024;
 
 pub fn compress_fs_data(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
@@ -15,8 +14,7 @@ pub fn compress_fs_data(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
 
 pub fn decompress_fs_data(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
     let decoder = flate2::read::ZlibDecoder::new(data);
-    // Cap the decompressed output so a highly-compressible payload can't blow up
-    // memory. Read one byte past the limit to detect (and reject) overflow.
+    // Cap output and read one byte past the limit to detect overflow.
     let mut limited = decoder.take(MAX_FS_OBJECT_BYTES + 1);
     let mut decompressed = Vec::new();
     limited.read_to_end(&mut decompressed)?;
@@ -78,10 +76,8 @@ pub fn decode_pack_fs_entries(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Str
         entries.push((fs_id, entry_data));
     }
 
-    // The body must end exactly on an entry boundary. A trailing fragment
-    // smaller than an object header used to be dropped silently while the
-    // request still reported success, so a truncated upload was half-stored and
-    // only failed later (upstream returns 400: `sync_api.go:503-509`).
+    // The body must end on an entry boundary. A trailing fragment used to be dropped
+    // silently, half-storing a truncated upload (upstream returns 400: `sync_api.go:503`).
     if offset != data.len() {
         return Err(format!(
             "trailing {} byte(s) after the last fs object",

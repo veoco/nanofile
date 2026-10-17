@@ -1,21 +1,14 @@
 //! Reversible, domain-separated encryption for per-repository sync tokens.
 //!
-//! Sync tokens must stay **recoverable**: `/api2/repo-tokens/` and
-//! `/api2/repos/{id}/download-info/` re-present previously issued tokens to the
-//! client, and seaf-daemon keeps using whatever token it was last handed (it
-//! has no re-authentication path on 401/403). Hashing would therefore break
-//! token reuse, so tokens are encrypted with an AEAD key derived from the
-//! server `secret_key` through a **distinct** HKDF info string: a leaked
-//! database alone is not enough to recover them without the server secret.
+//! Tokens must stay **recoverable**: `/api2/repo-tokens/` and download-info
+//! re-present previously issued tokens, and seaf-daemon keeps using whatever token
+//! it was handed (no re-authentication path on 401/403), so hashing would break
+//! reuse. They are AEAD-encrypted with a key derived from `secret_key` through a
+//! **distinct** HKDF info string, so a leaked database alone is not enough.
 //!
-//! Encryption is deterministic (fixed all-zero nonce), so the stored value can
-//! double as the indexed equality-lookup key — mirroring
-//! [`super::block_encryption`]. Sync tokens are 160-bit random values, so
-//! leaking whether two tokens are equal is already public information.
-//!
-//! Stored values carry a [`TOKEN_CIPHER_PREFIX`] marker so the migration window
-//! (rows written before this change) is unambiguous: values without the prefix
-//! are legacy plaintext and are returned as-is.
+//! Encryption is deterministic (all-zero nonce), so the stored value doubles as the
+//! equality-lookup key; tokens are 160-bit random values, so equality is already
+//! public. A [`TOKEN_CIPHER_PREFIX`] marker separates legacy plaintext rows.
 
 use aes_gcm_siv::aead::{Aead, KeyInit};
 use aes_gcm_siv::{Aes256GcmSiv, Nonce};
@@ -33,9 +26,7 @@ const DEK_LEN: usize = 32;
 /// Fixed, all-zero GCM-SIV nonce (deterministic encryption, see module docs).
 const NONCE: [u8; 12] = [0u8; 12];
 
-/// A symmetric authenticated-encryption handle for sync tokens.
-///
-/// Cheap to construct and safe to clone; holds the 32-byte DEK.
+/// Authenticated-encryption handle for sync tokens; cheap to construct and clone.
 #[derive(Clone)]
 pub struct TokenCipher {
     cipher: Aes256GcmSiv,
@@ -57,8 +48,7 @@ impl TokenCipher {
             .expect("DEK length is within HKDF output bound");
         let cipher =
             Aes256GcmSiv::new_from_slice(&dek).expect("32-byte key is valid for AES-256-GCM-SIV");
-        // The key schedule inside `Aes256GcmSiv` cannot be scrubbed, but the
-        // raw DEK buffer should not linger on the stack either.
+        // The cipher's key schedule cannot be scrubbed, but clear the raw DEK buffer.
         dek.zeroize();
         Self { cipher }
     }
@@ -75,10 +65,9 @@ impl TokenCipher {
 
     /// Decrypt a stored token value.
     ///
-    /// Legacy plaintext values (no prefix) are returned unchanged so the
-    /// migration window keeps working. Returns `None` when an encrypted value
-    /// cannot be decrypted (e.g. the server secret changed) — callers must
-    /// treat that as an invalid credential, not an internal error.
+    /// Legacy plaintext (no prefix) is returned unchanged so the migration window keeps
+    /// working. `None` means an encrypted value cannot be decrypted (e.g. the server
+    /// secret changed); callers must treat that as an invalid credential.
     pub fn decrypt(&self, stored: &str) -> Option<String> {
         let Some(hex_ct) = stored.strip_prefix(TOKEN_CIPHER_PREFIX) else {
             return Some(stored.to_string());

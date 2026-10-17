@@ -1,26 +1,18 @@
 //! `config.toml.example` is deliberately a small file.
 //!
-//! The settings catalog (`infra::settings::CATALOG`) plus the admin pages and
-//! the locale dictionaries are the reference for every key; the template only
-//! carries (1) the keys the pages cannot store at all (`Apply::ReadOnly`) and
-//! (2) the values an operator has to decide before the interface is reachable.
-//! That is a property a comment cannot enforce, and the file is the one place a
-//! well-meaning "let me just document this key here too" quietly undoes it — so
-//! the tests below hold the line: the file names nothing else, and it still
-//! documents every key that can only be set from a file.
+//! The settings catalog plus the admin pages and locales are the reference for every
+//! key; the template only carries read-only keys and values an operator must decide
+//! before the interface is reachable. The tests below hold that line: the file names
+//! nothing else, and still documents every file-only key.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use infra::settings::{Apply, CATALOG};
 
-/// Keys the template keeps although a settings page can store them: the values
-/// that have to be decided before the page is reachable (the listener, the
-/// external URL, where state lives, the language). Anything else belongs on a
-/// page, where it also names its own `NANOFILE_*` variable.
-///
-/// Removing one of these is a documentation decision, not a mechanical one:
-/// drop its entry here in the same commit.
+/// Keys the template keeps although a page can store them: values decided before the
+/// page is reachable (listener, external URL, state paths, language). Removing one is
+/// a documentation decision — drop its entry here in the same commit.
 const DEPLOYMENT_KEYS: &[&str] = &[
     "server.addr",
     "server.port",
@@ -34,9 +26,8 @@ const DEPLOYMENT_KEYS: &[&str] = &[
     "ui.default_language",
 ];
 
-/// `[settings]` decides what a stored value means, so it is deliberately not a
-/// catalog entry and can only come from the file or the environment. The
-/// template is its only prose home.
+/// `[settings]` decides what a stored value means, so it is not a catalog entry and can
+/// only come from the file or environment; the template is its only prose home.
 const POLICY_KEYS: &[&str] = &[
     "settings.config_policy",
     "settings.config_override_keys",
@@ -49,12 +40,9 @@ fn example_text() -> String {
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
 }
 
-/// Every `section.key` the file mentions, commented out or not.
-///
-/// A section header has to be a line of nothing but `[name]` (optionally
-/// commented): prose that merely starts with a bracketed name — "# [server]
-/// secret_key" — is not a header, and treating it as one would silently move
-/// every key after it into the wrong section.
+/// Every `section.key` the file mentions, commented out or not. A section header must
+/// be a line of nothing but `[name]` (optionally commented): prose starting with a
+/// bracketed name must not move following keys into the wrong section.
 fn keys_in(text: &str) -> BTreeSet<String> {
     let mut section: Option<String> = None;
     let mut keys = BTreeSet::new();
@@ -91,8 +79,7 @@ fn keys_in(text: &str) -> BTreeSet<String> {
     keys
 }
 
-/// The keys the template is allowed to name: the catalog's read-only entries,
-/// the deployment set, and the layering policy.
+/// The keys the template may name: catalog read-only entries, deployment keys, policy.
 fn allowed_keys() -> BTreeSet<String> {
     let mut allowed: BTreeSet<String> = CATALOG
         .iter()
@@ -149,17 +136,15 @@ fn the_example_documents_every_file_only_key() {
     );
 }
 
-/// The template is shipped to operators, so it has to be a valid configuration
-/// even before anyone edits it — every key commented out, and the two active
-/// ones (`secret_key`, `config_policy`) parse.
+/// Shipped to operators, so it must be a valid configuration before editing: every key
+/// commented out, and the two active ones (`secret_key`, `config_policy`) parse.
 #[test]
 fn the_example_parses_as_a_config() {
     let text = example_text();
     let parsed: infra::config::Config =
         toml::from_str(&text).expect("config.toml.example must deserialize into Config");
-    // An empty master key is the point: a release build refuses to start with
-    // it and names the variable to set. Pinned so a future edit cannot quietly
-    // put a working-looking placeholder there.
+    // An empty master key is the point: a release build refuses to start and names the
+    // variable to set. Pinned so a future edit cannot put a working-looking placeholder there.
     assert_eq!(parsed.server.secret_key, "");
     assert_eq!(parsed.settings.config_policy, "bootstrap");
 }

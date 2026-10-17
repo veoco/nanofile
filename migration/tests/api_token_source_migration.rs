@@ -1,11 +1,9 @@
 //! `api_tokens.source` is backfilled from the only hint the old schema had.
 //!
-//! Before this column, a token's origin had to be guessed from `platform`,
-//! which is set only when a client reported device details. The backfill is
-//! therefore an approximation, and the test pins which way it errs: rows that
-//! look like client logins become `client`, everything else stays `web`. A
-//! session filed under the wrong label is still visible and revocable, which is
-//! the direction that matters.
+//! Before this column, origin was guessed from `platform`, set only when a client
+//! reported device details, so the backfill is an approximation: client-looking rows
+//! become `client`, everything else `web`. A mislabelled session stays visible and
+//! revocable, which is the direction that matters.
 
 use migration::{Migrator, MigratorTrait};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
@@ -13,8 +11,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 /// The migration under test.
 const ADD_SOURCE: &str = "m20260913_000001_add_source_and_user_agent_to_api_tokens";
 
-/// How many migrations run before `name`: the `steps` argument that leaves the
-/// database in the state immediately preceding it.
+/// The `steps` argument that leaves the database just before `name`.
 fn steps_before(name: &str) -> u32 {
     Migrator::migrations()
         .iter()
@@ -43,8 +40,7 @@ async fn existing_tokens_are_classified_from_platform() {
     ))
     .await;
 
-    // Stop immediately before the column is added. Looked up by name so a
-    // later migration cannot silently move this starting point.
+    // Stop immediately before the column is added, looked up by name.
     Migrator::up(&db, Some(steps_before(ADD_SOURCE)))
         .await
         .expect("migrate to the pre-change schema");
@@ -56,9 +52,8 @@ async fn existing_tokens_are_classified_from_platform() {
     .await
     .expect("seed user");
 
-    // 1: a client that reported its device. 2: a browser session. 3: a client
-    // that sent no device details — indistinguishable from a browser session
-    // before this change, and still filed as one afterwards.
+    // 1: a client that reported its device. 2: a browser session. 3: a client that sent
+    // no device details — indistinguishable from a browser before this change.
     db.execute_unprepared(&format!(
         "INSERT INTO api_tokens \
            (id, user_id, token, created_at, platform, device_id, device_name, is_pending) \
@@ -86,8 +81,7 @@ async fn existing_tokens_are_classified_from_platform() {
         "the backfill cannot recover a client that sent no device info"
     );
 
-    // The new column is nullable and starts empty: nothing recorded a user
-    // agent before this release, and a made-up one would be worse than none.
+    // The new column is nullable and starts empty: nothing recorded a user agent before.
     let agents: i64 = db
         .query_one_raw(Statement::from_string(
             DbBackend::Sqlite,

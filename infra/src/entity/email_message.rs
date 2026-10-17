@@ -1,12 +1,9 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// One queued (or already attempted) outbound message.
-///
-/// This table is both the retry queue and the audit log the admin page reads.
-/// The rendered body is stored **encrypted** while it is pending and cleared
-/// once the message has been delivered: a password-reset link must be readable
-/// only by the recipient, so it can never sit in plaintext in the database.
+/// One queued (or attempted) outbound message: both the retry queue and the audit log.
+/// The rendered body is stored **encrypted** while pending and cleared once delivered
+/// — a password-reset link must never sit in plaintext.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "email_messages")]
 pub struct Model {
@@ -17,30 +14,25 @@ pub struct Model {
     pub kind: String,
     #[sea_orm(not_null)]
     pub to_address: String,
-    /// Recipient account, when the message belongs to one. No foreign key: the
-    /// log outlives the account it describes.
+    /// Recipient account, if any. No foreign key: the log outlives the account.
     #[sea_orm(nullable)]
     pub user_id: Option<i32>,
     #[sea_orm(not_null)]
     pub subject: String,
-    /// Ciphertext of the rendered body. `None` once delivered, or after a
-    /// deliberate purge of a message that can no longer be retried.
+    /// Ciphertext of the rendered body; `None` once delivered or purged.
     #[sea_orm(nullable)]
     pub body_enc: Option<String>,
     /// `pending` | `sent` | `failed`.
     #[sea_orm(not_null, default_value = "pending")]
     pub status: String,
-    /// Times delivery was attempted. Incremented as part of *claiming* a row,
-    /// so a process that dies mid-send leaves the row retryable.
+    /// Delivery attempts, incremented while *claiming* a row, so a crash stays retryable.
     #[sea_orm(not_null, default_value = 0)]
     pub attempts: i32,
     #[sea_orm(not_null, default_value = 0)]
     pub next_attempt_at: i64,
-    /// Unix time until which the current claim holder owns this row.
-    ///
-    /// `None` means unclaimed. A claim requires this to be absent or in the
-    /// past, which is what makes it exclusive; an expired lease is cleared by
-    /// the drain's reaper so a row whose holder died becomes claimable again.
+    /// Unix time until which the current claim holder owns this row; `None` means
+    /// unclaimed. A claim requires this absent or past, and the drain's reaper clears an
+    /// expired lease so a dead holder's row becomes claimable.
     #[sea_orm(nullable)]
     pub lease_until: Option<i64>,
     #[sea_orm(nullable)]

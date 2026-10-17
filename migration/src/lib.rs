@@ -1,24 +1,18 @@
 pub use sea_orm_migration::prelude::*;
 
-/// A connection helper for this crate's tests, in-src and integration alike.
-///
-/// Public because an integration test compiles as its own crate and cannot see
-/// an item behind `#[cfg(test)]`; hidden because it is not part of the migrator
-/// any caller should use. Nothing in the shipping server touches it.
+/// A connection helper for this crate's tests. Public because an integration test is
+/// its own crate and cannot see `#[cfg(test)]`; hidden because it is not part of the
+/// migrator API and the shipping server never touches it.
 #[doc(hidden)]
 pub mod tests_support;
 
-/// Declare each migration module once and register it in `Migrator`,
-/// so adding a new migration touches a single list.
+/// Declare each migration once and register it, so adding one touches a single list.
 macro_rules! migrations {
     ($($name:ident),* $(,)?) => {
         $(mod $name;)*
 
-        /// The registered migration module names, in chain order.
-        ///
-        /// Lets a test locate one migration's position — e.g. to stop the chain
-        /// just before it — without hard-coding the chain length, which silently
-        /// broke as soon as another migration was appended.
+        /// Registered migration names in chain order, so a test can locate one without
+        /// hard-coding the chain length.
         pub fn migration_names() -> Vec<&'static str> {
             vec![$(stringify!($name)),*]
         }
@@ -116,10 +110,8 @@ mod tests {
     use sea_orm_migration::MigratorTrait;
     use sea_orm_migration::seaql_migrations::Entity as SeaqlMigrations;
 
-    /// Verify the full migration chain applies cleanly to a fresh database.
-    ///
-    /// Catches ordering/`self.manager`/index-creation regressions that only
-    /// surface when every migration runs end-to-end against an empty schema.
+    /// Verify the whole chain applies cleanly to a fresh database, catching ordering,
+    /// `self.manager` and index regressions that only show end-to-end.
     #[tokio::test]
     async fn migrates_fresh_database_from_scratch() {
         let dir = tempfile::tempdir().expect("tempdir");

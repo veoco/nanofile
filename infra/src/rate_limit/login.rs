@@ -1,21 +1,18 @@
 /// In-memory login attempt rate limiter.
 ///
-/// Tracks failed login attempts by key (IP or "ip:username") and
-/// prevents further attempts after a configurable threshold within
-/// a configurable time window. A third counter tracks how many *distinct*
-/// accounts one address has failed on, so credential spraying is caught even
-/// when a successful login keeps resetting the per-address counter.
+/// Tracks failures by key (IP or `ip:username`), locks out after a threshold in a
+/// window, and counts distinct failed accounts per address so credential spraying is
+/// caught even when a success keeps resetting the per-address counter.
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Throttle keys for a single login attempt.
+/// Throttle keys for one login attempt.
 ///
-/// The pair key deliberately includes the client address: a username-only
-/// counter lets anyone lock a victim out of their own account from an
-/// unrelated address, and the victim cannot clear it (only a *successful*
-/// login clears a key).
+/// The pair includes the client address: a username-only counter would let anyone
+/// lock a victim out from an unrelated address, and only a successful login clears a
+/// key.
 #[derive(Debug, Clone)]
 pub struct LoginKeys {
     client_ip: String,
@@ -35,30 +32,23 @@ impl LoginKeys {
     }
 }
 
-/// Upper bound on the number of client addresses the spray detector tracks, so
-/// a flood of distinct (real) source addresses cannot grow the map forever.
-/// Once full, the address with the oldest failure is evicted.
+/// Cap on the client addresses the spray detector tracks, so a flood of distinct
+/// addresses cannot grow the map forever; the oldest failure is evicted.
 const MAX_SPRAY_IPS: usize = 4096;
 
-/// Upper bound on the failed-attempt map.
-///
-/// Keys combine a client-supplied address with a client-supplied account name,
-/// and one attempt records two keys (address + pair). Window-based trimming
-/// cannot bound the map when every attempt uses a fresh address — a routed IPv6
-/// /64 alone provides effectively unlimited addresses — so the oldest keys are
-/// evicted once this cap is reached. Evicting throttling state fails open, which
-/// is the right trade-off against unbounded memory growth.
+/// Cap on the failed-attempt map. Keys combine a client-supplied address and account
+/// and one attempt records two keys, so window trimming cannot bound a flood of fresh
+/// IPv6 addresses; the oldest keys are evicted instead. Eviction fails open, the right
+/// trade-off against unbounded memory.
 const MAX_ATTEMPT_KEYS: usize = 50_000;
 
 pub struct LoginRateLimiter {
     attempts: Mutex<HashMap<String, Vec<i64>>>,
-    /// Distinct account names that failed from each address within the window
-    /// (`ip -> account -> last failure`). A successful login does NOT clear
-    /// this: see [`LoginRateLimiter::clear_login_failure`].
+    /// `ip -> account -> last failure`; a successful login deliberately does NOT clear
+    /// this (see [`LoginRateLimiter::clear_login_failure`]).
     spray: Mutex<HashMap<String, HashMap<String, i64>>>,
-    /// Atomic so an administrator can change the budget on a running server.
-    /// What is already counted is deliberately kept: making a save reset the
-    /// counters would turn "raise the limit" into "clear every lockout".
+    /// Atomic so an administrator can change the budget on a running server; what is
+    /// already counted is kept, so raising the limit does not clear lockouts.
     max_attempts: AtomicU32,
     lockout_secs: AtomicI64,
     /// Max distinct accounts one address may fail on before it is blocked
@@ -113,17 +103,14 @@ impl LoginRateLimiter {
             .as_secs() as i64
     }
 
-    /// Acquire the internal mutex, recovering from a poisoned state.
-    /// The rate limiter's HashMap has no invariants that would be violated
-    /// by a panic in another thread, so poison recovery is safe.
+    /// Acquire the mutex, recovering from poison: the map has no invariant a panic
+    /// elsewhere could violate.
     fn lock(&self) -> MutexGuard<'_, HashMap<String, Vec<i64>>> {
         self.attempts.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Bound the failed-attempt map by evicting its least recently active keys.
-    ///
-    /// Only runs once [`MAX_ATTEMPT_KEYS`] is exceeded, so the common path stays
-    /// a couple of hash operations.
+    /// Evict the least recently active keys once [`MAX_ATTEMPT_KEYS`] is exceeded, so the
+    /// common path stays a couple of hash operations.
     fn shrink_attempts(map: &mut HashMap<String, Vec<i64>>) {
         let Some(excess) = map.len().checked_sub(MAX_ATTEMPT_KEYS) else {
             return;
@@ -150,7 +137,6 @@ impl LoginRateLimiter {
         let mut map = self.lock();
         let timestamps = map.entry(key.to_string()).or_default();
         timestamps.push(now);
-        // Trim entries older than the lockout window to bound memory.
         let cutoff = now - self.window();
         timestamps.retain(|&t| t > cutoff);
         Self::shrink_attempts(&mut map);
@@ -158,8 +144,7 @@ impl LoginRateLimiter {
 
     /// Check if the given key is currently locked out.
     pub fn is_locked(&self, key: &str) -> bool {
-        // Without this early return the `len() >= max_attempts` comparison
-        // below would reject every login on the instance.
+        // Without this, `len() >= max_attempts` would reject every login.
         if self.lockout_disabled() {
             return false;
         }
@@ -177,8 +162,7 @@ impl LoginRateLimiter {
             None => (false, false),
         };
         if stale {
-            // All attempts expired — drop the key so the map doesn't grow
-            // without bound on continuously-failing keys.
+            // All attempts expired: drop the key so it does not accumulate.
             map.remove(key);
             false
         } else {
@@ -237,11 +221,8 @@ impl LoginRateLimiter {
         map.remove(key);
     }
 
-    /// Whether this attempt must be rejected before any credential work.
-    ///
-    /// Three limits are consulted: failures from the address, failures for this
-    /// (address, account) pair, and failures spread across too many distinct
-    /// accounts from the address.
+    /// Whether this attempt is rejected before credential work: address failures,
+    /// (address, account) failures, or failures across too many distinct accounts.
     pub fn is_login_blocked(&self, keys: &LoginKeys) -> bool {
         self.is_any_locked(&[keys.ip_key.as_str(), keys.pair_key.as_str()])
             || self.is_spraying(&keys.client_ip)
@@ -255,11 +236,9 @@ impl LoginRateLimiter {
 
     /// Record a successful login.
     ///
-    /// The address and pair counters are forgiven — otherwise one user
-    /// fat-fingering their password behind a shared NAT address would lock out
-    /// everyone behind it. The distinct-account history is deliberately kept:
-    /// an attacker holding one valid account must not be able to reset their
-    /// spray budget by logging into it after every few guesses.
+    /// Forgive the address and pair counters (otherwise one typo behind a shared NAT locks
+    /// out everyone). Keep the distinct-account history: a valid account must not reset
+    /// the spray budget.
     pub fn clear_login_failure(&self, keys: &LoginKeys) {
         self.clear(&keys.ip_key);
         self.clear(&keys.pair_key);
@@ -271,9 +250,8 @@ impl LoginRateLimiter {
         let cutoff = now - self.window();
         let mut map = self.spray.lock().unwrap_or_else(PoisonError::into_inner);
         if !map.contains_key(ip) && map.len() >= MAX_SPRAY_IPS {
-            // Evict the address whose most recent failure is oldest. Failure
-            // timestamps are refreshed on every attempt, so this tracks the
-            // least recently active source.
+            // Evict the address whose most recent failure is oldest; timestamps are refreshed on
+            // every attempt, so this tracks the least recently active source.
             let oldest = map
                 .iter()
                 .min_by_key(|(_, per_ip)| per_ip.values().copied().max().unwrap_or(i64::MIN))
@@ -287,8 +265,7 @@ impl LoginRateLimiter {
         per_ip.insert(username.to_string(), now);
     }
 
-    /// Whether `ip` has failed on at least the configured number of distinct
-    /// accounts within the window.
+    /// Whether `ip` failed on at least the configured number of distinct accounts.
     fn is_spraying(&self, ip: &str) -> bool {
         if self.distinct_limit() == 0 {
             return false;
@@ -311,8 +288,7 @@ impl LoginRateLimiter {
     }
 }
 
-/// The same rule as [`GenericRateLimiter`]: a running budget change must not
-/// clear the lockout state an attacker earned.
+/// As in [`GenericRateLimiter`]: a budget change must not clear earned lockout state.
 #[cfg(test)]
 mod set_limits_tests {
     use super::LoginRateLimiter;
@@ -320,7 +296,6 @@ mod set_limits_tests {
     #[test]
     fn set_limits_keeps_what_is_already_counted() {
         let limiter = LoginRateLimiter::new(2, 3600, 2);
-        // Each call records one attempt per key.
         limiter.record_failures(&["ip", "ip:pair"]);
         limiter.record_failures(&["ip", "ip:pair"]);
         assert!(limiter.is_locked("ip"));
@@ -330,13 +305,11 @@ mod set_limits_tests {
             !limiter.is_locked("ip"),
             "the raised budget applies at once"
         );
-        // Two attempts were already counted before the change, so two more
-        // reach the new budget of four.
+        // Two attempts were already counted, so two more reach the new budget of four.
         limiter.record_failures(&["ip"]);
         limiter.record_failures(&["ip"]);
         assert!(limiter.is_locked("ip"));
 
-        // Raising the spray budget takes effect on the same terms.
         limiter.record_username_failure("addr", "a");
         limiter.record_username_failure("addr", "b");
         assert!(limiter.is_spraying("addr"));
@@ -416,8 +389,7 @@ mod tests {
         assert!(!limiter.attempts.lock().unwrap().contains_key("stale"));
     }
 
-    /// An attacker must not be able to lock a victim out of their own account:
-    /// failures from one address only throttle that address for that account.
+    /// Failures from one address only throttle that address for that account.
     #[test]
     fn pair_key_scopes_failures_to_the_source_address() {
         let limiter = LoginRateLimiter::new(3, 60, 0);
@@ -428,23 +400,19 @@ mod tests {
         }
         assert!(limiter.is_login_blocked(&attacker));
 
-        // The victim's own address is unaffected and can still authenticate.
         let victim = LoginKeys::new("198.51.100.4", "victim@example.com");
         assert!(!limiter.is_login_blocked(&victim));
         limiter.clear_login_failure(&victim);
         assert!(!limiter.is_login_blocked(&victim));
 
-        // A third address is unaffected by the attacker's failures.
         assert!(!limiter.is_login_blocked(&LoginKeys::new("192.0.2.7", "victim@example.com")));
 
-        // The per-address counter is the credential-stuffing control, so the
-        // attacker's address is blocked for other accounts too.
+        // The per-address counter also blocks the attacker's address for other accounts.
         let other = LoginKeys::new("203.0.113.9", "someone-else@example.com");
         assert!(limiter.is_login_blocked(&other));
     }
 
-    /// A successful login forgives the address and pair counters, so a shared
-    /// NAT address is not locked out by one user's typos.
+    /// A success forgives address and pair counters, so a shared NAT is not locked out.
     #[test]
     fn success_clears_address_and_pair_counters() {
         let limiter = LoginRateLimiter::new(3, 60, 2);
@@ -460,8 +428,7 @@ mod tests {
         assert!(!limiter.is_login_blocked(&keys));
     }
 
-    /// Spraying distinct accounts stays blocked across successful logins: one
-    /// known-good credential must not reset the attacker's budget.
+    /// Spraying stays blocked across successful logins.
     #[test]
     fn success_does_not_reset_distinct_account_spraying() {
         let limiter = LoginRateLimiter::new(5, 60, 3);
@@ -480,7 +447,6 @@ mod tests {
         assert!(limiter.is_login_blocked(&good));
         assert!(limiter.is_login_blocked(&LoginKeys::new("203.0.113.9", "d@example.com")));
 
-        // A different address is unaffected.
         assert!(!limiter.is_login_blocked(&LoginKeys::new("198.51.100.4", "a@example.com")));
     }
 
@@ -516,8 +482,7 @@ mod tests {
         assert!(!limiter.spray.lock().unwrap().contains_key("203.0.113.9"));
     }
 
-    /// A flood of distinct (address, account) keys must not grow the
-    /// failed-attempt map without bound: the oldest keys are evicted.
+    /// A flood of distinct keys must not grow the map: the oldest keys are evicted.
     #[test]
     fn failed_attempt_map_is_capped() {
         let limiter = LoginRateLimiter::new(5, 3600, 0);
@@ -527,9 +492,7 @@ mod tests {
                 map.insert(format!("k{i}"), vec![i as i64]);
             }
         }
-        // A normal failure record triggers the shrink. Its own timestamp is
-        // "now", far newer than every injected one, so the injected keys are
-        // what gets evicted from the front.
+        // The trigger's own timestamp is newest, so the injected keys are evicted first.
         limiter.record_failure("trigger");
 
         let guard = limiter.attempts.lock().unwrap();

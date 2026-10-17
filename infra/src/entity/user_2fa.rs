@@ -17,13 +17,9 @@ pub struct Model {
     #[sea_orm(not_null, default_value = false)]
     pub enabled: bool,
     pub enabled_at: Option<i64>,
-    /// Highest TOTP time step already accepted for this user.
-    ///
-    /// Verification allows the previous/current/next step (±30s clock skew), so
-    /// without this a code observed by an attacker stays usable for up to ~90
-    /// seconds. Rejecting any step `<= last_used_step` makes each code
-    /// effectively single-use while keeping the skew tolerance for honest
-    /// clients.
+    /// Highest TOTP time step already accepted. Verification allows ±1 step (~90 s of
+    /// skew), so without this an observed code stays usable; rejecting
+    /// `step <= last_used_step` makes each code single-use while keeping the tolerance.
     pub last_used_step: Option<i64>,
 }
 

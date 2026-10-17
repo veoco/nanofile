@@ -1,11 +1,9 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Association between a file path and a repo tag (`file_tags` table).
-///
-/// The API-facing `file_tag_id` is this table's `id`, and `repo_tag_id`
-/// references a row in `repo_tags`. The file is identified by its full path
-/// (seafile uses a `FileUUIDMap`; here the path is stored directly).
+/// Association between a file path and a repo tag (`file_tags`). The API-facing
+/// `file_tag_id` is this table's `id`; the file is identified by full path (seafile
+/// uses a `FileUUIDMap`; here the path is stored directly).
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "file_tags")]
 pub struct Model {

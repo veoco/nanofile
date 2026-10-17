@@ -2,20 +2,15 @@ use sea_orm_migration::prelude::*;
 
 /// Withdraw every library share by purging non-owner memberships.
 ///
-/// nanofile no longer offers user-to-user library sharing, but `repo_members`
-/// stays: the permission predicates in `server/src/domain/permission.rs` and
-/// every listing read it, and library creation writes the owner's row into it.
-/// The rows a previous share created would therefore keep granting access even
-/// though no endpoint can undo them any more — so this migration deletes every
-/// row whose `user_id` is not its library's `owner_id`.
+/// nanofile no longer offers user-to-user sharing, but `repo_members` stays: the
+/// permission predicates and every listing read it, and library creation writes the
+/// owner's row. Rows from a previous share would keep granting access that no endpoint
+/// can undo, so every row whose `user_id` is not its library's `owner_id` is deleted,
+/// along with those users' sync tokens (handlers re-derive permission on every request,
+/// so a surviving token is refused anyway — this is defence in depth).
 ///
-/// The purged users' repository sync tokens go with them. Handlers re-derive
-/// the caller's permission on every `/seafhttp/` request, so a surviving token
-/// would be refused anyway; deleting it is defence in depth, and it is what the
-/// removed unshare operation used to do.
-///
-/// `down()` is a deliberate no-op: the deleted rows are evidence of a feature
-/// that no longer exists, and there is nothing to reconstruct them from.
+/// `down()` is a no-op: the rows are evidence of a removed feature and there is nothing
+/// to reconstruct them from.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -24,8 +19,7 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
 
-        // Credentials first: a token is what makes the row below reachable
-        // without a re-check, so it must not outlive the membership.
+        // Credentials first: a token must not outlive the membership it made reachable.
         db.execute_unprepared(
             "DELETE FROM sync_tokens
               WHERE NOT EXISTS (
@@ -61,8 +55,7 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
     use sea_orm_migration::MigratorTrait;
 
-    /// A database migrated up to — but not including — this migration, so the
-    /// foreign memberships are still present to be purged.
+    /// A database migrated to just before this migration, so shares are still present.
     async fn before_this_migration() -> (tempfile::TempDir, DatabaseConnection) {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = crate::tests_support::connect(&crate::tests_support::file_uri(
@@ -84,9 +77,8 @@ mod tests {
         db.execute_unprepared(sql).await.expect("seed/exec");
     }
 
-    /// Two accounts, one library owned by user 1. User 1 holds the owner
-    /// membership row; user 2 holds a share, and both hold a sync token.
-    /// A second library has no membership row at all.
+    /// Two accounts, one library owned by user 1. User 2 holds a share; both hold sync
+    /// tokens. A second library has no membership row at all.
     async fn seed(db: &DatabaseConnection) {
         exec(
             db,
@@ -133,7 +125,6 @@ mod tests {
 
         crate::Migrator::up(&db, None).await.expect("run migration");
 
-        // The owner's row survives; the share does not.
         assert_eq!(
             count_where(
                 &db,
@@ -150,7 +141,6 @@ mod tests {
             .await,
             0
         );
-        // …and neither does the share's sync token.
         assert_eq!(
             count_where(
                 &db,
@@ -159,7 +149,6 @@ mod tests {
             .await,
             0
         );
-        // The owner keeps the library's token.
         assert_eq!(
             count_where(
                 &db,

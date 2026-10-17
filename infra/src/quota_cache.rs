@@ -1,44 +1,33 @@
 //! Per-server caches backing storage-quota accounting.
 //!
-//! Two pieces of state live here:
+//! * Committed-usage snapshots: `SUM(repo.size)` per user, cached briefly so the
+//!   hot upload paths do not run a full-table aggregate.
+//! * Uncommitted-block reservations: bytes written to the content-addressed block
+//!   store that no commit references. A block write never changes `repo.size`, so
+//!   without this a client could write forever without committing, never touching
+//!   a quota.
 //!
-//! * **Committed-usage snapshots** — `SUM(repo.size)` per user, cached for a
-//!   short TTL so the hot upload paths (`put_block`, every upload chunk) do not
-//!   run a full-table aggregate.
-//! * **Uncommitted-block reservations** — bytes a user has written to the
-//!   content-addressed block store that no commit references yet. Content
-//!   addressing means a block write never changes any repo's `size`, so without
-//!   this counter a client could write blocks forever without ever committing
-//!   and never touch a quota.
-//!
-//! Both are deliberately owned by a [`crate::…`] `Repositories` instance rather
-//! than being process-global statics: they must describe *one* database, and a
-//! process can host several servers (each integration test starts its own, with
-//! its own user ids starting at 1). Process-global maps keyed by user id would
-//! leak one server's usage and reservations into another's.
+//! Both belong to one `Repositories` instance, not to process-global statics: a
+//! process can host several servers (integration tests each start one), and global
+//! maps keyed by user id would leak usage between them.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// How long a committed-usage snapshot stays valid.
-///
-/// `repo.size` only changes on commit, which is a low-frequency path compared
-/// to the per-chunk checks that read this cache, and commits invalidate the
-/// entry outright, so a short TTL is only a backstop.
+/// How long a committed-usage snapshot stays valid. `repo.size` changes only on
+/// commit, which invalidates the entry outright, so the TTL is only a backstop for
+/// the per-chunk checks.
 const USAGE_TTL: Duration = Duration::from_millis(500);
 
-/// Hard cap on cached usage entries so a flush of distinct users cannot grow
-/// the map without bound.
+/// Cap on cached usage entries.
 const USAGE_MAX: usize = 4096;
 
 /// Hard cap on tracked `(user, repo)` reservations.
 const RESERVED_MAX: usize = 8192;
 
-/// Reason a reservation was refused: it would push the user past their quota.
-///
-/// A dedicated type rather than `()` so the outcome is self-describing at the
-/// call site (`map_err(|_| AppError::QuotaExceeded)`).
+/// A reservation would push the user past their quota. A dedicated type so the
+/// outcome is self-describing at the call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuotaExceeded;
 
@@ -75,12 +64,11 @@ impl QuotaCache {
         }
     }
 
-    /// Drop a user's usage snapshot, so the next check re-reads the database.
+    /// Drop a user's snapshot so the next check re-reads the database.
     ///
-    /// Commits call this: without it a commit leaves the 500 ms snapshot in
-    /// place, and several uploads started inside that window all see the
-    /// pre-commit usage — a check-then-write race that lets the aggregate
-    /// exceed the quota by roughly the number of concurrent uploads.
+    /// Commits must call this: otherwise the 500 ms snapshot stays in place and several
+    /// uploads started in that window all see pre-commit usage, overshooting the quota
+    /// by roughly the number of concurrent uploads.
     pub fn invalidate_usage(&self, user_id: i32) {
         let mut map = self.usage.lock().unwrap_or_else(|e| e.into_inner());
         map.remove(&user_id);
@@ -96,11 +84,9 @@ impl QuotaCache {
     }
 
     /// Atomically reserve `delta` more bytes for `(user_id, repo_id)` when
-    /// `committed + already_reserved + delta <= quota`.
-    ///
-    /// Returns [`QuotaExceeded`] when the reservation would exceed the quota;
-    /// nothing is reserved in that case. The check and the insert happen under
-    /// one lock so concurrent requests cannot both consume the same headroom.
+    /// `committed + reserved + delta <= quota`. Returns [`QuotaExceeded`] and reserves
+    /// nothing otherwise; the check and insert share one lock, so concurrent requests
+    /// cannot both consume the same headroom.
     pub fn reserve_if_fits(
         &self,
         user_id: i32,
@@ -125,13 +111,11 @@ impl QuotaCache {
 
         let key = (user_id, repo_id.to_string());
         if map.len() >= RESERVED_MAX && !map.contains_key(&key) {
-            // Bound the map: released keys are removed outright, so in practice
-            // only live uploads are tracked.
+            // Bound the map; released keys are removed outright, so only live uploads stay.
             map.retain(|_, n| *n > 0);
             if map.len() >= RESERVED_MAX {
-                // Fail open on accounting megadata rather than rejecting a
-                // legitimate upload: quota is a fairness control, and the
-                // per-request body limit still bounds a single write.
+                // Fail open on accounting metadata rather than rejecting a legitimate upload:
+                // the per-request body limit still bounds a single write.
                 return Ok(());
             }
         }
@@ -139,10 +123,8 @@ impl QuotaCache {
         Ok(())
     }
 
-    /// Drop every outstanding reservation for `(user_id, repo_id)`.
-    ///
-    /// Called when an upload commits (the bytes are now counted by the
-    /// committed-usage snapshot) or when the blocks are deleted again.
+    /// Drop every reservation for `(user_id, repo_id)`, e.g. when an upload commits
+    /// (the bytes are now in the usage snapshot) or its blocks are deleted.
     pub fn release_repo(&self, user_id: i32, repo_id: &str) -> i64 {
         let mut map = self.reserved.lock().unwrap_or_else(|e| e.into_inner());
         map.remove(&(user_id, repo_id.to_string())).unwrap_or(0)
@@ -171,13 +153,11 @@ mod tests {
     #[test]
     fn reservation_is_refused_when_committed_plus_reserved_exceeds_quota() {
         let cache = QuotaCache::new();
-        // 900 committed, 700 reserved: 700 more would total 2300 > 2000.
         assert!(cache.reserve_if_fits(1, "r1", 700, 900, 2000).is_ok());
         assert!(
             cache.reserve_if_fits(1, "r1", 700, 900, 2000).is_err(),
             "the second reservation must not fit"
         );
-        // The refused reservation left nothing behind.
         assert_eq!(cache.reserved_total(1), 700);
     }
 
@@ -193,8 +173,7 @@ mod tests {
 
     #[test]
     fn instances_do_not_share_state() {
-        // The reason this type is not a process-global static: two servers in
-        // one process must not see each other's usage or reservations.
+        // The reason this is not a process-global static: two servers must not share state.
         let a = QuotaCache::new();
         let b = QuotaCache::new();
         a.store_usage(1, 100);

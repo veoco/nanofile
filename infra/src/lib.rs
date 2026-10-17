@@ -1,7 +1,5 @@
-//! # infra
-//!
 //! Infrastructure layer for nanofile: entities, config, crypto, storage,
-//! serialization, permissions, rate limiting, search indexing, and events.
+//! serialization, permissions, rate limiting, search indexing and events.
 
 pub mod activity_log;
 pub mod common;

@@ -8,11 +8,9 @@ use crate::crypto::pwd_hash;
 use crate::crypto::verify::verify_repo_password;
 use base::AppError;
 
-/// The stored password verifier and key-wrapping material of one library.
-///
-/// A library carries exactly one verifier: `pwd_hash` (Seafile 11+, with an
-/// algorithm and optional parameters) or the legacy `magic`. `pwd_hash` is the
-/// one used whenever `pwd_hash_algo` is present.
+/// The stored verifier and key-wrapping material of one library. A library
+/// carries exactly one verifier: `pwd_hash` (Seafile 11+) or the legacy `magic`;
+/// `pwd_hash` wins when `pwd_hash_algo` is present.
 pub struct RepoKeyMaterial<'a> {
     pub enc_version: i32,
     pub magic: Option<&'a str>,
@@ -23,11 +21,8 @@ pub struct RepoKeyMaterial<'a> {
     pub pwd_hash_params: Option<&'a str>,
 }
 
-/// A cached decryption key entry for an encrypted repo.
-///
-/// The key material is wrapped in [`Zeroizing`] so it is scrubbed from memory
-/// when the entry is evicted or dropped, rather than lingering as plaintext
-/// for the full cache TTL (default 1 hour) where a memory dump could read it.
+/// A cached decryption key. The material is [`Zeroizing`], so it is scrubbed when
+/// evicted rather than lingering in a memory dump for the TTL (default 1 hour).
 #[derive(Debug, Clone)]
 struct CachedDecryptKey {
     /// The actual encryption key (32 bytes for AES-256).
@@ -38,14 +33,9 @@ struct CachedDecryptKey {
     expires_at: i64,
 }
 
-/// In-memory password manager for encrypted repositories.
-///
-/// This caches decryption keys per user+repo, matching the behavior of
-/// seafile-server's `passwd-mgr.c`. Keys are cached for a configurable
-/// TTL (default 3600 seconds = 1 hour) and the cache is bounded by
-/// `max_entries` (default 10_000) to prevent unbounded growth.
-///
-/// Key format: `"repo_id:user_id"` composite key.
+/// In-memory cache of decryption keys per user+repo, mirroring seafile-server's
+/// `passwd-mgr.c`: configurable TTL (default 3600 s), bounded by `max_entries`
+/// (default 10_000). Key format: `"repo_id:user_id"`.
 pub struct PasswordManager {
     cache: Arc<RwLock<HashMap<String, CachedDecryptKey>>>,
     ttl_secs: i64,
@@ -78,17 +68,12 @@ impl PasswordManager {
 
     /// Set a repo password for a user.
     ///
-    /// This will:
-    /// 1. Verify the password against the stored verifier — `pwd_hash` when the
-    ///    library has one (Seafile 11+), `magic` otherwise
-    /// 2. Derive the decryption key from the password and `random_key`
-    /// 3. Cache the decryption key with expiry
+    /// Verifies against `pwd_hash` (Seafile 11+) or `magic`, derives the decryption key
+    /// from the password and `random_key`, and caches it with an expiry. Mirrors
+    /// `seaf_passwd_manager_set_passwd()` (`server/passwd-mgr.c`).
     ///
-    /// Returns `Ok(())` on success, or `AppError::RepoPasswdRequired` on
-    /// password mismatch, or `AppError::BadRequest` for unsupported versions.
-    ///
-    /// Mirrors `seaf_passwd_manager_set_passwd()` (`server/passwd-mgr.c`), which
-    /// picks the same two branches.
+    /// Returns `AppError::RepoPasswdRequired` on mismatch, `AppError::BadRequest` for
+    /// unsupported versions.
     pub async fn set_password(
         &self,
         repo_id: &str,
@@ -110,8 +95,7 @@ impl PasswordManager {
         };
 
         let verified = match (material.pwd_hash, material.pwd_hash_algo) {
-            // A `pwd_hash` library stores no `magic` at all, so this is the only
-            // verifier it has.
+            // A `pwd_hash` library stores no `magic`; this is its only verifier.
             (Some(hash), Some(algo)) => pwd_hash::verify_pwd_hash(
                 repo_id,
                 password,
@@ -137,12 +121,10 @@ impl PasswordManager {
             return Err(AppError::RepoPasswdRequired);
         }
 
-        // 2. Decrypt the random_key to get the actual file encryption key
         let (enc_key, enc_iv) =
             key_derivation::decrypt_repo_enc_key(password, random_key, enc_version, effective_salt)
                 .map_err(|e| AppError::BadRequest(format!("key derivation failed: {e}")))?;
 
-        // 3. Cache the decrypted key with expiry
         let now = chrono::Utc::now().timestamp();
         let cached = CachedDecryptKey {
             enc_key: Zeroizing::new(enc_key),
@@ -153,13 +135,11 @@ impl PasswordManager {
         let mut cache = self.cache.write().await;
         cache.insert(Self::cache_key(repo_id, user_id), cached);
 
-        // Enforce capacity bound: if cache exceeds max_entries, evict expired
-        // entries first, then remove the oldest entries.
+        // Capacity bound: evict expired entries, then the oldest.
         if cache.len() > self.max_entries {
             let now = chrono::Utc::now().timestamp();
             cache.retain(|_, entry| now < entry.expires_at);
-            // If still over capacity, drain oldest entries (HashMap iteration
-            // order is non-deterministic but this is best-effort eviction).
+            // Still over capacity: drain oldest entries (best effort; order is arbitrary).
             while cache.len() > self.max_entries {
                 let oldest_key = cache
                     .iter()
@@ -176,9 +156,7 @@ impl PasswordManager {
         Ok(())
     }
 
-    /// Check if a password has been set for this user+repo pair.
-    ///
-    /// Returns `true` if there is a valid (non-expired) cached key.
+    /// Whether a valid (non-expired) cached key exists for this user+repo.
     pub async fn is_password_set(&self, repo_id: &str, user_id: i32) -> bool {
         let cache = self.cache.read().await;
         let key = Self::cache_key(repo_id, user_id);
@@ -191,10 +169,8 @@ impl PasswordManager {
         }
     }
 
-    /// Get the cached decryption key for web file access.
-    ///
-    /// Returns `Some((enc_key, enc_iv))` if a valid cached key exists,
-    /// or `None` if no password has been set or the cached entry has expired.
+    /// Cached `(enc_key, enc_iv)` for web file access, or `None` when no password has
+    /// been set or the entry expired.
     pub async fn get_decrypt_key(&self, repo_id: &str, user_id: i32) -> Option<(Vec<u8>, Vec<u8>)> {
         let cache = self.cache.read().await;
         let key = Self::cache_key(repo_id, user_id);
@@ -231,11 +207,8 @@ impl PasswordManager {
         cache.retain(|k, _| !k.ends_with(&suffix));
     }
 
-    /// Remove all expired entries and return the count removed.
-    ///
-    /// This is a single-shot variant used by the unified task scheduler
-    /// ([`Scheduler`](crate::scheduler::Scheduler)) which owns the interval
-    /// loop.
+    /// Remove all expired entries and return the count; the task `Scheduler` owns the
+    /// interval loop.
     pub async fn cleanup_expired_once(&self) -> u64 {
         let now = chrono::Utc::now().timestamp();
         let mut cache = self.cache.write().await;
@@ -491,8 +464,7 @@ mod tests {
         assert_eq!(enc_iv.len(), 16);
     }
 
-    /// A Seafile 11+ library has no `magic` at all, so `pwd_hash` is the only
-    /// verifier it can be unlocked with (`seaf_passwd_manager_set_passwd`).
+    /// A Seafile 11+ library has no `magic`; `pwd_hash` is its only verifier.
     #[tokio::test]
     async fn test_set_password_with_pwd_hash() {
         let mgr = PasswordManager::new();
@@ -523,8 +495,7 @@ mod tests {
             .expect_err("a wrong password must not unlock");
         assert!(matches!(err, AppError::RepoPasswdRequired));
 
-        // A library that claims an algorithm but stores no hash cannot be
-        // unlocked by falling back to a magic it does not have.
+        // Claiming an algorithm without storing a hash must not fall back to a magic.
         let broken = RepoKeyMaterial {
             pwd_hash: None,
             pwd_hash_algo: Some(pwd_hash::ALGO_PBKDF2_SHA256),

@@ -1,37 +1,15 @@
-//! `pwd_hash`-based library passwords (Seafile 11 / seahub
-//! `ENCRYPTED_LIBRARY_PWD_HASH_ALGO`).
+//! `pwd_hash`-based library passwords (Seafile 11, `ENCRYPTED_LIBRARY_PWD_HASH_ALGO`).
 //!
-//! Up to Seafile 10 an encrypted library stored a `magic`
-//! (see [`crate::crypto::key_derivation::generate_magic`]) and both sides
-//! re-derived it with PBKDF2-SHA256 at a hard-coded 1000 iterations. Seafile 11
-//! added a second, configurable verifier: `pwd_hash`, computed from
-//! `repo_id + password` with a named algorithm and explicit parameters
-//! (`common/password-hash.c`, `seafile_generate_pwd_hash()`).
+//! Up to Seafile 10 an encrypted library stored a `magic` re-derived with PBKDF2-SHA256
+//! at 1000 iterations. Seafile 11 added a configurable verifier, `pwd_hash`, computed
+//! from `repo_id + password` with a named algorithm. A `pwd_hash` library carries **no**
+//! `magic`, so every check goes through this module. The names must stay lowercase and
+//! exact (the desktop client compares them verbatim): `pbkdf2_sha256` takes an iteration
+//! count, `argon2id` takes `time_cost,memory_cost,parallelism`.
 //!
-//! * `pbkdf2_sha256` — `PBKDF2-HMAC-SHA256`, `params_str` is the iteration count
-//! * `argon2id` — raw Argon2id (v1.3, no secret/associated data),
-//!   `params_str` is `time_cost,memory_cost,parallelism`
-//!
-//! The algorithm is advertised to clients through `/api2/server-info/`; the
-//! desktop client compares the value verbatim, so the names below must stay
-//! lowercase and exact. A library created through the `pwd_hash` flow carries
-//! **no** `magic` at all (the commit omits the field), which is why every
-//! password check has to go through this module instead.
-//!
-//! # The v1/v2 salt is not what it looks like
-//!
-//! `seafile_generate_pwd_hash()` uses the fixed 8-byte salt for
-//! `enc_version <= 2`, but hands it to `pwd_hash_derive_key()` as a hex string
-//! produced by `rawdata_to_hex(salt, fixed_salt, 8)` into a 64-byte zeroed
-//! buffer — i.e. `"da9045c306c7cc26"` followed by a NUL. `pwd_hash_derive_key()`
-//! then calls `hex_to_rawdata(salt, salt_bin, 32)`, whose `hexval()` returns
-//! `~0` for `'\0'`, so the loop bails out at the NUL **without writing** the
-//! offending pair. The 32-byte buffer therefore ends up as the 8 magic bytes
-//! followed by **24 zero bytes**.
-//!
-//! Note that this differs from `seafile_derive_key()`'s v2 branch (used for
-//! `magic`), which hashes with the 8-byte salt only. The two v2 salts are
-//! different lengths on purpose; do not "unify" them.
+//! The v1/v2 salt is 8 fixed magic bytes followed by 24 zeros: `pwd_hash_derive_key()`
+//! parses a NUL-terminated 8-byte hex string as 32 bytes, while `seafile_derive_key()`'s
+//! v2 `magic` branch hashes the 8 bytes only — the two salts differ on purpose.
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use sha2::{Digest, Sha256};
@@ -49,16 +27,12 @@ pub const PBKDF2_DEFAULT_ITERATIONS: u32 = 1000;
 /// `parse_argon2id_params()` fallback, as `(time_cost, memory_cost, parallelism)`.
 pub const ARGON2ID_DEFAULT_PARAMS: (u32, u32, u32) = (2, 102_400, 8);
 
-// ── Resource bounds (deliberate deviation from upstream) ────────────────────
+// Resource bounds (deliberate deviation from upstream).
 //
-// Upstream validates only the algorithm name and `strlen(pwd_hash)`. The
-// parameters, however, are chosen by the *client* at creation time and are
-// replayed on every later password check, so an unbounded value is a
-// server-side resource-exhaustion primitive: `2,4294967295,8` makes every
-// `set-password` attempt to allocate terabytes. We bound the *parsed* values
-// (so the desktop client's habit of sending the algorithm name as
-// `pwd_hash_params` still lands on the defaults) and reject at creation, at
-// config load, and at verification.
+// Upstream validates only the algorithm name and length. Parameters are chosen by
+// the client and replayed on every check, so an unbounded value is a resource-
+// exhaustion primitive (`2,4294967295,8` allocates terabytes). Bound the *parsed*
+// values so the desktop client sending the algorithm name still lands on defaults.
 
 /// Upper bound for a `pbkdf2_sha256` iteration count.
 pub const MAX_PBKDF2_ITERATIONS: u32 = 50_000_000;
@@ -68,12 +42,9 @@ pub const MAX_ARGON2_T_COST: u32 = 64;
 pub const MAX_ARGON2_M_COST_KIB: u32 = 1_048_576;
 /// Upper bound for Argon2id `parallelism`.
 pub const MAX_ARGON2_P_COST: u32 = 64;
-/// Upper bound for `memory_cost × time_cost`, in KiB-passes.
-///
-/// Bounding the two independently is not enough: `1 GiB × 64 passes` satisfies
-/// both and still costs minutes of CPU per password check. 2 GiB-passes keeps
-/// the worst case in the same order as the defaults (`100 MiB × 2`), while
-/// still allowing e.g. 1 GiB with the default 2 passes.
+/// Upper bound for `memory_cost × time_cost` in KiB-passes: 1 GiB × 64 satisfies
+/// both individual maxima and still costs minutes per check, while 2 GiB-passes
+/// keeps the worst case near the defaults.
 pub const MAX_ARGON2_MEMORY_TIME_KIB_PASSES: u64 = 2 * 1024 * 1024;
 
 /// Whether `algo` is one of the two algorithms seafile implements.
@@ -81,14 +52,11 @@ pub fn is_supported_algo(algo: &str) -> bool {
     algo == ALGO_PBKDF2_SHA256 || algo == ALGO_ARGON2ID
 }
 
-/// C `atoi()`/`atoll()` semantics: skip leading whitespace, accept an optional
-/// sign, then consume digits and stop at the first non-digit. Returns 0 when
-/// there is no number at all.
+/// C `atoi()`/`atoll()` semantics: skip whitespace, optional sign, digits, stop at
+/// the first non-digit; 0 when there is no number.
 ///
-/// A faithful port matters: the desktop client sends the *algorithm name* in
-/// the `pwd_hash_params` field (`create-repo-dialog.cpp` assigns
-/// `getEncryptedLibraryPwdHashAlgo()` to `pwd_hash_params`), and upstream turns
-/// `"pbkdf2_sha256"` into 0 and then into the default iteration count.
+/// Faithful on purpose: the desktop client sends the *algorithm name* in
+/// `pwd_hash_params`, and upstream turns `"pbkdf2_sha256"` into 0 (the default).
 fn c_atoi(s: &str) -> i64 {
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -115,8 +83,7 @@ fn c_atoi(s: &str) -> i64 {
     if negative { -value } else { value }
 }
 
-/// Convert a `c_atoi()` result the way upstream would end up storing it.
-/// Values that do not fit are saturated, which [`validate_params`] then rejects.
+/// Saturate a `c_atoi()` result; [`validate_params`] rejects the overflow.
 fn positive_or(default: u32, value: i64) -> u32 {
     if value <= 0 {
         default
@@ -125,8 +92,7 @@ fn positive_or(default: u32, value: i64) -> u32 {
     }
 }
 
-/// `parse_pbkdf2_sha256_params()`: `None` and any non-positive parse mean the
-/// upstream default of 1000 iterations.
+/// `parse_pbkdf2_sha256_params()`: `None` or a non-positive parse means 1000.
 pub fn parse_pbkdf2_params(params: Option<&str>) -> u32 {
     match params {
         None => PBKDF2_DEFAULT_ITERATIONS,
@@ -134,14 +100,10 @@ pub fn parse_pbkdf2_params(params: Option<&str>) -> u32 {
     }
 }
 
-/// `parse_argon2id_params()`: `"t,m,p"`. A string that does not split into
-/// exactly three comma-separated fields falls back to the whole default triple;
-/// each individual field that parses to a non-positive number falls back to its
-/// own default.
-///
-/// `g_strsplit(s, ",", 3)` stops after three fields, so `"1,2,3,4"` yields
-/// `("1", "2", "3,4")` and `atoll("3,4")` is 3 — reproduced here with
-/// `splitn(3, ',')` plus a `c_atoi()` that stops at the comma.
+/// `parse_argon2id_params()`: `"t,m,p"`. A string that does not split into three
+/// fields falls back to the default triple; each non-positive field falls back to
+/// its own default. `g_strsplit(s, ",", 3)` stops after three fields, so
+/// `"1,2,3,4"` yields `("1", "2", "3,4")` and `atoll("3,4")` is 3.
 pub fn parse_argon2id_params(params: Option<&str>) -> (u32, u32, u32) {
     let (default_t, default_m, default_p) = ARGON2ID_DEFAULT_PARAMS;
     let Some(s) = params else {
@@ -158,10 +120,8 @@ pub fn parse_argon2id_params(params: Option<&str>) -> (u32, u32, u32) {
     )
 }
 
-/// Reject an unsupported algorithm and out-of-range parameters.
-///
-/// Applied when the config is loaded, when a client proposes `pwd_hash`
-/// parameters at creation, and again before verifying a stored hash.
+/// Reject an unsupported algorithm or out-of-range parameters, at config load, at
+/// creation, and before verifying a stored hash.
 pub fn validate_params(algo: &str, params: Option<&str>) -> Result<(), String> {
     match algo {
         ALGO_PBKDF2_SHA256 => {
@@ -193,15 +153,13 @@ pub fn validate_params(algo: &str, params: Option<&str>) -> Result<(), String> {
                      {MAX_ARGON2_P_COST}"
                 ));
             }
-            // `Params::new` additionally requires `m_cost >= 8 * p_cost`; let it
-            // report that rather than duplicating the rule here.
+            // `Params::new` also requires `m_cost >= 8 * p_cost`; let it report that.
             if m < 8u32.saturating_mul(p) {
                 return Err(format!(
                     "argon2id memory_cost = {m} KiB is too small for parallelism = {p}"
                 ));
             }
-            // Both maxima can be satisfied while the *product* is still minutes
-            // of CPU (1 GiB × 64), so bound the work as well.
+            // Both maxima can hold while the product is minutes of CPU, so bound the work.
             let kib_passes = u64::from(m) * u64::from(t);
             if kib_passes > MAX_ARGON2_MEMORY_TIME_KIB_PASSES {
                 return Err(format!(
@@ -234,10 +192,8 @@ fn pwd_hash_salt(enc_version: i32, repo_salt: &str) -> Result<[u8; 32], CryptoEr
     Ok(salt)
 }
 
-/// Compute `pwd_hash` exactly like `seafile_generate_pwd_hash()`.
-///
-/// Unlike the commit id, the hash input is the bare `repo_id + password` byte
-/// string — no NUL terminator is hashed.
+/// Compute `pwd_hash` like `seafile_generate_pwd_hash()`. The input is the bare
+/// `repo_id + password` byte string — no NUL terminator is hashed.
 pub fn derive_pwd_hash(
     repo_id: &str,
     password: &str,
@@ -257,8 +213,7 @@ pub fn derive_pwd_hash(
             key
         }
         ALGO_ARGON2ID => {
-            // C's `argon2id_hash_raw(t_cost, memory_cost, parallelism, ...)` —
-            // note that `Params::new` takes memory first.
+            // C's arg order is (t_cost, memory_cost, parallelism); `Params::new` takes memory first.
             let (t_cost, m_cost, p_cost) = parse_argon2id_params(params);
             let argon_params = Params::new(m_cost, t_cost, p_cost, Some(32))
                 .map_err(|e| CryptoError::HashFailed(format!("invalid argon2id params: {e}")))?;
@@ -275,10 +230,8 @@ pub fn derive_pwd_hash(
 }
 
 /// Check a password against a stored `pwd_hash`
-/// (`seafile_pwd_hash_verify_repo_passwd()`).
-///
-/// Fails closed: an unsupported algorithm or out-of-range stored parameters
-/// return `false` rather than attempting an unbounded derivation.
+/// (`seafile_pwd_hash_verify_repo_passwd()`). Fails closed: an unsupported
+/// algorithm or out-of-range stored parameters return `false`.
 pub fn verify_pwd_hash(
     repo_id: &str,
     password: &str,
@@ -311,12 +264,9 @@ mod tests {
     const SALT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SALT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    /// Golden vectors produced by `/tmp/pwdhash_ref/pwdhash_ref`, a driver built
-    /// from `common/password-hash.c` + `common/seafile-crypt.c` +
-    /// `lib/utils.c` verbatim (see the module docs for the salt subtlety).
-    /// The v2 default was independently reproduced with
-    /// `openssl kdf -keylen 32 -kdfopt digest:SHA256 -kdfopt pass:... \
-    ///  -kdfopt hexsalt:da9045c306c7cc26000...0 -kdfopt iter:1000 PBKDF2`.
+    /// Golden vectors from a driver built from `common/password-hash.c` +
+    /// `common/seafile-crypt.c` verbatim, cross-checked with `openssl kdf ... PBKDF2`
+    /// (see the module docs for the salt subtlety).
     #[test]
     fn test_derive_pwd_hash_pbkdf2_matches_seafile_c() {
         let cases: &[(i32, &str, Option<&str>, &str)] = &[
@@ -365,9 +315,8 @@ mod tests {
         }
     }
 
-    /// The desktop client sends the algorithm name where the parameters belong
-    /// (`create-repo-dialog.cpp`), so this must parse to the 1000-iteration
-    /// default rather than failing.
+    /// The desktop client sends the algorithm name where parameters belong, so this
+    /// must parse to the 1000-iteration default rather than failing.
     #[test]
     fn test_pbkdf2_params_that_are_an_algorithm_name_fall_back_to_default() {
         assert_eq!(parse_pbkdf2_params(Some("pbkdf2_sha256")), 1000);
@@ -389,7 +338,6 @@ mod tests {
         assert_eq!(parse_argon2id_params(Some("1,2")), defaults);
         assert_eq!(parse_argon2id_params(Some("1,2,3,4")), (1, 2, 3));
         assert_eq!(parse_argon2id_params(Some(" 2 , 4096 , 8 ")), (2, 4096, 8));
-        // Per-field fallbacks are independent.
         assert_eq!(parse_argon2id_params(Some("0,0,0")), defaults);
         assert_eq!(parse_argon2id_params(Some("3,,4")), (3, 102_400, 4));
     }
@@ -398,7 +346,6 @@ mod tests {
     fn test_validate_params_rejects_out_of_range() {
         assert!(validate_params(ALGO_PBKDF2_SHA256, None).is_ok());
         assert!(validate_params(ALGO_PBKDF2_SHA256, Some("5000")).is_ok());
-        // The desktop's buggy value still validates.
         assert!(validate_params(ALGO_PBKDF2_SHA256, Some("pbkdf2_sha256")).is_ok());
         assert!(validate_params(ALGO_PBKDF2_SHA256, Some("999999999999")).is_err());
         assert!(validate_params(ALGO_ARGON2ID, None).is_ok());
@@ -406,10 +353,7 @@ mod tests {
         assert!(validate_params(ALGO_ARGON2ID, Some("2,4294967295,8")).is_err());
         assert!(validate_params(ALGO_ARGON2ID, Some("9999999,4096,1")).is_err());
         assert!(validate_params(ALGO_ARGON2ID, Some("2,4096,9999999")).is_err());
-        // m_cost must cover 8 blocks per lane.
         assert!(validate_params(ALGO_ARGON2ID, Some("2,8,8")).is_err());
-        // Neither maximum alone is enough: 1 GiB × 64 passes satisfies both and
-        // still costs minutes per password check.
         assert!(validate_params(ALGO_ARGON2ID, Some("2,1048576,1")).is_ok());
         assert!(validate_params(ALGO_ARGON2ID, Some("64,1048576,1")).is_err());
         assert!(validate_params(ALGO_ARGON2ID, Some("16,65536,1")).is_ok());
@@ -418,9 +362,8 @@ mod tests {
         assert!(validate_params("scrypt", None).is_err());
     }
 
-    /// The salt the KDF sees for `enc_version <= 2` is the 8 fixed bytes
-    /// followed by 24 zeros — not the 8 bytes on their own, and not the
-    /// (unrelated) 8-byte salt `generate_magic` uses.
+    /// The salt for `enc_version <= 2` is the 8 fixed bytes followed by 24 zeros — not
+    /// the 8 on their own, and not the (unrelated) 8-byte salt `generate_magic` uses.
     #[test]
     fn test_pwd_hash_salt_is_the_8_magic_bytes_plus_24_zeros() {
         let salt = pwd_hash_salt(2, "").unwrap();
@@ -429,7 +372,6 @@ mod tests {
             salt[8..].iter().all(|b| *b == 0),
             "the remainder must stay zeroed"
         );
-        // Same for enc_version 1 and for a v4-looking salt on a v2 library.
         assert_eq!(pwd_hash_salt(1, "").unwrap(), salt);
         assert_eq!(pwd_hash_salt(2, SALT_A).unwrap(), salt);
 
@@ -439,8 +381,7 @@ mod tests {
         assert!(pwd_hash_salt(4, "zz").is_err());
     }
 
-    /// Guards the mistake this module's docs warn about: hashing with only the
-    /// 8 magic bytes yields a different (wrong) value.
+    /// Guards the quirk the module docs warn about: hashing only the 8 magic bytes is wrong.
     #[test]
     fn test_v2_salt_is_not_the_bare_eight_bytes() {
         let input = format!("{REPO_ID}{PASSWORD}");
@@ -452,11 +393,8 @@ mod tests {
         );
     }
 
-    /// Golden vectors from OpenSSL 3.5's `ARGON2ID` KDF (Argon2 v1.3, no
-    /// secret/ad — the same shape as `argon2id_hash_raw`), e.g.
-    /// `openssl kdf -keylen 32 -kdfopt pass:... -kdfopt hexsalt:... \
-    ///  -kdfopt iter:2 -kdfopt memcost:102400 -kdfopt lanes:8 -kdfopt threads:1 ARGON2ID`.
-    /// OpenSSL derives the tag from `lanes`; `threads` only sizes its pool.
+    /// Golden vectors from OpenSSL 3.5's `ARGON2ID` KDF (`iter`, `memcost`, `lanes`
+    /// options; Argon2 v1.3, no secret/ad). OpenSSL derives the tag from `lanes`.
     #[test]
     fn test_derive_pwd_hash_argon2id_matches_openssl() {
         let cases: &[(i32, &str, &str, &str)] = &[
@@ -567,8 +505,7 @@ mod tests {
         ));
     }
 
-    /// Unsupported algorithms and out-of-range parameters fail closed instead of
-    /// running an unbounded derivation.
+    /// Unsupported algorithms and out-of-range parameters fail closed.
     #[test]
     fn test_verify_pwd_hash_fails_closed() {
         let hash = derive_pwd_hash(REPO_ID, PASSWORD, 2, "", ALGO_PBKDF2_SHA256, None).unwrap();

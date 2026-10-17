@@ -7,13 +7,9 @@ use crate::entity::{commit, repo};
 use base::AppError;
 use base::common::DirEntryData;
 
-/// Canonical absolute form of `path`, falling back to the input when
-/// canonicalization fails (the file does not exist yet).
-///
-/// On Windows the `\\?\` verbatim prefix is stripped. That is not cosmetic:
-/// `\\?\C:\…` contains a `?`, so a `sqlite:` URL built from it would be split
-/// into a file name and a query string right there, and Explorer's
-/// `/select,"…"` argument would be mangled too.
+/// Canonical absolute form of `path`, falling back to the input when it does not
+/// exist yet. On Windows the `\\?\` prefix is stripped: its `?` would split a
+/// `sqlite:` URL into file name and query, and mangle Explorer `/select` arguments.
 pub fn absolute_path(path: &Path) -> PathBuf {
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     #[cfg(windows)]
@@ -29,13 +25,9 @@ pub fn absolute_path(path: &Path) -> PathBuf {
     resolved
 }
 
-/// Directory of the running binary, or `None` when it cannot be determined.
-///
-/// This is the directory every relative path the server owns resolves against
-/// (see [`crate::config::Config::resolve_state_paths`]): a login-started
-/// desktop instance runs with a working directory that has nothing to do with
-/// the installation, and a Windows `Run` registry entry cannot carry a start
-/// directory at all.
+/// Directory of the running binary, or `None`. Every relative path the server owns
+/// resolves against it: a login-started desktop runs in an unrelated working
+/// directory, and a Windows `Run` entry cannot carry a start directory.
 pub fn exe_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let exe = absolute_path(&exe);
@@ -44,19 +36,12 @@ pub fn exe_dir() -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// The current user's home directory, or `None` when the environment does not
-/// say where it is.
+/// The current user's home directory, or `None` when the environment does not say.
 ///
-/// Read from the environment rather than from a platform crate on purpose: the
-/// one thing this is used for is the default location of the per-user
-/// configuration file a first-run setup writes (`~/.nanofile/config.toml`), and
-/// a dependency that exists only for that would land in every build — including
-/// the ones that never run a desktop setup. `dirs` is already in the graph, but
-/// only through the optional `tray` feature.
-///
-/// Windows falls back to the `HOMEDRIVE` + `HOMEPATH` pair the platform
-/// documents for accounts whose `USERPROFILE` is not set (a service running as
-/// a virtual account, for instance).
+/// Read from the environment rather than a platform crate on purpose: the only use
+/// is the per-user config path, and `dirs` is in the graph only through the
+/// optional `tray` feature. Windows falls back to `HOMEDRIVE` + `HOMEPATH` for
+/// accounts whose `USERPROFILE` is unset (e.g. a virtual service account).
 pub fn home_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -65,8 +50,7 @@ pub fn home_dir() -> Option<PathBuf> {
         }
         let drive = non_empty_var("HOMEDRIVE")?;
         let path = non_empty_var("HOMEPATH")?;
-        // `PathBuf::push` treats a rooted path as a replacement, and `HOMEPATH`
-        // is written rooted (`\Users\foo`), so the two are joined as text.
+        // `PathBuf::push` treats a rooted path as a replacement, and `HOMEPATH` is rooted.
         let mut home = drive.into_os_string();
         home.push("\\");
         home.push(path.to_string_lossy().trim_start_matches(['\\', '/']));
@@ -85,19 +69,12 @@ fn non_empty_var(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Create `dir` (and its parents) and, on Unix, restrict `dir` to its owner.
+/// Create `dir` (and parents) and, on Unix, restrict `dir` to its owner.
 ///
-/// Every directory nanofile writes private data into — file blocks, resumable
-/// uploads, generated thumbnails, avatars, the search index and the log file —
-/// is created through this helper so the mode does not depend on the
-/// operator's umask. Without it a default `022` umask leaves those trees
-/// world-readable, which exposes thumbnails, avatars and indexed document text
-/// to any other local user on the host.
-///
-/// Only `dir` itself is chmod'ed (parents created by `create_dir_all` keep the
-/// default mode); the leaf is what gates traversal into the data. Existing
-/// directories are chmod'ed too: nanofile may be upgrading a data directory
-/// first created by an older build.
+/// Every private directory — blocks, temp uploads, thumbnails, avatars, index, log —
+/// is created here so the mode does not depend on the umask; a default `022` would
+/// leave them world-readable. Only the leaf is chmod'ed (it gates traversal), and
+/// pre-existing directories too, since nanofile may adopt one from an older build.
 pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
@@ -108,12 +85,9 @@ pub fn ensure_private_dir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Create a directory owner-only, but leave a **pre-existing** one alone.
-///
-/// [`ensure_private_dir`] also chmods a directory it did not create, which is
-/// right for a directory this application owns and wrong for a shared one: a
-/// root-run instance pointed at `/var/log/nanofile.log` would silently turn
-/// `/var/log` into 0700 and break every other service that writes there.
+/// Create a directory owner-only, but leave a **pre-existing** one alone: chmodding
+/// a shared directory (e.g. `/var/log`) would break every other service writing
+/// there.
 pub fn ensure_private_dir_only_if_created(dir: &Path) -> std::io::Result<()> {
     if dir.exists() {
         return Ok(());
@@ -127,33 +101,27 @@ pub fn ensure_private_dir_only_if_created(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Extract a field from a POST body probing JSON, form-urlencoded,
-/// then multipart/form-data in order.
+/// Extract a field from a JSON, form-urlencoded or multipart body, in that order.
 pub fn extract_body_field(bytes: &[u8], field_name: &str) -> Option<String> {
-    // Try JSON
     if let Ok(map) = serde_json::from_slice::<HashMap<String, String>>(bytes)
         && let Some(val) = map.get(field_name)
     {
         return Some(val.clone());
     }
-    // Try form-urlencoded
     if let Ok(map) = serde_urlencoded::from_bytes::<HashMap<String, String>>(bytes)
         && let Some(val) = map.get(field_name)
     {
         return Some(val.clone());
     }
-    // Try multipart
     extract_multipart_field(bytes, field_name)
 }
 
-/// Extract a named field from a multipart/form-data body by scanning the
-/// raw body for `name="<field_name>"` and returning the value that follows
-/// the header-terminating `\r\n\r\n` boundary.
+/// Extract a named field from a multipart body by scanning for `name="<field>"` and
+/// returning the value after the header-terminating `\r\n\r\n`.
 pub fn extract_multipart_field(bytes: &[u8], field_name: &str) -> Option<String> {
     let body_str = String::from_utf8_lossy(bytes);
     let pattern = format!("name=\"{}\"", field_name);
     let rest = body_str.split(&pattern).nth(1)?;
-    // The value follows after the part headers which end with \r\n\r\n
     let val_block = rest.split("\r\n\r\n").nth(1)?;
     let value = val_block.split("\r\n").next().unwrap_or("").trim();
     if value.is_empty() {
@@ -170,8 +138,7 @@ pub async fn get_head_root_id(db: &DatabaseConnection, repo_id: &str) -> Result<
         .ok_or_else(|| AppError::NotFound("No commits yet".to_string()))
 }
 
-/// Like `get_head_root_id` but returns `Ok(None)` when the repo has no head
-/// commit yet (vs. an error for a missing repo or head commit record).
+/// Like `get_head_root_id`, but `Ok(None)` when there is no head commit yet.
 pub async fn get_head_root_id_opt(
     db: &DatabaseConnection,
     repo_id: &str,
@@ -192,8 +159,7 @@ pub async fn get_head_root_id_opt(
     Ok(Some(head.root_id))
 }
 
-/// Get the head commit ID for a repo, without resolving the root fs_id.
-/// Returns an error if the repo or head commit doesn't exist.
+/// Head commit id of a repo; errors when the repo or commit is missing.
 pub async fn get_head_commit_id(
     db: &DatabaseConnection,
     repo_id: &str,
@@ -207,8 +173,7 @@ pub async fn get_head_commit_id(
         .ok_or_else(|| AppError::NotFound("No commits yet".to_string()))
 }
 
-/// Extract the parent directory path from a full path.
-/// `/dir/file.txt` → `/dir`,  `/file.txt` → `/`
+/// Parent directory: `/dir/file.txt` → `/dir`, `/file.txt` → `/`.
 pub fn parent_path_from(path: &str) -> &str {
     match path.rsplit_once('/') {
         Some(("", _)) => "/",
@@ -217,14 +182,12 @@ pub fn parent_path_from(path: &str) -> &str {
     }
 }
 
-/// Extract the final path segment (filename or directory name).
-/// `/dir/file.txt` → `file.txt`,  `/dir/` → `""`,  `/` → `""`
+/// Final path segment; a trailing slash or `/` yields `""`.
 pub fn basename(path: &str) -> &str {
     path.rsplit_once('/').map(|(_, name)| name).unwrap_or("")
 }
 
-/// Join a parent path and a name, avoiding a doubled slash at the root.
-/// `("/", "a")` → `/a`,  `("/dir", "a")` → `/dir/a`
+/// Join parent and name without doubling the slash at the root.
 pub fn join_path(parent: &str, name: &str) -> String {
     if parent == "/" {
         format!("/{name}")
@@ -233,16 +196,14 @@ pub fn join_path(parent: &str, name: &str) -> String {
     }
 }
 
-/// Format a Unix timestamp (seconds) as an RFC3339 string, or `""` when the
-/// timestamp cannot be represented as a `DateTime`.
+/// RFC3339 timestamp, or `""` when it cannot be represented.
 pub fn timestamp_rfc3339(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
         .map(|d| d.to_rfc3339())
         .unwrap_or_default()
 }
 
-/// Format a byte count as a human-readable size (`B`/`KB`/`MB`/`GB`/`TB`).
-/// Uses decimal (1000-based) units, matching the frontend `formatFileSize`.
+/// Human-readable size in decimal units, matching the frontend's `formatFileSize`.
 pub fn format_size(size: i64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut s = size as f64;
@@ -258,8 +219,7 @@ pub fn format_size(size: i64) -> String {
     }
 }
 
-/// Generate a unique filename when there's a name collision.
-/// Appends " (N)" before the extension, e.g. "file (1).txt", "file (2).txt".
+/// Append " (N)" before the extension until the name is unused.
 pub fn generate_unique_filename(existing: &[DirEntryData], name: &str) -> String {
     let base = if let Some(dot) = name.rfind('.') {
         let (stem, ext) = name.split_at(dot);
@@ -299,15 +259,13 @@ mod tests {
         let nested = root.join("blocks");
         let _ = std::fs::remove_dir_all(&root);
 
-        // The leaf directory is created and restricted; parents created along
-        // the way keep the process default (the leaf is what gates traversal).
+        // Only the leaf is restricted; parents keep the process default.
         ensure_private_dir(&nested).unwrap();
         assert!(nested.is_dir());
         let mode = std::fs::metadata(&nested).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700, "new dir should be 0700, got {mode:o}");
 
-        // A pre-existing directory with a loose mode is tightened as well,
-        // since nanofile may adopt a data directory created by an older build.
+        // A pre-existing loose directory is tightened as well.
         std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o755)).unwrap();
         ensure_private_dir(&nested).unwrap();
         let mode = std::fs::metadata(&nested).unwrap().permissions().mode() & 0o777;

@@ -2,22 +2,15 @@ use sea_orm_migration::prelude::*;
 
 /// Drop settings rows whose key no longer exists in the catalog.
 ///
-/// `index.sandbox` was the four-value policy (`require`/`strict`/`sealed`/
-/// `prefer`) that once decided whether a document could be parsed. It is
-/// replaced by the `sandbox.enabled` master switch, and by what the host measures
-/// for itself. Nothing reads the old key any more, so the row is invisible to
-/// the settings page and to every resolution path — but it is also a value an
-/// operator cannot see, change or delete, and a row that looks like
-/// configuration while doing nothing is worse than no row at all.
+/// `index.sandbox` was the four-value policy that once decided whether a document could
+/// be parsed; it is replaced by the `sandbox.enabled` switch and by what the host
+/// measures. Nothing reads it, so the row is invisible to the page and every resolution
+/// path — but an operator cannot see, change or delete it, and a row that looks like
+/// configuration while doing nothing is worse than no row.
 ///
 /// The key is a **frozen literal on purpose**, like the thumbnail sizes in
-/// `m20260918_000002`: the point is to remove what an older release wrote, not
-/// to agree with whatever the catalog happens to list today. A future retirement
-/// adds its own key here — and nothing else, because the table is otherwise
-/// schemaless by design.
-///
-/// There is no `down`: the value was a policy token the new model cannot
-/// express, so inventing one back would be a lie.
+/// `m20260918_000002`: remove what an older release wrote, not what the catalog lists
+/// today. There is no `down`: the policy token has no equivalent in the new model.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 

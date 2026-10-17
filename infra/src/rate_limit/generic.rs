@@ -1,34 +1,24 @@
-/// A generic sliding-window rate limiter for non-login endpoints
-/// (password reset, registration, TOTP verification, etc.).
+/// A generic sliding-window rate limiter for non-login endpoints (password reset,
+/// registration, TOTP verification, …).
 ///
-/// Tracks attempts per key within a fixed time window.
-/// Returns a human-readable message when rate-limited.
-///
-/// `max_attempts == 0` disables the limiter entirely, matching the documented
-/// "(0 = unlimited)" contract of every config field that feeds it. Callers must
-/// not silently turn 0 into 1: that would make "unlimited" mean "the first
-/// request is already rejected".
+/// Tracks attempts per key within a window and returns a human-readable message when
+/// limited. `max_attempts == 0` disables it, matching every config field's
+/// "(0 = unlimited)"; callers must not turn 0 into 1.
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Upper bound on tracked keys.
-///
-/// Keys are derived from client-controlled values (per-IP, per-link-token) on
-/// unauthenticated endpoints, so a flood of distinct keys — e.g. a routed IPv6
-/// /64 or a swarm of share tokens — could otherwise grow this map without
-/// bound: window expiry only drops a key when that same key is looked up again.
-/// Once the cap is reached the least recently active keys are evicted, which
-/// fails open (a throttled attacker may regain budget) rather than growing
-/// memory until the process dies.
+/// Cap on tracked keys. Keys come from client-controlled values on unauthenticated
+/// endpoints, so a flood (IPv6 /64, share tokens) could grow the map; window expiry
+/// only drops a key when it is looked up again. Once full, the least recently active
+/// keys are evicted — failing open rather than growing memory until the process dies.
 const MAX_KEYS: usize = 50_000;
 
 pub struct GenericRateLimiter {
     attempts: Mutex<HashMap<String, Vec<i64>>>,
-    /// Atomic so an administrator can change the budget on a running server.
-    /// The window already counted is deliberately kept: making a save reset the
-    /// counters would turn "raise the limit" into "clear every lockout".
+    /// Atomic so the budget can change on a running server; counted attempts are kept, so
+    /// raising the limit does not clear lockouts.
     max_attempts: AtomicU32,
     window_secs: AtomicI64,
 }
@@ -76,10 +66,8 @@ impl GenericRateLimiter {
         self.attempts.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Bound the map by evicting its least recently active keys.
-    ///
-    /// Only runs once [`MAX_KEYS`] is exceeded, so the common path stays a
-    /// couple of hash operations.
+    /// Evict the least recently active keys once [`MAX_KEYS`] is exceeded, keeping the
+    /// common path to a couple of hash operations.
     fn shrink(map: &mut HashMap<String, Vec<i64>>) {
         let Some(excess) = map.len().checked_sub(MAX_KEYS) else {
             return;
@@ -130,8 +118,7 @@ impl GenericRateLimiter {
             None => (false, false),
         };
         if stale {
-            // All attempts expired — drop the key so the map doesn't grow
-            // without bound on continuously-failing keys.
+            // All attempts expired: drop the key so it does not accumulate.
             map.remove(key);
             false
         } else {
@@ -150,9 +137,8 @@ impl GenericRateLimiter {
 mod tests {
     use super::{GenericRateLimiter, MAX_KEYS};
 
-    /// Raising the budget must take effect immediately *without* forgetting who
-    /// has been trying: a save that cleared the counters would turn "raise the
-    /// limit" into "clear every lockout".
+    /// Raising the budget takes effect immediately without forgetting who has been trying:
+    /// a save that cleared counters would clear every lockout.
     #[test]
     fn set_limits_keeps_what_is_already_counted() {
         let limiter = GenericRateLimiter::new(2, 3600);
@@ -185,8 +171,7 @@ mod tests {
             !limiter.is_limited("k"),
             "0 must mean unlimited, not 'the first request is rejected'"
         );
-        // Nothing is recorded either, so the map cannot grow for a disabled
-        // limiter.
+        // Disabled limiters record nothing, so the map cannot grow.
         assert!(limiter.attempts.lock().unwrap().is_empty());
     }
 
@@ -201,8 +186,7 @@ mod tests {
         assert!(!limiter.is_limited("k"));
     }
 
-    /// A flood of distinct keys must not grow the map without bound: eviction
-    /// keeps the least recently active keys out.
+    /// A flood of distinct keys must not grow the map: the oldest are evicted.
     #[test]
     fn shrink_bounds_the_map_and_drops_the_oldest_keys() {
         let limiter = GenericRateLimiter::new(5, 3600);
@@ -212,8 +196,7 @@ mod tests {
                 map.insert(format!("k{i}"), vec![i as i64]);
             }
         }
-        // A normal attempt triggers the shrink without changing the ordering:
-        // its timestamp is "now", far newer than every injected one.
+        // The trigger's timestamp is newest, so injected keys are evicted first.
         limiter.record_attempt("trigger");
 
         let guard = limiter.attempts.lock().unwrap();

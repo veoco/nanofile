@@ -1,25 +1,19 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// A durable record of one background run.
-///
-/// The in-memory run table keeps what is happening now; this keeps what
-/// happened, across a crash or a power cut. It is deliberately *not* a second
-/// source of truth while the process is alive.
+/// A durable record of one background run: the in-memory table keeps what is happening
+/// now, this keeps what happened across a crash. Not a second source of truth while
+/// the process is alive.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "job_runs")]
 pub struct Model {
-    /// The run's id, as handed to whoever submitted it.
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: String,
-    /// Stable job slug.
     #[sea_orm(not_null)]
     pub kind: String,
-    /// Submitting account, when the job belongs to one.
     #[sea_orm(nullable)]
     pub owner: Option<i32>,
-    /// `queued` | `running` | `yielded` | `succeeded` | `failed` | `cancelled`
-    /// | `timed_out` | `interrupted`.
+    /// `queued` | `running` | `yielded` | `succeeded` | `failed` | `cancelled` | ...
     #[sea_orm(not_null)]
     pub phase: String,
     /// Human summary, so an administrator can tell two runs apart.
@@ -43,8 +37,7 @@ pub struct Model {
     pub started_at: Option<i64>,
     #[sea_orm(nullable)]
     pub finished_at: Option<i64>,
-    /// When a recovery pass may take this row over. `None` for a finished row,
-    /// or one nobody is holding.
+    /// When a recovery pass may take the row over; `None` for finished/unheld rows.
     #[sea_orm(nullable)]
     pub lease_until: Option<i64>,
 }

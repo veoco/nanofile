@@ -8,26 +8,21 @@ use serde::{Deserialize, Serialize};
 pub const CONFIG_PATH_ENV: &str = "NANOFILE_CONFIG";
 /// Name of a configuration file, wherever one lives.
 pub const CONFIG_FILE_NAME: &str = "config.toml";
-/// The historical default when neither `--config` nor `NANOFILE_CONFIG` is set:
-/// `config.toml` in the working directory, which is what every existing
-/// deployment records in its auto-start entries and service registration.
+/// Default when neither `--config` nor `NANOFILE_CONFIG` is set: `config.toml` in
+/// the working directory.
 pub const DEFAULT_CONFIG_PATH: &str = CONFIG_FILE_NAME;
-/// Directory created under the user's home for a first-run configuration.
+/// Directory created under the home directory for a first-run configuration.
 ///
-/// The same name on every platform on purpose: the file this holds is the
-/// operator's only handle on a double-clicked installation, so "it is at
-/// `~/.nanofile/config.toml`" has to be one sentence, not one per platform.
+/// The same name on every platform: "it is at `~/.nanofile/config.toml`" has to
+/// be one sentence, not one per platform.
 pub const USER_CONFIG_DIR_NAME: &str = ".nanofile";
 
-/// Environment variables that supply no configuration, so their presence does
+/// `NANOFILE_*` variables that supply no configuration, so their presence does
 /// not count as "the operator configured this".
 ///
-/// The first-run setup is gated on *variable names*, not on values: a variable
-/// that is set but fails to parse is still an explicit choice, and treating it
-/// as "nothing configured" would stand a generated key next to a deployment
-/// that meant to supply one. The list below is therefore exactly the
-/// `NANOFILE_*` names that decide something other than the server's
-/// configuration.
+/// First-run setup is gated on variable *names*: a set-but-invalid value is
+/// still an explicit choice, and treating it as unconfigured would stand a
+/// generated key next to a deployment that meant to supply one.
 pub const NON_CONFIG_ENV_VARS: &[&str] = &[
     // Toggles `.env` loading only.
     "NANOFILE_DOTENV",
@@ -37,10 +32,8 @@ pub const NON_CONFIG_ENV_VARS: &[&str] = &[
     "NANOFILE_BUILD_TS",
 ];
 
-/// The catalog keys the environment supplied a value for.
-///
-/// Needed because a value's *origin* cannot be recovered from the value itself:
-/// an environment variable and a config-file entry can hold the same string.
+/// Catalog keys the environment supplied a value for: a value's origin cannot be
+/// recovered from the value itself.
 pub type EnvKeys = std::collections::BTreeSet<&'static str>;
 
 /// A loaded configuration plus where its environment overrides came from.
@@ -85,15 +78,13 @@ pub struct Config {
 
 /// How the config file and the `settings` table layer with each other.
 ///
-/// The file is *bootstrap* by default: it supplies the value of any key the
-/// database has no row for, and stops mattering for a key once one is saved.
-/// `config_policy = "override"` (or a key in `config_override_keys`) reverses
-/// that for the keys it names, which is the escape hatch for an operator who
-/// keeps a deployment file-managed. The environment always wins over both.
+/// The file is *bootstrap*: it supplies any key the database has no row for and
+/// stops mattering for a key once one is saved. `config_policy = "override"` (or
+/// a key in `config_override_keys`) reverses that for the keys it names; the
+/// environment always wins over both.
 ///
-/// This section is deliberately *not* managed from the admin UI: it is the
-/// policy that decides what the UI's saves mean, so it has to come from outside
-/// the layer the UI writes to.
+/// Deliberately not managed from the admin UI: this policy decides what the UI's
+/// saves mean, so it has to come from outside the layer the UI writes to.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SettingsConfig {
     /// `"bootstrap"` (default) or `"override"`.
@@ -101,13 +92,12 @@ pub struct SettingsConfig {
     #[serde(default = "default_config_policy")]
     pub config_policy: String,
     /// Keys the config file wins over the database for while
-    /// `config_policy = "bootstrap"` (e.g. `["server.site_url"]`).
+    /// `config_policy = "bootstrap"`, e.g. `["server.site_url"]`.
     /// Env: NANOFILE_SETTINGS_CONFIG_OVERRIDE_KEYS (comma-separated)
     #[serde(default)]
     pub config_override_keys: Vec<String>,
-    /// Seconds between re-reads of the `settings` table, so a change made on
-    /// another instance (or restored from a backup) is picked up without a
-    /// restart. `0` disables the periodic read.
+    /// Seconds between re-reads of the `settings` table, so a change from another
+    /// instance is picked up without a restart. `0` disables the periodic read.
     /// Env: NANOFILE_SETTINGS_REFRESH_INTERVAL_SECS
     #[serde(default = "default_settings_refresh_interval")]
     pub refresh_interval_secs: u64,
@@ -136,11 +126,9 @@ impl Default for SettingsConfig {
 pub struct SyncConfig {
     /// Verify that a received FS object's id equals `sha1(uncompressed JSON)`.
     ///
-    /// `"strict"` (default) rejects mismatches with 400; `"log"` accepts but
-    /// warns; `"off"` skips the check. The official server performs no such
-    /// check, but every legitimate repo-v1 client sends a matching id, so
-    /// strict is safe and prevents a client from storing an object under an id
-    /// whose content it does not match.
+    /// `"strict"` (default) rejects a mismatch with 400; `"log"` accepts and warns;
+    /// `"off"` skips the check. The official server does not check, but every
+    /// legitimate repo-v1 client sends a matching id, so strict is safe.
     /// Env: NANOFILE_SYNC_VERIFY_FS_OBJECTS
     #[serde(default = "default_verify_fs_objects")]
     pub verify_fs_objects: String,
@@ -192,13 +180,12 @@ impl SyncConfig {
 /// Web UI localization settings.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UiConfig {
-    /// Fallback UI language when the user hasn't set a preference and the
-    /// browser's Accept-Language doesn't match a supported language.
+    /// Fallback UI language when the user has no preference and the browser sends no
+    /// supported language.
     #[serde(default = "default_ui_language")]
     pub default_language: String,
-    /// Language of the system tray menu (desktop builds only): `"auto"`
-    /// follows the OS locale (falling back to `default_language`), `"en"` /
-    /// `"zh"` force a language.
+    /// Tray menu language: `"auto"` follows the OS locale (falling back to
+    /// `default_language`), `"en"` / `"zh"` force one.
     /// Env: NANOFILE_UI_TRAY_LANGUAGE
     #[serde(default = "default_tray_language")]
     pub tray_language: String,
@@ -223,21 +210,16 @@ fn default_tray_language() -> String {
 
 /// Email delivery configuration.
 ///
-/// Password reset links are **only** delivered to the account owner's inbox:
-/// the server must never echo a reset link back in an HTTP response, since that
-/// would let anyone take over any account.
-///
-/// `enabled` is a hard switch and the only way to turn mail on: an administrator
-/// cannot enable outbound mail from the Web UI, only configure how it is sent.
-/// The connection fields below are *bootstrap* values — they seed the
-/// `email_settings` row on first start and are superseded by whatever
-/// `/sysadmin/settings/email/` saves, so the SMTP host can be corrected without
-/// editing this file or restarting.
+/// Password reset links are **only** delivered to the account owner's inbox,
+/// never echoed in an HTTP response — that would let anyone take over any
+/// account. `enabled` is the only way to turn mail on: the admin UI can configure
+/// how it is sent but never enable it. The connection fields are *bootstrap*
+/// values that seed `email_settings` on first start and are superseded by
+/// whatever `/sysadmin/settings/email/` saves.
 #[derive(Deserialize, Serialize, Clone)]
 pub struct EmailConfig {
-    /// Master switch. When `false` (default) the whole mail subsystem is off:
-    /// the password-reset flow renders a generic page without minting a token,
-    /// and no notification is ever queued.
+    /// Master switch. When `false` (default) the mail subsystem is off: password
+    /// reset renders a generic page without minting a token, and nothing is queued.
     #[serde(default)]
     pub enabled: bool,
     /// SMTP host. Empty means "not configured": the subsystem stays inert even
@@ -246,9 +228,9 @@ pub struct EmailConfig {
     pub host: String,
     #[serde(default = "default_smtp_port")]
     pub port: u16,
-    /// `"starttls"` (default), `"tls"` (implicit TLS, typically port 465) or
-    /// `"none"`. `"none"` sends credentials and message bodies in the clear —
-    /// acceptable only for a relay on the same machine.
+    /// `"starttls"` (default), `"tls"` (implicit TLS, typically 465) or `"none"`.
+    /// `"none"` sends credentials and bodies in the clear — only for a same-machine
+    /// relay.
     #[serde(default = "default_smtp_tls")]
     pub tls: String,
     #[serde(default)]
@@ -267,14 +249,12 @@ pub struct EmailConfig {
     /// Delivery attempts before a queued message is marked failed.
     #[serde(default = "default_smtp_max_attempts")]
     pub max_attempts: u32,
-    /// Stop delivery without clearing the SMTP settings. A paused server still
-    /// mints password-reset tokens (the recipient can retry once delivery
-    /// resumes) but sends nothing.
+    /// Stop delivery without clearing the SMTP settings; a paused server still mints
+    /// password-reset tokens but sends nothing.
     #[serde(default)]
     pub paused: bool,
-    /// Notify the account owner when a client device signs in for the first
-    /// time. The password-reset link is not a notification and is not gated by
-    /// these switches.
+    /// Notify the account owner when a client device signs in for the first time. The
+    /// password-reset link is not a notification and is not gated by these switches.
     #[serde(default = "default_true")]
     pub notify_new_device: bool,
     /// Notify the account owner when an API key is created.
@@ -333,25 +313,21 @@ pub struct NotificationConfig {
     /// Seconds without a Pong after which the connection is dropped.
     #[serde(default = "default_client_timeout")]
     pub client_timeout: u64,
-    /// Max concurrent WebSocket connections (0 = unlimited). Prevents
-    /// connection-exhaustion DoS by capping the total number of open
-    /// notification connections.
+    /// Max concurrent WebSocket connections (0 = unlimited). Bounds connection
+    /// exhaustion by anonymous clients.
     #[serde(default = "default_notif_max_connections")]
     pub max_connections: u64,
     /// Max concurrent WebSocket connections per client IP (0 = unlimited).
     #[serde(default = "default_notif_max_connections_per_ip")]
     pub max_connections_per_ip: u64,
-    /// Seconds a connection may stay unauthenticated (no valid `subscribe`
-    /// message) before the server drops it (0 = disabled). Prevents anonymous
-    /// connections from being held open indefinitely.
+    /// Seconds a connection may stay unauthenticated before it is dropped (0 =
+    /// disabled), so anonymous connections cannot be held open indefinitely.
     #[serde(default = "default_subscribe_timeout_secs")]
     pub subscribe_timeout_secs: u64,
     /// Also accept **event** JWTs signed with the undivided `private_key`, for
-    /// external publishers written against the pre-subkey scheme.
-    ///
-    /// Off by default. Subscription JWTs (handed to every repository member)
-    /// are always rejected on `/notification/events`; enabling this only
-    /// re-admits callers that sign with the raw key themselves.
+    /// external publishers using the pre-subkey scheme. Off by default.
+    /// Subscription JWTs (handed to every repository member) are always rejected on
+    /// `/notification/events`; this only re-admits raw-key signers.
     #[serde(default)]
     pub accept_legacy_event_tokens: bool,
 }
@@ -391,16 +367,13 @@ impl Default for NotificationConfig {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TaskConfig {
     /// Max async copy/move tasks in Pending or Processing state (0 = unlimited).
-    /// New tasks beyond the cap are rejected with HTTP 429, preventing
-    /// authenticated users from exhausting the server with unbounded
-    /// background copy tasks.
-    /// Env: NANOFILE_TASKS_MAX_ACTIVE
+    /// Beyond the cap new tasks get HTTP 429, so authenticated users cannot exhaust
+    /// the server with unbounded background copies. Env: NANOFILE_TASKS_MAX_ACTIVE
     #[serde(default = "default_task_max_active")]
     pub max_active_tasks: u64,
-    /// Max runs one user may have active at once, across every job (0 =
-    /// unlimited). The server-wide cap is shared, so without a per-user limit a
-    /// single account can take every slot and the next user gets a 429.
-    /// Env: NANOFILE_TASKS_MAX_ACTIVE_PER_USER
+    /// Max runs one user may have active at once, across every job (0 = unlimited).
+    /// The server-wide cap is shared, so without this one account can take every
+    /// slot. Env: NANOFILE_TASKS_MAX_ACTIVE_PER_USER
     #[serde(default = "default_task_max_active_per_user")]
     pub max_active_per_user: u64,
     /// Byte budget for retained job runs (0 = unlimited). A run carries the
@@ -408,10 +381,8 @@ pub struct TaskConfig {
     /// Env: NANOFILE_TASKS_MAX_RETAINED_BYTES
     #[serde(default = "default_task_max_retained_bytes")]
     pub max_retained_bytes: u64,
-    /// Let heavy background jobs wait for a quiet server, and slow down while
-    /// it is busy. Off by default: the measurements it acts on need a week of
-    /// real traffic before the thresholds mean anything, and the admin page
-    /// shows them meanwhile.
+    /// Let heavy background jobs wait for a quiet server and slow down while it is
+    /// busy. Off by default: the thresholds need a week of real traffic first.
     /// Env: NANOFILE_TASKS_LOAD_AWARE
     #[serde(default)]
     pub load_aware: bool,
@@ -455,212 +426,175 @@ pub struct ServerConfig {
     pub addr: String,
     #[serde(default = "default_port")]
     pub port: u16,
-    /// Seafile-compatible server version advertised to clients via
-    /// `/api2/server-info/`. Clients parse the major/minor/patch numbers to
-    /// gate feature availability, so keep it at a version whose capabilities
-    /// this server actually implements.
-    /// Env: NANOFILE_SERVER_VERSION
+    /// Seafile-compatible server version advertised via `/api2/server-info/`. Clients
+    /// parse the version numbers to gate features, so keep it at a version whose
+    /// capabilities this server implements. Env: NANOFILE_SERVER_VERSION
     #[serde(default = "default_server_version")]
     pub version: String,
-    /// External URL for this server, e.g. "http://127.0.0.1:8082".
-    /// Used to construct download/upload/share URLs and as the default CORS origin.
-    /// If empty at startup, derived from addr:port as http://{addr}:{port}.
+    /// External URL for this server, e.g. "http://127.0.0.1:8082"; used for download,
+    /// upload and share URLs and as the default CORS origin. Empty derives it from
+    /// addr:port.
     #[serde(default = "default_site_url")]
     pub site_url: String,
     #[serde(default = "default_max_upload_size_mb")]
     pub max_upload_size_mb: u64,
-    /// Maximum size of a JSON/Form request body, in MiB. Set as the app-wide
-    /// axum `DefaultBodyLimit`; upload routes raise their own limit to
-    /// `max_upload_size_mb`. Prevents one JSON request from buffering
-    /// gigabytes into memory. Env: NANOFILE_SERVER_MAX_JSON_BODY_MB
+    /// Max JSON/Form request body in MiB, set as the app-wide axum `DefaultBodyLimit`
+    /// (upload routes raise their own limit). Stops one request buffering gigabytes.
+    /// Env: NANOFILE_SERVER_MAX_JSON_BODY_MB
     #[serde(default = "default_max_json_body_mb")]
     pub max_json_body_mb: u64,
-    /// Per-chunk size cap for resumable (Content-Range) uploads. Enforced
-    /// before the chunk body is read: an oversized chunk is rejected from the
-    /// Content-Range header alone, and the bytes actually read are also capped,
-    /// so one request can never buffer more than this amount. 0 disables the
-    /// cap. Env: NANOFILE_SERVER_MAX_CHUNK_SIZE_MB
+    /// Per-chunk cap for resumable (Content-Range) uploads, enforced from the header
+    /// and again on the bytes read. 0 disables it.
+    /// Env: NANOFILE_SERVER_MAX_CHUNK_SIZE_MB
     #[serde(default = "default_max_chunk_size_mb")]
     pub max_chunk_size_mb: u64,
     /// Total time a request handler (including reading its body) may run before
     /// the connection is answered with 408. Env: NANOFILE_SERVER_REQUEST_TIMEOUT_SECS
     #[serde(default = "default_request_timeout_secs")]
     pub request_timeout_secs: u64,
-    /// How long a client may take to send the request headers (slowloris
-    /// guard). 0 disables the deadline.
-    /// Env: NANOFILE_SERVER_HEADER_READ_TIMEOUT_SECS
+    /// How long a client may take to send request headers (slowloris guard); 0
+    /// disables the deadline. Env: NANOFILE_SERVER_HEADER_READ_TIMEOUT_SECS
     #[serde(default = "default_header_read_timeout_secs")]
     pub header_read_timeout_secs: u64,
-    /// How long a client may take to send the request body before the server
-    /// answers 408 (0 = only bounded by `request_timeout_secs`).
-    /// Env: NANOFILE_SERVER_BODY_TIMEOUT_SECS
+    /// How long a client may take to send the body before 408 (0 = only bounded by
+    /// `request_timeout_secs`). Env: NANOFILE_SERVER_BODY_TIMEOUT_SECS
     #[serde(default)]
     pub body_timeout_secs: u64,
     /// Allowed CORS origins. When empty, defaults to the origin of `site_url`.
     /// Set to a comma-separated list for multiple origins (e.g. for API clients).
     #[serde(default)]
     pub cors_allowed_origins: Vec<String>,
-    /// Server-wide secret key for cryptographic operations (CSRF tokens,
-    /// notification JWTs, the storage encryption master key and the sync-token
-    /// encryption key). Must be at least 32 bytes of entropy; 64 hex characters
-    /// from `openssl rand -hex 32` is recommended. **Release builds require an
-    /// explicit value** — startup fails rather than deriving keys from an
-    /// ephemeral secret (which would make encrypted data unreadable after a
-    /// restart). Debug builds auto-generate one with a warning.
+    /// Server-wide secret for CSRF tokens, notification JWTs, the storage encryption
+    /// master key and the sync-token encryption key. Must be at least 32 bytes of
+    /// entropy; 64 hex chars from `openssl rand -hex 32` is recommended. **Release
+    /// builds require an explicit value** — startup fails rather than deriving keys
+    /// from an ephemeral secret, which would make encrypted data unreadable after a
+    /// restart. Debug builds auto-generate one with a warning.
     /// Env: NANOFILE_SERVER_SECRET_KEY
     #[serde(default)]
     pub secret_key: String,
     /// CORS max-age in seconds (default 86400 = 24h).
     #[serde(default = "default_cors_max_age")]
     pub cors_max_age_secs: u64,
-    /// Whether the WebDAV endpoint (`/dav/...`) is enabled.
-    /// When false, all WebDAV requests return 403.
+    /// Whether the WebDAV endpoint (`/dav/...`) is enabled; false returns 403 for all.
     #[serde(default = "default_true")]
     pub webdav_enabled: bool,
-    /// Whether the SSO local-browser login flow is enabled.
-    /// When false, the `/client-sso/{token}/` browser pages return an error and
-    /// `client-sso-via-local-browser` is not advertised in `/api2/server-info/`.
-    /// Env: NANOFILE_SERVER_SSO_ENABLED
+    /// Whether the SSO local-browser login flow is enabled. When false, its browser
+    /// pages error and `client-sso-via-local-browser` is not advertised in
+    /// `/api2/server-info/`. Env: NANOFILE_SERVER_SSO_ENABLED
     #[serde(default = "default_true")]
     pub sso_enabled: bool,
-    /// Custom brand string shown by the desktop client in its title bar
-    /// (`desktop-custom-brand` in `/api2/server-info/`). When set, the value is
-    /// advertised verbatim; `None` keeps the key absent.
+    /// Custom brand string shown by the desktop client in its title bar, advertised
+    /// verbatim as `desktop-custom-brand`; `None` keeps the key absent.
     /// Env: NANOFILE_SERVER_DESKTOP_CUSTOM_BRAND
     #[serde(default)]
     pub desktop_custom_brand: Option<String>,
-    /// Path (relative to the server root) of a custom logo the desktop client
-    /// fetches and shows (`desktop-custom-logo` in `/api2/server-info/`). The
-    /// client joins this onto the server URL itself, so a full URL here would
-    /// be mangled. `None` keeps the key absent.
+    /// Path (relative to the server root) of a custom logo the desktop client fetches,
+    /// advertised as `desktop-custom-logo`. The client joins this onto the server URL
+    /// itself, so a full URL would be mangled. `None` keeps the key absent.
     /// Env: NANOFILE_SERVER_DESKTOP_CUSTOM_LOGO
     #[serde(default)]
     pub desktop_custom_logo: Option<String>,
-    /// Encryption version advertised as `encrypted_library_version` in
-    /// `/api2/server-info/` and used when the **server** generates the keys of
-    /// a library created with a bare `passwd` (seahub's
-    /// `ENCRYPTED_LIBRARY_VERSION`).
+    /// Encryption version advertised as `encrypted_library_version` and used when the
+    /// **server** generates keys for a library created with a bare `passwd`.
     ///
-    /// Official clients take this value verbatim as the `enc_version` of a
-    /// library they create themselves, and nanofile only implements the two
-    /// versions that use AES-256-CBC: 2 (fixed salt) and 4 (per-library salt).
-    /// Seafile's version 3 is a different cipher (AES-128-ECB for the key
-    /// wrapping) and is rejected by the key schedule, so advertising it makes
-    /// every encrypted-library creation fail; the seahub default is 2.
+    /// Clients take it verbatim as `enc_version`. Only the AES-256-CBC versions 2
+    /// (fixed salt) and 4 (per-library salt) are implemented; seafile's version 3
+    /// uses a different cipher and fails the key schedule, so advertising it breaks
+    /// every encrypted-library creation. Seahub's default is 2.
     /// Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_VERSION
     #[serde(default = "default_encrypted_library_version")]
     pub encrypted_library_version: i32,
-    /// Hash algorithm used for encrypted-library passwords, advertised as
-    /// `encrypted_library_pwd_hash_algo` in `/api2/server-info/` (seahub's
-    /// `ENCRYPTED_LIBRARY_PWD_HASH_ALGO`). The desktop client compares it
-    /// verbatim and, when it is present, generates a `pwd_hash` *instead of* a
-    /// `magic`; Android and the web UI let the server hash a bare `passwd` with
-    /// it. `None` (or an empty string) keeps the legacy `magic` flow, which is
-    /// upstream's default.
+    /// Hash algorithm for encrypted-library passwords, advertised as
+    /// `encrypted_library_pwd_hash_algo` (seahub's `ENCRYPTED_LIBRARY_PWD_HASH_ALGO`).
+    /// The desktop client compares it verbatim and, when present, sends a `pwd_hash`
+    /// instead of a `magic`; Android and the web UI let the server hash a bare
+    /// `passwd` with it. `None` or empty keeps the legacy `magic` flow.
     ///
-    /// Accepted values are exactly [`infra`'s `pbkdf2_sha256` and `argon2id`] —
-    /// lowercase, spelled as seafile spells them; anything else fails at
-    /// startup rather than confusing every client.
+    /// Accepted values are exactly `pbkdf2_sha256` and `argon2id`; anything else
+    /// fails at startup rather than confusing every client.
     /// Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_ALGO
     #[serde(default)]
     pub encrypted_library_pwd_hash_algo: Option<String>,
     /// Parameters of `encrypted_library_pwd_hash_algo`, advertised alongside it
-    /// (seahub's `ENCRYPTED_LIBRARY_PWD_HASH_PARAMS`). Format depends on the
-    /// algorithm: an iteration count for `pbkdf2_sha256`, `t,m,p` for
-    /// `argon2id`. `None` means the algorithm's own defaults (1000, and
-    /// `2,102400,8`).
+    /// (seahub's `ENCRYPTED_LIBRARY_PWD_HASH_PARAMS`): an iteration count for
+    /// `pbkdf2_sha256`, `t,m,p` for `argon2id`. `None` uses the algorithm defaults
+    /// (1000, and `2,102400,8`).
     ///
-    /// Note that the desktop client cannot read this key (it looks for
-    /// `encrypted_library_pwd_params`, and assigns the *algorithm* to the value
-    /// it sends back), so client-created libraries always use the defaults; the
-    /// server still honours the configured value when it hashes a bare
-    /// `passwd` itself.
+    /// The desktop client cannot read this key (it looks for
+    /// `encrypted_library_pwd_params` and assigns the algorithm to the value), so
+    /// client-created libraries always use the defaults; the server honours the
+    /// configured value when it hashes a bare `passwd` itself.
     /// Env: NANOFILE_SERVER_ENCRYPTED_LIBRARY_PWD_HASH_PARAMS
     #[serde(default)]
     pub encrypted_library_pwd_hash_params: Option<String>,
-    /// Advertise the `file-search` feature (gates the desktop client's search
-    /// tab and mobile search). The backend has a search API either way.
+    /// Advertise `file-search` (gates the desktop client's search tab and mobile
+    /// search); the search API exists either way.
     /// Env: NANOFILE_SERVER_FILE_SEARCH_ENABLED
     #[serde(default = "default_true")]
     pub file_search_enabled: bool,
-    /// Whether anonymous share links and upload links are allowed at all.
-    /// When false, creating new share/upload links is rejected and all existing
-    /// links (web preview `/f/`, `/d/`, `/u/`) become inaccessible, while the
-    /// manage pages still allow viewing/deleting them. Set to false to disable
-    /// all external link sharing server-wide.
+    /// Whether anonymous share and upload links are allowed. When false, creating them
+    /// is rejected and existing `/f/`, `/d/`, `/u/` links become inaccessible, while
+    /// the manage pages still list them.
     /// Env: NANOFILE_SERVER_SHARE_LINK_ENABLED
     #[serde(default = "default_true")]
     pub share_link_enabled: bool,
     /// IP addresses of trusted reverse proxies. Forwarded client-address headers
-    /// (`CF-Connecting-IP`, `X-Forwarded-For`) are only honored for rate limiting
-    /// when the TCP peer is one of these; otherwise the raw TCP peer address is
-    /// used, so clients cannot spoof the header to bypass per-IP limits. When
-    /// empty (default) the server is assumed to be exposed directly.
+    /// (`CF-Connecting-IP`, `X-Forwarded-For`) are honored for rate limiting only when
+    /// the TCP peer is one of these; otherwise the raw peer address is used, so clients
+    /// cannot spoof the header to bypass per-IP limits. Empty means exposed directly.
     ///
-    /// Each entry is an exact IP, a CIDR range (e.g. `172.16.0.0/12`,
-    /// `fd00::/8`), or one of the keywords `loopback`, `private`, `link-local`,
-    /// `unique-local`. A Cloudflare Tunnel (`cloudflared`) reaches the origin
-    /// from a loopback or private address, and Cloudflare sets `CF-Connecting-IP`
-    /// to the real visitor — so `trusted_proxies = ["private"]` plus binding the
-    /// origin to `127.0.0.1` (or isolating it on the Docker network) restores
-    /// correct client IPs. Trusting `private` only on a host where the origin is
-    /// reachable solely through that proxy, or a LAN peer could forge the
-    /// headers.
+    /// Each entry is an exact IP, a CIDR range (`172.16.0.0/12`, `fd00::/8`), or one of
+    /// `loopback`, `private`, `link-local`, `unique-local`. `cloudflared` reaches the
+    /// origin from a loopback or private address and sets `CF-Connecting-IP` to the real
+    /// visitor, so `trusted_proxies = ["private"]` restores correct client IPs when the
+    /// origin is bound to `127.0.0.1`; on a host reachable by LAN peers, trusting
+    /// `private` would let them forge the headers.
     /// Env: NANOFILE_SERVER_TRUSTED_PROXIES (comma-separated)
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
-    /// Hosts allowed to appear in generated absolute URLs (download and block
-    /// links) when `site_url` is left at its built-in default.
+    /// Hosts allowed in generated absolute URLs (download and block links) while
+    /// `site_url` is left at its built-in default.
     ///
-    /// While `site_url` is unconfigured, the request `Host` is echoed into those
-    /// URLs so LAN clients hitting the server by IP receive a reachable address.
-    /// A `Host` the server did not choose is attacker-influenced (DNS rebinding,
-    /// wildcard vhost, misconfigured proxy), and a client that follows the
-    /// returned URL sends its capability token to that host.
-    ///
-    /// When this list is **non-empty** only those values are accepted and
-    /// anything else falls back to `site_url`. When it is empty the previous
-    /// behaviour is kept, and startup logs an advisory. Setting `site_url` to
-    /// the address clients actually use makes this setting unnecessary.
+    /// The request `Host` is echoed into those URLs so LAN clients hitting the server
+    /// by IP get a reachable address. A Host the server did not choose is
+    /// attacker-influenced (DNS rebinding, wildcard vhost, misconfigured proxy), and a
+    /// client that follows the returned URL sends its capability token there. When
+    /// this list is non-empty only these values are accepted; when empty the previous
+    /// behaviour is kept and startup logs an advisory. Setting `site_url` to the
+    /// address clients actually use makes the list unnecessary.
     /// Env: NANOFILE_SERVER_ALLOWED_HOSTS (comma-separated)
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
-    /// Whether to honour the request `Host` header when building absolute URLs
-    /// while `site_url` is left at its built-in default.
+    /// Whether to honour the request `Host` header when building absolute URLs while
+    /// `site_url` is left at its built-in default.
     ///
-    /// Defaults to `true` because direct LAN access relies on it (the client's
-    /// browser and the desktop client reach the server by an address it cannot
-    /// know). The header is only trusted when it is a syntactically valid
-    /// authority and, when configured, matches `allowed_hosts`. Set to `false`
-    /// to always use `site_url` — recommended whenever the server is exposed
-    /// through a proxy or a wildcard vhost, where an attacker-influenced Host
-    /// would otherwise be echoed into a URL that carries a capability token.
+    /// Defaults to `true` because direct LAN access relies on it. The header is only
+    /// trusted when it is a syntactically valid authority and, when configured,
+    /// matches `allowed_hosts`. Set to `false` to always use `site_url` — recommended
+    /// behind a proxy or wildcard vhost, where an attacker-influenced Host would
+    /// otherwise be echoed into a token-bearing URL.
     /// Env: NANOFILE_SERVER_TRUST_REQUEST_HOST
     #[serde(default = "default_true")]
     pub trust_request_host: bool,
-    /// Maximum resources a single WebDAV `PROPFIND` may return (0 = unlimited).
+    /// Max resources one WebDAV `PROPFIND` may return (0 = unlimited).
     ///
-    /// RFC 4918 makes `Depth: infinity` the default when the header is absent,
-    /// so one request can ask for an entire library. The multistatus document is
-    /// assembled in memory, so without a cap a single request against a huge
-    /// library — or a handful of concurrent ones — can exhaust the process.
-    /// Over the cap the request is answered `507` rather than truncated, which
-    /// tells the client to retry with `Depth: 1`.
+    /// RFC 4918 makes `Depth: infinity` the default, so one request can ask for an
+    /// entire library and the multistatus document is assembled in memory. Over the
+    /// cap the request is answered `507` rather than truncated, telling the client to
+    /// retry with `Depth: 1`.
     /// Env: NANOFILE_SERVER_MAX_PROPFIND_ENTRIES
     #[serde(default = "default_max_propfind_entries")]
     pub max_propfind_entries: usize,
     /// Add `includeSubDomains` to the HSTS header (HTTPS deployments only).
     ///
-    /// Off by default: the pin only covers host names the operator controls, and
-    /// a deployment may serve unrelated plain-HTTP sites on sibling host names.
-    /// Env: NANOFILE_SERVER_HSTS_INCLUDE_SUBDOMAINS
+    /// Off by default: a deployment may serve unrelated plain-HTTP sites on sibling
+    /// host names. Env: NANOFILE_SERVER_HSTS_INCLUDE_SUBDOMAINS
     #[serde(default)]
     pub hsts_include_subdomains: bool,
-    /// Whether the system tray icon is shown. Only meaningful for binaries
-    /// compiled with `--features tray` (plain builds have no tray code at
-    /// all). Set to false to run headless even in a desktop session, e.g. for
-    /// auto-started instances that should stay invisible.
-    /// Env: NANOFILE_SERVER_TRAY
+    /// Whether the system tray icon is shown (only for `--features tray` builds). Set
+    /// to false to run headless in a desktop session, e.g. for auto-started instances
+    /// that should stay invisible. Env: NANOFILE_SERVER_TRAY
     #[serde(default = "default_true")]
     pub tray: bool,
 }
@@ -737,13 +671,12 @@ impl Default for ServerConfig {
 impl ServerConfig {
     /// Validate the encrypted-library wire contract.
     ///
-    /// Every one of these values is echoed to clients through
-    /// `/api2/server-info/` and then taken verbatim: `encrypted_library_version`
-    /// becomes the `enc_version` of the libraries a client creates, and
-    /// `encrypted_library_pwd_hash_algo` decides whether it computes a
-    /// `pwd_hash` *instead of* a `magic`. A value nanofile cannot honour
-    /// therefore breaks encrypted-library creation on every client, so it is
-    /// rejected at startup rather than at the first request.
+    /// These values are echoed through `/api2/server-info/` and taken verbatim:
+    /// `encrypted_library_version` becomes a new library's `enc_version`, and
+    /// `encrypted_library_pwd_hash_algo` decides whether the client sends a `pwd_hash`
+    /// instead of a `magic`. A value nanofile cannot honour breaks encrypted-library
+    /// creation on every client, so it is rejected at startup rather than at the
+    /// first request.
     ///
     /// Returns `Err` with a message meant to be shown to the operator.
     pub fn validate_encrypted_library(&self) -> Result<(), String> {
@@ -764,8 +697,7 @@ impl ServerConfig {
             .map(str::trim)
             .unwrap_or_default();
         if algo.is_empty() {
-            // Upstream's default (`ENCRYPTED_LIBRARY_PWD_HASH_ALGO = ""`): the
-            // legacy magic flow, no `pwd_hash` at all.
+            // Upstream's default (empty): the legacy magic flow, no `pwd_hash`.
             return Ok(());
         }
         if !crate::crypto::pwd_hash::is_supported_algo(algo) {
@@ -787,34 +719,23 @@ impl ServerConfig {
         .map_err(|e| format!("server.encrypted_library_pwd_hash_params is invalid: {e}"))
     }
 
-    /// Whether `site_url` is still the built-in default (`http://127.0.0.1:8082`),
-    /// i.e. the admin has not configured an external address.
+    /// Whether `site_url` is still the built-in default (`http://127.0.0.1:8082`).
     ///
-    /// Used by download/block URL construction: an unconfigured site_url is not
-    /// reachable from other machines, so the URL falls back to the request Host
-    /// header instead (mirroring seahub's FILE_SERVER_ROOT semantics, where the
-    /// admin-provided root always wins).
+    /// An unconfigured site_url is not reachable from other machines, so URL
+    /// construction falls back to the request Host header.
     pub fn site_url_is_default(&self) -> bool {
         self.site_url.trim().trim_end_matches('/') == default_site_url()
     }
 
     /// URL base (`scheme://host[:port]`) for download / block links.
     ///
-    /// Mirrors seahub's `FILE_SERVER_ROOT` semantics: a configured `site_url`
-    /// (the admin-provided external address) always wins, because only the
-    /// admin knows the address clients can actually reach — e.g. the public
-    /// hostname behind a reverse proxy. The request Host header is only used
-    /// as a fallback while `site_url` is still the built-in default
-    /// (`http://127.0.0.1:8082`), so LAN clients hitting the server by IP get
-    /// a reachable URL. In that fallback the Host value is used verbatim
-    /// (its port is kept when the client actually used one, omitted when it
-    /// used the default 80/443) — the server's internal listen port is never
-    /// appended, which used to produce unreachable URLs like
-    /// `http://host:8082/...` behind a reverse proxy.
-    ///
-    /// Because the Host is client-supplied, a configured `allowed_hosts` list
-    /// restricts which values may be echoed; anything else falls back to
-    /// `site_url`.
+    /// Mirrors seahub's `FILE_SERVER_ROOT`: a configured `site_url` always wins,
+    /// because only the admin knows the address clients can reach. The request `Host`
+    /// is used only while `site_url` is the built-in default, so LAN clients get a
+    /// reachable URL; its port is kept only when the client used one, never replaced
+    /// by the internal listen port (which produced unreachable `:8082` URLs behind a
+    /// reverse proxy). Because the Host is client-supplied, `allowed_hosts` restricts
+    /// which values may be echoed.
     pub fn download_url_base(&self, host_header: Option<&str>) -> String {
         let base = self.site_url.trim_end_matches('/');
         if !self.site_url_is_default() {
@@ -829,16 +750,12 @@ impl ServerConfig {
                     .iter()
                     .any(|allowed| allowed.eq_ignore_ascii_case(h)))
         {
-            // When `allowed_hosts` is empty the Host is only echoed if it names a
-            // literal address, because the URL being built **carries a capability
-            // token**. A DNS name here is attacker-influenceable (DNS rebinding,
-            // a wildcard vhost, a proxy forwarding arbitrary Host values) and
-            // following the returned link would hand that token to whoever owns
-            // the name. Literal addresses are what the zero-config LAN case
-            // documents ("LAN clients hitting the server by IP"): they cannot be
-            // pointed at a third party by rebinding the server's own address.
-            // An operator who wants a hostname echoed lists it in
-            // `allowed_hosts`.
+            // When `allowed_hosts` is empty the Host is only echoed if it names a literal
+            // address, because the URL built here **carries a capability token**. A DNS name
+            // is attacker-influenceable (DNS rebinding, wildcard vhost, a proxy forwarding
+            // arbitrary Host values) and following the link would hand the token to whoever
+            // owns the name. Literal addresses are the documented zero-config LAN case; a
+            // hostname can be echoed by listing it in `allowed_hosts`.
             if !self.allowed_hosts.is_empty() || host_names_literal_address(h) {
                 return format!("{}://{h}", self.site_url_scheme());
             }
@@ -855,11 +772,8 @@ impl ServerConfig {
         }
     }
 
-    /// Whether `site_url` uses the `https` scheme.
-    ///
-    /// Uses `get(..8)` rather than a byte slice so a short or multi-byte value
-    /// can never panic; the comparison is case-insensitive because URL schemes
-    /// are.
+    /// Whether `site_url` uses `https`. Uses `get(..8)` so a short or multi-byte value
+    /// cannot panic; the comparison is case-insensitive because schemes are.
     fn site_url_is_https(&self) -> bool {
         self.site_url
             .trim()
@@ -867,20 +781,16 @@ impl ServerConfig {
             .is_some_and(|p| p.eq_ignore_ascii_case("https://"))
     }
 
-    /// Whether cookies should include the `Secure` flag.
-    /// Enabled when the site_url scheme is `https`.
+    /// Whether cookies carry `Secure`: true when `site_url` uses https.
     pub fn secure_cookies(&self) -> bool {
         self.site_url_is_https()
     }
 
-    /// Extract the origin (scheme + host + port) from `site_url`.
-    /// e.g. "http://127.0.0.1:8082/some/path" -> "http://127.0.0.1:8082"
+    /// Extract the origin (scheme + host + port) from `site_url`, e.g.
+    /// `http://127.0.0.1:8082/some/path` -> `http://127.0.0.1:8082`.
     ///
-    /// Never panics: a malformed value (`"http:/"`, an empty string, a value
-    /// whose scheme is longer than the string) yields the built-in default
-    /// origin instead of slicing at a byte offset that may not be a char
-    /// boundary. [`Config::normalize`] repairs the common cases at load time,
-    /// so this is the last-resort floor.
+    /// Never panics: a malformed value yields the built-in default instead of slicing
+    /// at a non-char boundary. [`Config::normalize`] repairs common cases at load time.
     pub fn site_url_origin(&self) -> String {
         let url = self.site_url.trim();
         let (scheme, rest) = match url.split_once("://") {
@@ -896,8 +806,7 @@ impl ServerConfig {
         format!("{scheme}{authority}")
     }
 
-    /// Return the list of CORS origins to allow.
-    /// If `cors_allowed_origins` is empty, uses the origin of `site_url`.
+    /// CORS origins to allow; defaults to the origin of `site_url` when empty.
     pub fn cors_origins(&self) -> Vec<String> {
         if self.cors_allowed_origins.is_empty() {
             vec![self.site_url_origin()]
@@ -907,12 +816,10 @@ impl ServerConfig {
     }
 }
 
-/// Whether a `Host` header value is safe to echo into an absolute URL.
+/// Whether a `Host` value is safe to echo into an absolute URL.
 ///
-/// The value is client-supplied, so only a plain `host[:port]` authority is
-/// accepted: ASCII, no userinfo, no path/query/fragment, no whitespace or
-/// control characters, and a numeric port in range. Anything else falls back to
-/// `site_url`.
+/// Only a plain ASCII `host[:port]` is accepted: no userinfo, path, query,
+/// fragment, whitespace or control characters, and a numeric port in range.
 pub fn is_valid_host_header(host: &str) -> bool {
     if host.is_empty() || host.len() > 255 || !host.is_ascii() {
         return false;
@@ -974,14 +881,11 @@ fn is_hostname(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_')
 }
 
-/// Whether a validated `Host` header names a literal IP address (or localhost).
+/// Whether a validated `Host` names a literal IP address (or localhost).
 ///
-/// `download_url_base` only echoes a Host like this when `allowed_hosts` is
-/// unset: the URLs it builds carry capability tokens, and a DNS name in the Host
-/// is attacker-influenceable (DNS rebinding, wildcard vhost, a proxy that
-/// forwards arbitrary Host values). LAN deployments reach the server by address
-/// anyway, so this keeps the documented zero-config behaviour without letting a
-/// hostile name into a token-bearing URL.
+/// Token-bearing URLs may echo only these when `allowed_hosts` is unset: a DNS
+/// name is attacker-influenceable, while LAN deployments reach the server by
+/// address anyway.
 fn host_names_literal_address(host: &str) -> bool {
     // Strip a `:port` suffix; bracketed IPv6 keeps its own colons.
     let name = if host.starts_with('[') {
@@ -1002,9 +906,8 @@ fn host_names_literal_address(host: &str) -> bool {
 pub struct DatabaseConfig {
     #[serde(default = "default_db_url")]
     pub url: String,
-    /// Number of pooled SQLite connections. Under WAL, SQLite allows many
-    /// concurrent readers (but a single writer), so this mainly improves read
-    /// throughput. Env: NANOFILE_DATABASE_MAX_CONNECTIONS
+    /// Pooled SQLite connections (WAL allows many readers but one writer), mainly
+    /// improving read throughput. Env: NANOFILE_DATABASE_MAX_CONNECTIONS
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
@@ -1033,26 +936,22 @@ pub struct StorageConfig {
     pub temp_dir: PathBuf,
     #[serde(default)]
     pub max_storage_bytes: u64,
-    /// Path to the `ffmpeg` binary used to generate video thumbnails. When the
-    /// binary isn't found, video files fall back to a play-icon placeholder.
-    /// Env: NANOFILE_STORAGE_FFMPEG_PATH
+    /// `ffmpeg` binary for video thumbnails; when it is not found, videos fall back
+    /// to a play-icon placeholder. Env: NANOFILE_STORAGE_FFMPEG_PATH
     #[serde(default = "default_ffmpeg_path")]
     pub ffmpeg_path: String,
-    /// Max concurrent in-flight resumable (Content-Range) uploads tracked by
-    /// the temp manager (0 = unlimited). Prevents abandoned chunked uploads —
-    /// including anonymous upload-link uploads — from exhausting memory and
-    /// disk. Env: NANOFILE_STORAGE_MAX_TEMP_UPLOADS
+    /// Max concurrent in-flight resumable uploads tracked by the temp manager (0 =
+    /// unlimited). Bounds memory and disk from abandoned chunked uploads, including
+    /// anonymous upload-link ones. Env: NANOFILE_STORAGE_MAX_TEMP_UPLOADS
     #[serde(default = "default_max_temp_uploads")]
     pub max_temp_uploads: u64,
-    /// Max total declared bytes across active temp uploads. Defaults to 32 GiB
-    /// so a client cannot declare a disk-filling set of resumable uploads;
-    /// 0 = unlimited.
+    /// Max declared bytes across active temp uploads (default 32 GiB), so a client
+    /// cannot declare a disk-filling set of resumable uploads; 0 = unlimited.
     /// Env: NANOFILE_STORAGE_MAX_TEMP_UPLOAD_BYTES
     #[serde(default = "default_max_temp_upload_bytes")]
     pub max_temp_upload_bytes: u64,
-    /// Hours an abandoned resumable-upload temp file is retained before the
-    /// periodic cleanup task removes it (0 = disable the cleanup task).
-    /// Env: NANOFILE_STORAGE_TEMP_UPLOAD_TTL_HOURS
+    /// Hours an abandoned resumable-upload temp file is kept before cleanup (0 =
+    /// disable the cleanup task). Env: NANOFILE_STORAGE_TEMP_UPLOAD_TTL_HOURS
     #[serde(default = "default_temp_upload_ttl_hours")]
     pub temp_upload_ttl_hours: u64,
     /// Max files in a single zip archive (0 = unlimited). Prevents one zip
@@ -1061,46 +960,39 @@ pub struct StorageConfig {
     /// Env: NANOFILE_STORAGE_MAX_ZIP_ENTRIES
     #[serde(default = "default_max_zip_entries")]
     pub max_zip_entries: u64,
-    /// Max total uncompressed bytes in a single zip archive. Defaults to 8 GiB
-    /// so one "download as zip" cannot exhaust the disk; 0 = unlimited.
-    /// Env: NANOFILE_STORAGE_MAX_ZIP_BYTES
+    /// Max total uncompressed bytes in one zip archive (default 8 GiB; 0 =
+    /// unlimited), so one "download as zip" cannot exhaust the disk.
     #[serde(default = "default_max_zip_bytes")]
     pub max_zip_bytes: u64,
-    /// Byte budget for all unconsumed zip-download tokens held in memory
-    /// (0 = unlimited). A token carries the full entry list including every
-    /// file's block ids, so this — not the token count — is what decides how
-    /// much memory a flood of zip requests can pin. Oldest tokens are evicted
-    /// first; a single archive whose listing exceeds the budget is rejected.
+    /// Byte budget for all unconsumed zip-download tokens (0 = unlimited). A token
+    /// carries every file's block ids, so this bounds memory where a count does not.
+    /// Oldest tokens are evicted first; a single oversized archive is rejected.
     /// Env: NANOFILE_STORAGE_MAX_ZIP_TASK_BYTES
     #[serde(default = "default_max_zip_task_bytes")]
     pub max_zip_task_bytes: u64,
-    /// Thumbnail cache directory for file thumbnails.
-    /// Defaults to `data/thumbnails` for backward compatibility.
-    /// Env: NANOFILE_STORAGE_THUMBNAIL_DIR
+    /// Thumbnail cache directory (default `data/thumbnails` for backward
+    /// compatibility). Env: NANOFILE_STORAGE_THUMBNAIL_DIR
     #[serde(default = "default_thumbnail_dir")]
     pub thumbnail_dir: PathBuf,
-    /// Avatar storage directory for user avatar files.
-    /// Defaults to `data/avatars` for backward compatibility.
+    /// Avatar storage directory (default `data/avatars` for backward compatibility).
     /// Env: NANOFILE_STORAGE_AVATAR_DIR
     #[serde(default = "default_avatar_dir")]
     pub avatar_dir: PathBuf,
     /// Server-side transparent at-rest encryption for file blocks.
     ///
-    /// - `off`: blocks are stored exactly as received (legacy plaintext).
-    /// - `on`: every newly written block is encrypted on disk and every read is
-    ///   decrypted; requires `encryption_key`.
-    /// - `lazy`: new writes are encrypted, reads accept both encrypted and
-    ///   legacy plaintext blocks — the migration window.
+    /// - `off`: blocks are stored as received (legacy plaintext).
+    /// - `on`: new writes are encrypted on disk and reads are decrypted; requires
+    ///   `encryption_key`.
+    /// - `lazy`: new writes are encrypted, reads accept both — the migration window.
     ///
     /// The block id (`sha1` of the logical bytes) is unchanged in every mode, so
-    /// Seafile clients and the existing content-addressed dedup keep working.
+    /// Seafile clients and content-addressed dedup keep working.
     /// Env: NANOFILE_STORAGE_BLOCK_ENCRYPTION_MODE
     #[serde(default = "default_block_encryption_mode")]
     pub block_encryption_mode: String,
-    /// Master key for block at-rest encryption. Set it via the
-    /// `NANOFILE_STORAGE_ENCRYPTION_KEY` / `NANOFILE_STORAGE_ENCRYPTION_KEY_FILE`
-    /// environment variables. It is never serialized into `config.toml` (or its
-    /// `.bak`), so secrets never end up on disk or in backups via the config.
+    /// Master key for block at-rest encryption, set via
+    /// `NANOFILE_STORAGE_ENCRYPTION_KEY` or `..._KEY_FILE`. Never serialized into
+    /// `config.toml` (or its `.bak`), so secrets never reach disk or backups.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption_key: Option<String>,
 }
@@ -1150,10 +1042,8 @@ fn default_block_encryption_mode() -> String {
 }
 
 impl StorageConfig {
-    /// Parse `block_encryption_mode` into the runtime encryption mode.
-    ///
-    /// Invalid values default to `Off` (legacy behaviour) so a bad value can
-    /// never silently encrypt or decrypt blocks.
+    /// Parse `block_encryption_mode` into the runtime mode. Invalid values default to
+    /// `Off`, so a bad value can never silently encrypt or decrypt blocks.
     pub fn block_encryption_mode(
         &self,
     ) -> crate::storage::encrypting_block_store::BlockEncryptionMode {
@@ -1191,12 +1081,10 @@ impl Default for StorageConfig {
 pub struct AuthConfig {
     #[serde(default = "default_password_hash_iterations")]
     pub password_hash_iterations: u32,
-    /// Lifetime of an account (API/session) token, in days.
-    ///
-    /// **`0` means the token never expires** on the API login path
-    /// (`POST /api2/auth-token/`), which is a permanent bearer credential until
-    /// a password change or reset revokes it. The web-UI login path treats `0`
-    /// as "expires immediately" instead. Leave this at its default.
+    /// Lifetime of an account (API/session) token in days. **`0` means never expire**
+    /// on the API login path (`POST /api2/auth-token/`), a permanent bearer credential
+    /// until a password change or reset revokes it; the web-UI path treats `0` as
+    /// "expires immediately" instead. Leave this at its default.
     #[serde(default = "default_api_token_ttl_days")]
     pub api_token_ttl_days: u64,
     /// Lifetime of a repository sync token, in days.
@@ -1347,8 +1235,8 @@ fn default_true() -> bool {
     true
 }
 
-/// seahub's `ENCRYPTED_LIBRARY_VERSION` default. Only 2 and 4 are supported by
-/// the key schedule in `infra::crypto::key_derivation` (both AES-256-CBC).
+/// Seahub's default. Only 2 and 4 are supported by the key schedule (both
+/// AES-256-CBC).
 fn default_encrypted_library_version() -> i32 {
     2
 }
@@ -1379,26 +1267,21 @@ fn default_password_min_length() -> u32 {
 pub struct LoggingConfig {
     #[serde(default = "default_log_level")]
     pub level: String,
-    /// Whether logs go to a rotating file instead of stdout. Unset = auto:
-    /// file when running as a desktop (tray) app or in a Windows
-    /// GUI-subsystem build, stdout otherwise (servers, Docker).
+    /// Whether logs go to a rotating file instead of stdout. Unset = auto: file for a
+    /// desktop (tray) or Windows GUI build, stdout otherwise (servers, Docker).
     /// Env: NANOFILE_LOG_FILE_ENABLED
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_enabled: Option<bool>,
-    /// Log file path. Unset: resolved to `nanofile.log` next to the nanofile
-    /// binary in file-logging mode and written back here (absolute), so a
-    /// login-started instance always uses the same file. A relative path is
-    /// resolved against the binary's directory, never the (variable) working
-    /// directory.
+    /// Log file path. Unset: `nanofile.log` next to the binary, written back here
+    /// (absolute) so a login-started instance uses the same file. A relative path is
+    /// resolved against the binary's directory, never the working directory.
     /// Env: NANOFILE_LOG_FILE
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<PathBuf>,
-    /// Per-file size cap in MB before rotation. Clamped to a minimum of 1 so
-    /// the log file can never grow unbounded.
+    /// Per-file size cap in MB before rotation, clamped to a minimum of 1.
     #[serde(default = "default_log_max_file_size_mb")]
     pub max_file_size_mb: u64,
-    /// How many rotated backup files (`nanofile.log.1`, `.2`, …) to keep.
-    /// 0 truncates the log in place once the size cap is reached.
+    /// Rotated backups to keep (`nanofile.log.1`, `.2`, …); 0 truncates in place.
     #[serde(default = "default_log_max_backups")]
     pub max_backups: u32,
 }
@@ -1433,10 +1316,10 @@ pub struct GcConfig {
     pub enabled: bool,
     #[serde(default = "default_gc_interval_hours")]
     pub interval_hours: u64,
-    /// Blocks written less than this many seconds ago are never deleted, even
-    /// when the reference snapshot cannot see the commit that will reference
-    /// them: an upload writes its blocks before committing them, so a pass that
-    /// started just before that commit would otherwise delete live data.
+    /// Blocks written less than this many seconds ago are never deleted, even when the
+    /// reference snapshot cannot see the commit that will reference them: an upload
+    /// writes its blocks before committing them, so a pass started just before that
+    /// commit would otherwise delete live data.
     /// Env: NANOFILE_GC_MIN_BLOCK_AGE_SECS
     #[serde(default = "default_gc_min_block_age_secs")]
     pub min_block_age_secs: u64,
@@ -1464,10 +1347,8 @@ fn default_gc_min_block_age_secs() -> u64 {
 pub struct IndexConfig {
     pub enabled: bool,
     pub index_dir: PathBuf,
-    /// Let the background pass index files the index has never seen (and files
-    /// whose extractor has changed) when the server is quiet.
-    ///
-    /// Env: NANOFILE_INDEX_BACKFILL_ENABLED
+    /// Let the background pass index files the index has never seen (or whose
+    /// extractor changed) when the server is quiet. Env: NANOFILE_INDEX_BACKFILL_ENABLED
     #[serde(default = "default_true")]
     pub backfill_enabled: bool,
 }
@@ -1484,22 +1365,16 @@ impl Default for IndexConfig {
 
 /// The sandbox that bounds every child process which reads untrusted bytes.
 ///
-/// Documents, images, EXIF and media (ffmpeg) are all parsed or decoded in a
-/// separate process whose memory and CPU are bounded, and whose file, network
-/// and process confinement is whatever the platform can supply. This section is
-/// the master switch over those features and nothing else: which layers a host
-/// gives is a platform property, and it is measured and reported rather than
+/// Documents, images, EXIF and media are parsed or decoded in a separate process
+/// with bounded memory/CPU and whatever file, network and process confinement the
+/// platform supplies. Which layers a host gives is measured and reported, not
 /// configured.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SandboxConfig {
-    /// Master switch over every feature that parses untrusted bytes.
-    ///
-    /// With it off, documents are not parsed for the index, image and media
-    /// thumbnails are not generated, EXIF is not read and avatars are not
-    /// processed. The features are *disabled* rather than run inside the server
-    /// process: there is no unconfined path.
-    ///
-    /// Env: NANOFILE_SANDBOX_ENABLED
+    /// Master switch over every feature that parses untrusted bytes. With it off,
+    /// documents are not parsed for the index, thumbnails/EXIF are not produced and
+    /// avatars are not processed. Features are *disabled* rather than run unconfined
+    /// in the server process. Env: NANOFILE_SANDBOX_ENABLED
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -1512,12 +1387,11 @@ impl Default for SandboxConfig {
 
 /// Load a `.env` file, unless `NANOFILE_DOTENV=0`.
 ///
-/// `dotenvy` walks the working directory and its parents, so the file that is
-/// found is not necessarily next to the config file — a `.env` written by
-/// another local user in a shared run directory could supply the master
-/// `secret_key` or point the database somewhere else. The file is still loaded
-/// (existing deployments rely on it), but a permissive mode is called out so the
-/// risk is visible, and `NANOFILE_DOTENV=0` turns the feature off.
+/// `dotenvy` walks the working directory and its parents, so the file found is not
+/// necessarily next to the config file — a `.env` written by another local user in
+/// a shared run directory could supply the master `secret_key` or point the
+/// database elsewhere. The file is still loaded (existing deployments rely on it),
+/// but a permissive mode is called out so the risk is visible.
 fn load_dotenv() {
     if std::env::var("NANOFILE_DOTENV").is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("false")) {
         return;
@@ -1550,34 +1424,28 @@ fn load_dotenv() {
 /// One relative state path handled by [`Config::resolve_state_paths`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathResolution {
-    /// The config field, e.g. `database.url`; used by the startup log so an
-    /// operator can see which file the running instance actually opened.
+    /// Config field, e.g. `database.url`, for the startup log.
     pub field: &'static str,
     /// The path the field names (absolute once `rewritten`).
     pub path: PathBuf,
-    /// `true` when the field was rewritten under the base directory, `false`
-    /// when it was left exactly as configured.
+    /// True when the field was rewritten under the base directory.
     pub rewritten: bool,
 }
 
 /// Directory that every relative state path in a [`Config`] resolves against.
 ///
-/// The working directory cannot be used for this. A Windows `Run` registry
-/// value carries no start directory, so a login-started desktop instance
-/// inherits the launcher's (`C:\Windows\System32`), and even a double-clicked
-/// binary depends on the shortcut's "Start in" field. `[logging] file` has
-/// always resolved against the binary's directory for that reason; the
-/// database, block store and search index now do too. The working directory is
-/// only a fallback for the case where the binary's location cannot be
-/// determined at all.
+/// The working directory cannot be used: a Windows `Run` value carries no start
+/// directory, so a login-started desktop instance inherits the launcher's
+/// (`C:\Windows\System32`), and a double-clicked binary depends on the shortcut's
+/// "Start in" field. The working directory is only a fallback when the binary's
+/// location cannot be determined at all.
 pub fn state_path_base() -> PathBuf {
     crate::common::util::exe_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 /// The per-user configuration file a first-run setup writes
-/// (`~/.nanofile/config.toml`), or `None` when the home directory cannot be
-/// determined from the environment.
+/// (`~/.nanofile/config.toml`), or `None` when home cannot be determined.
 pub fn user_config_path() -> Option<PathBuf> {
     crate::common::util::home_dir()
         .map(|home| home.join(USER_CONFIG_DIR_NAME).join(CONFIG_FILE_NAME))
@@ -1585,24 +1453,20 @@ pub fn user_config_path() -> Option<PathBuf> {
 
 /// Why a start reads the configuration file it reads.
 ///
-/// The distinction matters in one direction only: a path the operator *named*
-/// must exist (a moved folder leaves an auto-start entry pointing at nothing,
-/// and falling back to built-in defaults would start a second instance), while
-/// a path this build chose by default may legitimately be absent — that is what
-/// a zero-config first run is.
+/// A path the operator *named* must exist (a moved folder leaves an auto-start
+/// entry pointing at nothing, and falling back to defaults would start a second
+/// instance), while a default path may legitimately be absent for a first run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigPathOrigin {
     /// `--config <path>`.
     CommandLine,
     /// `NANOFILE_CONFIG=<path>`.
     Environment,
-    /// `./config.toml`, kept as the default for compatibility with every
-    /// deployment that predates the per-user location.
+    /// `./config.toml`, kept for compatibility with pre-per-user deployments.
     LegacyDefault,
     /// `<home>/.nanofile/config.toml`.
     UserDefault,
-    /// Nothing named a configuration file and none exists: `path` is where a
-    /// first run has to write one.
+    /// No file named and none exists: `path` is where a first run writes.
     Unconfigured,
 }
 
@@ -1640,14 +1504,12 @@ impl ConfigPath {
 
 /// Resolve which configuration file a start reads.
 ///
-/// Order, first match wins: `--config`, `NANOFILE_CONFIG`, `./config.toml`
-/// (the historical default, so an existing deployment keeps reading the file it
-/// always did), `<home>/.nanofile/config.toml`, and finally "nothing
-/// configured" — in which case `path` is where a first run writes and the
-/// loader falls back to built-in defaults plus the environment.
+/// Order, first match wins: `--config`, `NANOFILE_CONFIG`, `./config.toml` (the
+/// historical default, so existing deployments keep reading the file they always
+/// did), `<home>/.nanofile/config.toml`, then "nothing configured" — where `path`
+/// is where a first run writes and the loader uses defaults plus the environment.
 ///
-/// Loads `.env` first through [`load_dotenv`], so a `NANOFILE_CONFIG` written
-/// there counts exactly like one exported by the shell.
+/// Loads `.env` first, so a `NANOFILE_CONFIG` written there counts like an export.
 pub fn resolve_config_path(explicit: Option<&Path>) -> ConfigPath {
     load_dotenv();
     let env_config = std::env::var_os(CONFIG_PATH_ENV)
@@ -1660,10 +1522,9 @@ pub fn resolve_config_path(explicit: Option<&Path>) -> ConfigPath {
 
     let resolved = resolve_config_path_from(explicit, env_config, legacy, user, write_default);
     if resolved.is_unconfigured() && user_config_path().is_none() {
-        // `tracing` is not initialized this early (reading the configuration is
-        // what starts that), and a machine with no home directory that is about
-        // to have its configuration written into the working directory is worth
-        // one line on stderr.
+        // `tracing` is not initialized this early, and a machine with no home directory
+        // whose configuration will be written into the working directory is worth one
+        // line on stderr.
         eprintln!(
             "[nanofile] WARN: no home directory in the environment; a first-run setup will \
              write its configuration to {}",
@@ -1673,8 +1534,7 @@ pub fn resolve_config_path(explicit: Option<&Path>) -> ConfigPath {
     resolved
 }
 
-/// [`resolve_config_path`] with every input passed in, so the precedence is
-/// testable without touching the process environment or the working directory.
+/// [`resolve_config_path`] with every input passed in, so precedence is testable.
 fn resolve_config_path_from(
     explicit: Option<&Path>,
     env_config: Option<PathBuf>,
@@ -1692,10 +1552,8 @@ fn resolve_config_path_from(
     ConfigPath { path, origin }
 }
 
-/// Whether any environment variable that supplies configuration is set.
-///
-/// Name presence only, and `NANOFILE_*` only: see [`NON_CONFIG_ENV_VARS`] for
-/// the names that are deliberately not configuration.
+/// Whether any environment variable that supplies configuration is set, by name
+/// only; [`NON_CONFIG_ENV_VARS`] lists the names that are not configuration.
 pub fn environment_supplies_config() -> bool {
     names_supply_config(std::env::vars_os().map(|(name, _)| name))
 }
@@ -1711,24 +1569,21 @@ fn names_supply_config(names: impl IntoIterator<Item = std::ffi::OsString>) -> b
 
 /// Whether this start should run the first-run setup instead of serving.
 ///
-/// True only when nothing named a configuration file, no configuration file
-/// exists, and the environment supplies nothing either. Everything else — a
-/// `--config` path, `NANOFILE_CONFIG`, `./config.toml`, the per-user file, any
-/// `NANOFILE_*` — means this installation is configured, even if the
+/// True only when nothing named a configuration file, no file exists, and the
+/// environment supplies nothing. Any `--config`, `NANOFILE_CONFIG`, `./config.toml`,
+/// per-user file or `NANOFILE_*` means this installation is configured, even if the
 /// configuration turns out to be unusable (that is a different report).
 pub fn needs_first_run_setup(resolved: &ConfigPath) -> bool {
     resolved.is_unconfigured() && !environment_supplies_config()
 }
 
-/// The database file of a `sqlite:` URL, with its query string, or `None` when
-/// the URL names a different backend, an in-memory database, or no file.
+/// The database file of a `sqlite:` URL, with its query string, or `None` for a
+/// different backend, an in-memory database or no file.
 ///
-/// The URL is split exactly the way sqlx does it
-/// (`SqliteConnectOptions::from_str`: strip the scheme, and with it the `//`
-/// optional in the URL form, then cut at the first `?`), so callers ask about
-/// the very string sqlx will use as the file name. `trim_start_matches` strips
-/// *every* leading repetition, which is why `sqlite:///var/lib/x.db` keeps its
-/// leading slash and stays absolute.
+/// Split exactly the way sqlx does (`SqliteConnectOptions::from_str`: strip the
+/// scheme and the optional `//`, then cut at the first `?`). `trim_start_matches`
+/// strips every leading repetition, which is why `sqlite:///var/lib/x.db` keeps
+/// its leading slash and stays absolute.
 pub(crate) fn sqlite_url_file(url: &str) -> Option<(&str, Option<&str>)> {
     if !url.starts_with("sqlite:") {
         return None;
@@ -1740,8 +1595,7 @@ pub(crate) fn sqlite_url_file(url: &str) -> Option<(&str, Option<&str>)> {
         Some((file, params)) => (file, Some(params)),
         None => (rest, None),
     };
-    // `:memory:`, `file::memory:?cache=shared` and `?mode=memory` (which leaves
-    // the file name empty) name no file on disk.
+    // `:memory:`, `file::memory:?cache=shared` and `?mode=memory` name no file.
     if file.is_empty() || file == ":memory:" || file.starts_with("file::memory") {
         return None;
     }
@@ -1773,15 +1627,13 @@ fn resolve_dir(
 impl Config {
     /// Reject a configuration the server could not run with.
     ///
-    /// Called before an administrator's save is persisted, so a value that would
-    /// make the next start fail is refused on the page that produced it instead
-    /// of being discovered after a restart. Also called at startup, where a
-    /// failure is reported and the process still starts (an existing deployment
-    /// must not be bricked by a value it already had).
+    /// Called before an administrator's save is persisted, so a value that would make
+    /// the next start fail is refused on the page that produced it. Also called at
+    /// startup, where failure is reported and the process still starts (an existing
+    /// deployment must not be bricked by a value it already had).
     ///
-    /// Returns a message meant to be shown to the operator. Checks that need a
-    /// server-only dependency (the email address parser) live in the settings
-    /// service, which adds them on top of this.
+    /// Returns a message meant to be shown to the operator. Server-only checks (the
+    /// email address parser) are added by the settings service.
     pub fn validate(&self) -> Result<(), String> {
         self.server.validate_encrypted_library()?;
 
@@ -1880,16 +1732,13 @@ impl Config {
 
     /// Repair externally visible URL fields at load time.
     ///
-    /// Accepts the two shapes operators actually write — a full
-    /// `scheme://host[:port]` URL, or a bare `host[:port]` — and rewrites the
-    /// latter to `http://host[:port]`. An empty value becomes the built-in
-    /// default. Without this, a schemeless value yielded a garbage origin in
-    /// [`ServerConfig::site_url_origin`], so every browser login/2FA request
+    /// Accepts a full `scheme://host[:port]` URL or a bare `host[:port]`, rewriting the
+    /// latter to `http://host[:port]`; empty becomes the built-in default. Without this
+    /// a schemeless value yielded a garbage origin, so every browser login/2FA request
     /// failed its Origin check with a confusing message.
     ///
-    /// `https` must be written explicitly: silently upgrading a value that had
-    /// no scheme would flip `Secure` cookies and HSTS on for a server that may
-    /// not be served over TLS.
+    /// `https` must be written explicitly: silently upgrading a schemeless value would
+    /// flip `Secure` cookies and HSTS on for a server not served over TLS.
     pub fn normalize(&mut self) {
         let trimmed = self.server.site_url.trim().to_string();
         if trimmed.is_empty() {
@@ -1908,45 +1757,35 @@ impl Config {
         self.server.site_url = trimmed;
     }
 
-    /// Rewrite every relative state path in this config so it names the same
-    /// file no matter which directory the process was started from.
+    /// Rewrite every relative state path so it names the same file no matter which
+    /// directory the process was started from.
     ///
-    /// "Relative" means relative to whatever the working directory happens to
-    /// be, which for a login-started desktop instance is a system directory that
-    /// has nothing to do with the installation (see [`state_path_base`]). The
-    /// database, the block store, the thumbnail and avatar caches and the search
-    /// index are therefore resolved against `base`. `[logging] file` is
-    /// deliberately not touched — `logging::init` already resolves it against
-    /// the same directory and bakes the result into the config file — and
-    /// neither is `storage.ffmpeg_path`, which is a command name looked up on
-    /// `PATH` rather than a state path.
+    /// "Relative" means relative to the working directory, which for a login-started
+    /// desktop instance is a system directory (see [`state_path_base`]). The database,
+    /// block store, thumbnail and avatar caches and search index are resolved against
+    /// `base`. `[logging] file` is not touched (`logging::init` resolves it against the
+    /// same directory) and neither is `storage.ffmpeg_path`, a `PATH` command.
     ///
-    /// An installation that already keeps its state next to its working
-    /// directory (any configured relative path exists there) is left exactly as
-    /// configured, so upgrading never moves an existing deployment's data. That
-    /// decision is taken once for the whole config: rewriting only the paths
-    /// that do not exist yet would split one installation's state across two
-    /// roots.
+    /// An installation whose relative paths already exist under its working directory
+    /// is left exactly as configured, so upgrading never moves data; that decision is
+    /// taken once for the whole config, because rewriting only missing paths would
+    /// split one installation's state across two roots.
     ///
-    /// The returned [`PathResolution`]s list every relative field that was
-    /// rewritten or deliberately kept, for the startup log.
+    /// The returned [`PathResolution`]s list every relative field rewritten or kept.
     pub fn resolve_state_paths(&mut self, base: &Path) -> Vec<PathResolution> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         self.resolve_state_paths_in(base, &cwd)
     }
 
-    /// Every directory the server keeps state in, with the config field that
-    /// names it.
+    /// Every directory the server keeps state in, with the config field naming it.
     ///
-    /// The one list of "the server's directories": the startup checks and the
-    /// Windows-service preflight walk all of them, and `run_server` creates the
-    /// subset it owns, so a state directory cannot be created in one place and
-    /// left unchecked in another. A database URL that names no file
-    /// (`:memory:`, or another backend) contributes nothing; the database's
-    /// directory is otherwise the parent of its file.
+    /// The one list of "the server's directories": startup checks and the Windows
+    /// preflight walk all of them, and `run_server` creates the subset it owns, so a
+    /// state directory cannot be created in one place and left unchecked in another.
+    /// A URL that names no file (`:memory:`, another backend) contributes nothing;
+    /// otherwise the database's directory is the parent of its file.
     ///
-    /// The paths are exactly as configured, so call [`Self::resolve_state_paths`]
-    /// first.
+    /// The paths are exactly as configured, so call [`Self::resolve_state_paths`] first.
     pub fn state_dirs(&self) -> Vec<(&'static str, PathBuf)> {
         let mut dirs = Vec::new();
         if let Some((file, _)) = sqlite_url_file(&self.database.url) {
@@ -1968,8 +1807,7 @@ impl Config {
         dirs
     }
 
-    /// [`Self::resolve_state_paths`] with an explicit working directory, so
-    /// tests never have to change the process's own.
+    /// [`Self::resolve_state_paths`] with an explicit working directory, for tests.
     fn resolve_state_paths_in(&mut self, base: &Path, cwd: &Path) -> Vec<PathResolution> {
         // Absolute paths are unambiguous already and are never touched.
         let relative_database = sqlite_url_file(&self.database.url)
@@ -1988,8 +1826,7 @@ impl Config {
 
         let mut out = Vec::new();
 
-        // `database.url` needs its URL rebuilt around the new file name rather
-        // than a plain join, and its query string has to survive verbatim.
+        // `database.url` needs its URL rebuilt, and its query string must survive.
         if !keep && let Some((file, params)) = sqlite_url_file(&self.database.url) {
             let params = params.map(str::to_string);
             let path = base.join(file);
@@ -2023,43 +1860,33 @@ impl Config {
         Self::load_tracked().map(|loaded| loaded.config)
     }
 
-    /// [`Self::load`] plus the set of catalog keys the environment supplied.
-    ///
-    /// The tracked form is what the server uses: without knowing which values
-    /// came from the environment, an admin page cannot say whether a database
-    /// save would take effect.
+    /// [`Self::load`] plus the catalog keys the environment supplied. The server needs
+    /// this to say whether a database save would take effect.
     pub fn load_tracked() -> anyhow::Result<LoadedConfig> {
-        // The precedence a server start uses, minus the "a named file must
-        // exist" rule: a tool that only wants the effective configuration should
-        // not be blind to the per-user file the first-run setup writes.
+        // The precedence a server start uses, minus "a named file must exist": a tool
+        // should still see the per-user file a first-run setup writes.
         let resolved = resolve_config_path(None);
         Self::load_from_tracked(&resolved.path)
     }
 
     /// Load the configuration a *server start* should use.
     ///
-    /// Like [`Self::load_tracked`], but a configuration file the operator named
-    /// explicitly — `--config`, or `NANOFILE_CONFIG` (including one set in a
-    /// `.env` file) — **must exist**.
+    /// Like [`Self::load_tracked`], but a file the operator named explicitly
+    /// (`--config`, or `NANOFILE_CONFIG`, including one set in `.env`) **must exist**.
     ///
-    /// The difference matters because these paths outlive a single process: a
-    /// login auto-start entry and a Windows service registration both record the
-    /// config path they were created with, so a folder that was moved or renamed
-    /// leaves them pointing at a file that is gone. Falling back to built-in
-    /// defaults there would silently start a server on the default port with the
-    /// default database next to the binary — a *different* instance — instead of
-    /// saying that the named file is missing. The zero-config convenience stays
-    /// for the unnamed default (`./config.toml`, then the per-user file), where
-    /// "no file" is a legitimate setup rather than a broken reference.
+    /// These paths outlive a single process: auto-start entries and Windows service
+    /// registrations record the path they were created with, so a moved folder leaves
+    /// them pointing at nothing. Falling back to defaults there would silently start a
+    /// *different* instance on the default port next to the binary. The zero-config
+    /// convenience stays for the unnamed default (`./config.toml`, then the per-user
+    /// file), where "no file" is a legitimate setup.
     pub fn load_for_start(explicit_path: Option<&Path>) -> anyhow::Result<LoadedConfig> {
         Self::load_for_start_with_path(explicit_path).map(|(loaded, _)| loaded)
     }
 
-    /// [`Self::load_for_start`] plus the path it resolved and why.
-    ///
-    /// The caller needs both: the path an auto-start entry records and the log
-    /// target are the *same* path the loader read, and whether anything was
-    /// named decides whether a missing file is an error or a first run.
+    /// [`Self::load_for_start`] plus the path it resolved and why: an auto-start entry
+    /// records the path the loader read, and whether anything was named decides
+    /// whether a missing file is an error or a first run.
     pub fn load_for_start_with_path(
         explicit_path: Option<&Path>,
     ) -> anyhow::Result<(LoadedConfig, ConfigPath)> {
@@ -2077,20 +1904,17 @@ impl Config {
         Ok((loaded, resolved))
     }
 
-    /// Load a config file. A key the file does not mention keeps its built-in
-    /// default in memory; the file itself is never rewritten, so what an
-    /// operator wrote is what stays on disk. Every key is discoverable at
-    /// `/sysadmin/settings/` with its environment variable and its effective
-    /// value, which is what makes a partial file a complete configuration.
+    /// Load a config file. Keys the file omits keep their built-in defaults in memory;
+    /// the file is never rewritten, so what the operator wrote stays on disk. Every key
+    /// is discoverable at `/sysadmin/settings/` with its environment variable and
+    /// effective value, which makes a partial file a complete configuration.
     ///
-    /// When the file does not exist, falls back to built-in defaults (plus env
-    /// overrides) so the server can start with zero config; other I/O errors
-    /// (and unparseable/corrupt files) still fail.
+    /// A missing file falls back to built-in defaults (plus env overrides) for a
+    /// zero-config start; other I/O errors and unparseable files still fail.
     pub fn load_from(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         Self::load_from_tracked(path).map(|loaded| loaded.config)
     }
-    /// [`Self::load_from`] plus the set of catalog keys the environment
-    /// supplied. See [`Self::load_tracked`].
+    /// [`Self::load_from`] plus the environment-supplied catalog keys.
     pub fn load_from_tracked(path: impl AsRef<Path>) -> anyhow::Result<LoadedConfig> {
         let path = path.as_ref();
         let original = match std::fs::read_to_string(path) {
@@ -2111,10 +1935,9 @@ impl Config {
             }
         };
 
-        // Missing fields are serde defaults in memory; the document is left
-        // alone, so a partial file stays the size the operator wrote. The live
-        // config carries the master secret, and a permissive mode is worth an
-        // explicit warning (it used to be silently inherited).
+        // Missing fields are serde defaults in memory; the document is left alone, so a
+        // partial file stays as written. The live config carries the master secret, so a
+        // permissive mode is worth an explicit warning.
         warn_if_group_or_world_readable(path);
 
         let mut config: Config = toml::from_str(&original)?;
@@ -2126,16 +1949,14 @@ impl Config {
 
     /// Apply every `NANOFILE_*` override.
     ///
-    /// Driven from [`crate::settings::CATALOG`], so a setting cannot exist
-    /// without its variable being read — the admin UI shows the very variable
-    /// name the server consults, and the two cannot drift apart.
-    /// `env_keys` records which catalog keys the environment supplied, which is
-    /// what makes a value's origin reportable.
+    /// Driven from [`crate::settings::CATALOG`], so a setting cannot exist without its
+    /// variable being read, and the admin UI shows the variable the server consults.
+    /// `env_keys` records which keys the environment supplied, making origins
+    /// reportable.
     ///
-    /// A value that does not parse is ignored with a warning: a typo in the
-    /// environment must not stop the process from starting. The `*_FILE`
-    /// secrets are read after the plain variables, so the file wins — that is
-    /// what keeps a secret out of a process listing.
+    /// A value that does not parse is ignored with a warning: a typo must not stop the
+    /// process from starting. `*_FILE` secrets are read after the plain variables so
+    /// the file wins, keeping secrets out of process listings.
     fn apply_env_overrides(&mut self, env_keys: &mut EnvKeys) {
         for def in crate::settings::CATALOG {
             let Some(var) = def.env else { continue };
@@ -2197,14 +2018,11 @@ impl Config {
     }
 }
 
-/// Persist a single string value into the config file, preserving comments
-/// and formatting. Creates the section if missing. This is the one write the
-/// loader-adjacent code does: a value *resolved* at startup — the log file path
-/// next to the binary in desktop mode — is baked into the config so every later
-/// run, including a login-started instance, reads the same explicit path.
-/// Built-in defaults are never written; a key the file omits keeps its default
-/// in memory. An existing value for `key` is overwritten only by this explicit
-/// call.
+/// Persist a single string value into the config file, preserving comments and
+/// formatting and creating the section if missing. This is the one write the loader
+/// does: a value *resolved* at startup (the log path next to the binary) is baked in
+/// so every later run reads the same explicit path. Built-in defaults are never
+/// written; an existing value is overwritten only by this explicit call.
 pub fn write_config_value(
     path: impl AsRef<Path>,
     section: &str,
@@ -2236,25 +2054,20 @@ pub fn write_config_value(
 /// Why a new configuration file could not be written.
 #[derive(Debug, thiserror::Error)]
 pub enum WriteConfigError {
-    /// A configuration file is already there. Deliberately its own variant: a
-    /// first-run setup has to report this as "somebody already configured this",
-    /// not as an I/O failure.
+    /// A configuration file is already there. Its own variant so first-run setup can
+    /// report "somebody already configured this" rather than an I/O failure.
     #[error("{} already exists", .0.display())]
     AlreadyExists(PathBuf),
     #[error("{0}")]
     Other(#[from] anyhow::Error),
 }
 
-/// A value in a configuration document a first run writes.
-///
-/// Typed rather than a string on purpose: a port written as `"8123"` is a
-/// configuration the loader rejects, and guessing the type from the text ("all
-/// digits") would turn a future string setting that happens to look numeric into
-/// a broken one.
+/// A typed value a first run writes. Typed rather than a string: a port written as
+/// `"8123"` is a configuration the loader rejects, and guessing the type ("all
+/// digits") would break a future string setting that looks numeric.
 #[derive(Debug, Clone)]
 pub enum ConfigValue<'a> {
-    /// Quoted and escaped as a TOML string. Borrowed when the caller's text
-    /// outlives the write, owned when the caller had to build it.
+    /// TOML string, borrowed when the caller's text outlives the write.
     Text(std::borrow::Cow<'a, str>),
     /// Written as a bare TOML integer.
     Integer(u64),
@@ -2298,19 +2111,15 @@ pub struct ConfigSection<'a> {
     pub name: &'a str,
     /// Lines written as comments above the header (no `#` needed).
     pub comment: &'a str,
-    /// `key = value` pairs, in order. Strings are rendered by `toml_edit`, so
-    /// quoting and escaping are the TOML crate's problem, not a caller's.
+    /// `key = value` pairs in order; `toml_edit` handles quoting and escaping.
     pub entries: Vec<(&'a str, ConfigValue<'a>)>,
 }
 
-/// Create a **new** configuration file from scratch.
-///
-/// Only a first-run setup calls this. Its whole job is the part that must not
-/// be re-implemented: the parent directory is created owner-only, the write is
-/// atomic and restricted to the owner (the file holds the master secret), and
-/// an existing file is **never** overwritten — that is enforced by reserving
-/// the path with `create_new`, so it holds even if two first runs race, rather
-/// than by a check-then-write that a concurrent process can slip through.
+/// Create a **new** configuration file from scratch. Only a first-run setup calls
+/// this; its job is the part that must not be re-implemented: an owner-only parent
+/// directory, an owner-only atomic write (the file holds the master secret), and
+/// **no overwrite** — enforced by reserving the path with `create_new`, so it holds
+/// even if two first runs race.
 pub fn write_new_config(
     path: impl AsRef<Path>,
     header: &str,
@@ -2347,8 +2156,7 @@ pub fn write_new_config(
             document.push_str(key);
             document.push_str(" = ");
             match value {
-                // `toml_edit::value` renders a string the way TOML wants it,
-                // escaping quotes and control characters.
+                // `toml_edit::value` renders a string the way TOML wants it.
                 ConfigValue::Text(text) => {
                     document.push_str(&toml_edit::value(text.as_ref()).to_string())
                 }
@@ -2362,8 +2170,8 @@ pub fn write_new_config(
         document.push('\n');
     }
 
-    // The reservation, not a permission check: `create_new` fails when the path
-    // exists, which is the one thing a concurrent first run cannot get around.
+    // `create_new` fails when the path exists, which a concurrent first run cannot
+    // get around.
     if let Err(e) = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -2376,8 +2184,7 @@ pub fn write_new_config(
         });
     }
 
-    // Replace the (empty) reservation with the real document: temp file +
-    // rename, owner-only, fsynced.
+    // Replace the reservation with the real document: temp file + rename, fsynced.
     atomic_write(path, &document).map_err(|e| {
         WriteConfigError::Other(e.context(format!("failed to write {}", path.display())))
     })
@@ -2395,8 +2202,8 @@ fn tmp_path(path: &Path) -> PathBuf {
 }
 
 /// Atomically replace `path` with `filled`, keeping the previous content as
-/// `path.bak`. Fails without touching `path` when the backup or the write
-/// fails. The backup is taken with `fs::copy` so file permissions carry over.
+/// `path.bak`. Fails without touching `path` when the backup or the write fails;
+/// the backup is taken with `fs::copy` so file permissions carry over.
 fn persist_with_backup(path: &Path, filled: &str) -> anyhow::Result<()> {
     std::fs::copy(path, backup_path(path)).with_context(|| {
         format!(
@@ -2405,8 +2212,7 @@ fn persist_with_backup(path: &Path, filled: &str) -> anyhow::Result<()> {
             backup_path(path).display()
         )
     })?;
-    // The backup is a second copy of the same secrets: `fs::copy` carries the
-    // source mode over, so tighten it explicitly.
+    // The backup is a second copy of the secrets: tighten its mode explicitly.
     if let Err(e) = restrict_to_owner(&backup_path(path)) {
         tracing::warn!(
             "could not restrict permissions on the config backup {}: {e}",
@@ -2416,11 +2222,9 @@ fn persist_with_backup(path: &Path, filled: &str) -> anyhow::Result<()> {
     atomic_write(path, filled)
 }
 
-/// Restrict a file to its owner (`0600`) on Unix.
-///
-/// The config file holds the master `secret_key` (plus, potentially, an
-/// encryption key and an admin password), so it must never be group- or
-/// world-readable. A no-op on platforms without Unix modes.
+/// Restrict a file to its owner (`0600`) on Unix. The config file holds the master
+/// `secret_key` (and possibly encryption keys or an admin password), so it must
+/// never be group- or world-readable. No-op without Unix modes.
 fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -2458,10 +2262,9 @@ fn warn_if_group_or_world_readable(path: &Path) {
     }
 }
 
-/// Write `content` to `path` via a same-directory temp file + rename. The file is
-/// restricted to its owner and fsynced before renaming, so the replaced file is
-/// never observed half-written or world-readable. The temp file is cleaned up on
-/// failure.
+/// Write `content` via a same-directory temp file + rename, restricted to the owner
+/// and fsynced, so the replaced file is never observed half-written. The temp file
+/// is cleaned up on failure.
 fn atomic_write(path: &Path, content: &str) -> anyhow::Result<()> {
     let tmp = tmp_path(path);
     let result = (|| -> anyhow::Result<()> {
@@ -2470,8 +2273,7 @@ fn atomic_write(path: &Path, content: &str) -> anyhow::Result<()> {
             f.write_all(content.as_bytes())?;
             f.sync_all()?;
         }
-        // The config file holds the master secret: never inherit a permissive
-        // mode from the file being replaced.
+        // The config file holds the master secret: never inherit a permissive mode.
         restrict_to_owner(&tmp)?;
         #[cfg(windows)]
         {
@@ -2668,8 +2470,7 @@ request_timeout_secs = 600
         c.normalize();
         assert_eq!(c.server.site_url, default_site_url());
 
-        // An explicit scheme is preserved verbatim (never silently upgraded to
-        // https, which would flip Secure cookies and HSTS).
+        // An explicit scheme is preserved verbatim (never silently upgraded to https).
         c.server.site_url = " https://files.example.com ".to_string();
         c.normalize();
         assert_eq!(c.server.site_url, "https://files.example.com");
@@ -2699,10 +2500,8 @@ request_timeout_secs = 600
             c.download_url_base(Some("192.168.1.100:8082")),
             "http://192.168.1.100:8082"
         );
-        // A *name* is not echoed while `allowed_hosts` is unset: these URLs
-        // carry a capability token, so a DNS name the server did not choose
-        // (DNS rebinding, wildcard vhost) must not reach the client. The
-        // operator lists the name in `allowed_hosts` to opt in.
+        // A *name* is not echoed while `allowed_hosts` is unset: these URLs carry a
+        // capability token, so an unchosen DNS name must not reach the client.
         assert_eq!(
             c.download_url_base(Some("seafile.example.com:8082")),
             "http://127.0.0.1:8082"
@@ -2719,8 +2518,7 @@ request_timeout_secs = 600
     #[test]
     fn trust_request_host_never_echoes_a_name_by_default() {
         let c = cfg("http://127.0.0.1:8082");
-        // Literal addresses (and localhost) keep the zero-config LAN case
-        // working.
+        // Literal addresses (and localhost) keep the zero-config LAN case working.
         for host in [
             "192.168.1.100",
             "10.0.0.5:8082",
@@ -2747,10 +2545,8 @@ request_timeout_secs = 600
 
     #[test]
     fn default_site_url_falls_back_to_host_without_port() {
-        // Reverse proxy without a port in Host (80/443): never append the
-        // internal listen port — the old behavior produced unreachable URLs.
-        // A literal address is echoed; a name needs `allowed_hosts` (see
-        // `trust_request_host_never_echoes_a_name_by_default`).
+        // Reverse proxy without a port in Host (80/443): never append the internal
+        // listen port. A literal address is echoed; a name needs `allowed_hosts`.
         let c = cfg("http://127.0.0.1:8082");
         assert_eq!(
             c.download_url_base(Some("192.168.1.100")),
@@ -2764,8 +2560,7 @@ request_timeout_secs = 600
 
     #[test]
     fn default_site_url_ipv6_host() {
-        // IPv6 literals (with or without port) pass through verbatim — the
-        // old split_once(':') logic produced malformed URLs for these.
+        // IPv6 literals (with or without port) pass through verbatim.
         let c = cfg("http://127.0.0.1:8082");
         assert_eq!(
             c.download_url_base(Some("[2001:db8::1]:8082")),
@@ -2777,9 +2572,8 @@ request_timeout_secs = 600
         );
     }
 
-    /// Secrets must never appear in `Debug` output: `{:?}` on a config is the
-    /// obvious thing to do when diagnosing a startup problem, and the config is
-    /// cloned into `AppState` where it lives for the process lifetime.
+    /// Secrets must never appear in `Debug` output: `{:?}` on a config is the obvious
+    /// thing to do when diagnosing a startup problem, and it is cloned into `AppState`.
     #[test]
     fn debug_output_does_not_leak_secrets() {
         let mut config = Config::default();
@@ -2829,16 +2623,12 @@ request_timeout_secs = 600
         let config = Config::load_from(&path).expect("load complete config");
         assert_eq!(config.server.port, 8082);
 
-        // 完整配置无缺失字段:文件不变、无备份。
         assert_eq!(std::fs::read_to_string(&path).unwrap(), complete);
         assert!(!std::path::Path::new(&format!("{}.bak", path.display())).exists());
     }
 
-    /// A partial file is a complete configuration: the missing keys keep their
-    /// built-in defaults in memory, and the file is left exactly as written.
-    /// Nothing surfaces a new option in the file — the settings pages do that,
-    /// and a file that grew on its own would hide which values an operator
-    /// actually chose.
+    /// A partial file is a complete configuration: missing keys keep their built-in
+    /// defaults in memory, and the file is left exactly as written.
     #[test]
     fn load_incomplete_config_takes_defaults_without_rewriting() {
         let dir = tempfile::tempdir().unwrap();
@@ -2888,9 +2678,8 @@ request_timeout_secs = 600
             );
         }
 
-        /// The config file holds the master `secret_key`: a permissive mode must
-        /// be tightened by the config write instead of being inherited. The
-        /// loader itself no longer writes, so this is the log-path write.
+        /// The config file holds the master `secret_key`: a permissive mode must be
+        /// tightened by the config write rather than inherited.
         #[test]
         fn permissive_config_is_tightened() {
             let dir = tempfile::tempdir().unwrap();
@@ -2951,9 +2740,8 @@ request_timeout_secs = 600
         assert_eq!(config.database.url, "sqlite:data/nanofile.db?mode=rwc");
         assert_eq!(config.storage.block_dir, PathBuf::from("data/blocks"));
         assert_eq!(config.auth.password_hash_iterations, 600000);
-        // Loading leaves relative paths relative: resolving them is an explicit
-        // startup step (`resolve_state_paths`), so a config file loaded by a
-        // test or a tool never silently points somewhere else.
+        // Loading leaves relative paths relative: resolving them is an explicit startup
+        // step, so a test or tool never silently points somewhere else.
         assert_eq!(config.index.index_dir, PathBuf::from("data/index"));
     }
 
@@ -2985,11 +2773,10 @@ request_timeout_secs = 600
         assert_eq!(sqlite_url_file(""), None);
     }
 
-    /// Regression: a desktop instance started at login runs with a working
-    /// directory that has nothing to do with the installation — a Windows `Run`
-    /// registry value carries no start directory, so it inherits
-    /// `C:\Windows\System32` — and there the relative defaults
-    /// (`sqlite:data/nanofile.db?mode=rwc`, `data/blocks`, …) name nothing.
+    /// Regression: a desktop instance started at login runs with a working directory
+    /// that has nothing to do with the installation (`C:\Windows\System32`), where the
+    /// relative defaults (`sqlite:data/nanofile.db?mode=rwc`, `data/blocks`, …) name
+    /// nothing.
     #[test]
     fn resolve_state_paths_rewrites_relative_paths_under_the_base() {
         let base = PathBuf::from("/opt/nanofile");
@@ -3069,10 +2856,8 @@ request_timeout_secs = 600
         );
     }
 
-    /// An installation whose state already lives next to its working directory
-    /// keeps every relative path: upgrading must not move a running
-    /// deployment's database, and deciding per path could split one
-    /// installation's state across two roots.
+    /// An installation whose state already lives next to its working directory keeps
+    /// every relative path: upgrading must not move a running deployment.
     #[test]
     fn resolve_state_paths_keeps_state_that_is_already_in_the_working_directory() {
         let base = PathBuf::from("/opt/nanofile");
@@ -3097,9 +2882,8 @@ request_timeout_secs = 600
         let cwd = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         config.database.url = "postgres://localhost/nanofile".to_string();
-        // An absolute path for *this* platform: `/srv/blocks` is relative on
-        // Windows, where an absolute path carries a drive letter, and the check
-        // below is about what absolute means rather than about `/srv`.
+        // An absolute path for *this* platform: `/srv/blocks` is relative on Windows,
+        // where absolute paths carry a drive letter.
         let absolute = if cfg!(windows) {
             PathBuf::from(r"C:\srv\blocks")
         } else {
@@ -3112,14 +2896,12 @@ request_timeout_secs = 600
 
         assert_eq!(config.database.url, "postgres://localhost/nanofile");
         assert_eq!(config.storage.block_dir, absolute);
-        // `[logging] file` resolves against the same directory, but inside
-        // `logging::init`, which also writes the resolved path back.
+        // `[logging] file` resolves inside `logging::init`, which writes it back.
         assert_eq!(
             config.logging.file,
             Some(PathBuf::from("logs/nanofile.log"))
         );
-        // Only the relative directories are reported (temp, thumbnails,
-        // avatars, index).
+        // Only the relative directories are reported (temp, thumbnails, avatars, index).
         assert!(resolved.iter().all(|r| r.field != "database.url"));
         assert_eq!(resolved.len(), 4);
     }
@@ -3131,9 +2913,8 @@ request_timeout_secs = 600
         assert!(base.is_dir(), "{base:?}");
     }
 
-    /// The reference a login auto-start entry or a service registration records
-    /// has to be an error when it is gone: built-in defaults here would start a
-    /// second instance against a different database and port.
+    /// The reference an auto-start entry or service registration records has to be an
+    /// error when it is gone: defaults here would start a second instance.
     #[test]
     fn a_config_named_explicitly_must_exist() {
         let dir = tempfile::tempdir().unwrap();
@@ -3164,18 +2945,15 @@ request_timeout_secs = 600
         assert_eq!(c.max_backups, 3);
     }
 
-    /// The two byte caps that bound what one client can make the server buffer
-    /// are finite by default: an unset value used to mean "unlimited", which is
-    /// not a posture a default should pick. Both are deliberately generous, so
-    /// the pair is pinned as constants rather than as "non-zero".
+    /// The two byte caps that bound what one client can make the server buffer are
+    /// finite by default (deliberately generous), rather than "unlimited".
     #[test]
     fn storage_byte_caps_default_to_finite_limits() {
         let c = StorageConfig::default();
         assert_eq!(c.max_temp_upload_bytes, 32 * 1024 * 1024 * 1024);
         assert_eq!(c.max_zip_bytes, 8 * 1024 * 1024 * 1024);
 
-        // The serde default and the struct default must agree: a config file
-        // that omits the key has to get the same value as a fresh `Config`.
+        // The serde default and the struct default must agree.
         let parsed: StorageConfig = toml::from_str("").unwrap();
         assert_eq!(parsed.max_temp_upload_bytes, c.max_temp_upload_bytes);
         assert_eq!(parsed.max_zip_bytes, c.max_zip_bytes);
@@ -3183,8 +2961,7 @@ request_timeout_secs = 600
 
     #[test]
     fn logging_section_takes_defaults_for_keys_it_omits() {
-        // An old config with only `[logging] level` keeps that value and reads
-        // the rest from the built-in defaults; the file is not extended.
+        // An old config with only `[logging] level` keeps it and defaults the rest.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "[logging]\nlevel = \"debug\"\n").unwrap();
@@ -3246,9 +3023,8 @@ request_timeout_secs = 600
 
     #[test]
     fn email_section_roundtrips_and_leaves_the_file_alone() {
-        // A config with only the switch reads every other email key from its
-        // default, and the file keeps exactly what the operator wrote: a
-        // `password` line is never invented, not even an empty one.
+        // A config with only the switch reads every other email key from its default, and
+        // the file keeps exactly what the operator wrote: no `password` line is invented.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "[email]\nenabled = true\n").unwrap();
@@ -3269,8 +3045,7 @@ request_timeout_secs = 600
 
     #[test]
     fn email_config_never_debugs_its_password() {
-        // `EmailConfig` carries the SMTP password; its `Debug` is redacted so a
-        // `{:?}` on the section cannot print it.
+        // `EmailConfig` carries the SMTP password; its `Debug` is redacted.
         let c = EmailConfig {
             password: Some("smtp-secret".to_string()),
             ..Default::default()
@@ -3278,8 +3053,6 @@ request_timeout_secs = 600
         let rendered = format!("{c:?}");
         assert!(!rendered.contains("smtp-secret"));
     }
-
-    // ── Configuration path resolution ────────────────────────────────────
 
     fn os(name: &str) -> std::ffi::OsString {
         std::ffi::OsString::from(name)
@@ -3318,8 +3091,7 @@ request_timeout_secs = 600
 
     #[test]
     fn the_working_directory_default_precedes_the_per_user_file() {
-        // Both exist: the historical default wins, so a deployment upgraded to
-        // this build keeps reading the file it always read.
+        // Both exist: the historical default wins, so an upgraded deployment keeps it.
         let resolved = resolve_config_path_from(
             None,
             None,
@@ -3394,16 +3166,12 @@ request_timeout_secs = 600
             path: PathBuf::from("config.toml"),
             origin: ConfigPathOrigin::LegacyDefault,
         };
-        // The gate itself is a conjunction; the environment half is covered by
-        // `only_configuration_variables_count_as_environment`, and the process
-        // environment is deliberately not mutated here (the suite runs tests in
-        // parallel).
+        // The gate and the environment half are covered elsewhere; the process
+        // environment is deliberately not mutated (the suite runs tests in parallel).
         assert!(unconfigured.is_unconfigured());
         assert!(!legacy.is_unconfigured());
         assert!(!needs_first_run_setup(&legacy) || !environment_supplies_config());
     }
-
-    // ── New configuration files ──────────────────────────────────────────
 
     #[test]
     fn write_new_config_creates_a_private_file_that_parses() {
@@ -3473,9 +3241,8 @@ request_timeout_secs = 600
 
     #[test]
     fn write_new_config_carries_the_first_run_values_into_a_config() {
-        // The document the setup writes has to be a configuration the loader
-        // accepts with the values it was built from -- the two halves of a first
-        // run (the page and every later start) must agree.
+        // The document the setup writes has to be a configuration the loader accepts
+        // with the values it was built from.
         let dir = tempfile::tempdir().unwrap();
         let data_dir = dir.path().join("data");
         let path = dir.path().join(CONFIG_FILE_NAME);
@@ -3508,15 +3275,10 @@ request_timeout_secs = 600
     }
 }
 
-// ─── Redacting Debug ────────────────────────────────────────────────────────
-//
 // `Config` derives `Debug` so a whole configuration can be logged, but several
-// fields are secrets: `server.secret_key` (master key, from which the token,
-// TOTP and block keys are derived), `notification.private_key`,
-// `storage.encryption_key`, `database.url` (may embed credentials) and
-// `admin_init.password`. These impls deliberately print no fields at all, so a
-// `{:?}` cannot leak a secret and a newly added field cannot start leaking one
-// by accident. Use the individual accessors when a value is needed.
+// fields are secrets (`server.secret_key`, `notification.private_key`,
+// `storage.encryption_key`, `database.url`, `admin_init.password`). These impls
+// print no fields at all, so `{:?}` cannot leak a secret; use the accessors.
 macro_rules! redacting_debug {
     ($($ty:ident),+ $(,)?) => {
         $(
@@ -3536,7 +3298,6 @@ redacting_debug!(
     DatabaseConfig,
     StorageConfig,
     AdminInitConfig,
-    // Holds the SMTP password, so it joins the redacted set for the same reason
-    // `admin_init` does: a `{:?}` must not be able to print a secret.
+    // Holds the SMTP password, so it joins the redacted set for the same reason.
     EmailConfig,
 );

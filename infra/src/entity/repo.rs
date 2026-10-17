@@ -20,16 +20,12 @@ pub struct Model {
     pub random_key: Option<String>,
     #[sea_orm(not_null, default_value = "")]
     pub salt: String,
-    /// `pwd_hash`-based password verifier (Seafile 11+): the hex-encoded
-    /// `pwd_hash_derive_key(repo_id + password, …)` output.
-    ///
-    /// A library that has one carries **no** `magic` — upstream writes the
-    /// `magic` field only when `!pwd_hash` — so `magic` stays NULL here too and
-    /// every password check goes through
-    /// [`infra::crypto::pwd_hash::verify_pwd_hash`] instead.
+    /// `pwd_hash` verifier (Seafile 11+): hex of `pwd_hash_derive_key(repo_id + password, …)`.
+    /// A library that has one carries **no** `magic` (upstream writes `magic` only when
+    /// `!pwd_hash`), so `magic` stays NULL and every check goes through
+    /// `infra::crypto::pwd_hash::verify_pwd_hash`.
     pub pwd_hash: Option<String>,
-    /// Hash algorithm of `pwd_hash` (`pbkdf2_sha256` or `argon2id`); clients
-    /// compare it verbatim.
+    /// Hash algorithm of `pwd_hash` (`pbkdf2_sha256` / `argon2id`); clients compare it verbatim.
     pub pwd_hash_algo: Option<String>,
     /// Parameters of `pwd_hash_algo`; `None` means "the algorithm's defaults".
     pub pwd_hash_params: Option<String>,
@@ -50,8 +46,7 @@ pub struct Model {
     /// Keep file history for at most this many days. 0 = unlimited.
     #[sea_orm(not_null, default_value = 0)]
     pub history_ttl_days: i32,
-    /// Repository type: `"repo"` (normal). "type" is a reserved word, hence
-    /// the `r#` escape and explicit column name.
+    /// `"repo"`; "type" is reserved, hence the `r#` escape and explicit column name.
     #[sea_orm(column_name = "type", not_null, default_value = "repo", length = 20)]
     pub r#type: String,
 }

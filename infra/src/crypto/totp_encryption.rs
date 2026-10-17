@@ -1,17 +1,13 @@
 //! At-rest encryption for TOTP second-factor seeds.
 //!
 //! A TOTP seed is password-equivalent: anyone who reads it can mint valid codes
-//! forever, so a leaked database would silently defeat 2FA for every enrolled
-//! user. The seed is never used as a lookup key, so — unlike sync tokens — it is
-//! encrypted with a **random nonce per value**, which removes the equality leak
-//! that deterministic encryption would expose.
+//! forever, so a leaked database would silently defeat 2FA. The seed is never a
+//! lookup key, so — unlike sync tokens — it is encrypted with a **random nonce per
+//! value**, removing the equality leak deterministic encryption would expose.
 //!
-//! The key is derived from the server `secret_key` through a distinct HKDF info
-//! string, so the database alone is not enough to recover seeds.
-//!
-//! Stored values carry a [`TOTP_CIPHER_PREFIX`] marker; anything without it is
-//! legacy plaintext and is returned unchanged, which keeps the migration window
-//! (rows written before this change) working.
+//! The key is derived from `secret_key` through a distinct HKDF info string, so the
+//! database alone is not enough. A [`TOTP_CIPHER_PREFIX`] marker separates legacy
+//! plaintext rows, which are returned unchanged.
 
 use aes_gcm_siv::aead::{Aead, KeyInit};
 use aes_gcm_siv::{Aes256GcmSiv, Nonce};
@@ -30,9 +26,7 @@ const DEK_LEN: usize = 32;
 /// Per-value random nonce length (GCM-SIV accepts any length).
 const NONCE_LEN: usize = 12;
 
-/// A symmetric authenticated-encryption handle for TOTP seeds.
-///
-/// Cheap to construct and safe to clone; holds the 32-byte DEK.
+/// Authenticated-encryption handle for TOTP seeds; cheap to construct and clone.
 #[derive(Clone)]
 pub struct TotpCipher {
     cipher: Aes256GcmSiv,
@@ -54,8 +48,7 @@ impl TotpCipher {
             .expect("DEK length is within HKDF output bound");
         let cipher =
             Aes256GcmSiv::new_from_slice(&dek).expect("32-byte key is valid for AES-256-GCM-SIV");
-        // The key schedule inside `Aes256GcmSiv` cannot be scrubbed, but the
-        // raw DEK buffer should not linger on the stack either.
+        // The cipher's key schedule cannot be scrubbed, but clear the raw DEK buffer.
         dek.zeroize();
         Self { cipher }
     }
@@ -76,12 +69,11 @@ impl TotpCipher {
         )
     }
 
-    /// Decrypt a stored seed.
+    /// Decrypt a stored seed. Legacy plaintext (no prefix) is returned unchanged.
     ///
-    /// Legacy plaintext values (no prefix) are returned unchanged. Returns
-    /// `None` when an encrypted value cannot be decrypted — for example after
-    /// the server secret was rotated. Callers must treat that as "this user has
-    /// to re-enrol", and never as a successful verification.
+    /// `None` means the value cannot be decrypted — for example after the server secret
+    /// was rotated. Callers must treat that as "this user has to re-enrol", never as a
+    /// successful verification.
     pub fn decrypt(&self, stored: &str) -> Option<String> {
         let Some(rest) = stored.strip_prefix(TOTP_CIPHER_PREFIX) else {
             return Some(stored.to_string());

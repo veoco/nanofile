@@ -2,17 +2,14 @@ use sea_orm_migration::prelude::*;
 
 /// Email delivery: one settings row and the outbox/log of every message.
 ///
-/// `email_settings` is a single row (`id = 1`). The master switch stays in
-/// `config.toml` (`[email] enabled`) on purpose: enabling outbound mail is an
-/// operational opt-in, while everything else about the SMTP connection is meant
-/// to be editable at runtime from `/sysadmin/settings/email/` — which requires a
-/// table, because `AppState.config` is immutable.
+/// `email_settings` is a single row (`id = 1`). The master switch stays in `config.toml`
+/// on purpose (enabling outbound mail is an operational opt-in), while the SMTP
+/// connection is editable at runtime, which needs a table because `AppState.config` is
+/// immutable.
 ///
-/// `email_messages` is both the queue and the audit log. The rendered body is
-/// stored **encrypted** (`body_enc`, the same domain-separated AEAD cipher as
-/// repository sync tokens) and cleared once the message is delivered, so a
-/// password-reset link is never readable at rest — the plaintext that used to
-/// be dropped on the floor is now only recoverable by the recipient's mailbox.
+/// `email_messages` is both queue and audit log: the rendered body is **encrypted**
+/// (`body_enc`, the sync-token AEAD) and cleared on delivery, so a password-reset link
+/// is never readable at rest.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -161,8 +158,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // The drainer's only query is "due pending rows", so the index has to
-        // lead with both columns in that order for it to be usable.
+        // The drainer queries "due pending rows", so the index leads with both columns.
         manager
             .create_index(
                 Index::create()
@@ -239,12 +235,9 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
     use sea_orm_migration::MigratorTrait;
 
-    /// The number of migrations that run before this one.
-    ///
-    /// Looked up by name rather than assumed to be "the last one": a later
-    /// migration that removes `email_settings` (which this migration's table
-    /// has since been folded into) would otherwise silently become the subject
-    /// of these tests.
+    /// Number of migrations before this one, looked up by name: a later migration may remove
+    /// `email_settings` (it has since been folded into `settings`) and must not become the
+    /// subject of these tests.
     fn steps_before_this_migration() -> u32 {
         crate::migration_names()
             .iter()
@@ -252,8 +245,7 @@ mod tests {
             .expect("this migration is registered") as u32
     }
 
-    /// A database migrated up to — but not including — this migration, so the
-    /// two tables really are created by the code under test.
+    /// A database migrated to just before this migration.
     async fn before_this_migration() -> (tempfile::TempDir, DatabaseConnection) {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = crate::tests_support::connect(&crate::tests_support::file_uri(
@@ -302,9 +294,8 @@ mod tests {
 
         crate::Migrator::up(&db, Some(1)).await.expect("run migration");
 
-        // A row inserted with nothing but the delivery defaults must be
-        // *deliverable-shaped*: every notification on, not paused, sensible
-        // SMTP defaults. A column added later without a default would fail here.
+        // A row with nothing but the delivery defaults must be *deliverable-shaped*: every
+        // notification on, not paused; a column added without a default would fail here.
         db.execute_unprepared("INSERT INTO email_settings (id) VALUES (1)")
             .await
             .expect("insert settings");
@@ -367,8 +358,7 @@ mod tests {
             "a queued row is immediately due and unattempted"
         );
 
-        // Delivery clears the ciphertext: the delivered body must not survive
-        // in the database, which is what keeps a reset link unreadable at rest.
+        // Delivery clears the ciphertext: a delivered reset link must not survive at rest.
         db.execute_unprepared(
             "UPDATE email_messages SET body_enc = NULL, status = 'sent', sent_at = 9 WHERE id = 1",
         )
@@ -386,8 +376,7 @@ mod tests {
 
     #[tokio::test]
     async fn down_drops_both_tables() {
-        // Stop right after this migration, then roll exactly it back: running
-        // the whole chain and stepping back once would undo a *later* migration.
+        // Roll exactly this migration back, not the whole chain.
         let (_dir, db) = db_holding_this_migrations_tables().await;
 
         crate::Migrator::down(&db, Some(1))

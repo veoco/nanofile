@@ -8,17 +8,14 @@ use std::time::{Duration, Instant};
 use crate::crypto::fs_id::sha1_hex;
 use crate::storage::{BlockStorageBackend, LegacyCopyOutcome, MAX_BLOCK_PREFIX_LEN};
 
-/// Subdirectory of the block root that holds the per-repository directories.
+/// Subdirectory of the block root holding the per-repository directories.
 ///
-/// Keeping the new layout under a single well-known name makes it trivially
-/// distinguishable from the legacy flat layout (`{base}/<2hex>/<block_id>`) that
-/// the one-shot migration has to remove, and gives the migration a definite end
-/// state to verify.
+/// A single well-known name distinguishes it from the legacy flat layout
+/// (`{base}/<2hex>/<block_id>`) that the migration removes.
 pub const REPOS_DIR: &str = "repos";
 
-/// Marker file written inside every repository directory, holding the raw
-/// repository id. The directory name is a hash, so this is what maps a
-/// directory back to a repository for the GC orphan sweep and for operators.
+/// Marker file in every repository directory holding the raw repository id, so a
+/// hashed directory maps back to its repository for the GC orphan sweep.
 pub const REPO_MARKER_FILE: &str = ".repo_id";
 
 /// Marker file written in the block root once the layout migration completed.
@@ -27,31 +24,24 @@ pub const LAYOUT_MARKER_FILE: &str = ".block_layout";
 /// Contents of [`LAYOUT_MARKER_FILE`].
 pub const LAYOUT_VERSION: &str = "v2";
 
-/// Upper bound on the number of block ids held in the existence cache. Blocks
-/// are content-addressed and (except under GC) immutable, so a large common
-/// block id set is very common; this cap bounds memory when it grows unbounded.
+/// Upper bound on cached block ids. Content-addressed blocks are immutable and a
+/// large common id set is expected; this bounds memory.
 const EXISTS_CACHE_CAPACITY: usize = 100_000;
 
-/// Time-to-live for a cached "block exists" entry. Only blocks removed by GC or
-/// `remove_block` stop existing, and GC runs far less often (24h by default),
-/// so a short TTL is enough to bound any false-positive window.
+/// TTL for a cached "block exists" entry. Only GC or `remove_block` makes a block
+/// disappear, and GC runs rarely, so a short TTL bounds the false-positive window.
 const EXISTS_CACHE_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 pub struct BlockStorage {
     base_dir: PathBuf,
-    /// Repository directories whose 256 prefix directories and marker file have
-    /// already been created, so the steady-state write path does no mkdir work.
+    /// Repositories whose prefix directories and marker already exist.
     prepared_repos: Mutex<HashSet<String>>,
-    /// Cache of recently-confirmed-existing `(repo_id, block_id)` pairs →
-    /// (confirmation time, stored length). Content addressing makes blocks
-    /// immutable, so a presence result never goes stale except under
+    /// Recently-confirmed `(repo_id, block_id)` → (time, stored length). Content
+    /// addressing makes blocks immutable, so presence never goes stale except under
     /// `remove_block`/GC; the TTL and capacity bound the worst case. The length
-    /// is what lets the write paths tell "already stored with exactly these
-    /// bytes" from "a partial write left by an interrupted one", which must be
-    /// replaced rather than treated as a dedup hit. Kept behind a short-lived
-    /// `Mutex` lock that is never held across an `.await`, so it cannot block
-    /// the runtime.
+    /// separates "already stored with these bytes" from "partial write", which must be
+    /// replaced. The `Mutex` is never held across an `.await`.
     exists_cache: Mutex<HashMap<String, (Instant, u64)>>,
 }
 
@@ -69,10 +59,9 @@ impl BlockStorage {
         &self.base_dir
     }
 
-    /// Directory holding one repository's blocks. The repository id is hashed
-    /// rather than used verbatim: it reaches this module from URL segments and
-    /// multipart fields (see `repo_dir_name` in the web upload module), so it
-    /// must never carry path semantics.
+    /// Directory holding one repository's blocks. The repository id is hashed rather
+    /// than used verbatim: it reaches this module from URL segments and multipart
+    /// fields, so it must never carry path semantics.
     pub fn repo_dir(&self, repo_id: &str) -> PathBuf {
         self.base_dir
             .join(REPOS_DIR)
@@ -85,8 +74,7 @@ impl BlockStorage {
     }
 
     fn block_path(&self, repo_id: &str, block_id: &str) -> PathBuf {
-        // Defensive: never index before checking length (callers validate via
-        // `is_valid_block_id`, but write paths also route through here).
+        // Defensive: never index before checking length.
         let prefix = block_id.get(..2).unwrap_or(block_id);
         self.repo_dir(repo_id).join(prefix).join(block_id)
     }
@@ -100,14 +88,12 @@ impl BlockStorage {
         key
     }
 
-    /// Drop entries older than [`EXISTS_CACHE_TTL`]. Called under the cache lock;
-    /// `elapsed()` (not `duration_since`) so a never-set entry cannot panic.
+    /// Drop entries older than [`EXISTS_CACHE_TTL`]; `elapsed()` so it cannot panic.
     fn evict_expired(cache: &mut HashMap<String, (Instant, u64)>) {
         cache.retain(|_, (t, _)| t.elapsed() < EXISTS_CACHE_TTL);
     }
 
-    /// Stored length of a freshly-confirmed block, or `None` when the cache
-    /// holds no (fresh) entry for it.
+    /// Stored length of a fresh cached entry, or `None`.
     fn exists_cache_len(&self, repo_id: &str, block_id: &str) -> Option<u64> {
         let key = Self::cache_key(repo_id, block_id);
         let mut cache = self.exists_cache.lock().unwrap();
@@ -124,8 +110,7 @@ impl BlockStorage {
         let mut cache = self.exists_cache.lock().unwrap();
         Self::evict_expired(&mut cache);
         if cache.len() >= EXISTS_CACHE_CAPACITY {
-            // Capacity reached with all entries still fresh: drop the whole
-            // cache. Cheaper than an LRU and only costs a few extra stats.
+            // Capacity reached with all entries fresh: drop the whole cache.
             cache.clear();
         }
         cache.insert(key, (Instant::now(), stored_len));
@@ -136,12 +121,9 @@ impl BlockStorage {
         self.exists_cache.lock().unwrap().remove(&key);
     }
 
-    /// Create a repository's directory, its 256 prefix directories and its
-    /// `.repo_id` marker, at most once per process.
-    ///
-    /// `create_dir_all` is idempotent and the prefix set is fixed, so a race
-    /// between two writers of the same repository is harmless; the in-memory
-    /// set only exists to keep the steady-state write path free of mkdir work.
+    /// Create a repository's directory, its 256 prefix directories and its marker, at
+    /// most once per process. `create_dir_all` is idempotent, so a race is harmless;
+    /// the set only keeps the steady-state write path free of mkdir work.
     async fn ensure_repo_dirs(&self, repo_id: &str) -> io::Result<()> {
         {
             let prepared = self.prepared_repos.lock().unwrap();
@@ -155,8 +137,7 @@ impl BlockStorage {
         for i in 0..=0xFFu16 {
             tokio::fs::create_dir_all(repo_dir.join(format!("{i:02x}"))).await?;
         }
-        // The marker is what lets an operator (or the GC orphan sweep) map a
-        // hashed directory name back to a repository id.
+        // The marker maps a hashed directory back to its repository id.
         tokio::fs::write(repo_dir.join(REPO_MARKER_FILE), repo_id.as_bytes()).await?;
 
         self.prepared_repos
@@ -166,13 +147,9 @@ impl BlockStorage {
         Ok(())
     }
 
-    // ── Atomic block publication ───────────────────────────────────────────
-
-    /// Write `data` to a temp file next to its final path and flush it, so the
-    /// bytes are durable before they can become visible under the block's id.
-    ///
-    /// Returns the temp path and the final path; the caller publishes the block
-    /// and always removes the temp file.
+    /// Write `data` to a temp file next to its final path and flush it, so the bytes
+    /// are durable before they become visible under the block id. Returns the temp and
+    /// final paths; the caller publishes and removes the temp file.
     async fn stage_block(
         &self,
         repo_id: &str,
@@ -186,23 +163,18 @@ impl BlockStorage {
             let _ = tokio::fs::remove_file(&tmp).await;
             return Err(e);
         }
-        // Flush the bytes before they become visible under the final id: a crash
-        // must not leave a published-but-empty block.
+        // Flush before publishing: a crash must not leave a published-but-empty block.
         if let Ok(f) = tokio::fs::OpenOptions::new().write(true).open(&tmp).await {
             let _ = f.sync_all().await;
         }
         Ok((tmp, path))
     }
 
-    /// Publish a staged block under its final path, reporting whether this call
-    /// created it.
-    ///
-    /// `hard_link` is the publish that cannot overwrite: it fails when the block
-    /// is already there, which keeps `was_new` race-free under concurrent
-    /// writers of the same id. Filesystems without hard links fall back to an
-    /// atomic `rename` (overwrite), where `was_new` comes from a prior existence
-    /// check — the flag only feeds quota cleanup, which re-checks references
-    /// before deleting.
+    /// Publish a staged block under its final path, reporting whether this call created
+    /// it. `hard_link` cannot overwrite and fails when the block exists, making `was_new`
+    /// race-free under concurrent writers; filesystems without hard links fall back to
+    /// `rename`, where `was_new` comes from a prior existence check (it only feeds quota
+    /// cleanup, which re-checks references before deleting).
     async fn publish_block(tmp: &Path, path: &Path) -> io::Result<bool> {
         match tokio::fs::hard_link(tmp, path).await {
             Ok(()) => Ok(true),
@@ -215,12 +187,9 @@ impl BlockStorage {
         }
     }
 
-    /// Store `data` under `block_id`, overwriting whatever is there when
-    /// `exclusive` is false. Returns whether this call wrote the block.
-    ///
-    /// The bytes are staged and flushed first, so a write that is interrupted
-    /// (or a process that is killed) leaves at most a `.tmp` file beside the
-    /// block and never a short block at the final content-addressed path.
+    /// Store `data` under `block_id`, overwriting when `exclusive` is false. Returns
+    /// whether this call wrote it. Bytes are staged and flushed first, so an interrupted
+    /// write leaves at most a `.tmp`, never a short final block.
     async fn store_block(
         &self,
         repo_id: &str,
@@ -240,10 +209,8 @@ impl BlockStorage {
         Ok(was_new)
     }
 
-    /// An existing block whose stored length does not match the content being
-    /// written cannot be the right bytes (the id is their sha1), so it is
-    /// replaced. Log it: it means an interrupted write was left behind before
-    /// blocks were published atomically.
+    /// A block whose stored length differs from the content cannot be the right bytes
+    /// (the id is their sha1), so replace it and log the interrupted write.
     fn warn_stored_len_mismatch(repo_id: &str, block_id: &str, stored: u64, expected: u64) {
         tracing::warn!(
             "block {block_id} in repo {repo_id} stores {stored} bytes but its content has \
@@ -251,12 +218,8 @@ impl BlockStorage {
         );
     }
 
-    // ── Layout / migration helpers ─────────────────────────────────────────
-    //
-    // These operate on raw files and are used by the one-shot legacy-layout
-    // migration. They live on the concrete backend (not the trait) because the
-    // migration must move stored bytes verbatim, bypassing the at-rest
-    // encryption decorator.
+    // Layout / migration helpers. They work on raw files for the one-shot legacy
+    // migration and live on the concrete backend, bypassing the encryption decorator.
 
     /// Path of the layout marker in the block root.
     pub fn layout_marker_path(&self) -> PathBuf {
@@ -276,12 +239,9 @@ impl BlockStorage {
         tokio::fs::write(self.layout_marker_path(), LAYOUT_VERSION.as_bytes()).await
     }
 
-    /// Top-level directories of the legacy flat layout, i.e. every entry of the
-    /// block root whose name is exactly two hex digits.
-    ///
-    /// The per-repository layout keeps its data under [`REPOS_DIR`] and its
-    /// markers under dot-prefixed names, so a two-hex-digit directory can only
-    /// be the legacy layout.
+    /// Top-level directories of the legacy flat layout: entries of the block root whose
+    /// name is exactly two hex digits. The per-repository layout keeps data under
+    /// [`REPOS_DIR`] and dot-prefixed markers, so this is unambiguous.
     pub async fn legacy_layout_dirs(&self) -> io::Result<Vec<PathBuf>> {
         let mut out = Vec::new();
         let mut entries = match tokio::fs::read_dir(&self.base_dir).await {
@@ -334,13 +294,10 @@ impl BlockStorage {
         Ok(out)
     }
 
-    /// Copy one block from the legacy flat layout into `repo_id`'s directory.
-    ///
-    /// Pure copy — no hard links, no symlinks — so it behaves identically on
-    /// every supported platform and filesystem, and so purging the legacy tree
-    /// afterwards cannot break the new one. The copy goes to a temporary file in
-    /// the destination directory and is renamed into place, so an interrupted
-    /// migration can never leave a half-written block behind.
+    /// Copy one legacy block into `repo_id`'s directory: a pure copy (no hard links or
+    /// symlinks), so purging the old tree cannot break the new one. It goes to a temp
+    /// file and is renamed into place, so an interrupted migration never leaves a
+    /// half-written block.
     pub async fn migrate_legacy_block(
         &self,
         repo_id: &str,
@@ -379,8 +336,7 @@ impl BlockStorage {
         let tmp = dst.with_file_name(format!("{block_id}.{}.tmp", uuid::Uuid::new_v4()));
         tokio::fs::copy(&src, &tmp).await?;
         {
-            // Flush the copied bytes to stable storage before the rename, so a
-            // crash can never expose a renamed-but-empty block.
+            // Flush before renaming, so a crash cannot expose a renamed-but-empty block.
             let f = tokio::fs::OpenOptions::new().write(true).open(&tmp).await?;
             let _ = f.sync_all().await;
         }
@@ -392,10 +348,8 @@ impl BlockStorage {
         Ok(LegacyCopyOutcome::Copied)
     }
 
-    /// Remove every top-level directory of the legacy flat layout.
-    ///
-    /// Idempotent: safe to re-run after an interrupted purge. Returns the number
-    /// of directories removed.
+    /// Remove every legacy top-level directory. Idempotent, so re-running after an
+    /// interrupted purge is safe; returns the number removed.
     pub async fn purge_legacy_layout(&self) -> io::Result<u64> {
         let mut removed = 0u64;
         for dir in self.legacy_layout_dirs().await? {
@@ -405,10 +359,8 @@ impl BlockStorage {
         Ok(removed)
     }
 
-    /// Remove any stray temporary files left by an interrupted migration or an
-    /// interrupted block write. Called once at startup: blocks are published by
-    /// an atomic link/rename, so a `.tmp` file is never a block, only leftover
-    /// bytes.
+    /// Remove stray `.tmp` files from interrupted migrations or writes; blocks are
+    /// published atomically, so a temp file is only leftover bytes.
     pub async fn purge_layout_temp_files(&self) -> io::Result<u64> {
         let mut removed = 0u64;
         let repos = self.base_dir.join(REPOS_DIR);
@@ -451,8 +403,7 @@ impl BlockStorageBackend for BlockStorage {
             return true;
         }
         let path = self.block_path(repo_id, block_id);
-        // Record the size too: the write paths use it to tell a complete block
-        // from a partial write left by an interrupted one.
+        // Record the size: write paths use it to tell a complete block from a partial one.
         match tokio::fs::metadata(&path).await {
             Ok(meta) if meta.is_file() => {
                 self.exists_cache_insert(repo_id, block_id, meta.len());
@@ -472,12 +423,9 @@ impl BlockStorageBackend for BlockStorage {
         tokio::fs::read(self.block_path(repo_id, block_id)).await
     }
 
-    /// Read at most `min(max, MAX_BLOCK_PREFIX_LEN)` leading bytes.
-    ///
-    /// A real partial read (open + bounded read) rather than [`Self::read_block`],
-    /// so probing a large block's on-disk format header never pulls the whole
-    /// block off disk: `get_block_map` and `range_stream`'s prefix skip probe
-    /// every block of a file.
+    /// Read at most `min(max, MAX_BLOCK_PREFIX_LEN)` leading bytes with a bounded read,
+    /// so probing an on-disk header never pulls a whole block off disk (`get_block_map`
+    /// and `range_stream` probe every block of a file).
     async fn read_block_prefix(
         &self,
         repo_id: &str,
@@ -520,12 +468,9 @@ impl BlockStorageBackend for BlockStorage {
         block_id: &str,
         data: &[u8],
     ) -> Result<String, io::Error> {
-        // The caller has already computed `block_id` as the SHA-1 of `data`
-        // (and verified it), so write under it directly without re-hashing.
-        //
-        // Validate the shape anyway: `block_path` joins this id onto `base_dir`,
-        // so an unvalidated `../../x` from a future caller would escape the
-        // block directory. Every sibling method already fails closed here.
+        // The caller already computed and verified `block_id`, so write under it directly.
+        // Validate the shape anyway: `block_path` joins it onto `base_dir`, so an
+        // unvalidated `../../x` would escape the block directory.
         if !Self::is_valid_block_id(block_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -534,9 +479,8 @@ impl BlockStorageBackend for BlockStorage {
         }
         let expected_len = data.len() as u64;
 
-        // Content-addressed storage: identical content yields the same SHA-1,
-        // so skip the write when the block is already stored at its full length.
-        // Re-uploads and sync retries hit this path constantly.
+        // Content-addressed: identical content yields the same SHA-1, so skip the write when
+        // the block is already stored at full length (re-uploads hit this constantly).
         if self.exists_cache_len(repo_id, block_id) == Some(expected_len) {
             return Ok(block_id.to_string());
         }
@@ -547,11 +491,9 @@ impl BlockStorageBackend for BlockStorage {
                 return Ok(block_id.to_string());
             }
             Ok(meta) if meta.is_file() => {
-                // A block stored at a different length cannot be the bytes this
-                // id names: it is a partial write left by an interrupted upload
-                // from before blocks were published atomically. Replace it
-                // rather than treating it as a dedup hit, which would keep every
-                // reader (and every file that references it) truncated.
+                // A block stored at a different length cannot be the bytes this id names; it is a
+                // partial write from before atomic publication. Replace it rather than treating it
+                // as a dedup hit, which would keep readers truncated.
                 Self::warn_stored_len_mismatch(repo_id, block_id, meta.len(), expected_len);
                 self.store_block(repo_id, block_id, data, false).await?;
                 return Ok(block_id.to_string());
@@ -569,9 +511,8 @@ impl BlockStorageBackend for BlockStorage {
         block_id: &str,
         data: &[u8],
     ) -> Result<String, io::Error> {
-        // Same as `write_block_with_id` but never short-circuits on an existing
-        // block: the caller (lazy→encrypted conversion) needs to overwrite a
-        // legacy plaintext block with its ciphertext under the same ID.
+        // Like `write_block_with_id` but never short-circuits on an existing block: the
+        // caller overwrites a legacy plaintext block with its ciphertext under the same id.
         if !Self::is_valid_block_id(block_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -588,12 +529,8 @@ impl BlockStorageBackend for BlockStorage {
         block_id: &str,
         data: &[u8],
     ) -> Result<(String, bool), io::Error> {
-        // Race-free tracked write: the publish is exclusive, so when two
-        // concurrent calls write the same block only one sees `was_new = true`
-        // and the quota-cleanup path can safely delete only the blocks this
-        // upload actually created. The bytes are staged and published
-        // atomically, so an interrupted write leaves a `.tmp` file, never a
-        // short block at the final path.
+        // Race-free tracked write: the publish is exclusive, so only one concurrent call
+        // sees `was_new = true` and quota cleanup deletes only blocks this upload created.
         if !Self::is_valid_block_id(block_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -625,8 +562,7 @@ impl BlockStorageBackend for BlockStorage {
         if path.exists() {
             tokio::fs::remove_file(&path).await?;
         }
-        // Invalidate the cached presence regardless: even if the file was
-        // already gone, a stale "exists" entry must not survive a remove.
+        // Invalidate cached presence: a stale "exists" must not survive a remove.
         self.exists_cache_remove(repo_id, block_id);
         Ok(())
     }
@@ -686,7 +622,6 @@ impl BlockStorageBackend for BlockStorage {
                 if prefix_str.len() == 2 {
                     let mut sub_entries = tokio::fs::read_dir(entry.path()).await?;
                     while let Some(sub_entry) = sub_entries.next_entry().await? {
-                        // Only include regular files matching 40-char hex IDs
                         if sub_entry.file_type().await?.is_file()
                             && let Some(name) = sub_entry.file_name().to_str()
                             && name.len() == 40
@@ -702,8 +637,7 @@ impl BlockStorageBackend for BlockStorage {
         Ok(blocks)
     }
 
-    /// Stream every block ID of one repository directly from the three-level
-    /// directory layout without materialising the full list in memory.
+    /// Stream one repository's block IDs from the three-level layout without listing.
     async fn for_each_block_in_repo(
         &self,
         repo_id: &str,
@@ -723,7 +657,6 @@ impl BlockStorageBackend for BlockStorage {
                 if prefix_str.len() == 2 {
                     let mut sub_entries = tokio::fs::read_dir(entry.path()).await?;
                     while let Some(sub_entry) = sub_entries.next_entry().await? {
-                        // Only visit regular files matching 40-char hex IDs
                         if sub_entry.file_type().await?.is_file() {
                             let name = sub_entry.file_name();
                             if let Some(name) = name.to_str()
@@ -741,9 +674,7 @@ impl BlockStorageBackend for BlockStorage {
         Ok(())
     }
 
-    /// Stream every block id of one repository to a channel as the directory
-    /// walk finds them, so a caller that awaits on each id never holds the
-    /// whole list. Stops early when the receiver goes away.
+    /// Stream block ids to a channel; stops early when the receiver goes away.
     async fn stream_blocks_in_repo(
         &self,
         repo_id: &str,
@@ -795,9 +726,8 @@ impl BlockStorageBackend for BlockStorage {
                 continue;
             }
             let path = entry.path();
-            // A directory without a readable marker cannot be attributed to a
-            // repository (interrupted write, or a manual copy); report it under
-            // its directory name so callers can still surface it.
+            // A directory without a readable marker cannot be attributed to a repository;
+            // report it under its directory name so callers can still surface it.
             let marker = tokio::fs::read_to_string(path.join(REPO_MARKER_FILE))
                 .await
                 .ok()
@@ -814,15 +744,12 @@ impl BlockStorageBackend for BlockStorage {
 mod tests {
     use super::*;
 
-    /// A fixed repository id for the tests: every operation is now scoped to a
-    /// repository, and using two of them is how the isolation is asserted.
+    /// A fixed repository id for tests; two of them assert isolation.
     const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
     const OTHER: &str = "11111111-2222-3333-4444-555555555555";
 
-    /// Create a unique temp layout `{tmp}/nf-blockstore-{uuid}/data/blocks` and
-    /// return `(root, store)`. The `data` level makes path-traversal ids resolve
-    /// through real directories (the kernel rejects `..` through non-existent
-    /// dirs).
+    /// Create a unique temp layout `{tmp}/nf-blockstore-{uuid}/data/blocks`. The `data`
+    /// level makes traversal ids resolve through real directories.
     fn temp_storage() -> (PathBuf, BlockStorage) {
         let root = std::env::temp_dir().join(format!("nf-blockstore-{}", uuid::Uuid::new_v4()));
         let blocks = root.join("data").join("blocks");
@@ -843,8 +770,7 @@ mod tests {
         assert!(!store.has_block(REPO, &id).await);
     }
 
-    /// The whole point of the per-repository layout: a block written for one
-    /// repository is invisible and unreadable through another one.
+    /// Per-repository isolation: a block written for one repo is invisible via another.
     #[tokio::test]
     async fn blocks_are_isolated_per_repository() {
         let (_root, store) = temp_storage();
@@ -902,8 +828,7 @@ mod tests {
         let id2 = store.write_block(REPO, b"same content").await.unwrap();
         assert_eq!(id1, id2);
         assert!(store.has_block(REPO, &id1).await);
-        // Dedup is per repository: the same bytes under another repository get
-        // their own copy.
+        // Dedup is per repository: another repository gets its own copy.
         let id3 = store.write_block(OTHER, b"same content").await.unwrap();
         assert_eq!(id1, id3);
         assert!(store.has_block(OTHER, &id3).await);
@@ -928,9 +853,8 @@ mod tests {
         assert_eq!(tokio::fs::read(&secret).await.unwrap(), b"secret");
     }
 
-    /// `write_block_with_id` must validate the id it is handed: `block_path`
-    /// joins it onto the block directory, so an unvalidated value from a future
-    /// caller would escape the tree on write.
+    /// `write_block_with_id` must validate its id: `block_path` joins it onto the tree,
+    /// so an unvalidated value would escape on write.
     #[tokio::test]
     async fn write_block_with_id_rejects_malformed_ids() {
         let (root, store) = temp_storage();
@@ -1007,8 +931,7 @@ mod tests {
         assert_eq!(p, expected);
     }
 
-    /// `remove_block` must invalidate the cached presence entry, not just delete
-    /// the file — otherwise a subsequent `has_block` returns a stale "exists".
+    /// `remove_block` must invalidate the cached presence, not just delete the file.
     #[tokio::test]
     async fn exists_cache_clear_on_remove() {
         let (_root, store) = temp_storage();
@@ -1021,8 +944,7 @@ mod tests {
         );
     }
 
-    /// `invalidate_exists_cache` drops every cached presence so the next check
-    /// re-stats disk instead of trusting a stale entry.
+    /// `invalidate_exists_cache` drops every entry so the next check re-stats disk.
     #[tokio::test]
     async fn invalidate_exists_cache_forces_recheck() {
         let (_root, store) = temp_storage();
@@ -1035,8 +957,6 @@ mod tests {
             "recheck after invalidation"
         );
     }
-
-    // ── Layout migration ────────────────────────────────────────────────────
 
     /// Build a legacy flat layout holding `blocks`, then return the store.
     async fn legacy_store(blocks: &[(&str, &[u8])]) -> (PathBuf, BlockStorage) {
@@ -1124,10 +1044,8 @@ mod tests {
         assert!(store.has_block(REPO, &id).await);
     }
 
-    /// A block stored at a shorter length than its id names is what an
-    /// interrupted write left behind before blocks were published atomically.
-    /// A later verified write of the same block must replace it rather than
-    /// taking the dedup shortcut, which would keep every reader truncated.
+    /// A block shorter than the length its id names is an interrupted write from before
+    /// atomic publication; a verified write must replace it, not take the dedup path.
     #[tokio::test]
     async fn write_block_repairs_a_short_stored_block() {
         let (_root, store) = temp_storage();
@@ -1150,8 +1068,7 @@ mod tests {
         );
     }
 
-    /// The tracked (quota-accounted) write repairs the same way and reports
-    /// that it wrote the block, so cleanup may treat it as this upload's own.
+    /// The tracked write repairs the same way and reports `was_new`.
     #[tokio::test]
     async fn tracked_write_repairs_a_short_stored_block() {
         let (_root, store) = temp_storage();
@@ -1186,9 +1103,8 @@ mod tests {
         assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
     }
 
-    /// Neither the fresh-write nor the repair path may leave its staged `.tmp`
-    /// file behind: only an interrupted process leaves one, and startup sweeps
-    /// those.
+    /// Neither the fresh-write nor the repair path may leave a staged `.tmp` behind;
+    /// only an interrupted process leaves one, and startup sweeps those.
     #[tokio::test]
     async fn block_writes_leave_no_temp_files() {
         let (root, store) = temp_storage();

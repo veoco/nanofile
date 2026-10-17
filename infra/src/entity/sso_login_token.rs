@@ -1,12 +1,9 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// A one-time SSO / "view on website" login token.
-///
-/// `token` is stored as a SHA-256 hash (bearer tokens are never stored in
-/// plaintext). `api_token` holds the plaintext API token minted on completion —
-/// the `poll_sso_link` flow must re-present it to the client, so it cannot be
-/// hashed (a documented limitation).
+/// A one-time SSO / "view on website" login token. `token` is stored as a SHA-256 hash;
+/// `api_token` holds the plaintext API token minted on completion, which `poll_sso_link`
+/// must re-present (a documented limitation).
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "sso_login_tokens")]
 pub struct Model {
@@ -24,11 +21,9 @@ pub struct Model {
     #[sea_orm(not_null)]
     pub created_at: i64,
     pub expires_at: Option<i64>,
-    /// Unix timestamp when the browser first opened `/client-sso/{token}/`.
-    /// The seahub-compatible soft timeout (300s) is measured from here.
+    /// When the browser first opened `/client-sso/{token}/`; the 300s soft timeout starts here.
     pub accessed_at: Option<i64>,
-    /// Desktop client version (from `shib_client_version`) for device-bound
-    /// API-token creation on completion.
+    /// Desktop client version (`shib_client_version`) for device-bound token creation.
     pub client_version: Option<String>,
 }
 

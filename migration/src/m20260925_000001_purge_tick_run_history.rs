@@ -5,28 +5,16 @@ pub struct Migration;
 
 /// Drop the run history of the two passes that used to fire every 30 seconds.
 ///
-/// The index committer and the outbox drainer were periodic jobs on a
-/// 30-second timer, and every tick was recorded whether or not it had anything
-/// to do. That is ~5,760 rows a day between them, so the run list's newest
-/// twenty rows were always those two and the list answered nothing. Both are
-/// gone: the commit is a debounced write in the indexer and the drainer is a
-/// service that is woken when a message is queued, so neither writes a run row
-/// for merely ticking.
+/// The index committer and the outbox drainer were 30-second jobs and every tick was
+/// recorded, ~5,760 rows a day, so the run list's newest rows were always those two.
+/// Both are gone (a debounced write and a woken service), so stored tick rows are the
+/// only thing between an upgrade and a run list that says something.
 ///
-/// The rows already stored describe ticks that the system no longer records,
-/// and they are the only thing standing between an upgrading installation and a
-/// run list that says something. `job_run.params` is dropped with each row; the
-/// rows that remain are the runs somebody asked for.
-///
-/// The slug literals are **frozen on purpose**, like the thumbnail sizes in
-/// `m20260918_000002`: an installation upgrading from an old release still has
-/// to lose these rows even if the job set changes again.
-///
-/// Only finished rows are touched. An unfinished row is somebody's pending work
-/// and the recovery pass reads it, so a row a crashed process left in `queued`
-/// or `running` stays and is closed as interrupted by the next start — which is
-/// also why the deletion needs no `down`: the information is gone, and inventing
-/// it back would be a lie.
+/// The slug literals are **frozen on purpose**, like the thumbnail sizes: an old
+/// installation still has to lose these rows. Only finished rows are touched — an
+/// unfinished one is somebody's pending work that the recovery pass reads, and closing
+/// it as interrupted is the next start's job. Hence no `down`: inventing the rows back
+/// would be a lie.
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -94,8 +82,7 @@ mod tests {
         .expect("insert a pre-migration run");
     }
 
-    /// The two tick histories go; a run somebody asked for, and an unfinished
-    /// row a crash left behind, both stay.
+    /// Tick histories go; a requested run and an unfinished row both stay.
     #[tokio::test]
     async fn drops_the_recorded_ticks_and_nothing_else() {
         let (_dir, db) = before_this_migration().await;

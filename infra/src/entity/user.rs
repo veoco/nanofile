@@ -21,7 +21,6 @@ pub struct Model {
     pub invited_by: Option<i32>,
     /// Per-user storage quota in bytes (null = use global default, 0 = unlimited).
     pub storage_quota: Option<i64>,
-    /// Full name (optional, reserved for future use).
     pub name: Option<String>,
     /// Display name / nickname — preferred for human-readable display.
     pub display_name: Option<String>,
@@ -118,8 +117,7 @@ impl Related<super::upload_link::Entity> for Entity {
 }
 
 impl Model {
-    /// Best available display name.
-    /// Fallback chain: display_name → name → local-part-of-email → ""
+    /// Best display name: display_name → name → local part of email → "".
     pub fn nickname(&self) -> String {
         self.display_name
             .clone()

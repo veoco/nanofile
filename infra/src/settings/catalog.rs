@@ -1,16 +1,13 @@
 //! The settings catalog: one entry per `Config` field.
 //!
-//! Every entry names its `NANOFILE_*` variable, how the value is parsed, and
-//! when a change takes effect ([`Apply`]). The environment layer is applied
-//! *from* this table, so a setting cannot be added without wiring its variable,
-//! and the admin UI cannot advertise a variable the server does not read.
+//! Every entry names its `NANOFILE_*` variable, how the value is parsed, and when a
+//! change takes effect ([`Apply`]). The environment layer is applied *from* this
+//! table, so a setting cannot be added without wiring its variable and the admin UI
+//! cannot advertise a variable the server does not read.
 //!
-//! Entries are grouped by the admin page they appear on ([`Section`]) and, on a
-//! page, by the heading they are read under ([`GROUPS`]). This file therefore
-//! reads top to bottom like the pages do; where a group's order disagrees with
-//! the config file's, the page wins, because the page is what an operator reads.
-//! [`GROUPS`] names the same keys a second time, and the
-//! `the_groups_partition_the_catalog` test is what keeps the two lists honest.
+//! Entries are grouped by page ([`Section`]) and, on a page, by heading ([`GROUPS`]).
+//! The page order wins over the config file's because the page is what an operator
+//! reads; the `the_groups_partition_the_catalog` test keeps the two lists honest.
 
 use std::path::PathBuf;
 
@@ -20,10 +17,8 @@ use super::{
     parse_u16, parse_u32, parse_u64, parse_usize,
 };
 
-/// Declare one catalog entry.
-///
-/// The two-arm form carries a `*_FILE` variable for a secret, which is preferred
-/// over the plain variable because it keeps the value out of a process listing.
+/// Declare one catalog entry. The two-arm form carries a `*_FILE` variable for a
+/// secret, preferred over the plain variable so it stays out of process listings.
 macro_rules! setting {
     ($key:literal, $section:ident, $env:literal, $kind:expr, $apply:expr, $get:expr, $set:expr) => {
         setting!($key, $section, $env, None, $kind, $apply, $get, $set)
@@ -44,8 +39,6 @@ macro_rules! setting {
 
 /// Every `Config` field, in admin-page order.
 pub static CATALOG: &[SettingDef] = &[
-    // ── Server ──────────────────────────────────────────────────────────────
-    // · Addresses & identity
     setting!(
         "server.addr",
         Server,
@@ -254,8 +247,6 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // ── Security ────────────────────────────────────────────────────────────
-    // · Master secret
     setting!(
         "server.secret_key",
         Security,
@@ -379,8 +370,6 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // ── Authentication ──────────────────────────────────────────────────────
-    // · Passwords
     setting!(
         "auth.password_hash_iterations",
         Authentication,
@@ -491,8 +480,6 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // ── Rate limits ────────────────────────────────────────────────────────
-    // · Sign-in
     setting!(
         "auth.max_login_attempts",
         RateLimits,
@@ -652,8 +639,6 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // ── Storage ─────────────────────────────────────────────────────────────
-    // · Directories
     setting!(
         "storage.block_dir",
         Storage,
@@ -794,10 +779,8 @@ pub static CATALOG: &[SettingDef] = &[
         Storage,
         "NANOFILE_STORAGE_FFMPEG_PATH",
         Kind::Text,
-        // A helper is a grant: the media worker may execute the file this names
-        // and no other, so a saved path has to be re-resolved — and the answers
-        // measured against the old one dropped — through the same hook the
-        // sandbox's own settings use.
+        // A helper is a grant: the media worker may execute this file and no other, so a
+        // saved path is re-resolved through the same hook the sandbox settings use.
         Apply::LiveWithHook(Hook::Sandbox),
         |c| c.storage.ffmpeg_path.clone(),
         |c, v| {
@@ -805,8 +788,6 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // ── Encryption ──────────────────────────────────────────────────────────
-    // · Block storage
     setting!(
         "storage.block_encryption_mode",
         Encryption,
@@ -877,8 +858,6 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // ── Maintenance ─────────────────────────────────────────────────────────
-    // · Search index
     setting!(
         "index.enabled",
         Maintenance,
@@ -1026,8 +1005,6 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // ── Email ───────────────────────────────────────────────────────────────
-    // · Delivery
     setting!(
         "email.enabled",
         Email,
@@ -1200,8 +1177,6 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // ── Notifications ───────────────────────────────────────────────────────
-    // · Service
     setting!(
         "notification.enabled",
         Notifications,
@@ -1300,8 +1275,6 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // ── Advanced ────────────────────────────────────────────────────────────
-    // · Database
     setting!(
         "database.url",
         Advanced,
@@ -1457,16 +1430,12 @@ pub static CATALOG: &[SettingDef] = &[
     ),
 ];
 
-/// One group of rows inside an admin page.
-///
-/// A page is read under a handful of headings rather than as one flat list:
-/// `Security` is the master secret, the capability switches, the hosts that are
-/// trusted and the headers that are sent, and an operator looking for one of
-/// them should not have to read the other three to find it.
+/// One group of rows inside an admin page. A page is read under a handful of
+/// headings so an operator looking for one setting need not read the rest of the
+/// page's sections.
 pub struct GroupDef {
     pub section: Section,
-    /// Stable identifier, used for the page's `data-setting-group` hook and to
-    /// build [`Self::title_key`].
+    /// Stable id used for `data-setting-group` and to build [`Self::title_key`].
     pub id: &'static str,
     /// The locale key of the group's heading.
     pub title_key: &'static str,
@@ -1474,10 +1443,8 @@ pub struct GroupDef {
     pub keys: &'static [&'static str],
 }
 
-/// Every page's groups, in navigation order.
-///
-/// This is a second list beside [`CATALOG`], so a key can be added without a
-/// home; `the_groups_partition_the_catalog` fails in that case, and the page
+/// Every page's groups, in navigation order. A second list beside [`CATALOG`], so a
+/// key can be added without a home; the partition test fails then, and the page
 /// falls back to a trailing "Other" group rather than dropping the row.
 pub static GROUPS: &[GroupDef] = &[
     GroupDef {

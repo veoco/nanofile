@@ -1,16 +1,12 @@
 use sea_orm::entity::prelude::*;
 
-/// One saved setting (`key = "auth.max_login_attempts"`), in the canonical
-/// string form the catalog parses.
+/// One saved setting (`key = "auth.max_login_attempts"`) in the canonical string form
+/// the catalog parses.
 ///
-/// The table is deliberately untyped about values: `infra::settings::CATALOG`
-/// owns which keys exist, how each is parsed, and whether a change needs a
-/// restart. Adding a setting is therefore a code change with no migration, and
-/// the database can never disagree with the code about a key's type.
-///
-/// Secret values are stored encrypted (`enc1:` prefix, the same AEAD cipher as
-/// repository sync tokens), so a leaked database does not yield a usable SMTP
-/// password — which is exactly how the row this table replaces behaved.
+/// The table is untyped about values: `infra::settings::CATALOG` owns which keys exist
+/// and how they parse, so adding a setting needs no migration. Secrets are stored
+/// encrypted (`enc1:`, the sync-token AEAD), so a leaked database yields no usable
+/// SMTP password.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, serde::Serialize, serde::Deserialize)]
 #[sea_orm(table_name = "settings")]
 pub struct Model {
@@ -20,8 +16,7 @@ pub struct Model {
     pub value: String,
     #[sea_orm(not_null, default_value = 0)]
     pub updated_at: i64,
-    /// Admin who last saved the value. No foreign key: deleting an account must
-    /// not touch (or fail on) a setting it once changed.
+    /// Admin who last saved it. No foreign key: deleting an account must not fail here.
     #[sea_orm(nullable)]
     pub updated_by: Option<i32>,
 }

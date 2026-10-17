@@ -6,18 +6,13 @@ const BREAK_VALUE: u32 = 0x0013;
 
 /// seafile's official CDC block sizing.
 ///
-/// `common/fs-mgr.c` (server) and `common/fs-mgr.h` (daemon) define
-/// `CDC_AVERAGE_BLOCK_SIZE (1 << 23)` = 8 MiB, `CDC_MIN_BLOCK_SIZE
-/// (6 * (1 << 20))` = 6 MiB and `CDC_MAX_BLOCK_SIZE (10 * (1 << 20))` =
-/// 10 MiB, and `seaf_fs_manager_index_blocks()` always chunks with them
-/// (seafile commit `31dcd928`, "Use 8MB as average block size", 2017).
+/// `common/fs-mgr.h` defines `CDC_AVERAGE_BLOCK_SIZE` = 8 MiB, `CDC_MIN_BLOCK_SIZE`
+/// = 6 MiB and `CDC_MAX_BLOCK_SIZE` = 10 MiB, and `seaf_fs_manager_index_blocks()`
+/// always chunks with them (seafile commit `31dcd928`, 2017).
 ///
-/// They are **fixed and independent of file size**. The size-dependent
-/// `calculate_chunk_size()` in `common/fs-mgr.c` is only the legacy (pre-6.1)
-/// fallback consulted by the daemon's `compare_file_content()`, never the
-/// indexing path, so it must not be used to chunk new blocks: doing so makes
-/// the server's block boundaries (and therefore every `seafile` object id)
-/// disagree with what a seafile client computes for the same content.
+/// The sizes are **fixed and independent of file size**: the legacy size-dependent
+/// `calculate_chunk_size()` is only the pre-6.1 fallback, never the indexing path.
+/// Using it here would change every block boundary and `seafile` object id.
 pub const SEAFILE_AVG_BLOCK: usize = 8 * 1024 * 1024;
 pub const SEAFILE_MIN_BLOCK: usize = 6 * 1024 * 1024;
 pub const SEAFILE_MAX_BLOCK: usize = 10 * 1024 * 1024;
@@ -41,9 +36,8 @@ impl ChunkSizes {
 
 /// seafile-compatible Rabin fingerprint.
 ///
-/// Matches the exact behaviour of seafile's `common/cdc/rabin-checksum.c`:
-/// polynomial `0xbfe6b8a5bf378d83`, 48-byte window, GF(2) polynomial
-/// arithmetic with precomputed T/U tables.
+/// Matches `common/cdc/rabin-checksum.c`: polynomial `0xbfe6b8a5bf378d83`,
+/// 48-byte window, GF(2) arithmetic with precomputed T/U tables.
 struct RabinState {
     window: [u8; WINDOW_SIZE],
     pos: usize,
@@ -111,8 +105,7 @@ impl RabinState {
     }
 
     fn new() -> Self {
-        // Copy the precomputed tables (4 KiB) rather than recomputing them —
-        // the tables depend only on POLY/WINDOW_SIZE, not on chunk content.
+        // Copy the 4 KiB precomputed tables instead of recomputing them per chunk.
         let (shift, t, u) = *RABIN_TABLES;
         Self {
             window: [0; WINDOW_SIZE],
@@ -125,15 +118,13 @@ impl RabinState {
         }
     }
 
-    /// Core fingerprint update: `(p * x^8 + m) mod poly`.
-    /// Uses the T table for efficient reduction.
+    /// Core update: `(p * x^8 + m) mod poly`, using the T table.
     fn append8(&self, p: u64, m: u8) -> u64 {
         let idx = (p >> self.shift) as usize;
         ((p << 8) | m as u64) ^ self.t[idx]
     }
 
-    /// Initialise fingerprint from the first WINDOW_SIZE bytes.
-    /// Equivalent to seafile's `rabin_checksum(buf, WINDOW_SIZE)`.
+    /// Seed from the first WINDOW_SIZE bytes (seafile's `rabin_checksum`).
     fn init(&mut self, data: &[u8]) {
         self.fingerprint = 0;
         self.count = 0;
@@ -149,8 +140,7 @@ impl RabinState {
         }
     }
 
-    /// Rolling update: slide window by one byte.
-    /// Equivalent to seafile's `rabin_rolling_checksum(csum, len, c1, c2)`.
+    /// Slide the window by one byte (seafile's `rabin_rolling_checksum`).
     fn update(&mut self, byte: u8) {
         let out = self.window[self.pos];
         self.fingerprint =
@@ -165,13 +155,9 @@ impl RabinState {
     }
 }
 
-/// Precomputed Rabin lookup tables for `POLY`/`WINDOW_SIZE`.
-///
-/// `T[256]`, `U[256]` and `shift` depend only on the two compile-time
-/// constants above — never on file content — so they are computed exactly
-/// once and reused by every `RabinState::new()`. Recomputing them per chunk
-/// wasted ~512 `polymult`/`polymod` bit-operations (~75k integer ops) for
-/// every chunk in `file_chunk_cdc`.
+/// Precomputed Rabin lookup tables for `POLY`/`WINDOW_SIZE`, computed once and
+/// shared by every `RabinState::new()`. Recomputing them per chunk cost ~512
+/// `polymult`/`polymod` operations per chunk.
 static RABIN_TABLES: LazyLock<(usize, [u64; 256], [u64; 256])> = LazyLock::new(|| {
     let poly = POLY;
     let xshift = RabinState::fls64(poly) - 1;
@@ -198,23 +184,18 @@ static RABIN_TABLES: LazyLock<(usize, [u64; 256], [u64; 256])> = LazyLock::new(|
     (shift, t, u)
 });
 
-/// Content-defined chunking matching seafile's `file_chunk_cdc` exactly, using
-/// seafile's official fixed block sizes ([`ChunkSizes::SEAFILE`]).
+/// Content-defined chunking matching seafile's `file_chunk_cdc` exactly, using its
+/// official fixed block sizes ([`ChunkSizes::SEAFILE`]).
 ///
-/// Algorithm mirrors the C code's buffer management:
-/// 1. Skip first `min - WINDOW_SIZE` bytes (no break checking)
-/// 2. At position `min - 1` from chunk start, compute fingerprint from scratch
-/// 3. Continue with rolling updates, checking for break points or max size
-/// 4. On break/max: emit chunk, reset, repeat
+/// Same buffer management as the C code: skip `min - WINDOW_SIZE` bytes, seed the
+/// fingerprint at `min - 1`, then roll until a break point or max size.
 pub fn file_chunk_cdc(data: &[u8]) -> Vec<(usize, usize)> {
     file_chunk_cdc_with(data, ChunkSizes::SEAFILE)
 }
 
-/// [`file_chunk_cdc`] with an explicit block-size triple.
-///
-/// Production code always uses [`ChunkSizes::SEAFILE`]; the parameter exists so
-/// tests can exercise multi-block boundaries on small fixtures without
-/// generating tens of megabytes.
+/// [`file_chunk_cdc`] with an explicit block-size triple. Production always uses
+/// [`ChunkSizes::SEAFILE`]; the parameter lets tests exercise multi-block boundaries
+/// on small fixtures.
 pub fn file_chunk_cdc_with(data: &[u8], sizes: ChunkSizes) -> Vec<(usize, usize)> {
     let file_size = data.len();
     if file_size == 0 {
@@ -236,8 +217,7 @@ pub fn file_chunk_cdc_with(data: &[u8], sizes: ChunkSizes) -> Vec<(usize, usize)
 
         // Compute initial fingerprint at position `min - 1` from scratch (like C's finger)
         let scan_start = chunk_start + min - 1;
-        // `min` is far larger than the Rabin window for every seafile size, so
-        // the last `WINDOW_SIZE` bytes before `scan_start` always exist.
+        // `min` far exceeds the Rabin window, so the last window before `scan_start` exists.
         debug_assert!(
             scan_start >= WINDOW_SIZE - 1,
             "scan_start too small for window"
@@ -281,20 +261,12 @@ pub fn file_chunk_cdc_with(data: &[u8], sizes: ChunkSizes) -> Vec<(usize, usize)
     chunks
 }
 
-// ─── Streaming CDC chunker ──────────────────────────────────────────────────
-
-/// Content-defined chunker that consumes bytes incrementally and emits
-/// chunks, so the caller never has to buffer the whole file in memory.
+/// Content-defined chunker that consumes bytes incrementally and emits chunks, so
+/// the caller never buffers the whole file in memory.
 ///
-/// The chunk boundaries are **identical** to [`file_chunk_cdc`]: it keeps the
-/// same windowing / break-point / max-size state machine, but instead of
-/// indexing the whole `&[u8]` it accumulates each chunk's bytes in a buffer
-/// and rolls the Rabin fingerprint forward one byte at a time. The most
-/// recent `WINDOW_SIZE` bytes of the current chunk are always available for
-/// the fingerprint initialisation at the `min`-th byte, matching
-/// `file_chunk_cdc`'s `state.init(&data[scan_start - (WINDOW_SIZE-1)..])`.
-///
-/// Memory use is O(max chunk size) regardless of file size.
+/// Boundaries are **identical** to [`file_chunk_cdc`]: the same windowing, break and
+/// max-size state machine, with each chunk's bytes buffered and the fingerprint
+/// rolled forward. Memory is O(max chunk size) regardless of file size.
 pub struct Chunker {
     file_size: usize,
     min: usize,
@@ -305,28 +277,23 @@ pub struct Chunker {
     chunk_buf: Vec<u8>,
     /// Global offset of the current chunk's first byte.
     chunk_start: usize,
-    /// Rabin fingerprint state. Meaningful once the current chunk has reached
-    /// `min` bytes (`rolling == true`); `init` re-seeds it per chunk.
+    /// Rabin state, meaningful once the chunk has reached `min` bytes.
     state: RabinState,
-    /// `false` while the current chunk is still accumulating its first `min`
-    /// bytes (no break checks yet); `true` once the rolling fingerprint is
-    /// being advanced byte by byte.
+    /// `false` until the chunk has its first `min` bytes (no break checks), `true` once
+    /// the rolling fingerprint advances byte by byte.
     rolling: bool,
 }
 
 impl Chunker {
-    /// Streaming CDC with seafile's official fixed block sizes
-    /// ([`ChunkSizes::SEAFILE`]). `file_size` drives only the "end of file"
-    /// test (`next_pos >= file_size`); the block sizes do **not** depend on it,
-    /// so this streaming chunker and the whole-buffer [`file_chunk_cdc`] agree
-    /// for any file size. For an unknown size pass `0` and the trailing chunk
-    /// is produced by [`Chunker::finish`].
+    /// Streaming CDC with seafile's fixed block sizes ([`ChunkSizes::SEAFILE`]).
+    /// `file_size` drives only the end-of-file test; the block sizes do **not** depend
+    /// on it, so this agrees with [`file_chunk_cdc`] for any size. For an unknown size
+    /// pass `0` and let [`Chunker::finish`] produce the trailing chunk.
     pub fn new(file_size: usize) -> Self {
         Self::with_sizes(file_size, ChunkSizes::SEAFILE)
     }
 
-    /// [`Chunker::new`] with an explicit block-size triple (tests only; see
-    /// [`file_chunk_cdc_with`]).
+    /// [`Chunker::new`] with an explicit triple (tests; see [`file_chunk_cdc_with`]).
     pub fn with_sizes(file_size: usize, sizes: ChunkSizes) -> Self {
         let ChunkSizes { avg, min, max } = sizes;
         let mask = (avg as u32).wrapping_sub(1);
@@ -343,17 +310,13 @@ impl Chunker {
         }
     }
 
-    /// Feed a slice of bytes, returning any chunks that become complete.
-    /// May be called repeatedly with arbitrary boundaries; chunk boundaries
-    /// are derived solely from the content, not the feed call sizes.
-    ///
-    /// The prefix phase (first `min` bytes of a chunk) is a bulk memcpy; the
-    /// rolling phase scans byte by byte without any Option checks.
+    /// Feed a slice, returning any chunks that become complete. Chunk boundaries come
+    /// from the content, not the feed sizes. The prefix phase is a bulk memcpy; the
+    /// rolling phase scans byte by byte.
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
         let mut i = 0usize;
-        // Local mirror of the current chunk length, so the rolling loop never
-        // re-reads `chunk_buf.len()` (a capacity check) on every byte.
+        // Local mirror of the chunk length, so the loop avoids a capacity check per byte.
         let mut chunk_len = self.chunk_buf.len();
 
         while i < bytes.len() {
@@ -366,16 +329,13 @@ impl Chunker {
                     i += take;
                     if chunk_len == self.min {
                         self.finish_min_chunk(&mut out);
-                        // Either the chunk was emitted (buffer emptied, so
-                        // chunk_len is 0) or rolling flipped on (chunk_len
-                        // stays min).
+                        // Emitted (buffer empty) or rolling flipped on (length stays `min`).
                         chunk_len = self.chunk_buf.len();
                     }
                 }
             } else {
-                // Rolling phase: the fingerprint corresponds to
-                // `pos = chunk_start+len-1` (the last byte in `chunk_buf`);
-                // `bytes[i]` is `data[pos+1]`.
+                // Rolling phase: the fingerprint covers the last byte in `chunk_buf`; `bytes[i]`
+                // is the next byte.
                 while self.rolling && i < bytes.len() {
                     let b = bytes[i];
                     let pos = self.chunk_start + chunk_len - 1;
@@ -393,10 +353,8 @@ impl Chunker {
                         continue;
                     }
 
-                    // Max size / end of file — emit this chunk (without `b`).
-                    // When `file_size == 0` the total size is unknown (A2's
-                    // multipart path has no field size), so the end-of-file test
-                    // is suppressed and the trailing chunk comes from `finish()`.
+                    // Max size or end of file. `file_size == 0` means unknown (the A2 multipart path
+                    // has no field size), so the end test is suppressed; `finish()` ends the tail.
                     if next_pos >= self.chunk_start + self.max
                         || (self.file_size > 0 && next_pos >= self.file_size)
                     {
@@ -425,15 +383,13 @@ impl Chunker {
         self.chunk_buf
     }
 
-    /// Emit the accumulated chunk and leave a buffer pre-sized to `max` so the
-    /// next chunk grows without repeated reallocations.
+    /// Emit the chunk, leaving a buffer pre-sized to `max` for the next one.
     fn take_chunk(&mut self) -> Vec<u8> {
         std::mem::replace(&mut self.chunk_buf, Vec::with_capacity(self.max))
     }
 
-    /// Initialise the Rabin fingerprint once the current chunk reaches `min`
-    /// bytes (matching `file_chunk_cdc`'s `scan_start = chunk_start+min-1`),
-    /// then decide whether the chunk ends here or rolling continues.
+    /// Seed the fingerprint once the chunk reaches `min` bytes (matching the whole-
+    /// buffer `scan_start`), then decide whether it ends here.
     fn finish_min_chunk(&mut self, out: &mut Vec<Vec<u8>>) {
         debug_assert!(
             self.chunk_buf.len() >= WINDOW_SIZE,
@@ -453,9 +409,8 @@ impl Chunker {
             return;
         }
 
-        // Max size / end of file — chunk is `min` bytes (or the whole tail).
-        // `file_size == 0` means "unknown" (A2 multipart path), so the end test
-        // is suppressed; the trailing chunk comes from `finish()`.
+        // Max size or end of file. `file_size == 0` (A2 multipart) suppresses the end
+        // test; `finish()` ends the tail.
         if next_pos >= self.chunk_start + self.max
             || (self.file_size > 0 && next_pos >= self.file_size)
         {
@@ -473,21 +428,17 @@ impl Chunker {
 mod tests {
     use super::*;
 
-    /// Small block-size triple for boundary/equivalence tests. The production
-    /// defaults (8/6/10 MiB) need ~30 MiB fixtures to span several blocks, so
-    /// these proportional sizes (1 MiB / 256 KiB / 4 MiB) keep the tests fast;
-    /// the production triple itself is locked separately by
-    /// [`test_default_block_sizes_match_seafile`] and
-    /// [`test_default_boundaries_match_seafile_c_reference`].
+    /// Small triple for boundary/equivalence tests: the production 8/6/10 MiB sizes
+    /// need ~30 MiB fixtures. The production triple is locked by
+    /// [`test_default_block_sizes_match_seafile`].
     const TEST_SIZES: ChunkSizes = ChunkSizes {
         avg: 1024 * 1024,
         min: 256 * 1024,
         max: 4 * 1024 * 1024,
     };
 
-    /// Deterministic pseudo-random bytes (no rand dependency), identical to the
-    /// generator used by `test_default_boundaries_match_seafile_c_reference`'s
-    /// C counterpart.
+    /// Deterministic pseudo-random bytes (no rand dependency), matching the generator
+    /// of the C reference test.
     fn lcg_bytes(n: usize, seed: u64) -> Vec<u8> {
         let mut x = seed;
         (0..n)
@@ -500,8 +451,7 @@ mod tests {
             .collect()
     }
 
-    /// Feed `data` through `Chunker` in slices of `feed_len` bytes and return
-    /// the emitted chunks (concatenating them must recover `data`).
+    /// Feed `data` in `feed_len` slices and collect the chunks.
     fn stream_blocks(data: &[u8], feed_len: usize, sizes: ChunkSizes) -> Vec<Vec<u8>> {
         if data.is_empty() {
             return Vec::new();
@@ -518,10 +468,8 @@ mod tests {
         blocks
     }
 
-    /// The streaming chunker must produce chunk boundaries *identical* to the
-    /// whole-buffer `file_chunk_cdc` for the same content — seafile clients
-    /// depend on this. Verified under many feed slice sizes to exercise the
-    /// feed-boundary (off-by-one) cases.
+    /// The streaming chunker must produce boundaries *identical* to the whole-buffer
+    /// chunker for the same content, under many feed slice sizes.
     fn assert_chunkers_agree(data: &[u8], sizes: ChunkSizes) {
         let expected: Vec<usize> = file_chunk_cdc_with(data, sizes)
             .iter()
@@ -542,19 +490,15 @@ mod tests {
 
     #[test]
     fn test_chunker_matches_file_chunk_cdc() {
-        // Empty file.
         assert_chunkers_agree(&[], TEST_SIZES);
-        // Sub-min-size files.
         assert_chunkers_agree(&[0u8; 1], TEST_SIZES);
         assert_chunkers_agree(&[0u8; 1000], TEST_SIZES);
         assert_chunkers_agree(&[0xFFu8; 500], TEST_SIZES);
-        // Exactly min boundary and just above.
         assert_chunkers_agree(
             &(0..256 * 1024).map(|i| i as u8).collect::<Vec<_>>(),
             TEST_SIZES,
         );
         assert_chunkers_agree(&[0u8; 256 * 1024 + 100], TEST_SIZES);
-        // Alternating / all-ones pattern.
         assert_chunkers_agree(
             &(0..300_000)
                 .map(|i| if i % 2 == 0 { 0xAA } else { 0x55 })
@@ -562,17 +506,14 @@ mod tests {
             TEST_SIZES,
         );
         assert_chunkers_agree(&[0xFFu8; 1_000_000], TEST_SIZES);
-        // Larger pseudo-random content spanning multiple chunks.
         let data: Vec<u8> = (0..3_000_000)
             .map(|i: usize| (i.wrapping_mul(31) ^ (i >> 2) ^ (i.wrapping_mul(7))) as u8)
             .collect();
         assert_chunkers_agree(&data, TEST_SIZES);
     }
 
-    /// `stream_file_into_blocks` (the A2 multipart upload path) uses
-    /// `Chunker::new(0)` because the field size isn't known up front, while the
-    /// whole-buffer path uses `file_chunk_cdc`. Both must emit exactly the same
-    /// boundaries for the same content.
+    /// The A2 multipart path uses `Chunker::new(0)` (field size unknown) while the
+    /// whole-buffer path uses `file_chunk_cdc`; both must agree on boundaries.
     #[test]
     fn test_chunker_new_zero_matches_file_chunk_cdc() {
         fn feed_zero(data: &[u8], feed_len: usize, sizes: ChunkSizes) -> Vec<Vec<u8>> {
@@ -622,9 +563,8 @@ mod tests {
         }
     }
 
-    /// Feed sizes that straddle the `min` boundary must not shift chunk
-    /// boundaries; a single 5 MiB feed must also emit multiple chunks in one
-    /// call (the new inline-loop path).
+    /// Feed sizes straddling `min` must not shift boundaries; one large feed must emit
+    /// multiple chunks in a single call.
     #[test]
     fn test_chunker_feed_len_across_min_boundary() {
         let data: Vec<u8> = (0..2 * 1024 * 1024)
@@ -642,9 +582,8 @@ mod tests {
         }
     }
 
-    /// Known total size of `max + min`: the first chunk is forced out by the
-    /// max-size check, the second by the end-of-file check in
-    /// `finish_min_chunk`.
+    /// Known size `max + min`: the first chunk is forced out by max size, the second
+    /// by the end-of-file check in `finish_min_chunk`.
     #[test]
     fn test_chunker_max_min_known_size() {
         let data = vec![0u8; 4 * 1024 * 1024 + 256 * 1024];
@@ -658,8 +597,7 @@ mod tests {
         assert_eq!(blocks.concat(), data);
     }
 
-    /// Unknown total size (`new(0)`) over 4 MiB of break-free (zero) content
-    /// forces the max-size branch during the rolling phase.
+    /// Unknown size (`new(0)`) over break-free zero content forces the max-size branch.
     #[test]
     fn test_chunker_zero_unknown_size_over_max() {
         let data = vec![0u8; 4 * 1024 * 1024 + 512 * 1024];
@@ -683,8 +621,7 @@ mod tests {
         }
     }
 
-    /// seafile's block sizes are fixed constants; the streaming chunker must use
-    /// them (and only them) regardless of `file_size`.
+    /// The streaming chunker must use seafile's fixed sizes regardless of `file_size`.
     #[test]
     fn test_chunker_size_independent() {
         let a = Chunker::new(0);
@@ -698,8 +635,7 @@ mod tests {
         assert_eq!(a.max, c.max, "max must not depend on file_size");
     }
 
-    /// The production triple must equal seafile's `CDC_*_BLOCK_SIZE` constants
-    /// (`common/fs-mgr.h`): 8 MiB average, 6 MiB min, 10 MiB max.
+    /// Must equal seafile's `CDC_*_BLOCK_SIZE` constants: 8 / 6 / 10 MiB.
     #[test]
     fn test_default_block_sizes_match_seafile() {
         assert_eq!(ChunkSizes::SEAFILE.avg, 8 * 1024 * 1024);
@@ -707,15 +643,10 @@ mod tests {
         assert_eq!(ChunkSizes::SEAFILE.max, 10 * 1024 * 1024);
     }
 
-    /// Golden test: block boundaries for 40 MiB of deterministic `lcg_bytes`
-    /// (seed 1) must match, byte for byte, the boundaries produced by the
-    /// **unmodified upstream C implementation** (`seafile common/cdc/cdc.c` +
-    /// `common/cdc/rabin-checksum.c`) run with `block_sz=8 MiB`,
-    /// `block_min_sz=6 MiB`, `block_max_sz=10 MiB`.
-    ///
-    /// This is the compatibility contract: a seafile client chunking the same
-    /// bytes computes these same blocks, so the server-created `seafile` object
-    /// id matches the one the client would derive.
+    /// Golden test: boundaries for 40 MiB of deterministic `lcg_bytes` (seed 1) must
+    /// match byte for byte those of **unmodified upstream C** (`common/cdc/rabin-
+    /// checksum.c`) with 8/6/10 MiB. This is the compatibility contract: a client
+    /// chunking the same bytes derives the same `seafile` object id.
     #[test]
     fn test_default_boundaries_match_seafile_c_reference() {
         const EXPECTED: &[usize] = &[6_431_339, 10_485_760, 10_485_760, 10_485_760, 4_054_421];
@@ -751,14 +682,11 @@ mod tests {
         assert_eq!(total, data.len());
     }
 
-    /// Verify fingerprint matches seafile's rabin-checksum.c line-for-line.
-    ///
-    /// Uses a pure-Rust reference implementation ported from seafile
-    /// common/cdc/rabin-checksum.c, independently of RabinState above,
-    /// to cross-validate the fingerprint computation.
+    /// Fingerprint must match a pure-Rust port of seafile's rabin-checksum.c line for
+    /// line, independently of `RabinState`.
     #[test]
     fn test_fingerprint_matches_seafile() {
-        // ── Reference: port of seafile rabin-checksum.c ──
+        // Reference: port of seafile's rabin-checksum.c.
         fn fls64_ref(v: u64) -> usize {
             if v == 0 {
                 return 0;
@@ -808,14 +736,12 @@ mod tests {
         let xshift = fls64_ref(poly) - 1;
         let shift = xshift - 8;
 
-        // calcT
         let t1 = polymod_ref(0, 1u64 << xshift, poly);
         let mut t_ref = [0u64; 256];
         for j in 0..256u64 {
             t_ref[j as usize] = polymmult_ref(j, t1, poly) | (j << xshift);
         }
 
-        // calcU
         let mut sizeshift: u64 = 1;
         for _ in 1..48 {
             let idx = (sizeshift >> shift) as usize;
@@ -826,13 +752,11 @@ mod tests {
             u_ref[i as usize] = polymmult_ref(i, sizeshift, poly);
         }
 
-        // append8
         let append8_ref = |p: u64, m: u8| -> u64 {
             let idx = (p >> shift) as usize;
             ((p << 8) | m as u64) ^ t_ref[idx]
         };
 
-        // rabin_checksum: init fingerprint for first 48 bytes
         let rabin_checksum_ref = |buf: &[u8]| -> u64 {
             let mut fp: u64 = 0;
             for &b in buf.iter().take(48) {
@@ -841,12 +765,10 @@ mod tests {
             fp
         };
 
-        // rabin_rolling_checksum
         let rolling_ref =
             |csum: u64, c1: u8, c2: u8| -> u64 { append8_ref(csum ^ u_ref[c1 as usize], c2) };
 
-        // ── Test vectors ──
-        // 1. All zeros: init fingerprint
+        // Test vectors:
         let data_zeros = vec![0u8; 100];
         let expected_init = rabin_checksum_ref(&data_zeros);
 
@@ -858,7 +780,6 @@ mod tests {
             state.fingerprint, expected_init
         );
 
-        // 2. Rolling update: zeros → add byte 0x42 at pos 48
         let mut expected_fp = expected_init;
         expected_fp = rolling_ref(expected_fp, 0, 0x42);
         state.update(0x42);
@@ -867,7 +788,6 @@ mod tests {
             "fingerprint mismatch after rolling update"
         );
 
-        // 3. All 0xFF pattern
         let data_ff = vec![0xFFu8; 100];
         let expected_ff_init = rabin_checksum_ref(&data_ff);
         let mut state2 = RabinState::new();
@@ -877,7 +797,6 @@ mod tests {
             "fingerprint mismatch for 0xFF init"
         );
 
-        // 4. Alternating 0xAA/0x55
         let data_alt: Vec<u8> = (0..100)
             .map(|i| if i % 2 == 0 { 0xAA } else { 0x55 })
             .collect();
@@ -889,7 +808,6 @@ mod tests {
             "fingerprint mismatch for alternating init"
         );
 
-        // 5. T and U tables match
         let state = RabinState::new();
         for i in 0..256 {
             assert_eq!(state.t[i], t_ref[i], "T[{}] mismatch", i);
@@ -919,11 +837,8 @@ mod tests {
         assert_eq!(total, data.len(), "chunks must cover entire file");
     }
 
-    /// Verify fingerprint stream matches reference for every byte position.
-    ///
-    /// This is the definitive proof that our CDC produces the same chunk
-    /// boundaries as seafile: if the fingerprint matches at every byte,
-    /// the break-point decisions are identical.
+    /// Golden proof that the fingerprint matches the reference at every byte position,
+    /// so break-point decisions are identical.
     #[test]
     fn test_fingerprint_stream_matches_reference() {
         // Reference implementation ported from seafile rabin-checksum.c
@@ -987,22 +902,18 @@ mod tests {
             u_ref[i as usize] = polymmult_ref(i, sizeshift, poly);
         }
 
-        // reference rolling hash functions
         let append8_ref =
             |p: u64, m: u8| -> u64 { ((p << 8) | m as u64) ^ t_ref[(p >> shift) as usize] };
         let mut ref_fp: u64 = 0;
         let mut ref_window = [0u8; WINDOW_SIZE];
         let mut ref_pos: usize = WINDOW_SIZE % WINDOW_SIZE;
 
-        // Production state
         let mut prod = RabinState::new();
 
-        // Generate varied data (500KB)
         let data: Vec<u8> = (0..(500 * 1024))
             .map(|i: usize| (i.wrapping_mul(37) ^ (i >> 5) ^ (i.wrapping_mul(13))) as u8)
             .collect();
 
-        // Init: first WINDOW_SIZE bytes
         prod.init(&data);
         for i in 0..WINDOW_SIZE {
             ref_fp = append8_ref(ref_fp, data[i]) & 0xFFFF_FFFF;
@@ -1018,13 +929,11 @@ mod tests {
         let mut mismatch_count = 0;
         let mut first_mismatch = None;
         for (pos, &byte) in data.iter().enumerate().skip(WINDOW_SIZE) {
-            // Reference: rolling update
             let out = ref_window[ref_pos];
             ref_fp = append8_ref(ref_fp ^ u_ref[out as usize], byte) & 0xFFFF_FFFF;
             ref_window[ref_pos] = byte;
             ref_pos = (ref_pos + 1) % WINDOW_SIZE;
 
-            // Production: rolling update
             prod.update(byte);
 
             if prod.fingerprint != ref_fp {
@@ -1044,8 +953,7 @@ mod tests {
             );
         }
 
-        // Also verify that the async fingerprint matches u32 truncation
-        // (seafile uses u32 fingerprint for break-point check)
+        // Also check the u32 truncation seafile uses for break-point decisions.
         let prod_fp_u32 = prod.get_fingerprint();
         let ref_fp_u32 = ref_fp as u32;
         assert_eq!(
@@ -1065,8 +973,8 @@ mod tests {
     fn test_cdc_min_block_respected() {
         let data = vec![0u8; TEST_SIZES.min + 100]; // just above min
         let chunks = file_chunk_cdc_with(&data, TEST_SIZES);
-        // With uniform zero data, we may not hit break points.
-        // All chunks except possibly the last must be >= min or == max.
+        // With uniform zero data there may be no break points: every non-final chunk must
+        // be >= min or == max.
         for (i, &(_offset, size)) in chunks.iter().enumerate() {
             if i < chunks.len() - 1 {
                 assert!(

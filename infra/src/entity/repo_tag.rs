@@ -1,11 +1,8 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// A tag definition scoped to a repository (`repo_tags` table).
-///
-/// Mirrors seafile's `RepoTags` model: tags carry a name and a color and are
-/// exposed through the metadata service API as `_id` / `_tag_name` /
-/// `_tag_color`.
+/// A tag definition scoped to a repository (`repo_tags`), mirroring seafile's
+/// `RepoTags`: a name and a color exposed as `_id` / `_tag_name` / `_tag_color`.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "repo_tags")]
 pub struct Model {

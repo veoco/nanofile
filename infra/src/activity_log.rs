@@ -1,23 +1,12 @@
 /// File activity event logger.
 ///
-/// Provides a single entry point for recording user-initiated file operations
-/// (create, rename, move, delete, edit) into the `activities` table.  Each
-/// record captures the operation type, affected path, acting user, the repo's
-/// current HEAD commit ID, and a JSON `detail` field containing size, obj_id,
-/// path, and repo_name (matching the seafevents Activity.detail format).
+/// One entry point records user-initiated file operations (create, rename, move,
+/// delete, edit) into the `activities` table: op type, path, user, the repo's HEAD
+/// commit and a `detail` JSON matching seafevents' `Activity.detail`.
 ///
-/// # Batch aggregation
-///
-/// For `create` and `delete` operations, the logger attempts to aggregate
-/// multiple operations within a 5-minute window into a single
-/// `batch_create` / `batch_delete` record with an array of detail dicts.
-/// This matches seafevents' `save_user_activity` + `_update_batch_activity`
-/// logic.
-///
-/// # Best-effort semantics
-///
-/// All errors are logged via `tracing::warn!` but never propagated — activity
-/// logging must not break the calling operation.
+/// `create`/`delete` aggregate within a 5-minute window into one `batch_create` /
+/// `batch_delete` row (matching seafevents' `save_user_activity`). All errors are
+/// logged and never propagated: activity logging must not break the caller.
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set};
 use std::collections::HashMap;
 
@@ -26,33 +15,17 @@ use crate::entity::{activity, repo};
 /// Maximum number of items in a batch-aggregated activity detail array.
 const ACTIVITY_MAX_AGGREGATE_ITEMS: usize = 200;
 
-/// Window (seconds) within which repeated edits of the same path collapse into
-/// a single activity row (matching seafevents' `save_user_activities`).
+/// Window within which repeated edits of one path collapse into a row (seafevents).
 const EDIT_DEDUP_WINDOW: i64 = 1800;
 
 /// Log a file operation activity.
 ///
-/// Parameters:
-/// - `db`: database connection
-/// - `repo_id`: the repository the operation occurred in
-/// - `op_type`: one of `"create"`, `"delete"`, `"edit"`, `"rename"`, `"move"`
-/// - `obj_type`: `"file"` or `"dir"` (or `"repo"` for repo-level events)
-/// - `path`: the (new) file/directory path, e.g. `"/dir/file.txt"`
-/// - `user_id`: numeric user ID from the `users` table
-/// - `old_path`: previous path (for rename/move)
-/// - `size`: file size in bytes (optional, for detail metadata)
-/// - `obj_id`: fs_object ID (SHA1 hash, optional, for detail metadata)
+/// `op_type` (`create`/`delete`/`edit`/`rename`/`move`/`recover`) and `obj_type`
+/// (`file`/`dir`) follow seafevents' constants.
 ///
-/// The `op_type` and `obj_type` conventions match seafevents' constants:
-/// seafevents uses `create`/`delete`/`edit`/`rename`/`move`/`recover`
-/// as op_type and `file`/`dir` as obj_type.
-///
-/// For `create` / `delete` operations, the function attempts to aggregate
-/// into a recent batch event within a 5-minute window (same repo, user,
-/// and obj_type).  When aggregated, the record's `op_type` is promoted to
-/// `batch_create` / `batch_delete` and the new detail item is appended to
-/// the existing detail array.  `rename`, `move`, `edit`, and `recover`
-/// operations are never aggregated, matching seafevents behavior.
+/// `create`/`delete` aggregate into a recent batch row within a 5-minute window
+/// (same repo, user and obj_type), promoting `op_type` to `batch_create` /
+/// `batch_delete` and appending the detail item. Other ops are never aggregated.
 #[allow(clippy::too_many_arguments)]
 pub async fn log_activity(
     db: &DatabaseConnection,
@@ -69,13 +42,11 @@ pub async fn log_activity(
 ) {
     let now = chrono::Utc::now().timestamp();
 
-    // Best-effort: look up repo name and head commit ID.
     let (commit_id, repo_name) = match repo::Entity::find_by_id(repo_id).one(db).await {
         Ok(Some(r)) => (r.head_commit_id.unwrap_or_default(), r.name.clone()),
         _ => (String::new(), String::new()),
     };
 
-    // Build detail dict (only non-None fields, matching seafevents pattern).
     let mut detail_map = serde_json::Map::new();
     if let Some(s) = size {
         detail_map.insert("size".to_string(), serde_json::json!(s));
@@ -97,8 +68,7 @@ pub async fn log_activity(
         detail_map.insert("days".to_string(), serde_json::json!(d));
     }
 
-    // Only aggregate create/delete operations (matching seafevents'
-    // BATCH_AGGREGATE_OP_TYPES = ('create', 'delete')).
+    // Only create/delete aggregate (seafevents' BATCH_AGGREGATE_OP_TYPES).
     if op_type == "create" || op_type == "delete" {
         let batch_types = [op_type.to_string(), format!("batch_{}", op_type)];
         let cutoff = now - 300; // 5-minute window
@@ -113,14 +83,13 @@ pub async fn log_activity(
             .one(db)
             .await
         {
-            // Found a recent aggregatable activity — try to append.
+            // A recent batch row: try to append to it.
             if let Ok(current_detail) = serde_json::from_str::<serde_json::Value>(&recent.detail) {
                 let mut detail_array: Vec<serde_json::Value> = match &current_detail {
                     serde_json::Value::Array(arr) => arr.clone(),
                     serde_json::Value::Object(_) => {
-                        // Extract only the allowed detail keys (matching seafevents'
-                        // _extract_detail_item behavior), so the first item in a batch
-                        // array has the same shape as subsequently appended items.
+                        // Extract only the allowed detail keys, so the first item in a batch array has the
+                        // same shape as subsequently appended items.
                         let allowed_keys: [&str; 6] = [
                             "obj_id",
                             "size",
@@ -162,8 +131,7 @@ pub async fn log_activity(
         }
     }
 
-    // Repeated edits of the same path within the window only refresh the
-    // existing record's timestamp (seafevents `save_user_activities`).
+    // A repeated edit within the window only refreshes the row's timestamp.
     if op_type == "edit" {
         let cutoff = now - EDIT_DEDUP_WINDOW;
         if let Ok(Some(recent)) = activity::Entity::find()
@@ -185,7 +153,6 @@ pub async fn log_activity(
         }
     }
 
-    // Insert a new activity record (single-operation or fallback).
     let detail_json = serde_json::to_string(&detail_map).unwrap_or_else(|_| "{}".to_string());
 
     if let Err(e) = activity::Entity::insert(activity::ActiveModel {
@@ -207,10 +174,8 @@ pub async fn log_activity(
     }
 }
 
-/// Lightweight activity entry for batched logging.
-///
-/// Kept in `infra` (no dependency on the server crate's `FsChange`) so the
-/// sync commit path can log many items with one function call.
+/// Lightweight entry for batched logging, kept in `infra` so the sync commit path
+/// can log many items without a server-crate dependency.
 pub struct ActivityItem {
     pub op_type: &'static str,
     pub obj_type: &'static str,
@@ -218,13 +183,11 @@ pub struct ActivityItem {
     pub old_path: Option<String>,
     pub size: Option<i64>,
     pub obj_id: Option<String>,
-    /// The change came out of a server-side merge (the upload's parent was no
-    /// longer HEAD) rather than from a device writing this path. Stored as
-    /// `detail.merge` so the activity page can say the server produced it.
+    /// The change came out of a server-side merge rather than a device writing this
+    /// path; stored as `detail.merge` so the activity page can say so.
     pub merged: bool,
-    /// The merge kept a path one side had deleted or renamed while the other
-    /// side changed it: no device ever saved anything to this path. Stored as
-    /// `detail.merge_kept`.
+    /// The merge kept a path one side deleted or renamed while the other changed it:
+    /// no device saved to this path. Stored as `detail.merge_kept`.
     pub merge_kept: bool,
 }
 
@@ -281,9 +244,8 @@ fn to_active_model(
     }
 }
 
-/// Parse a stored `detail` into the array of items it holds, reshaping a lone
-/// object into a single-element array using only the allowed keys (matches the
-/// single-item aggregation path).
+/// Parse a stored `detail` into items, reshaping a lone object into a one-element
+/// array using only the allowed keys.
 fn parse_detail_array(detail: &str) -> Vec<serde_json::Value> {
     match serde_json::from_str::<serde_json::Value>(detail) {
         Ok(serde_json::Value::Array(arr)) => arr,
@@ -309,18 +271,12 @@ fn parse_detail_array(detail: &str) -> Vec<serde_json::Value> {
     }
 }
 
-/// Batch-log file activity on hot commit paths.
+/// Batch-log activity on hot commit paths. `commit_id` and `repo_name` are supplied
+/// once per commit, eliminating the per-item repo lookup (N+1).
 ///
-/// `commit_id` and `repo_name` are supplied by the caller (already fetched
-/// once for the whole commit), so no per-item repo lookup is needed —
-/// eliminating the N+1 query on large sync commits.
-///
-/// `create`/`delete` keep the 5-minute batch-aggregation semantics of
-/// `log_activity`, grouped by `(op_type, obj_type)` so only one aggregation
-/// query runs per group instead of one per item. Other op types insert
-/// directly with a single `insert_many`, except `edit` which is deduplicated
-/// per path within a 30-minute window (matching `log_activity`). Best-effort:
-/// failures are logged via `tracing::warn!` and never propagated.
+/// `create`/`delete` keep the 5-minute aggregation, grouped by `(op_type, obj_type)`
+/// so one query runs per group; other types insert with `insert_many`, except `edit`
+/// which dedups per path in a 30-minute window. Failures are logged, never propagated.
 #[allow(clippy::too_many_arguments)]
 pub async fn log_activity_batch(
     db: &DatabaseConnection,
@@ -332,8 +288,7 @@ pub async fn log_activity_batch(
 ) {
     let now = chrono::Utc::now().timestamp();
 
-    // Non-aggregating ops (rename/move/recover) insert in one statement; edit
-    // ops are deduplicated per path within a 30-minute window.
+    // Non-aggregating ops insert in one statement; edit dedups per path in 30 minutes.
     let direct: Vec<&ActivityItem> = items
         .iter()
         .filter(|i| i.op_type != "create" && i.op_type != "delete")
@@ -361,8 +316,7 @@ pub async fn log_activity_batch(
         dedup_edit_items(db, repo_id, commit_id, repo_name, user_id, now, &edit_items).await;
     }
 
-    // create/delete aggregate into a recent batch row within 5 minutes,
-    // grouped by (op_type, obj_type).
+    // create/delete aggregate into a recent batch row within 5 minutes, grouped by type.
     let mut groups: HashMap<(&str, &str), Vec<&ActivityItem>> = HashMap::new();
     for item in items
         .iter()
@@ -436,9 +390,8 @@ pub async fn log_activity_batch(
     }
 }
 
-/// Deduplicate `edit` activity items: for each path, if a recent edit row
-/// (same repo/user/path within `EDIT_DEDUP_WINDOW`) exists, refresh its
-/// timestamp; otherwise insert a new row.
+/// Dedup `edit` items: refresh the timestamp of a recent row for the same path, or
+/// insert a new one.
 async fn dedup_edit_items(
     db: &DatabaseConnection,
     repo_id: &str,
@@ -451,8 +404,7 @@ async fn dedup_edit_items(
     let cutoff = now - EDIT_DEDUP_WINDOW;
     let paths: Vec<&str> = items.iter().map(|i| i.path.as_str()).collect();
 
-    // One query for all recent edit rows in this repo/user within the window,
-    // ordered newest-first so the first row per path is the dedup target.
+    // One newest-first query covers every path's dedup target.
     let recent_rows = activity::Entity::find()
         .filter(activity::Column::RepoId.eq(repo_id))
         .filter(activity::Column::UserId.eq(user_id))

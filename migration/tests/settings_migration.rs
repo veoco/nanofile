@@ -1,9 +1,8 @@
 //! `email_settings` is folded into the generic `settings` table.
 //!
-//! The single typed row becomes one row per key, and its `password_enc` becomes
-//! `email.password` verbatim: the value is already ciphertext under the same AEAD
-//! key, so no secret is re-encrypted (or, worse, written in the clear) and the
-//! administrator never has to retype it.
+//! The typed row becomes one row per key, and `password_enc` becomes `email.password`
+//! verbatim: it is already ciphertext under the same AEAD key, so no secret is
+//! re-encrypted (or written in the clear) and the admin never retypes it.
 
 use migration::{Migrator, MigratorTrait};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
@@ -11,8 +10,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 /// The migration under test.
 const MOVE: &str = "m20260922_000001_create_settings";
 
-/// How many migrations run before `name`, so adding a later one cannot silently
-/// turn this into "after the move".
+/// The `steps` argument that leaves the database just before `name`.
 fn steps_before(name: &str) -> u32 {
     Migrator::migrations()
         .iter()
@@ -89,7 +87,6 @@ async fn the_email_settings_row_becomes_settings_keys() {
     assert_eq!(value(&db, "email.username").await.as_deref(), Some("bot"));
     assert_eq!(value(&db, "email.timeout_secs").await.as_deref(), Some("7"));
     assert_eq!(value(&db, "email.max_attempts").await.as_deref(), Some("3"));
-    // Booleans become the catalog's canonical spelling.
     assert_eq!(value(&db, "email.paused").await.as_deref(), Some("false"));
     assert_eq!(
         value(&db, "email.notify_new_device").await.as_deref(),
@@ -103,13 +100,11 @@ async fn the_email_settings_row_becomes_settings_keys() {
         value(&db, "email.notify_new_login").await.as_deref(),
         Some("true")
     );
-    // The ciphertext is copied exactly: same format, same AEAD key, and the
-    // administrator never has to enter the password again.
+    // The ciphertext is copied exactly: same format and AEAD key.
     assert_eq!(
         value(&db, "email.password").await.as_deref(),
         Some("enc1:ciphertext")
     );
-    // The audit columns travel with every row.
     assert_eq!(
         count(
             &db,
@@ -133,7 +128,6 @@ async fn a_database_without_an_email_row_just_gets_the_table() {
     Migrator::up(&db, None).await.expect("migrate everything");
 
     assert!(table_exists(&db, "settings").await);
-    // A fresh install never saved an email row, so nothing is invented for it:
-    // the config file keeps supplying every email setting.
+    // A fresh install never saved an email row, so nothing is invented.
     assert_eq!(count(&db, "SELECT COUNT(*) AS n FROM settings").await, 0);
 }

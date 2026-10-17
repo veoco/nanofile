@@ -1,26 +1,16 @@
 use sea_orm_migration::prelude::*;
 
-/// Phase 1 schema changes: add missing fields and tables for full Seafile API compatibility.
-///
-/// Changes:
-/// - users:             add name, display_name, storage_total, storage_usage, is_staff
-/// - api_tokens:        add device_id, platform, device_name, client_version
-/// - repos:             add repo_version, size
-/// - commits:           add encrypted, creator
-/// - sync_tokens:       add UNIQUE(repo_id, user_id)
-/// - Add indexes on     repos(owner_id), fs_objects(repo_id, fs_id), share_links(repo_id),
-///   upload_links(repo_id), sync_tokens(user_id), commits(commit_id)
-/// - New tables:        starred_files, locked_files, groups, group_members,
-///   user_contacts, sso_login_tokens, thumbnails
+/// Phase 1 schema changes for full Seafile API compatibility: fields on
+/// users/api_tokens/repos/commits/sync_tokens, indexes on the hot lookup columns, and
+/// the starred_files, locked_files, groups, user_contacts, sso_login_tokens and
+/// thumbnails tables.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // ================ Table field additions ================
 
-        // users
         manager
             .alter_table(
                 Table::alter()
@@ -79,7 +69,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // api_tokens
         manager
             .alter_table(
                 Table::alter()
@@ -121,7 +110,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // repos
         manager
             .alter_table(
                 Table::alter()
@@ -149,7 +137,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // commits
         manager
             .alter_table(
                 Table::alter()
@@ -174,7 +161,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // ================ Indexes ================
 
         manager
             .create_index(
@@ -216,8 +202,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // UNIQUE(repo_id, user_id) on sync_tokens — enforced via unique index
-        // since SQLite ALTER TABLE cannot add constraints.
+        // UNIQUE(repo_id, user_id) via a unique index: SQLite ALTER TABLE cannot add constraints.
         manager
             .create_index(
                 Index::create()
@@ -230,7 +215,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // ================ New tables ================
 
         manager
             .create_table(
@@ -559,7 +543,6 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Drop new tables (reverse order of creation)
         manager
             .drop_table(Table::drop().table(Thumbnails::Table).to_owned())
             .await?;
@@ -582,7 +565,7 @@ impl MigrationTrait for Migration {
             .drop_table(Table::drop().table(StarredFiles::Table).to_owned())
             .await?;
 
-        // Drop indexes (no-op if they don't exist in a future rollback scenario)
+        // Drop indexes (no-op if they do not exist in a future rollback scenario).
         let _ = manager
             .drop_index(Index::drop().name("idx_repos_owner_id").to_owned())
             .await;
@@ -596,13 +579,11 @@ impl MigrationTrait for Migration {
             .drop_index(Index::drop().name("idx_sync_tokens_user_id").to_owned())
             .await;
 
-        // SQLite cannot drop columns (ADD COLUMN only), so we can't revert
-        // column additions. This is a documented limitation.
+        // SQLite cannot drop columns, so column additions are not reverted.
         Ok(())
     }
 }
 
-// ================ Old table Iden types (derive with renamed table idens) ================
 
 #[derive(Iden)]
 #[iden = "users"]
@@ -721,7 +702,6 @@ enum OldSyncTokensCol {
     UserId,
 }
 
-// ================ New table Iden types ================
 
 #[derive(Iden)]
 enum StarredFiles {

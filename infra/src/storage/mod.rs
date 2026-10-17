@@ -1,30 +1,14 @@
-//! Block storage.
+//! Blocks live per repository: `{base}/repos/{sha1(repo_id)}/{prefix[..2]}/{block_id}`.
+//! Namespacing makes authorization exact: a block is reachable only through a
+//! repository the caller belongs to, so an id learned elsewhere is not reachable.
 //!
-//! Blocks live in a **per-repository** directory tree:
-//! `{base}/repos/{sha1(repo_id)}/{prefix[..2]}/{block_id}`.
+//! Every backend and decorator must preserve two invariants:
 //!
-//! Namespacing by repository is what makes authorization exact: a request can
-//! only name a block through a repository the caller is a member of, and the
-//! path is derived from that repository, so a block id learned elsewhere (a
-//! cached `fs_object`, a revoked collaborator's client state) is simply not
-//! reachable. The official server and the official clients both organize blocks
-//! per library for the same reason.
-//!
-//! Every read/write method therefore takes a `repo_id`; enumeration is
-//! per-repository as well.
-//!
-//! Two invariants hold for every backend and decorator, and clients depend on
-//! both:
-//!
-//! * A block is written under the sha1 of the bytes it holds, and is published
-//!   atomically — an interrupted write leaves a `.tmp` file, never a short block
-//!   at the block's final path.
-//! * [`BlockStorageBackend::block_size`] equals
-//!   `read_block(repo_id, block_id).len()`. `block-map` responses and the
-//!   `Range` fast path turn those sizes into byte offsets, so a size that is
-//!   even slightly off shifts every byte after it. A decorator that cannot
-//!   guarantee the property must return `false` from
-//!   [`BlockStorageBackend::logical_sizes_are_exact`].
+//! * A block is stored under the sha1 of its bytes and published atomically; an
+//!   interrupted write leaves a `.tmp`, never a short block.
+//! * [`BlockStorageBackend::block_size`] equals `read_block(..).len()`; block-map
+//!   and `Range` offsets depend on it. A decorator that cannot guarantee this must
+//!   return `false` from [`BlockStorageBackend::logical_sizes_are_exact`].
 pub mod block_store;
 pub mod cdc;
 pub mod encrypting_block_store;
@@ -32,12 +16,10 @@ pub mod encrypting_block_store;
 use std::sync::Arc;
 
 /// Upper bound on how many leading bytes [`BlockStorageBackend::read_block_prefix`]
-/// returns. Callers only ever need a format header (a few bytes), so a backend
-/// can bound its buffer without changing the contract.
+/// returns; callers only need a format header.
 pub const MAX_BLOCK_PREFIX_LEN: usize = 64 * 1024;
 
-/// Outcome of copying one legacy block into a repository's directory during the
-/// one-shot layout migration.
+/// Outcome of copying a legacy block during the one-shot layout migration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LegacyCopyOutcome {
     /// The block was copied into the repository's directory.
@@ -50,8 +32,7 @@ pub enum LegacyCopyOutcome {
 
 /// Abstract backend for content-addressed block storage.
 ///
-/// Blocks are identified by their SHA-1 hash (40-char hex string) and stored in
-/// a three-level directory tree:
+/// Blocks are identified by their SHA-1 hash and stored in
 /// `{base}/repos/{sha1(repo_id)}/{prefix[..2]}/{block_id}`.
 #[async_trait::async_trait]
 pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
@@ -60,20 +41,16 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
 
     /// Read raw block data by its SHA-1 ID from this repository's directory.
     ///
-    /// For a store that decrypts transparently this returns the *logical* bytes,
-    /// so `data.len()` is always the block's logical size — the property
-    /// [`Self::block_size`] must agree with.
+    /// A store that decrypts transparently returns the *logical* bytes, so
+    /// `data.len()` is the size [`Self::block_size`] must agree with.
     async fn read_block(&self, repo_id: &str, block_id: &str) -> Result<Vec<u8>, std::io::Error>;
 
-    /// Read at most `min(max, MAX_BLOCK_PREFIX_LEN)` leading bytes of the block
-    /// **as stored**, i.e. bypassing any at-rest decryption `read_block`
-    /// applies.
+    /// Read at most `min(max, MAX_BLOCK_PREFIX_LEN)` leading bytes **as stored**,
+    /// bypassing any at-rest decryption.
     ///
-    /// A decorator that encrypts blocks at rest must delegate this to its inner
-    /// store: the leading bytes are the on-disk format header, which is what
-    /// decides how to size the block. The default reads the whole block through
-    /// [`Self::read_block`] and truncates; backends with a real partial read
-    /// should override it.
+    /// An encrypting decorator must delegate: the leading bytes are the on-disk format
+    /// header. The default reads the whole block and truncates; backends with a real
+    /// partial read should override.
     async fn read_block_prefix(
         &self,
         repo_id: &str,
@@ -88,9 +65,8 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
     /// Write raw block data, computing and returning its SHA-1 ID.
     async fn write_block(&self, repo_id: &str, data: &[u8]) -> Result<String, std::io::Error>;
 
-    /// Write raw block data under a pre-computed SHA-1 ID, skipping the
-    /// re-hash inside `write_block`. Defaults to the hashing path so backends
-    /// that cannot take the ID for granted still work.
+    /// Write under a pre-computed SHA-1, skipping the re-hash. Defaults to the hashing
+    /// path so backends that cannot take the id for granted still work.
     async fn write_block_with_id(
         &self,
         repo_id: &str,
@@ -100,14 +76,11 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
         self.write_block(repo_id, data).await
     }
 
-    /// Like [`Self::write_block_with_id`] but also reports whether this call
-    /// created the block on disk (`was_new`). Used by the upload quota-cleanup
-    /// path: only blocks newly written by the current upload are safe to delete
-    /// on quota failure — deduped blocks may be referenced by other files.
-    ///
-    /// Implementations should use exclusive creation (O_CREAT|O_EXCL) so the
-    /// `was_new` flag is race-free under concurrent writes of the same block.
-    /// The default falls back to the untracked path and always reports `true`.
+    /// Like [`Self::write_block_with_id`] but reports whether this call created the
+    /// block. Quota cleanup may delete only blocks newly written by the upload —
+    /// deduped blocks can be referenced by other files. Implementations should use
+    /// exclusive creation (O_CREAT|O_EXCL) so `was_new` is race-free; the default
+    /// falls back to the untracked path and always reports `true`.
     async fn write_block_with_id_tracked(
         &self,
         repo_id: &str,
@@ -118,10 +91,8 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
         Ok((id, true))
     }
 
-    /// Write raw block data under a pre-computed ID, overwriting any existing
-    /// block. Unlike [`Self::write_block_with_id`], this never short-circuits
-    /// on an existing block. Used by the lazy→encrypted conversion task to
-    /// rewrite a legacy plaintext block as ciphertext under the same ID.
+    /// Write under a pre-computed id, overwriting any existing block (used by the
+    /// lazy→encrypted task to replace plaintext with ciphertext under the same id).
     async fn write_block_with_id_force(
         &self,
         repo_id: &str,
@@ -131,10 +102,8 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
         self.write_block_with_id(repo_id, block_id, data).await
     }
 
-    /// Convert one legacy plaintext block to ciphertext in place (same ID).
-    /// Returns `Ok(true)` if the block was converted, `Ok(false)` if it was
-    /// already encrypted or absent. Default no-op for backends without
-    /// at-rest encryption.
+    /// Convert one legacy plaintext block to ciphertext in place (same id). Returns
+    /// `Ok(false)` when it is already encrypted or absent; default no-op.
     async fn convert_legacy_block(
         &self,
         _repo_id: &str,
@@ -146,33 +115,23 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
     /// Delete a block file from this repository's directory.
     async fn remove_block(&self, repo_id: &str, block_id: &str) -> Result<(), std::io::Error>;
 
-    /// Get the size of a block on disk in bytes.
-    ///
-    /// For a store that decrypts transparently this is the *logical* size, and
-    /// it must equal `read_block(repo_id, block_id).len()`.
+    /// Logical size of a block; must equal `read_block(repo_id, block_id).len()`.
     async fn block_size(&self, repo_id: &str, block_id: &str) -> Result<i64, std::io::Error>;
 
-    /// Whether [`Self::block_size`] is guaranteed to equal the length of the
-    /// bytes [`Self::read_block`] returns, for every block this store holds.
+    /// Whether [`Self::block_size`] is exact for every block this store holds.
     ///
-    /// `range_stream` turns these sizes into byte offsets when it skips blocks
-    /// that lie entirely before a `Range` start, so an offset that is even
-    /// slightly off shifts every byte after it (a size-only check cannot catch
-    /// that: nothing is read while skipping). A decorator that changes block
-    /// lengths — compression, re-encoding, and formerly the at-rest encryption
-    /// wrapper — must return `false` until it can guarantee the property.
+    /// `range_stream` turns sizes into byte offsets when skipping, so a slightly off
+    /// size shifts every byte after it (a size-only check cannot catch it). A decorator
+    /// that changes block lengths must return `false`.
     fn logical_sizes_are_exact(&self) -> bool {
         true
     }
 
-    /// Modification time of a block file as Unix epoch seconds, or `None` when
-    /// the block is absent or the backend cannot report it.
+    /// Modification time as Unix epoch seconds, or `None` when absent or unreportable.
     ///
-    /// An upload writes its blocks *before* the commit that references them, so
-    /// a GC pass whose reference snapshot predates that commit would otherwise
-    /// see a live-block-about-to-be-referenced as an orphan. GC uses this to
-    /// keep a grace window; a `None` return means "no age information", which
-    /// GC treats as eligible (the pre-existing behaviour).
+    /// Uploads write blocks *before* the commit that references them, so GC uses this
+    /// age to avoid deleting a block whose commit predates its reference snapshot;
+    /// `None` means eligible, the pre-existing behaviour.
     async fn block_modified_secs(
         &self,
         _repo_id: &str,
@@ -184,9 +143,8 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
     /// List all block IDs stored for one repository.
     async fn list_blocks(&self, repo_id: &str) -> Result<Vec<String>, std::io::Error>;
 
-    /// Visit every block ID stored for one repository without necessarily
-    /// materialising the full list. The default walks [`Self::list_blocks`];
-    /// backends may override to stream directly from the filesystem.
+    /// Visit every block ID of one repository; the default walks [`Self::list_blocks`],
+    /// backends may override to stream from the filesystem.
     async fn for_each_block_in_repo(
         &self,
         repo_id: &str,
@@ -199,14 +157,10 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
         Ok(())
     }
 
-    /// Enumerate one repository's block IDs through a bounded channel so a
-    /// caller that must *await* per id can process them while the walk is still
-    /// running.
-    ///
-    /// [`Self::for_each_block_in_repo`] takes a synchronous callback, which
-    /// forces an async caller to buffer the whole list first — for a large
-    /// library that buffer is the dominant memory cost. Ids are sent in
-    /// enumeration order; the walk stops early once the receiver is dropped.
+    /// Enumerate block IDs through a bounded channel so an async caller can process
+    /// each id while the walk runs. [`Self::for_each_block_in_repo`] takes a synchronous
+    /// callback, which forces buffering the whole list first. Ids are sent in
+    /// enumeration order; the walk stops when the receiver is dropped.
     async fn stream_blocks_in_repo(
         &self,
         repo_id: &str,
@@ -220,17 +174,14 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
         Ok(())
     }
 
-    /// Repository ids that currently have a block directory on disk, paired with
-    /// that directory. Used by GC's orphan sweep (a repo whose directory is
-    /// still on disk but which no longer has a row in the database).
+    /// Repository ids with a block directory on disk, paired with it. Used by GC's
+    /// orphan sweep.
     async fn repo_dirs(&self) -> Result<Vec<(String, std::path::PathBuf)>, std::io::Error> {
         Ok(Vec::new())
     }
 
-    /// Drop any cached "block exists" results. Called before a batch of blocks
-    /// is deleted (e.g. by GC) so a later [`Self::has_block`] re-stats disk
-    /// instead of trusting a stale presence entry. No-op for backends that keep
-    /// no presence cache.
+    /// Drop cached presence results, so a later [`Self::has_block`] re-stats disk (GC
+    /// calls this before deleting blocks). No-op for backends without a cache.
     fn invalidate_exists_cache(&self) {}
 }
 

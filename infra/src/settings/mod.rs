@@ -1,31 +1,15 @@
-//! Runtime-managed settings: a catalog of every `Config` field, the layer
-//! policy that decides which source wins, and the origin of each effective
-//! value.
+//! Runtime-managed settings: a catalog of every `Config` field, the layer policy
+//! that decides which source wins, and the origin of each effective value.
 //!
-//! # Layers, highest first
-//!
-//! 1. **Environment** (`NANOFILE_*`) — always wins. The admin UI shows these
-//!    read-only together with the variable name, because a save that cannot take
-//!    effect would be a lie.
-//! 2. **Config file** — only for the keys the `[settings]` policy lets override
-//!    the database (`config_policy = "override"`, or a key listed in
-//!    `config_override_keys`).
-//! 3. **Database** — the `settings` row saved from `/sysadmin/settings/`.
-//! 4. **Built-in default**.
-//!
-//! The config file is otherwise *bootstrap*: a key with no stored row takes its
-//! value from the file, and the file is ignored for that key once a row exists.
-//! That is why the origin of a value whose config-file entry merely repeats the
-//! built-in default is reported as [`Origin::Default`] — the two are
-//! indistinguishable and mean the same thing.
-//!
-//! # Why a catalog
-//!
-//! [`CATALOG`] is the single source of truth for which fields exist, what they
-//! are called on the wire (`NANOFILE_*`), how they are parsed, and whether a
-//! change can take effect without a restart. The environment layer is applied
-//! *from* the catalog, so a setting cannot be added without also wiring its
-//! variable — the two can no longer drift apart.
+//! Layers, highest first: environment (`NANOFILE_*`, shown read-only in the admin
+//! UI with its variable name), config file (only for keys the `[settings]` policy
+//! lets override), the `settings` row, and the built-in default. The config file is
+//! otherwise *bootstrap*: it seeds a key with no row and is ignored once one exists,
+//! so a file value that merely repeats the default is reported as [`Origin::Default`].
+//! [`CATALOG`] is the single source of truth for which fields exist, their wire
+//! names, parsing, and whether a change needs a restart. The environment layer is
+//! applied *from* the catalog, so a setting cannot be added without wiring its
+//! variable.
 
 pub mod catalog;
 
@@ -37,12 +21,9 @@ pub use catalog::{CATALOG, GROUPS, GroupDef, groups};
 
 /// The admin page a setting is shown on.
 ///
-/// The pages follow the operator's mental model rather than the config file's
-/// shape: one page per subject, in the order they appear in the navigation. A
-/// page that would grow past a couple of screens is split by subject instead —
-/// `security` is what requests are trusted and which capabilities are exposed,
-/// while the password policy, the token lifetimes and the attempt budgets each
-/// have a page of their own.
+/// Pages follow the operator's mental model rather than the config file's shape,
+/// one page per subject in navigation order; a page past a couple of screens is
+/// split by subject.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Section {
     Server,
@@ -76,11 +57,8 @@ impl Section {
         }
     }
 
-    /// Parse a URL segment.
-    ///
-    /// `general` is what the first page was called before it became `server`;
-    /// accepting it keeps an older bookmark on the page it named rather than
-    /// silently landing the reader somewhere else.
+    /// Parse a URL segment. `general` is the old name of the first page; accepting it
+    /// keeps an older bookmark on the page it named.
     pub fn from_id(value: &str) -> Option<Self> {
         match value {
             "general" | "server" => Some(Section::Server),
@@ -157,17 +135,14 @@ pub enum Kind {
     U64,
     I32,
     Usize,
-    /// Free text.
     Text,
     /// `Option<String>`: an empty value is `None`.
     OptText,
     /// A write-only value: never rendered back into HTML.
     Secret,
-    /// A filesystem path.
     Path,
     /// `Option<bool>`: an empty value is `None`.
     OptBool,
-    /// A string restricted to a fixed set.
     Enum(&'static [&'static str]),
     /// `Vec<String>`, comma-separated.
     TextList,
@@ -175,17 +150,13 @@ pub enum Kind {
     NumList,
 }
 
-/// A long-lived object a live change has to be pushed into.
-///
-/// A setting whose value is read from the config snapshot on every request needs
-/// no hook ([`Apply::Live`]); one that was copied into an object at startup does,
-/// or it would be [`Apply::Restart`] instead.
+/// A long-lived object a live change has to be pushed into: a setting read from the
+/// config snapshot on every request needs no hook, one copied into an object does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Hook {
     /// `AuthRateLimiters`: the per-endpoint attempt budgets.
     RateLimits,
-    /// The task system: the server-wide and per-user run caps and the run
-    /// table's byte budget.
+    /// The task system: run caps and the run table's byte budget.
     TaskSystem,
     /// Whether background jobs react to load, and how often it is sampled.
     TaskLoad,
@@ -193,11 +164,9 @@ pub enum Hook {
     NotificationManager,
     /// The process-wide sync-protocol statics (`traversal`, FS-object check).
     SyncStatics,
-    /// The outbound-mail drainer: its scheduler task is registered
-    /// unconditionally and checks the live switch itself.
+    /// The outbound-mail drainer; its task checks the live switch itself.
     MailDrain,
-    /// The process-wide sandbox switch (`sandbox.enabled`), which every confined
-    /// child is told before it reads a request.
+    /// The process-wide sandbox switch every confined child is told.
     Sandbox,
 }
 
@@ -206,27 +175,18 @@ pub enum Hook {
 pub enum Apply {
     /// Effective for the next request.
     Live,
-    /// Effective for the next request, after a hook pushes it into the object
-    /// that captured it at startup.
+    /// Effective for the next request, after a hook pushes it into its object.
     LiveWithHook(Hook),
-    /// Saved now, applied at the next restart of the server.
-    ///
-    /// The server restarts itself in place (the "Restart server" button on the
-    /// settings page): everything the server rebuilds for a new generation —
-    /// the layered settings, the database, the caches, the background tasks —
-    /// is recreated, while the process, the tray icon and the listening socket
-    /// survive.
+    /// Saved now, applied at the next in-place server restart: settings, database,
+    /// caches and background tasks are recreated while the process, tray icon and
+    /// listening socket survive.
     Restart,
-    /// Saved now, applied only when the *operating-system process* is
-    /// restarted (stopped and started again). These are the values read before
-    /// the server loop exists: the log subscriber and the desktop tray. An
-    /// in-place restart deliberately cannot apply them, and the page says so
-    /// rather than pretending a restart happened.
+    /// Saved now, applied only when the *OS process* restarts (the log subscriber and
+    /// the tray are read before the server loop exists). The page says so rather than
+    /// pretending a restart happened.
     ProcessRestart,
-    /// Never stored: the value can only come from the environment or the config
-    /// file. Editing it would be either meaningless (the database cannot govern
-    /// the database) or unrecoverable (a new `secret_key` makes existing
-    /// ciphertext permanently unreadable).
+    /// Never stored: the value can only come from the environment or config file.
+    /// Editing it would be meaningless or unrecoverable (a new `secret_key` orphans data).
     ReadOnly,
 }
 
@@ -253,15 +213,12 @@ impl Apply {
     }
 
     /// Whether the in-app "Restart server" button applies a saved value.
-    ///
-    /// [`Apply::ProcessRestart`] is not covered on purpose: it is the set the
-    /// button cannot reach, and the settings page marks it separately.
+    /// [`Apply::ProcessRestart`] is excluded on purpose; the page marks it separately.
     pub const fn is_in_place_restart(self) -> bool {
         matches!(self, Apply::Restart)
     }
 
-    /// Whether a saved change waits for *some* restart — the in-place button or
-    /// a full process restart.
+    /// Whether a saved change waits for some restart, in-place or full process.
     pub const fn is_restart_only(self) -> bool {
         matches!(self, Apply::Restart | Apply::ProcessRestart)
     }
@@ -303,10 +260,8 @@ pub struct SettingRow {
     pub updated_by: Option<i32>,
 }
 
-/// One catalog entry.
-///
-/// `get`/`set` are plain function pointers (non-capturing closures) so the
-/// catalog stays a `static` and both directions are total for every field.
+/// One catalog entry. `get`/`set` are plain function pointers so the catalog stays
+/// a `static` and both directions are total.
 #[derive(Clone, Copy)]
 pub struct SettingDef {
     /// `"auth.max_login_attempts"`, also the `settings.key` value.
@@ -314,8 +269,7 @@ pub struct SettingDef {
     pub section: Section,
     /// The `NANOFILE_*` variable that overrides this field.
     pub env: Option<&'static str>,
-    /// An additional `*_FILE` variable holding the secret (preferred over `env`
-    /// so the value does not reach a process listing).
+    /// An additional `*_FILE` variable (preferred over `env` so it stays out of ps).
     pub env_file: Option<&'static str>,
     pub kind: Kind,
     pub apply: Apply,
@@ -324,8 +278,7 @@ pub struct SettingDef {
 }
 
 impl SettingDef {
-    /// A catalog entry is identified by its key and how it is applied; the
-    /// function pointers are the same for every copy and add nothing.
+    /// Identity for `Debug`: the key and apply mode, not the function pointers.
     pub fn debug_label(&self) -> String {
         format!("{} ({:?})", self.key, self.apply)
     }
@@ -345,14 +298,10 @@ impl SettingDef {
         self.apply.is_stored()
     }
 
-    /// The unit a numeric value is expressed in, as a suffix for
-    /// `setting.unit_<id>`.
+    /// The unit of a numeric value, as a suffix for `setting.unit_<id>`.
     ///
-    /// The unit belongs beside the field rather than inside the label: "Max
-    /// upload size" with `MB` after the box reads as one statement, and the
-    /// label stays usable in a sentence. The table is explicit rather than
-    /// derived from the key's suffix, because a name is not a contract — a
-    /// `_bytes` field could hold kilobytes tomorrow.
+    /// The unit belongs beside the field, not in the label. The table is explicit
+    /// rather than derived from the key suffix, because a name is not a contract.
     pub fn unit(&self) -> Option<&'static str> {
         Some(match self.key {
             "server.max_upload_size_mb"
@@ -391,10 +340,8 @@ impl SettingDef {
 
     /// The locale key of one enum option's label.
     ///
-    /// One key per setting rather than one per value: `off` means "no
-    /// encryption" on `storage.block_encryption_mode` and "do not verify" on
-    /// `sync.verify_fs_objects`, and a single shared string could not say both.
-    /// An empty value is the "unset" choice, which every enum shares.
+    /// One key per setting rather than per value: `off` means "no encryption" on one
+    /// setting and "do not verify" on another. Empty is the shared "unset" choice.
     pub fn option_label_key(&self, value: &str) -> String {
         if value.is_empty() {
             "setting.value_unset".to_string()
@@ -447,11 +394,9 @@ pub enum ConfigPolicy {
 #[derive(Clone, Debug)]
 pub struct SettingsPolicy {
     pub config_policy: ConfigPolicy,
-    /// Keys the config file wins over the database for, even under
-    /// [`ConfigPolicy::Bootstrap`].
+    /// Keys the file wins over the database for, even under bootstrap.
     pub config_override_keys: BTreeSet<String>,
-    /// Seconds between re-reads of the `settings` table (0 = only at startup and
-    /// on this instance's own saves).
+    /// Seconds between re-reads of the `settings` table (0 = startup/saves only).
     pub refresh_interval_secs: u64,
 }
 
@@ -466,10 +411,8 @@ impl Default for SettingsPolicy {
 }
 
 impl SettingsPolicy {
-    /// Resolve the policy from the loaded config file/env.
-    ///
-    /// An unknown `config_policy` falls back to `bootstrap` (never silently to
-    /// `override`, which would make a database save do nothing) with a warning.
+    /// Resolve the policy from the loaded config. An unknown value falls back to
+    /// `bootstrap` (never silently to `override`) with a warning.
     pub fn from_config(config: &Config) -> Self {
         let raw = config.settings.config_policy.trim();
         let config_policy = match raw.to_ascii_lowercase().as_str() {
@@ -503,11 +446,8 @@ impl SettingsPolicy {
             || self.config_override_keys.contains(def.key)
     }
 
-    /// Whether a config-file entry that disagrees with a stored row is being
-    /// ignored, which is worth telling the operator about.
-    ///
-    /// Under [`ConfigPolicy::Override`] the file wins, so there is nothing to
-    /// report — that is the point of the setting.
+    /// Whether an ignored config-file value is worth telling the operator about. Under
+    /// [`ConfigPolicy::Override`] the file wins, so there is nothing to report.
     pub fn should_report_drift(&self) -> bool {
         matches!(self.config_policy, ConfigPolicy::Bootstrap)
     }
@@ -517,22 +457,17 @@ impl SettingsPolicy {
 #[derive(Clone, Debug)]
 pub struct Resolved {
     pub def: &'static SettingDef,
-    /// Canonical string form (for [`Kind::Secret`] this is the *stored ciphertext*
-    /// when the database supplied it, and the plaintext when only the
-    /// environment or the file supplied it — callers that render HTML must never
-    /// print it at all).
+    /// Canonical string form. For [`Kind::Secret`] this can be the stored ciphertext or
+    /// the plaintext — callers that render HTML must never print it.
     pub value: String,
     pub origin: Origin,
-    /// A stored secret that cannot be decrypted any more (the `secret_key`
-    /// changed). Delivery and login must not proceed as if it were absent.
+    /// A stored secret that no longer decrypts (the `secret_key` changed).
     pub broken_secret: bool,
 }
 
-/// Decide the effective value of one setting.
-///
-/// `base` is the config file **with the environment already applied** and
-/// `env_keys` names the catalog keys that came from the environment; `defaults`
-/// is a `Config::default()` used to tell a configured value from a built-in one.
+/// Decide the effective value of one setting. `base` is the config file with the
+/// environment already applied, `env_keys` the catalog keys it supplied, and
+/// `defaults` a `Config::default()` for telling configured from built-in.
 pub fn resolve(
     def: &'static SettingDef,
     base: &Config,
@@ -573,9 +508,8 @@ pub fn resolve(
     let origin = if base_value != default_value {
         Origin::ConfigFile { key: def.key }
     } else if policy.config_wins(def) {
-        // The file's value happens to equal the built-in default, but the file
-        // is what is in charge for this key — say so, because that is why a
-        // stored row (if any) is being ignored.
+        // The file's value equals the default, but the file is in charge for this key —
+        // which is why any stored row is ignored.
         Origin::ConfigFile { key: def.key }
     } else {
         Origin::Default
@@ -602,16 +536,12 @@ pub fn resolve_all(
         .collect()
 }
 
-/// Write resolved values into `config`.
+/// Write resolved values into `config`. `live_only` skips [`Apply::Restart`] and
+/// [`Apply::ReadOnly`], so the running snapshot keeps startup values while the row
+/// waits for the next start.
 ///
-/// `live_only` skips [`Apply::Restart`] and [`Apply::ReadOnly`] entries, which is
-/// how the running snapshot keeps the startup value of a restart-only setting
-/// while the database row waits for the next start.
-///
-/// Returns a description of every value that could not be applied. That is
-/// reported rather than fatal: a row written by a newer build (or edited by
-/// hand) must not stop the process from starting, and the admin page has to stay
-/// reachable to fix it.
+/// Returns a description of every value that could not be applied, reported rather
+/// than fatal: a row from a newer build must not stop startup or hide the page.
 pub fn apply_resolved(config: &mut Config, resolved: &[Resolved], live_only: bool) -> Vec<String> {
     let mut failures = Vec::new();
     for entry in resolved {
@@ -625,8 +555,6 @@ pub fn apply_resolved(config: &mut Config, resolved: &[Resolved], live_only: boo
     failures
 }
 
-// ─── Value parsing / formatting ─────────────────────────────────────────────
-
 /// Canonical string form of a boolean: `"true"` / `"false"`.
 pub fn fmt_bool(value: bool) -> String {
     if value { "true" } else { "false" }.to_string()
@@ -637,9 +565,9 @@ pub fn fmt_opt_bool(value: Option<bool>) -> String {
     value.map(fmt_bool).unwrap_or_default()
 }
 
-/// Parse a boolean, accepting the spellings a config file or environment
-/// variable plausibly uses. Anything else is an error rather than a silent
-/// `false`: a typo must not quietly switch a protection off.
+/// Parse a boolean, accepting the spellings a config file or environment variable
+/// plausibly uses. Anything else is an error rather than a silent `false`: a typo
+/// must not quietly switch a protection off.
 pub fn parse_bool(value: &str) -> Result<bool, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Ok(true),
@@ -648,8 +576,7 @@ pub fn parse_bool(value: &str) -> Result<bool, String> {
     }
 }
 
-/// Parse an optional boolean; an empty value (or one of `unset`/`auto`/`none`)
-/// means "not configured".
+/// Parse an optional boolean; empty (or `unset`/`auto`/`none`) means unset.
 pub fn parse_opt_bool(value: &str) -> Result<Option<bool>, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "" | "unset" | "auto" | "none" | "default" => Ok(None),
@@ -657,7 +584,6 @@ pub fn parse_opt_bool(value: &str) -> Result<Option<bool>, String> {
     }
 }
 
-/// Parse an unsigned integer.
 pub fn parse_u64(value: &str) -> Result<u64, String> {
     value
         .trim()
@@ -665,7 +591,6 @@ pub fn parse_u64(value: &str) -> Result<u64, String> {
         .map_err(|_| format!("not a whole number: {:?}", value.trim()))
 }
 
-/// Parse an unsigned 32-bit integer.
 pub fn parse_u32(value: &str) -> Result<u32, String> {
     value
         .trim()
@@ -673,7 +598,6 @@ pub fn parse_u32(value: &str) -> Result<u32, String> {
         .map_err(|_| format!("not a whole number: {:?}", value.trim()))
 }
 
-/// Parse an unsigned 16-bit integer.
 pub fn parse_u16(value: &str) -> Result<u16, String> {
     value
         .trim()
@@ -681,7 +605,6 @@ pub fn parse_u16(value: &str) -> Result<u16, String> {
         .map_err(|_| format!("not a port number: {:?}", value.trim()))
 }
 
-/// Parse a signed 32-bit integer.
 pub fn parse_i32(value: &str) -> Result<i32, String> {
     value
         .trim()
@@ -689,7 +612,6 @@ pub fn parse_i32(value: &str) -> Result<i32, String> {
         .map_err(|_| format!("not a whole number: {:?}", value.trim()))
 }
 
-/// Parse a `usize`.
 pub fn parse_usize(value: &str) -> Result<usize, String> {
     value
         .trim()
@@ -713,14 +635,12 @@ pub fn parse_text_list(value: &str) -> Vec<String> {
         .collect()
 }
 
-/// Canonical form of a text list.
 pub fn fmt_text_list(values: &[String]) -> String {
     values.join(",")
 }
 
-/// Parse a comma-separated list of whole numbers. An unparsable entry is
-/// dropped rather than failing the whole list, matching how the environment
-/// layer has always treated these presets.
+/// Parse a comma-separated list of whole numbers; an unparsable entry is dropped
+/// rather than failing the list, matching the environment layer.
 pub fn parse_num_list(value: &str) -> Vec<u64> {
     value
         .split(',')
@@ -728,7 +648,6 @@ pub fn parse_num_list(value: &str) -> Vec<u64> {
         .collect()
 }
 
-/// Canonical form of a numeric list.
 pub fn fmt_num_list(values: &[u64]) -> String {
     values
         .iter()
@@ -782,9 +701,7 @@ mod tests {
 
     #[test]
     fn every_declared_config_field_is_in_the_catalog() {
-        // The list is written out rather than derived so a field added to
-        // `Config` without a catalog entry makes this test fail instead of
-        // silently producing a settings page that cannot show it.
+        // Written out so a field added to `Config` without a catalog entry fails this test.
         let expected: BTreeSet<&str> = [
             "server.addr",
             "server.port",
@@ -907,9 +824,8 @@ mod tests {
 
     #[test]
     fn every_kind_round_trips_through_get_and_set() {
-        // A sample per kind; the point is that `set` accepts what `get` produces
-        // and that the round trip is stable for every catalog entry, so the
-        // admin form can submit exactly what the page rendered.
+        // Every entry's `set` accepts what `get` produces, so the admin form can submit
+        // exactly what the page rendered.
         for def in CATALOG {
             let mut config = Config::default();
             let sample: &str = match def.kind {
@@ -970,9 +886,8 @@ mod tests {
         );
     }
 
-    /// The in-app restart cannot reach these: the log subscriber and the tray
-    /// are decided before the server loop exists, so the page has to say so
-    /// instead of promising the button applied them.
+    /// The in-app restart cannot reach these (the log subscriber and tray are decided
+    /// before the server loop), so the page says so.
     #[test]
     fn process_restart_entries_are_the_ones_read_before_the_loop() {
         for key in [
@@ -995,8 +910,7 @@ mod tests {
         }
     }
 
-    /// The two restart kinds are disjoint, and both are outside the live
-    /// snapshot: a value that never reaches the running process cannot be live.
+    /// The two restart kinds are disjoint and both outside the live snapshot.
     #[test]
     fn the_restart_kinds_are_disjoint() {
         for def in CATALOG {
@@ -1080,7 +994,6 @@ mod tests {
         let policy = SettingsPolicy::default();
         let def = find("server.share_link_enabled").unwrap();
 
-        // Default.
         let resolved = resolve(
             def,
             &defaults,
@@ -1092,7 +1005,6 @@ mod tests {
         assert_eq!(resolved.origin, Origin::Default);
         assert_eq!(resolved.value, "true");
 
-        // Config file value (no row).
         let mut file = Config::default();
         file.server.share_link_enabled = false;
         let resolved = resolve(
@@ -1106,7 +1018,6 @@ mod tests {
         assert_eq!(resolved.origin, Origin::ConfigFile { key: def.key });
         assert_eq!(resolved.value, "false");
 
-        // Database wins over the file.
         let mut rows = BTreeMap::new();
         rows.insert(
             def.key.to_string(),
@@ -1126,7 +1037,6 @@ mod tests {
         );
         assert_eq!(resolved.value, "false");
 
-        // The environment wins over everything.
         let (env_config, env_keys) = base_with_env("server.share_link_enabled");
         let resolved = resolve(def, &env_config, &defaults, &env_keys, &rows, &policy);
         assert_eq!(
@@ -1137,7 +1047,6 @@ mod tests {
         );
         assert_eq!(resolved.value, "false");
 
-        // ...unless the key is simply not set in the environment.
         let resolved = resolve(def, &defaults, &defaults, &BTreeSet::new(), &rows, &policy);
         assert_eq!(resolved.origin.id(), "database");
     }
@@ -1196,7 +1105,6 @@ mod tests {
         let defaults = Config::default();
         let policy = SettingsPolicy::default();
         let mut rows = BTreeMap::new();
-        // A live key and a restart key, both stored.
         rows.insert(
             "server.share_link_enabled".to_string(),
             SettingRow {
@@ -1224,9 +1132,8 @@ mod tests {
         );
     }
 
-    /// An enum's choices are named through locale keys, one setting at a time
-    /// (the same word means different things on different pages), and the empty
-    /// choice is the one "unset" string every enum shares.
+    /// An enum's choices are named through locale keys, one setting at a time (the
+    /// same word means different things on different pages).
     #[test]
     fn enum_options_have_their_own_label_keys() {
         for def in CATALOG {
@@ -1253,9 +1160,8 @@ mod tests {
         }
     }
 
-    /// A unit is a fact about the value's shape, so it only belongs on a number
-    /// (or a list of them), and the key it renders through has to be one the
-    /// locales define.
+    /// A unit only belongs on a number (or a list), and its key must exist in the
+    /// locales.
     #[test]
     fn units_are_known_and_only_on_numbers() {
         const UNITS: &[&str] = &["mb", "secs", "days", "hours", "bytes"];
@@ -1288,15 +1194,12 @@ mod tests {
             assert_eq!(Section::from_id(section.id()), Some(section));
         }
         assert_eq!(Section::from_id("nope"), None);
-        // The first page kept its old id as an alias, so an older bookmark
-        // lands on the page it named.
+        // The first page kept its old id as an alias for older bookmarks.
         assert_eq!(Section::from_id("general"), Some(Section::Server));
     }
 
-    /// Every page has a title and a description, and no two share one.
-    ///
-    /// The keys are what the template renders; a duplicate would put one page's
-    /// heading over another page's body.
+    /// Every page has a title and a description, and no two share one: a duplicate
+    /// would put one page's heading over another's body.
     #[test]
     fn every_section_has_its_own_title_and_subtitle() {
         let mut ids = BTreeSet::new();
@@ -1318,8 +1221,7 @@ mod tests {
         assert_eq!(ids.len(), Section::ALL.len());
     }
 
-    /// The group list is a second naming of the catalog, so the two have to
-    /// agree: every entry in exactly one group, and on the page it belongs to.
+    /// The group list is a second naming of the catalog, so the two must agree.
     #[test]
     fn the_groups_partition_the_catalog() {
         let mut seen: BTreeSet<&str> = BTreeSet::new();
@@ -1354,8 +1256,7 @@ mod tests {
         );
     }
 
-    /// A page reads top to bottom like the catalog does, so the page order and
-    /// the declaration order cannot drift into disagreeing.
+    /// A page reads like the catalog does, so page and declaration order cannot drift.
     #[test]
     fn a_pages_groups_follow_the_catalog_order() {
         for page in Section::ALL {

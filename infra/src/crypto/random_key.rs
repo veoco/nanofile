@@ -3,25 +3,19 @@ use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
-/// Encrypt a file block using AES-256-CBC with PKCS7 padding (Seafile protocol).
+/// Encrypt a file block with AES-256-CBC + PKCS7 (Seafile protocol).
 ///
-/// Seafile protocol: the IV is deterministic (derived from the key chain),
-/// and no IV is prepended to the ciphertext. The stored block is raw
-/// AES-256-CBC ciphertext with PKCS7 padding.
+/// The IV is deterministic (derived from the key chain) and no IV is prepended; the
+/// stored block is raw ciphertext. Block id = SHA-1(ciphertext), matching
+/// `seafile_encrypt()`.
 ///
-/// Block ID = SHA-1(ciphertext), matching seafile's seafile_encrypt().
-///
-/// Security: deterministic encryption — identical plaintext blocks yield
-/// identical ciphertext, and the content-addressed block id already leaks
-/// block equality. There is no authentication (AES-CBC only); tampering is
-/// detected solely via the block id mismatch, not via a MAC.
-///
-/// Encrypt a file block with AES-256-CBC (Seafile protocol).
+/// Security: deterministic, so identical plaintext blocks give identical ciphertext,
+/// and content addressing already leaks equality. No authentication: tampering is
+/// detected only by the block-id mismatch.
 ///
 /// # Panics
-/// Panics if `file_key` is not 32 bytes or `file_iv` is not 16 bytes.
-/// Callers must always pass valid key/IV lengths (enforced by the Seafile
-/// protocol — key is always 32 bytes derived via PBKDF2, IV is always 16 bytes).
+/// Panics if `file_key` is not 32 bytes or `file_iv` is not 16 bytes; the Seafile
+/// protocol fixes both.
 pub fn encrypt_block(data: &[u8], file_key: &[u8], file_iv: &[u8]) -> Vec<u8> {
     debug_assert!(
         file_key.len() == 32,
@@ -38,10 +32,8 @@ pub fn encrypt_block(data: &[u8], file_key: &[u8], file_iv: &[u8]) -> Vec<u8> {
         .encrypt_padded_vec::<Pkcs7>(data)
 }
 
-/// Decrypt a file block encrypted with `encrypt_block` (Seafile protocol).
-///
-/// Expects raw AES-256-CBC ciphertext (no IV prefix). The IV is deterministic
-/// from the key chain, passed as `file_iv`.
+/// Decrypt a block from `encrypt_block`: raw AES-256-CBC ciphertext with no IV prefix;
+/// the deterministic IV is passed as `file_iv`.
 pub fn decrypt_block(
     encrypted: &[u8],
     file_key: &[u8],
@@ -114,11 +106,9 @@ mod tests {
         let data = b"test data";
         let encrypted = encrypt_block(data, &key1, &iv1);
         let result = decrypt_block(&encrypted, &key2, &iv2);
-        // Wrong key should either error or produce wrong data
         if let Ok(decrypted) = result {
             assert_ne!(decrypted, data);
         }
-        // Error is also acceptable
     }
 
     #[test]
@@ -137,7 +127,6 @@ mod tests {
     fn test_block_aligned_data() {
         let (key, iv) = random_key_iv();
 
-        // 32 bytes = exactly 2 AES blocks
         let data = b"ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP";
         assert_eq!(data.len(), 32);
 

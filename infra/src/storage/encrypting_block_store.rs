@@ -1,31 +1,15 @@
-//! A [`BlockStorageBackend`] decorator that transparently encrypts blocks at
-//! rest on the server.
+//! At-rest encryption decorator for [`BlockStorageBackend`].
 //!
-//! The wrapper keeps the trait contract ("`read_block` returns the bytes that
-//! were written") untouched, so **every** read/write caller — web download &
-//! range, sync get/put, indexer, thumbnails, exif, WebDAV, share views,
-//! resumable uploads, zip, history — is covered transparently. `GC` only
-//! enumerates ids and removes blocks, and storage encryption never changes the
-//! content-addressed id, so it is compatible too.
+//! The wrapper keeps the trait contract (`read_block` returns the bytes that were
+//! written), so every caller is covered; GC only enumerates ids and removes blocks,
+//! and the content-addressed id never changes. Ids keep their semantics
+//! (`sha1(logical bytes)`, or `sha1(CBC ciphertext)` for client-encrypted repos).
 //!
-//! Block ids retain their existing semantics: `block_id = sha1(logical bytes)`
-//! for plaintext repos and `sha1(CBC ciphertext)` for client-encrypted repos
-//! (see [`super::super::crypto::random_key`]). The wrapper never re-hashes the
-//! data it writes; the caller has already guaranteed `sha1(data) == block_id`.
-//!
-//! Three runtime modes ([`BlockEncryptionMode`]):
-//! - `Off`: store is used as-is (legacy plaintext).
-//! - `On`: everything written is encrypted; reads always decrypt.
-//! - `Lazy`: writes are encrypted, reads probe the GCM-SIV tag and fall back to
-//!   plaintext on mismatch — the migration window for pre-existing blocks.
-//!
-//! Two ciphertext formats exist on disk: the versioned `NFE1 || key_id` header
-//! plus tag (`On` writes), and a header-less legacy format written before that
-//! header existed (tag only). `decrypt` accepts both, and so must every
-//! *length* this wrapper reports: [`BlockStorageBackend::block_size`] derives
-//! the logical size from the stored format, because clients compute `block-map`
-//! and range/resume offsets from it. Reporting a legacy block as if it carried
-//! the versioned overhead under-reports it by six bytes.
+//! Modes: `Off` (plaintext), `On` (encrypt writes, decrypt reads), `Lazy` (writes
+//! encrypted, header-less reads fall back to plaintext during migration).
+//! Ciphertext is either the versioned `NFE1 || key_id` header plus tag or a
+//! header-less legacy tag. `decrypt` accepts both, and reported sizes must derive
+//! from the *stored* format or blocks under-report by six bytes.
 
 use async_trait::async_trait;
 use std::io;
@@ -38,13 +22,11 @@ use crate::storage::DynBlockStorage;
 /// Runtime at-rest encryption mode. Decided once at startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockEncryptionMode {
-    /// Legacy behaviour: store bytes exactly as received (plaintext repos) or
-    /// as client-encrypted CBC (sync encrypted repos).
+    /// Legacy: store bytes as received (plaintext, or client-encrypted CBC).
     Off,
     /// Every newly written block is encrypted; every read is decrypted.
     On,
-    /// New writes are encrypted; reads accept both encrypted and legacy
-    /// plaintext blocks by probing the authentication tag.
+    /// New writes encrypted; reads accept both encrypted and legacy plaintext.
     Lazy,
 }
 
@@ -75,9 +57,8 @@ impl EncryptingBlockStore {
         }
     }
 
-    /// Encrypt-write `data` under the caller-assigned `id`, in `repo_id`'s
-    /// directory. Never re-hashes: the caller has already verified
-    /// `sha1(data) == id`.
+    /// Encrypt-write `data` under the caller-assigned `id`; never re-hashes, since the
+    /// caller verified `sha1(data) == id`.
     async fn write_encrypted_with_id(
         &self,
         repo_id: &str,
@@ -88,18 +69,15 @@ impl EncryptingBlockStore {
         self.inner.write_block_with_id(repo_id, id, &ct).await
     }
 
-    /// Read raw bytes and decrypt them according to `self.mode`.
-    ///
-    /// `lazy` treats a tag-mismatch as a legacy plaintext block (returns the raw
-    /// bytes); `on` treats it as an error.
+    /// Read raw bytes and decrypt per `self.mode`: `lazy` treats a tag mismatch as a
+    /// legacy plaintext block, `on` treats it as an error.
     async fn read_decrypted(&self, repo_id: &str, id: &str) -> Result<Vec<u8>, io::Error> {
         let raw = self.inner.read_block(repo_id, id).await?;
         self.decrypt_offload(raw).await
     }
 
-    /// Encrypt `data` on the blocking thread pool. AES-GCM-SIV is CPU-bound, so
-    /// running it inline on the async executor would stall other tasks sharing
-    /// the worker thread.
+    /// Encrypt on the blocking pool: AES-GCM-SIV is CPU-bound and would stall the
+    /// async worker.
     async fn encrypt_offload(&self, data: Vec<u8>) -> Result<Vec<u8>, io::Error> {
         let cipher = self.cipher.clone();
         tokio::task::spawn_blocking(move || cipher.encrypt(&data))
@@ -119,11 +97,9 @@ impl EncryptingBlockStore {
                     "block at-rest decryption failed",
                 )
             }),
-            // During the migration window a block may still be pre-encryption
-            // plaintext. Decide that by **format**, not by a decryption
-            // failure: a block that carries the `NFE1` header and then fails
-            // authentication is corrupt or tampered with, and returning its
-            // bytes verbatim would defeat the integrity guarantee entirely.
+            // During migration a block may still be plaintext. Decide by **format**, not by a
+            // decryption failure: a block carrying `NFE1` that then fails authentication is
+            // corrupt, and returning its bytes would defeat the integrity guarantee.
             BlockEncryptionMode::Lazy => {
                 if !BlockCipher::looks_encrypted(&raw) {
                     return Ok(raw);
@@ -157,16 +133,13 @@ impl BlockStorageBackend for EncryptingBlockStore {
         block_id: &str,
         max: usize,
     ) -> Result<Vec<u8>, io::Error> {
-        // The leading bytes are the *stored* format header, so this must not go
-        // through `read_decrypted`.
+        // The leading bytes are the *stored* header, so do not go through `read_decrypted`.
         self.inner.read_block_prefix(repo_id, block_id, max).await
     }
 
     async fn write_block(&self, repo_id: &str, data: &[u8]) -> Result<String, io::Error> {
-        // Content-addressed id is the sha1 of the *logical* bytes, so it is the
-        // same whether the store is encrypted or not. We encrypt and write
-        // under that id; we do not reuse `write_block` on the inner store, which
-        // would key the id on the ciphertext.
+        // The id is the sha1 of the *logical* bytes, so encrypt and write under it;
+        // delegating to inner `write_block` would key the id on the ciphertext.
         let id = sha1_hex(data);
         self.write_encrypted_with_id(repo_id, &id, data).await
     }
@@ -186,9 +159,8 @@ impl BlockStorageBackend for EncryptingBlockStore {
         block_id: &str,
         data: &[u8],
     ) -> Result<(String, bool), io::Error> {
-        // Encrypt the logical bytes, then delegate to inner's tracked write
-        // so the `was_new` flag reflects whether the ciphertext file was
-        // created on disk.
+        // Encrypt first, then delegate the tracked write so `was_new` reflects whether the
+        // ciphertext file was created.
         let ct = self.encrypt_offload(data.to_vec()).await?;
         self.inner
             .write_block_with_id_tracked(repo_id, block_id, &ct)
@@ -201,10 +173,8 @@ impl BlockStorageBackend for EncryptingBlockStore {
         block_id: &str,
         data: &[u8],
     ) -> Result<String, io::Error> {
-        // `data` is logical (plaintext) bytes, as for `write_block_with_id`, so
-        // encrypt them and then force-write the ciphertext: the trait default
-        // would re-enter `write_block_with_id`, which skips an existing block
-        // instead of replacing it.
+        // `data` is plaintext, so encrypt and force-write the ciphertext: the trait default
+        // would re-enter `write_block_with_id`, which skips an existing block.
         let ct = self.encrypt_offload(data.to_vec()).await?;
         self.inner
             .write_block_with_id_force(repo_id, block_id, &ct)
@@ -215,23 +185,17 @@ impl BlockStorageBackend for EncryptingBlockStore {
         self.inner.remove_block(repo_id, block_id).await
     }
 
-    /// Logical size of a stored block.
-    ///
-    /// Contract: the returned value equals `read_block(repo_id, block_id).len()`.
-    /// Clients derive block offsets for range/segmented downloads from it, and
-    /// `range_stream` uses it to skip blocks, so a value that is systematically
-    /// off shifts everything after it.
+    /// Logical size of a stored block: must equal `read_block(..).len()`, because clients
+    /// derive range/segmented offsets from it and `range_stream` skips by it, so a
+    /// systematic error shifts everything after it.
     async fn block_size(&self, repo_id: &str, block_id: &str) -> Result<i64, io::Error> {
         let stored = self.inner.block_size(repo_id, block_id).await?;
         match self.mode {
             // Logical size equals the stored size for legacy plaintext blocks.
             BlockEncryptionMode::Off => Ok(stored),
-            // GCM-SIV adds no padding, but the overhead depends on the stored
-            // format: versioned ciphertext carries the 6-byte `NFE1 || key_id`
-            // header *and* the 16-byte tag, while blocks written before that
-            // header existed (or by an older deployment) carry only the tag.
-            // Deciding by the stored header — not by the versioned constant —
-            // is what keeps this equal to `read_block(..).len()`.
+            // GCM-SIV adds no padding, but the stored overhead differs: versioned ciphertext
+            // carries the 6-byte `NFE1 || key_id` header and the 16-byte tag, while older
+            // blocks carry only the tag. Decide by the stored header, not the constant.
             BlockEncryptionMode::On => {
                 let prefix = self
                     .inner
@@ -249,10 +213,9 @@ impl BlockStorageBackend for EncryptingBlockStore {
                 i64::try_from(logical)
                     .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "block size overflow"))
             }
-            // In the migration window a block may still be plaintext; decide by
-            // the `NFE1` header rather than by a failed decode. A header-less
-            // block is what `read_decrypted` hands back verbatim in this mode,
-            // so its size is the stored size — the two must agree.
+            // In the migration window a block may still be plaintext; decide by the `NFE1`
+            // header. A header-less block is handed back verbatim, so its logical size is the
+            // stored size — the two must agree.
             BlockEncryptionMode::Lazy => {
                 let raw = self.inner.read_block(repo_id, block_id).await?;
                 if !BlockCipher::looks_encrypted(&raw) {
@@ -273,9 +236,8 @@ impl BlockStorageBackend for EncryptingBlockStore {
         }
     }
 
-    /// The age of the stored file is unaffected by the at-rest layer, so this
-    /// delegates: the header and tag are written in the same `create` that
-    /// produced the file.
+    /// The stored file's age is unaffected by encryption: header and tag are written in
+    /// the same `create`.
     async fn block_modified_secs(
         &self,
         repo_id: &str,
@@ -293,23 +255,18 @@ impl BlockStorageBackend for EncryptingBlockStore {
     }
 
     async fn convert_legacy_block(&self, repo_id: &str, block_id: &str) -> Result<bool, io::Error> {
-        // Read the raw on-disk bytes (not through `read_decrypted`, which in
-        // `Lazy` mode would hand back plaintext and hide the distinction).
+        // Read raw on-disk bytes, not through `read_decrypted` (which would hide plaintext).
         let raw = self.inner.read_block(repo_id, block_id).await?;
-        // A versioned block is already converted — or corrupt/tampered.
-        // Re-encrypting it would launder the corruption into a "valid" block,
-        // so leave it alone.
+        // A versioned block is already converted — or corrupt. Re-encrypting would launder
+        // the corruption into a "valid" block.
         if BlockCipher::looks_encrypted(&raw) {
             return Ok(false);
         }
-        // Header-less: either legacy *plaintext* (written before encryption was
-        // enabled) or legacy *ciphertext* (written before the versioned header
-        // existed). Only the tag probe can tell them apart, and it decides what
-        // to re-encrypt: a body that decrypts is ciphertext, so its plaintext is
-        // what gets re-encrypted (a format change, not a content change);
-        // anything else is plaintext and is encrypted as-is. Encrypting the raw
-        // ciphertext would double-encrypt it and serve the inner ciphertext as
-        // the block's bytes.
+        // Header-less: either legacy *plaintext* or legacy *ciphertext*. Only the tag probe
+        // can tell them apart, and it decides what to re-encrypt: a body that decrypts is
+        // ciphertext, so its plaintext gets re-encrypted (a format change, not content);
+        // anything else is plaintext and is encrypted as-is. Encrypting raw ciphertext
+        // would double-encrypt it.
         let cipher = self.cipher.clone();
         let ct = tokio::task::spawn_blocking(move || {
             let plaintext = cipher.decrypt(&raw).unwrap_or(raw);
@@ -354,14 +311,10 @@ mod tests {
     const MASTER: [u8; 32] = [0x42; 32];
     const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
 
-    /// Build a raw filesystem store plus a decorator in `mode` over that same
-    /// raw store, rooted under a temp dir. Both the raw store and the decorator
-    /// share the one underlying directory so tests can write legacy plaintext
-    /// via `raw` and inspect on-disk ciphertext through it.
-    /// Returns a concrete `Arc<BlockStorage>` backed by a unique temp dir plus
-    /// a decorator in `mode` over the very same raw store. The `Arc<BlockStorage>`
-    /// derefs to the raw store for inspecting/writing legacy blocks; it also
-    /// unsize-coerces to `DynBlockStorage` for the decorator.
+    /// Build a raw store plus a decorator in `mode` over it, under a temp dir, so tests
+    /// can write legacy plaintext through `raw` and inspect on-disk ciphertext. Returns
+    /// the concrete `Arc<BlockStorage>` (which derefs to the raw store and unsize-
+    /// coerces to `DynBlockStorage`).
     fn temp_store(
         mode: BlockEncryptionMode,
     ) -> (tempfile::TempDir, EncryptingBlockStore, Arc<BlockStorage>) {
@@ -380,12 +333,9 @@ mod tests {
         let data = b"secret plaintext block";
         let id = store.write_block(REPO, data).await.unwrap();
 
-        // Logical id is the sha1 of the plaintext.
         assert_eq!(id, sha1_hex(data));
-        // Logical read returns the original bytes.
         assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
 
-        // Underlying bytes differ from the plaintext and hold no plaintext prefix.
         let on_disk = raw.read_block(REPO, &id).await.unwrap();
         assert!(!on_disk.starts_with(data));
 
@@ -406,7 +356,6 @@ mod tests {
         let returned = store.write_block_with_id(REPO, &id, data).await.unwrap();
         assert_eq!(returned, id);
         assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
-        // The stored bytes on disk are ciphertext, not the original plaintext.
         assert!(
             raw.read_block(REPO, &id).await.unwrap().len() == data.len() + TAG_LEN + HEADER_LEN
         );
@@ -420,8 +369,8 @@ mod tests {
         let id = store.write_block(REPO, &data).await.unwrap();
         let first = raw.read_block(REPO, &id).await.unwrap();
 
-        // Remove the deduped block and write the same content again; the
-        // produced ciphertext must be byte-identical.
+        // Removing the deduped block and rewriting the same content must reproduce the
+        // same ciphertext.
         raw.remove_block(REPO, &id).await.unwrap();
         raw.invalidate_exists_cache();
         let id2 = store.write_block(REPO, &data).await.unwrap();
@@ -433,10 +382,8 @@ mod tests {
     #[tokio::test]
     async fn lazy_mode_reads_both_legacy_and_encrypted() {
         let (dir, store, raw) = temp_store(BlockEncryptionMode::Lazy);
-        // Legacy plaintext written straight to the raw store.
         let legacy = b"pre-existing plaintext block".to_vec();
         let legacy_id = raw.write_block(REPO, &legacy).await.unwrap();
-        // New encrypted block via the decorator.
         let fresh = b"freshly encrypted block".to_vec();
         let fresh_id = store.write_block(REPO, &fresh).await.unwrap();
 
@@ -459,7 +406,6 @@ mod tests {
         let data = b"tamper me".to_vec();
         let id = store.write_block(REPO, &data).await.unwrap();
 
-        // Corrupt one byte on disk.
         let mut ct = raw.read_block(REPO, &id).await.unwrap();
         ct[0] ^= 0xFF;
         raw.remove_block(REPO, &id).await.unwrap();
@@ -495,9 +441,8 @@ mod tests {
         drop(dir);
     }
 
-    /// Deterministic pseudo-random bytes (no `rand` dependency). The sizes are
-    /// what matters here, never the content; `seed` keeps distinct blocks
-    /// distinct so content-addressed dedup cannot collapse the fixture.
+    /// Deterministic pseudo-random bytes (no `rand`); `seed` keeps blocks distinct so
+    /// dedup cannot collapse the fixture.
     fn pseudo_block(seed: u64, len: usize) -> Vec<u8> {
         let mut x: u64 = 0x9E37_79B9_7F4A_7C15 ^ seed.wrapping_mul(0x9E37_79B9);
         (0..len)
@@ -510,9 +455,8 @@ mod tests {
             .collect()
     }
 
-    /// Rewrite a stored block in the pre-`NFE1` header-less format: what a
-    /// deployment that encrypted blocks before the versioned header existed
-    /// left on disk — the same GCM-SIV body, without the 6-byte header.
+    /// Rewrite a stored block in the pre-`NFE1` header-less format: the same GCM-SIV
+    /// body without the 6-byte header.
     async fn strip_versioned_header(raw: &BlockStorage, id: &str) {
         let stored = raw.read_block(REPO, id).await.unwrap();
         assert_eq!(&stored[..4], MAGIC.as_slice(), "fixture must be versioned");
@@ -531,9 +475,8 @@ mod tests {
 
         // Still readable: `decrypt` accepts the header-less legacy format.
         assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
-        // Sizing follows the *stored* format. Subtracting the versioned
-        // overhead for a legacy block under-reported every such block by 6
-        // bytes, which is what shifted clients' segmented downloads.
+        // Sizing follows the *stored* format; subtracting the versioned overhead
+        // under-reported legacy blocks by 6 bytes and shifted segmented downloads.
         assert_eq!(
             store.block_size(REPO, &id).await.unwrap(),
             data.len() as i64
@@ -541,9 +484,8 @@ mod tests {
         drop(dir);
     }
 
-    /// The property the incident violated: the sizes a file's block list
-    /// reports must sum to the logical file size, for a mix of versioned and
-    /// header-less legacy blocks, and each must equal `read_block(..).len()`.
+    /// The property the incident violated: block-list sizes must sum to the logical file
+    /// size for mixed versioned and legacy blocks, and equal `read_block(..).len()`.
     #[tokio::test]
     async fn on_mode_reported_sizes_sum_to_the_logical_file_size_for_mixed_formats() {
         let (dir, store, raw) = temp_store(BlockEncryptionMode::On);
@@ -556,9 +498,8 @@ mod tests {
         for data in &plaintexts {
             ids.push(store.write_block(REPO, data).await.unwrap());
         }
-        // The first three blocks predate the versioned header (the incident's
-        // shape: three legacy blocks skipped -> an 18-byte gap); the last one
-        // was written by the current build.
+        // The first three blocks predate the versioned header (three skipped legacy blocks
+        // produced an 18-byte gap); the last was written by the current build.
         for id in &ids[..3] {
             strip_versioned_header(&raw, id).await;
         }
@@ -581,9 +522,8 @@ mod tests {
         drop(dir);
     }
 
-    /// A header-less *ciphertext* block converted to the versioned format keeps
-    /// its plaintext; encrypting the on-disk bytes instead would double-encrypt
-    /// them and serve the inner ciphertext as the block's content.
+    /// A header-less *ciphertext* block converted to the versioned format keeps its
+    /// plaintext; encrypting the on-disk bytes would double-encrypt and serve garbage.
     #[tokio::test]
     async fn convert_legacy_ciphertext_keeps_the_plaintext_and_adds_the_header() {
         let (dir, store, raw) = temp_store(BlockEncryptionMode::On);

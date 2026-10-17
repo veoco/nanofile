@@ -3,17 +3,13 @@ use std::collections::HashMap;
 use sea_orm::Statement;
 use sea_orm_migration::prelude::*;
 
-/// Move the legacy per-library WebDAV keys into the unified API-key tables and
-/// drop the old table.
+/// Move the legacy per-library WebDAV keys into the unified API-key tables and drop
+/// the old table.
 ///
-/// One-way move: every `webdav_keys` row becomes an `api_keys` row whose
-/// capabilities are exactly `webdav.read` (plus `webdav.write` for an `rw` key)
-/// and one `api_key_repos` binding, so a migrated key keeps precisely the access
-/// it had — including the fact that it never worked on `/api2`.
-///
-/// The secret is not re-hashed: `webdav_keys.key_hash` is already
-/// `hex(sha256(raw))`, the same digest the unified store compares against, so
-/// migrated keys keep working with the value their client already holds.
+/// Every `webdav_keys` row becomes an `api_keys` row with exactly `webdav.read` (plus
+/// `webdav.write` for `rw`) and one binding, so access is preserved — including that it
+/// never worked on `/api2`. The digest is copied, not re-hashed: it is already
+/// `hex(sha256(raw))`, the form the unified store compares.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -24,30 +20,20 @@ impl MigrationTrait for Migration {
         let backend = db.get_database_backend();
 
         if !manager.has_table("webdav_keys").await? {
-            // A database that never had the legacy table (a fresh install runs
-            // the creating migration first, so this only happens if the table
-            // was already dropped).
+            // A database that never had the legacy table (already dropped) has nothing to do.
             return Ok(());
         }
 
-        // A previous failed run of this migration may have left partial rows
-        // in api_keys / api_key_repos (each INSERT auto-commits in SQLite, so
-        // a mid-loop failure does not roll them back). Re-running would then
-        // hit api_keys.key_hash's unique constraint on the first row already
-        // copied. Remove any migrated rows — key_prefix IS NULL is the marker
-        // for a migrated key, since API-created keys always carry a prefix —
-        // before starting the copy. api_key_repos is cleared first as the
-        // child side of the FK.
+        // A previous failed run may have left partial rows: each INSERT auto-commits in SQLite,
+        // so a mid-loop failure does not roll back, and re-running would hit the unique key_hash
+        // constraint. Remove migrated rows (`key_prefix IS NULL` is the marker; API-created keys
+        // always have a prefix) and the bindings first.
         db.execute_unprepared("DELETE FROM api_key_repos").await?;
         db.execute_unprepared("DELETE FROM api_keys WHERE key_prefix IS NULL").await?;
 
-        // SQLite does not enforce FKs by default, so past deletes of users or
-        // repos may have left dangling webdav_keys rows whose user_id or
-        // repo_id points at a record that no longer exists. Filtering at
-        // SELECT time (rather than DELETE) is robust against transaction
-        // rollbacks: even if a previous run's orphan-cleanup DELETE was
-        // rolled back, this query only returns rows whose FK targets exist,
-        // so the INSERTs below cannot trip the new tables' FK constraints.
+        // SQLite does not enforce FKs, so past deletes may have left dangling rows. Filter at
+        // SELECT time rather than DELETE: even after a rolled-back orphan cleanup, this returns
+        // only rows whose FK targets exist, so the inserts cannot trip the new constraints.
         let legacy = db
             .query_all_raw(Statement::from_string(
                 backend,
@@ -59,11 +45,9 @@ impl MigrationTrait for Migration {
             ))
             .await?;
 
-        // The old schema's unique index was on (repo_id, user_id, key_hash),
-        // so the same digest could appear on multiple rows — one per library.
-        // The unified api_keys.key_hash is globally unique, so the first
-        // occurrence of a digest creates the key and later ones add another
-        // api_key_repos binding to the same key.
+        // The old unique index was on (repo_id, user_id, key_hash), so one digest could appear
+        // once per library. `api_keys.key_hash` is globally unique, so the first occurrence
+        // creates the key and later ones add a binding.
         let mut key_id_by_hash: HashMap<String, i32> = HashMap::new();
 
         let mut migrated = 0usize;
@@ -93,10 +77,8 @@ impl MigrationTrait for Migration {
             };
 
             let key_id = if let Some(&id) = key_id_by_hash.get(&key_hash) {
-                // Same secret already migrated from another library: the
-                // unified key is globally unique on key_hash, so widen the
-                // capability set if this row grants broader access (rw
-                // supersedes r) rather than inserting a duplicate row.
+                // Same secret already migrated from another library: widen the capability set if this
+                // row grants more (rw supersedes r) rather than inserting a duplicate.
                 if permission != "r" {
                     db.execute_raw(Statement::from_sql_and_values(
                         backend,
@@ -124,11 +106,9 @@ impl MigrationTrait for Migration {
                 ))
                 .await?;
 
-                // Look up the id by key_hash rather than last_insert_rowid():
-                // the migration connection is a pool, so the INSERT and a
-                // last_insert_rowid() call may land on different connections,
-                // returning 0 or an unrelated id. key_hash is globally
-                // unique, so this SELECT always finds the right row.
+                // Look up by key_hash, not last_insert_rowid(): the migration connection is a pool, so
+                // the insert and the lookup may land on different connections. key_hash is globally
+                // unique, so the SELECT always finds the row.
                 let id: i32 = db
                     .query_one_raw(Statement::from_sql_and_values(
                         backend,
@@ -148,10 +128,8 @@ impl MigrationTrait for Migration {
                 id
             };
 
-            // The binding carries the same ceiling as the legacy key, so a
-            // read-only key stays read-only even if its capabilities are later
-            // widened. INSERT OR IGNORE covers the rare case of the same
-            // (key_id, repo_id) pair arising from two users sharing a digest.
+            // The binding carries the same ceiling, so a read-only key stays read-only. INSERT OR
+            // IGNORE covers the same (key_id, repo_id) arising from two users sharing a digest.
             db.execute_raw(Statement::from_sql_and_values(
                 backend,
                 "INSERT OR IGNORE INTO api_key_repos (key_id, repo_id, permission) \
@@ -163,8 +141,7 @@ impl MigrationTrait for Migration {
             migrated += 1;
         }
 
-        // Verify the copy before destroying the source. A shortfall aborts the
-        // migration, leaving the legacy table (and the data) in place.
+        // Verify the copy before destroying the source; a shortfall aborts the migration.
         if migrated != legacy.len() {
             return Err(DbErr::Custom(format!(
                 "migrated {migrated} of {} webdav keys",
@@ -178,9 +155,8 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // The move is one-way: recreate the empty table so the schema matches
-        // this migration's predecessor, but do not attempt to restore rows (the
-        // unified rows are left in place and would otherwise be lost).
+        // One-way: recreate the empty table to match the predecessor's schema, but do not
+        // restore rows (the unified rows are left in place).
         manager
             .create_table(
                 Table::create()

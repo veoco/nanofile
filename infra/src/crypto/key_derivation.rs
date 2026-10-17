@@ -6,13 +6,10 @@ use thiserror::Error;
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
-/// Fixed salt used for enc_version 1 and 2 (same as seafile-server).
-/// Source: /tmp/seafile-server/common/seafile-crypt.c line 24.
+/// Fixed salt for enc_version 1/2 (seafile-server `common/seafile-crypt.c`).
 ///
-/// Note: `pwd_hash` (see [`crate::crypto::pwd_hash`]) uses these same 8 bytes
-/// but pads them to 32 with zeros, because `seafile_generate_pwd_hash()` feeds a
-/// NUL-terminated hex string to `hex_to_rawdata()`. Do not reuse this constant
-/// as "the" v2 salt length for both KDFs.
+/// `pwd_hash` uses the same 8 bytes padded to 32 with zeros, because
+/// `seafile_generate_pwd_hash()` feeds a NUL-terminated hex string to `hex_to_rawdata()`.
 pub(crate) const MAGIC_SALT: [u8; 8] = [0xda, 0x90, 0x45, 0xc3, 0x06, 0xc7, 0xcc, 0x26];
 
 /// Error type for key derivation operations.
@@ -34,7 +31,7 @@ pub enum CryptoError {
     HashFailed(String),
 }
 
-/// The Seafile encryption protocol supports these versions:
+/// Seafile encryption protocol versions:
 ///
 /// | Version | Cipher       | Key Size | Salt      | KDF                        |
 /// |---------|-------------|----------|-----------|----------------------------|
@@ -43,25 +40,16 @@ pub enum CryptoError {
 /// | 3       | AES-128-ECB | 16B      | per-repo  | PBKDF2-SHA256, 1000 it     |
 /// | 4       | AES-256-CBC | 32B      | per-repo  | PBKDF2-SHA256, 1000 it     |
 ///
-/// For initial implementation, only versions 2 and 4 (AES-256-CBC) are supported.
-/// The key derivation chain for v2/v4 (from seadroid's Crypto.java):
-///
-///   1. Password + repo_salt → PBKDF2(1000, SHA256) → derivedKey (32 bytes)
-///   2. derivedKey + repo_salt → PBKDF2(10, SHA256) → derivedIv (16 bytes)
-///   3. AES-256-CBC-Decrypt(random_key, derivedKey, derivedIv) → fileKey (32 bytes)
-///   4. fileKey + salt → PBKDF2(1000, SHA256) → encKey (32 bytes, actual block key)
-///   5. encKey + salt → PBKDF2(10, SHA256) → encIv (16 bytes, actual block IV)
-///
-/// For enc_version 2, repo_salt = MAGIC_SALT (the fixed 8-byte salt).
-/// For enc_version 4, repo_salt = per-repo 32-byte random salt.
-///
-/// Whether a salt value means "use the default fixed salt".
+/// Only 2 and 4 (AES-256-CBC) are supported. Their chain (from seadroid's
+/// `Crypto.java`): password + repo_salt → PBKDF2(1000) → derivedKey; derivedKey +
+/// repo_salt → PBKDF2(10) → derivedIv; AES-256-CBC-decrypt(random_key) → fileKey;
+/// fileKey + salt → PBKDF2(1000) → encKey; encKey + salt → PBKDF2(10) → encIv.
+/// For v2 repo_salt is [`MAGIC_SALT`]; for v4 it is a per-repo 32-byte random salt.
 fn is_default_salt(salt: &str) -> bool {
     salt.is_empty() || salt == "0000000000000000000000000000000000000000000000000000000000000000"
 }
 
-/// Decode a hex salt string to bytes.
-/// Default/empty salts use the fixed MAGIC_SALT.
+/// Decode a hex salt; default/empty salts use [`MAGIC_SALT`].
 fn decode_salt(repo_salt: &str) -> Result<Vec<u8>, CryptoError> {
     if is_default_salt(repo_salt) {
         Ok(MAGIC_SALT.to_vec())
@@ -73,22 +61,13 @@ fn decode_salt(repo_salt: &str) -> Result<Vec<u8>, CryptoError> {
     }
 }
 
-/// Derive the wrapping key and IV from a password.
+/// Derive the wrapping key and IV from a password (first stage of the chain).
 ///
-/// This is the first step of the two-layer key derivation:
-/// password → (derivedKey, derivedIv) used to decrypt random_key.
-///
-/// For enc_version 2: uses fixed MAGIC_SALT, PBKDF2-SHA256 (1000 key + 10 IV)
-/// For enc_version 4: uses per-repo salt, PBKDF2-SHA256 (1000 key + 10 IV)
-/// For enc_version 1: (unsupported) would use EVP_BytesToKey with 524288 iterations
-///
-/// Security: the 1000-iteration PBKDF2 key and 10-iteration IV are fixed by
-/// the Seafile wire protocol (seafile-server seafile-crypt.c KEYGEN_ITERATION2),
-/// and cannot be raised unilaterally without breaking client interop. The
-/// derived magic is a password-equivalent value and is weak against offline
-/// brute-force.
-///
-/// Returns (key, iv).
+/// v2 uses the fixed [`MAGIC_SALT`], v4 the per-repo one; both use PBKDF2-SHA256
+/// with 1000 key iterations and 10 IV iterations, as the Seafile wire protocol
+/// requires (`seafile-crypt.c` `KEYGEN_ITERATION2`) — raising them would break
+/// client interop. The magic is password-equivalent and weak against offline
+/// brute force.
 pub fn derive_key(
     password: &str,
     enc_version: i32,
@@ -97,11 +76,8 @@ pub fn derive_key(
     derive_key_bytes(password.as_bytes(), enc_version, repo_salt)
 }
 
-/// Derive wrapping key and IV from raw key bytes (not a password string).
-///
-/// This is identical to `derive_key` but accepts `&[u8]` instead of `&str`.
-/// Used for the second stage of the key derivation chain where the file_key
-/// is 32 raw bytes (not a UTF-8 string).
+/// Like `derive_key` but for raw key bytes (the second stage, where the file key
+/// is 32 bytes rather than a UTF-8 string).
 pub fn derive_key_bytes(
     key_bytes: &[u8],
     enc_version: i32,
@@ -119,24 +95,19 @@ pub fn derive_key_bytes(
 
             Ok((key.to_vec(), iv.to_vec()))
         }
-        // Version 1 uses AES-128 (16-byte key) with EVP_BytesToKey and 524288 iterations
-        // Version 3 uses AES-128-ECB with per-repo salt
+        // v1 (AES-128 + EVP_BytesToKey) and v3 (AES-128-ECB) are unsupported.
         1 | 3 => Err(CryptoError::UnsupportedVersion(enc_version)),
         _ => Err(CryptoError::UnsupportedVersion(enc_version)),
     }
 }
 
-/// Derive the actual file encryption key by decrypting the random_key.
+/// Derive the actual block key by decrypting `random_key`.
 ///
-/// This is the full key derivation chain:
-///   password → derive_key → (derivedKey, derivedIv)
-///   AES-256-CBC-Decrypt(random_key, derivedKey, derivedIv) → fileKey (32 bytes)
-///   fileKey → derive_key_bytes → (encKey, encIv)  // actual block encryption key+IV
+/// password → derive_key → (derivedKey, derivedIv), AES-256-CBC-decrypt of
+/// `random_key` (96 hex chars = 48 encrypted bytes) → fileKey, then
+/// `derive_key_bytes` → (encKey, encIv). `salt` is the per-repo salt, or empty for v2.
 ///
-/// The `random_key` parameter is a hex-encoded 96-char string (48 bytes encrypted).
-/// The `salt` parameter is the per-repo salt (64 hex chars, or empty for v2).
-///
-/// Returns (encKey, encIv) — the actual AES key and IV for file block operations.
+/// Returns the AES key and IV for block operations.
 pub fn decrypt_repo_enc_key(
     password: &str,
     random_key: &str,
@@ -149,42 +120,31 @@ pub fn decrypt_repo_enc_key(
     // Step 1: Derive wrapping key from password
     let (derived_key, derived_iv) = derive_key(password, enc_version, repo_salt)?;
 
-    // Step 2: Decrypt random_key with PKCS7 to get the 32-byte secret file key
-    // PKCS7 strips the padding, returning exactly the original 32-byte secret key
+    // PKCS7 strips the padding, returning exactly the 32-byte secret key.
     let file_key = Aes256CbcDec::new_from_slices(&derived_key, &derived_iv)
         .map_err(|e| CryptoError::DecryptionFailed(format!("init: {e}")))?
         .decrypt_padded_vec::<Pkcs7>(&random_key_bytes)
         .map_err(|e| CryptoError::DecryptionFailed(format!("decrypt random_key: {e}")))?;
 
-    // Step 3: Derive the actual block encryption key from the raw 32-byte file key
-    // Pass as raw bytes — NOT via String::from_utf8_lossy which would corrupt
-    // arbitrary byte values
+    // Derive the block key from the raw 32 bytes — not via `from_utf8_lossy`, which
+    // would corrupt arbitrary byte values.
     let (enc_key, enc_iv) = derive_key_bytes(&file_key, enc_version, repo_salt)?;
 
     Ok((enc_key, enc_iv))
 }
 
-/// Generate a per-repo random salt.
-///
-/// Returns a 64-hex-char string (32 random bytes).
-/// Used for enc_version >= 3.
+/// Generate a per-repo salt: 64 hex chars (32 random bytes), for enc_version >= 3.
 pub fn generate_repo_salt() -> String {
     let mut salt = [0u8; 32];
     rand::rng().fill_bytes(&mut salt);
     hex::encode(salt)
 }
 
-/// Generate a random_key (encrypted secret key) for a new encrypted repo.
+/// Generate a `random_key` (encrypted secret key) for a new encrypted repo, used by
+/// clients and by the server when a password is supplied.
 ///
-/// This is used by clients to pre-compute the random_key locally,
-/// and by the server when creating encrypted repos with a provided password.
-///
-/// 1. Generate a random 32-byte secret key (the actual file encryption key)
-/// 2. Derive wrapping key from password
-/// 3. Encrypt the secret key with AES-256-CBC + PKCS7 padding (32 → 48 bytes)
-/// 4. Hex-encode the 48-byte ciphertext → 96 hex chars
-///
-/// Returns the hex-encoded random_key.
+/// Generates a random 32-byte file key, derives the wrapping key, encrypts with
+/// AES-256-CBC + PKCS7 (32 → 48 bytes), and hex-encodes to 96 chars.
 pub fn generate_random_key_for_repo(
     password: &str,
     enc_version: i32,
@@ -203,15 +163,12 @@ pub fn generate_random_key_for_repo(
     Ok(hex::encode(&ciphertext))
 }
 
-/// Generate the magic string for password verification.
+/// Generate the magic string for password verification. Seafile's magic is the
+/// hex-encoded `PBKDF2(repo_id + password, salt, 1000, SHA256)`, which verifies a
+/// password without decrypting anything.
 ///
-/// In Seafile, the magic is the hex-encoded key derived from
-/// `PBKDF2(repo_id + password, salt, 1000, SHA256)`. It is used to verify
-/// a password without needing to decrypt anything.
-///
-/// Returns a 64-hex-char string (32-byte key) for v2/v4, or 32 hex chars
-/// (16-byte key) for v1. This matches the seafile-server protocol where
-/// `magic` = hex(key), NOT key+iv.
+/// 64 hex chars (32-byte key) for v2/v4, 32 hex chars (16-byte key) for v1 —
+/// `magic` = hex(key), not key+iv.
 pub fn generate_magic(
     repo_id: &str,
     password: &str,
@@ -232,10 +189,7 @@ pub fn generate_magic(
     }
 }
 
-/// Extract the key portion (i.e. the entire magic) from a magic string.
-///
-/// For v2/v4: magic is a 64-char hex string → 32 bytes.
-/// For v1: magic is a 32-char hex string → 16 bytes.
+/// Extract the key portion (the whole magic): 32 bytes for v2/v4, 16 for v1.
 pub fn extract_key_from_magic(magic: &str, enc_version: i32) -> Option<Vec<u8>> {
     match enc_version {
         1 => {
@@ -372,9 +326,8 @@ mod tests {
         let (correct_key, correct_iv) =
             decrypt_repo_enc_key(password, &random_key, 2, repo_salt).unwrap();
 
-        // Wrong password must not produce the correct key.
-        // It may return Err (PKCS7 padding mismatch, ~94%) or Ok(garbage, ~6%)
-        // — either is acceptable as long as the key material doesn't match.
+        // Wrong password must not produce the correct key. It may error (PKCS7 mismatch,
+        // ~94%) or return garbage (~6%); either is fine if the material differs.
         if let Ok((wrong_key, wrong_iv)) =
             decrypt_repo_enc_key("wrong_password", &random_key, 2, repo_salt)
         {

@@ -3,13 +3,9 @@ use sea_orm_migration::prelude::*;
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
-/// Records the container a cached thumbnail was encoded in (`jpeg` or `png`).
-///
-/// Thumbnails used to be PNG unconditionally; they now follow the pixels
-/// (opaque → JPEG, transparent → PNG), so the serving path has to know which
-/// container a cache entry holds without decoding it. Rows written before this
-/// column existed are all PNG, which is exactly what the default supplies, so
-/// they stay servable without a regeneration.
+/// Records the thumbnail's container (`jpeg` or `png`). Thumbnails used to be PNG
+/// unconditionally and now follow the pixels, so serving has to know the container
+/// without decoding; older rows are all PNG, exactly what the default supplies.
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -51,12 +47,8 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
     use sea_orm_migration::MigratorTrait;
 
-    /// A database migrated up to — but not including — this migration, i.e. the
-    /// schema an existing installation is on.
-    ///
-    /// The stop point is this migration's own position in the chain, not
-    /// `len() - 1`: the latter silently becomes "everything including this one"
-    /// as soon as another migration is appended after it.
+    /// A database migrated to this migration's own chain position, not `len() - 1` (which
+    /// silently becomes "everything including this one" when a migration is appended).
     async fn before_this_migration() -> (tempfile::TempDir, DatabaseConnection) {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = crate::tests_support::connect(&crate::tests_support::file_uri(
@@ -94,9 +86,8 @@ mod tests {
             .find(|(name, _, _)| name == "format")
     }
 
-    /// Thumbnails cached before this migration were all PNG. The upgrade has to
-    /// leave them servable without a regeneration, which is what the column
-    /// default has to supply for the rows that already exist.
+    /// Cached rows predate the column and are all PNG; the default must keep them servable
+    /// without regeneration.
     #[tokio::test]
     async fn existing_rows_default_to_png() {
         let (_dir, db) = before_this_migration().await;
@@ -106,9 +97,8 @@ mod tests {
             "the format column must not exist before this migration"
         );
 
-        // A row written by the old code: no `format` value. Size 48 is one the
-        // UI still asks for, so the later legacy-size purge leaves it alone and
-        // this test keeps asserting on a surviving row.
+        // A row from the old code: no `format`. Size 48 survives the later legacy-size purge, so
+        // this test keeps asserting on a live row.
         db.execute_unprepared("PRAGMA foreign_keys = OFF")
             .await
             .expect("disable foreign keys for the raw insert");

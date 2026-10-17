@@ -2,15 +2,11 @@ use sea_orm_migration::prelude::*;
 
 /// Runtime-managed settings: one row per key saved from `/sysadmin/settings/`.
 ///
-/// The table is deliberately schemaless about values: the catalog in
-/// `infra::settings` owns what each key means, how it is parsed and whether a
-/// change needs a restart. Adding a setting is therefore a code change with no
-/// migration, and the database cannot disagree with the code about a key's type.
-///
-/// `email_settings` — a single typed row — is folded in here: its columns become
-/// `email.*` keys, and its `password_enc` becomes `email.password` verbatim.
-/// The value is already ciphertext under the same AEAD key (`enc1:` prefix), so
-/// nothing is re-encrypted and no secret is ever written in the clear.
+/// The table is schemaless about values: the catalog in `infra::settings` owns what each
+/// key means and how it parses, so adding a setting needs no migration. `email_settings`
+/// is folded in: its columns become `email.*` keys and its `password_enc` becomes
+/// `email.password` verbatim — already ciphertext under the same AEAD key, so nothing is
+/// re-encrypted or written in the clear.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -28,8 +24,7 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    // Canonical string form: the catalog parses it, so a row is
-                    // readable in `sqlite3` without knowing the schema.
+                    // Canonical string form: readable in `sqlite3` without knowing the schema.
                     .col(ColumnDef::new(Settings::Value).text().not_null())
                     .col(
                         ColumnDef::new(Settings::UpdatedAt)
@@ -37,8 +32,7 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(0),
                     )
-                    // No foreign key: deleting an account must not fail on, or
-                    // erase, the row of a setting it once changed.
+                    // No foreign key: deleting an account must not fail on or erase its settings.
                     .col(ColumnDef::new(Settings::UpdatedBy).integer())
                     .to_owned(),
             )
@@ -46,9 +40,8 @@ impl MigrationTrait for Migration {
 
         if manager.has_table("email_settings").await? {
             let db = manager.get_connection();
-            // Text columns are CAST so an existing INTEGER value cannot land in
-            // the TEXT `value` column under a different storage class; booleans
-            // become the catalog's canonical "true"/"false".
+            // CAST text so an existing INTEGER cannot land in the TEXT column under another storage
+            // class; booleans become canonical "true"/"false".
             let copies = [
                 (
                     "email.paused",
@@ -84,9 +77,8 @@ impl MigrationTrait for Migration {
                 .await?;
             }
 
-            // The password may be NULL (no password configured). Copy only a
-            // real value, so an "unset" row keeps falling back to the config
-            // file — which is how an operator keeps the secret in a 0600 file.
+            // Copy only a real password, so an "unset" row keeps falling back to the config file
+            // (how an operator keeps the secret in a 0600 file).
             db.execute_unprepared(
                 "INSERT OR REPLACE INTO settings (key, value, updated_at, updated_by) \
                  SELECT 'email.password', CAST(password_enc AS TEXT), updated_at, updated_by \

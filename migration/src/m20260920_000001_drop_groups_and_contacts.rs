@@ -2,18 +2,11 @@ use sea_orm_migration::prelude::*;
 
 /// Drop the group and contact tables.
 ///
-/// nanofile targets independent per-user use: it never grew a group
-/// create/join/leave endpoint, so `groups` and `group_members` were only ever
-/// populated out of band by whatever inserted rows for the read-only group
-/// listings. `user_contacts` was read by exactly one endpoint,
-/// `/api2/groupandcontacts/`, which is removed in the same change. All three
-/// tables are gone, and with them the endpoints that serialized them.
-///
-/// `repo_members` deliberately stays: it is the membership index the permission
-/// checks read (`server/src/domain/permission.rs`), and library creation writes
-/// the owner's row into it. The migration that follows this one purges every
-/// row that was not an owner, which is what actually withdraws the access a
-/// previous share granted.
+/// nanofile never grew a group create/join/leave endpoint, so `groups` and
+/// `group_members` were only ever populated out of band, and `user_contacts` was read
+/// by exactly one endpoint removed in the same change. `repo_members` deliberately
+/// stays: the permission checks read it and library creation writes the owner's row;
+/// the next migration purges non-owner rows, withdrawing the access a share granted.
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
@@ -45,8 +38,7 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Recreate the tables exactly as `m20260603_000001_extend_schema` made
-        // them. Informational only: nothing in this build reads or writes them.
+        // Recreate the tables as `extend_schema` made them; informational only.
         manager
             .create_table(
                 Table::create()
@@ -213,8 +205,7 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseConnection};
     use sea_orm_migration::MigratorTrait;
 
-    /// A database migrated up to — but not including — this migration, so the
-    /// three tables still exist and can be seeded.
+    /// A database migrated to just before this migration, so the tables still exist.
     async fn before_this_migration() -> (tempfile::TempDir, DatabaseConnection) {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = crate::tests_support::connect(&crate::tests_support::file_uri(
@@ -297,7 +288,6 @@ mod tests {
         assert!(!table_exists(&db, "groups").await);
         assert!(!table_exists(&db, "group_members").await);
         assert!(!table_exists(&db, "user_contacts").await);
-        // The ownership index the permission checks read must survive.
         assert!(table_exists(&db, "repo_members").await);
     }
 
@@ -306,8 +296,7 @@ mod tests {
         let (_dir, db) = before_this_migration().await;
         seed(&db).await;
 
-        // Apply exactly this migration, so the rollback below targets it and
-        // not the purge migration that follows.
+        // Apply exactly this migration, so the rollback targets it, not the next one.
         crate::Migrator::up(&db, Some(1))
             .await
             .expect("run migration");
@@ -316,7 +305,6 @@ mod tests {
         assert!(table_exists(&db, "groups").await);
         assert!(table_exists(&db, "group_members").await);
         assert!(table_exists(&db, "user_contacts").await);
-        // The recreated tables are empty: the dropped rows are not restored.
         assert_eq!(count_rows(&db, "groups").await, 0);
         assert_eq!(count_rows(&db, "group_members").await, 0);
         assert_eq!(count_rows(&db, "user_contacts").await, 0);
