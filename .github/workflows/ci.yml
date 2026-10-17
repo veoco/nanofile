@@ -99,6 +99,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
+      # The two Rust cache families, and the one rule that keeps them useful:
+      # `nanofile` holds check-only artifacts (clippy and rustdoc, nothing
+      # linked) and `nanofile-build` holds linked dev/test codegen. A GitHub
+      # cache entry is immutable — the first job to save a key defines it for
+      # every later run — so a job must use the family that matches what it
+      # writes. A check-only entry under a build job's key makes that job
+      # recompile the whole dependency graph on every run: that is ~380 crates,
+      # 4-6 minutes on macOS and Windows.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "nanofile"
@@ -163,9 +171,11 @@ jobs:
         include:
           - { os: macos-latest, label: macos-arm64 }
           - { os: windows-latest, label: windows-amd64 }
-    # Same `debug` reduction as the `tests` rows, and deliberately identical
-    # values: rust-cache keys on `CARGO*`, so matching them keeps one cache entry
-    # per platform instead of two.
+    # Check-only, in the same `nanofile` family as the Linux `lint` job: this
+    # job compiles without linking, so its `shared-key` must never be the one
+    # `tests` or `tray-check` writes. The `CARGO_*` debug values are part of the
+    # cache key and not of what clippy emits (a check unit produces no object
+    # code); they keep this job's existing entries matching.
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -205,9 +215,9 @@ jobs:
           - { os: ubuntu-latest, label: linux-amd64 }
           - { os: macos-latest, label: macos-arm64 }
           - { os: windows-latest, label: windows-amd64 }
-    # Same `debug` reduction as the `tests` job, and deliberately identical
-    # values: rust-cache keys on `CARGO_*`, so matching them keeps this job and
-    # the Linux rows on one cache entry instead of two.
+    # Same `debug` values and the same `nanofile-build` key as `tests`: both
+    # rows link binaries, so they share one full-codegen entry per platform.
+    # Nothing that only checks code may write it (see the note on `lint`).
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -220,7 +230,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          shared-key: "nanofile"
+          shared-key: "nanofile-build"
       - name: Install tray system dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
@@ -371,9 +381,10 @@ jobs:
   # tests need a real helper and fail on CI without one, which is why every
   # runner installs it.
   #
-  # The cache keys are the same as the other Rust jobs on purpose: rust-cache
-  # keys on `CARGO*`, so a per-platform job that set its own would keep a second
-  # copy of the same dependency graph.
+  # `nanofile-build` is the codegen family: this job and `tray-check` are its
+  # only writers, so a hit always carries linked test binaries. The lint rows
+  # use `nanofile`, which holds check-only output (see `lint`); sharing that key
+  # here is what used to make every run rebuild the dependency graph.
   #
   # No test-side switch decides whether a launch asks for the AppContainer: it
   # always does, and the runner's own answer is what the sandbox tests assert.
@@ -404,7 +415,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          shared-key: "nanofile"
+          shared-key: "nanofile-build"
       - name: Install Tailwind CSS
         run: npm ci
       - name: Install ffmpeg (Linux)
