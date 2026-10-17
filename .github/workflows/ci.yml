@@ -110,7 +110,9 @@ jobs:
       # documentation defect like any other. `--bins` covers `main.rs` and its
       # modules, which the default lib-only pass never sees.
       - name: Check rustdoc
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --bins --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --bins --no-deps --document-private-items
       # Comments must explain the invariant, not cite an external audit item
       # number: those references are meaningless to a reader who does not have
       # the report, and they go stale as soon as the code moves.
@@ -180,7 +182,9 @@ jobs:
       - name: Lint the workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Check rustdoc
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --bins --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --bins --no-deps --document-private-items
 
   # ── Optional tray feature (compiled out by default; keep it healthy) ──
   # One definition and three runners: the tray unit tests sit behind a feature
@@ -225,7 +229,9 @@ jobs:
       - name: Lint with the tray feature
         run: cargo clippy -p server --features tray --bin nanofile -- -D warnings
       - name: Check tray rustdoc
-        run: RUSTDOCFLAGS="-D warnings" cargo doc -p server --features tray --bins --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc -p server --features tray --bins --no-deps --document-private-items
       - name: Test with tray feature
         run: cargo test -p server --features tray --bin nanofile -- --nocapture
 
