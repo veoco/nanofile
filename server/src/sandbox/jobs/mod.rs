@@ -1,14 +1,9 @@
 //! The jobs a confined child can run.
 //!
-//! Each job owns its own request and reply framing; the transport
-//! ([`crate::sandbox::worker`]) carries bytes and one tag, so a single child
-//! binary serves every pipeline without any of them being able to read another's
-//! reply as its own.
-//!
-//! What they have in common is why they are here: every one of them turns bytes
-//! a user supplied into something the server keeps, and the code that does that
-//! runs on the far side of the process boundary, where a parser that is
-//! exploited reaches nothing.
+//! Each owns its request and reply framing; the transport
+//! ([`crate::sandbox::worker`]) carries bytes and one tag, so one child binary serves
+//! every pipeline and no job can read another's reply. All of them turn user bytes
+//! into server state on the far side of the process boundary.
 
 pub mod images;
 pub mod media;

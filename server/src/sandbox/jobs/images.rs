@@ -1,13 +1,12 @@
 //! Image decode, EXIF and avatar processing, in the confined child.
 //!
-//! The parent reads the bytes — a block read for a repository file, the request
-//! body for an avatar — and hands them over; the decode, the resize and the
-//! encode all happen on the far side of the process boundary, because a hostile
-//! image is exactly what an image decoder must not meet inside the server.
+//! The parent reads the bytes and hands them over; the decode, resize and encode
+//! all happen on the far side of the process boundary, because a hostile image is
+//! exactly what an image decoder must not meet inside the server.
 //!
-//! The request is `NFX1`, one operation byte, a little-endian `u32` target size,
-//! then the image bytes to end of input. The reply is the common frame: `P` or
-//! `J` for an encoded image, `X` for EXIF JSON, `U` for a refusal.
+//! Request: `NFX1`, one operation byte, a little-endian `u32` target size, then
+//! the bytes. Reply: the common frame, `P`/`J` for an image, `X` for EXIF JSON, `U`
+//! for a refusal.
 
 use std::io::Read;
 
@@ -15,19 +14,13 @@ use crate::sandbox::worker::{self, RunOutcome};
 use crate::sandbox::{Grants, JobVerdict, Profile};
 use crate::thumbnail_util::{self, ThumbFormat};
 
-/// Re-encode the image as a thumbnail of `size`.
 pub const OP_THUMBNAIL: u8 = b'T';
-/// Re-encode the image as a square avatar of `size`.
 pub const OP_SQUARE: u8 = b'S';
-/// Parse EXIF and answer with JSON.
 pub const OP_EXIF: u8 = b'X';
 
-/// Most image bytes the child will accept.
-///
-/// The parent caps what it reads before it sends anything (32 MiB for a
-/// thumbnail source, 8 MiB for EXIF), so this is the second half of the same
-/// bound: a request that reached the child over any other path still cannot make
-/// it hold an unbounded buffer.
+/// Most image bytes the child will accept: the parent already caps what it reads
+/// (32 MiB for a thumbnail source, 8 MiB for EXIF), and this is the second half of
+/// the same bound.
 const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 
 /// A thumbnail, encoded and its container. `Err` is why there is none.
@@ -41,7 +34,6 @@ pub(crate) fn thumbnail(content: &[u8], size: u32) -> Result<(Vec<u8>, ThumbForm
     }
 }
 
-/// A square avatar, encoded as PNG.
 pub(crate) fn square(content: &[u8], size: u32) -> Result<Vec<u8>, String> {
     let (tag, body) = run(OP_SQUARE, size, content)?;
     match tag {
@@ -51,7 +43,6 @@ pub(crate) fn square(content: &[u8], size: u32) -> Result<Vec<u8>, String> {
     }
 }
 
-/// The image's EXIF, as the JSON the endpoint serves.
 pub(crate) fn exif(content: &[u8]) -> Result<String, String> {
     let (tag, body) = run(OP_EXIF, 0, content)?;
     match tag {
@@ -62,7 +53,6 @@ pub(crate) fn exif(content: &[u8]) -> Result<String, String> {
     }
 }
 
-/// Send one image operation to the child and collect its reply.
 fn run(op: u8, size: u32, content: &[u8]) -> Result<(u8, Vec<u8>), String> {
     let request = request(op, size, content);
     match worker::run_request(
@@ -77,7 +67,6 @@ fn run(op: u8, size: u32, content: &[u8]) -> Result<(u8, Vec<u8>), String> {
     }
 }
 
-/// The request the parent sends.
 fn request(op: u8, size: u32, content: &[u8]) -> Vec<u8> {
     let mut request = Vec::with_capacity(worker::MAGIC.len() + 5 + content.len());
     request.extend_from_slice(worker::MAGIC);
@@ -97,20 +86,15 @@ fn unknown_tag(tag: u8) -> String {
 
 /// The gate that bounds how many image children are alive at once.
 ///
-/// A cache miss for a file thumbnail, an avatar or an EXIF read spawns one
-/// confined child, and each may work for the whole timeout. Every caller queues
-/// on this permit rather than spawning without bound: the file-thumbnail path
-/// has always used it, the avatar path paces both its write and its read side
-/// this way, and the EXIF path does too. The avatar *read* path is the one that
-/// can be reached without authentication. A constant rather than a setting, so
-/// it cannot be set to "unlimited" by accident.
+/// A cache miss spawns one child, each may work for the whole timeout, and every
+/// caller queues here rather than spawning without bound — including the avatar read
+/// path, which needs no authentication. A constant, so it cannot be set unlimited.
 pub(crate) const MAX_CONCURRENT_IMAGE_WORKERS: usize = 4;
 
 static IMAGE_CONCURRENCY: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
     std::sync::OnceLock::new();
 
-/// Acquire a permit covering one image-worker child. Callers queue rather than
-/// fail, which is what preserves the behaviour of a normal burst.
+/// Acquire a permit covering one image-worker child; callers queue rather than fail.
 pub(crate) async fn acquire_image_permit() -> Result<tokio::sync::OwnedSemaphorePermit, String> {
     IMAGE_CONCURRENCY
         .get_or_init(|| {
@@ -122,7 +106,6 @@ pub(crate) async fn acquire_image_permit() -> Result<tokio::sync::OwnedSemaphore
         .map_err(|error| format!("image concurrency gate failed: {error}"))
 }
 
-/// The child's half of the protocol.
 pub fn serve() -> anyhow::Result<()> {
     let mut stdin = std::io::stdin().lock();
     let mut head = [0u8; 9];
@@ -166,11 +149,8 @@ fn answer(op: u8, size: u32, data: &[u8]) -> (u8, Vec<u8>) {
     }
 }
 
-/// The self-test: decode a generated image and encode it again.
-///
-/// A profile that cannot do the work says so here rather than on the first
-/// thumbnail a user asks for. The token is what the report carries and a CI step
-/// greps; the verdict beside it is what the parent decides on.
+/// The self-test: decode a generated image and encode it again, so a profile that
+/// cannot do the work says so here rather than on a user's first thumbnail.
 pub fn probe() -> (String, JobVerdict) {
     let png = tiny_png();
     match thumbnail_util::generate_thumbnail_encoded(&png, 16) {
@@ -179,8 +159,7 @@ pub fn probe() -> (String, JobVerdict) {
     }
 }
 
-/// A 2×2 PNG, generated rather than checked in so the probe has no fixture to
-/// lose.
+/// A generated 2×2 PNG, so the probe has no fixture to lose.
 fn tiny_png() -> Vec<u8> {
     let image = image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 40, 40, 255]));
     let mut out = Vec::new();
@@ -193,8 +172,7 @@ fn tiny_png() -> Vec<u8> {
 mod tests {
     use super::*;
 
-    /// A PNG round-trips through the operation the parent sends, and the reply
-    /// is the frame the parent parses.
+    /// A PNG round-trips through the operation the parent sends.
     #[test]
     fn a_thumbnail_request_round_trips() {
         let png = tiny_png();
@@ -206,7 +184,6 @@ mod tests {
         assert!(decoded.width() <= 16 && decoded.height() <= 16);
     }
 
-    /// A square request answers with PNG whatever the source was.
     #[test]
     fn a_square_request_answers_png() {
         let png = tiny_png();
@@ -216,7 +193,6 @@ mod tests {
         assert_eq!((decoded.width(), decoded.height()), (8, 8));
     }
 
-    /// Bytes that are not an image are a refusal, not a crash.
     #[test]
     fn undecodable_bytes_are_a_refusal() {
         let (tag, body) = answer(OP_THUMBNAIL, 16, b"not an image at all");
@@ -224,14 +200,12 @@ mod tests {
         assert!(!body.is_empty(), "a refusal says why");
     }
 
-    /// An unknown operation is refused rather than guessed at.
     #[test]
     fn an_unknown_operation_is_refused() {
         let (tag, _) = answer(b'?', 16, b"");
         assert_eq!(tag, b'U');
     }
 
-    /// The self-test does the work rather than assuming it.
     #[test]
     fn the_probe_decodes_and_re_encodes() {
         let (token, job) = probe();
@@ -239,7 +213,6 @@ mod tests {
         assert_eq!(job, JobVerdict::Ok);
     }
 
-    /// The request framing is the magic, the operation, the size and the bytes.
     #[test]
     fn the_request_is_what_the_child_reads() {
         let request = request(OP_THUMBNAIL, 48, b"payload");

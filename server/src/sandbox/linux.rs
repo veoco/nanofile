@@ -1,23 +1,18 @@
 //! Linux confinement: resource limits, capabilities, Landlock and seccomp.
 //!
-//! Everything is a raw syscall through `libc::syscall` with the kernel UAPI
-//! defined locally. That is deliberate, and follows the `landlock-run` launcher
-//! this file mirrors: the kernel's user-space ABI is stable by contract, the
-//! definitions below are the audit record of exactly which kernel surface this
-//! code touches, and the build does not depend on the toolchain's header or
-//! `libc` vintage (several of these constants — `PR_SET_NO_NEW_PRIVS`,
-//! `PR_SET_SECCOMP`, `capget` — are not in `libc` for Linux at all).
+//! Everything is a raw syscall through `libc::syscall`, with the kernel UAPI defined
+//! locally: the ABI is stable by contract, the definitions are the audit record of
+//! which surface this code touches, and the build depends on neither the toolchain's
+//! headers nor the `libc` vintage.
 //!
 //! Order matters and is not interchangeable:
 //!
-//! 1. close every descriptor above stderr, so nothing inherited can be reached;
-//! 2. clamp the resource limits, with the soft limit equal to the hard one so
-//!    the child cannot raise what bounds it;
-//! 3. `PR_SET_NO_NEW_PRIVS`, which is what lets an unprivileged process install
-//!    Landlock and a seccomp filter, and neutralises setuid escalation;
+//! 1. close every descriptor above stderr;
+//! 2. clamp the resource limits, soft equal to hard, so the child cannot raise them;
+//! 3. `PR_SET_NO_NEW_PRIVS`, which lets an unprivileged process install Landlock and
+//!    seccomp and neutralises setuid escalation;
 //! 4. drop every capability, and read them back;
-//! 5. Landlock, with no grants at all — the document arrives on stdin, so this
-//!    process has nothing legitimate to open;
+//! 5. Landlock, with no grants — the document arrives on stdin;
 //! 6. seccomp last, because Landlock's own syscalls must happen first.
 
 use std::mem::size_of;
@@ -25,7 +20,6 @@ use std::path::{Path, PathBuf};
 
 use super::{Grants, Profile, Protections, shebang_interpreter};
 
-// ── prctl ───────────────────────────────────────────────────────────────────
 const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
 const PR_CAP_AMBIENT: libc::c_int = 47;
 const PR_CAP_AMBIENT_CLEAR_ALL: libc::c_ulong = 4;
@@ -33,7 +27,6 @@ const PR_CAP_AMBIENT_CLEAR_ALL: libc::c_ulong = 4;
 const PR_SET_MDWE: libc::c_int = 65;
 const PR_MDWE_REFUSE_EXEC_GAIN: libc::c_ulong = 1 << 0;
 
-// ── capabilities (linux/capability.h) ───────────────────────────────────────
 const CAP_VERSION_3: u32 = 0x2008_0522;
 
 #[repr(C)]
@@ -50,12 +43,11 @@ struct CapData {
     inheritable: u32,
 }
 
-// ── Landlock (linux/landlock.h) ─────────────────────────────────────────────
 const LANDLOCK_CREATE_RULESET_VERSION: libc::c_uint = 1;
 /// Newest ABI this file knows about.
 ///
 /// Six rather than five: the scope bits are the ABI-6 addition, and the report
-/// carries the ABI that was actually used rather than this one.
+/// carries the ABI actually used rather than this one.
 const LANDLOCK_MAX_ABI: i64 = 6;
 
 #[repr(C)]
@@ -88,16 +80,14 @@ const LL_IOCTL_DEV: u64 = 1 << 15;
 const LL_NET_BIND_TCP: u64 = 1 << 0;
 const LL_NET_CONNECT_TCP: u64 = 1 << 1;
 
-/// IPC scopes (ABI 6): a domain cannot signal a process outside itself, and
-/// cannot reach an abstract socket outside itself.
+/// IPC scopes (ABI 6): a domain cannot signal or reach an abstract socket outside
+/// itself.
 ///
-/// This is what closes the one hole a denylist cannot: `kill` must be judged by
-/// its *target*, which a classic BPF filter cannot read, and Landlock decides
-/// it against the domain instead.
+/// This closes the hole a denylist cannot: `kill` is judged by its *target*, which a
+/// classic BPF filter cannot read, and Landlock decides it against the domain.
 const LL_SCOPE_ABSTRACT_UNIX_SOCKET: u64 = 1 << 0;
 const LL_SCOPE_SIGNAL: u64 = 1 << 1;
 
-// ── seccomp (linux/seccomp.h, linux/filter.h, linux/bpf_common.h) ───────────
 const SECCOMP_SET_MODE_FILTER: libc::c_uint = 1;
 const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
 const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
@@ -118,11 +108,9 @@ const SECCOMP_DATA_ARGS0_LOW: u32 = 16;
 
 /// `__X32_SYSCALL_BIT` from `arch/x86/include/uapi/asm/unistd.h`.
 ///
-/// A call made through the x32 ABI carries this bit in `nr`, and x32 shares
-/// `AUDIT_ARCH_X86_64` with the 64-bit ABI: the architecture check cannot tell
-/// the two apart, and every number in the denylist below is a 64-bit one that
-/// an x32 call can never equal. `seccomp(2)` names exactly this as the way a
-/// `nr`-keyed denylist is bypassed, which is what this bound closes.
+/// An x32 call carries this bit in `nr` but reports `AUDIT_ARCH_X86_64`, so the
+/// architecture check cannot separate it and every denylist number below is 64-bit.
+/// `seccomp(2)` names this as the bypass of an `nr`-keyed denylist.
 const X32_SYSCALL_BIT: u32 = 0x4000_0000;
 
 const CLONE_THREAD: u32 = 0x0001_0000;
@@ -144,10 +132,8 @@ struct SockFprog {
 
 /// `AUDIT_ARCH_*` for this target, or `None` where the filter cannot be built.
 ///
-/// The constant is `EM_* | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE` from
-/// `linux/audit.h`; the arch check is what stops a 32-bit compatibility entry
-/// point from bypassing the filter. It does *not* separate the x86-64 and x32
-/// ABIs, which report the same value: `X32_SYSCALL_BIT` is what that needs.
+/// The arch check stops a 32-bit compatibility entry point from bypassing the
+/// filter; it does not separate x86-64 from x32, which report the same value.
 #[cfg(target_arch = "x86_64")]
 const AUDIT_ARCH: Option<u32> = Some(0xC000_003E);
 #[cfg(target_arch = "aarch64")]
@@ -166,11 +152,9 @@ const AUDIT_ARCH: Option<u32> = None;
 
 /// `newfstatat`'s number, which `libc` has no constant for on `loongarch64`.
 ///
-/// That target's module lists 301 syscalls and is missing this one (libc
-/// 0.2.189), while `aarch64` and `riscv64` both give it as 79. All three read
-/// the same `asm-generic` table, and the entries either side of it agree across
-/// them — `faccessat` is 48 and `statx` is 291 — so 79 is this target's number
-/// too. The four `libc::SYS_newfstatat` uses in this file go through here.
+/// That target's module lists 301 syscalls and misses this one, while `aarch64` and
+/// `riscv64` give 79; all three read the same `asm-generic` table and the entries
+/// either side agree, so 79 is this target's number too.
 #[cfg(target_arch = "loongarch64")]
 const SYS_NEWFSTATAT: libc::c_long = 79;
 #[cfg(not(target_arch = "loongarch64"))]
@@ -178,16 +162,11 @@ const SYS_NEWFSTATAT: libc::c_long = libc::SYS_newfstatat;
 
 /// `fchmodat2`'s number, which `libc` 0.2.189 carries only for some targets.
 ///
-/// Linux 6.6 added the call as 452 in the `asm-generic` table, and `x86_64`
-/// agrees; `aarch64`, `riscv64` and `loongarch64` read that table too but their
-/// `libc` modules do not define the constant. The number is therefore stated
-/// here, the way [`SYS_NEWFSTATAT`] is for `loongarch64`. It closes the one
-/// metadata write Landlock cannot govern that `fchmod` and `fchmodat` do not
-/// cover: an exploited parser could otherwise change the mode of any path the
-/// server user owns without ever opening it.
+/// Linux 6.6 added it as 452 in `asm-generic`, and `x86_64` agrees, but the other
+/// targets' `libc` modules do not define it. It closes the one metadata write Landlock
+/// cannot govern that `fchmod` and `fchmodat` do not cover.
 const SYS_FCHMODAT2: libc::c_long = 452;
 
-/// Apply every layer this platform offers.
 pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec<String>) {
     let mut layers = Protections::default();
     let mut detail = Vec::new();
@@ -213,10 +192,9 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
     detail.push(if set_mdwe() { "mdwe=on" } else { "mdwe=off" }.to_string());
 
     detail.push(drop_capabilities().to_string());
-    // Both are free and both close a way for a process of the same user to
-    // reach this one: `PR_SET_DUMPABLE` takes away `/proc/<pid>/mem` and the
-    // ability to attach, and the parent-death signal is what ends a parser
-    // whose parent is gone. Neither is a layer — the report says what took.
+    // Both are free and both close a way for a same-user process to reach this one:
+    // `PR_SET_DUMPABLE` takes away `/proc/<pid>/mem`, and the parent-death signal ends a
+    // parser whose parent is gone. Neither is a layer; the report says what took.
     detail.push(
         if set_dumpable() {
             "dumpable=off"
@@ -248,14 +226,10 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
                     // granted, whatever else the ruleset took.
                     detail.push("helper-rule-refused".to_string());
                 }
-                // The helper is started by copying this process, so the filter
-                // that denies `clone` without `CLONE_THREAD` cannot be installed
-                // for this profile, and nothing else on this platform bounds how
-                // many copies there may be: `RLIMIT_NPROC` counts per real user
-                // id, so setting it here would throttle the server's own
-                // spawns. It is the parent's wall-clock timeout and the process
-                // group it kills that bound them, and the report says so rather
-                // than leaving the absence of a kernel bound to be discovered.
+                // The helper starts by copying this process, so the filter that denies
+                // `clone` without `CLONE_THREAD` cannot be installed here, and
+                // `RLIMIT_NPROC` counts per real user id too. The parent's timeout and the
+                // process group it kills are what bound the copies, and the report says so.
                 detail.push("media_process=unbounded".to_string());
             }
         }
@@ -267,18 +241,14 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
             layers.network = true;
             layers.process = true;
             detail.push(format!("seccomp={denied}"));
-            // The media filter is the one that re-allows the metadata calls the
-            // dynamic loader makes, so the paths this child can see are wider
-            // than the two parser profiles'; the page says so beside the item
-            // rather than leaving `ll_gaps=closed` to imply otherwise.
+            // The media filter re-allows the metadata calls the loader makes, so its reachable
+            // paths are wider than the parser profiles'; the page says so beside `ll_gaps=closed`.
             if profile.runs_helper() {
                 detail.push("metadata=open".to_string());
             }
-            // Landlock sees opens and creations; it does not see a metadata
-            // change, a truncation before ABI 3, or who a signal is for. Those
-            // are this filter's job (see `denied_syscalls`), so a host where it
-            // did not install has a filesystem layer with holes in it rather
-            // than a missing one — which is what this says.
+            // Landlock sees opens and creations, not a metadata change, a truncation before ABI 3
+            // or a signal's target: those are the filter's job, so a host where it did not install
+            // has a filesystem layer with holes rather than a missing one.
             detail.push("ll_gaps=closed".to_string());
         }
         None => {
@@ -297,20 +267,16 @@ fn on_off(value: bool) -> &'static str {
 
 /// Make this process undumpable.
 ///
-/// A process of the same user can otherwise read this one through
-/// `/proc/<pid>/mem` and attach to it; nothing here defends against a same-user
-/// process in general (see the module docs), but this is the difference between
-/// "the sandbox does not stop your neighbour" and "your neighbour can read the
-/// document the server just handed over".
+/// A same-user process could otherwise read it through `/proc/<pid>/mem` and attach.
+/// Nothing here defends against same-user processes in general; this is the difference
+/// between "the sandbox does not stop your neighbour" and "your neighbour reads the
+/// document".
 fn set_dumpable() -> bool {
     unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0 as libc::c_ulong, 0, 0, 0) == 0 }
 }
 
-/// Ask the kernel to end this process when its parent ends.
-///
-/// The parent bounds every child with a timeout and kills the group it started,
-/// so this covers the one case it cannot: the parent itself is gone, and
-/// nothing is left to wait for the parser or to collect it.
+/// Ask the kernel to end this process when its parent ends: the parent's timeout and
+/// group kill cover everything but the parent itself being gone.
 fn set_parent_death_signal() -> bool {
     unsafe {
         libc::prctl(
@@ -325,13 +291,10 @@ fn set_parent_death_signal() -> bool {
 
 /// Close every descriptor above stderr.
 ///
-/// The parent's descriptors are close-on-exec where the standard library
-/// created them, but a parser exploited for a file read would still rather be
-/// handed one than have to open it. `close_range` cannot be raced against a
-/// concurrent open; the loop is the fallback for kernels before 5.9, and it
-/// walks to this process's own descriptor limit rather than to a constant —
-/// a parent with a raised `RLIMIT_NOFILE` can hold a descriptor the constant
-/// would have missed.
+/// The standard library's descriptors are close-on-exec, but an exploited parser would
+/// rather be handed one. `close_range` cannot race a concurrent open; the loop is the
+/// pre-5.9 fallback, and it walks to this process's own limit so a raised
+/// `RLIMIT_NOFILE` cannot hide one.
 fn close_extra_descriptors() {
     let closed = unsafe {
         libc::syscall(
@@ -380,15 +343,10 @@ fn set_no_new_privs() -> bool {
 
 /// Ask the kernel to refuse a mapping that is both writable and executable.
 ///
-/// This is the one hardening that costs nothing and closes the classic
-/// exploitation step — write shellcode into a buffer, mark it executable, jump
-/// to it — at the kernel rather than in the parser. It is inherited by a helper
-/// the media profile starts, which still maps its own libraries: those come from
-/// files and are never made writable first.
-///
-/// A kernel older than 6.3 does not know the call and answers `EINVAL`, which is
-/// reported as `mdwe=off` rather than treated as a failure: the protection is
-/// additive, and the confinement is decided from the items a probe measures.
+/// The classic exploitation step, closed at the kernel rather than in the parser. It is
+/// inherited by a helper the media profile starts, which still maps its libraries from
+/// files that are never writable. A kernel older than 6.3 answers `EINVAL`, reported as
+/// `mdwe=off`: the protection is additive and the items decide the confinement.
 fn set_mdwe() -> bool {
     unsafe {
         libc::syscall(
@@ -402,11 +360,9 @@ fn set_mdwe() -> bool {
     }
 }
 
-/// Drop every capability the process holds, then read the sets back.
-///
-/// A no-op for an unprivileged process, and the reason a server started as root
-/// does not hand root to a parser. Dropping is always permitted; only adding
-/// needs `CAP_SETPCAP`.
+/// Drop every capability the process holds, then read the sets back: a no-op for an
+/// unprivileged process, and the reason a server started as root does not hand root to
+/// a parser. Dropping is always permitted; only adding needs `CAP_SETPCAP`.
 fn drop_capabilities() -> &'static str {
     let mut header = CapHeader {
         version: CAP_VERSION_3,
@@ -476,44 +432,33 @@ struct Landlock {
     helper_grants: usize,
     /// The shape the media profile's read grants took, as the report spells it.
     ///
-    /// A count says how many rules the ruleset took and nothing about their
-    /// breadth; this is what the settings page turns into a note. `libs` is the
-    /// helper, its interpreter, the libraries beside it and the system library
-    /// trees — never a directory of the helper's own.
+    /// A count says how many rules took, not their breadth; `libs` is the helper, its
+    /// interpreter, the libraries beside it and the system library trees.
     helper_scope: &'static str,
     /// Whether the rule for the helper file itself was added.
     ///
-    /// The count alone cannot say: a helper that cannot be opened leaves the
-    /// library and interpreter rules in place, so `helper_grants` is non-zero
-    /// while the one program this profile exists to run is not granted at all.
+    /// The count cannot say: a helper that cannot be opened leaves the library and
+    /// interpreter rules in place, so `helper_grants` is non-zero while the program this
+    /// profile exists to run is not granted at all.
     helper: bool,
 }
 
-/// Install a Landlock ruleset that grants nothing — except the paths the media
-/// profile was handed.
+/// Install a Landlock ruleset that grants nothing — except what the media profile was
+/// handed.
 ///
-/// Every access the running kernel's ABI can govern is handled, and no
-/// path-beneath rule is added for the profiles that read nothing: on Linux an
-/// unhandled access is simply allowed, so handling the full mask *is* the
-/// denial. This is stricter than the launcher this mirrors, which grants read
-/// access to `/` because it wraps commands that need a filesystem; the document
-/// and image children get their bytes on stdin.
+/// Handling every access the ABI can govern *is* the denial: on Linux an unhandled
+/// access is allowed, so the document and image children, which get their bytes on
+/// stdin, need no path rule.
 ///
-/// The media profile is the exception: it executes a helper, so the helper and
-/// the libraries it maps have to be readable and executable, and the scratch
-/// source it decodes has to be readable. Those grants are `path-beneath` rules
-/// on exact paths (never a directory the parent chose), so the reachable set is
-/// the helper, the fixed system library trees and one scratch file.
+/// The media profile is the exception: it executes a helper, so the helper, its
+/// interpreter and the libraries it maps must be readable, and the scratch source must
+/// be readable. Those are `path-beneath` rules on exact paths, never a directory the
+/// parent chose.
 ///
-/// Three groups of rights, added as the ABI that has them (the kernel rejects a
-/// struct with fields it does not know, so the size passed is the one this ABI
-/// reads): the filesystem mask, the two TCP rights from ABI 4, and the IPC
-/// scopes from ABI 6.
-///
-/// A ruleset the kernel refuses is retried with the filesystem mask alone. The
-/// alternative — reporting `landlock=ruleset` and losing the filesystem
-/// protection because a bit this file guessed was wrong — would be a sandbox
-/// that gives up its strongest protection over its weakest claim.
+/// Rights are added as the ABI has them (a field the kernel does not know is rejected):
+/// the filesystem mask, the two TCP rights from ABI 4, and the IPC scopes from ABI 6. A
+/// refused ruleset is retried with the filesystem mask alone, rather than losing the
+/// strongest protection over a guessed bit.
 fn install_landlock(profile: Profile, grants: Grants<'_>) -> Result<Landlock, &'static str> {
     let abi = unsafe {
         libc::syscall(
@@ -565,7 +510,6 @@ fn install_landlock(profile: Profile, grants: Grants<'_>) -> Result<Landlock, &'
     })
 }
 
-/// `LANDLOCK_RULE_PATH_BENEATH`.
 const LANDLOCK_RULE_PATH_BENEATH: libc::c_uint = 1;
 
 /// One `landlock_path_beneath_attr`, packed the way the UAPI declares it.
@@ -577,45 +521,27 @@ struct LandlockPathBeneath {
 
 /// The media profile's rules, and whether the helper itself got one.
 struct HelperRules {
-    /// How many path rules the ruleset took.
     added: usize,
-    /// Whether the rule for the helper file was one of them.
     helper: bool,
 }
 
 /// Add the media profile's read and execute rules.
 ///
-/// `execute` is granted to exactly two things: the helper the parent named, and
-/// the interpreter the kernel runs before the helper's own code (an ELF
-/// interpreter, or the interpreter a script helper's `#!` line names). The
-/// directories around them get `read` alone, because Landlock grants are
-/// hierarchical: `execute` on the helper's directory is `execute` on every
-/// program in it, which is the whole userland when the helper is `/usr/bin/ffmpeg`
-/// and `/usr/lib/git-core` when it is not. The library trees are a `read` grant
-/// for the same reason — the helper's libraries live there, and nothing in them
-/// is this profile's to run.
+/// `execute` goes to exactly two things: the helper the parent named, and the
+/// interpreter the kernel runs before its code. The directories around them get `read`
+/// alone, because a Landlock grant is hierarchical: `execute` on the helper's directory
+/// is `execute` on every program in it, the whole userland for a distribution ffmpeg.
 ///
-/// The libraries *beside* the helper are granted one file at a time, the way the
-/// Windows profile grants the DLLs beside its helper, and for the same reason a
-/// whole directory is the wrong shape here: a packaged build's libraries are
-/// what the helper needs, and nothing else in that directory is. `read` on the
-/// directory itself would be `read` on every file in it — measured on this host
-/// as everything in `/usr/bin` when the helper is the distribution's ffmpeg,
-/// whose libraries are in the system trees that are granted separately anyway.
+/// The libraries *beside* the helper are granted one file at a time, as on Windows: a
+/// packaged build's libraries are what the helper needs, and `read` on the directory
+/// would be `read` on every file in it. The scratch source gets `read` alone, and a path
+/// that is not there is skipped rather than failing the ruleset.
 ///
-/// The scratch source gets `read` alone. A path that is not there is skipped —
-/// a 32-bit library directory on a 64-bit host, an interpreter for another
-/// architecture — rather than failing the ruleset over a rule that grants
-/// nothing.
-///
-/// One residual the `execute` count does not state: the ELF interpreter is
-/// granted execute and the library trees are granted read, and Landlock checks
-/// `FS_EXECUTE` where a program is *opened*, not where a mapping is made
-/// executable. A helper that invoked `ld.so` with another program as its
-/// argument could therefore run any ELF the library trees make readable. That
-/// stays inside this profile — Landlock, seccomp and the limits all still
-/// apply — so it is a widening of what the helper may run, not a way out of the
-/// sandbox, and it is named here rather than left for the report to imply.
+/// One residual the count does not state: Landlock checks `FS_EXECUTE` where a program
+/// is opened, not where a mapping becomes executable, so a helper that invoked `ld.so`
+/// on another program could run any ELF the library trees make readable. That stays
+/// inside this profile — Landlock, seccomp and the limits still apply — so it is a
+/// widening of what the helper may run, not a way out.
 fn add_helper_rules(ruleset: i64, grants: Grants<'_>) -> HelperRules {
     let mut added = 0;
     let mut helper = false;
@@ -647,15 +573,12 @@ fn add_helper_rules(ruleset: i64, grants: Grants<'_>) -> HelperRules {
     HelperRules { added, helper }
 }
 
-/// The shared libraries sitting beside the helper, which a packaged build links
-/// against by an `$ORIGIN`-relative path.
+/// The shared libraries beside the helper, which a packaged build links against by an
+/// `$ORIGIN`-relative path.
 ///
-/// Named `*.so*` because that is what a shared object is called on this platform,
-/// including the versioned form (`libavcodec.so.61`) and the development symlink
-/// (`libavcodec.so`). A directory that cannot be listed yields nothing: the
-/// caller grants what it can find and reports how many rules the ruleset took,
-/// so a helper that needed something else says so through `parse=` rather than
-/// through a silent widening.
+/// Named `*.so*` for the versioned form and the development symlink. An unlistable
+/// directory yields nothing: the caller grants what it finds, and a helper that needed
+/// more says so through `parse=` rather than through a silent widening.
 fn helper_libraries(helper: &Path) -> Vec<PathBuf> {
     let Some(directory) = helper.parent() else {
         return Vec::new();
@@ -684,31 +607,23 @@ const fn helper_file_access() -> u64 {
     LL_EXECUTE | LL_READ_FILE
 }
 
-/// What the interpreter the kernel runs before the helper gets.
-///
-/// A file, never a directory: this is the one program that has to be executable
-/// so that the helper can be.
+/// What the interpreter the kernel runs before the helper gets: a file, never a
+/// directory, because it is the one program that has to be executable.
 const fn helper_interpreter_access() -> u64 {
     LL_EXECUTE | LL_READ_FILE
 }
 
-/// What a system library tree gets.
-///
-/// Deliberately without `execute`. Where it was granted, an exploited helper
-/// could start any program in `/usr/lib`, and no library is something this
-/// profile runs.
+/// What a system library tree gets: deliberately no `execute`, because a library is not
+/// something this profile runs.
 const fn helper_library_access() -> u64 {
     LL_READ_FILE | LL_READ_DIR
 }
 
 /// The programs the kernel runs before the helper's own code, which have to be
-/// executable for the helper to be.
+/// executable for it to be.
 ///
-/// The static tree covers the glibc and musl interpreters of the architectures
-/// this file pins; a helper that is a script names its own interpreter on its
-/// `#!` line, and that path is added on top. A path that is not there grants
-/// nothing, so listing an interpreter for a distribution this host is not costs
-/// one skipped rule.
+/// The static tree covers the glibc and musl interpreters this file pins; a script
+/// helper names its own on its `#!` line. A path that is not there grants nothing.
 fn helper_interpreters(helper: &Path) -> Vec<PathBuf> {
     let mut interpreters: Vec<PathBuf> = Vec::new();
     if let Some(named) = shebang_interpreter(helper) {
@@ -742,11 +657,9 @@ const HELPER_LIBRARY_DIRS: &[&str] = &[
 /// The loader's own cache, which is a file rather than a directory.
 const HELPER_LIBRARY_FILES: &[&str] = &["/etc/ld.so.cache"];
 
-/// The ELF interpreters, which the kernel executes out of the library trees.
-///
-/// This is where the `execute` right the library directories used to carry
-/// belongs: the trees are for reading libraries, and one interpreter file is
-/// what a dynamically linked helper cannot start without.
+/// The ELF interpreters, which the kernel executes out of the library trees: the trees
+/// are for reading, and one interpreter file is what a dynamic helper cannot start
+/// without.
 const HELPER_INTERPRETERS: &[&str] = &[
     // glibc
     "/lib64/ld-linux-x86-64.so.2",
@@ -816,9 +729,8 @@ fn create_ruleset(attr: &LandlockRulesetAttr, size: usize) -> i64 {
 
 /// Every filesystem access the given Landlock ABI can govern.
 ///
-/// The mask grows with the ABI: handling a bit the kernel does not know is
-/// rejected outright, so the newest bits are added only where they exist and
-/// the report carries the ABI that was actually used.
+/// The mask grows with the ABI: a bit the kernel does not know is rejected, so the
+/// newest are added only where they exist.
 fn fs_mask_for_abi(abi: i64) -> u64 {
     // Everything through `LL_MAKE_SYM` is ABI 1.
     let mut mask = LL_EXECUTE
@@ -846,10 +758,8 @@ fn fs_mask_for_abi(abi: i64) -> u64 {
     mask
 }
 
-/// Install the seccomp filter, returning how many syscalls it refuses.
-///
-/// The count is in the report because the list is what the layer is: a run
-/// where the list silently stopped covering a call is a report that says so.
+/// Install the seccomp filter, returning how many syscalls it refuses: the count is in
+/// the report because the list is what the layer is.
 fn install_seccomp(profile: Profile) -> Option<usize> {
     let (program, denied) = filter_program(profile)?;
     install_program(&program).then_some(denied)
@@ -857,9 +767,9 @@ fn install_seccomp(profile: Profile) -> Option<usize> {
 
 /// Install a filter that is already built.
 ///
-/// Split from [`install_seccomp`] so the effect test can build the program in
-/// the parent and hand it to a forked child: this path allocates nothing, which
-/// is what makes it callable between `fork` and `_exit`.
+/// Split from [`install_seccomp`] so the effect test can build the program in the
+/// parent: this path allocates nothing, which makes it callable between `fork` and
+/// `_exit`.
 fn install_program(program: &[SockFilter]) -> bool {
     let fprog = SockFprog {
         length: program.len() as u16,
@@ -878,21 +788,15 @@ fn install_program(program: &[SockFilter]) -> bool {
 
 /// The filter, and how many syscalls it names.
 ///
-/// A denylist rather than an allowlist, following Codex's Linux sandbox: an
-/// allowlist has to enumerate every syscall a Rust runtime and two parsers may
-/// legitimately make, and a name missing from it turns into a document that
-/// cannot be read. `EPERM` rather than a kill is the same choice: a denied
-/// call is an error the parser can survive, not a crash to attribute later.
+/// A denylist rather than an allowlist: an allowlist must enumerate every call a Rust
+/// runtime and two parsers may make, and a missing name turns into an unreadable
+/// document. `EPERM` rather than a kill, so a denied call is an error the parser can
+/// survive.
 ///
-/// The list carries two kinds of entry. The first is what a parser must never
-/// do at all — sockets, starting programs, reading another process, the kernel
-/// surfaces. The second is what Landlock *cannot* govern, which is a fact about
-/// Landlock rather than about parsers: it sees opens and creations, not
-/// metadata changes, not truncation before ABI 3, not a signal's target. Those
-/// calls are denied here, where the decision is about the syscall rather than
-/// about the path.
-///
-/// Returns `None` on an architecture whose audit code this file does not carry.
+/// Two kinds of entry: what a parser must never do (sockets, starting programs, reading
+/// another process), and what Landlock *cannot* govern (metadata changes, truncation
+/// before ABI 3, a signal's target). `None` on an architecture whose audit code this
+/// file does not carry.
 fn filter_program(profile: Profile) -> Option<(Vec<SockFilter>, usize)> {
     let arch = AUDIT_ARCH?;
     let denied = denied_syscalls(profile);
@@ -913,14 +817,10 @@ fn filter_program(profile: Profile) -> Option<(Vec<SockFilter>, usize)> {
     program.push(stmt(BPF_RET_K, SECCOMP_RET_KILL_PROCESS));
 
     program.push(stmt(BPF_LD_W_ABS, SECCOMP_DATA_NR));
-    // The architecture check above does not cover the x32 ABI, which reports
-    // `AUDIT_ARCH_X86_64` and marks itself in `nr` instead. Every comparison
-    // below is against a 64-bit number, so a call carrying `__X32_SYSCALL_BIT`
-    // would fall through the whole list to `SECCOMP_RET_ALLOW` — the bypass
-    // `seccomp(2)` documents. Refusing the range closes it. No syscall any
-    // architecture's table carries is numbered near the bit, so nothing a
-    // parser legitimately does is refused, and the bound is harmless on the
-    // targets where the bit means nothing.
+    // x32 reports `AUDIT_ARCH_X86_64` and marks itself in `nr`, and every comparison below
+    // is against a 64-bit number, so such a call would fall through to `ALLOW` — the bypass
+    // `seccomp(2)` documents. Refusing the range closes it, and no legitimate syscall is
+    // numbered near the bit.
     program.push(jump(BPF_JGE_K, X32_SYSCALL_BIT, 0, 1));
     program.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | EPERM));
     for number in &denied {
@@ -928,28 +828,20 @@ fn filter_program(profile: Profile) -> Option<(Vec<SockFilter>, usize)> {
         program.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | EPERM));
     }
 
-    // `clone3` carries its flags behind a pointer, so no filter can tell a
-    // thread from a process there. Answering `ENOSYS` instead of refusing it is
-    // what makes the runtime fall back to `clone`, whose flags *can* be read —
-    // so the check below is the one that decides, and a caller that does not
-    // fall back simply sees an unsupported syscall rather than a way through.
+    // `clone3` carries its flags behind a pointer, so no filter can tell a thread from a
+    // process there. `ENOSYS` makes the runtime fall back to `clone`, whose flags can be
+    // read; one that does not fall back sees an unsupported syscall, not a way through.
     program.push(jump(BPF_JEQ_K, libc::SYS_clone3 as u32, 0, 1));
     program.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | ENOSYS));
 
-    // `clone` stays reachable because the parsers run their work on a thread,
-    // but only with `CLONE_THREAD`: without it, `clone` is how a process is
-    // made. The flags live in the low half of the first argument, which is the
-    // half this reads on a little-endian target — the only kind this carries.
+    // `clone` stays reachable because the parsers run their work on a thread, but only with
+    // `CLONE_THREAD`: without it, `clone` is how a process is made. The flags are in the low
+    // half of the first argument, and the check is reached only when the syscall is `clone`,
+    // because `args[0]` means something else everywhere else.
     //
-    // The check is reached only when the syscall is `clone` (`jf = 3` jumps the
-    // whole block), because `args[0]` means something else everywhere else: a
-    // check applied to every syscall would read the file descriptor a `write`
-    // was given and refuse it for not carrying a thread flag.
-    //
-    // The media profile is the one exception: it has to make a process to run
-    // the helper, so the argument check is not installed for it. What still
-    // bounds it is the files grant — `exec` reaches the one helper binary — and
-    // the parent's timeout and process-group kill.
+    // The media profile is the exception: it makes a process to run the helper, so the
+    // argument check is not installed; the files grant, the timeout and the group kill bound
+    // it.
     #[cfg(target_endian = "little")]
     if !profile.runs_helper() {
         program.push(jump(BPF_JEQ_K, libc::SYS_clone as u32, 0, 3));
@@ -958,12 +850,9 @@ fn filter_program(profile: Profile) -> Option<(Vec<SockFilter>, usize)> {
         program.push(stmt(BPF_RET_K, SECCOMP_RET_ERRNO | EPERM));
     }
 
-    // `prlimit64` is how the runtime sets its own limits — glibc's `setrlimit`
-    // is this call — and it is also how a limit is set on *another* process.
-    // Only the self form is allowed: the resource limits are this process's
-    // alone to state, and a document that could lower the server's would have
-    // reached the process the sandbox exists to protect. `args[0] == 0` is the
-    // kernel's own spelling of "this process".
+    // `prlimit64` is glibc's `setrlimit` and also how a limit is set on another process.
+    // Only the self form is allowed: `args[0] == 0` is the kernel's spelling of "this
+    // process".
     #[cfg(target_endian = "little")]
     {
         program.push(jump(BPF_JEQ_K, libc::SYS_prlimit64 as u32, 0, 3));
@@ -978,18 +867,11 @@ fn filter_program(profile: Profile) -> Option<(Vec<SockFilter>, usize)> {
 
 /// The syscalls the child never needs.
 ///
-/// A denylist is only as good as the argument for each name being on it, and the
-/// two arguments here are "a parser has no business doing this" and "Landlock
-/// cannot decide this". Both are re-derivable, which is what keeps the list from
-/// drifting into folklore:
-///
-/// * A new name goes on for a reason, and the reason goes above it.
-/// * What the parsers actually call can be re-measured instead of argued about:
-///   run the fixture corpus with the filter in `SECCOMP_RET_LOG` mode (or under
-///   `strace -f -c`), and diff the syscalls seen against this list. Anything the
-///   parsers never call and this list does not name is a candidate, and anything
-///   the parsers *do* call that is named here is a report of `parse=` turning
-///   into `unsupported` in the worker's own self-test.
+/// A denylist is only as good as the argument for each name, and there are two: "a
+/// parser has no business doing this" and "Landlock cannot decide this". Both are
+/// re-derivable, which keeps the list from drifting into folklore: a new name carries
+/// its reason above it, and what the parsers actually call can be re-measured in
+/// `SECCOMP_RET_LOG` mode or under `strace -f -c` and diffed against this list.
 fn denied_syscalls(profile: Profile) -> Vec<libc::c_long> {
     let mut denied = vec![
         // Sockets of every kind: the child talks to its parent over pipes.
@@ -1056,11 +938,9 @@ fn denied_syscalls(profile: Profile) -> Vec<libc::c_long> {
         libc::SYS_quotactl,
         libc::SYS_open_by_handle_at,
         libc::SYS_memfd_create,
-        // Reading another process, and the signal that would end it: the sandbox
-        // has no business addressing anything outside itself. `pidfd_open` is
-        // how a signal is sent without a pid race, and the `rt_sig*queueinfo`
-        // pair is the third way a signal is sent — the queueing form the
-        // `kill`/`tgkill` entries above do not name.
+        // Reading another process, and the signal that would end it: the sandbox addresses
+        // nothing outside itself. `pidfd_open` sends a signal without a pid race, and the
+        // `rt_sig*queueinfo` pair is the third way one is sent.
         libc::SYS_kill,
         libc::SYS_tkill,
         libc::SYS_tgkill,
@@ -1068,19 +948,13 @@ fn denied_syscalls(profile: Profile) -> Vec<libc::c_long> {
         libc::SYS_rt_tgsigqueueinfo,
         libc::SYS_pidfd_open,
         libc::SYS_pidfd_send_signal,
-        // Leaving the process group the parent started this child in. The media
-        // profile is the one that may copy itself, so a copy could otherwise
-        // call `setsid`/`setpgid` and become unreachable by the `killpg` the
-        // parent uses to end the helper's descendants — an exploited ffmpeg
-        // would leave processes behind that outlive the request. A parser has no
-        // use for either call.
+        // Leaving the group the parent started this child in. Media may copy itself, so a copy
+        // could otherwise `setsid`/`setpgid` out of reach of the parent's `killpg` and outlive
+        // the request. A parser has no use for either call.
         libc::SYS_setsid,
         libc::SYS_setpgid,
-        // Reading the shape of the filesystem without reading a file: names,
-        // sizes and existence. Landlock governs opens, so these reach past it —
-        // an exploited parser could otherwise map the machine it is confined to.
-        // `*at` forms only where the architecture has no bare one, which is
-        // what the second block below is for.
+        // The shape of the filesystem without reading a file: names, sizes and existence.
+        // Landlock governs opens, so these reach past it and would map the machine.
         SYS_NEWFSTATAT,
         libc::SYS_statx,
         libc::SYS_faccessat,
@@ -1096,11 +970,9 @@ fn denied_syscalls(profile: Profile) -> Vec<libc::c_long> {
         libc::SYS_inotify_init1,
         libc::SYS_inotify_add_watch,
         libc::SYS_fanotify_init,
-        // The calls Landlock documents as ungovernable: metadata changes and
-        // truncation. None has a use here — the document arrives on stdin and
-        // nothing is written — so the syscall is where they are refused.
-        // `fchmodat2` is the same operation as `fchmodat` under a newer number
-        // (Linux 6.6) and would otherwise be the one metadata write left open.
+        // The calls Landlock documents as ungovernable: metadata changes and truncation. The
+        // document arrives on stdin and nothing is written, so the syscall is where they are
+        // refused, including `fchmodat2` under its newer number.
         libc::SYS_ftruncate,
         libc::SYS_truncate,
         libc::SYS_fchmod,
@@ -1120,11 +992,9 @@ fn denied_syscalls(profile: Profile) -> Vec<libc::c_long> {
         libc::SYS_mount_setattr,
     ];
 
-    // The bare path-taking forms of the same calls: the architectures that kept
-    // the old table have them (x86, and the 32-bit ones), and the ones that did
-    // not — aarch64, riscv64, loongarch64 — reach the same objects through the
-    // `*at` forms above. A number a kernel does not have cannot be denied here
-    // and does not need to be.
+    // The bare path-taking forms, on the architectures that kept the old table: the `*at`
+    // forms above reach the same objects elsewhere, and a number a kernel does not have
+    // cannot be denied and does not need to be.
     #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
     {
         denied.push(libc::SYS_chmod);
@@ -1148,20 +1018,15 @@ fn denied_syscalls(profile: Profile) -> Vec<libc::c_long> {
         denied.push(libc::SYS_vfork);
     }
 
-    // The media profile adds back what a second, dynamically linked program
-    // needs and a parser never does: the fork/exec pair, the calls the loader
-    // makes while it maps the helper's libraries, and the pipe/dup that connect
-    // it. Every one of them is either bounded by the files grant (`exec` and
-    // `open` are decided by Landlock) or leaks only metadata. Dropping the
-    // metadata calls is the one visible weakening: they are not governed by
-    // Landlock, so allowing them lets a compromised helper see which paths
-    // exist — never read one.
+    // The media profile adds back what a second, dynamically linked program needs: the
+    // fork/exec pair, the loader's mapping calls, and the pipe/dup that connect it. Each is
+    // bounded by the files grant (`exec` and `open` are Landlock's) or leaks only metadata;
+    // dropping the metadata calls is the one visible weakening, and it lets a compromised
+    // helper see which paths exist, never read one.
     if profile.runs_helper() {
         denied.retain(|number| !MEDIA_ALLOWED.contains(number));
-        // The bare `fork`/`vfork` pair, where the architecture has them: the
-        // runtime's own spawn uses one of them, and the media profile is the one
-        // that spawns. `clone` is already allowed for this profile (the argument
-        // check is not installed).
+        // The bare `fork`/`vfork` pair where the architecture has them: the runtime's spawn uses
+        // one, and `clone` is already allowed here.
         #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
         denied.retain(|number| *number != libc::SYS_fork && *number != libc::SYS_vfork);
     }
@@ -1169,13 +1034,10 @@ fn denied_syscalls(profile: Profile) -> Vec<libc::c_long> {
     denied
 }
 
-/// The calls the media profile adds back to the denylist.
-///
-/// Each is here because a helper that is a separate program needs it; the list
-/// is deliberately short, and Landlock still decides what any `open` or `exec`
+/// The calls the media profile adds back to the denylist: each is here because a helper
+/// that is a separate program needs it, and Landlock still decides what `open` or `exec`
 /// may reach.
 const MEDIA_ALLOWED: &[libc::c_long] = &[
-    // Starting the helper.
     libc::SYS_execve,
     libc::SYS_execveat,
     // What the dynamic loader does before `main`: stat, readlink and access on
@@ -1226,7 +1088,7 @@ mod tests {
         std::fs::write(&helper, b"#!/bin/sh\n").expect("write helper");
         std::fs::write(directory.join("libavcodec.so.61"), b"x").expect("write library");
         std::fs::write(directory.join("libavcodec.so"), b"x").expect("write link");
-        // Not a library, and the thing the directory grant used to hand over.
+        // Not a library, and not what the directory grant reaches.
         std::fs::write(directory.join("secret.txt"), b"secret").expect("write secret");
         std::fs::create_dir_all(directory.join("subdir")).expect("create subdir");
 
@@ -1284,12 +1146,9 @@ mod tests {
         );
     }
 
-    /// Every architecture the media worker ships on names its loader here.
-    ///
-    /// The build matrix carries x86_64, aarch64 and loongarch64 on glibc and on
-    /// musl. A dynamically linked helper cannot start without the interpreter
-    /// the kernel runs before it, and a missing entry is invisible on any host
-    /// that does not use that loader.
+    /// Every architecture the media worker ships on names its loader here: x86_64, aarch64
+    /// and loongarch64 on glibc and musl. A missing entry is invisible on any host that does
+    /// not use that loader.
     #[test]
     fn every_shipped_linux_target_names_its_interpreter() {
         for (gnu, glibc, musl) in [
@@ -1400,11 +1259,8 @@ mod tests {
         }
     }
 
-    /// Evaluate the filter the way the kernel's BPF interpreter would.
-    ///
-    /// The tests below are only worth anything if they run the program rather
-    /// than inspect it: the bug this caught — a `clone` argument check placed
-    /// where every syscall reached it — looks perfectly reasonable as text.
+    /// Evaluate the filter the way the kernel's BPF interpreter would: the tests are worth
+    /// nothing if they inspect the program rather than run it.
     fn evaluate(program: &[SockFilter], arch: u32, nr: u32, args0: u32) -> u32 {
         let mut accumulator = 0u32;
         let mut pc = 0usize;
@@ -1510,12 +1366,9 @@ mod tests {
         );
     }
 
-    /// The x32 ABI marks itself in `nr` while reporting the same
-    /// `AUDIT_ARCH_X86_64` as the 64-bit one, so the architecture check cannot
-    /// tell the two apart and every comparison in the list is against a 64-bit
-    /// number. Without the upper bound a call carrying `__X32_SYSCALL_BIT`
-    /// reaches the filter's final `ALLOW`: this is the bypass `seccomp(2)`
-    /// documents, and it is what the bound closes.
+    /// The x32 ABI reports `AUDIT_ARCH_X86_64` and marks itself in `nr`, so the architecture
+    /// check cannot see it. Without the upper bound such a call reaches the final `ALLOW`:
+    /// this is the bypass `seccomp(2)` documents.
     #[test]
     fn the_filter_refuses_the_x32_syscall_range() {
         for number in [
@@ -1580,11 +1433,9 @@ mod tests {
         }
     }
 
-    /// The call that made the files layer bypassable: Landlock cannot govern a
-    /// mode change, and `fchmodat2` is the one spelling of it the older entries
-    /// did not name. It must be refused for every profile, the media one too —
-    /// an exploited helper runs as the server's user and could otherwise plant a
-    /// setuid binary or take the server's own data away.
+    /// The call that made the files layer bypassable: Landlock cannot govern a mode change,
+    /// and `fchmodat2` is the spelling the older entries missed. Refused for every profile —
+    /// an exploited helper could plant a setuid binary or take the server's data.
     #[test]
     fn a_mode_cannot_be_changed_by_any_spelling() {
         for profile in Profile::ALL {
@@ -1631,10 +1482,9 @@ mod tests {
         }
     }
 
-    /// A process that may copy itself must not be able to leave the group the
-    /// parent started it in: the media helper's descendants are bounded by the
-    /// parent's timeout and the `killpg` it sends, and `setsid`/`setpgid` are
-    /// how a copy would step outside that group. Both profiles refuse them.
+    /// A process that may copy itself must not leave the group the parent started it in:
+    /// the helper's descendants are bounded by the timeout and `killpg`, and `setsid` /
+    /// `setpgid` are how a copy steps outside. Both profiles refuse them.
     #[test]
     fn the_process_group_cannot_be_left() {
         for profile in Profile::ALL {
@@ -1809,10 +1659,10 @@ mod tests {
         ProcessVmReadv,
     }
 
-    /// Call one, and answer with the errno it set — or `0` when it succeeded.
+    /// Call one, and answer with the errno it set — or `0` on success.
     ///
-    /// This runs in a forked child, so it allocates nothing: every branch is a
-    /// raw syscall and a comparison, and the errno is read back by number.
+    /// It runs in a forked child, so it allocates nothing: raw syscalls and comparisons,
+    /// with the errno read back by number.
     fn attempt(what: Attempt, path: *const libc::c_char) -> i32 {
         let result = unsafe {
             match what {
@@ -1859,13 +1709,7 @@ mod tests {
         }
     }
 
-    /// What one syscall answered in a child that installed `program`, or in one
-    /// left bare.
-    ///
-    /// The child is a `fork` of this process with the program already built, so
-    /// nothing on its side of the fork allocates or takes a lock: `prctl`,
-    /// `seccomp`, one `syscall`, one `write` and `_exit`. `-1` means the filter
-    /// would not install, which is not an answer about the syscall.
+    /// What one syscall answered in a child that installed `program`, or in a bare one.
     fn errno_for(program: Option<&[SockFilter]>, what: Attempt, path: *const libc::c_char) -> i32 {
         let mut fds = [0 as libc::c_int; 2];
         assert_eq!(

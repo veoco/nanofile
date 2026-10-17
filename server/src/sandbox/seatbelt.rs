@@ -1,57 +1,25 @@
 //! The Seatbelt profile the extraction child runs under on macOS.
 //!
-//! macOS has no unprivileged seccomp and no Landlock: a profile is applied by
-//! `/usr/bin/sandbox-exec`, so the *parent* wraps the child in it
-//! ([`super::runner`]) and the child only clamps its own resources.
-//!
-//! The program path is hardcoded — the same choice Codex's sandbox makes — so a
-//! `PATH` entry cannot substitute a different program for the real one.
-//!
-//! The profile is deny-by-default, which is what makes it worth more than the
-//! write-denial profiles in circulation: a socket is refused by `(deny default)`
-//! unless something allows it, and nothing here does.
+//! macOS has no unprivileged seccomp and no Landlock: `/usr/bin/sandbox-exec` applies the
+//! profile, so the *parent* wraps the child in it ([`super::runner`]). The program path is
+//! hardcoded so a `PATH` entry cannot substitute another program, and the profile is
+//! deny-by-default: a socket is refused unless something allows it.
 //!
 //! # What this cannot close
 //!
-//! The media profile must fork — it exists to start the helper — so its process
-//! layer is an *exec* bound: a helper that got code running could still make
-//! copies of this process. Each copy inherits the profile and the resource
-//! limits — the address-space limit with them — so the copies are confined, but
-//! nothing bounds how many there are. The child says so (`fork=` in its report),
-//! and the process item follows it: this is why media never has that item.
-//!
-//! The documents and images profiles deny the fork outright: nothing they do
-//! needs to copy the process, so their process item is real here as it is on
-//! Linux. The parsers' own thread is the thing that
-//! was once thought to need it — Seatbelt charges a thread to `process-fork` —
-//! so that is a measured claim rather than an assumed one: the probe reports
-//! `threads=` beside `parse=`, and a profile that broke thread creation shows up
-//! as an unreadable document rather than as a missing protection.
+//! The media profile must fork, so its process layer is an *exec* bound: a helper that got
+//! code running can still copy this process. Each copy inherits the profile and the
+//! limits, but nothing bounds how many there are — the child says `fork=`, which is why
+//! media never has the process item. The parsers deny the fork outright, and the probe's
+//! `threads=`/`parse=` are what say they survive without it.
 //!
 //! # The media profile's helper
 //!
-//! The one profile that starts a program has a grant for it — `process-exec` as a
-//! `(literal …)` for the helper and for the interpreter a script helper names, and
-//! `file-read*`/`file-map-executable` for the helper, the libraries beside it
-//! (one file at a time) and, only when the helper actually lives in one, the
-//! trees a packaged build loads from — plus `file-write-data` on `/dev/null`,
-//! because the helper's standard streams are set to it and an open for write is
-//! not the read grant the base profile carries.
-//!
-//! Two things had to be right for the helper to start, and each looked like the
-//! other from the outside: the spawn was refused with the same
-//! `media-unavailable(Operation not permitted)` for both. The streams first —
-//! `/dev/null` for write, which the profile did not grant, so the spawn died in
-//! its own stdio setup before the exec. Then the path: Seatbelt matches the path
-//! the filesystem *resolved*, and a Homebrew helper is reached through
-//! `/opt/homebrew/bin/ffmpeg` while it is checked as
-//! `/opt/homebrew/Cellar/ffmpeg/<version>/bin/ffmpeg`, so a literal written from
-//! the typed path granted nothing — measured in the sandbox's own log as
-//! `deny(1) process-exec* /opt/homebrew/Cellar/ffmpeg/9.0.1_1/bin/ffmpeg` for a
-//! profile whose literal was the short path. [`resolved`] is what writes the
-//! literals now, and the child's own image has been resolved by its caller for
-//! the same reason all along. A synthetic profile with the same grants was what
-//! ruled out the grant itself in between.
+//! `process-exec` is a `(literal …)` for the helper and the interpreter a script names;
+//! read/map cover the helper, the libraries beside it and, only when it lives there, the
+//! trees a packaged build loads from; `file-write-data` on `/dev/null` covers its streams.
+//! A literal written from a Homebrew short path grants nothing, because Seatbelt matches
+//! the resolved path. [`resolved`] writes the literals now.
 
 #[cfg(target_os = "macos")]
 use super::Protections;
@@ -73,75 +41,25 @@ pub(super) fn args(exe: &Path, profile: Profile, grants: Grants<'_>) -> Vec<Stri
 
 /// The profile the child runs under.
 ///
-/// Allowed, and why:
+/// Allowed: `process-exec` for this binary alone, because the runner's own `exec` is
+/// checked and a `(literal …)` is narrower than `(allow process-exec)`; `process-fork` for
+/// media only, which copies the process to start the helper; `signal (target self)`;
+/// `sysctl-read` of a pinned list, because an unfiltered read answers `kern.procargs2` —
+/// another same-uid process's argv and environment, which is what the cleared environment
+/// keeps away; `file-read*` of the root directory, because the child's working directory is
+/// `/` and denying it aborts the process; read and `file-map-executable` under the system
+/// library paths and for this binary, which the loader maps and resolves through; and
+/// `/dev/null` and `/dev/urandom` for the streams and `getentropy`.
 ///
-/// * `process-exec` for this binary and nothing else. The `exec` the runner
-///   performs to start the child is itself checked, so `(deny default)` refuses
-///   to start anything without this grant — `sandbox-exec: execvp() of …
-///   failed: Operation not permitted` is what its absence looks like. A
-///   `(literal …)` here is narrower than a bare `(allow process-exec)`: no
-///   second program can be started, and re-running this binary cannot escape
-///   the profile, because a sandboxed process passes its own on to its
-///   children.
-/// * `process-fork` — media only. It starts the helper, so it copies the process
-///   to do it; the documents and images profiles deny the fork, because nothing
-///   a parser does needs one. Seatbelt is said to charge a parser's thread to
-///   `process-fork`; that claim is what the probe's `threads=` and `parse=`
-///   measure, and the profiles deny it only while those stay green.
-/// * `signal (target self)` — the runtime's own bookkeeping.
-/// * `sysctl-read` of a pinned list of names — the allocator and the runtime
-///   read a few values while starting up. The list is not optional: an
-///   unfiltered `sysctl-read` also answers `kern.procargs2`, which returns
-///   another same-uid process's argv and environment, so a parser with code
-///   execution could read the server's secrets from the kernel after the parent
-///   went to the trouble of clearing its environment.
-/// * `file-read*` of the root directory itself, which is what a process does
-///   about a directory it is sitting in: the child's working directory is `/`
-///   (`super::super::worker` sets it so nothing is relative), and the runtime
-///   reads it on the way up. Denying it is fatal rather than inconvenient —
-///   Seatbelt aborts the process with `SIGABRT` before it can say anything, so
-///   the failure reads as a silent child. Codex carries the same grant with the
-///   same reason ("Allow processes to get their current working directory"),
-///   and it was isolated on macOS 26 by toggling one rule at a time: with only
-///   this grant added to an otherwise identical deny-default profile, the
-///   process starts.
-/// * `file-read*` under the system library paths and for this binary, and
-///   `file-map-executable` for the same paths: macOS binds symbols lazily and
-///   maps an executable image with a permission of its own, so the first call
-///   into an unresolved symbol, and the mapping of the binary itself, both send
-///   the loader back to a file. Without them the child dies before it reads a
-///   byte of its request.
-/// * `/dev/null` and `/dev/urandom`: the runtime keeps the first for the
-///   standard streams the parent set up, and `getentropy` may fall back to the
-///   second.
-///
-/// Everything else — every write, every socket, every other path — is denied.
-/// Reading the root directory lists it and grants nothing beneath it: `/etc`,
-/// `/Users` and every other path stay denied, which is what the child's own
-/// measurement of the files item checks.
-///
-/// The media profile is the one addition: it may execute the configured helper
-/// and read the helper's image and the scratch source the parent wrote. The
-/// `process-exec` grant is a literal, so it reaches exactly that one file — of
-/// the path the kernel resolves, which is what [`resolved`] is for.
-///
-/// What a helper needs *beyond* its own image is read and map, never execute: a
-/// packaged ffmpeg links against its own tree and dyld will not start it without
-/// those paths, so the helper's own directory and the trees the package managers
-/// install into are granted `file-read*` and `file-map-executable`. That is the
-/// same shape as the Linux grant — libraries are readable, and the only program
-/// that may be started is still the helper the parent named.
+/// Everything else is denied, and reading root grants nothing beneath it. The media
+/// addition is a literal `process-exec` for the helper and read/map for its libraries.
 pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> String {
     let exe = escape(&exe.to_string_lossy());
     let mut extra = String::new();
     if profile.runs_helper() {
-        // A grant is written for one path, so a path that cannot be stated as
-        // one is not granted at all: a relative helper (the shipped default is
-        // the bare name `ffmpeg`, and a `PATH` lookup that failed leaves it
-        // relative) resolves against the child's directory, which is not where
-        // it was configured, and the profile matches the path the kernel
-        // resolved. Refusing the grant is the same outcome as today's useless
-        // literal, without the rule that followed it.
+        // A grant is written for one path, so a relative helper is not granted at all: the shipped
+        // default `ffmpeg` resolves against the child's directory, not where it was configured,
+        // and the profile matches what the kernel resolved.
         if let Some(path) = grants.helper.filter(|path| is_grantable(path)) {
             let helper_path = resolved(path);
             let helper = escape(&helper_path.to_string_lossy());
@@ -150,21 +68,17 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
                  (allow file-read* (literal \"{helper}\")) \
                  (allow file-map-executable (literal \"{helper}\"))"
             ));
-            // The libraries beside the helper, one file at a time. A `(subpath
-            // …)` on the directory would be a read and map grant on every file
-            // in it — the shape the other two platforms also refuse, and the
-            // reason a helper dropped into a directory of the admin's own does
-            // not expose the rest of it.
+            // The libraries beside the helper, one file at a time: a `(subpath …)` on the directory
+            // would grant every file in it.
             for library in helper_libraries(&helper_path) {
                 let library = escape(&library.to_string_lossy());
                 extra.push_str(&format!(
                     " (allow file-read* file-map-executable (literal \"{library}\"))"
                 ));
             }
-            // A package manager's tree is readable only when the helper actually
-            // lives in it: granting `/opt/homebrew` to a `/usr/bin/ffmpeg` helper
-            // would open `/opt/homebrew/var` and every other file under it for
-            // no reason.
+            // A package manager's tree only when the helper lives in it: granting
+            // `/opt/homebrew` to a `/usr/bin/ffmpeg` helper would open `/opt/homebrew/var`
+            // for nothing.
             for tree in HELPER_LIBRARY_TREES {
                 if helper_path.starts_with(Path::new(tree)) {
                     extra.push_str(&format!(
@@ -172,18 +86,12 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
                     ));
                 }
             }
-            // The helper's streams are set to `/dev/null`, and that is an open
-            // for *write*: the read grant the base profile carries is not enough,
-            // and without this the spawn fails with `Operation not permitted`
-            // before the helper's own code ever runs — which is what it was
-            // doing, measured as `parse=media-unavailable(EPERM)` while the same
-            // program was readable (`helper=allowed`). Linux grants this device
-            // read *and* write to the same profile, which is where the shape
-            // comes from.
+            // The streams are set to `/dev/null`, which is an open for *write*: without it
+            // the spawn fails with `Operation not permitted` before the helper's code runs.
+            // Linux grants the same device read and write.
             extra.push_str(" (allow file-write-data (literal \"/dev/null\"))");
-            // A helper that is a script needs its own interpreter started before
-            // its code runs. That path is a literal too — and the resolved one:
-            // `/bin/sh` is a shim on this platform that re-execs `/bin/bash`.
+            // A script helper needs its interpreter started first, and that path is a resolved
+            // literal too: `/bin/sh` is a shim that re-execs `/bin/bash`.
             if let Some(interpreter) = super::shebang_interpreter(path)
                 && is_grantable(&interpreter)
             {
@@ -200,12 +108,8 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
             extra.push_str(&format!(" (allow file-read* (literal \"{source}\"))"));
         }
     }
-    // The fork is the one process operation the documents and images profiles
-    // now deny. Whether they can is a measured question, not an assumed one:
-    // the parsers run their work on a thread, and the probe reports `threads=`
-    // beside `parse=`, so a profile that broke thread creation would say so
-    // rather than silently make every document unreadable. The media profile is
-    // the exception — it exists to start the helper, so it needs the fork.
+    // The fork is the one process operation the parsers deny. Whether they can is measured:
+    // `threads=` and `parse=` say so. Media is the exception — it starts the helper.
     let fork = if profile.runs_helper() {
         " (allow process-fork)"
     } else {
@@ -225,15 +129,11 @@ pub(super) fn profile_text(exe: &Path, profile: Profile, grants: Grants<'_>) -> 
     )
 }
 
-/// The `sysctl-read` rule, with the names the runtime actually reads.
+/// The `sysctl-read` rule, with the names the runtime reads.
 ///
-/// A bare `(allow sysctl-read)` is not a startup detail: `kern.procargs2`
-/// returns another same-uid process's argv *and environment*, so a parser with
-/// code execution could recover the server's environment from the kernel — the
-/// very thing the parent's cleared environment exists to keep from it — and
-/// `kern.proc.all`/`hw.*` describe the machine. The list is the one Codex pins
-/// for the same reason, without the operations its own profiles add (iokit,
-/// mach-lookup, ptys, ipc): only the `sysctl-read` names are adopted.
+/// A bare allow answers `kern.procargs2`, another same-uid process's argv *and
+/// environment*, so a parser with code execution could recover the server's secrets. The
+/// list is Codex's, without its operations.
 fn sysctl_read_rule() -> String {
     const NAMES: &[&str] = &[
         "hw.activecpu",
@@ -300,13 +200,11 @@ fn sysctl_read_rule() -> String {
     rule
 }
 
-/// The shared libraries sitting beside the helper, which a packaged build links
-/// against by a `@loader_path`-relative path.
+/// The shared libraries beside the helper, linked by a `@loader_path`-relative path.
 ///
-/// `*.dylib` is the platform's own name and `*.so*` what some ports ship; each
-/// is granted one file at a time. A directory that cannot be listed yields
-/// nothing: the caller grants what it can find and the helper says what it still
-/// needs through `parse=`, rather than the profile widening to a directory.
+/// `*.dylib` and `*.so*` are granted one file at a time; an unlistable directory yields
+/// nothing, and the helper says what it needs through `parse=` rather than widening to a
+/// directory.
 fn helper_libraries(helper: &Path) -> Vec<PathBuf> {
     let Some(directory) = helper.parent() else {
         return Vec::new();
@@ -331,50 +229,31 @@ fn helper_libraries(helper: &Path) -> Vec<PathBuf> {
 
 /// The path as the kernel resolves it, for a `(literal …)` form.
 ///
-/// Seatbelt matches the path the filesystem resolved, not the one that was typed:
-/// a Homebrew helper is reached through `/opt/homebrew/bin/ffmpeg` and checked as
-/// `/opt/homebrew/Cellar/ffmpeg/<version>/bin/ffmpeg`, so a literal written from
-/// the typed path grants nothing at all — measured as
-/// `deny(1) process-exec* /opt/homebrew/Cellar/ffmpeg/9.0.1_1/bin/ffmpeg` for a
-/// profile whose literal was the short path. The child's own image is resolved by
-/// its caller for the same reason. A path that cannot be resolved is left as it
-/// was: the grant then fails the way the exec does, with the same path in the
-/// report.
+/// Seatbelt matches the resolved path, not the typed one: a Homebrew helper is checked as
+/// `/opt/homebrew/Cellar/ffmpeg/<version>/bin/ffmpeg`, so a literal from the short path
+/// grants nothing. A path that cannot be resolved is left as it was, and the grant then
+/// fails the way the exec does.
 fn resolved(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Escape a path for a `(literal "…")` form.
 ///
-/// Paths are data here, never policy text: a directory named `") (allow` must
-/// not be able to rewrite the profile.
-///
-/// `\` and `"` are the *complete* set of characters that can end a Scheme string
-/// literal early — a raw newline or tab inside `"…"` is an ordinary character —
-/// and both are escaped here, with the backslash first so that a path ending in
-/// one cannot escape the quote that closes it. Escaping the whitespace controls
-/// as `\n`/`\t` would not be a safety improvement but a correctness bug: R5RS
-/// does not define those escapes, so the grant would name a path containing a
-/// backslash and match nothing. Paths that carry a control character are refused
-/// outright instead, by [`is_grantable`].
+/// Paths are data, never policy text: a directory named `") (allow` must not rewrite the
+/// profile. `\` and `"` are the complete set that can end a Scheme string early, and the
+/// backslash is escaped first. Escaping whitespace as `\n`/`\t` would be a correctness bug
+/// — R5RS does not define them — so a path carrying a control character is refused
+/// outright by [`is_grantable`].
 fn escape(path: &str) -> String {
     path.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Whether a configured path can be written into the profile as a rule.
 ///
-/// Three ways it cannot, and each would produce a rule that does not mean what it
-/// says rather than no rule at all:
-///
-/// * it is not absolute, so the profile's own path matching (which is against
-///   what the kernel resolved) cannot agree with it;
-/// * it carries a control character, which the profile text would pass through
-///   into a string literal whose reader this side cannot verify;
-/// * it is empty, which is a prefix of every path.
-///
-/// Refusing the grant is fail-closed: the helper does not start, `parse=` says
-/// so, and the media profile reports itself unavailable rather than confined by
-/// a rule nobody meant.
+/// Three ways it cannot: it is not absolute, so path matching cannot agree with it; it
+/// carries a control character the profile text cannot vouch for; or it is empty, the
+/// prefix of every path. Refusing is fail-closed: the helper does not start, `parse=`
+/// says so, and the media profile reports itself unavailable.
 fn is_grantable(path: &Path) -> bool {
     path.is_absolute()
         && !path.as_os_str().is_empty()
@@ -384,25 +263,17 @@ fn is_grantable(path: &Path) -> bool {
             .any(|character| character.is_control())
 }
 
-/// The trees a helper installed by a package manager keeps its libraries in.
-///
-/// Homebrew on both architectures and MacPorts. A tree is granted
-/// `file-read*` and `file-map-executable` — and never `process-exec`: dyld has
-/// to map a library to start the helper at all, and starting a *program* out of
-/// one of these trees is still refused, which is what keeps the process grant a
-/// literal — **only when the helper actually lives inside it**. A `/usr/bin`
-/// helper has no business reading `/opt/homebrew/var` or `/usr/local/etc`, which
-/// is what an unconditional grant exposed.
+/// The trees a package-manager helper keeps its libraries in: Homebrew on both
+/// architectures and MacPorts, granted read/map and never `process-exec`, and **only when
+/// the helper lives inside** — a `/usr/bin` helper has no business reading
+/// `/opt/homebrew/var`.
 const HELPER_LIBRARY_TREES: &[&str] = &["/opt/homebrew", "/usr/local", "/opt/local"];
 
-/// Clamp the child's own resources. The rest of the confinement comes from the
-/// runner.
+/// Clamp the child's own resources; the rest comes from the runner.
 ///
-/// The address-space limit is stated against the space this process already has
-/// mapped, which is what makes Darwin accept it at all (see
-/// `super::macos::mapped_address_space`). There is no fallback: the oldest
-/// macOS this build supports takes the limit, and a host that refused it would
-/// report the limits item as missing rather than pretend a weaker bound is one.
+/// The address-space limit is stated against what is already mapped, which is what makes
+/// Darwin accept it (see `super::macos::mapped_address_space`); a host that refused it
+/// reports the limits item missing rather than a weaker bound.
 #[cfg(target_os = "macos")]
 pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec<String>) {
     let mut protections = Protections::default();
@@ -414,12 +285,8 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
     }
     detail.push(format!("limits={}", limits.detail));
     if profile.runs_helper() {
-        // How wide this platform's media grants are, in one token: `trees` when
-        // the helper actually lives in a package-manager tree (so the tree is
-        // readable and mappable for the libraries a packaged build links), and
-        // `libs` when it does not (helper, interpreter and the files beside it,
-        // each a literal). Said out loud because the profile text is the only
-        // other place it appears, and an admin does not read the profile text.
+        // How wide the media grants are, in one token: `trees` when the helper lives in a
+        // package-manager tree, `libs` otherwise (helper, interpreter, files beside it).
         if let Some(path) = grants.helper.filter(|path| is_grantable(path)) {
             let resolved = resolved(path);
             let scope = if HELPER_LIBRARY_TREES
@@ -432,14 +299,10 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
             };
             detail.push(format!("helper_scope={scope}"));
         }
-        // The media profile is the one that keeps `(allow process-fork)`: it
-        // starts the helper by copying this process. Nothing on this platform
-        // bounds how many such copies there may be: the CPU limit is per
-        // process, so it bounds each copy and not their number, and no
-        // operation here refuses the `setsid`/`setpgid` a copy would call to
-        // leave the group the parent kills. What is left is the parent's
-        // wall-clock timeout, and the report says so instead of letting the
-        // absence of a kernel bound be inferred from a note about `fork`.
+        // Media keeps `(allow process-fork)` because it starts the helper by copying this
+        // process. Nothing here bounds how many copies: the CPU limit is per process, and no
+        // operation refuses the `setsid`/`setpgid` a copy would call to leave the group. The
+        // parent's timeout is what is left, and the report says so.
         detail.push("media_process=unbounded".to_string());
     }
     (protections, detail)
@@ -464,9 +327,7 @@ mod tests {
             Grants::default(),
         );
         assert!(profile.starts_with("(version 1) (deny default)"));
-        // A parser may not copy the process: the documents profile denies the
-        // fork, and the probe's `threads=`/`parse=` are what say whether the
-        // parsers survive without it. Media is the profile that keeps it.
+        // A parser may not copy the process; media is the profile that keeps the fork.
         assert!(!profile.contains("(allow process-fork)"));
         let media = profile_text(
             Path::new("/opt/nanofile/nanofile"),
@@ -480,12 +341,9 @@ mod tests {
             media.contains("(allow process-fork)"),
             "the media profile starts the helper by copying: {media}"
         );
-        // The child's working directory is `/`: a process that cannot read the
-        // directory it sits in is aborted, not refused, so this grant is
-        // load-bearing rather than cosmetic.
+        // The child's working directory is `/`: a process that cannot read it is aborted, not
+        // refused.
         assert!(profile.contains("(allow file-read* file-test-existence (literal \"/\")"));
-        // The loader gets the same paths to read and to map executable, and
-        // nothing else.
         for path in [
             "/usr/lib",
             "/System/Library",
@@ -504,13 +362,10 @@ mod tests {
                 "the profile must not mention {forbidden}: {profile}"
             );
         }
-        // Starting a program is granted for this binary alone: the runner's own
-        // `exec` needs it, and a bare `(allow process-exec)` would let a
-        // document parser start anything it can read.
+        // Starting a program is granted for this binary alone: a bare `(allow process-exec)` would
+        // let a parser start anything it can read.
         assert!(profile.contains("(allow process-exec (literal \"/opt/nanofile/nanofile\"))"));
         assert!(!profile.contains("(allow process-exec)"));
-        // Reading and mapping executable are granted for the same paths, so the
-        // loader can map what it is allowed to read and nothing else.
         assert!(profile.contains(
             "(allow file-map-executable (subpath \"/usr/lib\") (subpath \"/System/Library\") \
              (subpath \"/System/Volumes/Preboot/Cryptexes/OS\") \
@@ -520,12 +375,10 @@ mod tests {
 
     /// The sysctl grant names what it allows.
     ///
-    /// A bare `(allow sysctl-read)` also answers `kern.procargs2`, which is
-    /// another same-uid process's argv **and environment**: the parent clears
-    /// the child's environment because it holds the master secret and the
-    /// storage keys, and an unfiltered sysctl would hand the same values back
-    /// through the kernel. The rule must therefore carry a filter, and the one
-    /// name that matters must not be in it.
+    /// A bare `(allow sysctl-read)` answers `kern.procargs2`, another same-uid process's argv
+    /// **and environment**: the parent clears the child's environment because it holds the
+    /// master secret, and an unfiltered sysctl would hand those values back. The rule carries
+    /// a filter, and the name that matters is not in it.
     #[test]
     fn the_sysctl_grant_is_filtered_and_excludes_the_process_environment() {
         let profile = profile_text(
@@ -542,7 +395,6 @@ mod tests {
             !profile.contains("kern.procargs2"),
             "another process's environment must not be readable: {profile}"
         );
-        // The names the runtime actually needs are still there.
         for name in ["hw.ncpu", "hw.memsize", "kern.argmax"] {
             assert!(
                 profile.contains(&format!("(sysctl-name \"{name}\")")),
@@ -584,19 +436,12 @@ mod tests {
 
     /// A degenerate helper path must not become a grant that covers everything.
     ///
-    /// `(subpath …)` is a prefix match, so `""` — what `Path::parent` gives for
-    /// the shipped `ffmpeg` default when its `PATH` lookup failed — and `/` are
-    /// the whole filesystem. Neither may reach the profile text, and a relative
-    /// helper may not reach it at all: the profile matches what the kernel
-    /// resolved, so a rule written from a relative path grants nothing while
-    /// looking like it grants something.
+    /// `(subpath …)` is a prefix match, so `""` — what `Path::parent` gives for a bare
+    /// `ffmpeg` whose lookup failed — and `/` are the whole filesystem; neither reaches the
+    /// profile text, and a relative helper may not either.
     ///
-    /// Unix-only, and so are the three tests below it that name a helper or a
-    /// path: the inputs are the paths this profile is written for, and Windows
-    /// answers `is_absolute() == false` for every one of them, so the grants
-    /// would be refused for a reason that has nothing to do with what is under
-    /// test. Linux still runs them, which is where the text builder is covered
-    /// for the platform that uses it.
+    /// Unix-only, with the three tests below: Windows answers `is_absolute() == false` for
+    /// every one of these paths. Linux still runs them, which covers the text builder.
     #[cfg(unix)]
     #[test]
     fn a_degenerate_helper_path_grants_nothing() {
@@ -611,16 +456,13 @@ mod tests {
             )
         };
 
-        // A helper inside a package-manager tree is the one case that still
-        // grants the tree, and the tree is granted, never the directory the
-        // helper happens to sit in.
+        // A helper inside a package-manager tree grants the tree, never the directory it sits in.
         let homebrew = text("/opt/homebrew/bin/ffmpeg");
         assert!(homebrew.contains("(subpath \"/opt/homebrew\")"));
         assert!(
             !homebrew.contains("(subpath \"/opt/homebrew/bin\")"),
             "the helper's own directory must not be a grant: {homebrew}"
         );
-        // A helper outside every tree gets no tree at all.
         let system = text("/usr/bin/ffmpeg");
         for tree in HELPER_LIBRARY_TREES {
             assert!(
@@ -628,7 +470,6 @@ mod tests {
                 "{tree} must not be granted for a helper outside it: {system}"
             );
         }
-        // The two prefixes of everything.
         for degenerate in ["ffmpeg", "/ffmpeg", ""] {
             let profile = text(degenerate);
             assert!(
@@ -658,9 +499,6 @@ mod tests {
             Grants::default(),
         );
 
-        // The path's own quotes are escaped wherever the path is written (it
-        // appears once per grant), so it cannot close a literal early and turn
-        // what follows into a form of its own.
         assert!(injected.matches(r#"\""#).count() >= 2);
         assert_eq!(
             unescaped(&injected),
@@ -669,13 +507,9 @@ mod tests {
         );
     }
 
-    /// The media profile is the one that may execute the configured helper, and
-    /// it may read the helper, the scratch source it was handed and the trees a
-    /// packaged helper keeps its libraries in — but `process-exec` stays a
-    /// literal, so starting a *program* reaches the one file the parent named.
-    ///
-    /// Unix-only: the helper and the source are paths this profile is written
-    /// for, and neither is absolute to Windows.
+    /// The media profile may execute the helper, read it, the scratch source and a packaged
+    /// helper's library trees — but `process-exec` stays a literal, so starting a program
+    /// reaches the one file the parent named. Unix-only.
     #[cfg(unix)]
     #[test]
     fn only_the_media_profile_may_execute_the_helper() {
@@ -705,10 +539,8 @@ mod tests {
             media.contains("(allow file-map-executable (literal \"/usr/bin/ffmpeg\"))"),
             "{media}"
         );
-        // The helper's own directory is not a grant, and neither is a
-        // package-manager tree it does not live in: `process-exec` has no
-        // `subpath` anywhere, and `file-read*` reaches the helper and the files
-        // beside it, one literal at a time.
+        // The helper's directory is not a grant, nor is a tree it does not live in: `process-exec`
+        // has no `subpath`, and `file-read*` reaches one literal at a time.
         assert!(
             !media.contains("(subpath \"/usr/bin\")"),
             "the helper's directory must not be a grant: {media}"
@@ -723,9 +555,8 @@ mod tests {
             !media.contains("process-exec (subpath"),
             "no directory may be executable: {media}"
         );
-        // The one write this profile has is the helper's standard streams, which
-        // are set to `/dev/null`: an open for write is not the read the base
-        // profile grants, and a spawn without it dies before the exec.
+        // The one write is the helper's streams on `/dev/null`: an open for write is not the read
+        // the base profile grants.
         assert!(media.contains("(allow file-write-data (literal \"/dev/null\"))"));
         assert_eq!(
             media.matches("file-write").count(),
@@ -735,16 +566,11 @@ mod tests {
         assert!(!media.contains("network"));
     }
 
-    /// A helper that is a script names its interpreter on its `#!` line, and that
-    /// interpreter is the only other program the media profile may start. The
-    /// documents profile names neither.
+    /// A script helper names its interpreter on its `#!` line, and that interpreter is the
+    /// only other program media may start. The literal is the *resolved* one: the sandbox
+    /// checks the path `/bin/sh` resolves to.
     ///
-    /// The literal is the *resolved* interpreter: a script that names `/bin/sh`
-    /// is started through whatever that resolves to here, and the sandbox checks
-    /// the resolved path.
-    ///
-    /// Unix-only: a shebang names a unix interpreter, and `/bin/sh` is not a
-    /// path this side of the platform can grant.
+    /// Unix-only: `/bin/sh` is not a path this side of the platform can grant.
     #[cfg(unix)]
     #[test]
     fn a_script_helper_names_the_one_other_program_that_may_run() {
@@ -785,14 +611,11 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// A helper reached through a symlink is granted under the path the kernel
-    /// resolves, not the one that was typed.
+    /// A helper reached through a symlink is granted under the resolved path.
     ///
-    /// A packaged helper is reached that way (`/opt/homebrew/bin/ffmpeg` →
-    /// `…/Cellar/ffmpeg/<version>/bin/ffmpeg`) and Seatbelt checks the resolved
-    /// path, so a literal written from the typed one grants nothing: the exec is
-    /// refused while the same binary is readable, which is what CI measured as
-    /// `helper=allowed,…,parse=media-unavailable(EPERM)`.
+    /// `/opt/homebrew/bin/ffmpeg` is checked as `…/Cellar/ffmpeg/<version>/bin/ffmpeg`, so a
+    /// literal from the typed path grants nothing: the exec is refused while the binary is
+    /// readable.
     #[cfg(unix)]
     #[test]
     fn a_helper_is_granted_under_the_path_the_kernel_resolves() {
@@ -835,9 +658,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The runner is what confines files, the network and process creation, so
-    /// the child must be told that those protections are not its own to
-    /// establish.
+    /// The runner is what confines files, the network and process creation, so the child must
+    /// be told those protections are not its own.
     #[test]
     fn the_arguments_wrap_the_child_in_the_profile() {
         let args = args(

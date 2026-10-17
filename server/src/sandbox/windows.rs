@@ -2,211 +2,151 @@
 //! to run under, an AppContainer around that, and the process mitigations the
 //! kernel will take for it.
 //!
-//! Windows has no `RLIMIT_AS` and no unprivileged equivalent of Landlock, so the
-//! layers are these three, and the parent applies all of them at creation — a
-//! token, a job and a container are each a property of the process rather than
-//! something a running one can adopt:
+//! Windows has no `RLIMIT_AS` and no unprivileged Landlock, so these are the
+//! layers, and the parent applies every one at creation: a token, a job and a
+//! container are each a property of the process, not something a running one can
+//! adopt.
 //!
-//! * **The Job Object** (the parent, named as a creation attribute) caps the
-//!   process's committed memory, its CPU time and how many processes it may
-//!   hold, and — because `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` is set and the
-//!   handle stays here — takes whatever it started with it. The child reads
-//!   the limits back rather than trusting that they were set. A child that held
-//!   its own job handle, which is what this used to be, could have raised the
-//!   limit it was bounded by. It carries no window-station, clipboard or handle
-//!   restrictions: those were removed for the reason recorded with the job's
-//!   constants below, because they killed the child in its own loader.
+//! * **The Job Object** (the parent, named as a creation attribute) caps committed
+//!   memory, CPU time and the process count, and `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
+//!   on a handle the parent holds takes whatever the child started with it. The
+//!   child reads the limits back instead of trusting them and holds no handle of
+//!   its own, so nothing inside can raise them. It carries no window-station,
+//!   clipboard or handle restrictions: those apply from the first instruction and
+//!   `JOB_OBJECT_UILIMIT_HANDLES` kills the loader before it can print. There is no
+//!   descriptor or file-size bound here at all.
 //! * **The restricted token** (the parent, at creation) cannot be applied to a
-//!   running process, so it is the parent that starts the child with one:
-//!   `CreateProcessAsUser` with a restricted version of the parent's own token,
-//!   which is the one case Windows allows without `SeAssignPrimaryToken`.
-//!   Privileges are gone, the administrative SIDs are deny-only, and write
-//!   access is checked against the restricting SIDs alone. No integrity label is
-//!   set here: low integrity is the container's own property, and the child
-//!   reports the level it reads back (`il=`) rather than assuming one.
+//!   running process, so the parent starts the child with it: `CreateProcessAsUser`
+//!   with a restricted version of its own token, the one case Windows allows
+//!   without `SeAssignPrimaryToken`. Privileges are gone, the administrative SIDs
+//!   are deny-only, and writes are checked against the restricting SIDs. No
+//!   integrity label is set: low integrity is the container's own property, and the
+//!   child reports the level it reads back (`il=`).
 //! * **The AppContainer** (the parent, at creation) is a process-creation
-//!   attribute rather than a token: `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`
-//!   with an AppContainer SID and *no capabilities* is what turns the child into
-//!   a low-box process. Capabilities are what grant a container network access
-//!   and access outside its own package, so an empty list is a process that
-//!   cannot open a socket to anything and cannot read a file whose ACL names only
-//!   its user. This is the configuration Chromium's own zero-capability sandbox
-//!   uses, and the one the reference below documents.
+//!   attribute: `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES` with an AppContainer
+//!   SID and *no capabilities*. Capabilities are what grant network access and
+//!   access outside the package, so an empty list opens no socket and reads no file
+//!   whose ACL names only the user. This is Chromium's zero-capability
+//!   configuration.
 //!
-//! On top of those, the child asks for the process mitigations it can live with:
-//! win32k lockdown, arbitrary code guard, no extension points, no fonts, no
-//! remote or low-integrity images, the ASLR family and strict handle checks, and
-//! — for every profile but media — the child-process policy. Each is read back
-//! with `GetProcessMitigationPolicy`, and the report counts what is there rather
-//! than what was asked for. They are *runtime* policies set by
-//! `SetProcessMitigationPolicy` after the process exists, not creation
-//! attributes: the creation attribute list carries the handles, the container
-//! and the job, and the child-process policy is deliberately not among them
-//! because the media profile must be able to start its helper. Between creation
+//! On top, the child sets the process mitigations it can live with — win32k
+//! lockdown, arbitrary code guard, no extension points, no fonts, no remote or
+//! low-integrity images, the ASLR family, strict handle checks, and the
+//! child-process policy for every profile but media — and reads each back with
+//! `GetProcessMitigationPolicy`. They are *runtime* policies, not creation
+//! attributes, because the media profile must start its helper. Between creation
 //! and `confine` the job's active-process limit is the only bound on child
 //! creation, and nothing untrusted runs in that window.
 //!
 //! The restricting SIDs are this process's own identity: the logon session, the
 //! user, and the groups Windows grants the objects a process needs to attach to
 //! (`INTERACTIVE`, `Authenticated Users`, `Users`, `Everyone`). They cannot be
-//! dropped, because a restricted token is checked twice on every access and a
-//! restricting list that does not cover the window station and desktop the child
-//! inherits leaves it created and then dead inside the loader with
+//! dropped: a restricted token is checked twice on every access, and a restricting
+//! list without them leaves the child created and dead inside the loader with
 //! `STATUS_DLL_INIT_FAILED` (`0xC0000142`).
 //!
 //! Because the user's own SID is in that list, `WRITE_RESTRICTED` narrows writes
-//! to what this user may write rather than to nothing — the restricting list
-//! *is* the user's identity, so it is close to a no-op on its own and must not be
-//! read as a write bound. What bounds writes is the container and the integrity
-//! level; what closes the gap the restricting list leaves is the container: an
-//! AppContainer access check requires an ACE for the package SID — or for
-//! `ALL APPLICATION PACKAGES` — *in addition* to whatever the user and group SIDs
-//! grant, so a file that only names the user stops being readable.
-//! The one file that has to keep being readable is the worker's own image, which
-//! a per-user install does not carry that ACE on, so the parent grants it to the
-//! container's SID before the first launch (see [`grant_image_access`]).
+//! to what this user may write rather than to nothing, and is close to a no-op on
+//! its own. What bounds writes is the container and the integrity level: an
+//! AppContainer check requires an ACE for the package SID — or for
+//! `ALL APPLICATION PACKAGES` — *in addition* to what the user SIDs grant, so a
+//! file naming only the user stops being readable. The worker's own image is the
+//! one file that has to stay readable and a per-user install carries no such ACE,
+//! so the parent grants it to the container before the first launch
+//! ([`grant_image_access`]).
 //!
-//! With the container in place, all four items are the platform's own. Without
-//! it the child still runs in the job, under the
-//! restricted token and with the mitigations, and reports `files=open` beside
-//! them: the resource bound is what keeps the server up, and the container is the
-//! only mechanism that could add the files and network items. Every launch
-//! attempts it, and a host that refuses one is not asked twice — see the section
-//! below.
+//! With the container, all four items are the platform's own. Without it the child
+//! still runs in the job, under the restricted token and with the mitigations, and
+//! reports `files=open`: `limits` is what keeps the server up, and the container is
+//! the only mechanism that could add the files and network items. Every launch
+//! attempts it once; a host that refuses is not asked twice.
 //!
 //! # Why a host may end up without the container
 //!
 //! Creating one is a registry profile plus package-SID access on the worker's own
-//! image, and a *host* sandbox that confines every command it runs — a
-//! development or agent environment, DeepSeek Harness's own Windows file sandbox
-//! among them — refuses exactly those operations. The failure then arrives as a
-//! child that dies in its loader with no diagnosis, or as an ACL that cannot be
-//! written. While the files layer was a hard requirement that disabled indexing,
-//! thumbnails, EXIF and avatars on the whole machine, which is a large
-//! availability cost for a layer that bounds neither memory nor CPU. So a launch
-//! attempts the container first, and a host that refuses it is not asked twice:
-//! the walk falls back to the job object and reports the missing item.
+//! image, and a host sandbox that confines every command it runs — a development
+//! or agent environment — refuses exactly those. The failure arrives as a child
+//! that dies in its loader with no diagnosis, or as an ACL that cannot be written.
+//! A launch therefore attempts the container first and falls back to the job
+//! object, reporting the missing item.
 //!
 //! # The less privileged container
 //!
-//! Windows 11 lets a container opt out of `ALL APPLICATION PACKAGES`:
-//! `PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY` with `…_OPT_OUT` is
-//! asked for whenever a container is used, and `lpac=` says whether the list
-//! took it. Windows 10 answers the attribute with an error, so it is dropped and
-//! the host keeps the plain container. The attribute is accepted at creation, so
-//! a container the loader cannot start inside fails *after* `CreateProcess`
-//! returns success; when that happens the parent stops asking and starts over in
-//! the plain container.
+//! Windows 11 lets a container opt out of `ALL APPLICATION PACKAGES` with
+//! `PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY` `..._OPT_OUT`, and
+//! `lpac=` says whether it took. Windows 10 answers with an error, so the attribute
+//! is dropped and the plain container kept. The attribute is accepted at creation,
+//! so a container the loader cannot start in fails *after* `CreateProcess` returns
+//! success; the parent then stops asking and starts over in the plain container.
 //!
-//! What the opt-out does **not** do is close the note below.
+//! The opt-out does not close the note below. It is the security attribute
+//! `WIN://NOALLAPPPKG`, which makes the low-box check *ignore* `ALL APPLICATION
+//! PACKAGES` without removing it from the token, and the process stays an
+//! AppContainer. What keeps the system tree readable is another principal,
+//! `ALL RESTRICTED APPLICATION PACKAGES` (`S-1-15-2-2`), whose ACEs ship on the
+//! system files a packaged process loads — a property of the Windows build rather
+//! than a documented invariant, which is why `system=` is measured and why a host
+//! answering `system=denied` is stricter rather than broken. Nor does the opt-out
+//! cover the registry: an LPAC needs the `registryRead` capability to read the keys
+//! a parser would want.
 //!
-//! The opt-out is the security attribute `WIN://NOALLAPPPKG`, which makes the
-//! low-box access check *ignore* `ALL APPLICATION PACKAGES` — it does not remove
-//! that package from the token's groups, and the process is still an AppContainer
-//! by every other measure. What keeps the system tree readable under it is a
-//! different principal: `ALL RESTRICTED APPLICATION PACKAGES`
-//! (`S-1-15-2-2`), whose ACEs ship on the system files a packaged process loads.
-//! That is a property of the Windows build rather than a documented invariant —
-//! which is precisely why the note is decided by the measured `system=` token and
-//! not by which container was asked for, and why a host that answered
-//! `system=denied` would be reported as stricter rather than as broken.
-//!
-//! The opt-out also does not cover the registry: an LPAC needs the
-//! `registryRead` capability to read the keys a parser would want, so unlike the
-//! files case there is no equivalent granted set to point at.
-//!
-//! What no protection here bounds is the shape of the boundary itself. The
-//! container reads the system tree it loads from (`Windows`, `Program Files` —
-//! the trees whose ACLs carry the packages a low-box process is checked against),
-//! which is the over-grant the child reports as `system=readable` beside the
-//! per-user paths it was refused. A write from it is reported as what it measured
-//! — `writes=store` when the path resolves into the container's own redirected
-//! store, `writes=user` when it does not — and writes are the one resource this
-//! platform has no size bound for at all (the unix file-size limit has no
-//! equivalent here). Everything else is that same dual-principal check rather
-//! than an open door: the registry it reads is the keys carrying the same grant —
-//! system ones, not the user's, and only for a container with the capability for
-//! it — while its writes are redirected to its own per-app store, and the IPC it
-//! reaches is over the handles this process handed it. Those are the platform's
-//! own limits, and they are the same shape as the macOS profile's grants.
+//! What no protection here bounds is the shape of the boundary. The container reads
+//! the system tree it loads from (`Windows`, `Program Files` — the trees whose ACLs
+//! carry the packages a low-box process is checked against), reported as
+//! `system=readable` beside the per-user paths it was refused. A write is reported
+//! as measured — `writes=store` inside the container's redirected store,
+//! `writes=user` outside it — and writes have no size bound here at all. The
+//! registry it reads and the IPC it reaches are the same dual-principal check and
+//! the handles this process handed it: the platform's own limits, the same shape
+//! as the macOS profile's grants.
 //!
 //! # Where the media profile's helper may live
 //!
-//! The media profile starts a second program, and a container's file access is
-//! decided by ACEs that name its own package SID, so a helper somewhere the user
-//! installed it needs an explicit grant — on the helper's own file and on the
-//! libraries beside it, and on nothing else. The child opens the file it was
-//! granted and says which way that went: `helper=allowed` when the grant took,
-//! and a `helper-grant-refused` token when it did not.
+//! The helper needs an explicit grant — on its own file and on the libraries
+//! beside it, one file at a time, and nothing else — because a container's file
+//! access is decided by ACEs naming its own package SID. The child reports
+//! `helper=allowed` or `helper-grant-refused`.
 //!
-//! Granting only files is deliberate, on two counts. Walking *up* to the helper
-//! and granting every directory on the way looks like the thorough thing to do,
-//! and this did it: it is unnecessary, because [`restricted_token`] keeps
-//! `SeChangeNotifyPrivilege` — `DISABLE_MAX_PRIVILEGE` disables every privilege
-//! *except* that one — and a caller that holds it is not checked for traverse at
-//! all, which a CI host demonstrated by opening a helper several levels down
-//! inside `target/debug` with no directory ACE anywhere above it. It is also
-//! ruinous: `SetNamedSecurityInfo` and `SetSecurityInfo` "impose the current
-//! inheritance model on the ACLs of all objects in the hierarchy below the
-//! target object" (Microsoft, *Automatic Propagation of Inheritable ACEs*), so
-//! one ACE written on `C:\Users\<user>` — or on `C:\Program Files` — rewrites
-//! the inheritance of every object beneath it. The media probe spent 4m39s there
-//! while using 0.4s of CPU, and the same call on a host's first media request
-//! would have held the server for those minutes only to time out at the media
-//! request's own deadline.
+//! Granting only files is deliberate. Walking *up* and granting every directory
+//! would be unnecessary: [`restricted_token`] keeps `SeChangeNotifyPrivilege`
+//! (`DISABLE_MAX_PRIVILEGE` disables everything except it), so a caller holding it
+//! is not checked for traverse at all. It is also ruinous: `SetNamedSecurityInfo`
+//! "impose[s] the current inheritance model on the ACLs of all objects in the
+//! hierarchy below the target object" (Microsoft, *Automatic Propagation of
+//! Inheritable ACEs*), so one ACE on `C:\Users\<user>` rewrites the inheritance of
+//! everything beneath it.
 //!
-//! Starting it was the part that read wrong. A CI host reported
-//! `helper=allowed,…,parse=media-unavailable(Access is denied)` for a helper under
-//! the workspace and for a copy under `Program Files`, with the less privileged
-//! container (`lpac=off` was measured too) and without it, while the same probe's
-//! token-only rung — no container — ran it. What all of those had in common was
-//! the helper's stdio: its streams were set to the null device, and `NUL` is a
-//! device a container may refuse to open. That refusal arrives from the same call
-//! as the process creation, so it reads as "the container cannot start a
-//! program" — and the traverse grants were added on that reading, which is what
-//! made them ruinous rather than merely redundant. The streams are pipes now —
-//! stdin closed by this side, stdout and stderr drained — and the same launch
-//! reports `parse=media-failed(...)` for the worker's own image and
-//! `parse=media-ok(<bytes>)` for a packaged ffmpeg: the helper runs and the
-//! probe decodes a frame with it. Seatbelt refuses the
-//! write to `/dev/null` in exactly the same way, which is how this was found.
-//!
-//! That measurement was taken while the null device was still in the way, so
-//! "the container flavour makes no difference to the helper" was not something it
-//! could show: both containers refused the same stdio. What the flavour *does*
-//! change is which principal answers for the helper — see the note below — and
-//! the media profile therefore gives the opt-out up when its helper cannot run
-//! under it rather than reporting an environment problem it has not tried to
-//! remove ([`use_plain_container`]).
+//! A helper's stdio is the first suspect when it cannot run: `NUL` is a device a
+//! container may refuse to open, and that refusal arrives from the same call as the
+//! process creation. The streams are pipes — stdin closed here, stdout and stderr
+//! drained — and the launch reports `parse=media-ok(<bytes>)`. A helper whose only
+//! grant is `ALL APPLICATION PACKAGES` gets the opt-out given up for the media
+//! profile rather than an environment problem reported ([`use_plain_container`]).
 //!
 //! # The two principals, and why the opt-out is the one that can go
 //!
-//! A low-box access check is answered by an ACE for the process's own package SID
-//! *or* by one for `ALL APPLICATION PACKAGES`. The second is what the system tree
-//! carries — and what an installer may have put on the tree a helper lives in —
-//! and it is the shortcut [`dacl_grants_any_package`] takes so that a file the OS
-//! already granted is not re-written on every launch. The opt-out of the section
-//! above makes the check *ignore* `ALL APPLICATION PACKAGES`, so that shortcut
-//! certifies a read only while the launch is not asking for it. [`add_access`]
-//! therefore asks the question from the launch's own decision, and a file this
+//! A low-box check is answered by an ACE for the process's package SID *or* for
+//! `ALL APPLICATION PACKAGES`; the second is what the system tree carries, and the
+//! shortcut [`dacl_grants_any_package`] takes it so a file the OS already granted
+//! is not rewritten on every launch. The opt-out makes the check ignore it, so that
+//! shortcut certifies a read only while the launch is not asking for the opt-out.
+//! [`add_access`] therefore asks from the launch's own decision, and a file this
 //! process may not re-DACL — a system-owned DLL, an image under `Program Files` —
 //! is where the two meet: the opt-out is given up and the container kept, rather
-//! than the child being handed an image it cannot read. Nothing about that is
-//! silent: the launch reports `lpac=off`, the settings page carries the note, and
-//! the log says the media profile gave it up.
+//! than the child being handed an image it cannot read. The launch reports
+//! `lpac=off`, the settings page carries the note, and the log says the media
+//! profile gave it up.
 //!
 //! # References
 //!
 //! * Microsoft, *Launch an AppContainer*: the attribute, the empty capability
 //!   list, and the requirement that the image be readable by the container.
-//! * Microsoft, *Process Mitigation Policies* and *Job Objects*: the two APIs
-//!   the layers here are built from, including `PROC_THREAD_ATTRIBUTE_JOB_LIST`
-//!   and the child-process policy that is only accepted for a process in a job.
-//! * Chromium's `sandbox/win/src/`: the same launch (`CreateProcessAsUser` with a
-//!   plain restricted token plus `SECURITY_CAPABILITIES`), the same
-//!   one-active-process job with the UI restrictions, and the note that the
-//!   creation-time child-process policy exists *because* a job can be escaped.
-//!
+//! * Microsoft, *Process Mitigation Policies* and *Job Objects*, including
+//!   `PROC_THREAD_ATTRIBUTE_JOB_LIST` and the child-process policy that is only
+//!   accepted for a process in a job.
+//! * Chromium's `sandbox/win/src/`: the same launch, the same one-active-process
+//!   job, and the note that the creation-time child-process policy exists
+//!   *because* a job can be escaped.
 use std::ffi::{OsStr, OsString, c_void};
 use std::fs::File;
 use std::mem::{offset_of, size_of, size_of_val};
@@ -275,12 +215,9 @@ static LPAC_APPLIED: AtomicBool = AtomicBool::new(false);
 /// The profiles that gave the opt-out up because the program they run could not
 /// run under it.
 ///
-/// One per profile, and only the media profile ever sets one: the opt-out makes
-/// the low-box check ignore `ALL APPLICATION PACKAGES`, which is the principal
-/// the helper's own ACL is granted through, so a helper the plain container can
-/// start and the less privileged one cannot is a fact about that profile rather
-/// than about the host. The other two profiles run no second program and have
-/// nothing to give up for.
+/// One per profile, and only the media profile ever sets one: `ALL APPLICATION
+/// PACKAGES` is the principal a helper's ACL is granted through, and the other two
+/// profiles run no second program.
 static PLAIN_CONTAINER: [AtomicBool; 3] = [
     AtomicBool::new(false),
     AtomicBool::new(false),
@@ -289,12 +226,10 @@ static PLAIN_CONTAINER: [AtomicBool; 3] = [
 
 /// Whether the child runs in a less privileged AppContainer.
 ///
-/// Only the parent knows: the policy is a creation attribute, and the child's
-/// own token looks the same either way. It is reported because it is a fact
-/// about the launch, not because it settles the files item — the child's own
-/// `system=` measurement is what says whether the system tree is reachable, and
-/// on a host with the opt-out applied it still is, through the user's SID the
-/// token also carries.
+/// Only the parent knows: the policy is a creation attribute and the child's token
+/// looks the same either way. It is reported as a fact about the launch, not as a
+/// verdict on files — the child's `system=` measurement says whether the system
+/// tree is reachable, and under the opt-out it still is, through the user's SID.
 pub(super) fn lpac() -> bool {
     LPAC_APPLIED.load(Ordering::Relaxed)
 }
@@ -306,11 +241,9 @@ pub(super) fn lpac_attempted() -> bool {
 
 /// Stop asking for it, for the rest of this process's life.
 ///
-/// Called when a child that was created under the policy did not come back:
-/// the attribute is accepted at creation, so a container the loader cannot
-/// start in fails *after* `CreateProcess` returns success, and the only way to
-/// tell is to try again without it. The container itself is kept — what is
-/// given up is the opt-out, not the confinement.
+/// Called when a child created under the policy did not come back: the attribute is
+/// accepted at creation, so a container the loader cannot start in fails *after*
+/// `CreateProcess` returns success. The container is kept; only the opt-out goes.
 pub(super) fn disable_lpac() {
     LPAC_WANTED.store(false, Ordering::Relaxed);
 }
@@ -322,18 +255,16 @@ pub(super) fn plain_container(profile: Profile) -> bool {
 
 /// Stop asking for the opt-out where this profile's own program is concerned.
 ///
-/// The container is kept; only the opt-out is given up. What asks for this is a
-/// helper that could not run under the opt-out while the plain container starts
-/// it: `ALL APPLICATION PACKAGES` is the principal such a helper's ACL carries,
-/// and the opt-out is what makes the low-box check ignore it.
+/// The container is kept. What asks for this is a helper that could not run under
+/// the opt-out: `ALL APPLICATION PACKAGES` is the principal its ACL carries, and
+/// the opt-out is what makes the low-box check ignore it.
 pub(super) fn use_plain_container(profile: Profile) {
     PLAIN_CONTAINER[slot(profile)].store(true, Ordering::Relaxed);
 }
 
 /// Forget that a profile gave the opt-out up.
 ///
-/// A different helper is a different measurement: the answer above was about the
-/// program the media profile was pointed at when it was taken.
+/// A different helper is a different measurement.
 pub(super) fn forget_plain_container() {
     for held in &PLAIN_CONTAINER {
         held.store(false, Ordering::Relaxed);
@@ -368,54 +299,40 @@ const HUNDRED_NANOSECONDS: i64 = 10_000_000;
 
 /// Flags that strip a token down to what a parser needs and nothing more.
 ///
-/// `DISABLE_MAX_PRIVILEGE` removes every privilege except `SeChangeNotifyPrivilege`
-/// (which is what lets the walk to a file happen without a traverse check —
-/// see [`grant_helper_access`]), and `LUA_TOKEN` makes the administrative SIDs
-/// deny-only. `WRITE_RESTRICTED` checks write access against the restricting SIDs
-/// as well as the token's groups; since the restricting list *is* this user's
-/// identity (the logon session, the user, `INTERACTIVE`, `Authenticated Users`,
-/// `Users`, `Everyone`), that is close to a no-op and is not a bound on its own.
-/// The write bound is the container and the integrity level.
+/// `DISABLE_MAX_PRIVILEGE` leaves only `SeChangeNotifyPrivilege` (no traverse check
+/// — see [`grant_helper_access`]), `LUA_TOKEN` makes the administrative SIDs
+/// deny-only, and `WRITE_RESTRICTED` checks writes against the restricting SIDs,
+/// which *are* this user's own identity: close to a no-op, not a write bound. The
+/// write bound is the container and the integrity level.
 const RESTRICTED_FLAGS: u32 = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
 
 /// `SE_GROUP_LOGON_ID` from `winnt.h`.
 const SE_GROUP_LOGON_ID: u32 = 0xC000_0000;
 
-/// `INHERIT_ONLY_ACE` from `winnt.h`: an ACE the object passes down but that
-/// does not apply to the object itself.
+/// `INHERIT_ONLY_ACE` from `winnt.h`: an ACE passed down, not applied here.
 const INHERIT_ONLY_ACE: u8 = 0x08;
 
-// The window station, desktop, clipboard and handle restrictions this job used
-// to carry are gone, and the reason is measured: a job's UI restrictions apply
-// from the process's first instruction, and `JOB_OBJECT_UILIMIT_HANDLES` denies
-// the loader the console it attaches on the way up — the child dies with
-// `STATUS_DLL_INIT_FAILED` (`0xC0000142`) before it can print anything. They
-// were applied *after* startup until the job moved to the parent, which is why
-// this only appeared then. What covers the same ground now is stronger and does
-// not have to be set on the job: win32k lockdown refuses every win32k system
-// call outright, the container reaches no other process's objects, and the
-// child-process policy refuses process creation.
+// No window-station, desktop, clipboard or handle restrictions on the job: UI
+// restrictions apply from the first instruction, and `JOB_OBJECT_UILIMIT_HANDLES`
+// denies the loader the console it attaches — `STATUS_DLL_INIT_FAILED`
+// (`0xC0000142`) before it can print. Win32k lockdown, the container and the
+// child-process policy cover the same ground without killing the child.
 
 /// Room for one SID, `SECURITY_MAX_SID_SIZE`.
 const MAX_SID_BYTES: usize = 68;
 
-/// Apply the confinement the child can give itself: the Job Object.
+/// Apply the confinement the child can give itself, and report what it measured.
 ///
-/// The other two layers are the parent's, but this process can still see one of
-/// them: whether the token it was given is an AppContainer's is a property of the
-/// token, read here rather than taken from the parent's word. A token that is not
-/// one claims neither layer, and the measurement below clears a claim the token
-/// does not back up.
+/// The other layers are the parent's, but the token's own properties are read here
+/// rather than taken from the parent's word: a token that is not an AppContainer's
+/// claims neither files nor network.
 pub(super) fn confine(profile: Profile) -> (Protections, Vec<String>) {
     let mut layers = Protections::default();
     let mut detail = Vec::new();
 
     // The job is the parent's, so this process can only read it back: what the
-    // limits *are* is a fact about the job, and a job nobody set limits on is
-    // not a layer. That is the one difference from the arrangement this
-    // replaced, where the process held its own limits and could raise them.
-    // The process count the job must show is the profile's own: a worker that
-    // starts a helper has two slots, and one that does not has one.
+    // limits *are* is a fact about the job, and a job nobody set limits on is not a
+    // layer. The process count it must show is the profile's own.
     let expected_processes = if profile.runs_helper() { 2 } else { 1 };
     match job_limits(expected_processes) {
         Ok((memory, cpu)) => {
@@ -445,18 +362,14 @@ pub(super) fn confine(profile: Profile) -> (Protections, Vec<String>) {
     ));
     detail.push(format!("mitigations={}", harden_process(profile)));
 
-    // What a write reaches, which is the near edge of the files layer: inside
-    // the container writes are redirected to its own store, outside it they are
-    // the user's own access. Reported rather than assumed, because it is the
-    // difference between a document filling its sandbox and a document filling
-    // the disk the server runs on.
+    // What a write reaches: inside the container, writes are redirected to its own
+    // store; outside it, they are the user's own access. The difference between a
+    // document filling its sandbox and one filling the server's disk.
     if layers.files {
         detail.push(format!("writes={}", write_scope()));
     }
-    // What the media profile's helper may read beyond its own image: the DLLs
-    // beside it, one file at a time, because a dynamically linked helper loads
-    // them from there. The same shape as the other two platforms grant, and said
-    // out loud because a `helper_grants` count would not say it.
+    // What the media helper may read beyond its own image: the DLLs beside it, one
+    // file at a time, because a dynamically linked helper loads them from there.
     if profile.runs_helper() && layers.files {
         detail.push("helper_scope=libs".to_string());
     }
@@ -467,9 +380,8 @@ pub(super) fn confine(profile: Profile) -> (Protections, Vec<String>) {
 /// The limits the parent's job puts on this process, read back from the job.
 ///
 /// `QueryInformationJobObject` with a null job asks about the job this process
-/// belongs to, which is the one the parent named at creation. A host that runs
-/// this under a job of its own (a CI runner does) nests rather than replaces
-/// it, so the immediate job is still the right one to ask.
+/// belongs to. A host that runs this under a job of its own (a CI runner does) nests
+/// rather than replaces it, so the immediate job is still the right one to ask.
 fn job_limits(expected_processes: u32) -> Result<(u64, i64), &'static str> {
     let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
     let sized = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
@@ -486,22 +398,18 @@ fn job_limits(expected_processes: u32) -> Result<(u64, i64), &'static str> {
         return Err("unverified");
     }
 
-    // The values, not only the flags: a job the host already put this process in
-    // (a CI runner wraps everything it starts) has limits of its own, and one
-    // whose limits are exactly these is the parent's. A job that is not there is
-    // reported as absent rather than counted — the layer is a bound only if
-    // there is one.
+    // The values, not only the flags: a host job (a CI runner wraps everything it
+    // starts) has limits of its own, and one whose limits are exactly these is the
+    // parent's. No job is reported absent, not counted.
     let limits = info.BasicLimitInformation.LimitFlags;
     let ours = limits & JOB_OBJECT_LIMIT_PROCESS_MEMORY != 0
         && limits & JOB_OBJECT_LIMIT_PROCESS_TIME != 0
         && limits & JOB_OBJECT_LIMIT_ACTIVE_PROCESS != 0
         && limits & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0
-        // The crash policy is a bound like the others and is reported beside
-        // them: a worker that dies on an unhandled exception takes the job with
-        // it rather than leaving it, which is what makes the exit code the
-        // parent reads meaningful. Read back rather than assumed for the same
-        // reason as the rest — this is a query of the job the child is actually
-        // in, and a job somebody else nested it under would not have it.
+        // The crash policy is a bound like the others: a worker that dies on an
+        // unhandled exception takes the job with it, which is what makes the exit
+        // code the parent reads meaningful. Read back like the rest, because a job
+        // somebody else nested would not have it.
         && limits & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION != 0
         && info.BasicLimitInformation.ActiveProcessLimit == expected_processes
         && info.ProcessMemoryLimit as u64 == MEMORY_LIMIT
@@ -519,17 +427,15 @@ fn job_limits(expected_processes: u32) -> Result<(u64, i64), &'static str> {
 
 /// The integrity level this process's token carries, read back.
 ///
-/// Read rather than assumed: the container path runs at low integrity by
-/// construction, and the token-only path does not — which is exactly the
-/// difference worth reporting, because integrity is the one mechanism that
-/// bounds a *write* on its own.
+/// The container path runs at low integrity by construction and the token-only path
+/// does not; integrity is the one mechanism that bounds a *write* on its own.
 fn integrity_level() -> &'static str {
     let mut token: HANDLE = null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
         return "unknown";
     }
-    // The label is a SID inside the buffer this call fills, and the buffer is
-    // word-aligned because it holds a pointer.
+    // The label is a SID inside the buffer, which is word-aligned because it holds
+    // a pointer.
     let mut buffer: Vec<u64> = vec![0; 16];
     let mut needed = 0u32;
     let read = unsafe {
@@ -572,27 +478,21 @@ fn integrity_level() -> &'static str {
 /// What a write from this process reaches.
 ///
 /// A write the container redirects into its own store is bounded by the store; a
-/// write that reaches the user's temporary directory is the user's own access,
-/// and is the case the container exists to prevent. Both are measured by making
-/// a file and taking it back.
+/// write that reaches the user's temporary directory is the user's own access, the
+/// case the container exists to prevent. Both are measured by making a file and
+/// taking it back.
 ///
-/// What the answer may *not* be is an inference from the attempt having
-/// succeeded. A successful create says only that the write was allowed; whether
-/// it landed in the container's store or in the user's directory is a fact about
-/// the path, so the path is what decides — the redirected store lives under
-/// `%LOCALAPPDATA%\Packages\<package SID>\`, and a file created anywhere else
-/// was created with the user's own authority. This token used to read
-/// `own-store` for every success, which named the benign case for the one
-/// measurement that cannot tell the two apart.
+/// The answer may *not* be inferred from the create having succeeded: whether it
+/// landed in the container's store or the user's directory is a fact about the
+/// path. The store lives under `%LOCALAPPDATA%\Packages\<package SID>\`, so a file
+/// created anywhere else was created with the user's own authority.
 fn write_scope() -> &'static str {
     let probe = std::env::temp_dir().join("nanofile-extraction-write-probe");
     match std::fs::File::create(&probe) {
         Ok(_) => {
-            // The path that was *typed* is not where the file landed: a
-            // container redirects the write into its own store, and only the
-            // resolved path says whether it did. `canonicalize` is what
-            // resolves the redirection; a host that will not answer falls back
-            // to the typed path, which then reads as the user's own.
+            // The typed path is not where the file landed; only the resolved path
+            // says whether the write was redirected. A host that will not answer
+            // falls back to the typed path, which reads as the user's own.
             let resolved = std::fs::canonicalize(&probe).unwrap_or_else(|_| probe.clone());
             let _ = std::fs::remove_file(&probe);
             if is_container_store(&resolved) {
@@ -608,13 +508,10 @@ fn write_scope() -> &'static str {
 
 /// Whether a path is inside the AppContainer's own redirected store.
 ///
-/// `%LOCALAPPDATA%\Packages` is the directory a packaged process's per-app state
-/// lives under, and the shape the OS creates for a container and nothing else.
-/// The path arrives as the kernel resolved it — a `\\?\`-prefixed verbatim path
-/// — so that prefix is removed before the components are compared: a verbatim
-/// `C:` is not the same component as a plain one. A path that does not resolve
-/// there was not redirected, so the write is reported as the user's own rather
-/// than assumed to be bounded by the store.
+/// `%LOCALAPPDATA%\Packages` is where a packaged process's per-app state lives. The
+/// path arrives as the kernel resolved it — `\\?\`-prefixed and verbatim — so the
+/// prefix is removed first: a verbatim `C:` is not the same component as a plain
+/// one. A path that does not resolve there was not redirected.
 fn is_container_store(path: &Path) -> bool {
     let Some(local) = std::env::var_os("LOCALAPPDATA") else {
         return false;
@@ -629,29 +526,22 @@ fn is_container_store(path: &Path) -> bool {
 
 /// Ask the kernel for the process mitigations a document parser can live with.
 ///
-/// Each is set and then *read back*, and the count in the report is the number
-/// that took: a policy this Windows does not know fails the call, and one that
-/// took is one an exploit has to get past. `SetProcessMitigationPolicy` is the
-/// interface Chromium uses for the same set.
-///
-/// What is deliberately not here is code-integrity policy (CIG): it refuses
-/// images that are not Microsoft-signed, and this worker is not signed.
+/// Each is set and then *read back*, and the count is the number that took: a policy
+/// this Windows does not know fails the call. What is deliberately not here is
+/// code-integrity policy (CIG), which refuses images that are not Microsoft-signed,
+/// and this worker is not signed.
 fn harden_process(profile: Profile) -> usize {
-    // Every one of these is a DWORD whose first bit is the mitigation and whose
-    // second, where it exists, asks for audit-only; the values are the fields
-    // of the corresponding `PROCESS_MITIGATION_*_POLICY` in `winnt.h`.
+    // Each is a DWORD whose first bit enables the mitigation and whose second, where
+    // it exists, asks for audit-only.
     const ENABLE: u32 = 0x1;
     const IMAGE_LOAD_NO_REMOTE: u32 = 0x1;
     const IMAGE_LOAD_NO_LOW_LABEL: u32 = 0x2;
     /// The four bits of `PROCESS_MITIGATION_ASLR_POLICY`: bottom-up
     /// randomization, forced relocation, high entropy, and disallow-stripped.
     ///
-    /// Each is asked for on its own rather than as one mask. They are separate
-    /// bits of one policy word, and `SetProcessMitigationPolicy` refuses the
-    /// whole word when any bit in it cannot be honoured: a build that does not
-    /// implement forced relocation would then take bottom-up randomization and
-    /// high entropy down with it, and the report would count one mitigation
-    /// fewer for a reason that has nothing to do with the two it lost.
+    /// Each is asked for on its own: `SetProcessMitigationPolicy` refuses the whole
+    /// word when one bit cannot be honoured, so a build without forced relocation
+    /// would take the other two down with it.
     const ASLR_BOTTOM_UP: u32 = 0x1;
     const ASLR_FORCE_RELOCATE: u32 = 0x2;
     const ASLR_HIGH_ENTROPY: u32 = 0x4;
@@ -660,9 +550,8 @@ fn harden_process(profile: Profile) -> usize {
         windows_sys::Win32::System::Threading::PROCESS_MITIGATION_POLICY,
         u32,
     ); 10] = [
-        // No calls serviced by `win32k.sys` at all: the kernel surface a
-        // document parser has no business reaching, and the one an exploit
-        // would use to find a kernel bug to climb out through.
+        // No calls serviced by `win32k.sys`: the kernel surface a parser has no
+        // business reaching, and the one an exploit would use to climb out.
         (ProcessSystemCallDisablePolicy, ENABLE),
         // Arbitrary Code Guard: no new executable pages, so injected code has
         // nowhere to run. Nothing here generates code at runtime.
@@ -683,20 +572,17 @@ fn harden_process(profile: Profile) -> usize {
         // A bad handle reference raises instead of being ignored, which turns
         // some exploits into crashes.
         (ProcessStrictHandleCheckPolicy, ENABLE),
-        // No process creation at all, on the process rather than on the job: a
-        // job can be escaped by a process that knows how, which is why Chromium
-        // carries this next to its own job. Set here rather than named at
-        // creation, because nothing untrusted runs before this point anyway —
-        // the document is not read until after `confine` returns.
+        // No process creation, on the process rather than on the job: a job can be
+        // escaped by a process that knows how, which is why Chromium carries this
+        // next to its own job. Nothing untrusted runs before this point anyway.
         (ProcessChildProcessPolicy, ENABLE),
     ];
 
     let mut taken = 0;
     for (policy, flags) in policies {
-        // The media profile is the one that starts a second process — the
-        // configured helper — so the policy that forbids child creation is not
-        // installed for it. What still bounds it is the job's process limit and
-        // the container's file access.
+        // The media profile starts the helper, so the no-child policy is not
+        // installed for it. What bounds it is the job's process limit and the
+        // container's file access.
         if policy == ProcessChildProcessPolicy && profile.runs_helper() {
             continue;
         }
@@ -710,8 +596,7 @@ fn harden_process(profile: Profile) -> usize {
         if !applied {
             continue;
         }
-        // Read back rather than trust the call: a policy the kernel accepted and
-        // did not apply is not a mitigation, and the report counts what is.
+        // Read back rather than trust the call.
         let mut observed = 0u32;
         let read = unsafe {
             GetProcessMitigationPolicy(
@@ -734,10 +619,9 @@ pub(crate) struct Child {
     process: HANDLE,
     /// The job the child runs in, held here rather than by the child.
     ///
-    /// `KILL_ON_JOB_CLOSE` fires when the last handle closes, so the parent
-    /// holding it is what makes the bound outlive the child — and, because the
-    /// child never gets a handle of its own, nothing running inside can raise a
-    /// limit the way a process that created its own job could.
+    /// `KILL_ON_JOB_CLOSE` fires when the last handle closes, so the parent holding
+    /// it makes the bound outlive the child, and nothing inside can raise a limit
+    /// the way a process holding its own job could.
     job: HANDLE,
     stdin: Option<File>,
     stdout: Option<File>,
@@ -766,11 +650,9 @@ impl Child {
 
     /// End the child and everything it started.
     ///
-    /// `TerminateProcess` on the direct child leaves a process it started
-    /// running — the media profile starts the helper that way — so the job is
-    /// what is ended: it holds the whole tree, and the parent is the side that
-    /// holds the job handle. A job that could not be created falls back to the
-    /// direct child, which is all this end knows about.
+    /// `TerminateProcess` on the direct child leaves the media helper running, so
+    /// the job is what is ended: it holds the whole tree. A job that could not be
+    /// created falls back to the direct child.
     pub(crate) fn kill_tree(&mut self) {
         if self.job.is_null() {
             self.kill();
@@ -793,8 +675,7 @@ impl Child {
 impl Drop for Child {
     fn drop(&mut self) {
         unsafe { CloseHandle(self.process) };
-        // Last handle to the job: if the child somehow outlived this, the job
-        // takes it (and anything it started) with it.
+        // Last handle to the job: the job takes the child with it.
         if !self.job.is_null() {
             unsafe { CloseHandle(self.job) };
         }
@@ -803,11 +684,9 @@ impl Drop for Child {
 
 /// The job the child is created in, with the limits it runs under.
 ///
-/// The parent's rather than the child's, and named as a creation attribute so
-/// there is no window in which the child runs without it. `None` when this host
-/// will not make one: the child then reports no job and the limits layer is
-/// absent, which is a level the policy decides about rather than something to
-/// paper over.
+/// Named as a creation attribute so there is no window in which the child runs
+/// without it. `None` when this host will not make one: the limits layer is then
+/// absent, which the policy decides about rather than papering over.
 fn parent_job(active_process_limit: u32) -> Option<HANDLE> {
     let job = unsafe { CreateJobObjectW(null(), null()) };
     if job.is_null() {
@@ -821,9 +700,8 @@ fn parent_job(active_process_limit: u32) -> Option<HANDLE> {
         | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
     limits.BasicLimitInformation.PerProcessUserTimeLimit = CPU_LIMIT_SECONDS * HUNDRED_NANOSECONDS;
-    // The worker, and for the media profile the helper it starts: a document
-    // parser has no child, so it gets one slot, and the one profile that does
-    // gets exactly two. A fork bomb has nowhere to go either way.
+    // The worker, and for the media profile the helper: one slot, or exactly two.
+    // A fork bomb has nowhere to go either way.
     limits.BasicLimitInformation.ActiveProcessLimit = active_process_limit;
     limits.ProcessMemoryLimit = MEMORY_LIMIT as usize;
 
@@ -847,32 +725,27 @@ fn parent_job(active_process_limit: u32) -> Option<HANDLE> {
 /// Start the child, in an AppContainer with a restricted token when the system
 /// will make them.
 ///
-/// The container is what bounds files and the network, and it is applied on top
-/// of the token rather than instead of it: the token takes the privileges away,
-/// the container makes every access check require the package SID as well as the
-/// user's.
-///
-/// This is the strongest creation, and the one a request uses unless the probe
-/// found that this host cannot start a child in it. A token the system refuses
-/// is recorded and the child still starts — it has the container and the job —
-/// and the report it prints says what it actually has, which is the
-/// requirement's decision and not this function's.
+/// The container is what bounds files and the network, applied on top of the token
+/// rather than instead of it: the token takes the privileges away, the container
+/// makes every access check require the package SID as well as the user's. This is
+/// the strongest creation, and the one a request uses unless the probe found it
+/// cannot start a child here. A token the system refuses is recorded and the child
+/// still starts with the container and the job; its report says what it actually
+/// has.
 pub(crate) fn spawn(
     program: &OsStr,
     args: &[OsString],
     profile: Profile,
     grants: Grants<'_>,
 ) -> std::io::Result<Child> {
-    // The opt-out is decided before the grants, because the grants are what
-    // decide it: a file whose only package grant is `ALL APPLICATION PACKAGES` is
-    // unreadable under the opt-out, so `app_container` and the helper's grant may
-    // hand the opt-out back rather than hand the child an image it cannot read.
+    // The opt-out is decided before the grants because the grants decide it: a file
+    // whose only package grant is `ALL APPLICATION PACKAGES` is unreadable under the
+    // opt-out, so the grant may hand it back rather than the child being given an
+    // image it cannot read.
     let mut opt_out = want_lpac(profile);
     let container = app_container(program, &mut opt_out);
-    // A worker that starts a helper gets two slots in its job and a container
-    // that can read the helper and the one source file the parent wrote. A
-    // worker that starts nothing keeps a single slot, which is the tighter
-    // bound and the one every other profile runs under.
+    // A worker that starts a helper gets two job slots and a container that can read
+    // the helper and the source; one that starts nothing keeps a single slot.
     let active_process_limit = process_slots(profile);
     if profile.runs_helper() {
         grant_helper_access(grants, &mut opt_out);
@@ -885,12 +758,10 @@ pub(crate) fn spawn(
         // log next to that fact.
         note_shortfall("token-refused", None);
     }
-    // The media profile asks for the same container every other profile gets,
-    // unless its own helper gave the opt-out up: the less privileged one was
-    // measured refusing the helper's `CreateProcess` (`Access is denied`), and
-    // the grant it reads the helper through is the principal that opt-out
-    // ignores. `want_lpac` carries both facts; `lpac=` in the report says which
-    // container the launch actually got.
+    // `want_lpac` carries the host decision and the helper's own: the less
+    // privileged container was measured refusing the helper's `CreateProcess`
+    // (`Access is denied`), and the principal it reads the helper through is the one
+    // the opt-out ignores. `lpac=` says which container the launch got.
     start(
         program,
         args,
@@ -903,22 +774,19 @@ pub(crate) fn spawn(
 
 /// Start the child with the restricted token, a job and no container.
 ///
-/// This is the creation a Windows launch uses unless the configuration asks for
-/// the files layer: the job object is the resource bound and the token takes the
-/// privileges away, while the container is the only mechanism that could bound
-/// files and the network. A host that cannot create one — a sandbox of its own
-/// that refuses a nested AppContainer, which is the common case for a development
-/// or agent environment — still gets everything that keeps the server up, and the
-/// child's report says `files=open` beside it.
+/// The job is the resource bound and the token takes the privileges away, while the
+/// container is the only mechanism that could bound files and the network. A host
+/// that cannot create one — a sandbox of its own refusing a nested AppContainer,
+/// common in development and agent environments — still gets what keeps the server
+/// up, and the child reports `files=open`.
 pub(crate) fn spawn_token_only(
     program: &OsStr,
     args: &[OsString],
     profile: Profile,
     grants: Grants<'_>,
 ) -> std::io::Result<Child> {
-    // No container in this creation: the opt-out is not a decision it makes, so a
-    // grant that is only good through `ALL APPLICATION PACKAGES` is good enough
-    // here.
+    // No container, so the opt-out is not this creation's decision: a grant good
+    // only through `ALL APPLICATION PACKAGES` is good enough here.
     let mut opt_out = false;
     if profile.runs_helper() {
         grant_helper_access(grants, &mut opt_out);
@@ -932,18 +800,12 @@ pub(crate) fn spawn_token_only(
 
 /// Start the child with this process's own token, a job and no container.
 ///
-/// The last creation on this platform, and still bounded: the job object is named
-/// at creation exactly as it is for every other, so the memory, CPU and process
-/// caps hold whatever the token turned out to be. What is given up is the
-/// restricted token's own narrowing, which some environments refuse outright — a
-/// child started under one is *created*, then dies in its loader with
-/// `STATUS_DLL_INIT_FAILED` before it can report on the confinement it got
-/// ([`crate::sandbox::worker`] decides that, from the child's silence).
-///
-/// It exists because the alternative is not "a better token" but "the feature is
-/// off on the whole machine": a host that can start neither a container nor a
-/// restrained child can still bound one, and the bound is the item that keeps the
-/// server up.
+/// Still bounded: the job is named at creation as for every other creation, so the
+/// memory, CPU and process caps hold whatever the token turned out to be. Some
+/// hosts refuse a restricted token outright — the child is *created*, then dies in
+/// its loader with `STATUS_DLL_INIT_FAILED` ([`crate::sandbox::worker`] decides
+/// that from the child's silence) — and the alternative is not a better token but
+/// the feature off on the whole machine. The bound is what keeps the server up.
 pub(crate) fn spawn_unrestricted(
     program: &OsStr,
     args: &[OsString],
@@ -960,8 +822,7 @@ pub(crate) fn spawn_unrestricted(
     start(program, args, None, None, process_slots(profile), false)
 }
 
-/// How many processes the job must allow: the worker, plus the helper the media
-/// profile starts.
+/// The worker, plus the helper the media profile starts.
 fn process_slots(profile: Profile) -> u32 {
     if profile.runs_helper() { 2 } else { 1 }
 }
@@ -969,9 +830,8 @@ fn process_slots(profile: Profile) -> u32 {
 /// Create the process, its pipes and the handle list that keeps inheritance to
 /// those pipes.
 ///
-/// The token is closed on every path, including the failing ones: this runs
-/// once per request, and a leak here would be a leak in the server's own handle
-/// table.
+/// The token is closed on every path, including the failing ones: this runs once per
+/// request, and a leak here would be a leak in the server's handle table.
 fn start(
     program: &OsStr,
     args: &[OsString],
@@ -1015,21 +875,16 @@ fn start_with(
     startup.StartupInfo.hStdInput = child_stdin;
     startup.StartupInfo.hStdOutput = child_stdout;
     startup.StartupInfo.hStdError = child_stderr;
-    // The job has to be named at creation rather than assigned afterwards:
-    // between the two the child is running with nothing bounding it, and the
-    // assignment itself is a call this process would have to make on a process
-    // it may already have lost control of.
+    // The job is named at creation rather than assigned afterwards: between the two
+    // the child runs with nothing bounding it.
     let job = parent_job(active_process_limit);
-    // Only these three handles are inherited, the container is named in the same
-    // list, and the job and the container policy travel with it. Without the
-    // list, `bInheritHandles` would hand the child everything inheritable this
-    // process holds — the server's own standard streams among it.
+    // Only these three handles are inherited; the container and the job travel in
+    // the same list. Without it, `bInheritHandles` would hand the child everything
+    // inheritable this process holds — the server's own standard streams among it.
     //
-    // The less privileged container is asked for whenever there is a container
-    // at all. Windows 11 introduced the attribute; on Windows 10 the list
-    // refuses to take it, and it is built again without it — a fallback between
-    // two confined containers, never to an unconfined child. Which one the child
-    // got is reported (`lpac=`), not assumed.
+    // The less privileged container is asked for whenever there is a container.
+    // Windows 10 refuses the attribute, and the list is rebuilt without it — a
+    // fallback between two confined containers, never to an unconfined child.
     let mut lpac = want_lpac && container.is_some();
     let capabilities = container.map(|held| &held.capabilities);
     let built = AttributeList::new(
@@ -1057,10 +912,9 @@ fn start_with(
         }
     };
     startup.lpAttributeList = attributes.as_mut_ptr();
-    // Recorded once the list is live: `true` only when the attribute the
-    // container policy needs actually made it into the list. `attempted` is
-    // what the caller reads to decide whether a child that never reported is
-    // worth starting again without the opt-out.
+    // Recorded once the list is live: `true` only when the attribute actually made
+    // it in. `attempted` is what the caller reads to decide whether a child that
+    // never reported is worth starting again without the opt-out.
     LPAC_APPLIED.store(lpac, Ordering::Relaxed);
     LPAC_ATTEMPTED.store(lpac, Ordering::Relaxed);
 
@@ -1070,10 +924,9 @@ fn start_with(
         .chain(std::iter::once(0))
         .collect();
     let environment = environment_block();
-    // `null` here would inherit the *server's* working directory, which is a
-    // path out of the deployment the child has no business knowing and the
-    // container may not even be able to read. Unix sets the child's directory
-    // to `/` for the same reason.
+    // `null` would inherit the *server's* working directory, a path the child has no
+    // business knowing and the container may not be able to read. Unix sets the
+    // child's directory to `/` for the same reason.
     let directory = current_directory();
 
     let flags = CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
@@ -1125,8 +978,7 @@ fn start_with(
     unsafe { CloseHandle(info.hThread) };
     Ok(Child {
         process: info.hProcess,
-        // The child is in the job from its first instruction; this end of it
-        // lives as long as the child does.
+        // The child is in the job from its first instruction.
         job: job.unwrap_or(null_mut()),
         stdin: Some(unsafe { File::from_raw_handle(parent_stdin as RawHandle) }),
         stdout: Some(unsafe { File::from_raw_handle(parent_stdout as RawHandle) }),
@@ -1142,12 +994,9 @@ fn close_all(handles: &[HANDLE]) {
 
 /// The directory the child starts in, as a NUL-terminated wide string.
 ///
-/// The system directory rather than the server's: it is part of the tree
-/// `ALL APPLICATION PACKAGES` covers, so a container can always read it, and it
-/// is a fact about Windows rather than about this deployment. `None` leaves
-/// `CreateProcess` to inherit the caller's directory, which is the behaviour
-/// this exists to avoid — the same choice unix makes in setting the child's
-/// directory to `/`.
+/// The system directory rather than the server's: `ALL APPLICATION PACKAGES` covers
+/// it, so a container can always read it. `None` would let `CreateProcess` inherit
+/// the caller's directory, the same choice unix makes in setting `/`.
 fn current_directory() -> Option<Vec<u16>> {
     let root = std::env::var_os("SystemRoot")?;
     let mut directory: Vec<u16> = root.encode_wide().collect();
@@ -1165,8 +1014,7 @@ fn current_directory() -> Option<Vec<u16>> {
 
 /// The three pipe pairs the protocol needs, cleaned up if one cannot be made.
 ///
-/// Every pair is `(child end, parent end)`: standard input runs into the child,
-/// standard output and standard error run out of it.
+/// Every pair is `(child end, parent end)`.
 fn open_pipes() -> std::io::Result<[(HANDLE, HANDLE); 3]> {
     let mut pipes: [(HANDLE, HANDLE); 3] = [(null_mut(), null_mut()); 3];
     for (slot, child_reads) in pipes.iter_mut().zip([true, false, false]) {
@@ -1185,12 +1033,9 @@ fn open_pipes() -> std::io::Result<[(HANDLE, HANDLE); 3]> {
 
 /// A pipe pair: the end the child holds, and the end the parent holds.
 ///
-/// Both ends come back inheritable — `CreatePipe` takes no such parameter — and
-/// only the parent's end is cleared. The child's end has to stay inheritable:
-/// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` accepts inheritable handles only, and
-/// names one it cannot pass on by failing with `ERROR_INVALID_PARAMETER`.
-///
-/// `child_reads` is the one thing that decides which end is which.
+/// Both ends come back inheritable and only the parent's end is cleared. The
+/// child's end has to stay inheritable: `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` accepts
+/// inheritable handles only.
 fn open_pipe(child_reads: bool) -> std::io::Result<(HANDLE, HANDLE)> {
     let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
@@ -1207,8 +1052,7 @@ fn open_pipe(child_reads: bool) -> std::io::Result<(HANDLE, HANDLE)> {
     } else {
         (write, read)
     };
-    // The parent's end must not be inherited, or the child would hold its own
-    // reader open and never see end of input.
+    // Otherwise the child holds its own reader open and never sees end of input.
     if unsafe {
         SetHandleInformation(
             parent,
@@ -1228,17 +1072,13 @@ fn open_pipe(child_reads: bool) -> std::io::Result<(HANDLE, HANDLE)> {
 /// the AppContainer it runs in, the job it runs under, and — for a host that has
 /// one — the opt-out from `ALL APPLICATION PACKAGES`.
 ///
-/// The child-process policy is not here: it is set at runtime by
-/// `SetProcessMitigationPolicy` (see [`harden_process`]), because the media
-/// profile has to be able to start its helper and the same list is built for
-/// every profile.
+/// The child-process policy is not here: it is a runtime policy (see
+/// [`harden_process`]), because the media profile has to start its helper.
 ///
-/// The buffer is held as words rather than as bytes because it is a
-/// `PROC_THREAD_ATTRIBUTE_LIST`: the kernel stores pointers in it, and asks for
-/// the alignment that goes with them. `Vec<u8>` requests alignment 1, so the
-/// list would be correctly aligned only when the allocator happened to hand back
-/// an aligned block — true in practice and a guarantee nowhere. `Vec<u64>` is
-/// the alignment the structure needs on every architecture this ships to.
+/// The buffer is held as words because `PROC_THREAD_ATTRIBUTE_LIST` stores pointers,
+/// and `Vec<u8>` would only be aligned when the allocator happened to hand back an
+/// aligned block. `Vec<u64>` is the alignment the structure needs on every
+/// architecture this ships to.
 struct AttributeList {
     buffer: Vec<u64>,
 }
@@ -1293,8 +1133,8 @@ impl AttributeList {
     /// Ask for the less privileged container, which opts out of
     /// `ALL APPLICATION PACKAGES`.
     ///
-    /// The attribute is one Windows 11 introduced; on Windows 10 the call
-    /// refuses it, which is how support is detected without reading a version.
+    /// Windows 10 refuses the attribute, which is how support is detected without
+    /// reading a version.
     fn container_policy(&mut self, policy: u32) -> std::io::Result<()> {
         unsafe {
             self.set(
@@ -1402,17 +1242,13 @@ impl Drop for AttributeList {
 
 /// Why the child is not in an AppContainer, when the parent asked for one.
 ///
-/// The probe prints it, as one whitespace-free token. Without it, losing the
-/// container would show up only as a child that reports `files=open`, with the
-/// reason on a `tracing` warning the probe path has no subscriber for.
+/// The probe prints it as one whitespace-free token; without it, losing the
+/// container would show up only as `files=open`, with the reason on a `tracing`
+/// warning the probe path has no subscriber for.
 ///
-/// Every reason one launch recorded, in the order it recorded them, rather than
-/// the first one ever: the failures are not interchangeable — a missing profile
-/// store, an image whose ACL was replaced by an in-place upgrade, a token the
-/// kernel refused — and a record that keeps only the first would leave the
-/// operator reading a reason from a launch that is no longer the one failing.
-/// [`clear_shortfall`] scopes it to a single launch, so what the report carries
-/// is always about the creation that just happened.
+/// Every reason of one launch, in order, rather than the first ever: a missing
+/// profile store, an ACL replaced by an in-place upgrade and a refused token are
+/// not interchangeable. [`clear_shortfall`] scopes it to a single launch.
 static SHORTFALL: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 
 /// The reasons the last launch recorded, joined into one whitespace-free token.
@@ -1430,11 +1266,9 @@ pub(crate) fn shortfall() -> Option<String> {
 
 /// Forget the previous launch's reasons, so the next one reports its own.
 ///
-/// Called once per *launch sequence* — the ladder the probe walks, or the single
-/// creation a request makes — and not once per rung. The rungs are not
-/// interchangeable attempts: the strongest creation's reason is the one an
-/// operator needs, and clearing between them loses it, leaving the report naming
-/// the weakest rung's failure or, when a weak rung records nothing at all, none.
+/// Called once per *launch sequence*, not once per rung: the strongest creation's
+/// reason is the one an operator needs, and clearing between rungs would leave the
+/// report naming the weakest rung's failure, or none.
 pub(super) fn clear_shortfall() {
     let slot = SHORTFALL.get_or_init(|| Mutex::new(Vec::new()));
     slot.lock()
@@ -1444,9 +1278,7 @@ pub(super) fn clear_shortfall() {
 
 /// Record one reason this launch gave for not applying the container.
 ///
-/// Deduplicated: the helper's grant and the image's are asked for once per
-/// attempt, and the rung loop may make several attempts, so the same reason can
-/// legitimately arrive more than once.
+/// Deduplicated: the same reason can arrive from more than one attempt.
 fn note_shortfall(reason: &str, error: Option<&std::io::Error>) {
     let mut token = reason.to_string();
     if let Some(error) = error {
@@ -1465,35 +1297,30 @@ fn note_shortfall(reason: &str, error: Option<&std::io::Error>) {
 
 /// The name the worker's AppContainer is known by.
 ///
-/// The SID is a hash of it, so the same name gives the same SID on every run and
-/// on every machine, and one container's profile is not another's.
+/// The SID is a hash of it, so the same name gives the same SID everywhere.
 const APP_CONTAINER_NAME: &str = "Nanofile.Extraction.Worker";
 
-/// `HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)`, which the profile call returns
-/// when the profile is already there — the common case after the first run.
+/// `HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)`: the profile is already there.
 const PROFILE_EXISTS: i32 = 0x8007_00B7u32 as i32;
 
 /// The AppContainer the child is created in.
 struct AppContainer {
-    /// What the process attribute points at: the package SID, and an empty
-    /// capability list. The SID's memory belongs to the process, not to this
-    /// value — it is derived once and outlives every launch — so this may only be
-    /// read while it is alive on the caller's stack.
+    /// What the process attribute points at: the package SID and an empty
+    /// capability list. The SID is derived once and outlives every launch, so this
+    /// may only be read while it is alive on the caller's stack.
     capabilities: SECURITY_CAPABILITIES,
 }
 
 /// The AppContainer to start `program` in, or `None` when this host will not
 /// give one.
 ///
-/// The container is its SID plus the image grant, and both have to be in place
-/// before the launch: a name no profile has established and an image the
-/// container cannot read are each a launch that fails rather than a child that
-/// runs confined.
+/// The SID and the image grant both have to be in place before the launch: a name
+/// no profile has established and an image the container cannot read are each a
+/// launch that fails rather than a child that runs confined.
 ///
-/// `opt_out` is the caller's decision to ask for the less privileged container,
-/// and this call may have to give it up: an image whose only package grant is
-/// `ALL APPLICATION PACKAGES` is one the opt-out makes unreadable, and the
-/// opt-out is the half that can be dispensed with.
+/// `opt_out` is the caller's decision, which this call may have to give up: an image
+/// whose only package grant is `ALL APPLICATION PACKAGES` is unreadable under the
+/// opt-out, and the opt-out is the half that can go.
 fn app_container(program: &OsStr, opt_out: &mut bool) -> Option<AppContainer> {
     let Some(sid) = app_container_sid() else {
         note_shortfall("sid-refused", None);
@@ -1522,33 +1349,17 @@ fn app_container(program: &OsStr, opt_out: &mut bool) -> Option<AppContainer> {
 /// This process's own SID for the worker container, creating its profile if it
 /// does not have one yet.
 ///
-/// The profile is what makes the name a container the system knows: it is
-/// `%LOCALAPPDATA%\Packages\<name>` plus a per-app registry store, which is the
-/// shape Microsoft's own launch sample and the two sandboxes this follows all
-/// establish before they start a process in one. It also gives the container a
-/// private directory of its own to write in, which is the only place in the
-/// user's profile it can.
+/// The profile makes the name a container the system knows: `%LOCALAPPDATA%\Packages\`
+/// `<name>` plus a per-app registry store, and it gives the container the only
+/// directory of its own it may write in.
 ///
-/// Made once and kept: the SID is a constant of the name, the grant recorded
-/// against it is a property of the image, and freeing it would only mean
-/// deriving the same value again. The allocation is one SID, for the life of the
-/// process.
-///
-/// A *failure* is not kept. Both calls can fail for a reason of the moment — the
-/// profile store is open in another process, the profile is being established as
-/// this asks for it — and a cached failure would leave every later launch of this
-/// process without a container at all, which the Sandbox page then reads as a
-/// host that cannot confine anything. Asking again costs one call.
-///
-/// It is asked more than once for the same reason. The call is a *create or
-/// find*, and this installation has more than one process that makes it — the
-/// tray and the service, a probe and the request behind it, three probes on one
-/// CI host — so one of them can find the profile half-established, which is an
-/// error about the race rather than about the host. A child created in a
-/// container the system has no profile for fails with `ERROR_FILE_NOT_FOUND`,
-/// which reads as a host with no files layer: the retry is what keeps a lost
-/// race from being reported as a sandbox that cannot confine anything. The pause
-/// is paid only on a path that is already failing.
+/// Made once and kept: the SID is a constant of the name, and the allocation is one
+/// SID for the life of the process. A *failure* is not kept: both calls fail for a
+/// reason of the moment, and a cached failure would leave every later launch without
+/// a container, which the page reads as a host that cannot confine anything. Asking
+/// again costs one call, and the retry is what keeps a lost race between the
+/// processes that create the same profile from reading as "cannot confine". The
+/// pause is paid only on a path that is already failing.
 fn app_container_sid() -> Option<PSID> {
     static SID: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
     let slot = SID.get_or_init(|| Mutex::new(None));
@@ -1566,37 +1377,25 @@ fn app_container_sid() -> Option<PSID> {
     Some(sid)
 }
 
-/// Create or find the worker's AppContainer profile, returning its SID, while
-/// holding a cross-process lock that keeps the operation from racing itself.
+/// Create or find the worker's AppContainer profile, returning its SID, under a
+/// cross-process lock that keeps the operation from racing itself.
 ///
-/// `CreateAppContainerProfile` is a create-or-find that several processes call
-/// for the same name — the tray and the service at boot, each
-/// `extract-worker --probe` (three profiles, three processes), the first worker a
-/// fresh process starts. Without the lock the losers of that race can see the
-/// winner's profile store (the registry plus `%LOCALAPPDATA%\Packages\<name>`)
-/// while it is still half written: the create answers with a transient error, or
-/// the derive that follows `ERROR_ALREADY_EXISTS` finds nothing to derive. Either
-/// way no SID comes back, the child is launched in a container the system has no
-/// profile for, `CreateProcess` returns `ERROR_FILE_NOT_FOUND`, the loader dies
-/// with `STATUS_DLL_INIT_FAILED`, and the probe reports `sid-refused`. The lock
-/// makes one process finish the create before any other opens the store, so the
-/// half-written window the race lived in is gone.
+/// `CreateAppContainerProfile` is a create-or-find several processes call for the
+/// same name — the tray and the service, each probe, the first worker. Without the
+/// lock the losers can see the winner's store while it is half written: the create
+/// answers with a transient error, or the derive after `ERROR_ALREADY_EXISTS` finds
+/// nothing. Either way no SID comes back, the child is launched in a container with
+/// no profile, `CreateProcess` returns `ERROR_FILE_NOT_FOUND`, the loader dies with
+/// `STATUS_DLL_INIT_FAILED`, and the probe reports `sid-refused`. The lock makes one
+/// process finish the create before any other opens the store.
 ///
-/// The lock is what makes the *order* sound: the create is asked first, and a
-/// `PROFILE_EXISTS` reached under the lock always means a profile some other
-/// process finished writing before it released the mutex — never one still being
-/// written. Deriving first would be cheaper on a host that already has the
-/// profile, but `DeriveAppContainerSidFromAppContainerName` is documented only to
-/// take a name, so whether it fails on a store with no profile is not something
-/// this code may assume; the create-or-find is the shape that works either way.
+/// The create comes first so that a `PROFILE_EXISTS` under the lock always means a
+/// finished profile, never one still being written. Deriving first would be cheaper
+/// but is documented only to take a name, so whether it fails on a store with no
+/// profile is not something this code may assume.
 ///
-/// A *failure* is not kept by the caller, and this asks again on the next launch:
-/// both calls fail for a reason of the moment, and a cached failure would leave
-/// every later launch without a container. A child started in a container the
-/// system has no profile for fails with `ERROR_FILE_NOT_FOUND`, which reads as a
-/// host with no files layer; the retry is what keeps a lost race from being
-/// reported as a sandbox that cannot confine anything. The pause is paid only on
-/// a path that is already failing.
+/// A *failure* is not kept: a cached one would leave every later launch without a
+/// container, and the pause above is paid only on a path that is already failing.
 fn ensure_profile(name: &[u16]) -> Option<PSID> {
     /// Attempts before the host is believed, and the pause between them.
     const ATTEMPTS: usize = 3;
@@ -1640,32 +1439,25 @@ fn ensure_profile(name: &[u16]) -> Option<PSID> {
 /// A cross-process mutex held only for the duration of [`ensure_profile`].
 ///
 /// Its one job is to stop two processes from running `CreateAppContainerProfile`
-/// for the same name at once. Created with a `Global\` name so a service in
-/// another session is covered too; a host that will not let a non-privileged
-/// process create in the global namespace falls back to `Local\`, which still
-/// serialises every collision this host can actually have. Released and closed on
-/// drop, so it is never held across a panic in the create-or-find, and an
-/// abandoned mutex (a previous owner crashed mid-create) is treated as acquired —
-/// the operation is idempotent, so continuing is safe. The wait is bounded rather
-/// than infinite (`LOCK_TIMEOUT_MS`), so a wedged owner is given up on instead of
-/// blocking every spawn.
+/// for the same name at once. A `Global\` name covers a service in another session;
+/// a host that refuses the global namespace falls back to `Local\`, which still
+/// serialises every collision it can have. Released and closed on drop, and an
+/// abandoned mutex (a previous owner crashed mid-create) is treated as acquired
+/// because the operation is idempotent.
 struct ProfileLock(HANDLE);
 
 impl ProfileLock {
     /// How long to wait for the lock before giving it up.
     ///
-    /// `CreateAppContainerProfile` is a registry write measured in milliseconds,
-    /// so a wait that reaches this bound is not a slow owner but a wedged one — a
-    /// process that holds the mutex and hangs without crashing (`WAIT_ABANDONED`
-    /// only covers a crashed or killed owner). Dropping the lock after the bound
-    /// and proceeding lock-free is the safer choice: the create-or-find is
-    /// idempotent and `ensure_profile` retries it, so a brief race is recovered
-    /// rather than letting one stuck process block every spawn for the host's life.
+    /// The create is a registry write measured in milliseconds, so a wait reaching
+    /// this bound means a wedged owner (`WAIT_ABANDONED` covers only a crash).
+    /// Proceeding lock-free is safer: the create-or-find is idempotent and
+    /// `ensure_profile` retries, so one stuck process cannot block every spawn.
     const LOCK_TIMEOUT_MS: u32 = 2000;
 
     fn acquire() -> Option<Self> {
-        // The AppContainer store is per user, so the colliding processes always
-        // share a user; `Global\` also reaches a service in another session.
+        // The store is per user; `Global\` also reaches a service in another
+        // session.
         static NAMES: &[&str] = &["Global\\nanofile-ac-profile", "Local\\nanofile-ac-profile"];
         for name in NAMES {
             let wide: Vec<u16> = OsStr::new(name)
@@ -1674,20 +1466,17 @@ impl ProfileLock {
                 .collect();
             let handle = unsafe { CreateMutexW(null(), 0, wide.as_ptr()) };
             if handle.is_null() {
-                // Creation was refused (e.g. `Global\` without the privilege):
-                // try the next name. Both refused means no lock — degrade to the
-                // lock-free path rather than denying confinement.
+                // Refused (e.g. `Global\` without the privilege): try the next name.
+                // Both refused means no lock — the lock-free path, not no
+                // confinement.
                 continue;
             }
             let waited = unsafe { WaitForSingleObject(handle, Self::LOCK_TIMEOUT_MS) };
             match waited {
-                // A crashed owner leaves the mutex abandoned; taking it is safe
-                // because the create-or-find is idempotent.
+                // Abandoned by a crashed owner; safe because the create is
+                // idempotent.
                 WAIT_OBJECT_0 | WAIT_ABANDONED => return Some(ProfileLock(handle)),
-                // A wedged owner, or any error, means this lock cannot be won:
-                // drop the handle and try the next name. If every name times out
-                // we fall through to the lock-free degrade below rather than
-                // blocking here for the host's life.
+                // A wedged owner or any error: drop it and try the next name.
                 _ => unsafe {
                     CloseHandle(handle);
                 },
@@ -1699,9 +1488,7 @@ impl ProfileLock {
 
 impl Drop for ProfileLock {
     fn drop(&mut self) {
-        // Release before close: a held mutex that is only closed is left
-        // abandoned for the next acquirer, which would then wait on a lock it
-        // cannot win from a dead owner.
+        // Release before close, or the next acquirer sees an abandoned mutex.
         unsafe {
             ReleaseMutex(self.0);
             CloseHandle(self.0);
@@ -1711,38 +1498,27 @@ impl Drop for ProfileLock {
 
 /// Give the container the read access the media profile's grants need.
 ///
-/// The worker itself is granted read and execute by [`grant_image_access`], and
-/// it is the container's own image. The media profile starts a *second* program
-/// and reads one file the parent wrote, and neither carries an ACE for the
-/// package SID: the configured helper lives wherever it was installed, and the
-/// scratch source is in the server's temporary directory, which only the user's
-/// own SIDs may open. Both are granted here, and the grant is a read (plus
-/// execute for the helper), never a write.
+/// The worker's own image is granted by [`grant_image_access`]. The media profile
+/// starts a *second* program and reads one file the parent wrote, and neither
+/// carries an ACE for the package SID: the helper lives wherever it was installed,
+/// and the scratch source is in the server's temporary directory. Both are granted
+/// here — read, plus execute for the helper, never write.
 ///
-/// Every grant is written on the object itself and never on a directory above
-/// it, however many levels down the object sits: the module docs have the two
-/// reasons, and the second one — a DACL write on a directory re-imposes
-/// inheritance on everything under it — is what turned this call into minutes of
-/// I/O on a host whose helper lives under `C:\Program Files` or a user profile.
+/// Every grant is written on the object itself, never on a directory above it: a
+/// DACL write on a directory re-imposes inheritance on everything under it (the
+/// module docs have both reasons). A grant that cannot be made is recorded as a
+/// shortfall and left to fail loudly.
 ///
-/// A grant that cannot be made is recorded as a shortfall and left to fail
-/// loudly: a helper the container may not read means the media profile cannot
-/// run, which the child's own report then says.
-///
-/// `opt_out` is the launch's decision to ask for the less privileged container,
-/// and this call may have to give it up: a helper whose only package grant is
-/// `ALL APPLICATION PACKAGES` is unreadable under the opt-out, and the opt-out
-/// is the half that can be dispensed with (see [`add_access`]).
+/// `opt_out` may have to be given up here: a helper whose only grant is
+/// `ALL APPLICATION PACKAGES` is unreadable under it (see [`add_access`]).
 fn grant_helper_access(grants: Grants<'_>, opt_out: &mut bool) {
     let Some(sid) = app_container_sid() else {
         return;
     };
     if let Some(helper) = grants.helper {
-        // The grant is written on a file, never on a directory: an ACE on a
-        // directory re-imposes inheritance on everything beneath it, and a
-        // configured path that is not a regular file is a path this profile
-        // cannot confine. It fails closed — the media profile then reports the
-        // helper as ungranted through `parse=`.
+        // Written on a file, never a directory: an ACE on a directory re-imposes
+        // inheritance on everything beneath it. A path that is not a regular file
+        // cannot be confined, and fails closed through `parse=`.
         if !helper.is_file() {
             let error = std::io::Error::other("the helper is not a regular file");
             note_shortfall("helper-grant-refused", Some(&error));
@@ -1755,9 +1531,8 @@ fn grant_helper_access(grants: Grants<'_>, opt_out: &mut bool) {
             ) {
                 note_shortfall("helper-grant-refused", Some(&error));
             }
-            // A helper that is dynamically linked loads libraries from beside its
-            // own image, and each one needs the same grant. A directory that cannot
-            // be listed is not a reason to skip the source below.
+            // A dynamically linked helper loads libraries from beside its image, and
+            // each needs the same grant. An unlistable directory skips only this.
             if let Some(directory) = helper.parent()
                 && let Ok(entries) = std::fs::read_dir(directory)
             {
@@ -1790,24 +1565,16 @@ fn grant_helper_access(grants: Grants<'_>, opt_out: &mut bool) {
 
 /// Whether `program` has been given to the container, granting it if not.
 ///
-/// Asked on every launch rather than remembered once. A grant is a change to the
-/// file's own ACL, and the question is whether that ACL still carries it — which
-/// a cached answer cannot know. An in-place upgrade replaces the image at the
-/// same path with a fresh ACL, and a cache keyed by path would keep saying yes:
-/// `app_container` would hand back a container the kernel then refuses to create,
-/// the probe would fall to the token-only rung, and the operator would read
-/// `files=open` with no reason recorded anywhere, because the failure that caused
-/// it never happened.
+/// Asked on every launch rather than remembered: a grant is a change to the file's
+/// own ACL, and a cached answer cannot know the ACL still carries it. An in-place
+/// upgrade replaces the image with a fresh ACL, and a path-keyed cache would keep
+/// saying yes until the kernel refused the container. Asking again costs a metadata
+/// read, not a write: [`add_access`] returns without touching the DACL when the ACE
+/// is already there.
 ///
-/// Asking again costs a metadata read, not a write: [`add_access`] reads the ACL
-/// first and returns without touching it when the ACE is already there, so the
-/// only launch that rewrites a DACL is the one that has to.
-///
-/// A grant that cannot be made — an image under `Program Files`, where the user
-/// may not rewrite the DACL, or one whose ACL cannot be read — leaves the child
-/// with the token alone. That is less confinement than this host could give, and
-/// the child's own measurement is what says so: nothing here claims a layer the
-/// token did not hand over.
+/// A grant that cannot be made — an image under `Program Files`, where the user may
+/// not rewrite the DACL — leaves the child with the token alone, and the child's own
+/// measurement says so.
 fn grant_image_access(program: &OsStr, sid: PSID, opt_out: &mut bool) -> bool {
     match add_read_execute(program, sid, opt_out) {
         Ok(()) => true,
@@ -1820,10 +1587,9 @@ fn grant_image_access(program: &OsStr, sid: PSID, opt_out: &mut bool) -> bool {
 
 /// Add read and execute for `sid` to `program`'s DACL, keeping every ACE it has.
 ///
-/// The existing DACL is read and merged into: writing a fresh one would take the
-/// file away from the user who owns it. `FILE_GENERIC_EXECUTE` is in the mask
-/// because executing an image and traversing into a directory are the same bit,
-/// and the loader needs both to map the file it was started from.
+/// The existing DACL is merged into, because a fresh one would take the file away
+/// from its owner. `FILE_GENERIC_EXECUTE` is in the mask because executing an image
+/// and traversing into a directory are the same bit, and the loader needs both.
 fn add_read_execute(program: &OsStr, sid: PSID, opt_out: &mut bool) -> std::io::Result<()> {
     add_access(
         program,
@@ -1836,16 +1602,14 @@ fn add_read_execute(program: &OsStr, sid: PSID, opt_out: &mut bool) -> std::io::
 /// Add `mask` for `sid` to `path`'s DACL, keeping every ACE it already has.
 ///
 /// The two SIDs a low-box check can be answered by are not interchangeable:
-/// `ALL APPLICATION PACKAGES` is ignored under the opt-out (the module docs have
-/// why), so an ACE for it certifies a read only while the launch is *not* asking
-/// for the opt-out. `opt_out` is that decision, and it is what decides whether
-/// such an ACE may stand in for the package's own.
+/// `ALL APPLICATION PACKAGES` is ignored under the opt-out, so an ACE for it
+/// certifies a read only while the launch is *not* asking for the opt-out. `opt_out`
+/// is that decision.
 ///
-/// A file whose ACL cannot be re-written — a system-owned DLL, an image under
-/// `Program Files` — is then the one case where the caller has a choice, and it
-/// is made here: the opt-out is given up (the container stays) rather than the
-/// file being reported ungranted. That is not a silent weakening — the launch
-/// says `lpac=off` and the page carries the note.
+/// A file whose ACL cannot be rewritten — a system-owned DLL, an image under
+/// `Program Files` — is where the caller chooses: the opt-out is given up (the
+/// container stays) rather than the file reported ungranted, and the launch says
+/// `lpac=off`.
 fn add_access(path: &OsStr, sid: PSID, mask: u32, opt_out: &mut bool) -> std::io::Result<()> {
     let path: Vec<u16> = path.encode_wide().chain(std::iter::once(0)).collect();
 
@@ -1866,22 +1630,18 @@ fn add_access(path: &OsStr, sid: PSID, mask: u32, opt_out: &mut bool) -> std::io
     if read != 0 {
         return Err(std::io::Error::from_raw_os_error(read as i32));
     }
-    // A NULL DACL grants everyone everything; merging our entry into it would
-    // produce a DACL that grants the container and nobody else, taking the file
-    // away from the user it belongs to. There is nothing to add to, so nothing
-    // is added.
+    // A NULL DACL grants everyone everything; merging into it would grant the
+    // container and nobody else. Nothing to add to, so nothing is added.
     if dacl.is_null() {
         unsafe { LocalFree(descriptor) };
         return Err(std::io::Error::other(
             "the image has no discretionary ACL to add to",
         ));
     }
-    // The grant the launch needs, asked as the launch's own decision: under the
-    // opt-out only the package's ACE answers, and without it either principal
-    // does. Asking it this way is also what keeps a grant an earlier launch made
-    // from being written again — the merge below is a write to a file another
-    // process may be running from, and the question the caller has is whether the
-    // container can read the file, not whether this call changed anything.
+    // Asked as the launch's own decision: under the opt-out only the package's ACE
+    // answers, without it either principal does. A grant an earlier launch made is
+    // therefore not written again — the merge is a write to a file another process
+    // may be running from.
     if already_granted(dacl, sid, mask, !*opt_out) {
         unsafe { LocalFree(descriptor) };
         return Ok(());
@@ -1891,11 +1651,10 @@ fn add_access(path: &OsStr, sid: PSID, mask: u32, opt_out: &mut bool) -> std::io
         unsafe { LocalFree(descriptor) };
         return written;
     }
-    // The file is not this process's to re-write, and the launch was going to
-    // need the package's own ACE to read it. When the principal the opt-out
-    // ignores still answers for it, the opt-out is given up rather than the read;
-    // a file with neither grant is the shortfall the caller records, with the
-    // launch's decision left as it was.
+    // Not this process's file to rewrite, and the launch needed the package's own
+    // ACE. When the principal the opt-out ignores still answers, the opt-out is
+    // given up rather than the read; with neither grant it is the caller's
+    // shortfall.
     let through_any_package = already_granted(dacl, sid, mask, true);
     if through_any_package {
         *opt_out = false;
@@ -1906,10 +1665,9 @@ fn add_access(path: &OsStr, sid: PSID, mask: u32, opt_out: &mut bool) -> std::io
 
 /// Whether `dacl` already gives the container the access this launch needs.
 ///
-/// The package's own ACE is the answer in every case. `ALL APPLICATION PACKAGES`
-/// is the answer only when the low-box check will consult it — which is why the
-/// caller passes `allow_any_package` from the launch's own opt-out decision
-/// rather than leaving it out of the question.
+/// The package's own ACE answers in every case; `ALL APPLICATION PACKAGES` only when
+/// the low-box check will consult it, which is why `allow_any_package` comes from
+/// the launch's own decision.
 fn already_granted(dacl: *const ACL, sid: PSID, mask: u32, allow_any_package: bool) -> bool {
     dacl_already_grants(dacl, sid, mask)
         || (allow_any_package && dacl_grants_any_package(dacl, mask))
@@ -1917,9 +1675,7 @@ fn already_granted(dacl: *const ACL, sid: PSID, mask: u32, allow_any_package: bo
 
 /// Merge one ACE for `sid` into `dacl` and write the result onto `path`.
 ///
-/// The write is what a system file may refuse, so the caller decides what that
-/// means: for the opt-out it is the reason to give the opt-out up, and anywhere
-/// else it is the shortfall the report carries.
+/// The write is what a system file may refuse; the caller decides what that means.
 fn write_access(path: &[u16], sid: PSID, mask: u32, dacl: *const ACL) -> std::io::Result<()> {
     let entry = EXPLICIT_ACCESS_W {
         grfAccessPermissions: mask,
@@ -1961,20 +1717,15 @@ fn write_access(path: &[u16], sid: PSID, mask: u32, dacl: *const ACL) -> std::io
 
 /// Whether `dacl` already gives `sid` every bit of `wanted`.
 ///
-/// The second run of this process finds the ACE the first one left, and a plain
-/// merge would depend on how the system treats a duplicate entry. Walking the
-/// ACL answers the question the caller actually has.
+/// The second run of this process finds the ACE the first left, and a plain merge
+/// would depend on how the system treats a duplicate entry. Walking the ACL answers
+/// the caller's question.
 ///
-/// `wanted` is the caller's own mask rather than a fixed one, because the
-/// answer is only yes for the access that was asked for. Hardcoding read *and*
-/// execute here made every call for a read-only grant answer no, which sent the
-/// caller down the merge path again: a duplicate ACE and another
-/// `SetNamedSecurityInfoW` on an object that already had the grant — the
-/// inheritance-re-imposing write this file exists to avoid — and, in the other
-/// direction, an `Ok` for a caller that wanted more than the ACE carries.
+/// `wanted` is the caller's own mask: the answer is only yes for the access asked
+/// for, and a fixed read-and-execute mask would answer no for a read-only grant and
+/// send the caller down the merge path again.
 fn dacl_already_grants(dacl: *const ACL, sid: PSID, wanted: u32) -> bool {
-    /// `ACCESS_ALLOWED_ACE_TYPE` from `winnt.h`, which is where this file keeps
-    /// the few Windows constants `windows-sys` does not carry behind a feature.
+    /// `ACCESS_ALLOWED_ACE_TYPE` from `winnt.h`.
     const ALLOWED: u8 = 0x00;
 
     let mut info: ACL_SIZE_INFORMATION = unsafe { std::mem::zeroed() };
@@ -1999,14 +1750,11 @@ fn dacl_already_grants(dacl: *const ACL, sid: PSID, wanted: u32) -> bool {
         if allowed.Header.AceType != ALLOWED {
             continue;
         }
-        // An ACE that is inherited-only does not apply to the object it sits on:
-        // it is what the object passes down, and counting it would answer "the
-        // container may read this" for a file whose own mask says otherwise.
+        // Inherited-only: what the object passes down, not a grant on itself.
         if allowed.Header.AceFlags & INHERIT_ONLY_ACE != 0 {
             continue;
         }
-        // `SidStart` is the first four bytes of the SID that follows the header,
-        // so its address is the SID's address.
+        // `SidStart` is the first four bytes of the SID that follows the header.
         let entry = std::ptr::addr_of!(allowed.SidStart).cast::<c_void>() as PSID;
         if unsafe { EqualSid(entry, sid) } != 0 && allowed.Mask & wanted == wanted {
             return true;
@@ -2017,16 +1765,13 @@ fn dacl_already_grants(dacl: *const ACL, sid: PSID, wanted: u32) -> bool {
 
 /// Whether `dacl` already gives every AppContainer the access `wanted` asks for.
 ///
-/// The container's token is checked against the package SIDs, and
-/// `ALL APPLICATION PACKAGES` (`WinBuiltinAnyPackageSid`) is the one the system
-/// tree carries: a file the OS already granted the container does not need this
-/// process to write its own ACE, which is what a per-request rewrite of every
-/// system DLL's DACL would otherwise be.
+/// `ALL APPLICATION PACKAGES` (`WinBuiltinAnyPackageSid`) is the principal the
+/// system tree carries, so a file the OS already granted needs no ACE from this
+/// process.
 ///
-/// It answers for the *plain* container only. The less privileged one makes the
-/// low-box check ignore this principal, so the caller must not ask the question
-/// on behalf of a launch that is asking for it — see [`already_granted`] and the
-/// module docs.
+/// It answers for the *plain* container only: the less privileged one makes the
+/// low-box check ignore this principal, so the caller must not ask it on behalf of
+/// a launch asking for the opt-out.
 fn dacl_grants_any_package(dacl: *const ACL, wanted: u32) -> bool {
     let mut sid = [0u8; MAX_SID_BYTES];
     let mut length = size_of_val(&sid) as u32;
@@ -2043,10 +1788,9 @@ fn dacl_grants_any_package(dacl: *const ACL, wanted: u32) -> bool {
 
 /// Whether this process's token is an AppContainer's.
 ///
-/// The parent asks for the container through the process attributes rather than
-/// through the command line, so the child reads its own token instead of being
-/// told: a request the kernel did not grant must not become a claim, and this is
-/// what the file and network layers are claimed on.
+/// The child reads its own token rather than the command line: a request the kernel
+/// did not grant must not become a claim, and this is what the file and network
+/// layers are claimed on.
 fn is_app_container() -> bool {
     let mut token: HANDLE = null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
@@ -2069,9 +1813,8 @@ fn is_app_container() -> bool {
 
 /// Whether this process's token is a restricted one.
 ///
-/// Read back rather than taken from the command line: the parent *asked* for a
-/// restricted token, and what the process actually carries is the fact the
-/// report is about.
+/// Read back rather than taken from the command line: what the process carries is
+/// the fact the report is about.
 fn is_restricted_token() -> bool {
     let mut token: HANDLE = null_mut();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
@@ -2140,16 +1883,12 @@ fn restricted_token() -> Option<HANDLE> {
         return None;
     }
 
-    // No integrity label is set here, and that is a measured decision rather
-    // than an omission: a low label applied to the token-only path — the one a
-    // host falls back to when it will not start a container — leaves the child
-    // unable to open the desktop its loader attaches to, and it dies with
-    // `STATUS_DLL_INIT_FAILED` before it can print anything. Chromium runs its
-    // renderers below medium because it gives them a window station of their
-    // own; this child has the interactive one, and the container is where the
-    // write bound comes from instead. The report says which level the token
-    // ended up with ([`integrity_level`]), which is what the container's own
-    // label shows up as.
+    // No integrity label is set, and that is measured: a low label on the
+    // token-only path leaves the child unable to open the desktop its loader
+    // attaches to, and it dies with `STATUS_DLL_INIT_FAILED` before it can print.
+    // Chromium can run renderers below medium because it gives them a window station
+    // of their own; this child has the interactive one, and the container supplies
+    // the write bound instead. The report says which level the token got.
     Some(restricted)
 }
 
@@ -2259,19 +1998,16 @@ impl RestrictingSids {
         false
     }
 
-    /// This user's own SID, which is the one the objects a process needs to
-    /// attach to are granted to.
+    /// This user's own SID, which the objects a process needs to attach to are
+    /// granted to.
     ///
-    /// A restricted token is checked twice on every access: once with its own
-    /// SIDs and once with the restricting ones, and there the *restricting*
-    /// check is the one that decides write access. The window station and the
-    /// desktop a process inherits are granted to the user — that is how the
-    /// parent is using them — so a restricting list without this SID leaves the
-    /// child created and then dead inside the loader with
-    /// `STATUS_DLL_INIT_FAILED` (`0xC0000142`), which is what Microsoft's
-    /// KB 184802 attributes to a process that "does not have correct security
-    /// access to the window station and desktop". Chromium's restricted tokens
-    /// carry the current user for the same reason.
+    /// A restricted token is checked twice on every access, and the *restricting*
+    /// check is the one that decides write access. The window station and desktop
+    /// are granted to the user, so a restricting list without this SID leaves the
+    /// child created and then dead inside the loader with `STATUS_DLL_INIT_FAILED`
+    /// (`0xC0000142`) — Microsoft's KB 184802, "does not have correct security
+    /// access to the window station and desktop". Chromium carries it for the same
+    /// reason.
     fn push_user(&mut self, token: HANDLE) -> bool {
         let mut needed = 0u32;
         unsafe { GetTokenInformation(token, TokenUser, null_mut(), 0, &mut needed) };
@@ -2279,9 +2015,8 @@ impl RestrictingSids {
             return false;
         }
 
-        // `TOKEN_USER` holds one `SID_AND_ATTRIBUTES`, which points at a SID
-        // inside the buffer, and the buffer is word-aligned because it holds a
-        // pointer.
+        // `TOKEN_USER` holds one `SID_AND_ATTRIBUTES` pointing at a SID inside the
+        // buffer, which is word-aligned because it holds a pointer.
         let mut buffer: Vec<u64> = vec![0; (needed as usize).div_ceil(8)];
         let read = unsafe {
             GetTokenInformation(
@@ -2308,14 +2043,11 @@ impl RestrictingSids {
 
     /// A well-known SID, by the identifier Windows gives it.
     ///
-    /// The list is the one a process's own identity is made of — the session,
-    /// the user, and the groups Windows grants the objects a process needs to
-    /// attach to. Chromium's restricted tokens carry the same set, and for the
-    /// same reason: the restricting check has to be able to satisfy the window
-    /// station and desktop the child inherits.
+    /// The set is a process's own identity, which the restricting check must satisfy
+    /// for the window station and desktop the child inherits.
     fn push_well_known(&mut self, kind: WELL_KNOWN_SID_TYPE) -> bool {
-        // Bytes, not words: `MAX_SID_BYTES` is a byte count, and a `[u64; n]`
-        // would round it down to a buffer shorter than the constant promises.
+        // Bytes, not words: `MAX_SID_BYTES` is a byte count, and rounding to words
+        // would leave less room than the constant promises.
         let mut sid = [0u8; MAX_SID_BYTES];
         let mut length = size_of_val(&sid) as u32;
         let created = unsafe {
@@ -2382,21 +2114,14 @@ fn quote(argument: &OsStr) -> String {
 
 /// The variables a Windows process needs before its own code runs.
 ///
-/// A process started with an empty environment does not work here: `winsock`
-/// fails to initialize without `SystemRoot`, the loader and the temporary
-/// directory helpers read the others, and both Go and libuv put a list like this
-/// back into a block that was cleared for the same reason (libuv: "Windows has a
-/// few essential environment variables"). None of them is a secret.
-///
-/// `LOCALAPPDATA` is on the list because the AppContainer path reads it while the
-/// process is being created — Microsoft's own process-container engine requires
-/// it to be present, even with a nonsense value — and because a container without
-/// a profile has no redirection to fall back on. Here it points at the user's own
-/// directory, which the container cannot write to and has no business reading.
+/// An empty environment does not work: `winsock` needs `SystemRoot`, and the loader
+/// and temporary-directory helpers read the others — libuv keeps a list like this
+/// for the same reason. `LOCALAPPDATA` is read by the AppContainer path while the
+/// process is created and is required to be present even with a nonsense value;
+/// here it points at the user's own directory, which the container cannot write.
 ///
 /// The identity variables a parser has no use for (`USERNAME`, `USERPROFILE`,
-/// `LOGONSERVER`, …) are deliberately not on the list, and neither is anything
-/// this deployment set.
+/// `LOGONSERVER`, …) are deliberately absent, and so is anything this deployment set.
 const SYSTEM_VARIABLES: &[&str] = &[
     "LOCALAPPDATA",
     "Path",
@@ -2407,8 +2132,8 @@ const SYSTEM_VARIABLES: &[&str] = &[
     "WINDIR",
 ];
 
-/// The environment the child starts with: the system variables above, the two
-/// switches the Rust runtime reads, and nothing else.
+/// The environment the child starts with: the system variables above, the two Rust
+/// switches, and nothing else.
 ///
 /// The server's environment holds the master secret, the storage keys and every
 /// resolved path, so it is not passed on.
@@ -2419,8 +2144,8 @@ fn environment_block() -> Vec<u16> {
         .collect();
     entries.push((OsString::from("RUST_BACKTRACE"), OsString::from("0")));
     entries.push((OsString::from("RUST_LIB_BACKTRACE"), OsString::from("0")));
-    // Windows reads the block in the order it was written and expects the order
-    // an environment is kept in: by name, case-insensitively.
+    // Windows expects the order an environment is kept in: by name,
+    // case-insensitively.
     entries.sort_by(|(left, _), (right, _)| {
         left.to_string_lossy()
             .to_ascii_uppercase()
@@ -2456,7 +2181,7 @@ mod tests {
         );
     }
 
-    /// The closing quote must stay a quote: a trailing backslash doubles.
+    /// The closing quote must stay a quote: trailing backslashes double.
     #[test]
     fn trailing_backslashes_are_doubled() {
         assert_eq!(
@@ -2479,8 +2204,7 @@ mod tests {
         assert_eq!(line, r#""C:\Program Files\nanofile.exe" extract-worker"#);
     }
 
-    /// The block carries what Windows needs to start a process and nothing this
-    /// deployment set: the names are the whole allowlist.
+    /// The names are the whole allowlist.
     #[test]
     fn the_environment_block_holds_the_system_variables_and_nothing_else() {
         let block = environment_block();
@@ -2517,8 +2241,7 @@ mod tests {
         assert_eq!(process_slots(Profile::Media), 2);
     }
 
-    /// The redirected store is the one path a container's write lands in, and it
-    /// is decided by the path rather than by the write having succeeded.
+    /// The store is decided by the path, not by the write having succeeded.
     #[test]
     fn the_container_store_is_recognised_by_its_path() {
         let Some(local) = std::env::var_os("LOCALAPPDATA") else {
@@ -2545,11 +2268,9 @@ mod tests {
         ));
     }
 
-    /// A write from a process that is not in a container reaches the user's own
-    /// temporary directory, and says so: `store` is a fact about a redirected
-    /// path, not a name for the benign case. The three measurements the report
-    /// is built on have to answer "not confined" for a process that is not — one
-    /// stuck on a single answer would certify a sandbox that is not there.
+    /// A process that is not in a container reaches the user's own temporary
+    /// directory and says so. A measurement stuck on one answer would certify a
+    /// sandbox that is not there.
     #[test]
     fn this_process_reports_itself_unconfined() {
         assert!(!is_app_container(), "a test process is not in a container");
@@ -2568,9 +2289,8 @@ mod tests {
             "nothing redirects this process's writes"
         );
 
-        // Nothing named a job for this process, so it must not claim the job's
-        // limits: either there is no job at all or it is one the host made,
-        // whose values are not these.
+        // No job named for this process, so no limits may be claimed: either there
+        // is none, or it is the host's and its values are not these.
         for slots in [1, 2] {
             assert!(
                 job_limits(slots).is_err(),
@@ -2581,9 +2301,7 @@ mod tests {
 
     /// A package SID that belongs to no file on this host, as owned bytes.
     ///
-    /// Derived rather than created: the question these tests ask is about an ACL,
-    /// and a name is all the derivation needs. Nothing is registered by it, so a
-    /// test leaves no profile behind.
+    /// Derived rather than created, so a test leaves no profile behind.
     fn package_sid(name: &str) -> Vec<u8> {
         let name: Vec<u16> = OsStr::new(name)
             .encode_wide()
@@ -2602,13 +2320,10 @@ mod tests {
         unsafe { std::slice::from_raw_parts(sid.cast::<u8>(), length) }.to_vec()
     }
 
-    /// `ALL APPLICATION PACKAGES`, the wildcard principal a tree the OS or an
-    /// installer granted carries.
+    /// `ALL APPLICATION PACKAGES`, the wildcard principal a granted tree carries.
     ///
-    /// Not a package's own SID: `WinBuiltinAnyPackageSid` is `S-1-15-2-1`, and the
-    /// name-derived SID above is one package, which the shortcut does not answer
-    /// for. Building the wildcard here is what [`dacl_grants_any_package`] builds
-    /// when it looks for it.
+    /// `WinBuiltinAnyPackageSid` is `S-1-15-2-1`; the name-derived SID above is one
+    /// package, which the shortcut does not answer for.
     fn any_package_sid() -> Vec<u8> {
         let mut sid = [0u8; MAX_SID_BYTES];
         let mut length = size_of_val(&sid) as u32;
@@ -2660,10 +2375,9 @@ mod tests {
         (dacl, descriptor)
     }
 
-    /// The `ALL APPLICATION PACKAGES` shortcut answers for the plain container and
-    /// not for the less privileged one. This is the whole reason the launch's
-    /// opt-out decision travels into the grant: a skipped ACE is a child that
-    /// cannot read the file it was started from, and the failure arrives as a
+    /// The shortcut answers for the plain container and not the less privileged one,
+    /// which is why the launch's opt-out decision travels into the grant: a skipped
+    /// ACE is a child that cannot read the file it was started from, reported as a
     /// loader death rather than as anything an operator can read.
     #[test]
     fn the_any_package_shortcut_is_asked_of_the_launch_that_needs_it() {
@@ -2698,8 +2412,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// An inherited-only ACE is what the object passes down, not what it grants,
-    /// and counting it would certify a read the object's own mask does not.
+    /// An inherited-only ACE is passed down, not granted.
     #[test]
     fn an_inherit_only_ace_does_not_grant_the_object() {
         use windows_sys::Win32::Security::{AddAccessAllowedAceEx, InitializeAcl};
@@ -2707,8 +2420,8 @@ mod tests {
 
         const ACL_REVISION: u32 = 2;
         let mask = FILE_GENERIC_READ;
-        // `_owned` is what the pointer points into, and it outlives every use of
-        // it: the shadowing below does not free it.
+        // `_owned` outlives every use of the pointer: the shadowing does not free
+        // it.
         let sid_owned = package_sid("Nanofile.Test.InheritOnly");
         let sid = sid_owned.as_ptr().cast_mut().cast::<c_void>();
 

@@ -1,24 +1,19 @@
 //! The interpreter a script helper's `#!` line names.
 //!
-//! A helper can be a script, and every platform that runs one has to allow the
-//! program the kernel starts before the script's own code: `linux.rs` grants it
-//! through Landlock, `seatbelt.rs` through the profile text. The `#!` line is
-//! where that path is written down, so it is read rather than guessed at from a
-//! list of names.
+//! A helper can be a script, so the program the kernel starts before its own code has
+//! to be granted: `linux.rs` does it through Landlock, `seatbelt.rs` through the
+//! profile text. The `#!` line is read rather than guessed at from a list of names.
 //!
-//! This lives in its own file because the aarch64 syscall check in CI compiles
-//! the real `linux.rs` against a hand-written parent module, and copies this file
-//! beside it: one implementation, on every platform that runs a helper.
+//! It lives in its own file because the aarch64 CI check compiles the real `linux.rs`
+//! against a hand-written parent module and copies this file beside it.
 
 use std::path::{Path, PathBuf};
 
 /// The interpreter the helper names, when it has one.
 ///
-/// Only an absolute path counts, and a bare name is not how the kernel resolves a
-/// shebang either — it does not search `PATH`. `#!/usr/bin/env ffmpeg` therefore
-/// names `env` and not `ffmpeg`: the second program is one the grant does not
-/// reach, which is the caller's to configure away rather than a reason to widen
-/// the grant.
+/// Only an absolute path counts: the kernel does not search `PATH` for a shebang.
+/// `#!/usr/bin/env ffmpeg` names `env`, not `ffmpeg`, and the second program is the
+/// caller's to configure away rather than a reason to widen the grant.
 pub(crate) fn interpreter(helper: &Path) -> Option<PathBuf> {
     use std::io::Read as _;
 
@@ -27,9 +22,8 @@ pub(crate) fn interpreter(helper: &Path) -> Option<PathBuf> {
     let read = file.read(&mut head).ok()?;
     let line = std::str::from_utf8(&head[..read]).ok()?;
     let rest = line.strip_prefix("#!")?;
-    // The set the kernel's `isspace` ends the interpreter's name on, so a CRLF
-    // or a form feed after the path does not become part of it — a grant written
-    // for `/bin/sh\r` would name nothing and look like a refusal.
+    // The kernel's `isspace` set, so a CRLF after the path does not become part of it:
+    // a grant for `/bin/sh\r` would name nothing and look like a refusal.
     let program = rest
         .split(['\n', '\r', '\t', '\x0b', '\x0c', ' '])
         .find(|token| !token.is_empty())?;
@@ -41,13 +35,9 @@ pub(crate) fn interpreter(helper: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    /// A script's own interpreter is read from its first line, and only an
-    /// absolute path counts.
-    ///
-    /// Unix-only: a shebang names a unix interpreter, and `is_absolute` on
-    /// Windows answers false for `/bin/dash` — the path the kernel would run is
-    /// not a Windows path at all. The reader itself is exercised on every
-    /// platform by the seatbelt tests that build a profile text around it.
+    /// A script's interpreter is read from its first line, and only an absolute path
+    /// counts. Unix-only: `is_absolute` on Windows answers false for `/bin/dash`, and
+    /// the reader is exercised there by the seatbelt tests.
     #[test]
     fn a_script_names_its_own_interpreter() {
         let path = std::env::temp_dir().join(format!(

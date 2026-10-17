@@ -1,18 +1,15 @@
 //! Media frame extraction, in the confined child.
 //!
-//! ffmpeg is an external program, so this is the one job that executes a helper.
-//! The helper is the configured `storage.ffmpeg_path` and nothing else: the
-//! parent names it on the child's command line, the child's own grants reach
-//! exactly that file, and the request cannot substitute another.
+//! ffmpeg is an external program, so this is the one job that executes a helper. The helper
+//! is the configured `storage.ffmpeg_path` and nothing else: the parent names it on the
+//! child's command line, the child's grants reach exactly that file, and the request cannot
+//! substitute another.
 //!
-//! The parent writes the media to a scratch file first — ffmpeg has to seek a
-//! container to find a frame — and hands over that one path. The child runs
-//! ffmpeg with the frame on a pipe, decodes and resizes it, and answers with the
-//! encoded thumbnail. Nothing of the media ever reaches the server process.
+//! The parent writes the media to a scratch file — ffmpeg has to seek a container — and hands
+//! over that path; the child decodes a frame and answers with the encoded thumbnail.
 //!
-//! The request is `NFX1`, one kind byte, a little-endian `u32` target size, a
-//! little-endian `u16` path length and that many path bytes. The reply is the
-//! common frame: `P`/`J` for an encoded image, `U` for a refusal.
+//! Request: `NFX1`, one kind byte, a little-endian `u32` target size, a little-endian `u16`
+//! path length and that many path bytes. Reply: the common frame, `P`/`J` or `U`.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -22,7 +19,6 @@ use crate::sandbox::worker::{self, RunOutcome};
 use crate::sandbox::{Grants, JobVerdict, Profile};
 use crate::thumbnail_util::{self, ThumbFormat};
 
-/// What the source is, which decides how ffmpeg is asked for a frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     /// A frame from the video stream (~1s in, first frame as fallback).
@@ -56,15 +52,13 @@ impl Kind {
 /// most a few megabytes even before the resize; this bounds the pipe read.
 const MAX_FRAME_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Most bytes of the source path in a request.
 const MAX_PATH_BYTES: usize = 4096;
 
 /// The media the self-test decodes: two seconds of a 64×64 test pattern.
 ///
-/// The child has nothing to open, so it travels in the binary. Checked in
-/// rather than generated because the profile is measured on hosts with no
-/// fixture tooling, and encoded with the native MPEG-4 codec every build of
-/// `ffmpeg` carries. Regenerate with:
+/// The child has nothing to open, so it travels in the binary; it is checked in because the
+/// profile is measured on hosts with no fixture tooling, and encoded with the native MPEG-4
+/// codec every build of `ffmpeg` carries. Regenerate with:
 ///
 /// ```text
 /// ffmpeg -y -f lavfi -i testsrc=duration=2:size=64x64:rate=5 \
@@ -72,25 +66,14 @@ const MAX_PATH_BYTES: usize = 4096;
 /// ```
 pub(crate) const PROBE_MEDIA: &[u8] = include_bytes!("../../../tests/fixtures/probe.mp4");
 
-/// The thumbnail size the self-test asks for, the size a request usually asks
-/// for as well.
 const PROBE_SIZE: u32 = 48;
 
 /// The path a media grant and a media request must agree on.
 ///
-/// The Seatbelt rule is a `(literal …)` for the resolved file, and the child has
-/// to open that same path: a macOS probe measured
-/// `parse=media-failed(... Error opening input: Operation not permitted … /var/folders/…/nanofile-media-probe-….mp4)`
-/// with the grant written for `/private/var/folders/…` — `TMPDIR` is reached
-/// through the `/var` symlink on every Mac, so the profile named a path the
-/// helper's `open` never used. Resolving the scratch path once, before it is
-/// named in the request and on the child's command line, is what makes the two
-/// agree; the helper's own grant is resolved for the same reason (see
-/// `worker::invocation`).
-///
-/// Elsewhere the path is returned as it was: Landlock rules are on the object
-/// rather than the spelling, and Windows `canonicalize` returns a `\\?\` path
-/// that is not what this binary was invoked as.
+/// A Seatbelt `(literal …)` is written for the resolved file and the child must open that
+/// same path: `TMPDIR` is reached through the `/var` symlink on every Mac, so a grant
+/// written from the typed path would not match. Elsewhere the path is returned as it was —
+/// Landlock rules are on the object, and Windows `canonicalize` returns a `\\?\` path.
 pub(crate) fn granted_source(source: &Path) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
@@ -102,7 +85,6 @@ pub(crate) fn granted_source(source: &Path) -> PathBuf {
     }
 }
 
-/// Extract a thumbnail for `source` with `ffmpeg`, in the confined child.
 pub fn thumbnail(
     kind: Kind,
     source: &Path,
@@ -129,7 +111,6 @@ pub fn thumbnail(
     }
 }
 
-/// The request the parent sends.
 fn request(kind: Kind, size: u32, source: &Path) -> Result<Vec<u8>, String> {
     let path = source
         .to_str()
@@ -147,7 +128,6 @@ fn request(kind: Kind, size: u32, source: &Path) -> Result<Vec<u8>, String> {
     Ok(request)
 }
 
-/// The child's half of the protocol.
 pub fn serve(grants: Grants<'_>) -> anyhow::Result<()> {
     let mut stdin = std::io::stdin().lock();
     let mut head = [0u8; 11];
@@ -171,9 +151,8 @@ pub fn serve(grants: Grants<'_>) -> anyhow::Result<()> {
             .map_err(|_| anyhow::anyhow!("the media source path is not UTF-8"))?,
     );
 
-    // The child reads the one file it was granted, whatever the request says:
-    // the path travels in the request only so the parent and the child agree on
-    // which file that is, and a mismatch is a request this profile will not run.
+    // The path travels in the request only so the two sides agree on the file; a
+    // mismatch is a request this profile will not run.
     let Some(granted) = grants.source else {
         return worker::write_frame(b'U', b"the media profile has no source grant");
     };
@@ -197,9 +176,8 @@ pub fn serve(grants: Grants<'_>) -> anyhow::Result<()> {
 
 /// Grab one frame and encode the thumbnail a request answers with.
 ///
-/// [`serve`] and the self-test both run this one call, so what the probe
-/// measures is the work a request does — read the granted file, demux it,
-/// decode a frame, resize and encode — rather than a helper that merely starts.
+/// [`serve`] and the self-test both run this call, so the probe measures the work a request
+/// does, not a helper that merely starts.
 fn encoded_thumbnail(
     helper: &Path,
     kind: Kind,
@@ -211,22 +189,15 @@ fn encoded_thumbnail(
         .map_err(|error| FrameError::Failed(error.to_string()))
 }
 
-/// Why the helper handed over no frame.
-///
-/// The two cases are different failures: one is the environment (the helper
-/// never ran), the other is the input (it ran and produced nothing usable).
-/// The report keeps them apart; the reply frame does not need to, because both
-/// are a refusal.
+/// Why the helper handed over no frame: the environment (never ran) or the input (ran and
+/// produced nothing usable). The report keeps them apart; a refusal is a refusal.
 #[derive(Debug)]
 pub(crate) enum FrameError {
-    /// The helper could not be started at all.
     Unavailable(String),
-    /// The helper ran and produced no frame this profile can use.
     Failed(String),
 }
 
 impl FrameError {
-    /// The message a refusal frame carries and the report token names.
     fn message(&self) -> &str {
         match self {
             FrameError::Unavailable(why) | FrameError::Failed(why) => why,
@@ -234,10 +205,7 @@ impl FrameError {
     }
 }
 
-/// Run the helper once and hand back the PNG frame it wrote to its stdout.
-///
-/// Shared with the service's own tests, which drive the invocation without the
-/// sandbox to check the arguments ffmpeg is given.
+/// Run the helper once and hand back the PNG frame it wrote to stdout.
 pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec<u8>, FrameError> {
     // Video is tried a second in before the first frame; a short clip has no
     // second to seek to, and that attempt failing is not a refusal.
@@ -264,10 +232,7 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
         command
             .arg("-frames:v")
             .arg("1")
-            // One frame, one thread: the child carries tight descriptor and
-            // address-space limits, and ffmpeg's frame-threaded encoder asks for
-            // more than those leave. The frame is a thumbnail, so there is
-            // nothing to gain from asking for parallelism.
+            // One frame, one thread: frame threading asks for more than the child's limits leave.
             .arg("-threads")
             .arg("1")
             .arg("-filter_threads")
@@ -279,12 +244,9 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
             .arg("-c:v")
             .arg("png")
             .arg("pipe:1")
-            // The protocol's own stdin is not the helper's to read: it is a pipe
-            // this side closes at once, so the helper sees end of input. A *null
-            // device* would be the obvious way to say that and it is the wrong
-            // one: a confinement layer decides whether that device may be opened,
-            // and both Seatbelt (writing it) and the Windows container have
-            // refused, which turns a stdio detail into "the helper cannot run".
+            // The helper's stdin is a pipe this side closes at once, not the null device: a
+            // confinement layer decides whether that device may open, and both Seatbelt and the
+            // Windows container have refused it.
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -323,19 +285,9 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
 
 /// The command that starts the helper.
 ///
-/// Two things about the *spawn* are macOS's own, and CI measures both. The
-/// standard library starts a program with `posix_spawn` there, and a Seatbelt
-/// profile that grants `process-exec` as a literal refuses that path — its
-/// fileport machinery is not the operation the profile allows — so an empty
-/// `pre_exec` hook is what makes the library fork and exec instead, which is the
-/// operation the grant is written for. The hook must be async-signal-safe, and
-/// doing nothing is.
-///
-/// What was *not* the problem is the grant: a synthetic profile carrying the same
-/// text starts `/bin/echo` from `/bin/bash` on that platform. The two refusals
-/// looked identical from here — `media-unavailable(Operation not permitted)` —
-/// and each had to be removed on its own: the null device first (an open for
-/// write, which the profile did not grant), then `posix_spawn`.
+/// The standard library uses `posix_spawn` on macOS, which a Seatbelt `process-exec` literal
+/// does not allow, so an empty `pre_exec` hook makes the library fork and exec instead — the
+/// operation the grant is written for, and async-signal-safe because it does nothing.
 fn helper_command(helper: &Path) -> Command {
     #[allow(unused_mut)]
     let mut command = Command::new(helper);
@@ -347,25 +299,16 @@ fn helper_command(helper: &Path) -> Command {
     command
 }
 
-/// Run the helper with its three streams on pipes, stdin closed.
-///
-/// `Command::output` would set stdin to the null device for us, which is the one
-/// thing a confinement layer may refuse — see [`grab_frame`]'s note. Closing the
-/// write end of the stdin pipe here is what the helper sees as end of input, and
-/// it needs no device to be granted.
+/// Run the helper with its streams on pipes and stdin closed: `Command::output` would set
+/// stdin to the null device a confinement layer may refuse.
 fn run_helper(command: &mut Command) -> std::io::Result<std::process::Output> {
     let mut child = command.spawn()?;
     drop(child.stdin.take());
     child.wait_with_output()
 }
 
-/// The self-test: decode a frame under the profile, the way a request does.
-///
-/// The grant reaching the helper and its libraries is half the answer; this is
-/// the other half. It hands the child a file the parent wrote and asks for a
-/// thumbnail from it, through the same call a request takes, so a profile that
-/// cannot read the source or cannot decode what it holds says so here rather
-/// than on the first video a user uploads.
+/// The self-test: decode a frame under the profile, the way a request does — the other half
+/// of the answer beside the grant reaching the helper.
 pub fn probe(grants: Grants<'_>) -> (String, JobVerdict) {
     let Some(helper) = grants.helper else {
         return ("media-no-helper".to_string(), JobVerdict::Nothing);
@@ -390,10 +333,7 @@ pub fn probe(grants: Grants<'_>) -> (String, JobVerdict) {
     (token_text, job)
 }
 
-/// One token out of a failure message.
-///
-/// The report's detail is comma-separated and whitespace-free, so a reason
-/// carrying either would read as more than one fact.
+/// One token out of a failure message: the detail is comma-separated and whitespace-free.
 fn token(why: &str) -> String {
     why.chars()
         .map(|character| {
@@ -408,23 +348,16 @@ fn token(why: &str) -> String {
 
 /// Start the helper by hand, and say what the kernel answered.
 ///
-/// macOS is the one platform where `parse=` has said
-/// `media-unavailable(Operation not permitted)` while the profile grants
-/// `process-exec (literal <helper>)`, the child can read that binary, and a
-/// synthetic profile with the same text starts a second generation. So this asks
-/// the kernel directly, in the child that is failing: `fork`, `execve` the helper
-/// with `-version`, its output on `/dev/null` (opened here, where the write is
-/// granted). `ok` means the grant is fine and the library's spawn path is what
-/// fails; `exec=<errno>` means the sandbox refuses *this* child, and the errno is
-/// what the sandbox log has an operation for.
+/// In the child that is failing: `fork`, `execve` the helper with `-version`, output on
+/// `/dev/null`. `ok` means the grant is fine and the library's spawn path fails;
+/// `exec=<errno>` means the sandbox refuses this child.
 #[cfg(target_os = "macos")]
 fn hand_start(helper: &Path) -> String {
     use std::ffi::CString;
     use std::os::fd::AsRawFd as _;
     use std::os::unix::ffi::OsStrExt as _;
 
-    /// What the copy exits with when the `execve` itself failed: the errno,
-    /// offset so it cannot be confused with the helper's own exit code.
+    /// The errno, offset so it cannot be confused with the helper's exit code.
     const EXEC_FAILED: i32 = 100;
 
     let Ok(program) = CString::new(helper.as_os_str().as_bytes()) else {
@@ -482,7 +415,6 @@ fn hand_start(helper: &Path) -> String {
 mod tests {
     use super::*;
 
-    /// The kind survives the wire, and nothing else does.
     #[test]
     fn a_kind_round_trips() {
         for kind in [Kind::Video, Kind::Audio, Kind::Image] {
@@ -491,7 +423,6 @@ mod tests {
         assert_eq!(Kind::from_byte(b'?'), None);
     }
 
-    /// The request names the operation, the size and the source path.
     #[test]
     fn the_request_carries_the_source_path() {
         let request = request(Kind::Video, 48, Path::new("/tmp/a.bin")).expect("request");
@@ -502,7 +433,6 @@ mod tests {
         assert_eq!(&request[11..], b"/tmp/a.bin");
     }
 
-    /// A source that is not UTF-8 is refused before anything is spawned.
     #[test]
     fn a_non_utf8_source_is_refused() {
         #[cfg(unix)]

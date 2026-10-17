@@ -8,21 +8,19 @@
 //!
 //! # Protocol
 //!
-//! Request, on the child's stdin: `NFX1`, one byte naming the [`Plan`], then the
-//! file's bytes to end of file. Reply, on stdout: `T` or `U`, a little-endian
-//! `u32` length, then that many bytes of UTF-8 — the text, or the reason the
-//! document is not indexable. `--selftest` replaces the request with a report
-//! line and no reply.
+//! Request on stdin: `NFX1`, one byte naming the [`Plan`], then the file's bytes to
+//! end of file. Reply on stdout: `T` or `U`, a little-endian `u32` length, then that
+//! many bytes of UTF-8 — the text, or the reason the document is not indexable.
+//! `--selftest` replaces the request with a report line and no reply; `--probe`
+//! runs the startup probe and exits non-zero when the worker is unavailable.
 //!
 //! # Why a process, not a thread
 //!
-//! What a parser can do to the *server* is bounded by what the process carrying
-//! it may do. A memory limit, a file boundary and a CPU limit are all per-process
-//! on the platforms this ships to, and a parser that overflows its stack or
-//! aborts on a failed allocation takes its own process down instead of the
-//! server. The panic boundary in [`crate::indexer::extract::guard`] covers
-//! panics only; this
-//! covers everything a panic cannot.
+//! A memory limit, a file boundary and a CPU limit are all per-process, and a
+//! parser that overflows its stack or aborts on a failed allocation takes its own
+//! process down instead of the server. The panic boundary in
+//! `crate::indexer::extract::guard` covers panics only; this covers everything a
+//! panic cannot.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -49,9 +47,7 @@ pub(crate) const MAGIC: &[u8; 4] = b"NFX1";
 
 /// Wall-clock ceiling for one document.
 ///
-/// The slowest legitimate document measured here took 6.6 seconds with the
-/// previous PDF parser and a fraction of that with the current one; the child
-/// also carries its own CPU limit, so this only has to catch a hang.
+/// The child also carries its own CPU limit, so this only has to catch a hang.
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Wall-clock ceiling for the startup self-test.
@@ -60,9 +56,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Wall-clock ceiling for one image request: decode, resize, encode.
 pub const IMAGE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Wall-clock ceiling for one media request: ffmpeg plus the resize of the
-/// frame it produced. Longer than the others because ffmpeg has to open and
-/// seek a whole container before it can hand over one frame.
+/// Wall-clock ceiling for one media request: ffmpeg plus the resize of the frame.
+/// Longer than the others because ffmpeg seeks a whole container first.
 pub const MEDIA_TIMEOUT: Duration = Duration::from_secs(35);
 
 /// Most bytes of a reply the parent will read.
@@ -70,22 +65,18 @@ const MAX_REPLY_BYTES: u64 = (MAX_INDEXED_CONTENT_BYTES + (1 << 20)) as u64;
 
 /// Most bytes of the child's *diagnostics* the parent will hold.
 ///
-/// A parser that logs per page, or a document that makes it loop, would
-/// otherwise let the child spend the server's memory through the one channel
-/// nothing bounds: the reply is capped and so is the request, and stderr was
-/// not. What is kept is the head, which is where the reason is; the rest is
-/// drained and dropped so the child never blocks writing into a full pipe.
+/// The reply is capped and so is the request, and stderr would otherwise be the
+/// one unbounded channel. The head is where the reason is; the rest is drained and
+/// dropped so the child never blocks on a full pipe.
 const MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
 
 /// How long the parent waits for the protocol pipes after the child is gone.
 ///
-/// The child has already exited by then, so what is left to read is at most one
-/// pipe buffer. The deadline exists for the case it is not: a process the child
-/// started can hold the inherited pipes open past its parent's death, and an
-/// unbounded read there would hold this call — and the caller's extraction
-/// permit — for as long as that process lives. Whatever was not read by the
-/// deadline is abandoned and the run is decided on what *was* read, which is
-/// the fail-closed direction: no reply is a failed document.
+/// What is left to read is at most one pipe buffer, unless a process the child
+/// started holds the pipes open past its death; an unbounded read would hold this
+/// call and the caller's extraction permit for as long as that process lives. What
+/// was not read by the deadline is abandoned, which is fail-closed: no reply is a
+/// failed document.
 const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// How long an unavailable sandbox is left alone before it is probed again.
@@ -94,17 +85,15 @@ const UNAVAILABLE_RETRY: Duration = Duration::from_secs(300);
 /// `STATUS_DLL_INIT_FAILED`, which Windows gives a process whose loader could
 /// not finish.
 ///
-/// Nothing of the document has been read at that point — the child confines
-/// itself before it reads its request, and the loader runs before that — so this
-/// is the environment rather than the file, and the document is a failure the
-/// backfill retries rather than a verdict on its bytes.
+/// Nothing of the document has been read at that point — the child confines itself
+/// before it reads its request — so this is the environment, and the document is a
+/// retryable failure rather than a verdict on its bytes.
 #[cfg(windows)]
 const STATUS_DLL_INIT_FAILED: i32 = 0xC000_0142u32 as i32;
 
 /// Exit code the child uses when it will not run unconfined.
 ///
-/// Nothing the child does on its own uses it, and it is outside the range a
-/// shell reserves for "not executable" and "not found".
+/// Outside the range a shell reserves for "not executable" and "not found".
 const EXIT_SANDBOX_UNAVAILABLE: i32 = 125;
 
 /// The prefix of the child's own refusal, which the parent recognises when the
@@ -113,14 +102,11 @@ const SANDBOX_REFUSAL: &str = "extract-worker: sandbox unavailable";
 
 /// Which creation a child is started with.
 ///
-/// Windows is the only platform with more than one shape, and the three are the
-/// layers it can be given, strongest first: the AppContainer with a restricted
-/// token, the restricted token alone, and neither. Every one of them names the
-/// same job object, which is the resource bound — the item that must be there —
-/// so a host that refuses a layer loses that layer and not the feature.
-///
-/// The container is asked for first, and the two below it are what a host falls
-/// back to, each remembered so the launch that was refused is not repeated.
+/// Windows is the only platform with more than one shape, strongest first: the
+/// AppContainer with a restricted token, the restricted token alone, and neither.
+/// Every one names the same job object, so a host that refuses a layer loses that
+/// layer and not the feature. The container is asked for first, and each refusal is
+/// remembered so it is not repeated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Start {
     /// Whatever this host can give: the runner on macOS, and on Windows the
@@ -136,14 +122,10 @@ enum Start {
 }
 
 impl Start {
-    /// How a creation is named in the log, and in the report when it was passed
-    /// over.
+    /// How a creation is named in the log and in the report.
     ///
-    /// One word, and whitespace-free: the name travels into the report's detail,
-    /// which [`Report::line`] flattens into a single line before the parent reads
-    /// it, and the parent's parser does not turn the flattened whitespace back —
-    /// a reason carrying a space would reach the settings page as
-    /// `with_every_protection`.
+    /// One word, whitespace-free: a space in a reason would reach the settings page
+    /// as `with_every_protection`.
     fn label(self) -> &'static str {
         match self {
             Start::Confined => "confined",
@@ -156,10 +138,8 @@ impl Start {
 
     /// The token the report carries for the creation that answered.
     ///
-    /// Windows is the only platform with a name to report, and the only one where
-    /// it is not already in the child's report: the child measures the container
-    /// for itself (`container=appcontainer`, or `files=open`), but that the
-    /// parent never asked for one is something only this side knows.
+    /// The child measures the container itself (`container=appcontainer` or
+    /// `files=open`), but only the parent knows it never asked for one.
     #[cfg(windows)]
     fn token(self) -> &'static str {
         match self {
@@ -169,11 +149,8 @@ impl Start {
         }
     }
 
-    /// The creation below this one, where the platform has one.
-    ///
-    /// `None` is what ends the walk: it is the last creation this platform can
-    /// start a child with, and the reason it exists is that the alternative to a
-    /// weaker creation is not a stronger one but no child at all.
+    /// The creation below this one, where the platform has one; `None` ends the
+    /// walk.
     fn weaker(self) -> Option<Self> {
         match self {
             Start::Confined => {
@@ -196,13 +173,10 @@ impl Start {
 
 /// The facts about one launch that only the parent can see, appended to its report.
 ///
-/// A child measures its own token, its own limits and its own refusals. What it
-/// cannot see is which creation this side ended up using, why the strongest one
-/// did not work, and which flavour of container the kernel accepted. Those lived
-/// in the parent's log and on the `--probe` line — which meant the one place an
-/// admin looks, the Sandbox page, could show `files=open` with no reason beside
-/// it. Appending them to the report puts them where the answer is read, and
-/// `Report::notes` turns them into the notes the page renders.
+/// The child measures its own token, limits and refusals; only the parent knows
+/// which creation answered, why the strongest did not, and which container flavour
+/// the kernel accepted. Putting them on the report puts them where the Sandbox page
+/// reads them, and `Report::notes` renders them.
 fn with_parent_facts(mut report: Report, start: Start) -> Report {
     #[cfg(windows)]
     {
@@ -224,28 +198,21 @@ fn with_parent_facts(mut report: Report, start: Start) -> Report {
     report
 }
 
-/// What the child was asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Job {
-    /// Report the confinement this process could establish, and exit.
     Selftest,
-    /// Extract one file, reading the request from stdin.
     Extract,
 }
 
-/// What the parent did around this process that the child cannot see itself.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct External {
     /// The parent wrapped this process in the platform's runner (macOS
-    /// `sandbox-exec`), so files, the network and process creation are not its
-    /// own layers to establish.
+    /// `sandbox-exec`); the layers are not its own to establish.
     pub runner: bool,
 }
 
-/// What the parent learned from running the child.
 #[derive(Debug)]
 pub enum Outcome {
-    /// The child produced a verdict for this document.
     Extracted(Extracted),
     /// The child could not be run, or would not run without confinement. An
     /// environment problem: the document is a *failure* the backfill retries.
@@ -255,17 +222,14 @@ pub enum Outcome {
     Failed(&'static str),
 }
 
-/// Whether the worker can run, and how well it confines itself.
 #[derive(Debug, Clone)]
 pub enum Status {
-    /// The child ran and reported its confinement.
     Ready(Report),
     /// The child could not be run, or reported less confinement than the
     /// policy accepts. The string is what to log.
     Unavailable(String),
 }
 
-/// Run the child side of the protocol and exit.
 pub fn run(
     job: Job,
     external: External,
@@ -293,15 +257,12 @@ pub fn run(
         measure,
         probe,
     );
-    // The token claim is not repeated here: on Windows the child reads its own
-    // token back (see `windows::confine`), and no other platform starts a child
-    // with one.
+    // The token claim is not repeated: Windows reads its own token back, and no
+    // other platform starts a child with one.
 
     if job == Job::Selftest {
-        // Parsing is the other half of the answer: the report says what was
-        // installed, this says the installed thing can still do its work. The
-        // token is what the parent reads; the typed verdict beside it is what
-        // the parent decides on, and both come from the one measurement.
+        // The report says what was installed; this says the installed thing can
+        // still do its work. Both come from the one measurement.
         let (items, verdict) = probe_parse(profile, grants);
         report.detail.push_str(&format!(",parse={items}"));
         report.job = Some(verdict);
@@ -330,16 +291,13 @@ pub fn run(
 
 /// Print what the probe a serving process runs at startup found, and exit.
 ///
-/// `extract-worker --probe` calls this. It starts the child exactly as the
-/// server does — the platform runner around it included — which makes it the
-/// only way to observe the macOS profile's effect from outside, and what CI
-/// asserts on.
+/// `extract-worker --probe` calls this. It starts the child exactly as the server
+/// does, the platform runner included, which is what CI asserts on.
 pub fn probe_report(profile: Profile) -> anyhow::Result<()> {
     match status(profile) {
         Status::Ready(report) => {
-            // The parent's half of the answer is already in the report: `probe`
-            // appends it, so the line the operator reads here, the line the log
-            // carries and the report the settings page renders are the same one.
+            // `probe` already appended the parent's half, so this line, the log
+            // and the settings page carry the same report.
             println!("{} text_chars={MAX_INDEXED_CONTENT_BYTES}", report.line());
             Ok(())
         }
@@ -349,14 +307,12 @@ pub fn probe_report(profile: Profile) -> anyhow::Result<()> {
     }
 }
 
-/// The parser limits the child sets for itself.
 pub fn configure_parser_limits() {
     crate::indexer::extract::configure_limits();
 }
 
-/// The self-test line: the confinement report, plus the parser limits this
-/// process set for itself, which is the one thing about the child the parent
-/// cannot otherwise see.
+/// The self-test line: the confinement report plus the parser limits this process
+/// set for itself.
 fn selftest_line(report: &Report) -> String {
     format!(
         "{} text_chars={} ",
@@ -369,11 +325,9 @@ fn selftest_line(report: &Report) -> String {
 
 /// Do the profile's own work here, under the confinement just installed.
 ///
-/// One whitespace-free verdict per item, so the report stays a line the parent
-/// can parse and a probe step can `grep`, beside the profile's own answer as a
-/// [`JobVerdict`]. What a caller can act on is "this confined worker cannot do
-/// its job", and *why* belongs to the job's own tests, which can say more than a
-/// token can.
+/// One whitespace-free verdict per item, beside the profile's own [`JobVerdict`]:
+/// what a caller can act on is "this confined worker cannot do its job", and *why*
+/// belongs to the job's own tests.
 fn probe_parse(profile: Profile, grants: crate::sandbox::Grants<'_>) -> (String, JobVerdict) {
     match profile {
         Profile::Documents => document_verdicts(),
@@ -384,12 +338,10 @@ fn probe_parse(profile: Profile, grants: crate::sandbox::Grants<'_>) -> (String,
 
 /// Parse the probe documents, in the confined child.
 ///
-/// Every way a parser can decline reads as `unsupported`: a panic caught by
-/// [`crate::indexer::extract::guard`], a document the reader will not open, a
-/// plan that stopped being supported. What separates `ok` from `text-differs`
-/// is the *whole* text: a parser that stopped early, or a limit that cut it
-/// short, is a worker that no longer does its job even though it returned
-/// something containing the words the fixture is made of.
+/// Every way a parser can decline reads as `unsupported`. What separates `ok` from
+/// `text-differs` is the *whole* text: a parser that stopped early, or a limit that
+/// cut it short, returned something containing the fixture's words but is not doing
+/// its job.
 fn document_verdicts() -> (String, JobVerdict) {
     let mut overall = JobVerdict::Ok;
     let items = crate::indexer::extract::PROBE_DOCUMENTS
@@ -412,9 +364,7 @@ fn document_verdicts() -> (String, JobVerdict) {
                         ("unsupported", JobVerdict::Unsupported)
                     }
                 };
-            // The profile's answer is its first item that is not `ok`: a reader
-            // that truncated one document did not do its job, whichever order
-            // the documents are in.
+            // The answer is the first item that is not `ok`.
             if overall == JobVerdict::Ok {
                 overall = job;
             }
@@ -425,7 +375,6 @@ fn document_verdicts() -> (String, JobVerdict) {
     (items, overall)
 }
 
-/// Read one request: magic, plan byte, then the file to end of input.
 fn read_request() -> anyhow::Result<(Plan, Vec<u8>)> {
     let mut stdin = std::io::stdin().lock();
     let mut prologue = [0u8; 5];
@@ -451,7 +400,6 @@ pub(crate) fn write_frame(tag: u8, body: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Write the reply to a document extraction.
 fn write_reply(extracted: Extracted) -> anyhow::Result<()> {
     let (tag, body) = match extracted {
         Extracted::Text(text) => (b'T', text.into_bytes()),
@@ -460,23 +408,22 @@ fn write_reply(extracted: Extracted) -> anyhow::Result<()> {
     write_frame(tag, &body)
 }
 
-/// What a confined job produced.
 #[derive(Debug)]
 pub enum RunOutcome {
-    /// The child answered: the reply's tag and its body, already framed and
-    /// checked.
-    Reply { tag: u8, body: Vec<u8> },
+    /// The reply's tag and body, already framed and checked.
+    Reply {
+        tag: u8,
+        body: Vec<u8>,
+    },
     /// The environment: the sandbox or the child's loader refused.
     Unavailable(String),
-    /// The request itself: a crash, a kill, a timeout or a bad reply.
     Failed(&'static str),
 }
 
 /// Run one confined request for `profile` and collect its reply.
 ///
-/// The request is written verbatim, so each job owns its own framing; the reply
-/// comes back as its tag and body, which is what lets one transport carry text,
-/// an encoded image and JSON.
+/// The request is written verbatim, so each job owns its framing; the reply comes
+/// back as a tag and body, which lets one transport carry text, an image and JSON.
 pub fn run_request(
     profile: Profile,
     timeout: Duration,
@@ -486,19 +433,14 @@ pub fn run_request(
     if let Status::Unavailable(why) = status(profile) {
         return RunOutcome::Unavailable(why);
     }
-    // A request's child has no probe file: the files item was measured by the
-    // probe that ran once, and the child claims it from the mechanism it
-    // installed. On Windows that layer is not re-measured per request at all
-    // (`files_are_measured`), so the cost of a private file per request buys
-    // nothing.
+    // A request's child has no probe file: the files item was measured once, and
+    // the child claims it from the mechanism it installed.
     let Some(invocation) = invocation(configured_requirement(), profile, grants, None) else {
         return RunOutcome::Unavailable("cannot resolve the sandbox worker".to_string());
     };
 
-    // The creation the probe settled on: a request's child is started the way
-    // the one that reported was, and the probe ran before any request could. The
-    // reason record starts here, because a request's launch is a sequence of its
-    // own — one creation, and the grants this request made.
+    // The creation the probe settled on. The reason record starts here, because a
+    // request's launch is a sequence of its own.
     crate::sandbox::clear_container_shortfall();
     let start = rung(profile);
     let run = match run_child(&invocation, Some(request), timeout, start, profile, grants) {
@@ -514,10 +456,8 @@ pub fn run_request(
     match verdict(run.exit_code, &run.stdout, &run.stderr) {
         Verdict::Reply { tag, body } => RunOutcome::Reply { tag, body },
         Verdict::Unavailable(why) => {
-            // The probe said this profile was ready; a request that finds it
-            // otherwise is news about the host. Drop the cached answer so the
-            // next call re-probes rather than spawning a child that would be
-            // refused the same way.
+            // The probe said ready; a request that finds otherwise is news about
+            // the host. Drop the answer so the next call re-probes.
             mark_unavailable(profile);
             RunOutcome::Unavailable(why)
         }
@@ -527,8 +467,8 @@ pub fn run_request(
 
 /// Extract one document in the child, or explain why that did not happen.
 ///
-/// The caller decides what a failure means: an [`Outcome::Unavailable`] is the
-/// environment, an [`Outcome::Failed`] is the document.
+/// The caller decides what a failure means: [`Outcome::Unavailable`] is the
+/// environment, [`Outcome::Failed`] the document.
 pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
     // The switch is the admin's own choice, not an environment problem: the
     // document is skipped (and not retried forever) rather than failed.
@@ -563,22 +503,17 @@ pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
 
 /// The confinement status of one profile, probed once and cached.
 ///
-/// Per profile rather than per process: the media profile may execute ffmpeg
-/// where the others may not, so the two reports answer different questions and
-/// one must never stand in for the other.
+/// Per profile rather than per process: the media profile may execute ffmpeg where
+/// the others may not, so one report must never stand in for the other.
 ///
-/// The probe runs **without** the cache lock. It starts children and may try a
-/// second creation on Windows, and holding the lock across it would block every
-/// other profile's `status`/`available` call for as long as that takes — a
-/// request path calls this. Two threads that race here both probe and both
-/// store the same answer, which is cheaper than serialising every caller
-/// behind one host's slow launch.
+/// The probe runs **without** the cache lock: it starts children and may try a
+/// second creation, and holding the lock would block every other `status` call on a
+/// request path. Two threads that race both probe and store the same answer, which
+/// is cheaper than serialising every caller behind one slow launch.
 ///
-/// An answer belongs to the requirement it was measured under: the switch and
-/// the minimum decide what a report *means*, so a stored answer is only usable
-/// while the requirement that produced it is still the configured one. A probe
-/// that runs across a settings change is returned but never stored — the change
-/// cleared the cache, and publishing would put the old answer back.
+/// An answer belongs to the requirement it was measured under. A probe that runs
+/// across a settings change is returned but never stored — the change cleared the
+/// cache, and publishing would put the old answer back.
 pub fn status(profile: Profile) -> Status {
     let cache = STATUS.get_or_init(|| Mutex::new(HashMap::new()));
     let requirement = configured_requirement();
@@ -613,9 +548,7 @@ pub fn status(profile: Profile) -> Status {
     entry.requirement = requirement;
     match &status {
         Status::Ready(report) => {
-            // The items are logged one field apiece rather than summed up: a
-            // log reader greps for the layer that is missing, and a grade would
-            // have to be translated back into one.
+            // Logged one field apiece: a log reader greps for the missing layer.
             tracing::info!(
                 profile = profile.as_str(),
                 limits = report.protections.limits,
@@ -626,16 +559,10 @@ pub fn status(profile: Profile) -> Status {
                 "sandbox confinement"
             );
             if !report.protections.complete() {
-                // Why the protection is missing, where the parent is the only
-                // one that can say: a child whose token is not an AppContainer's
-                // reports `files=open`, and the reason the launch produced no
-                // container is a fact only this side saw. Read from the report
-                // rather than from the record it was built from: the report is
-                // the cached, immutable copy, while the record belongs to the
-                // last launch of any kind and a request may have started since.
-                //
-                // The feature runs either way: the layers are what this platform
-                // could add, and the bound that keeps the server up is in place.
+                // Why the protection is missing, where only the parent can say: a
+                // child whose token is not an AppContainer's reports `files=open`.
+                // Read from the report, the cached copy, not from the record, which
+                // belongs to the last launch of any kind.
                 if let Some(reason) = sandbox::container_refusal(&report.detail) {
                     tracing::warn!(
                         profile = profile.as_str(),
@@ -671,12 +598,9 @@ pub fn status(profile: Profile) -> Status {
 
 /// Mark one profile's cached answer stale after a request's child refused.
 ///
-/// The probe ran before any request could, so a request that finds the child
-/// unavailable is news: the host's confinement changed, or a launch the probe
-/// got is no longer working. Dropping the cached `Ready` and starting the same
-/// retry window an unavailable probe uses means the next call re-probes the
-/// host — and the requests in between are refused without spawning a child that
-/// would be refused the same way.
+/// The probe ran before any request, so this is news about the host. Dropping
+/// `Ready` and starting the retry window means the next call re-probes, and the
+/// requests in between are refused without spawning a doomed child.
 fn mark_unavailable(profile: Profile) {
     let Some(cache) = STATUS.get() else {
         return;
@@ -693,28 +617,21 @@ fn mark_unavailable(profile: Profile) {
     entry.retry_at = Some(Instant::now() + UNAVAILABLE_RETRY);
 }
 
-/// Detail for a probe that is waiting out [`UNAVAILABLE_RETRY`].
+/// Detail for a probe that is waiting out `UNAVAILABLE_RETRY`.
 const PROBE_PENDING: &str = "the extraction sandbox is unavailable (a probe is pending)";
 
 /// The report a profile can produce on this host, whatever the settings say.
 ///
-/// For the settings page: an admin who has switched the sandbox off still needs
-/// to see what the host *would* give, because that is what decides whether
-/// switching it back on changes anything. The answer is measured once and
-/// cached: it is a property of the host, not of a request.
+/// For an admin who switched the sandbox off and still needs to see what the host
+/// *would* give. Measured once and cached: it is a property of the host.
 ///
-/// **Measured, not judged**: the caller decides what the report means, and
-/// [`page_answer`] is the caller. A profile whose items are all in place and
-/// whose own job still failed has answered this question — with a report the page
-/// has to show, because the items are how an admin tells "the host cannot confine
-/// this" from "the helper cannot run". Judging here would throw that answer away
-/// and leave the page with nothing but a refusal sentence.
+/// **Measured, not judged**: the caller ([`page_answer`]) decides what it means. A
+/// profile whose items are in place and whose job still failed has answered the
+/// question, and the items are how an admin tells "the host cannot confine this"
+/// from "the helper cannot run".
 ///
-/// A *failure* is cached only for [`UNAVAILABLE_RETRY`], the same window the
-/// request path uses. A probe that could not run — a child that lost a race with
-/// the machine's load, a timeout — says nothing about the host, and caching it
-/// for the process's lifetime would leave the page reporting a host it never
-/// managed to ask.
+/// A *failure* is cached only for `UNAVAILABLE_RETRY`: a probe that could not run
+/// says nothing about the host.
 pub fn capability(profile: Profile) -> Result<Report, String> {
     let cache = CAPABILITY.get_or_init(|| Mutex::new(HashMap::new()));
     {
@@ -751,53 +668,35 @@ pub fn capability(profile: Profile) -> Result<Report, String> {
     measured
 }
 
-/// One profile's cached answer for the settings page.
 enum Measured {
-    /// The host answered, and this is what it said.
     Report { report: Report },
-    /// The probe did not produce an answer, and when to ask again.
     Failed { why: String, retry_at: Instant },
 }
 
 /// What the settings page shows for one profile: the host's answer, and what the
-/// host itself makes of it.
+/// host makes of it.
 ///
-/// The two are different questions and the page needs both. "This host and this
-/// profile cannot run the work" is a fact about the machine; "and the master
-/// switch is therefore irrelevant" is a fact about the settings. Both come from
-/// the one probe [`capability`] already ran — the host half is
-/// [`Requirement::accepts`] applied with the switch *on* plus the profile's own
-/// job verdict, which is the same call the request path makes — so putting them
-/// on the page costs no second child.
+/// Both come from the one probe [`capability`] ran — the host half is
+/// [`Requirement::accepts`] with the switch *on* plus the profile's job verdict —
+/// so the page costs no second child.
 ///
 /// The judgement lives *here* rather than in the probe, so a measured report
-/// survives it: a profile the host refuses is a band with four rows and a reason,
-/// not a band with nothing to read. Only [`PageAnswer::Unavailable`] — a probe
-/// that never answered — has no items to show.
-///
-/// The two fields are measured with the switch out of the picture on purpose: an
-/// admin who has switched the sandbox off still needs to see what the host would
-/// give, and the page is where the two facts are put back together. A caller that
-/// wants the decision the request path makes asks [`status`] instead.
+/// survives it: a refused profile is a band with rows and a reason. Only
+/// [`PageAnswer::Unavailable`], a probe that never answered, has no items. A caller
+/// that wants the request path's decision asks [`status`] instead.
 pub enum PageAnswer {
-    /// The host answered, and this is what it gives with the switch on.
     Measured {
         report: Report,
         /// Whether this profile would run if the master switch were on.
         host_runs: bool,
-        /// Why it would not, when the host is the reason.
         host_reason: Option<String>,
     },
-    /// The probe could not run at all, so there is nothing to decide on.
     Unavailable(String),
 }
 
 /// The page's answer for one profile.
 ///
-/// Measured under `Requirement::new(true)`: the switch is the page's other input,
-/// and a host that is only switched off has not been measured otherwise. The
-/// profile's own job comes first — a media profile whose helper cannot decode
-/// would not run the work however well the host confines it.
+/// Measured under `Requirement::new(true)`: the switch is the page's other input.
 pub fn page_answer(profile: Profile) -> PageAnswer {
     match capability(profile) {
         Ok(report) => match host_verdict(&report) {
@@ -818,10 +717,7 @@ pub fn page_answer(profile: Profile) -> PageAnswer {
 
 /// Whether the host alone can run one profile, and why not when it cannot.
 ///
-/// The master switch is left out: this is the half of the decision that belongs
-/// to the machine. The other half is the switch, and the page is where the two are
-/// combined — which is why the answer is not [`Requirement::accepts`] with the
-/// configured requirement.
+/// The master switch is left out: this is the half that belongs to the machine.
 fn host_verdict(report: &Report) -> Result<(), String> {
     if let Some(why) = job_refusal(report) {
         return Err(why);
@@ -834,16 +730,11 @@ fn host_verdict(report: &Report) -> Result<(), String> {
 
 /// Why a profile that passed every item may still not serve requests.
 ///
-/// The items say what the host allows; they cannot say whether the program the
-/// profile exists to run still does its work. Media is the profile whose whole
-/// job is one program, and its self-test decodes a frame — so a profile that
-/// installed everything and failed that has nothing left to offer. Every request
-/// would start the same doomed helper and answer 404, and the page would show it
-/// as ready. A profile with no helper configured is `Nothing`, not `Failed`:
-/// that is a state an admin chose, not a fault.
-///
-/// Documents and images are not gated on their verdict: a document the probe
-/// could not read is still attempted, and its outcome is recorded per file.
+/// The items cannot say whether the program the profile exists to run still works.
+/// Media's whole job is one program: a profile that installed everything and failed
+/// its frame decode would start a doomed helper on every request and 404. No helper
+/// configured is `Nothing`, a state an admin chose. Documents and images are not
+/// gated on their verdict, and their outcome is recorded per file.
 fn job_refusal(report: &Report) -> Option<String> {
     (report.profile.runs_helper() && report.job == Some(JobVerdict::Failed))
         .then(|| format!("the media profile cannot decode a frame: {}", report.detail))
@@ -851,51 +742,40 @@ fn job_refusal(report: &Report) -> Option<String> {
 
 /// The report this host gives one profile, with no judgement of it.
 ///
-/// The settings page asks what this host *would* give, so the probe runs with the
-/// switch on: `limits` is the floor and every layer above it is measured as it is
-/// refused or established. What the answer *means* — whether the profile would
-/// run on it — is [`page_answer`]'s question, and asking it here is what used to
-/// cost the page its rows.
+/// The probe runs with the switch on: `limits` is the floor and every layer above is
+/// measured as established or refused. What it means is [`page_answer`]'s question.
 fn measure_capability(profile: Profile) -> Result<Report, String> {
     probe_raw(Requirement::new(true), profile).1
 }
 
 /// Point the worker at a specific binary instead of this process's own.
 ///
-/// Only tests need it: Cargo builds the binary and the integration test in
-/// separate places, and the test process cannot re-execute itself. Returns
-/// whether *this* call set it — the value is process-global and set once, so a
-/// test that deliberately points it at something that cannot run knows to
-/// expect the unavailable path.
+/// For tests: Cargo builds the binary and the integration test separately, and the
+/// test process cannot re-execute itself. Returns whether *this* call set it, since
+/// the value is process-global and set once.
 pub fn configure_executable(path: PathBuf) -> bool {
     EXECUTABLE.set(path).is_ok()
 }
 
 /// Whether a worker binary has already been named.
 ///
-/// For a test harness that has to install its own path without stepping on one
-/// another test put there first: the value is process-global and set once, so
-/// the caller that must win is the caller that went first.
+/// The value is process-global and set once, so the caller that must win is the one
+/// that went first.
 pub fn executable_is_configured() -> bool {
     EXECUTABLE.get().is_some()
 }
 
 /// Set the sandbox requirement the server resolved from `[sandbox]`.
 ///
-/// Called at startup and again whenever an admin saves a change on the Sandbox
-/// page (the `Hook::Sandbox` hook), so the value is mutable rather than set
-/// once. A change to the switch changes what a probe *means*, so the cached
-/// answers are dropped with it: the next request re-probes instead of being told
-/// what the previous setting decided.
+/// Called at startup and on every Sandbox save. A change to the switch changes what
+/// a probe *means*, so the cached answers are dropped with it.
 pub fn configure_requirement(requirement: Requirement) {
     *requirement_slot()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = requirement;
     invalidate();
-    // A host that gave a creation up and then got a fresh configuration deserves
-    // a fresh attempt: the save is the operator answering the question, and the
-    // give-up is this process's memory of one refusal, not a verdict about the
-    // host.
+    // A fresh configuration deserves a fresh attempt: the give-up is this
+    // process's memory of one refusal, not a verdict about the host.
     CONTAINER_GIVEN_UP.store(false, std::sync::atomic::Ordering::Relaxed);
     // The token record is cleared with the container's: both are one process's
     // memory of a refusal.
@@ -904,10 +784,8 @@ pub fn configure_requirement(requirement: Requirement) {
 
 /// Drop the cached answers about this host.
 ///
-/// Both are answers to questions whose inputs can change: the master switch and
-/// the helper a media grant names. A caller that changes either calls this, so
-/// the next request and the next visit to the Sandbox page see a fresh
-/// measurement rather than the previous setting's conclusion.
+/// Their inputs — the master switch and the media helper — can change, so the next
+/// request and page visit see a fresh measurement.
 pub fn invalidate() {
     if let Some(cache) = STATUS.get() {
         cache
@@ -923,67 +801,42 @@ pub fn invalidate() {
     }
 }
 
-/// The process-global requirement, created on first use.
 fn requirement_slot() -> &'static Mutex<Requirement> {
     REQUIREMENT.get_or_init(|| Mutex::new(Requirement::default()))
 }
 
 /// Whether a launch is still to attempt this platform's container.
 ///
-/// Only ever set, and by the one platform that has a container: a host whose
-/// container has been attempted and reported nothing is not asked again for the
-/// life of this process, because the refusal is a property of the environment (a
-/// host sandbox that will not let a child create a further container) rather than
-/// of one launch. The settings hook clears the record when the configuration asks
-/// for the container again — that is the operator answering the question, and it
-/// is worth one more try.
+/// A host whose container reported nothing is not asked again for the life of the
+/// process: the refusal is a property of the environment, not of one launch. The
+/// settings hook clears the record when the configuration asks again.
 ///
-/// Not `#[cfg(windows)]`, deliberately. What the flag *means* is a decision and
-/// nothing else, and a decision that only compiles on one platform is a decision
-/// only that platform's CI can catch a mistake in. Keeping it compiled everywhere
-/// costs a relaxed atomic load nothing; it is what lets
-/// `only_a_requirement_that_wants_the_layer_asks_for_the_container` run on every
-/// runner instead of only on the Windows one.
+/// Not `#[cfg(windows)]`: the rule is a decision, and keeping it compiled everywhere
+/// is what lets its test run on every runner instead of only on Windows.
 static CONTAINER_GIVEN_UP: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Whether a launch has given up the restricted *token* as well.
 ///
-/// The second refusal: a child started with a restricted token is *created* and
-/// then dies in its loader on some hosts (`STATUS_DLL_INIT_FAILED`, before it can
-/// report), which is the same shape as a container that never came back and is
-/// answered the same way — one attempt, then the creation below it. What stays is
-/// the job object.
+/// The same shape as a container that never came back: one attempt, then the
+/// creation below it. What stays is the job object.
 static TOKEN_GIVEN_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Whether a launch may still attempt this platform's container.
 ///
-/// The container is what the parent asks for first on Windows, and the one
-/// process-global record is what keeps a host that refused it from being asked
-/// again on every launch. Only the Windows request path *calls* it, while its
-/// test runs everywhere: the decision is one rule and not two, and compiling it
-/// on every platform is what keeps a mistake in it from hiding behind `#[cfg]`
-/// and reaching CI.
-// `allow` rather than `expect`: with `--all-targets` the unit test below is what
-// keeps it used, so an expectation would be unfulfilled in exactly the build CI
-// lints.
+/// Only the Windows request path calls it, but it is compiled and tested everywhere
+/// so a mistake cannot hide behind `#[cfg]`.
+// `allow` rather than `expect`: the unit test below is what keeps it used under
+// `--all-targets`, so an expectation would be unfulfilled where CI lints.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn container_wanted() -> bool {
     !CONTAINER_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Record that this host will not start a child in the container.
-///
-/// Called wherever the container was attempted and produced no report, so a
-/// request that follows never repeats the launch the probe already paid for.
 fn give_up_container() {
     CONTAINER_GIVEN_UP.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Record that this host will not start a child under a restricted token either.
-///
-/// Called from the Windows walk, and read by the test that pins the whole matrix
-/// on every platform — the same reasoning as `container_wanted`.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn give_up_token() {
     TOKEN_GIVEN_UP.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -997,14 +850,11 @@ fn configured_requirement() -> Requirement {
 
 #[derive(Default)]
 struct Cache {
-    /// The requirement this answer was measured under. `Requirement::default`
-    /// is the shipped setting, which is also what a `Default` entry carries
-    /// before anything has been stored.
+    /// The requirement this answer was measured under; `Requirement::default` is
+    /// the shipped setting.
     requirement: Requirement,
     status: Option<Status>,
     retry_at: Option<Instant>,
-    /// The creation the probe last got a report from, for the requests that
-    /// follow.
     rung: Option<Start>,
 }
 
@@ -1015,27 +865,21 @@ static EXECUTABLE: OnceLock<PathBuf> = OnceLock::new();
 static REQUIREMENT: OnceLock<Mutex<Requirement>> = OnceLock::new();
 /// The configured media helper, which the media profile may execute.
 ///
-/// Set through [`configure_helper`] and re-set whenever the setting is saved,
-/// so a `Mutex` rather than a first-wins `OnceLock`.
+/// Re-set whenever the setting is saved, so a `Mutex` rather than a `OnceLock`.
 static HELPER: OnceLock<Mutex<Option<&'static Path>>> = OnceLock::new();
 
 /// Set the media helper the media profile may execute.
 ///
-/// Mutable because the setting is: saving a new `storage.ffmpeg_path` re-points
-/// every later media grant at the new binary, and the cached answers that were
-/// measured against the old one are dropped with it ([`invalidate`]) — including
-/// the answer to whether the media profile had to give the opt-out up for it
+/// Saving a new `storage.ffmpeg_path` re-points every later grant, and the cached
+/// answers measured against the old helper are dropped with it ([`invalidate`]),
+/// including whether the media profile gave the opt-out up for it
 /// ([`crate::sandbox::forget_plain_container`]).
 ///
-/// An empty path clears the helper. The settings hook fires on any Sandbox save,
-/// so an administrator who empties `storage.ffmpeg_path` is saying there is no
-/// helper; keeping the leaked path would leave the media profile running a
-/// program the settings no longer name.
+/// An empty path clears the helper: the hook fires on any save, and an admin who
+/// empties the setting is saying there is none.
 ///
-/// The path is leaked into the process's own lifetime: a child's command line
-/// and a Landlock rule are both built from a `&'static Path`, and the value has
-/// to outlive the child that is using it. One leaked path per change of the
-/// setting is the price of a grant that names a file.
+/// The path is leaked into the process's lifetime: a child's command line and a
+/// Landlock rule are built from a `&'static Path` that must outlive the child.
 pub fn configure_helper(path: PathBuf) {
     let slot = HELPER.get_or_init(|| Mutex::new(None));
     let mut installed = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1058,17 +902,14 @@ pub fn helper() -> Option<&'static Path> {
 
 /// Resolve a configured helper to an absolute path.
 ///
-/// A grant is a rule about one file, so it cannot be written for the name
-/// `ffmpeg`: the child's environment is cleared, and its working directory is
-/// `/`, so a name would resolve nowhere. A configured command name is therefore
-/// resolved to an absolute path and that path is what every later request names.
+/// A grant is a rule about one file, so it cannot name `ffmpeg`: the child's
+/// environment is cleared and its working directory is `/`, so a bare name resolves
+/// nowhere.
 ///
 /// On Windows the bare name resolves through the shell's executable search
-/// ([`resolve_command`]: `PATHEXT`/`.exe` and the image directory), because a
-/// manual `is_file()` walk never matches `ffmpeg.exe` — which is why
-/// `storage.ffmpeg_path = "ffmpeg"` used to be reported unavailable even though
-/// `ffmpeg` runs from a shell. The unix branch keeps the previous `PATH` walk,
-/// which needs no extension.
+/// (`resolve_command`: `PATHEXT`/`.exe` and the image directory), because a manual
+/// `is_file()` walk never matches `ffmpeg.exe`. The unix branch walks `PATH`, which
+/// needs no extension.
 pub fn resolve_helper(configured: &str) -> PathBuf {
     let path = Path::new(configured);
     if path.is_absolute() {
@@ -1095,20 +936,16 @@ pub fn resolve_helper(configured: &str) -> PathBuf {
 }
 
 /// Resolve a bare command name to its full path the way the shell finds an
-/// executable, so `storage.ffmpeg_path = "ffmpeg"` works without a full path.
+/// executable.
 ///
-/// `SearchPathW` appends only the one extension it is handed — it never applies
-/// the shell's `PATHEXT` list itself — so a bare `ffmpeg` would otherwise miss
-/// `ffmpeg.exe`, the same way a manual `directory.join(name).is_file()` walk
-/// does. Each `PATHEXT` entry is tried, with `.EXE` last so the usual case
-/// resolves even where `PATHEXT` is unset. When nothing on `PATH` matches, the
-/// running image's directory and its `bin/` are tried too, covering a helper
-/// placed next to the server/tray executable. Windows-only: the unix walk in
+/// `SearchPathW` appends only the extension it is handed, never the shell's
+/// `PATHEXT` list, so a bare `ffmpeg` would miss `ffmpeg.exe`. Each `PATHEXT` entry
+/// is tried, `.EXE` last so the usual case resolves when `PATHEXT` is unset; then
+/// the running image's directory and its `bin/`. Windows-only: the unix walk in
 /// [`resolve_helper`] needs no extension.
 ///
-/// It lives here rather than in the binary's Win32 helpers so the media grants
-/// and the service preflight resolve a configured name through the same library
-/// call; the two disagreeing is what let a bare `ffmpeg` look configured while
+/// It lives here so media grants and the service preflight resolve a name through
+/// the same call; the two disagreeing let a bare `ffmpeg` look configured while
 /// every thumbnail returned 404.
 #[cfg(windows)]
 fn resolve_command(name: &str) -> Option<PathBuf> {
@@ -1146,9 +983,8 @@ fn resolve_command(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// One `SearchPathW` lookup: a NUL-terminated `name` with the NUL-terminated
-/// `extension` appended when the name carries none. `None` when the search fails
-/// or answers with a path that is not absolute.
+/// One `SearchPathW` lookup, with `extension` appended when `name` has none.
+/// `None` when the search fails or answers with a relative path.
 #[cfg(windows)]
 fn search_path(name: &[u16], extension: &[u16]) -> Option<PathBuf> {
     use windows_sys::Win32::Storage::FileSystem::SearchPathW;
@@ -1187,17 +1023,14 @@ fn search_path(name: &[u16], extension: &[u16]) -> Option<PathBuf> {
         return None;
     }
     let resolved = PathBuf::from(String::from_utf16_lossy(&buffer[..end]));
-    // A name with no separator resolves to an absolute `PATH` entry; guard
-    // against a relative result the call could in theory produce against the
-    // working directory.
+    // Guard against a relative result the call could in theory produce.
     resolved.is_absolute().then_some(resolved)
 }
 
 /// The grants a probe of `profile` runs under.
 ///
-/// The media probe gets the helper *and* a source: the job it has to measure
-/// starts by reading the file the parent handed over, so a probe with nothing to
-/// read would measure half of it. Every other probe reads nothing.
+/// The media probe gets the helper *and* a source: its job starts by reading the
+/// file the parent wrote, so nothing to read would measure half of it.
 fn probe_grants<'a>(profile: Profile, source: Option<&'a Path>) -> crate::sandbox::Grants<'a> {
     crate::sandbox::Grants {
         helper: if profile.runs_helper() {
@@ -1209,13 +1042,10 @@ fn probe_grants<'a>(profile: Profile, source: Option<&'a Path>) -> crate::sandbo
     }
 }
 
-/// The creation the probe settled on for `profile`, for the requests that
-/// follow.
+/// The creation the probe settled on for `profile`.
 ///
-/// Windows answers `Plain` whenever the container is not wanted — the
-/// configuration did not ask for the files layer, or the host was asked once and
-/// refused. Every other platform has one creation, so the question does not
-/// arise and the cached answer is the answer.
+/// Windows answers `Plain` whenever the container is not wanted; every other
+/// platform has one creation.
 fn rung(profile: Profile) -> Start {
     /// The creation a profile's cached answer was measured in, when the probe
     /// ran. An entry with no answer never settled anything.
@@ -1228,10 +1058,8 @@ fn rung(profile: Profile) -> Start {
             .and_then(|entry| entry.rung)
     }
 
-    // The creation a request falls back to when the probe never settled one: the
-    // container only where the platform has one *and* the configuration still
-    // wants it. Everywhere else there is one creation, so the question does not
-    // arise.
+    // When the probe never settled one: the container only where the platform has
+    // one and the configuration still wants it.
     #[cfg(windows)]
     let unsettled = if container_wanted() {
         Start::Confined
@@ -1243,21 +1071,18 @@ fn rung(profile: Profile) -> Start {
     #[cfg(not(windows))]
     let unsettled = Start::Confined;
 
-    // The probe's own record wins while it exists: a host the container worked
-    // on has to keep using it, and a host that gave it up must not be asked again
-    // even for a profile the probe never reached.
+    // The probe's record wins while it exists: a host that gave the container up
+    // must not be asked again, even for a profile the probe never reached.
     cached(profile).unwrap_or(unsettled)
 }
 
 /// A private file the files layer's measurement must refuse to read.
 ///
-/// The parent creates it and names it on the child's command line; the child
-/// opens it after its confinement is installed. It lives in the server user's
-/// own temporary directory, which no profile grants — and, on Windows, which
-/// carries no ACE for the package the container is checked against — so the
-/// refusal is the sandbox and not a missing file. Unlike the write candidate a
-/// container cannot redirect it, so the *read* side of the files layer is what
-/// gets measured. Dropped, and the file deleted, when the probe is over.
+/// It lives in the server user's own temporary directory, which no profile grants
+/// and which on Windows carries no ACE for the container, so the refusal is the
+/// sandbox rather than a missing file. A container cannot redirect a read, so this
+/// is the *read* side of the files layer. Dropped, and the file deleted, when the
+/// probe is over.
 struct DenyProbe {
     path: PathBuf,
 }
@@ -1268,9 +1093,8 @@ impl DenyProbe {
     fn create() -> Option<Self> {
         let path =
             std::env::temp_dir().join(format!("nanofile-sandbox-probe-{}", uuid::Uuid::new_v4()));
-        // `create_new` refuses a path that already exists, so a file another
-        // local user left there (or a symlink) makes this return `None` rather
-        // than letting the probe follow it.
+        // `create_new` refuses an existing path (or symlink) rather than following
+        // it.
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1294,14 +1118,10 @@ impl Drop for DenyProbe {
 
 /// The media a probe hands the media child, in a file it may read.
 ///
-/// The request path writes every upload to a scratch file for the same reason —
-/// `ffmpeg` seeks a container to find a frame — so a probe that is to measure
-/// the job rather than the helper's `-version` has to hand over a file too. It
-/// is created and deleted exactly like [`DenyProbe`], beside it in the
-/// temporary directory.
-///
-/// A temporary directory that will not take it leaves the probe with no source,
-/// and the report says `media-no-source` rather than claiming work it never did.
+/// `ffmpeg` seeks a container to find a frame, so a probe measuring the job rather
+/// than `-version` needs a file, created and deleted like [`DenyProbe`]. A
+/// temporary directory that will not take it leaves no source, and the report says
+/// `media-no-source`.
 struct SourceProbe {
     path: PathBuf,
 }
@@ -1318,9 +1138,8 @@ impl SourceProbe {
         file.write_all(crate::sandbox::jobs::media::PROBE_MEDIA)
             .ok()?;
         file.flush().ok()?;
-        // The path the profile will name and the path the child will open are
-        // the same one, which on macOS means the resolved file rather than the
-        // one typed here (see `media::granted_source`).
+        // On macOS the profile must name the resolved file, not the typed path (see
+        // `media::granted_source`).
         Some(Self {
             path: crate::sandbox::jobs::media::granted_source(&path),
         })
@@ -1350,14 +1169,12 @@ fn source_probe(profile: Profile) -> Option<SourceProbe> {
 /// on Windows when the container reports nothing.
 ///
 /// A creation is accepted by the *child's own report*, never by the launch having
-/// succeeded: the failure this walks past is a child that is created and then
-/// dies in its loader, which no creation error reports. Only the container is
-/// ever given up — the fallback keeps the job object, which is the one hard
-/// bound — and the reason travels in the report as `skipped0=<creation>:<reason>`,
-/// one entry per creation that was passed over, in the order the walk tried them.
+/// succeeded: a child created and then dead in its loader reports no creation
+/// error. Only the container is given up; the job object stays. The reason travels
+/// as `skipped0=<creation>:<reason>`, one entry per creation passed over, in order.
 ///
-/// The answer is returned rather than recorded here: the caller holds the status
-/// cache's lock, and a helper that took it again would deadlock.
+/// The answer is returned rather than recorded: the caller holds the status cache's
+/// lock, and taking it again would deadlock.
 fn probe(profile: Profile) -> (Start, Status) {
     probe_under(configured_requirement(), profile)
 }
@@ -1365,10 +1182,8 @@ fn probe(profile: Profile) -> (Start, Status) {
 /// One probe under a stated requirement, judged the way the request path judges
 /// it.
 ///
-/// The requirement is a parameter rather than read from the process slot so the
-/// settings page can ask what a *different* configuration would give — the
-/// container it has switched off, or the files layer it is thinking about asking
-/// for — without changing what the request path is judged by.
+/// The requirement is a parameter so the page can ask what a *different*
+/// configuration would give without changing what the request path is judged by.
 fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
     match probe_raw(requirement, profile) {
         (start, Ok(report)) => (start, accept(report, requirement)),
@@ -1378,10 +1193,8 @@ fn probe_under(requirement: Requirement, profile: Profile) -> (Start, Status) {
 
 /// One probe under a stated requirement, with no judgement of the report.
 ///
-/// The walk down the creations is the same one [`probe_under`] takes; the answer
-/// is the report itself, so a caller that has its own question to ask — the
-/// settings page asks what the host gives, not whether the profile would run —
-/// can ask it about the measurement instead of about a refusal.
+/// The same walk as [`probe_under`]; the answer is the report, so a caller with its
+/// own question can ask it about the measurement instead of a refusal.
 fn probe_raw(requirement: Requirement, profile: Profile) -> (Start, Result<Report, String>) {
     let probe_file = DenyProbe::create();
     let source_file = source_probe(profile);
@@ -1400,9 +1213,8 @@ fn probe_raw(requirement: Requirement, profile: Profile) -> (Start, Result<Repor
 
     crate::sandbox::clear_container_shortfall();
 
-    // The creation this launch starts from: the container where the platform has
-    // one and the host has not already refused it. Everything below is the walk
-    // down from here.
+    // The container where the platform has one and the host has not refused it;
+    // everything below is the walk down from here.
     #[cfg(windows)]
     let first = if container_wanted() {
         Start::Confined
@@ -1415,11 +1227,9 @@ fn probe_raw(requirement: Requirement, profile: Profile) -> (Start, Result<Repor
     let first = Start::Confined;
 
     let mut creation = first;
-    // One reason per creation that was passed over, carried into the report
-    // beside the answer: a fallback that leaves no trace is how a host ends up
-    // silently running weaker creations than an operator thinks. Each entry is
-    // the creation's `label` and the reason it gave, and both are whitespace-free
-    // so the entry stays one field of the report's line.
+    // One reason per creation passed over: a fallback that leaves no trace is how a
+    // host silently runs weaker creations than an operator thinks. The label and the
+    // reason are whitespace-free, so each entry stays one field.
     let mut skipped: Vec<String> = Vec::new();
 
     loop {
@@ -1432,9 +1242,8 @@ fn probe_raw(requirement: Requirement, profile: Profile) -> (Start, Result<Repor
                 return (creation, Ok(report));
             }
             Err(why) => {
-                // Said out loud as well as carried in the report: an operator
-                // reading the log at startup wants the reason a creation was
-                // passed over, not only the layer it left behind.
+                // Logged too: the operator wants the reason, not only the layer
+                // left behind.
                 tracing::warn!(
                     profile = profile.as_str(),
                     creation = creation.label(),
@@ -1444,11 +1253,8 @@ fn probe_raw(requirement: Requirement, profile: Profile) -> (Start, Result<Repor
                 let Some(weaker) = creation.weaker() else {
                     return (creation, Err(format!("{}: {why}", creation.label())));
                 };
-                // Each step down is remembered for this process's life: the
-                // refusal is a property of the environment rather than of one
-                // launch, and a request that follows must not pay for a creation
-                // the probe already found dead. The settings hook clears both
-                // records, so a configuration that asks again gets one more try.
+                // Remembered for the process's life: a request must not pay for a
+                // creation the probe found dead. The settings hook clears it.
                 match creation {
                     Start::Confined => {
                         give_up_container();
@@ -1481,22 +1287,18 @@ fn probe_raw(requirement: Requirement, profile: Profile) -> (Start, Result<Repor
 
 /// The one launch's answer, or why it did not give one.
 ///
-/// On Windows a launch is retried once without the less privileged container
-/// when the child asked for it did not come back: the attribute is accepted at
-/// creation, so a container the loader cannot start inside succeeds at
-/// `CreateProcess` and dies afterwards. The retry keeps the container and gives
-/// up only the opt-out; the shortfall is logged, and `lpac=` in the report says
-/// what the next request will get.
+/// On Windows a launch is retried once without the less privileged container when
+/// the child asked for it produced no report: the attribute is accepted at creation,
+/// so a container the loader cannot start in succeeds at `CreateProcess` and dies
+/// afterwards. The retry keeps the container and gives up only the opt-out.
 ///
-/// The retry is owed to the *shape* of the failure rather than to its
-/// occurrence: a child that ran out its timeout says nothing about the container
-/// flavour, and giving the opt-out up for it would make the confinement depend
-/// on how busy the machine was ([`opt_out_suspect`]).
+/// The retry is owed to the *shape* of the failure, not its occurrence: a timeout
+/// says nothing about the container flavour, and giving the opt-out up for it would
+/// make the confinement depend on machine load ([`opt_out_suspect`]).
 ///
-/// The media profile is the one that can fail *with* an answer instead: its
-/// report says the helper did not run, and the helper is the program the opt-out
-/// takes away. That report is measured again in the plain container before it is
-/// believed ([`media_in_plain_container`]).
+/// The media profile can fail *with* an answer: its report says the helper did not
+/// run, and that report is measured again in the plain container before it is
+/// believed (`media_in_plain_container`).
 fn probe_on(
     invocation: &Invocation,
     profile: Profile,
@@ -1527,14 +1329,10 @@ fn probe_on(
     }
 }
 
-/// Why one creation produced no report at all.
 struct NoReport {
-    /// The reason, for the log and the summary the report carries.
     why: String,
-    /// Whether the failure is the shape a container the opt-out makes unreadable
-    /// leaves behind, and therefore worth a second creation without it. Only the
-    /// Windows media profile takes that second creation, so the field is part of
-    /// the record everywhere and read in one place.
+    /// Whether the failure is the shape an unreadable image leaves behind, and worth
+    /// a second creation without the opt-out.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     opt_out_suspect: bool,
 }
@@ -1542,12 +1340,10 @@ struct NoReport {
 /// Whether a launch that produced no report is worth repeating without the
 /// opt-out.
 ///
-/// A child that was created and died before it said anything, and a child that
-/// could not be created at all, are both "nothing ran inside the container" —
-/// which is what an image the opt-out made unreadable looks like from here. Every
-/// other failure is evidence about something else: a timeout says how long the
-/// machine took, a child that refused on its own report ran perfectly well, and a
-/// child whose line could not be read ran too.
+/// A child created and dead before it said anything, and one that could not be
+/// created at all, are both "nothing ran inside the container" — what an unreadable
+/// image looks like from here. A timeout, a refusal on the child's own report and an
+/// unreadable report are all evidence about something else.
 fn opt_out_suspect(run: &Run) -> bool {
     if run.timed_out {
         return false;
@@ -1563,17 +1359,14 @@ fn opt_out_suspect(run: &Run) -> bool {
 /// Measure a media report that says the helper could not run again in the plain
 /// container.
 ///
-/// The helper is granted through `ALL APPLICATION PACKAGES` on every host whose
-/// tree carries that ACE — the OS's own trees do, and an installer may have put
-/// the helper in one — and the opt-out is exactly what makes the low-box check
-/// ignore that principal. So a media report that says the helper did not run is
-/// the one failure whose first suspect is the container flavour, and the profile
-/// asks for the plain one and measures again rather than answering the operator
-/// with an environment problem it has not tried to remove.
+/// The helper is granted through `ALL APPLICATION PACKAGES` on hosts whose tree
+/// carries that ACE, and the opt-out makes the low-box check ignore exactly that
+/// principal. So a media report that the helper did not run has the container
+/// flavour as its first suspect: the profile asks for the plain one and measures
+/// again rather than reporting an environment problem it has not tried to remove.
 ///
-/// One retry, and only for this profile: the report it returns is the one kept,
-/// so `lpac=off` and whichever `parse=` the second launch produced travel
-/// together.
+/// One retry, and only for this profile: the report it returns is kept, so
+/// `lpac=off` and the second launch's `parse=` travel together.
 #[cfg(target_os = "windows")]
 fn media_in_plain_container(
     invocation: &Invocation,
@@ -1601,11 +1394,9 @@ fn media_in_plain_container(
 
 /// Whether a report says the media profile needs the plain container.
 ///
-/// Four facts, and all four are needed: the profile is the one that runs a
-/// helper, the launch actually applied the opt-out (a plain launch has nothing to
-/// give up and would only loop), the profile is not already using the plain
-/// container, and the child's own verdict is that the helper failed — not that no
-/// helper is configured, which is a state its operator chose.
+/// All four facts are needed: the profile runs a helper, the opt-out was applied (a
+/// plain launch would only loop), the profile is not already plain, and the child's
+/// verdict is that the helper failed — not that none is configured.
 #[cfg(any(target_os = "windows", test))]
 fn media_needs_the_plain_container(
     profile: Profile,
@@ -1616,7 +1407,6 @@ fn media_needs_the_plain_container(
     profile.runs_helper() && opt_out_applied && !already_plain && job == Some(JobVerdict::Failed)
 }
 
-/// One creation and one report.
 fn probe_once(
     invocation: &Invocation,
     profile: Profile,
@@ -1633,10 +1423,8 @@ fn probe_once(
             }
         })?;
     if let Verdict::Unavailable(why) = verdict(run.exit_code, &run.stdout, &run.stderr) {
-        // The summary rides along: a child that dies in its loader writes nothing
-        // on either stream, and its exit code is then the only thing that says
-        // which failure this was. Without it, every such launch reads as the
-        // same sentence with no way to tell them apart.
+        // The summary rides along: a child dead in its loader writes nothing, and its
+        // exit code is then the only thing that tells the failures apart.
         return Err(NoReport {
             why: format!("{why} [{}]", run.summary()),
             opt_out_suspect: opt_out_suspect(&run),
@@ -1650,16 +1438,14 @@ fn probe_once(
             .unwrap_or_default(),
     );
     let line = line.trim();
-    // A child that never printed its report says why on stderr, and the probe is
-    // the only place that can be read: `tracing` has no subscriber on this path,
-    // so the summary is the whole diagnosis.
+    // The probe is the only place stderr can be read: `tracing` has no subscriber
+    // on this path.
     let report = Report::parse(line).ok_or_else(|| NoReport {
         why: format!("unreadable self-test line {line:?}: {}", run.summary()),
         opt_out_suspect: opt_out_suspect(&run),
     })?;
-    // A report for another profile is not this profile's answer: the two may
-    // hold different powers (only media may execute a helper), so accepting one
-    // for the other would be a decision made on the wrong facts.
+    // Another profile's report is not this profile's answer: only media may execute
+    // a helper.
     if report.profile != profile {
         return Err(NoReport {
             why: format!(
@@ -1675,20 +1461,13 @@ fn probe_once(
 
 /// Whether the report the probe got is one `requirement` accepts.
 ///
-/// Decided once, here, rather than left to each child: a host that cannot give
-/// what the settings ask for is an environment problem the operator has to see
-/// once at startup — with the reason — rather than one spawn per request that
-/// ends in exit 125 and a warning nothing aggregates. The child keeps the same
-/// check before it reads a request; this is the half that makes the shortfall
-/// visible and stops the spawns.
+/// Decided once, here: a host that cannot give what the settings ask for is an
+/// environment problem the operator sees once at startup with the reason, rather
+/// than one spawn per request ending in exit 125. The child keeps the same check
+/// before it reads a request.
 ///
-/// This is the *request path's* judgement, and the settings page deliberately
-/// does not go through it: the page asks [`capability`], which measures with the
-/// switch *on* to answer what this host would give, and a page that asked this
-/// function about its own answer would go blank exactly when an administrator had
-/// switched the sandbox off — or when the media helper could not decode, which is
-/// a fact about the helper rather than about the four items the page exists to
-/// report. [`host_verdict`] is the page's half of the same decision.
+/// This is the *request path's* judgement; the page asks [`capability`], which
+/// measures with the switch *on*. [`host_verdict`] is the page's half.
 fn accept(report: Report, requirement: Requirement) -> Status {
     if let Some(why) = job_refusal(&report) {
         return Status::Unavailable(why);
@@ -1722,12 +1501,9 @@ fn invocation(
         .get()
         .cloned()
         .or_else(|| std::env::current_exe().ok())?;
-    // The macOS profile names this path in a `(literal …)`, and Seatbelt matches
-    // the path the filesystem resolved rather than the one that was typed, so a
-    // binary reached through a symlinked directory has to be resolved before it
-    // is written down — and before it is started, so the two agree. Windows is
-    // left alone: `canonicalize` there returns a `\\?\` path, which is not what
-    // this binary was invoked as.
+    // Seatbelt matches the resolved path rather than the typed one, so a binary
+    // behind a symlinked directory is resolved before it is granted and started.
+    // Windows is left alone: `canonicalize` there returns a `\\?\` path.
     #[cfg(target_os = "macos")]
     let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
 
@@ -1739,9 +1515,8 @@ fn invocation(
     if !requirement.enabled {
         args.push(OsString::from("--sandbox-off"));
     }
-    // The child needs the granted paths on its own command line: Landlock and
-    // Seatbelt rules have to be installed before the request is read, so they
-    // cannot travel inside it.
+    // Landlock and Seatbelt rules must be installed before the request is read, so
+    // the grants travel on the command line.
     if let Some(helper) = grants.helper {
         args.push(OsString::from("--ffmpeg"));
         args.push(helper.as_os_str().to_os_string());
@@ -1750,9 +1525,7 @@ fn invocation(
         args.push(OsString::from("--src"));
         args.push(source.as_os_str().to_os_string());
     }
-    // The file the files layer must refuse, created by the parent: the one
-    // candidate that measures the same thing on every platform. Only the probe
-    // that runs once has one.
+    // The file the files layer must refuse; only the once-per-process probe has one.
     if let Some(probe) = probe {
         args.push(OsString::from("--probe-path"));
         args.push(probe.as_os_str().to_os_string());
@@ -1783,9 +1556,8 @@ fn invocation(
 
 /// A started child, whichever way the platform had to start it.
 ///
-/// Windows needs `CreateProcessAsUser` to give the child a restricted token,
-/// which `std::process::Command` cannot do; everywhere else the standard child
-/// is used. The pipes and the wait are what this hides.
+/// Windows needs `CreateProcessAsUser` for a restricted token, which
+/// `std::process::Command` cannot do; everywhere else the standard child is used.
 enum Child {
     #[cfg(not(windows))]
     Standard(std::process::Child),
@@ -1794,10 +1566,8 @@ enum Child {
 }
 
 impl Child {
-    /// The child's exit code, or `None` while it is still running.
-    ///
-    /// A death by signal has no code; the negative signal number stands in for
-    /// it, which no exit code can be confused with.
+    /// The child's exit code, or `None` while it is still running. A death by
+    /// signal is the negative signal number.
     fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
         match self {
             #[cfg(not(windows))]
@@ -1805,10 +1575,8 @@ impl Child {
                 use std::os::unix::process::ExitStatusExt;
                 Ok(child.try_wait()?.map(|status| match status.code() {
                     Some(code) => code,
-                    // A death by signal has no code, so it is reported as the
-                    // negative signal number: `-9` says the kernel killed it,
-                    // `-6` says it aborted, and neither is a code the child
-                    // itself produces.
+                    // `-9` is the kernel, `-6` an abort; neither is a code the
+                    // child itself produces.
                     None => -status.signal().unwrap_or(0),
                 }))
             }
@@ -1819,25 +1587,18 @@ impl Child {
 
     /// Kill the child and whatever it started.
     ///
-    /// The child leads its own process group on unix ([`spawn_child`]), so the
-    /// group is what gets the signal: killing the leader alone leaves a forked
-    /// copy holding the protocol pipes, and the read after this would then wait
-    /// on a pipe nobody will close. Windows reaches the whole tree through the
-    /// Job Object the child was created in, which the parent holds — ending the
-    /// job is what takes the helper a media child started with it. The group
-    /// reaches the whole tree on Linux only: a macOS copy can leave it.
+    /// The child leads its own process group ([`spawn_child`]), so the group is what
+    /// gets the signal: killing the leader alone leaves a forked copy holding the
+    /// pipes. Windows reaches the tree through the Job Object. The group reaches the
+    /// whole tree on Linux only: a macOS copy can leave it.
     fn kill_tree(&mut self) {
         match self {
             #[cfg(not(windows))]
             Child::Standard(child) => {
-                // `killpg` on the group the child leads; the child's own pid is
-                // the group id because it was made a group leader at spawn. On
-                // Linux that group is the whole tree: `setsid`/`setpgid` are
-                // refused by the filter the child installs (`sandbox::linux`),
-                // so a copy cannot leave it. On macOS nothing refuses those
-                // calls and Seatbelt has no operation that could, so a copy
-                // that makes one leaves the group and this signal does not
-                // reach it.
+                // `killpg` on the group the child leads. On Linux that is the whole
+                // tree: the child's filter refuses `setsid`/`setpgid`, so a copy
+                // cannot leave it. On macOS nothing refuses those calls, so a copy
+                // that makes one leaves the group and this signal.`
                 unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
                 let _ = child.kill();
             }
@@ -1857,7 +1618,6 @@ impl Child {
         }
     }
 
-    /// Take the three protocol streams.
     fn pipes(&mut self) -> Pipes {
         match self {
             #[cfg(not(windows))]
@@ -1913,30 +1673,25 @@ fn spawn_child(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        // A parser has no business reading the server's environment: it holds
-        // the master secret, the storage keys and every path this deployment
-        // resolved.
+        // The server's environment holds the master secret and every resolved path.
         .env_clear()
         .env("RUST_BACKTRACE", "0")
         // Nothing here is relative, and the server's own directory is not the
         // child's business.
         .current_dir(Path::new("/"));
-    // The child leads a process group of its own, so a timeout can end what it
-    // started and not only the child itself. macOS's media profile is where this
-    // matters: it starts the helper by forking, so a helper that got code
-    // running can leave copies behind, and a copy that holds the protocol pipes
-    // would keep this call waiting on a pipe that never closes. The parser
-    // profiles deny the fork, so they have no copies to leave.
+    // The child leads its own group, so a timeout can end what it started. macOS's
+    // media profile is where this matters: a helper that got code running can leave
+    // copies holding the pipes. Parser profiles deny the fork.
     #[cfg(unix)]
     command.process_group(0);
     command.spawn().map(Child::Standard)
 }
 
-/// Start the child in its container, its job and its restricted token, or in the
-/// job and the token alone when the container is not wanted or was given up.
+/// Start the child in its container, job and restricted token, or in the job and
+/// token alone when the container is not wanted or was given up.
 ///
-/// The environment, the working directory and the handle inheritance are all
-/// part of the creation call on Windows, so they are set inside `sandbox`.
+/// The environment, working directory and handle inheritance are set inside
+/// `sandbox` on Windows, where they are part of the creation call.
 #[cfg(windows)]
 fn spawn_child(
     invocation: &Invocation,
@@ -1959,7 +1714,6 @@ fn spawn_child(
     .map(Child::Windows)
 }
 
-/// Everything one child run produced.
 struct Run {
     exit_code: Option<i32>,
     stdout: Vec<u8>,
@@ -1968,12 +1722,8 @@ struct Run {
 }
 
 impl Run {
-    /// One line saying why a run that should have reported did not.
-    ///
-    /// A loader that cannot map a library, a panic and the kernel each explain
-    /// themselves on the child's stderr, which nothing else prints: the parent
-    /// logs it at `debug`, and the paths that start a child to diagnose it —
-    /// the probe, a CI step — have no subscriber for that to reach.
+    /// One line saying why a run that should have reported did not: the child's
+    /// stderr, which the parent logs at `debug` but the probe can print.
     fn summary(&self) -> String {
         let mut parts = Vec::new();
         if self.timed_out {
@@ -1993,9 +1743,8 @@ impl Run {
 
 /// How the child stopped, in the vocabulary of the platform that stopped it.
 ///
-/// A code below zero is a signal on unix — `-9` is the kernel, `-6` an abort —
-/// and an `NTSTATUS` on Windows, where `0xC0000135` is the loader failing to
-/// find a library.
+/// A code below zero is a signal on unix; on Windows it is an `NTSTATUS`, where
+/// `0xC0000135` is the loader failing to find a library.
 fn exit_line(code: Option<i32>) -> String {
     match code {
         #[cfg(unix)]
@@ -2021,9 +1770,8 @@ fn clipped(text: &str, limit: usize) -> String {
 
 /// Start the child, hand it the request and collect what it says.
 ///
-/// The three pipes are drained on their own threads: a parser that logs to
-/// stderr while the parent waits for it to exit would otherwise fill a pipe and
-/// deadlock both sides.
+/// The three pipes are drained on their own threads, or a parser that logs while
+/// the parent waits would fill a pipe and deadlock both sides.
 fn run_child(
     invocation: &Invocation,
     request: Option<Vec<u8>>,
@@ -2079,20 +1827,14 @@ fn run_child(
         }
     };
 
-    // The group is ended whichever way the child stopped, and before the pipes
-    // are drained. A child that exits 0 while a copy it made still holds the
-    // protocol pipes would otherwise leave that copy running: the readers below
-    // wait out `PIPE_DRAIN_TIMEOUT`, abandon their threads, and a detached
-    // process — with the descriptors it holds — outlives the request. The media
-    // profile is where this happens, because it is the one that may copy itself.
-    // An already-empty group answers `ESRCH`, and an already-exited child
-    // answers an error from `kill`, neither of which is a failure here.
+    // The group is ended before the pipes are drained, whichever way the child
+    // stopped: a child that exits 0 while a copy holds the pipes would otherwise
+    // leave that copy running past the request. An empty group answers `ESRCH`, and
+    // a child already gone answers an error, neither of which is a failure here.
     child.kill_tree();
 
-    // Bounded, because the child being gone is not the same as the pipes being
-    // closed: see `PIPE_DRAIN_TIMEOUT`. A writer that never finishes is dropped
-    // the same way — the request it was still sending is a request no reply
-    // will be read for.
+    // Bounded: the child being gone is not the pipes being closed. A writer that
+    // never finishes is dropped the same way.
     let drained = Instant::now() + PIPE_DRAIN_TIMEOUT;
     if let Some(writer) = writer {
         let _ = join_bounded(writer, drained);
@@ -2110,10 +1852,8 @@ fn run_child(
 
 /// Wait for a thread that should already be done, giving up at `deadline`.
 ///
-/// `None` means the thread is still running and its handles were dropped with
-/// it: the pipe it holds is the reason this exists, and the caller has a
-/// fail-closed answer for the missing half (`stdout` empty is no reply,
-/// `stderr` empty is no diagnostic).
+/// `None` means the thread still runs and its handles were dropped with it; the
+/// caller's fail-closed answer is an empty `stdout` (no reply) or `stderr`.
 fn join_bounded<T>(handle: JoinHandle<T>, deadline: Instant) -> Option<T> {
     while !handle.is_finished() {
         if Instant::now() >= deadline {
@@ -2126,10 +1866,8 @@ fn join_bounded<T>(handle: JoinHandle<T>, deadline: Instant) -> Option<T> {
 
 /// Read a child's diagnostics up to [`MAX_DIAGNOSTIC_BYTES`], then drain.
 ///
-/// Bytes rather than `read_to_string`: a parser's diagnostics are not required
-/// to be UTF-8, and a partial read that failed to decode would throw away the
-/// reason this is here for. Past the cap the bytes are still read and dropped,
-/// so a child that writes more than the cap is never the side that blocks.
+/// Bytes rather than `read_to_string`: diagnostics are not required to be UTF-8.
+/// Past the cap the bytes are still read and dropped, so the child never blocks.
 fn read_diagnostics(reader: &mut impl Read) -> String {
     let mut kept: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -2153,25 +1891,24 @@ fn read_diagnostics(reader: &mut impl Read) -> String {
 /// What a finished child means, before a job interprets its reply tag.
 #[derive(Debug)]
 enum Verdict {
-    /// The child answered: the reply's tag and body.
-    Reply { tag: u8, body: Vec<u8> },
+    Reply {
+        tag: u8,
+        body: Vec<u8>,
+    },
     /// The environment: the child would not run confined, or its loader failed.
     Unavailable(String),
-    /// The request: a crash, a kill, a bad reply.
     Failed(&'static str),
 }
 
 /// Decide what a finished child means.
 ///
-/// The order matters: a refusal or a runner failure is the *environment*, and
-/// both are checked before the reply, because a child that never ran cannot
-/// have written one.
+/// A refusal or a runner failure is the *environment* and is checked before the
+/// reply, because a child that never ran cannot have written one.
 fn verdict(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Verdict {
-    // The exit code is the child's own and is what a runner passes through. The
-    // text is the belt for a runner that rewrote it, and it is read only when
-    // nothing came back on the reply stream and the refusal is the child's first
-    // line: a document whose bytes reach a diagnostic must not be able to talk
-    // the parent into marking the profile unavailable.
+    // The exit code is what a runner passes through; the text is the belt for one
+    // that rewrote it, read only when nothing came back on the reply stream and the
+    // refusal is the child's first line. Otherwise document bytes echoed into a
+    // diagnostic could mark the profile unavailable.
     let refusal_is_the_childs =
         stdout.is_empty() && stderr.trim_start().starts_with(SANDBOX_REFUSAL);
     if exit_code == Some(EXIT_SANDBOX_UNAVAILABLE) || refusal_is_the_childs {
@@ -2181,20 +1918,17 @@ fn verdict(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Verdict {
     if exit_code == Some(STATUS_DLL_INIT_FAILED) {
         return Verdict::Unavailable(detail_or(stderr, "the sandbox worker could not initialize"));
     }
-    // A process that stopped itself at its memory bound would have no reply to
-    // write, but no platform does that any more: the kernel stops the child on
-    // Linux (RLIMIT_AS) and Windows (the job's committed-memory cap), and macOS
-    // takes the address-space limit. A memory kill therefore arrives as an exit
-    // code the platform chose, and the request is retried as a failed one.
+    // No platform stops a child at its own memory bound: Linux (RLIMIT_AS),
+    // Windows (the job's committed-memory cap) and macOS all let the kernel do it. A
+    // memory kill therefore arrives as an exit code, and the request is retried.
     for signature in runner_failure_signatures() {
         if stderr.to_ascii_lowercase().contains(signature) {
             return Verdict::Unavailable(detail_or(stderr, "the sandbox runner failed"));
         }
     }
     if !stderr.trim().is_empty() {
-        // Clipped here as well as at the source: what a log line can carry is
-        // smaller than what the parent is willing to hold, and the head is the
-        // part that says why.
+        // Clipped again: a log line carries less than the parent holds, and the head
+        // is what says why.
         tracing::debug!("extract-worker: {}", clipped(stderr.trim(), 400));
     }
 
@@ -2206,9 +1940,8 @@ fn verdict(exit_code: Option<i32>, stdout: &[u8], stderr: &str) -> Verdict {
 
 /// Signatures a platform runner prints when it refuses its own profile.
 ///
-/// A runner that fails before starting the command is not a document that
-/// cannot be read: it is a sandbox the operator has to fix, and the two must
-/// not be confused (the same distinction the DSH sandbox draws).
+/// A runner that fails before starting the command is a sandbox the operator has to
+/// fix, not a document that cannot be read.
 fn runner_failure_signatures() -> &'static [&'static str] {
     #[cfg(target_os = "macos")]
     {
@@ -2220,11 +1953,8 @@ fn runner_failure_signatures() -> &'static [&'static str] {
     }
 }
 
-/// The child's own words when it has any, clipped to what a log line carries.
-///
-/// The refusal line carries the policy and the detail, and the runner failures
-/// carry their own sentence; both are at the head, and the tail is the part a
-/// document can fill.
+/// The child's own words, clipped to what a log line carries. The reason is at the
+/// head; the tail is what a document can fill.
 fn detail_or(stderr: &str, fallback: &str) -> String {
     let detail = stderr.trim();
     if detail.is_empty() {
@@ -2236,9 +1966,8 @@ fn detail_or(stderr: &str, fallback: &str) -> String {
 
 /// Read one reply frame into its tag and body.
 ///
-/// The framing is the same for every job — tag, little-endian `u32` length,
-/// body — so a reply from one profile can never be read as another's: the tag
-/// says which job wrote it, and the caller checks that.
+/// The framing is the same for every job — tag, little-endian `u32` length, body —
+/// and the tag says which job wrote it, so the caller can reject another's reply.
 fn parse_frame(reply: &[u8]) -> Option<(u8, Vec<u8>)> {
     let (&tag, rest) = reply.split_first()?;
     if rest.len() < 4 {
@@ -2256,7 +1985,6 @@ fn parse_frame(reply: &[u8]) -> Option<(u8, Vec<u8>)> {
 mod tests {
     use super::*;
 
-    /// One child's invocation, as the parent builds it.
     struct Launched {
         program: String,
         args: Vec<String>,
@@ -2274,7 +2002,6 @@ mod tests {
             self.args[at..].iter().map(String::as_str).collect()
         }
 
-        /// The flags the child is given, without their values.
         fn flags(&self) -> Vec<&str> {
             self.child()
                 .into_iter()
@@ -2283,7 +2010,6 @@ mod tests {
         }
     }
 
-    /// Build one invocation the way the parent does.
     fn launched(
         requirement: Requirement,
         profile: Profile,
@@ -2304,19 +2030,13 @@ mod tests {
 
     /// The platform switch reaches the one decision it is about.
     ///
-    /// Windows only in outcome, because the answer is: a launch asks for the
-    /// AppContainer first, and a host that refused it is not asked again. That is
-    /// why a Windows launch inside a host sandbox — which will not let a child
-    /// create a further container — gets its bound and its token instead of dying
-    /// in a loader on every request. A settings save clears the give-up record,
-    /// so it is one more attempt and not a permanent verdict.
+    /// Windows-only in outcome: a launch asks for the AppContainer first, and a host
+    /// that refused it is not asked again, so a launch inside a host sandbox gets
+    /// its bound and token instead of dying in a loader on every request. A save
+    /// clears the record, so it is one more attempt, not a verdict.
     ///
-    /// Compiled and run on every platform on purpose. The flag is a decision and
-    /// not a platform detail, and a decision that only compiles on Windows is one
-    /// only the Windows runner can catch a mistake in — which is exactly how a
-    /// call site left behind by a signature change reached CI once. Only the
-    /// *outcome* is Windows-specific, and that part is asserted where it belongs:
-    /// in the probe test, under `#[cfg(windows)]`.
+    /// Compiled and run everywhere on purpose: only the *outcome* is Windows -
+    /// specific, and that part is asserted in the probe test under `#[cfg(windows)]`.
     #[test]
     fn only_a_host_that_refused_the_container_is_spared_a_second_attempt() {
         assert!(
@@ -2338,10 +2058,8 @@ mod tests {
             "a settings save is worth one more attempt"
         );
 
-        // The token record takes the same shape: one refusal, one attempt, and a
-        // settings save clears it. Without it a host that cannot start a child
-        // under a restricted token would have nowhere left to go, because the
-        // creation below that one is the last this platform has.
+        // The token record takes the same shape. Without it a host that cannot start
+        // a child under a restricted token has nowhere left to go.
         give_up_token();
         assert!(
             TOKEN_GIVEN_UP.load(std::sync::atomic::Ordering::Relaxed),
@@ -2365,11 +2083,9 @@ mod tests {
         assert_eq!(Start::Confined.weaker(), None);
     }
 
-    /// The child is started with the policy the parent resolved and nothing else:
-    /// every flag is one the parent decided, and each is named exactly when it
-    /// has something to say. A flag that leaked in unconditionally would change
-    /// what the child installs, and a flag that went missing would leave a grant
-    /// the child needs unavailable without failing anything.
+    /// The child starts with the policy the parent resolved and nothing else: a flag
+    /// leaked in would change what it installs, and a missing one would silently
+    /// remove a grant.
     #[test]
     fn the_child_is_started_with_the_policy_the_parent_resolved() {
         let launched = launched(
@@ -2398,9 +2114,7 @@ mod tests {
         }
     }
 
-    /// The switch reaches the child as well as the parent that decides not to
-    /// spawn one: the child has to judge its own report by the same rule the
-    /// parent used, and the switch is the whole of that rule.
+    /// The child judges its own report by the same rule the parent used.
     #[test]
     fn the_switch_travels_to_the_child() {
         let plain = launched(
@@ -2422,10 +2136,8 @@ mod tests {
         );
     }
 
-    /// The grants are the paths the child may reach, and they travel on its own
-    /// command line because they have to be installed before the request is read.
-    /// The probe file is how the files layer is measured at all, so a parent that
-    /// stopped naming it would leave the item claimed rather than measured.
+    /// The paths the child may reach, installed before the request is read. The probe
+    /// file is how the files layer is measured at all.
     #[test]
     fn the_grants_are_named_once_and_only_when_they_exist() {
         let helper = Path::new("/opt/nanofile/ffmpeg");
@@ -2460,10 +2172,8 @@ mod tests {
         }
     }
 
-    /// The platform runner is the parent's wrapper rather than the child's own
-    /// protection, and the child is told which of the two it is: on macOS the
-    /// Seatbelt profile is applied by `sandbox-exec`, and a child that thought
-    /// the layers were its own would refuse for lacking them.
+    /// The platform runner is the parent's wrapper, not the child's own protection:
+    /// a child that thought otherwise would refuse for lacking the layers.
     #[test]
     fn only_the_platform_with_a_runner_wraps_the_child() {
         let launched = launched(
@@ -2658,10 +2368,8 @@ mod tests {
         assert!(matches!(outcome, Verdict::Unavailable(_)));
     }
 
-    /// The text clause is the belt for a runner that rewrote the exit code. It
-    /// is read only when nothing came back on the reply stream and the refusal is
-    /// the child's first line, so bytes a document got echoed into a diagnostic
-    /// cannot mark the profile unavailable.
+    /// The text clause is the belt for a runner that rewrote the exit code, read only
+    /// when nothing came back on the reply stream and the refusal is the first line.
     #[test]
     fn a_document_cannot_write_the_refusal_the_parent_looks_for() {
         assert!(matches!(
@@ -2720,9 +2428,8 @@ mod tests {
         ));
     }
 
-    /// The self-test's parse step agrees with the parsers on this host. The
-    /// confinement around it is what the probe reports; this is the half that
-    /// says every packaged fixture still yields its whole text.
+    /// Every packaged fixture still yields its whole text; the confinement around it
+    /// is what the probe reports.
     #[test]
     fn the_self_test_parses_the_packaged_documents() {
         configure_parser_limits();
@@ -2732,10 +2439,8 @@ mod tests {
         );
     }
 
-    /// A media profile that installed every item and cannot decode a frame is
-    /// not one a request may be spawned for; a profile with no helper at all is
-    /// a state, not a failure; and a document's own verdict never gates, because
-    /// its per-file outcome is recorded where the file is.
+    /// A media profile that cannot decode is not spawned for; no helper at all is a
+    /// state, not a failure; and a document's verdict never gates.
     #[test]
     fn a_media_job_that_failed_is_not_ready() {
         let media = |job: Option<JobVerdict>, detail: &str| Report {
@@ -2812,9 +2517,8 @@ mod tests {
         assert!(kept.starts_with("reason"));
     }
 
-    /// A thread that never finishes is abandoned at its deadline rather than
-    /// joined: this is what keeps a process holding the protocol pipes from
-    /// holding the extraction permit with them.
+    /// Abandoned at its deadline rather than joined, so a process holding the pipes
+    /// cannot hold the extraction permit with them.
     #[test]
     fn a_thread_that_never_finishes_is_abandoned() {
         let (release, held) = std::sync::mpsc::channel::<()>();
@@ -2936,11 +2640,8 @@ mod tests {
         );
     }
 
-    /// A bare command name resolves to a real, absolute path, so the media grant
-    /// can name a file. On Windows that means `cmd` → `…\cmd.exe`: the old
-    /// `directory.join(name).is_file()` walk never appended the extension and
-    /// handed back the bare name, which made `storage.ffmpeg_path = "ffmpeg"`
-    /// fail even when `ffmpeg.exe` was on `PATH`.
+    /// A bare command name resolves to a real, absolute path, so the media grant can
+    /// name a file: on Windows `cmd` → `…\cmd.exe`, with the extension appended.
     #[test]
     fn a_bare_command_name_resolves_to_a_path_that_exists() {
         // A name every host this ships on has, and one whose executable carries
@@ -2956,7 +2657,6 @@ mod tests {
         );
     }
 
-    /// One child's outcome, as the parent classified it.
     fn finished(exit_code: Option<i32>, stdout: &[u8], stderr: &str, timed_out: bool) -> Run {
         Run {
             exit_code,
@@ -2967,15 +2667,12 @@ mod tests {
     }
 
     /// The opt-out is given up for a container the loader could not start in, and
-    /// for nothing else. The distinction decides whether the confinement of every
-    /// later launch depends on how busy the machine was: a probe that ran out its
-    /// five seconds says nothing about the container flavour, and a child that
+    /// nothing else: a timeout says nothing about the flavour, and a child that
     /// refused on its own report ran inside it.
     #[test]
     fn only_a_child_that_never_ran_makes_the_opt_out_the_suspect() {
-        // Created, died in its loader, said nothing: the shape the attribute
-        // leaves behind. The constant is spelled out because the loader status is
-        // Windows' own and this test runs everywhere.
+        // Created, died in its loader, said nothing: the shape the attribute leaves
+        // behind. Spelled out because the test runs everywhere.
         assert!(opt_out_suspect(&finished(
             Some(0xC000_0142u32 as i32),
             b"",
@@ -3008,10 +2705,8 @@ mod tests {
         )));
     }
 
-    /// The media profile gives the opt-out up only for its own helper's failure.
-    /// Any one of the four facts missing turns the retry into either a loop (the
-    /// profile already plain) or a wrong answer (another profile's report, a
-    /// helper that was never configured).
+    /// The opt-out is given up only for the media profile's own helper failure: a
+    /// missing fact would turn the retry into a loop or a wrong answer.
     #[test]
     fn only_a_failed_media_helper_selects_the_plain_container() {
         assert!(media_needs_the_plain_container(
