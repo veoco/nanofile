@@ -333,7 +333,7 @@ fn main() -> anyhow::Result<()> {
     // Failing here is before the subscriber exists, so the reason has to be
     // delivered by hand: a log file, and a dialog only when there is a desktop
     // to show one on (never for a service).
-    let loaded = match Config::load_for_start(cli.config.as_deref()) {
+    let (loaded, resolved_config) = match Config::load_for_start_with_path(cli.config.as_deref()) {
         Ok(loaded) => loaded,
         Err(e) => {
             logging::report_startup_failure(&e, !service_run);
@@ -341,16 +341,14 @@ fn main() -> anyhow::Result<()> {
         }
     };
     let mut config = loaded.config;
-    let env_keys = loaded.env_keys;
+    let mut env_keys = loaded.env_keys;
 
-    // The path this start was told to use — the tray's auto-start entries pass
-    // it on, and the log target persistence uses it.
-    let config_path: PathBuf = match &cli.config {
-        Some(path) => path.clone(),
-        None => std::env::var(infra::config::CONFIG_PATH_ENV)
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(infra::config::DEFAULT_CONFIG_PATH)),
-    };
+    // The path this start resolved — the one an auto-start entry records, the
+    // one the log target persistence writes to, and, for a start that has never
+    // been configured, the one a first-run setup writes. One source of truth:
+    // the loader and everything downstream must not disagree about which file
+    // is in play.
+    let config_path: PathBuf = resolved_config.path.clone();
 
     // Panics must reach the log file even in GUI-subsystem Windows builds
     // (no console shows them), so install the hook before anything else.
@@ -400,6 +398,58 @@ fn main() -> anyhow::Result<()> {
     );
     if let Some(reason) = headless_reason {
         tracing::info!("{reason}");
+    }
+
+    // ── First-run setup ────────────────────────────────────────────────
+    // A serving start that was named no configuration file, found none, and was
+    // handed nothing by the environment is not a deployment to report an error
+    // about: it is an installation nobody has set up yet. So instead of failing
+    // on the missing master secret (which is what a double-clicked release build
+    // used to do), it serves the setup page, which collects what that secret and
+    // every state path have to be, writes them to the per-user configuration
+    // file, and hands the listener over so the server starts on the very socket
+    // the page was served on.
+    //
+    // Deliberately before the relative-path resolution and the secret checks
+    // below: those read the configuration this writes.
+    let mut setup_listener: Option<server::restart::BoundListener> = None;
+    if matches!(command, Command::Server)
+        && !service_run
+        && infra::config::needs_first_run_setup(&resolved_config)
+    {
+        tracing::info!(
+            config = %config_path.display(),
+            "no configuration file and no NANOFILE_* environment variable: starting the \
+             first-run setup"
+        );
+        let defaults = server::setup::SetupDefaults::detect(&config);
+        let rt = tokio::runtime::Runtime::new()?;
+        match rt.block_on(server::setup::run(config_path.clone(), config, defaults))? {
+            server::setup::SetupOutcome::Completed { listener, .. } => {
+                setup_listener = listener;
+                // Everything below reads the configuration the page just wrote:
+                // the master secret, the database and every state directory.
+                let (reloaded, _) = Config::load_for_start_with_path(Some(&config_path))?;
+                config = reloaded.config;
+                env_keys = reloaded.env_keys;
+            }
+            server::setup::SetupOutcome::Aborted => return Ok(()),
+            server::setup::SetupOutcome::Expired => {
+                // A GUI-subsystem build has no console and no window: the log
+                // file and this box are the only ways the reason reaches a
+                // person. Everywhere else the logged line is enough, and a
+                // message box on a server would have nobody to dismiss it.
+                logging::show_message_box(
+                    "Nanofile",
+                    "Nanofile could not be set up: the configuration page was not completed in \
+                     time. Start Nanofile again to get a new setup page, and see nanofile.log \
+                     for the address it was served on.",
+                );
+                anyhow::bail!(
+                    "first-run setup was not completed; start the program again to retry"
+                );
+            }
+        }
     }
 
     // ── Relative state paths ───────────────────────────────────────────
@@ -592,11 +642,11 @@ fn main() -> anyhow::Result<()> {
             // the server runs on background tokio workers instead.
             #[cfg(feature = "tray")]
             if tray_mode {
-                tray::run(config, env_keys, config_path);
+                tray::run(config, env_keys, config_path, setup_listener);
             }
 
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(run_server_flow(config, env_keys, None))
+            rt.block_on(run_server_flow(config, env_keys, None, setup_listener))
         }
         Command::Adduser {
             email,
@@ -723,12 +773,17 @@ fn main() -> anyhow::Result<()> {
 /// `server::restart`). Everything a fresh process would re-read — the saved
 /// settings, the database, the indexer, the caches, the scheduler — is rebuilt
 /// by the next iteration.
+///
+/// `listener` is the socket a completed first-run setup was already serving on.
+/// Handing it in is what keeps the port: releasing it and binding it again
+/// moments later is what Windows refuses while the connection the setup page
+/// just answered sits in `TIME_WAIT`. It is `None` on every other path.
 async fn run_server_flow(
     config: Config,
     env_keys: EnvKeys,
     mut tray_cmd: Option<TrayCmdReceiver>,
+    mut listener: Option<server::restart::BoundListener>,
 ) -> anyhow::Result<()> {
-    let mut listener: Option<server::restart::BoundListener> = None;
     // Built once, outside the generation loop, for the same reason the listener
     // is: an in-place restart rebuilds `AppState`, and a run submitted before it
     // must still be pollable after it.
@@ -1004,26 +1059,13 @@ async fn run_server(
             .await?;
         if count == 0 {
             tracing::info!("No users found; creating initial admin user");
-            let password_hash = server::service::auth::password::hash_password(
+            server::service::auth::bootstrap::create_first_admin(
+                state.db.as_ref(),
+                admin_email,
                 admin_password,
-                state.config().auth.password_hash_iterations,
-            );
-            let now = chrono::Utc::now().timestamp();
-            let model = infra::entity::user::ActiveModel {
-                id: sea_orm::NotSet,
-                email: Set(admin_email.clone()),
-                password_hash: Set(password_hash),
-                is_active: Set(true),
-                is_admin: Set(true),
-                created_at: Set(now),
-                last_login_at: Set(None),
-                invited_by: Set(None),
-                storage_quota: sea_orm::NotSet,
-                name: sea_orm::NotSet,
-                display_name: sea_orm::NotSet,
-                language: sea_orm::NotSet,
-            };
-            model.insert(state.db.as_ref()).await?;
+                server::service::auth::bootstrap::AdminPolicy::from_config(&state.config()),
+            )
+            .await?;
             tracing::info!("Admin user '{}' created", admin_email);
         } else {
             tracing::debug!(

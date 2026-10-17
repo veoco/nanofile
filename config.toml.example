@@ -1,5 +1,10 @@
 # Nanofile configuration.
 #
+# This template is for an installation whose configuration you keep yourself.
+# A start with no configuration file and no NANOFILE_* environment variable does
+# not fall back to built-in defaults: it runs a one-time setup page and writes
+# ~/.nanofile/config.toml itself, with the master secret generated for you.
+#
 # Every key has a built-in default, and the web interface ("System Settings")
 # manages every key except the file-only ones marked below. A value here is a
 # bootstrap: it supplies a key with no saved value, and stops mattering for that

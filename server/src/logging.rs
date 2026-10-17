@@ -113,6 +113,23 @@ fn startup_message_box(title: &str, text: &str) {
     };
 }
 
+/// Show an error box to the person at the machine, where there is one.
+///
+/// A GUI-subsystem Windows build (the double-clicked tray binary) has no console
+/// and, before the log file a person would think to open, no other channel. The
+/// first-run setup uses this for the one failure it cannot report any other way:
+/// a setup page nobody completed before it gave up.
+///
+/// A no-op elsewhere: every other platform has a console or a terminal the
+/// process was started from, and a message box on a server would have nobody to
+/// dismiss it.
+pub fn show_message_box(title: &str, text: &str) {
+    #[cfg(target_os = "windows")]
+    startup_message_box(title, text);
+    #[cfg(not(target_os = "windows"))]
+    let _ = (title, text);
+}
+
 /// Initialize the global tracing subscriber.
 ///
 /// `no_console` says this process has no console a person can read (a desktop

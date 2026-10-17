@@ -10,6 +10,7 @@
 // ── Server crate modules ────────────────────────────────────────────────────
 pub mod app;
 pub mod body_limit;
+pub mod desktop;
 pub mod domain;
 pub mod filters;
 pub mod fs;
@@ -25,6 +26,7 @@ pub mod sandbox;
 pub mod serve;
 pub mod service;
 pub mod settings;
+pub mod setup;
 pub mod static_assets;
 pub mod tasks;
 pub mod thumbnail_util;

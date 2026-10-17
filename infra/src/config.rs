@@ -6,8 +6,36 @@ use serde::{Deserialize, Serialize};
 
 /// Environment variable overriding the config file path.
 pub const CONFIG_PATH_ENV: &str = "NANOFILE_CONFIG";
-/// Default config path when neither `--config` nor `NANOFILE_CONFIG` is set.
-pub const DEFAULT_CONFIG_PATH: &str = "config.toml";
+/// Name of a configuration file, wherever one lives.
+pub const CONFIG_FILE_NAME: &str = "config.toml";
+/// The historical default when neither `--config` nor `NANOFILE_CONFIG` is set:
+/// `config.toml` in the working directory, which is what every existing
+/// deployment records in its auto-start entries and service registration.
+pub const DEFAULT_CONFIG_PATH: &str = CONFIG_FILE_NAME;
+/// Directory created under the user's home for a first-run configuration.
+///
+/// The same name on every platform on purpose: the file this holds is the
+/// operator's only handle on a double-clicked installation, so "it is at
+/// `~/.nanofile/config.toml`" has to be one sentence, not one per platform.
+pub const USER_CONFIG_DIR_NAME: &str = ".nanofile";
+
+/// Environment variables that supply no configuration, so their presence does
+/// not count as "the operator configured this".
+///
+/// The first-run setup is gated on *variable names*, not on values: a variable
+/// that is set but fails to parse is still an explicit choice, and treating it
+/// as "nothing configured" would stand a generated key next to a deployment
+/// that meant to supply one. The list below is therefore exactly the
+/// `NANOFILE_*` names that decide something other than the server's
+/// configuration.
+pub const NON_CONFIG_ENV_VARS: &[&str] = &[
+    // Toggles `.env` loading only.
+    "NANOFILE_DOTENV",
+    // Read by the sandbox test helpers, never by a serving process.
+    "NANOFILE_TEST_FFMPEG_PATH",
+    // A compile-time stamp exported by `build.rs`, not a setting.
+    "NANOFILE_BUILD_TS",
+];
 
 /// The catalog keys the environment supplied a value for.
 ///
@@ -1547,6 +1575,151 @@ pub fn state_path_base() -> PathBuf {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
+/// The per-user configuration file a first-run setup writes
+/// (`~/.nanofile/config.toml`), or `None` when the home directory cannot be
+/// determined from the environment.
+pub fn user_config_path() -> Option<PathBuf> {
+    crate::common::util::home_dir()
+        .map(|home| home.join(USER_CONFIG_DIR_NAME).join(CONFIG_FILE_NAME))
+}
+
+/// Why a start reads the configuration file it reads.
+///
+/// The distinction matters in one direction only: a path the operator *named*
+/// must exist (a moved folder leaves an auto-start entry pointing at nothing,
+/// and falling back to built-in defaults would start a second instance), while
+/// a path this build chose by default may legitimately be absent — that is what
+/// a zero-config first run is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigPathOrigin {
+    /// `--config <path>`.
+    CommandLine,
+    /// `NANOFILE_CONFIG=<path>`.
+    Environment,
+    /// `./config.toml`, kept as the default for compatibility with every
+    /// deployment that predates the per-user location.
+    LegacyDefault,
+    /// `<home>/.nanofile/config.toml`.
+    UserDefault,
+    /// Nothing named a configuration file and none exists: `path` is where a
+    /// first run has to write one.
+    Unconfigured,
+}
+
+impl ConfigPathOrigin {
+    /// The name to report in a message about a path the operator named.
+    pub fn named_by(self) -> Option<&'static str> {
+        match self {
+            ConfigPathOrigin::CommandLine => Some("--config"),
+            ConfigPathOrigin::Environment => Some(CONFIG_PATH_ENV),
+            _ => None,
+        }
+    }
+}
+
+/// A resolved configuration path plus why it was chosen.
+#[derive(Debug, Clone)]
+pub struct ConfigPath {
+    pub path: PathBuf,
+    pub origin: ConfigPathOrigin,
+}
+
+impl ConfigPath {
+    /// Whether the operator named this path, which makes a missing file an
+    /// error rather than a zero-config start.
+    pub fn is_explicit(&self) -> bool {
+        self.origin.named_by().is_some()
+    }
+
+    /// Whether nothing is configured yet, which is the state a first-run setup
+    /// exists for.
+    pub fn is_unconfigured(&self) -> bool {
+        self.origin == ConfigPathOrigin::Unconfigured
+    }
+}
+
+/// Resolve which configuration file a start reads.
+///
+/// Order, first match wins: `--config`, `NANOFILE_CONFIG`, `./config.toml`
+/// (the historical default, so an existing deployment keeps reading the file it
+/// always did), `<home>/.nanofile/config.toml`, and finally "nothing
+/// configured" — in which case `path` is where a first run writes and the
+/// loader falls back to built-in defaults plus the environment.
+///
+/// Loads `.env` first through [`load_dotenv`], so a `NANOFILE_CONFIG` written
+/// there counts exactly like one exported by the shell.
+pub fn resolve_config_path(explicit: Option<&Path>) -> ConfigPath {
+    load_dotenv();
+    let env_config = std::env::var_os(CONFIG_PATH_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let legacy = PathBuf::from(DEFAULT_CONFIG_PATH);
+    let legacy = legacy.is_file().then_some(legacy);
+    let user = user_config_path().filter(|path| path.is_file());
+    let write_default = user_config_path().unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+
+    let resolved = resolve_config_path_from(explicit, env_config, legacy, user, write_default);
+    if resolved.is_unconfigured() && user_config_path().is_none() {
+        // `tracing` is not initialized this early (reading the configuration is
+        // what starts that), and a machine with no home directory that is about
+        // to have its configuration written into the working directory is worth
+        // one line on stderr.
+        eprintln!(
+            "[nanofile] WARN: no home directory in the environment; a first-run setup will \
+             write its configuration to {}",
+            resolved.path.display()
+        );
+    }
+    resolved
+}
+
+/// [`resolve_config_path`] with every input passed in, so the precedence is
+/// testable without touching the process environment or the working directory.
+fn resolve_config_path_from(
+    explicit: Option<&Path>,
+    env_config: Option<PathBuf>,
+    legacy: Option<PathBuf>,
+    user_existing: Option<PathBuf>,
+    write_default: PathBuf,
+) -> ConfigPath {
+    let (path, origin) = match (explicit, env_config, legacy, user_existing) {
+        (Some(path), _, _, _) => (path.to_path_buf(), ConfigPathOrigin::CommandLine),
+        (None, Some(path), _, _) => (path, ConfigPathOrigin::Environment),
+        (None, None, Some(path), _) => (path, ConfigPathOrigin::LegacyDefault),
+        (None, None, None, Some(path)) => (path, ConfigPathOrigin::UserDefault),
+        (None, None, None, None) => (write_default, ConfigPathOrigin::Unconfigured),
+    };
+    ConfigPath { path, origin }
+}
+
+/// Whether any environment variable that supplies configuration is set.
+///
+/// Name presence only, and `NANOFILE_*` only: see [`NON_CONFIG_ENV_VARS`] for
+/// the names that are deliberately not configuration.
+pub fn environment_supplies_config() -> bool {
+    names_supply_config(std::env::vars_os().map(|(name, _)| name))
+}
+
+fn names_supply_config(names: impl IntoIterator<Item = std::ffi::OsString>) -> bool {
+    names.into_iter().any(|name| {
+        let Some(name) = name.to_str() else {
+            return false;
+        };
+        name.starts_with("NANOFILE_") && !NON_CONFIG_ENV_VARS.contains(&name)
+    })
+}
+
+/// Whether this start should run the first-run setup instead of serving.
+///
+/// True only when nothing named a configuration file, no configuration file
+/// exists, and the environment supplies nothing either. Everything else — a
+/// `--config` path, `NANOFILE_CONFIG`, `./config.toml`, the per-user file, any
+/// `NANOFILE_*` — means this installation is configured, even if the
+/// configuration turns out to be unusable (that is a different report).
+pub fn needs_first_run_setup(resolved: &ConfigPath) -> bool {
+    resolved.is_unconfigured() && !environment_supplies_config()
+}
+
 /// The database file of a `sqlite:` URL, with its query string, or `None` when
 /// the URL names a different backend, an in-memory database, or no file.
 ///
@@ -1856,10 +2029,11 @@ impl Config {
     /// came from the environment, an admin page cannot say whether a database
     /// save would take effect.
     pub fn load_tracked() -> anyhow::Result<LoadedConfig> {
-        load_dotenv();
-        let path =
-            std::env::var(CONFIG_PATH_ENV).unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
-        Self::load_from_tracked(&path)
+        // The precedence a server start uses, minus the "a named file must
+        // exist" rule: a tool that only wants the effective configuration should
+        // not be blind to the per-user file the first-run setup writes.
+        let resolved = resolve_config_path(None);
+        Self::load_from_tracked(&resolved.path)
     }
 
     /// Load the configuration a *server start* should use.
@@ -1875,26 +2049,32 @@ impl Config {
     /// defaults there would silently start a server on the default port with the
     /// default database next to the binary — a *different* instance — instead of
     /// saying that the named file is missing. The zero-config convenience stays
-    /// for the unnamed default (`config.toml`), where "no file" is a legitimate
-    /// setup rather than a broken reference.
+    /// for the unnamed default (`./config.toml`, then the per-user file), where
+    /// "no file" is a legitimate setup rather than a broken reference.
     pub fn load_for_start(explicit_path: Option<&Path>) -> anyhow::Result<LoadedConfig> {
-        load_dotenv();
-        let (path, named_by) = match explicit_path {
-            Some(path) => (path.to_path_buf(), "--config"),
-            None => match std::env::var(CONFIG_PATH_ENV) {
-                Ok(path) => (PathBuf::from(path), CONFIG_PATH_ENV),
-                Err(_) => (PathBuf::from(DEFAULT_CONFIG_PATH), ""),
-            },
-        };
-        if !named_by.is_empty() && !path.is_file() {
+        Self::load_for_start_with_path(explicit_path).map(|(loaded, _)| loaded)
+    }
+
+    /// [`Self::load_for_start`] plus the path it resolved and why.
+    ///
+    /// The caller needs both: the path an auto-start entry records and the log
+    /// target are the *same* path the loader read, and whether anything was
+    /// named decides whether a missing file is an error or a first run.
+    pub fn load_for_start_with_path(
+        explicit_path: Option<&Path>,
+    ) -> anyhow::Result<(LoadedConfig, ConfigPath)> {
+        let resolved = resolve_config_path(explicit_path);
+        if resolved.is_explicit() && !resolved.path.is_file() {
+            let named_by = resolved.origin.named_by().unwrap_or("the environment");
             anyhow::bail!(
                 "configuration file {} does not exist (named by {named_by}); starting with \
                  built-in defaults would use a different database and listener, so fix the path \
                  or drop the explicit setting",
-                path.display()
+                resolved.path.display()
             );
         }
-        Self::load_from_tracked(&path)
+        let loaded = Self::load_from_tracked(&resolved.path)?;
+        Ok((loaded, resolved))
     }
 
     /// Load a config file. A key the file does not mention keeps its built-in
@@ -2053,12 +2233,161 @@ pub fn write_config_value(
     })
 }
 
+/// Why a new configuration file could not be written.
+#[derive(Debug, thiserror::Error)]
+pub enum WriteConfigError {
+    /// A configuration file is already there. Deliberately its own variant: a
+    /// first-run setup has to report this as "somebody already configured this",
+    /// not as an I/O failure.
+    #[error("{} already exists", .0.display())]
+    AlreadyExists(PathBuf),
+    #[error("{0}")]
+    Other(#[from] anyhow::Error),
+}
+
+/// A value in a configuration document a first run writes.
+///
+/// Typed rather than a string on purpose: a port written as `"8123"` is a
+/// configuration the loader rejects, and guessing the type from the text ("all
+/// digits") would turn a future string setting that happens to look numeric into
+/// a broken one.
+#[derive(Debug, Clone)]
+pub enum ConfigValue<'a> {
+    /// Quoted and escaped as a TOML string. Borrowed when the caller's text
+    /// outlives the write, owned when the caller had to build it.
+    Text(std::borrow::Cow<'a, str>),
+    /// Written as a bare TOML integer.
+    Integer(u64),
+    /// Written as `true` or `false`.
+    Boolean(bool),
+}
+
+impl<'a> From<&'a str> for ConfigValue<'a> {
+    fn from(value: &'a str) -> Self {
+        ConfigValue::Text(std::borrow::Cow::Borrowed(value))
+    }
+}
+
+impl<'a> From<&'a String> for ConfigValue<'a> {
+    fn from(value: &'a String) -> Self {
+        ConfigValue::Text(std::borrow::Cow::Borrowed(value.as_str()))
+    }
+}
+
+impl From<String> for ConfigValue<'_> {
+    fn from(value: String) -> Self {
+        ConfigValue::Text(std::borrow::Cow::Owned(value))
+    }
+}
+
+impl From<u16> for ConfigValue<'_> {
+    fn from(value: u16) -> Self {
+        ConfigValue::Integer(u64::from(value))
+    }
+}
+
+impl From<bool> for ConfigValue<'_> {
+    fn from(value: bool) -> Self {
+        ConfigValue::Boolean(value)
+    }
+}
+
+/// One `[section]` of a configuration file a first run writes.
+pub struct ConfigSection<'a> {
+    /// Section header, e.g. `server`.
+    pub name: &'a str,
+    /// Lines written as comments above the header (no `#` needed).
+    pub comment: &'a str,
+    /// `key = value` pairs, in order. Strings are rendered by `toml_edit`, so
+    /// quoting and escaping are the TOML crate's problem, not a caller's.
+    pub entries: Vec<(&'a str, ConfigValue<'a>)>,
+}
+
+/// Create a **new** configuration file from scratch.
+///
+/// Only a first-run setup calls this. Its whole job is the part that must not
+/// be re-implemented: the parent directory is created owner-only, the write is
+/// atomic and restricted to the owner (the file holds the master secret), and
+/// an existing file is **never** overwritten — that is enforced by reserving
+/// the path with `create_new`, so it holds even if two first runs race, rather
+/// than by a check-then-write that a concurrent process can slip through.
+pub fn write_new_config(
+    path: impl AsRef<Path>,
+    header: &str,
+    sections: &[ConfigSection<'_>],
+) -> Result<(), WriteConfigError> {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        crate::common::util::ensure_private_dir_only_if_created(parent)
+            .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", parent.display()))?;
+    }
+
+    let mut document = String::new();
+    for line in header.lines() {
+        if line.is_empty() {
+            document.push('\n');
+        } else {
+            document.push_str("# ");
+            document.push_str(line);
+            document.push('\n');
+        }
+    }
+    for section in sections {
+        if !section.comment.is_empty() {
+            for line in section.comment.lines() {
+                document.push_str("# ");
+                document.push_str(line);
+                document.push('\n');
+            }
+        }
+        document.push('[');
+        document.push_str(section.name);
+        document.push_str("]\n");
+        for (key, value) in &section.entries {
+            document.push_str(key);
+            document.push_str(" = ");
+            match value {
+                // `toml_edit::value` renders a string the way TOML wants it,
+                // escaping quotes and control characters.
+                ConfigValue::Text(text) => {
+                    document.push_str(&toml_edit::value(text.as_ref()).to_string())
+                }
+                ConfigValue::Integer(number) => document.push_str(&number.to_string()),
+                ConfigValue::Boolean(value) => {
+                    document.push_str(if *value { "true" } else { "false" })
+                }
+            }
+            document.push('\n');
+        }
+        document.push('\n');
+    }
+
+    // The reservation, not a permission check: `create_new` fails when the path
+    // exists, which is the one thing a concurrent first run cannot get around.
+    if let Err(e) = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        return Err(if e.kind() == std::io::ErrorKind::AlreadyExists {
+            WriteConfigError::AlreadyExists(path.to_path_buf())
+        } else {
+            WriteConfigError::Other(anyhow::anyhow!("cannot create {}: {e}", path.display()))
+        });
+    }
+
+    // Replace the (empty) reservation with the real document: temp file +
+    // rename, owner-only, fsynced.
+    atomic_write(path, &document).map_err(|e| {
+        WriteConfigError::Other(e.context(format!("failed to write {}", path.display())))
+    })
+}
+
 fn backup_path(path: &Path) -> PathBuf {
     let mut s = path.as_os_str().to_owned();
     s.push(".bak");
     PathBuf::from(s)
 }
-
 fn tmp_path(path: &Path) -> PathBuf {
     let mut s = path.as_os_str().to_owned();
     s.push(format!(".{}.tmp", std::process::id()));
@@ -2948,6 +3277,234 @@ request_timeout_secs = 600
         };
         let rendered = format!("{c:?}");
         assert!(!rendered.contains("smtp-secret"));
+    }
+
+    // ── Configuration path resolution ────────────────────────────────────
+
+    fn os(name: &str) -> std::ffi::OsString {
+        std::ffi::OsString::from(name)
+    }
+
+    #[test]
+    fn a_named_config_path_always_wins() {
+        let named = PathBuf::from("/tmp/named.toml");
+        let resolved = resolve_config_path_from(
+            Some(&named),
+            Some(PathBuf::from("/tmp/env.toml")),
+            Some(PathBuf::from("config.toml")),
+            Some(PathBuf::from("/home/u/.nanofile/config.toml")),
+            PathBuf::from("/home/u/.nanofile/config.toml"),
+        );
+        assert_eq!(resolved.path, named);
+        assert_eq!(resolved.origin, ConfigPathOrigin::CommandLine);
+        assert!(resolved.is_explicit());
+        assert!(!resolved.is_unconfigured());
+        assert_eq!(resolved.origin.named_by(), Some("--config"));
+    }
+
+    #[test]
+    fn the_environment_names_a_config_before_any_default_does() {
+        let resolved = resolve_config_path_from(
+            None,
+            Some(PathBuf::from("/etc/nanofile/config.toml")),
+            Some(PathBuf::from("config.toml")),
+            None,
+            PathBuf::from("/home/u/.nanofile/config.toml"),
+        );
+        assert_eq!(resolved.path, PathBuf::from("/etc/nanofile/config.toml"));
+        assert_eq!(resolved.origin, ConfigPathOrigin::Environment);
+        assert_eq!(resolved.origin.named_by(), Some(CONFIG_PATH_ENV));
+    }
+
+    #[test]
+    fn the_working_directory_default_precedes_the_per_user_file() {
+        // Both exist: the historical default wins, so a deployment upgraded to
+        // this build keeps reading the file it always read.
+        let resolved = resolve_config_path_from(
+            None,
+            None,
+            Some(PathBuf::from("config.toml")),
+            Some(PathBuf::from("/home/u/.nanofile/config.toml")),
+            PathBuf::from("/home/u/.nanofile/config.toml"),
+        );
+        assert_eq!(resolved.path, PathBuf::from("config.toml"));
+        assert_eq!(resolved.origin, ConfigPathOrigin::LegacyDefault);
+        assert!(!resolved.is_explicit());
+
+        // Only the per-user file exists: that is this build's default.
+        let resolved = resolve_config_path_from(
+            None,
+            None,
+            None,
+            Some(PathBuf::from("/home/u/.nanofile/config.toml")),
+            PathBuf::from("/home/u/.nanofile/config.toml"),
+        );
+        assert_eq!(
+            resolved.path,
+            PathBuf::from("/home/u/.nanofile/config.toml")
+        );
+        assert_eq!(resolved.origin, ConfigPathOrigin::UserDefault);
+    }
+
+    #[test]
+    fn nothing_at_all_leaves_the_write_default_unconfigured() {
+        let resolved = resolve_config_path_from(
+            None,
+            None,
+            None,
+            None,
+            PathBuf::from("/home/u/.nanofile/config.toml"),
+        );
+        assert_eq!(
+            resolved.path,
+            PathBuf::from("/home/u/.nanofile/config.toml")
+        );
+        assert!(resolved.is_unconfigured());
+        assert!(!resolved.is_explicit());
+    }
+
+    #[test]
+    fn only_configuration_variables_count_as_environment() {
+        // Anything that can carry a setting suppresses the first run...
+        assert!(names_supply_config([
+            os("PATH"),
+            os("NANOFILE_LOG_LEVEL"),
+            os("NANOFILE_CONFIG"),
+        ]));
+        assert!(names_supply_config([os("NANOFILE_SERVER_SECRET_KEY")]));
+        // ...and the names that decide something else do not.
+        assert!(!names_supply_config(
+            std::iter::empty::<std::ffi::OsString>()
+        ));
+        assert!(!names_supply_config([os("PATH"), os("HOME")]));
+        assert!(!names_supply_config([
+            os("NANOFILE_DOTENV"),
+            os("NANOFILE_TEST_FFMPEG_PATH"),
+            os("NANOFILE_BUILD_TS"),
+        ]));
+    }
+
+    #[test]
+    fn a_first_run_is_the_unconfigured_case_with_a_clean_environment() {
+        let unconfigured = ConfigPath {
+            path: PathBuf::from("/home/u/.nanofile/config.toml"),
+            origin: ConfigPathOrigin::Unconfigured,
+        };
+        let legacy = ConfigPath {
+            path: PathBuf::from("config.toml"),
+            origin: ConfigPathOrigin::LegacyDefault,
+        };
+        // The gate itself is a conjunction; the environment half is covered by
+        // `only_configuration_variables_count_as_environment`, and the process
+        // environment is deliberately not mutated here (the suite runs tests in
+        // parallel).
+        assert!(unconfigured.is_unconfigured());
+        assert!(!legacy.is_unconfigured());
+        assert!(!needs_first_run_setup(&legacy) || !environment_supplies_config());
+    }
+
+    // ── New configuration files ──────────────────────────────────────────
+
+    #[test]
+    fn write_new_config_creates_a_private_file_that_parses() {
+        let dir = tempfile::tempdir().unwrap();
+        // The per-user directory does not exist yet: it is created owner-only.
+        let config_dir = dir.path().join(".nanofile");
+        let path = config_dir.join(CONFIG_FILE_NAME);
+        write_new_config(
+            &path,
+            "Nanofile configuration.\n\nWritten by the first-run setup.",
+            &[
+                ConfigSection {
+                    name: "server",
+                    comment: "Listener and master secret.",
+                    entries: vec![
+                        ("addr", "0.0.0.0".into()),
+                        ("port", 8123.into()),
+                        ("secret_key", "abc".into()),
+                    ],
+                },
+                ConfigSection {
+                    name: "database",
+                    comment: "",
+                    entries: vec![("url", "sqlite:/data/nanofile.db?mode=rwc".into())],
+                },
+            ],
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("# Nanofile configuration."));
+        assert!(text.contains("# Listener and master secret.\n[server]\n"));
+        assert!(text.contains("port = 8123"), "{text}");
+
+        let parsed: Config = toml::from_str(&text).expect("the document parses");
+        assert_eq!(parsed.server.port, 8123);
+        assert_eq!(parsed.server.secret_key, "abc");
+        assert_eq!(parsed.database.url, "sqlite:/data/nanofile.db?mode=rwc");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "the config holds the master secret");
+            let dir_mode = std::fs::metadata(&config_dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(dir_mode, 0o700);
+        }
+    }
+
+    #[test]
+    fn write_new_config_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        std::fs::write(&path, "[server]\nport = 1\n").unwrap();
+
+        let error = write_new_config(&path, "header", &[]).unwrap_err();
+        assert!(
+            matches!(error, WriteConfigError::AlreadyExists(ref p) if *p == path),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[server]\nport = 1\n",
+            "the existing file must be untouched"
+        );
+    }
+
+    #[test]
+    fn write_new_config_carries_the_first_run_values_into_a_config() {
+        // The document the setup writes has to be a configuration the loader
+        // accepts with the values it was built from -- the two halves of a first
+        // run (the page and every later start) must agree.
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("data");
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        let db_url = format!("sqlite:{}/nanofile.db?mode=rwc", data_dir.display());
+        write_new_config(
+            &path,
+            "header",
+            &[
+                ConfigSection {
+                    name: "server",
+                    comment: "",
+                    entries: vec![("port", 8123.into())],
+                },
+                ConfigSection {
+                    name: "database",
+                    comment: "",
+                    entries: vec![("url", db_url.as_str().into())],
+                },
+            ],
+        )
+        .unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(config.server.port, 8123);
+        assert_eq!(config.database.url, db_url);
+        assert_eq!(
+            sqlite_url_file(&config.database.url).map(|(file, _)| PathBuf::from(file)),
+            Some(data_dir.join("nanofile.db"))
+        );
     }
 }
 

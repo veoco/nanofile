@@ -203,7 +203,15 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core
             return;
         }
     };
-    match runtime.block_on(crate::run_server_flow(config, env_keys, Some(quit_rx))) {
+    // No first-run setup behind a service: it has no desktop, no console and
+    // nobody watching it, so there is no page to complete. The preflight above
+    // has already reported what a missing configuration means for the service.
+    match runtime.block_on(crate::run_server_flow(
+        config,
+        env_keys,
+        Some(quit_rx),
+        None,
+    )) {
         Ok(()) => {
             tracing::info!("service stopped");
             report(SERVICE_STOPPED, 0, 0);

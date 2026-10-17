@@ -1,5 +1,6 @@
 pub mod access_token;
 pub mod backup_codes;
+pub mod bootstrap;
 pub mod csrf;
 pub mod login;
 pub mod password;

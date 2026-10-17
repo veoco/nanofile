@@ -171,3 +171,79 @@ export async function stopServer(handle: ServerHandle): Promise<void> {
   }
   fs.rmSync(handle.tmpRoot, { recursive: true, force: true });
 }
+
+/** One instance spawned with no configuration at all, plus the page it served. */
+export interface SetupHandle {
+  child: ChildProcess;
+  tmpRoot: string;
+  /** The temporary home directory the first-run setup writes into. */
+  home: string;
+  logPath: string;
+  /** The one-time setup page, scraped from the instance's log. */
+  setupUrl: string;
+}
+
+/**
+ * Spawn the binary the way a person starts a fresh install: no `--config`, no
+ * `NANOFILE_*` configuration, and a home directory of its own.
+ *
+ * Every inherited `NANOFILE_*` variable is removed, because presence alone
+ * suppresses the first-run setup — including the ones this suite sets for the
+ * shared instance. `NANOFILE_DOTENV=0` is added back deliberately: it is on the
+ * allowlist of variables that configure nothing, and it keeps a developer's
+ * `.env` from quietly configuring this instance. The working directory is the
+ * temp root too, so a `./config.toml` in the checkout cannot be found.
+ */
+export async function startSetupServer(binaryPath: string): Promise<SetupHandle> {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nanofile-e2e-setup-"));
+  const home = path.join(tmpRoot, "home");
+  fs.mkdirSync(home, { recursive: true });
+
+  const logPath = path.join(logDirFor(tmpRoot), "server.log");
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  const logStream = fs.createWriteStream(logPath, { flags: "a" });
+
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.toUpperCase().startsWith("NANOFILE_")) continue;
+    if (value !== undefined) env[key] = value;
+  }
+  env.HOME = home;
+  env.USERPROFILE = home;
+  env.NANOFILE_DOTENV = "0";
+
+  const child = spawn(binaryPath, [], {
+    cwd: tmpRoot,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout?.pipe(logStream);
+  child.stderr?.pipe(logStream);
+
+  const setupUrl = await waitForSetupUrl(logPath);
+  return { child, tmpRoot, home, logPath, setupUrl };
+}
+
+/** Poll the instance's log for the line that carries the one-time setup URL. */
+async function waitForSetupUrl(logPath: string, timeoutMs = 30_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(logPath)) {
+      const text = fs.readFileSync(logPath, "utf8");
+      const match = text.match(/http:\/\/127\.0\.0\.1:\d+\/setup\/[0-9a-f]+/);
+      if (match) return match[0];
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`a first-run setup URL never appeared in ${logPath}`);
+}
+
+/** Stop one zero-configuration instance and remove its temp tree. */
+export async function stopSetupServer(handle: SetupHandle): Promise<void> {
+  handle.child.kill(process.platform === "win32" ? undefined : "SIGTERM");
+  await new Promise((r) => setTimeout(r, 500));
+  if (handle.child.exitCode === null) {
+    handle.child.kill();
+  }
+  fs.rmSync(handle.tmpRoot, { recursive: true, force: true });
+}

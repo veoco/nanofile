@@ -20,12 +20,20 @@ Nanofile 是一个可自行部署的文件同步与分享服务。它兼容 Seaf
 ```bash
 npm install                       # 前端打包工具（esbuild 必需）
 cargo build --release -p server   # 产物是 nanofile（不是 server）
-cp config.toml.example config.toml
-chmod 600 config.toml             # 文件里存有主密钥
 ./target/release/nanofile
 ```
 
-服务监听 http://localhost:8082。首次启动需要一个管理员账号，可用 CLI 创建：
+**首次运行。** 既没有指定配置文件、环境里也没有任何 `NANOFILE_*` 变量时（例如 Windows 下直接双击、或从终端直接运行），这属于尚未初始化的安装，因此不会直接启动服务，而是进入**首次初始化**：起一个一次性页面，把地址（`http://127.0.0.1:8082/setup/<token>`）打印出来，桌面版还会自动用浏览器打开。在页面里创建第一个管理员，并决定监听地址、外部访问地址、数据目录，以及是否对文件块做静态加密。提交后会写出 `~/.nanofile/config.toml`（仅属主可读写），并在同一个端口上启动服务。之后每次启动都读这个文件；删掉它即可重新初始化。
+
+如果你想自己管理配置文件（或做非交互部署），按下面的方式准备 —— 只要存在配置文件就不会进入初始化：
+
+```bash
+cp config.toml.example config.toml
+chmod 600 config.toml             # 文件里存有主密钥
+./target/release/nanofile --config config.toml
+```
+
+服务监听 http://localhost:8082。管理员账号也可以直接用 CLI 创建（首次初始化时设置页会替你做这件事）：
 
 ```bash
 # 交互式输入密码
@@ -55,6 +63,8 @@ printf '%s\n' 'secret123' | ./target/release/nanofile adduser --email admin@exam
 ## 用 Docker 部署
 
 镜像为 `scratch` 容器，仅含 `nanofile` 一个二进制，无配置文件与数据目录，以 `1000:1000` 运行，挂载的数据卷需对该用户可写。
+
+下面两条示例都设置了 `NANOFILE_*` 变量，因此不会进入首次初始化。若容器**完全不带**环境变量启动，则会进入：初始化页面的地址会打印到容器 stdout，用 `docker logs <名称>` 即可取到。该地址是 `127.0.0.1`，且页面本身不带 TLS：远程主机请做端口转发（最简单的是 SSH 隧道），不要把它直接暴露出去。镜像里也没有 `HOME`，初始化无处写 `~/.nanofile/config.toml`；这种场景请自己传 `--config` 并设置 `HOME`。
 
 主密钥（`secret_key`）生成一次并长期保存：它用于加密会话、邮件与静态块。更换后所有会话登出、同步客户端失效、已加密块无法解密。
 
@@ -100,6 +110,8 @@ docker run -d --name nanofile \
 - **`config.toml` 与 `NANOFILE_*` 环境变量**：复制 `config.toml.example`。模板刻意只保留两类键——网页无法保存的（主密钥、数据库 URL、静态加密模式、首启管理员、日志文件），以及必须在网页可达之前就定下来的（对外地址、监听、状态目录、语言）。环境变量始终优先，且永不写回文件，因此容器部署主要依赖环境变量。
 
 分层顺序（高到低）：环境变量、配置文件、"系统设置"保存的值、内置默认值。
+
+配置文件的查找顺序（先命中先得）：`--config <路径>`、`NANOFILE_CONFIG`、`./config.toml`（历史默认值，保证已有部署继续读原来的文件）、`~/.nanofile/config.toml`（首次初始化写出的用户级文件）。只要设置了任何 `NANOFILE_*` 环境变量，就视为已配置，即使没有配置文件也不会进入首次初始化；唯一的例外是不决定配置本身的几个变量（`NANOFILE_DOTENV`、`NANOFILE_TEST_FFMPEG_PATH`、`NANOFILE_BUILD_TS`）。
 
 常用项：
 
@@ -157,7 +169,7 @@ docker run -d --name nanofile \
 - 经 Cloudflare Tunnel（cloudflared）暴露时，源站看到的对端是回环或私有地址。设置 `trusted_proxies = ["private"]` 并把源站绑定到 `127.0.0.1`（或在 Docker 网络中隔离），Cloudflare 会通过 `CF-Connecting-IP` 提供真实访客 IP，其优先级高于 `X-Forwarded-For`。只有在源站无法被其他来源访问时才可信任 `private`，否则同网段设备可伪造该头。
 - 加密资料库上传同样需要资料库密码；未提供时网页预览与下载返回 440，匿名上传链接不可用于加密库。
 - 改密码、停用账号或远程擦除会吊销该账号持有的全部登录：其他设备、同步客户端、API 密钥，以及未使用的重置链接。
-- release 构建在未设置 `secret_key` 时拒绝启动；debug 构建自动生成，但会话无法跨重启保留。`NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` 仅用于本地与 CI。
+- release 构建在未设置 `secret_key` 时拒绝启动；但零配置启动根本走不到这个报错：它会先进入首次初始化，生成强密钥并持久化。debug 构建在**显式给出**配置却缺少密钥时仍会临时生成（会话无法跨重启保留）；`NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` 让零配置启动也走这条临时密钥路径，仅用于本地与 CI。
 
 ## 命令行
 
@@ -207,6 +219,8 @@ nanofile [--config <path>] service run        SCM 调用，手工执行会直接
 ## 数据目录
 
 默认数据位于二进制所在目录的 `data/`，相对路径均相对该目录解析；配置段可指定绝对路径。
+
+首次初始化会把这个位置定下来：默认建议 `~/.nanofile/data`（与它即将写出的配置文件同目录）；如果二进制旁已经存在 `data/`，则默认沿用该目录——配置文件被删、数据还在的安装不会因此看起来"数据丢了"；并把结果以**绝对路径**写进 `~/.nanofile/config.toml`。自己写的配置文件里的相对路径仍然以二进制所在目录为基准。
 
 ```
 data/

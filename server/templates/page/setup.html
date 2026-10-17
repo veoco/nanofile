@@ -1,0 +1,98 @@
+{# The first-run setup form.
+
+   Served by the setup listener before any server exists, so it extends the
+   anonymous shell (`auth_base.html`) exactly like the sign-in page: at this
+   point there is no account to be signed in as. The action carries the one-time
+   token the page URL carried, which is the whole authorization for the submit. #}
+{% extends "auth_base.html" %}
+
+{% block title %}{{ t.tr("setup.title") }} | Nanofile{% endblock %}
+
+{% block heading %}
+<h1 class="text-[19px] font-semibold tracking-tight text-ink">{{ t.tr("setup.heading") }}</h1>
+<p class="mt-1 text-[12.5px] leading-relaxed text-ink-3">{{ t.tr("setup.intro") }}</p>
+{% endblock %}
+
+{% block error %}
+{% if !error.is_empty() %}
+{% include "includes/alert_error.html" %}
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<form class="space-y-4" action="/setup/{{ token }}" method="POST">
+    <div>
+        <label for="email" class="form-label">{{ t.tr("setup.email") }}</label>
+        <input id="email" name="email" type="email" autocomplete="email" required
+               value="{{ email }}" class="input mt-1.5 h-9">
+    </div>
+
+    <div>
+        <label for="password" class="form-label">{{ t.tr("setup.password") }}</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" required
+               class="input mt-1.5 h-9">
+        <p class="mt-1 text-[12px] text-ink-3">{{ password_hint }}</p>
+    </div>
+
+    <div>
+        <label for="password_confirm" class="form-label">{{ t.tr("setup.password_confirm") }}</label>
+        <input id="password_confirm" name="password_confirm" type="password"
+               autocomplete="new-password" required class="input mt-1.5 h-9">
+    </div>
+
+    <div class="border-t border-line pt-4">
+        <label for="addr" class="form-label">{{ t.tr("setup.addr") }}</label>
+        <input id="addr" name="addr" type="text" required value="{{ addr }}"
+               class="input mt-1.5 h-9">
+        <p class="mt-1 text-[12px] text-ink-3">{{ t.tr("setup.addr_hint") }}</p>
+    </div>
+
+    <div>
+        <label for="port" class="form-label">{{ t.tr("setup.port") }}</label>
+        <input id="port" name="port" type="number" min="1" max="65535" required
+               value="{{ port }}" class="input mt-1.5 h-9">
+        {% if port_in_use %}
+        <p class="mt-1 text-[12px] text-warn-text">{{ t.tr("setup.port_in_use") }}</p>
+        {% endif %}
+    </div>
+
+    <div>
+        <label for="site_url" class="form-label">{{ t.tr("setup.site_url") }}</label>
+        <input id="site_url" name="site_url" type="text" value="{{ site_url }}"
+               class="input mt-1.5 h-9">
+        <p class="mt-1 text-[12px] text-ink-3">{{ t.tr("setup.site_url_hint") }}</p>
+    </div>
+
+    <div class="border-t border-line pt-4">
+        <label for="data_dir" class="form-label">{{ t.tr("setup.data_dir") }}</label>
+        <input id="data_dir" name="data_dir" type="text" required value="{{ data_dir }}"
+               class="input mt-1.5 h-9">
+        <p class="mt-1 text-[12px] text-ink-3">{{ t.tr("setup.data_dir_hint") }}</p>
+        {% if let Some(accounts) = existing_accounts %}
+        <p class="mt-1 text-[12px] text-warn-text">
+            {{ t.trf("setup.existing_accounts", [("count", &accounts.to_string())]) }}
+        </p>
+        {% endif %}
+    </div>
+
+    <div>
+        <label for="encryption" class="form-label">{{ t.tr("setup.encryption") }}</label>
+        <select id="encryption" name="encryption" class="select mt-1.5">
+            <option value="off" {% if encryption == "off" %}selected{% endif %}>{{ t.tr("setup.encryption_off") }}</option>
+            <option value="on" {% if encryption == "on" %}selected{% endif %}>{{ t.tr("setup.encryption_on") }}</option>
+            <option value="lazy" {% if encryption == "lazy" %}selected{% endif %}>{{ t.tr("setup.encryption_lazy") }}</option>
+        </select>
+        <p class="mt-1 text-[12px] text-ink-3">{{ t.tr("setup.encryption_help") }}</p>
+    </div>
+
+    <button type="submit" class="btn btn-solid h-9 w-full text-[13px]">{{ t.tr("setup.submit") }}</button>
+</form>
+{% endblock %}
+
+{% block footer %}
+<div class="border-t border-line px-5 py-3">
+    <p class="text-[12px] leading-relaxed text-ink-3">
+        {{ t.trf("setup.config_path_hint", [("path", &config_path)]) }}
+    </p>
+</div>
+{% endblock %}

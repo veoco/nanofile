@@ -1,0 +1,21 @@
+{# Any other answer from the setup listener.
+
+   One template for three messages, all of which say "there is nothing for you to
+   do on this page": the port was reached without the token, a submit arrived
+   after another instance had already written the configuration file, or the
+   setup itself failed. The heading and body keys come from the caller, and
+   `detail` carries the one technical line that matters (a path, or the error). #}
+{% extends "auth_base.html" %}
+
+{% block title %}{{ t.tr(heading_key) }} | Nanofile{% endblock %}
+
+{% block heading %}
+<h1 class="text-[19px] font-semibold tracking-tight text-ink">{{ t.tr(heading_key) }}</h1>
+{% endblock %}
+
+{% block content %}
+<p class="text-[12.5px] leading-relaxed text-ink-2">{{ t.tr(body_key) }}</p>
+{% if !detail.is_empty() %}
+<p class="mt-3"><span class="nf-code">{{ detail }}</span></p>
+{% endif %}
+{% endblock %}

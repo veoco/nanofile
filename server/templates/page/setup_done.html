@@ -1,0 +1,50 @@
+{# What a completed first run says.
+
+   The setup listener stops serving as soon as this response is on its way, and
+   the real server takes the same port over. The refresh is therefore relative
+   (`/libraries/`) rather than the configured `site_url`: it is the one address
+   that is certainly the socket that just changed hands, while `site_url` may be
+   an external name that only resolves through a proxy. The link below still
+   offers the configured address for a deployment that wants it. #}
+{% extends "auth_base.html" %}
+
+{% block title %}{{ t.tr("setup.done_title") }} | Nanofile{% endblock %}
+
+{% block heading %}
+<h1 class="text-[19px] font-semibold tracking-tight text-ink">{{ t.tr("setup.done_title") }}</h1>
+<p class="mt-1 text-[12.5px] leading-relaxed text-ink-3">{{ t.tr("setup.done_body") }}</p>
+{% endblock %}
+
+{% block content %}
+<dl class="space-y-3 text-[12.5px]">
+    <div>
+        <dt class="text-ink-3">{{ t.tr("setup.done_account_label") }}</dt>
+        <dd class="text-ink">
+            {% if let Some(email) = created_email %}
+            {{ t.trf("setup.done_account_created", [("email", &email)]) }}
+            {% else %}
+            {{ t.trf("setup.done_accounts_kept", [("count", &accounts_kept.to_string())]) }}
+            {% endif %}
+        </dd>
+    </div>
+    <div>
+        <dt class="text-ink-3">{{ t.tr("setup.done_config_label") }}</dt>
+        <dd><span class="nf-code">{{ config_path }}</span></dd>
+    </div>
+    <div>
+        <dt class="text-ink-3">{{ t.tr("setup.done_data_label") }}</dt>
+        <dd><span class="nf-code">{{ data_dir }}</span></dd>
+    </div>
+</dl>
+
+<p class="mt-5 text-[12px] leading-relaxed text-ink-3">{{ t.tr("setup.done_starting") }}</p>
+
+<a href="{{ site_url }}" class="btn btn-solid mt-3 h-9 w-full text-[13px]">{{ t.tr("setup.done_open") }}</a>
+{% if handover %}
+<meta http-equiv="refresh" content="5;url=/libraries/">
+{% else %}
+{# The page's own socket is closed before the server starts (the operator chose
+   a different port), so the only address that can work is the configured one. #}
+<meta http-equiv="refresh" content="5;url={{ site_url }}">
+{% endif %}
+{% endblock %}

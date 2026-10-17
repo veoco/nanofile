@@ -97,13 +97,12 @@ pub fn run_mode(config: &Config) -> RunMode {
             "Tray disabled via config (server.tray = false), running headless",
         );
     }
-    #[cfg(target_os = "linux")]
-    {
-        if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
-            return RunMode::Headless(
-                "No desktop session (DISPLAY/WAYLAND_DISPLAY unset), running headless",
-            );
-        }
+    // The same question the first-run setup asks before it opens a browser:
+    // one answer, in `server::desktop`.
+    if !server::desktop::has_desktop_session() {
+        return RunMode::Headless(
+            "No desktop session (DISPLAY/WAYLAND_DISPLAY unset), running headless",
+        );
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
@@ -152,7 +151,19 @@ fn resolve_lang_with(config: &Config, locale: Option<&str>) -> &'static I18n {
 /// Runs the server on a background tokio runtime and blocks the main thread in
 /// the platform tray event loop. Never returns on its own: the server task
 /// exits the process when it is done (clean shutdown, Ctrl+C or error).
-pub fn run(config: Config, env_keys: infra::config::EnvKeys, config_path: PathBuf) -> ! {
+///
+/// `listener` is the socket a completed first-run setup already served its page
+/// on, when the operator confirmed that address. A held socket also means the
+/// "is somebody already serving this?" probe below must not run: it would
+/// connect to *this* process's own setup listener — bound, no longer accepted
+/// from — and conclude that a server is already there, turning a fresh install
+/// into a tray that brings up no server at all.
+pub fn run(
+    config: Config,
+    env_keys: infra::config::EnvKeys,
+    config_path: PathBuf,
+    listener: Option<server::restart::BoundListener>,
+) -> ! {
     let _ = TRAY_I18N.set(resolve_lang(&config));
 
     let exe_path = absolute(
@@ -176,8 +187,9 @@ pub fn run(config: Config, env_keys: infra::config::EnvKeys, config_path: PathBu
     // (the Windows service, or an instance the user forgot about). Trying to
     // bind anyway would end the process with nothing but a log line, and there
     // would be no tray left to switch the service off from — so the tray comes
-    // up in client mode instead.
-    let client_mode = already_serving(&config);
+    // up in client mode instead. A socket this process already holds is the
+    // exception, and the one case where this must not even be asked.
+    let client_mode = listener.is_none() && already_serving(&config);
 
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     let (quit_tx, quit_rx) = tokio::sync::mpsc::unbounded_channel::<TrayCommand>();
@@ -189,7 +201,7 @@ pub fn run(config: Config, env_keys: infra::config::EnvKeys, config_path: PathBu
         );
     } else {
         rt.spawn(async move {
-            let result = crate::run_server_flow(config, env_keys, Some(quit_rx)).await;
+            let result = crate::run_server_flow(config, env_keys, Some(quit_rx), listener).await;
             match result {
                 Ok(()) => std::process::exit(0),
                 Err(e) => {

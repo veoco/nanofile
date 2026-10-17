@@ -44,6 +44,47 @@ pub fn exe_dir() -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// The current user's home directory, or `None` when the environment does not
+/// say where it is.
+///
+/// Read from the environment rather than from a platform crate on purpose: the
+/// one thing this is used for is the default location of the per-user
+/// configuration file a first-run setup writes (`~/.nanofile/config.toml`), and
+/// a dependency that exists only for that would land in every build — including
+/// the ones that never run a desktop setup. `dirs` is already in the graph, but
+/// only through the optional `tray` feature.
+///
+/// Windows falls back to the `HOMEDRIVE` + `HOMEPATH` pair the platform
+/// documents for accounts whose `USERPROFILE` is not set (a service running as
+/// a virtual account, for instance).
+pub fn home_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        if let Some(profile) = non_empty_var("USERPROFILE") {
+            return Some(profile);
+        }
+        let drive = non_empty_var("HOMEDRIVE")?;
+        let path = non_empty_var("HOMEPATH")?;
+        // `PathBuf::push` treats a rooted path as a replacement, and `HOMEPATH`
+        // is written rooted (`\Users\foo`), so the two are joined as text.
+        let mut home = drive.into_os_string();
+        home.push("\\");
+        home.push(path.to_string_lossy().trim_start_matches(['\\', '/']));
+        Some(PathBuf::from(home))
+    }
+    #[cfg(not(windows))]
+    {
+        non_empty_var("HOME")
+    }
+}
+
+/// A non-empty environment variable as a path.
+fn non_empty_var(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
 /// Create `dir` (and its parents) and, on Unix, restrict `dir` to its owner.
 ///
 /// Every directory nanofile writes private data into — file blocks, resumable

@@ -71,7 +71,12 @@ pub async fn security_headers(
 /// own links do not use. `hsts_include_subdomains` extends that pin to
 /// subdomains and is opt-in, since a deployment may serve unrelated plain-HTTP
 /// sites on sibling host names.
-fn apply_security_headers(
+///
+/// `pub(crate)` because the first-run setup listener (see [`crate::setup`]) is a
+/// second, `AppState`-less router: it carries the same headers, and the only
+/// input it cannot read from a configuration is the pair above — it serves no
+/// TLS of its own, so it passes `false` twice.
+pub(crate) fn apply_security_headers(
     headers: &mut axum::http::HeaderMap,
     secure: bool,
     hsts_include_subdomains: bool,

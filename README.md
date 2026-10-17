@@ -20,12 +20,31 @@ Build from source:
 ```bash
 npm install                       # frontend bundler (esbuild is required)
 cargo build --release -p server   # binary is `nanofile`, not `server`
-cp config.toml.example config.toml
-chmod 600 config.toml             # it holds the master secret
 ./target/release/nanofile
 ```
 
-The server listens on http://localhost:8082. An admin account is required and can be created with the CLI:
+**First run.** A start that was given no configuration file and has no `NANOFILE_*`
+environment variable — a double-clicked Windows binary, or this one run from a
+terminal — is an installation nobody has set up yet, so it runs the **first-run
+setup** instead of the server: it serves a one-time page, prints its address
+(`http://127.0.0.1:8082/setup/<token>`) and, in a desktop build, opens it in a
+browser.
+The page creates the first administrator and decides the listen address, the
+external URL, the data directory and whether stored blocks are encrypted.
+Submitting it writes `~/.nanofile/config.toml` (owner-only) and starts the server
+on the same port. Every later start reads that file; delete it to run the setup
+again.
+
+To keep the configuration in the source tree, or to deploy non-interactively,
+manage the file yourself — a configuration file means the setup never runs:
+
+```bash
+cp config.toml.example config.toml
+chmod 600 config.toml             # it holds the master secret
+./target/release/nanofile --config config.toml
+```
+
+The server listens on http://localhost:8082. An admin account is required and can be created with the CLI (the setup page does this for you on a first run):
 
 ```bash
 # password prompt
@@ -55,6 +74,8 @@ Once enabled, the server sends: password-reset links, new-device and new-browser
 ## Deploy with Docker
 
 The image is a `scratch` container holding only the `nanofile` binary, with no config file or data directory. It runs as uid/gid `1000:1000`, so the mounted data volume must be writable by that user.
+
+Both recipes below set `NANOFILE_*` variables, which is what keeps a container out of the first-run setup. A container started with **no** environment variables at all does enter it — the setup URL goes to the container's stdout, so `docker logs <name>` has the page address. That address is `127.0.0.1`, and the page has no TLS of its own: on a remote host, forward the port (an SSH tunnel is the simple answer) rather than exposing it. The image has no `HOME` either, which leaves the setup nowhere to write `~/.nanofile/config.toml`; on that path pass `--config` and set `HOME` yourself.
 
 The master secret is generated once and kept: it encrypts sessions, mail and at-rest blocks. Rotating it logs out every session, breaks sync clients and makes encrypted blocks unreadable.
 
@@ -100,6 +121,8 @@ Settings have built-in defaults, and there are two places to change one:
 - **`config.toml` and `NANOFILE_*` environment variables**: copy `config.toml.example`. The template deliberately holds only what a page cannot store at all (the master secret, the database URL, the at-rest encryption mode, the first-start admin, the log file) plus the few values that have to be decided before the interface is reachable (external URL, listener, state directories, language). Environment variables always win and are never written back to the file, so container deployments rely on them.
 
 Layering, highest first: an environment variable, the config file, the value saved at "System Settings", the built-in default.
+
+Where the config file is looked for, first match wins: `--config <path>`, `NANOFILE_CONFIG`, `./config.toml` (the historical default, kept so an existing deployment keeps reading the file it always did), and `~/.nanofile/config.toml` — the per-user file the first-run setup writes. Any `NANOFILE_*` environment variable counts as configuring the installation, so it suppresses the first-run setup even when no file exists; the only exceptions are the variables that decide nothing about the configuration (`NANOFILE_DOTENV`, `NANOFILE_TEST_FFMPEG_PATH`, `NANOFILE_BUILD_TS`).
 
 Frequently changed keys:
 
@@ -256,7 +279,7 @@ the confinement this server builds rather than about the kernel underneath it.
 - Behind a Cloudflare Tunnel (`cloudflared`), the origin sees a loopback or private peer. Set `trusted_proxies = ["private"]` and bind the origin to `127.0.0.1` (or isolate it on the Docker network); Cloudflare then supplies the visitor in `CF-Connecting-IP`, which is preferred over `X-Forwarded-For`. Only trust `private` when nothing else can reach the origin, or a LAN peer could forge the header.
 - Encrypted libraries require the library password for uploads as well as reads. Without it, web preview and download return 440, and anonymous upload links cannot be created for or used against an encrypted library.
 - A password change, deactivation or device wipe revokes every credential the account holds: other devices, sync clients and API keys, plus unused reset links.
-- Release builds refuse to start without `secret_key`. Debug builds generate one, but sessions do not survive a restart. `NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` covers local and CI use.
+- Release builds refuse to start without `secret_key`. A zero-configuration start never reaches that refusal: it runs the first-run setup, which generates a strong key and persists it. Debug builds with an explicit config that omits the key still generate an ephemeral one, so sessions do not survive a restart; `NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` does the same for a zero-config start and covers local and CI use.
 
 ## Command line
 
@@ -310,6 +333,8 @@ Binaries built with `--features tray` carry a system tray menu: **Start at login
 ## Data directory
 
 State lives under the binary's directory in `data/` by default, since relative paths resolve against that directory. A section can name absolute paths instead.
+
+The first-run setup decides this once: it suggests `~/.nanofile/data` (next to the configuration file it is about to write), offers `data/` next to the binary when that directory already exists so an installation whose configuration file was deleted keeps its state, and records the result as **absolute** paths in `~/.nanofile/config.toml`. Relative paths in a configuration file you write yourself keep resolving against the binary's directory.
 
 ```
 data/
