@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-// ── Minimal DOM, just enough for local-time's day grouping ──────────────────
-//
 // The frontend tests run on bare Node (no jsdom dependency), and the grouping
 // only needs element creation, `classList`, `dataset`, sibling links and tree
 // queries — so this shim stands in for the browser rather than adding a dep.

@@ -31,9 +31,8 @@ function minimalWav(): Buffer {
   return b;
 }
 
-// A real SVG the browser paints through an `<img>`: the content endpoint serves
-// it as `image/svg+xml`, which is also the type whose response policy is
-// `sandbox`.
+// A real SVG painted through an `<img>`: the content endpoint serves it as `image/svg+xml`,
+// the type whose response policy is `sandbox`.
 const LOGO_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">' +
   '<rect width="120" height="80" fill="#444"/><circle cx="60" cy="40" r="20" fill="#ccc"/></svg>';
@@ -46,12 +45,12 @@ test.beforeAll(async () => {
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "clip.mp4", Buffer.from("not really a video"));
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "plays.mp4", tinyMp4());
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "note.xyz", "unrecognized\n");
-  // The two files neither preview surface can render: a container no browser
-  // demuxes, and an image whose bytes are not a picture.
+// The two files neither preview surface can render: a container no browser demuxes, and an
+// image whose bytes are not a picture.
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "sample.wmv", Buffer.from("not a wmv"));
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "broken.tiff", Buffer.from("not a tiff"));
-  // A real BMP and a real SVG: the two formats whose previews used to be a
-  // fallback message because the bytes arrived as `application/octet-stream`.
+// A real BMP and SVG: the two formats whose previews used to be a fallback message because
+// the bytes arrived as `application/octet-stream`.
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "photo.bmp", bmpFixture(64, 48));
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "logo.svg", LOGO_SVG);
   // Bigger than the preview stage at the suite's viewport, and long enough that
@@ -97,18 +96,15 @@ test("audio preview opens the audio player", async ({ page }) => {
 test("video preview opens the video player", async ({ page }) => {
   await dblclickRow(page, "plays.mp4");
   await expect(page.locator(".js-qp-video")).toBeVisible();
-  // A decodable clip must not be reported as unplayable.
   await expect(page.locator(".js-qp-unsupported")).toBeHidden();
   await expect
     .poll(() => page.locator(".js-qp-video").evaluate((v) => (v as HTMLVideoElement).videoWidth))
     .toBeGreaterThan(0);
 });
 
-// A media element that cannot decode its source fires `error` and otherwise
-// just sits there, so the dialog used to be an empty black box with no
-// explanation. Which files decode is the browser's codec list, not the file
-// extension: an HEVC/H.265 clip plays nowhere on a stock Windows Chrome/Edge
-// even though the phone writes it into the same .mp4/.MOV container as H.264.
+// A media element that cannot decode fires `error` and otherwise just sits there, so the dialog
+// used to be an empty black box. Which files decode is the browser's codec list, not the
+// extension: an HEVC clip plays nowhere on stock Windows Chrome even inside an .mp4 container.
 test("an unplayable video says so instead of showing a black box", async ({ page }) => {
   await dblclickRow(page, "clip.mp4");
   const message = page.locator(".js-qp-unsupported");
@@ -117,9 +113,8 @@ test("an unplayable video says so instead of showing a black box", async ({ page
   await expect(page.locator(".js-qp-video")).toBeHidden();
 });
 
-// The dialog used to be content-sized, so it opened at the media element's
-// default 300x150 box and jumped to the clip's real size once its metadata
-// arrived. The stage now reserves that space up front.
+// The dialog used to be content-sized, opening at 300x150 and jumping once metadata arrived;
+// the stage now reserves the space up front.
 test("the video dialog is settled before the clip loads", async ({ page }) => {
   await page.evaluate(() => {
     (window as any).__qp = [];
@@ -130,8 +125,7 @@ test("the video dialog is settled before the clip loads", async ({ page }) => {
     };
     new MutationObserver(() => {
       if (!video.classList.contains("hidden")) {
-        // Recorded the moment the player is revealed, before its metadata can
-        // have arrived, then again once it has.
+// Recorded when the player is revealed, before metadata can arrive, then again once it has.
         snap("revealed");
         video.addEventListener("loadedmetadata", () => snap("metadata"), { once: true });
       }
@@ -144,7 +138,6 @@ test("the video dialog is settled before the clip loads", async ({ page }) => {
   const shots = await page.evaluate(() => (window as any).__qp as { tag: string; h: number }[]);
   const revealed = shots.find((s) => s.tag === "revealed")!;
   expect(shots[shots.length - 1].h).toBe(revealed.h);
-  // …and it is already a preview-sized dialog, not a 150px-tall strip.
   expect(revealed.h).toBeGreaterThan((page.viewportSize()?.height || 0) / 2);
 });
 
@@ -158,15 +151,10 @@ test("full-page text preview renders the file content", async ({ page }) => {
   await expect(page.locator("pre code")).toContainText("content of alpha.txt");
 });
 
-// ─── Full-page previews: the other half of the file manager ─────────────────
-// Clicking a file *name* (as opposed to double-clicking the row, which opens the
-// quick-preview modal above) opens the full-page preview. It renders in the file
-// manager's own column — `.content` -> `.topline` -> viewer, the same frame as
-// `files/browser.html` — so these pin that frame: the topline carries the trail
-// and the actions, the viewer is the column's remainder, and it is the only
-// scroller on the page.
+// Clicking a file *name* (not double-clicking the row, which opens the modal) opens the
+// full-page preview in the file manager's own column, `.content` -> `.topline` -> viewer. The
+// topline carries the trail and actions, the viewer is the column's remainder and only scroller.
 
-/** Open the full-page preview of `name` through the file list, as a user does. */
 async function openFullPreview(page: import("@playwright/test").Page, name: string) {
   await page.goto(`/libraries/${repoId}/files/`);
   await page.waitForSelector(".js-entry-row");
@@ -178,21 +166,18 @@ const boxOf = async (page: import("@playwright/test").Page, selector: string) =>
   (await page.locator(selector).boundingBox())!;
 
 test("the preview renders in the file manager's own column", async ({ page }) => {
-  // The file list is the reference frame: the preview's topline has to sit at the
-  // same x and span the same width, or the content edge jumps when a name is
-  // clicked.
+// The file list is the reference frame: the preview's topline must sit at the same x and span
+// the same width, or the content edge jumps when a name is clicked.
   await page.goto(`/libraries/${repoId}/files/`);
   await page.waitForSelector(".js-entry-row");
   const listTopline = await boxOf(page, "main > .topline");
 
   await openFullPreview(page, "photo.png");
 
-  // The shared breadcrumb, ending at the file itself (non-link current page), and
-  // the whole name on hover now that no title row carries it.
+// The shared breadcrumb, ending at the file itself, with the whole name on hover.
   await expect(page.locator(".crumbs")).toHaveCount(1);
   await expect(page.locator(".crumbs .cur")).toHaveText("photo.png");
   await expect(page.locator(".crumbs .cur")).toHaveAttribute("title", "photo.png");
-  // …and neither the legacy markup nor the old card shell survives.
   await expect(page.locator(".nf-preview")).toHaveCount(0);
   await expect(page.locator(".card")).toHaveCount(0);
   await expect(page.locator("nav.flex.mb-4")).toHaveCount(0);
@@ -214,8 +199,8 @@ test("the preview renders in the file manager's own column", async ({ page }) =>
   );
 });
 
-// The spacing bug the redesign fixes: the crumbs sat on the padded page and the
-// viewer in a card below them, so the two bands had no relation to each other.
+// The spacing bug the redesign fixes: the crumbs sat on the padded page and the viewer in a
+// card below, so the two bands had no relation.
 test("the viewer sits flush under the topline", async ({ page }) => {
   for (const [name, viewer] of [
     ["photo.png", ".nf-preview-stage"],
@@ -237,8 +222,7 @@ test("the image preview loads from the content endpoint", async ({ page }) => {
   await expect(img).toHaveAttribute("data-download-url", /\?dl=1$/);
   await expect.poll(async () => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(1);
 
-  // The stage is the raised media surface the tiles use, and it is exactly the
-  // column's remainder — nothing under it, no page-level scroll.
+// The stage is the raised media surface the tiles use, and exactly the column's remainder.
   const stage = page.locator(".nf-preview-stage");
   await expect(stage).toHaveCount(1);
   await expect(stage).toHaveCSS("background-color", "rgb(240, 240, 240)");
@@ -247,8 +231,8 @@ test("the image preview loads from the content endpoint", async ({ page }) => {
   expect(stageBox.y + stageBox.height).toBeCloseTo(mainBox.y + mainBox.height, 0);
 });
 
-// The old rule was a `calc(100dvh - 16rem)` guess at the page chrome, so an image
-// bigger than the stage decided the page's height instead of being contained.
+// The old rule guessed the page chrome with `calc(100dvh - 16rem)`, so an oversized image
+// decided the page's height instead of being contained.
 test("a picture larger than the stage is contained by it", async ({ page }) => {
   await openFullPreview(page, "big.png");
 
@@ -256,13 +240,11 @@ test("a picture larger than the stage is contained by it", async ({ page }) => {
   const img = await boxOf(page, ".nf-preview-image");
   expect(img.width).toBeLessThanOrEqual(stage.width + 1);
   expect(img.height).toBeLessThanOrEqual(stage.height + 1);
-  // …and it did not collapse to the replaced element's 300x150 default.
   expect(Math.max(img.width, img.height)).toBeGreaterThan(200);
 });
 
-// The preview is an `<img>` and every response carries `nosniff`, so a format
-// served as `application/octet-stream` is a picture that never paints. BMP and
-// SVG were exactly that.
+// Every response carries `nosniff`, so a picture served as `application/octet-stream` never
+// paints; BMP and SVG were exactly that.
 test("a bmp and an svg preview as pictures", async ({ page }) => {
   await openFullPreview(page, "photo.bmp");
   const bmp = page.locator(".nf-preview-image");
@@ -295,9 +277,8 @@ test("an uploaded svg is not a script host", async ({ page }) => {
   expect(await page.evaluate(() => (window as any).__ran === true)).toBe(false);
 });
 
-// A decodable clip, not the deliberately broken one: a file the browser cannot
-// play is replaced by the failure sentence (asserted with the dialog below), so
-// this case has to be one whose player is still there to inspect.
+// A decodable clip, not the deliberately broken one: the failure sentence is asserted with the
+// dialog below, so this player must still be there to inspect.
 test("the media preview uses a native player and a short stage for audio", async ({ page }) => {
   await openFullPreview(page, "plays.mp4");
   const video = page.locator(".nf-preview-video");
@@ -323,8 +304,7 @@ test("the text preview renders in the column in monospace", async ({ page }) => 
   await expect(page.locator(".nf-preview-stage")).toHaveCount(0);
 });
 
-// The column and the code block both scrolled before; the block is the only
-// scroller now, so the topline can never be pushed off screen by the text.
+// The code block is the only scroller now, so the topline can never be pushed off screen.
 test("a long text preview scrolls in the code block, not the column", async ({ page }) => {
   await openFullPreview(page, "long.txt");
   expect(await page.locator("main").evaluate((el) => el.scrollHeight - el.clientHeight)).toBe(0);
@@ -333,9 +313,8 @@ test("a long text preview scrolls in the code block, not the column", async ({ p
   ).toBeGreaterThan(0);
 });
 
-// The mobile bottom nav is fixed over the column's last 5rem. The viewer keeps
-// the same clearance `.nf-scroll` gives the list, so the final line of a long
-// file can be scrolled clear of the nav instead of hiding under it.
+// The mobile bottom nav is fixed over the last 5rem; the viewer keeps the same clearance
+// `.nf-scroll` gives the list, so the final line can scroll clear of it.
 test("the viewer keeps clear of the mobile bottom nav", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openFullPreview(page, "long.txt");
@@ -372,10 +351,8 @@ test("the viewer follows the theme", async ({ page }) => {
   expect(dark).toBe("rgb(35, 35, 35)");
 });
 
-// ─── One failure sentence for both surfaces ─────────────────────────────────
-// The page and the dialog are two views of one file, so a file the browser
-// cannot decode has to read the same in both: the same sentence, and the same
-// way out. The page used to show a player that could never start.
+// The page and the dialog are two views of one file, so a file the browser cannot decode must
+// read the same in both: same sentence, same way out.
 
 test("an unplayable video reads the same on the page and in the dialog", async ({ page }) => {
   await openFullPreview(page, "sample.wmv");
@@ -386,7 +363,6 @@ test("an unplayable video reads the same on the page and in the dialog", async (
     "href",
     `/repos/${repoId}/files/sample.wmv?dl=1`,
   );
-  // Removed, not hidden behind the sentence.
   await expect(page.locator(".nf-preview-video")).toHaveCount(0);
   const pageText = await onPage.textContent();
 

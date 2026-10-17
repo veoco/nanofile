@@ -10,7 +10,6 @@ import { refreshFileList } from "./list.js";
 import { buildEntryApiPath } from "./urls.js";
 import { getCurrentDir, getRepoId, getSelectedItems, getSelectedPaths, getSelectedCount, clearSelection } from "./selection.js";
 
-// ─── Delete file/dir via API ────────────────────────────────────────────
 document.addEventListener("click", async function (e) {
   const btn = e.target.closest(".js-delete-btn");
   if (!btn) return;
@@ -52,7 +51,6 @@ document.addEventListener("click", async function (e) {
   }
 });
 
-// ─── File history dialog ────────────────────────────────────────────────
 var historyOverlay = document.getElementById("history-dialog-overlay");
 var historyPathEl = historyOverlay
   ? historyOverlay.querySelector(".js-history-path")
@@ -142,7 +140,6 @@ function renderHistoryList(items, repoId, path) {
   historyListEl.innerHTML = html;
 }
 
-// Restore action (event delegation inside the history list)
 if (historyListEl) {
   historyListEl.addEventListener("click", async function (e) {
     var btn = e.target.closest(".js-history-restore");
@@ -178,14 +175,12 @@ if (historyListEl) {
   });
 }
 
-// Open history from any .js-history-btn
 document.addEventListener("click", function (e) {
   var btn = e.target.closest(".js-history-btn");
   if (!btn) return;
   openHistoryDialog(btn.dataset.repoId, btn.dataset.path);
 });
 
-// Close via backdrop, close button, or Escape
 document.addEventListener("click", function (e) {
   if (!historyOverlay || historyOverlay.classList.contains("hidden")) return;
   if (e.target === historyOverlay) closeHistoryDialog();
@@ -201,7 +196,6 @@ if (historyOverlay) {
   });
 }
 
-// ─── Share dialog ───────────────────────────────────────────────────────
 var shareDialog = document.getElementById("share-dialog-overlay");
 var shareDialogPath = document.querySelector(".js-share-dialog-path");
 var sharePasswordInput = document.getElementById("share-password-input");
@@ -237,7 +231,6 @@ document.addEventListener("click", function (e) {
 
   if (!shareCurrentRepoId || !shareCurrentPath) return;
 
-  // Reset dialog
   sharePasswordInput.value = "";
   shareExpirySelect.value = "";
   shareDescriptionInput.value = "";
@@ -251,7 +244,6 @@ document.addEventListener("click", function (e) {
   if (shareCreateForm) shareCreateForm.classList.remove("hidden");
   if (shareLinkDisplay) shareLinkDisplay.classList.add("hidden");
 
-  // Show path
   var displayName = btn.dataset.name || name;
   shareDialogPath.textContent = displayName;
   shareDialog.classList.remove("hidden");
@@ -304,7 +296,6 @@ if (shareDialog) {
   });
 
   shareConfirmBtn.addEventListener("click", async function () {
-    // A link is already on screen: the button now only closes the dialog.
     if (shareLinkShown) {
       shareDialog.classList.add("hidden");
       return;
@@ -338,7 +329,6 @@ if (shareDialog) {
       var sType = data.s_type || shareCurrentType;
       var prefix = sType === "d" ? "/d/" : "/f/";
       var shareUrl = window.location.origin + prefix + data.token + "/";
-      // Show URL in dialog instead of closing
       if (shareCreateForm) shareCreateForm.classList.add("hidden");
       if (shareLinkDisplay) {
         shareLinkUrl.value = shareUrl;
@@ -362,7 +352,6 @@ if (shareDialog) {
   });
 }
 
-// ─── Rename dialog ──────────────────────────────────────────────────────
 const renameOverlay = document.getElementById("rename-overlay");
 const renameOldPath = document.getElementById("rename-old-path");
 const renameInput = document.getElementById("rename-input");
@@ -410,11 +399,9 @@ if (renameForm) {
     e.preventDefault();
     renameOverlay.classList.add("hidden");
 
-    // Extract repo_id from form action URL: /libraries/{id}/files/rename/
     var repoId = renameForm.action.match(/\/libraries\/([^/]+)\//)[1];
     var oldPath = renameOldPath.value;
 
-    // Determine entry type from the rename button's data attribute
     var renameBtn = document.querySelector('.js-rename-btn[data-path="' + oldPath + '"]');
     var entryType = renameBtn ? renameBtn.dataset.type || "file" : "file";
 
@@ -438,7 +425,6 @@ if (renameForm) {
   });
 }
 
-// ─── Batch delete ───────────────────────────────────────────────────────
 document.addEventListener("click", async function (e) {
   var btn = e.target.closest(".js-batch-delete");
   if (!btn) return;
@@ -474,7 +460,6 @@ document.addEventListener("click", async function (e) {
   }
 });
 
-// ─── Directory picker (for batch move/copy) ─────────────────────────────
 var pickerOperation = null;  // "move" or "copy"
 var pickerPath = "/";
 
@@ -520,7 +505,6 @@ async function loadPickerDirectory(path) {
     var resp = await fetch("/api2/repos/" + encodeURIComponent(repoId) + "/dir/?p=" + encodeURIComponent(path));
     if (!resp.ok) throw new Error(resp.statusText);
     var entries = await resp.json();
-    // Filter to directories only
     var dirs = entries.filter(function (e) { return e.type === "dir"; });
     renderPickerDirList(dirs, listEl);
   } catch (err) {
@@ -553,7 +537,6 @@ function renderPickerDirList(dirs, listEl) {
   }).join("");
 }
 
-// Open move/copy picker
 document.addEventListener("click", function (e) {
   var btn = e.target.closest(".js-batch-move, .js-batch-copy");
   if (!btn) return;
@@ -562,7 +545,6 @@ document.addEventListener("click", function (e) {
   openDirPicker(operation);
 });
 
-// Navigate in picker
 var pickerBreadcrumb = document.getElementById("dir-picker-breadcrumb");
 if (pickerBreadcrumb) {
   pickerBreadcrumb.addEventListener("click", function (e) {
@@ -585,7 +567,6 @@ if (pickerList) {
   });
 }
 
-// Confirm move/copy
 var pickerConfirmBtn = document.querySelector(".js-picker-confirm");
 if (pickerConfirmBtn) {
   pickerConfirmBtn.addEventListener("click", async function () {
@@ -628,7 +609,6 @@ if (pickerConfirmBtn) {
   });
 }
 
-// Cancel picker
 var pickerCancelBtn = document.querySelector(".js-picker-cancel");
 if (pickerCancelBtn) {
   pickerCancelBtn.addEventListener("click", function () {
@@ -636,14 +616,12 @@ if (pickerCancelBtn) {
   });
 }
 
-// Click outside picker content to close
 document.addEventListener("click", function (e) {
   var overlay = document.getElementById("dir-picker-overlay");
   if (!overlay || overlay.classList.contains("hidden")) return;
   if (e.target === overlay) closeDirPicker();
 });
 
-// Escape to close picker
 document.addEventListener("keydown", function (e) {
   if (e.key !== "Escape") return;
   var overlay = document.getElementById("dir-picker-overlay");
@@ -652,7 +630,6 @@ document.addEventListener("keydown", function (e) {
   }
 });
 
-// ─── Zip download (folder / batch) ──────────────────────────────────────
 function zipDownload(repoId, parentDir, dirents) {
   var json = JSON.stringify({
     parent_dir: parentDir,
@@ -683,7 +660,6 @@ function zipDownload(repoId, parentDir, dirents) {
     });
 }
 
-// Single folder download button (.js-entry-download)
 document.addEventListener("click", function (e) {
   var btn = e.target.closest(".js-entry-download");
   if (!btn) return;
@@ -701,7 +677,6 @@ document.addEventListener("click", function (e) {
   zipDownload(repoId, parentDir, [name]);
 });
 
-// Batch download selected items (.js-batch-download)
 document.addEventListener("click", function (e) {
   var btn = e.target.closest(".js-batch-download");
   if (!btn) return;
@@ -714,7 +689,6 @@ document.addEventListener("click", function (e) {
   zipDownload(repoId, parentDir, getSelectedPaths());
 });
 
-// ─── Batch reindex (.js-batch-reindex) ──────────────────────────────────
 document.addEventListener("click", async function (e) {
   var btn = e.target.closest(".js-batch-reindex");
   if (!btn) return;

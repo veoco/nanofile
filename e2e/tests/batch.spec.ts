@@ -10,7 +10,6 @@ test.beforeAll(async () => {
 const row = (page: Page, name: string) =>
   page.locator(`.js-file-list-view:not(.hidden) .js-entry-row[data-name="${name}"]`);
 
-/** Ctrl-click a set of file rows to multi-select them (list view only). */
 async function multiSelect(page: Page, names: string[]) {
   await page.keyboard.down("Control");
   for (const name of names) {
@@ -21,7 +20,6 @@ async function multiSelect(page: Page, names: string[]) {
   await page.keyboard.up("Control");
 }
 
-/** Seed an isolated repo so each test is independent of the others. */
 async function openFreshRepo(page: Page, suffix: string): Promise<void> {
   const repoId = await seedRepo(state.baseURL, state.adminToken, `batch-${suffix}-${Date.now()}`);
   await page.goto(`/libraries/${repoId}/files`);

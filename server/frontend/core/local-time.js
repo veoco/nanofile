@@ -1,16 +1,8 @@
-// local-time — the one place the Web UI turns a raw Unix timestamp into text.
-//
-// Templates carry nothing but the number and a mode:
-//
-//   <span data-ts="1756902896" data-ts-mode="relative"></span>
-//
-// `data-ts-mode` is `absolute` (the default: the reader's localized date and
-// time) or `relative` ("3 days ago") or `short` (the grid tile's "Sep 19"), and
-// every mode puts the exact local stamp in the element's `title`. `data-ts-day`
-// is the one other form: a marker on a row that the reader's local calendar day
-// starts there, so a group header belongs above it. The server never
-// pre-formats a time for a person to read; only machine-facing JSON payloads
-// keep RFC3339.
+// local-time — the one place the Web UI turns a raw Unix timestamp into text. Templates carry
+// only the number and a mode (`absolute`, `relative`, `short`), and every mode puts the exact
+// local stamp in `title`; `data-ts-day` marks the first row of a local calendar day so a group
+// header belongs above it. The server never pre-formats a time for a person; only machine JSON
+// keeps RFC3339.
 import { __t } from "./i18n.js";
 import {
   formatLocalDate,
@@ -58,8 +50,7 @@ function render(el) {
   if (absolute) el.textContent = absolute;
 }
 
-// Relative text, falling back to the local calendar date once the difference
-// reaches two weeks — the same cutoff the server used to apply.
+// Relative text, falling back to the local date once the difference reaches two weeks.
 function renderRelative(el, ts) {
   var parts = relativeParts(ts, Math.floor(Date.now() / 1000));
   if (!parts) {
@@ -98,9 +89,7 @@ function previousRow(el) {
   return sib && sib.hasAttribute("data-ts-day") ? sib : null;
 }
 
-// The header text for a day bucket. `key` is the ISO form the grouping compares
-// and stays internal; everything a person reads is localized, so an older day
-// gets the reader's own date rather than the raw key.
+// The header text for a day bucket: `key` stays internal, and everything read is localized.
 function dayLabel(key, ts) {
   var now = Math.floor(Date.now() / 1000);
   if (key === formatLocalDate(now)) return __t("activity.today");
@@ -108,10 +97,9 @@ function dayLabel(key, ts) {
   return formatLocalMediumDate(ts);
 }
 
-// `data-ts-day`: the row opens a group when its local calendar day differs from
-// the row above it. The day's header belongs above that first row only — every
-// later row of the same day has another row directly above it, so comparing
-// against the immediate sibling would label each row as its own group.
+// `data-ts-day`: the row opens a group when its local day differs from the row above. Comparing
+// against the immediate sibling would label every row its own group, so the header goes above the
+// first row only.
 function renderDayBoundary(el) {
   var ts = parseInt(el.dataset.tsDay, 10);
   var key = dayKey(el);
@@ -143,11 +131,8 @@ function renderDayBoundary(el) {
 var TICK_MS = 60_000;
 var started = false;
 
-// The activity feed ships ungrouped and CSS holds it out of the first paint
-// until this pass has run (see `.nf-list[data-day-group]` in input.css): a day
-// band is 41px of layout between two rows, so a feed painted before the bands
-// exist moves every row below them once they land. Marking the feeds grouped is
-// what releases that paint.
+// The feed ships ungrouped and CSS holds it out of the first paint until this pass runs: a band
+// is 41px of layout, so painting before the bands exist moves every row below them.
 function markFeedsGrouped() {
   document.querySelectorAll("[data-day-group]").forEach(function (el) {
     el.dataset.dayGrouped = "1";
@@ -162,10 +147,8 @@ export function initLocalTime() {
     markFeedsGrouped();
   }
 
-  // The file list is refreshed/paginated via AJAX, which swaps in new DOM
-  // containing fresh `[data-ts]` elements. Watch the document body (not the
-  // list container, which list.js replaces wholesale via outerHTML) so those
-  // get rendered too, without list.js needing to know about this module.
+// The file list is refreshed via AJAX, which swaps in new `[data-ts]` nodes. Observe the body
+// (not the container, which list.js replaces via outerHTML) so list.js need not know this module.
   if ("MutationObserver" in window && document.body) {
     var observer = new MutationObserver(function (mutations) {
       mutations.forEach(function (m) {
@@ -178,9 +161,7 @@ export function initLocalTime() {
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
-  // One timer for the whole page; when no cell is relative the list stays empty
-  // and a tick costs nothing. Hidden tabs skip the pass: the text is relative to
-  // now anyway, so the next visible tick catches up.
+// One timer for the page; an empty list costs nothing and hidden tabs skip the pass.
   if (!started) {
     started = true;
     setInterval(function () {

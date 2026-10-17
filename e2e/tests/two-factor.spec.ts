@@ -41,7 +41,6 @@ function totp(secret: string): string {
   return String(code % 1000000).padStart(6, "0");
 }
 
-/** Return a TOTP code that won't expire mid-request (waits out a short window). */
 async function freshTotp(secret: string): Promise<string> {
   const remaining = 30 - (Math.floor(Date.now() / 1000) % 30);
   if (remaining < 4) {
@@ -82,7 +81,6 @@ test("enable 2FA, log in with a backup code, then disable it", async ({ browser 
     const secret = (await page.locator("code").first().innerText()).trim();
     expect(secret.length).toBeGreaterThan(0);
 
-    // Verify with a freshly-computed TOTP code.
     const code = await freshTotp(secret);
     await page.locator("#code").fill(code);
     await page
@@ -90,7 +88,6 @@ test("enable 2FA, log in with a backup code, then disable it", async ({ browser 
       .click();
     await expect(page.locator('form[action="/settings/two-factor/disable/"]')).toBeVisible();
 
-    // Grab a backup code for the login step.
     const backupCode = (await page.locator("code").first().innerText()).trim();
     expect(backupCode.length).toBeGreaterThan(0);
 
@@ -102,7 +99,6 @@ test("enable 2FA, log in with a backup code, then disable it", async ({ browser 
       (await page.locator("#backup-codes code").allInnerTexts()).map((c) => c.trim()),
     );
 
-    // Log out, then log in — the flow must ask for a 2FA code.
     await page.goto("/accounts/logout/");
     await page.goto("/accounts/login/");
     await page.fill('input[name="email"]', ADMIN_EMAIL);
@@ -110,14 +106,12 @@ test("enable 2FA, log in with a backup code, then disable it", async ({ browser 
     await page.locator('button[type="submit"]').click();
     await page.waitForURL(/\/accounts\/two-factor-auth\//);
 
-    // Backup codes are accepted on the 2FA login page.
     await page.locator("#code").fill(backupCode);
     await page
       .locator('form[action="/accounts/two-factor-auth/"] button[type="submit"]')
       .click();
     await page.waitForURL(/\/libraries\//);
 
-    // Disable 2FA (requires the account password).
     await page.goto("/settings/two-factor/");
     await page.locator('form[action="/settings/two-factor/disable/"] #password').fill(ADMIN_PASSWORD);
     await page.locator('form[action="/settings/two-factor/disable/"] button[type="submit"]').click();
@@ -163,12 +157,10 @@ for (const [label, cookieValue] of [
 
       await page.waitForURL(/\/accounts\/login\/\?err=/);
       expect(page.url()).toContain("err=auth.session_expired_alt");
-      // The sign-in form, with the real reason — not the "Bad request" page.
       await expect(page.locator("#password")).toBeVisible();
       await expect(page.locator('[role="alert"]')).toContainText(
         "Invalid or expired authentication session",
       );
-      // The dead cookie is cleared, so a reload does not resubmit it.
       const cookies = await ctx.cookies();
       const pending = cookies.find((c) => c.name === "seahub-session-pending");
       expect(pending?.value ?? "").toBe("");

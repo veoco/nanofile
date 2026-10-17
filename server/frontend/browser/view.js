@@ -58,7 +58,6 @@ document.addEventListener("click", function (e) {
 var mode = localStorage.getItem("fileViewMode") || "list";
 setMode(mode);
 
-// ─── Sort controls ──────────────────────────────────────────────────────
 function applySortUI(field, order) {
   var sortBar = document.querySelector(".js-sort-bar");
   if (sortBar) {
@@ -97,7 +96,6 @@ document.addEventListener("click", function (e) {
   if (btn) { setSort(btn.dataset.sort); return; }
 });
 
-// ─── Tag filter ─────────────────────────────────────────────────────────
 function applyTagFilter(name) {
   var sb = document.querySelector(".js-sort-bar");
   if (!sb) return;

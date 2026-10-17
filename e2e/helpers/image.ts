@@ -1,29 +1,21 @@
 import zlib from "node:zlib";
 
 /**
- * Deterministic image fixtures for the e2e suite.
+* Deterministic image fixtures for the e2e suite.
  *
- * BMP on purpose: the format is a 54-byte header followed by raw BGR rows, so a
- * fixture needs neither zlib nor a CRC table and the suite stays free of image
- * tooling. The server decodes it through the same pipeline as a photo — a
- * confined child process with a memory and CPU bound (`sandbox::jobs::images`,
- * started by `sandbox::worker`) — so it exercises the real thumbnail path.
- *
- * PNG where the fixture has to be big and stay cheap to upload: a 1600×1200 BMP
- * carries 5.7 MB of raw rows, and the full-page preview's containment test only
- * needs a picture larger than the stage. Deflating raw scanlines is all the
- * encoder `pngFixture` needs — no image tooling, no dependency.
+ * BMP on purpose: a 54-byte header plus raw BGR rows, so a fixture needs no zlib or CRC table. The
+ * server decodes it through the same confined child as a photo, exercising the real thumbnail
+ * path. PNG where the fixture must be big and cheap to upload: deflating raw scanlines is all
+ * `pngFixture` needs — no image tooling, no dependency.
  */
 export function bmpFixture(width: number, height: number): Buffer {
   const clamp = (v: number) => (v < 0 ? 0 : v > 255 ? 255 : v);
-  // Rows are padded to a 4-byte boundary, bottom-up, three bytes per pixel.
   const rowSize = Math.ceil((width * 3) / 4) * 4;
   const pixels = Buffer.alloc(rowSize * height);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      // A dithered gradient: enough entropy that a PNG of this fixture is large
-      // and a JPEG of it is not, which is what the thumbnail assertions in
-      // `views.spec.ts` rely on.
+// A dithered gradient: enough entropy that a PNG of it is large and a JPEG is not, which the
+// thumbnail assertions in `views.spec.ts` rely on.
       const dither = ((x * 7 + y * 13) % 17) - 8;
       const r = clamp(Math.round((x / width) * 200) + dither);
       const g = clamp(Math.round((y / height) * 200) + dither);
@@ -70,7 +62,6 @@ function crc32(buf: Buffer): number {
 
 /** A truecolour PNG of `width` x `height`, with a per-pixel gradient. */
 export function pngFixture(width: number, height: number): Buffer {
-  // Raw scanlines: a filter byte per row, then three bytes per pixel.
   const raw = Buffer.alloc((width * 3 + 1) * height);
   let o = 0;
   for (let y = 0; y < height; y++) {

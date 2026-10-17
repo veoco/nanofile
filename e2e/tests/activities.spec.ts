@@ -63,9 +63,8 @@ test("deleting a file records a delete activity", async ({ page }) => {
   await expect(activityRow(page, name)).toBeVisible();
 });
 
-// The day headers are cut in the browser, on the reader's local calendar day:
-// the server ships the raw timestamp and core/local-time.js inserts the group
-// headers, so a header can never disagree with the stamp on the row below it.
+// The day headers are cut in the browser, on the reader's local calendar day: the server ships
+// the raw timestamp and core/local-time.js inserts the groups, so header and row cannot disagree.
 test("activity rows are grouped on the reader's local calendar day", async ({ page }) => {
   const repoId = await seedRepo(state.baseURL, state.adminToken, `act-${Date.now()}`);
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", `grouped-${Date.now()}.txt`, "x");
@@ -100,12 +99,10 @@ test("activity rows are grouped on the reader's local calendar day", async ({ pa
 
   expect(groups.length).toBeGreaterThan(0);
 
-  // A day header belongs above the first row of each local calendar day and
-  // nowhere else: one header per distinct day, never one per row.
+// A day header belongs above the first row of each local day and nowhere else.
   const seen = new Set<string>();
   for (const group of groups) {
-    // The row's own stamp spells out the day its header claims, in the reader's
-    // timezone.
+// The row's stamp spells out the day its header claims, in the reader's timezone.
     expect(group.title).toBe(group.expectedTitle);
 
     if (seen.has(group.key)) {
@@ -125,17 +122,16 @@ test("activity rows are grouped on the reader's local calendar day", async ({ pa
   expect(groups.length).toBeGreaterThan(seen.size);
 });
 
-// The day heading is the group boundary, so the row that ends a group draws no
-// hairline of its own: the two against each other read as one thick line, and
-// the heading's rule beside the label was the second line the reader noticed.
+// The day heading is the group boundary, so the row that ends a group draws no hairline: the two
+// against each other would read as one thick line.
 test("a day heading draws the only line above its group", async ({ page }) => {
   const repoId = await seedRepo(state.baseURL, state.adminToken, `act-${Date.now()}`);
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", `boundary-${Date.now()}.txt`, "x");
   await page.goto("/activities/");
   await page.waitForSelector("main .nf-prow[data-ts-day]");
 
-  // A second local day, without depending on the wall clock or on data seeded a
-  // day earlier: the reader's copy of yesterday is the newest row, one day back.
+// A second local day without depending on the wall clock: the reader's copy of yesterday is the
+// newest row, one day back.
   await page.evaluate(() => {
     const row = document.querySelector("main .nf-prow[data-ts-day]") as HTMLElement;
     const clone = row.cloneNode(true) as HTMLElement;
@@ -169,21 +165,17 @@ test("a day heading draws the only line above its group", async ({ page }) => {
   expect(band).not.toBe(row);
 });
 
-// The band's label is inset 14px on every side — the gutter the rows use — and
-// its line box is exactly its font size (`leading-none`). That is what squares
-// its ink against the panel's rounded top-left corner: at the inherited 1.5 the
-// 11px label carried 3.9px of empty leading above the caps against 0.5px beside
-// them, so it read as further from the top than from the left, and the 14px top
-// against 10px bottom that was there to compensate left it 2px low. `leading-none`
-// is also what keeps the band 41px rather than 46.5px.
+// The label is inset 14px on every side and its line box is exactly its font size
+// (`leading-none`), which squares its ink against the panel's rounded corner; at the inherited
+// 1.5 the 11px label carried 3.9px of leading above the caps against 0.5px beside them. The rule
+// also keeps the band 41px rather than 46.5px.
 test("a day band insets its label evenly and centers it", async ({ page }) => {
   const repoId = await seedRepo(state.baseURL, state.adminToken, `act-band-${Date.now()}`);
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", `band-${Date.now()}.txt`, "x");
   await page.goto("/activities/");
   await page.waitForSelector("main .nf-prow[data-ts-day]");
 
-  // The first band of a panel draws no top hairline, so the border each side is
-  // measured against has to come off before the two insets can be compared.
+// The first band draws no top hairline, so the border it is measured against comes off first.
   const read = () =>
     page.evaluate(() => {
       const el = document.querySelector("main .nf-list > .nf-sec") as HTMLElement;
@@ -216,10 +208,9 @@ test("a day band insets its label evenly and centers it", async ({ page }) => {
   expect(Math.abs(phone.padTop - phone.padLeft)).toBeLessThanOrEqual(0.5);
 });
 
-// A list row sheds its metadata column on a phone. The activity row puts the
-// class straight on the `[data-ts]` span, so the rule that hides it has to beat
-// the `inline-block` a time cell is given — which is why those defaults sit in
-// `@layer base` instead of outranking every rule a page can write.
+// A row sheds its metadata column on a phone. The activity row puts the class on the `[data-ts]`
+// span, so the hiding rule must beat the time cell's `inline-block`; those defaults live in
+// `@layer base` instead of outranking every page rule.
 test("a phone row sheds its time column", async ({ page }) => {
   await page.goto("/activities/");
   await page.waitForSelector("main .nf-prow[data-ts-day]");
@@ -230,12 +221,9 @@ test("a phone row sheds its time column", async ({ page }) => {
   await expect(meta).toBeHidden();
 });
 
-// The local-day bands are built by core/local-time.js, and its bundle is the
-// last thing in <body>. The server ships the feed ungrouped, so the browser
-// used to be free to paint it before that bundle ran — and each band (41px of
-// layout) then shoved every row below it down. The feed is now held out of the
-// first paint until the bands are in place, which this pins by holding the
-// bundle back and watching what the browser is allowed to paint.
+// The bands are built by core/local-time.js, whose bundle is last in <body>. The server ships the
+// feed ungrouped, so the browser used to paint it first and each 41px band then shoved the rows
+// down. The feed is now held out of the first paint until the bands are in place.
 test("the feed does not shift when the day bands are inserted", async ({ page }) => {
   const repoId = await seedRepo(state.baseURL, state.adminToken, `act-${Date.now()}`);
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", `shift-${Date.now()}.txt`, "x");
@@ -252,26 +240,22 @@ test("the feed does not shift when the day bands are inserted", async ({ page })
     }).observe({ type: "layout-shift", buffered: true });
   });
 
-  // Hold the bundle: the parsed-but-ungrouped feed is what the browser has in
-  // hand. Without the hold the grouping pass usually beats the first paint and
-  // the test would prove nothing.
+// Hold the bundle: the parsed-but-ungrouped feed is what the browser has in hand; without the
+// hold the grouping pass usually beats the first paint and proves nothing.
   await page.route("**/static/js/common.*.js", async (route) => {
     await new Promise((r) => setTimeout(r, 2500));
     await route.continue();
   });
 
   await page.goto("/activities/", { waitUntil: "commit" });
-  // `attached`, not the default `visible`: the feed is deliberately held at
-  // `visibility: hidden`, so waiting for it to be visible would wait for the
-  // very pass this test needs to observe *after* the snapshot below.
+// `attached`, not `visible`: the feed is held at `visibility: hidden`, so waiting for visible
+// would wait for the very pass this test observes after the snapshot.
   await page.waitForSelector("main .nf-list[data-day-group] .nf-prow", { state: "attached" });
 
-  // Parsed, ungrouped, and held back from paint.
   expect(await page.locator("main .nf-sec").count()).toBe(0);
   await expect(page.locator("main .nf-list[data-day-group]")).toHaveCSS("visibility", "hidden");
 
-  // Once the pass has run the bands exist and the feed is released, so the
-  // first painted feed is already grouped.
+// Once the pass has run the bands exist and the feed is released already grouped.
   await page.waitForSelector("main .nf-list[data-day-grouped]", { timeout: 10_000 });
   expect(await page.locator("main .nf-sec").count()).toBeGreaterThan(0);
   await expect(page.locator("main .nf-list[data-day-group]")).toHaveCSS("visibility", "visible");

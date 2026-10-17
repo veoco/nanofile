@@ -5,7 +5,6 @@ import { apiFetch } from "../core/api.js";
 import { Toast } from "../core/toast.js";
 import { ConfirmDialog } from "../core/confirm.js";
 
-// ─── Upload Link Dialog ─────────────────────────────────────────────────
 // Module-scoped reference, assigned by the IIFE below so delegated handlers
 // (data-action="open-upload-link") can open the dialog without a global.
 var openUploadLinkDialog;

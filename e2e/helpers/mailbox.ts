@@ -3,17 +3,12 @@ import net from "node:net";
 import path from "node:path";
 
 /**
- * A minimal SMTP server for the e2e run, plus the mailbox the specs read.
+* A minimal SMTP server for the e2e run, plus the mailbox the specs read.
  *
- * The product has no test transport on purpose — a "write the mail to disk"
- * mode would be a way to put password-reset links on a production filesystem —
- * so the suite runs a real SMTP conversation against this stub instead. That
- * also means the tests exercise the real client (EHLO, envelope, dot-stuffing,
- * quoted-printable bodies) rather than a shortcut.
- *
- * Messages are written as `.eml` files under `test-results/mail/`, which makes
- * them readable from the worker processes (a spec runs in a different process
- * than `globalSetup`) and leaves them behind as artifacts when a test fails.
+ * The product has no test transport on purpose — a "write the mail to disk" mode would put
+ * password-reset links on a production filesystem — so the suite runs a real SMTP conversation
+ * against this stub and exercises the real client (EHLO, envelope, dot-stuffing, quoted-printable).
+ * Messages land as `.eml` under `test-results/mail/`, readable across processes and kept on failure.
  */
 
 export const SMTP_PORT = 18025;
@@ -29,13 +24,11 @@ export interface MailMessage {
   raw: string;
 }
 
-/** Forget every message captured so far. */
 export function clearMailbox(): void {
   fs.rmSync(MAIL_DIR, { recursive: true, force: true });
   fs.mkdirSync(MAIL_DIR, { recursive: true });
 }
 
-/** Every captured message, oldest first. */
 export function readMailbox(): MailMessage[] {
   let files: string[];
   try {
@@ -50,7 +43,6 @@ export function readMailbox(): MailMessage[] {
   });
 }
 
-/** Messages addressed to `to` (case-insensitive). */
 export function mailFor(to: string): MailMessage[] {
   const wanted = to.trim().toLowerCase();
   return readMailbox().filter((mail) => mail.to.trim().toLowerCase() === wanted);
@@ -59,9 +51,8 @@ export function mailFor(to: string): MailMessage[] {
 /**
  * Wait for a message matching the filter, returning it.
  *
- * Polls rather than sleeping a fixed time: delivery is queued and attempted in
- * the background (that is the point of the outbox), so its arrival is
- * asynchronous by design.
+* Polls rather than sleeping: delivery is queued in the background (the point of the outbox), so
+ * its arrival is asynchronous by design.
  */
 export async function waitForMail(
   filter: { to?: string; subjectIncludes?: string; since?: number },
@@ -93,7 +84,6 @@ export async function waitForMail(
   );
 }
 
-/** The first URL in the message matching `pattern`. */
 export function extractLink(mail: MailMessage, pattern: RegExp): string {
   const match = mail.body.match(pattern);
   if (!match) {
@@ -135,10 +125,8 @@ function parseMail(file: string, raw: string): MailMessage {
 }
 
 /**
- * Decode an RFC 2047 encoded word.
- *
- * Only what the suite needs: a UTF-8 body or subject. Anything else is returned
- * verbatim so a test failure shows the raw value instead of mojibake.
+* Decode an RFC 2047 encoded word. Only what the suite needs: a UTF-8 body or subject; anything
+ * else is returned verbatim so a failure shows the raw value.
  */
 function decodeHeader(value: string): string {
   return value.replace(/=\?utf-8\?([bBqQ])\?([^?]*)\?=/g, (all, encoding, text) => {
@@ -168,10 +156,9 @@ interface Session {
 /**
  * Start the stub.
  *
- * Deliberately never closed: it lives in the runner process, which is exactly
- * as long as the run, and the OS releases the socket when the run ends. That
- * avoids handing a handle between `globalSetup` and `globalTeardown`, which are
- * separate module graphs.
+* Deliberately never closed: it lives in the runner process, and the OS releases the socket when
+ * the run ends. That avoids handing a handle between `globalSetup` and `globalTeardown`, which
+ * are separate module graphs.
  */
 export async function startMailServer(port = SMTP_PORT): Promise<void> {
   clearMailbox();
@@ -253,7 +240,6 @@ function store(sequence: number, session: Session): void {
   fs.writeFileSync(path.join(MAIL_DIR, name), payload);
 }
 
-/** The address inside `MAIL FROM:<a@b>` / `RCPT TO:<a@b>`. */
 function angleAddress(line: string): string | null {
   const match = line.match(/<([^>]*)>/);
   return match ? match[1] : null;

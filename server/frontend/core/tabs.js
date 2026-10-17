@@ -4,7 +4,6 @@
 // here knows about styling. Every `.tab-content` is toggled from the `tab`
 // query parameter, so switching updates the URL without a navigation and a
 // reload keeps the user on the same tab.
-//
 // `defaultTab` is the tab that means "no `tab` parameter" for that page.
 
 export function switchTab(name, defaultTab) {

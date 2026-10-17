@@ -98,10 +98,8 @@ test("delete a library", async ({ page }) => {
 test("the list spans the same box as its toolbar", async ({ page }) => {
   await openLibraries(page);
 
-  // Full-bleed, like the file list inside a library. It used to sit in the
-  // padded document column the Shares/Trash pages use, which left the header
-  // band and the row rules stopping 24px short of both edges, and gave the rows
-  // a further inset of their own on top of the toolbar's.
+// Full-bleed, like the file list inside a library: the header band and the row rules reach both
+// edges, and rows carry only the toolbar's inset.
   const box = await page.evaluate(() => {
     const rect = (sel: string) => {
       const r = document.querySelector(sel)!.getBoundingClientRect();
@@ -117,15 +115,11 @@ test("the list spans the same box as its toolbar", async ({ page }) => {
   expect(box.head).toEqual(box.toolbar);
 });
 
-// The header band is one more row of the same grid, so its hairline is the rows'
-// own `--color-line` — not the heavier `--color-line-strong` it used to draw,
-// which read as a stray dark rule under the toolbar on this page and inside a
-// library. Token-agnostic on purpose: it asserts the two are the same colour,
-// not which one that is.
+// The header band is one more row of the grid, so its hairline is the rows' own `--color-line`;
+// the two are asserted to be the same colour rather than a named token.
 test("the column header's hairline matches the rows'", async ({ page }) => {
-  // A second library, because the last row's `border-bottom: 0` shorthand also
-  // drops its colour back to `currentColor` — comparing against that row would
-  // assert the wrong thing whether or not the header regressed.
+// A second library: the last row's `border-bottom: 0` drops its colour to `currentColor`, so
+// comparing against it would assert the wrong thing.
   await createRepo(state.baseURL, state.adminToken, `hairline-lib-${Date.now()}`);
   await openLibraries(page);
 
@@ -138,12 +132,10 @@ test("the column header's hairline matches the rows'", async ({ page }) => {
   expect(colors.head).toBe(colors.row);
 });
 
-// The list used to be sorted only in the browser, so the server's membership
-// order painted first and every row jumped once the bundle ran. The default
-// order is the server's now: nothing moves on load.
+// The list used to sort only in the browser, so rows jumped once the bundle ran; the default
+// order is the server's now, and nothing moves on load.
 test("the default order is already the server-rendered one", async ({ page }) => {
-  // A name that sorts ahead of the seeded `seed-lib-…`, so the server has to
-  // reorder rather than emit membership order.
+// A name that sorts ahead of `seed-lib-…`, so the server must reorder, not emit membership order.
   await createRepo(state.baseURL, state.adminToken, `aaa-order-${Date.now()}`);
 
   const html = await (await page.request.get("/libraries/")).text();
@@ -187,10 +179,8 @@ test("the list filters and sorts without a round trip", async ({ page }) => {
   const total = await rows.count();
   expect(total).toBeGreaterThan(1);
 
-  // This filter is the one underlined search control left in the app — the
-  // sidebar's library filter beside it and every other search box are the boxed
-  // `.nf-search`. Only the bottom edge draws a hairline, and the top edge
-  // drawing none is what pins that exception.
+// This is the one underlined search control left: only the bottom edge draws a hairline, and the
+// top edge drawing none is the exception this pins.
   const toolbarFilter = page.locator(".nf-toolbar label.nf-find");
   await expect(toolbarFilter).toHaveCount(1);
   const edges = await toolbarFilter.evaluate((el) => {
@@ -232,18 +222,15 @@ test("the list filters and sorts without a round trip", async ({ page }) => {
   expect(descending).toEqual([...descending].sort((a, b) => byName(b, a)));
 });
 
-// The rail's filter narrows the rail's own tree, and now renders on every page,
-// /libraries/ included. There the page toolbar carries a second filter over the
-// same set; the two are independent, so the rail's query must not touch the
-// page's table.
+// The rail filter narrows the rail's tree and renders on every page, /libraries/ included; its
+// query must not touch the page's table, which has its own filter.
 test("the rail filter is on every page and filters the rail", async ({ page }) => {
   await openLibraries(page);
   const railFilter = page.locator(".js-repo-filter");
   const pageFilter = page.locator("#repo-filter");
   await expect(railFilter).toBeVisible();
   await expect(pageFilter).toBeVisible();
-  // Same control, same copy: the two boxes narrow the same set, so a separately
-  // worded placeholder is only drift.
+// Same control, same copy: both boxes narrow the same set.
   await expect(railFilter).toHaveAttribute(
     "placeholder",
     (await pageFilter.getAttribute("placeholder")) ?? "",
@@ -263,9 +250,8 @@ test("the rail filter is on every page and filters the rail", async ({ page }) =
   await page.goto("/starred/");
   await expect(page.locator(".js-repo-filter")).toBeVisible();
 
-  // Inside a library the rail filter is the only way to switch libraries, so it
-  // has to come back: the file browser shares `active_page == "repos"` with the
-  // list page above.
+// Inside a library the rail filter is the only way to switch libraries, so it must come back:
+// the file browser shares `active_page == "repos"` with the list page.
   const repoId = await createRepo(state.baseURL, state.adminToken, `rail-filter-browse-${Date.now()}`);
   await page.goto(`/libraries/${repoId}/files/`);
   await expect(page.locator(".js-repo-filter")).toBeVisible();
@@ -275,7 +261,6 @@ test("the row menu is reachable by keyboard", async ({ page }) => {
   await openLibraries(page);
   const row = page.locator("#repo-list > li").first();
 
-  // Hidden at rest, revealed once the row has focus (not only on hover).
   await expect(row.locator(".nf-more")).toHaveCSS("opacity", "0");
   await row.locator(".nf-lib-nm").focus();
   await expect(row.locator(".nf-more")).toHaveCSS("opacity", "1");
@@ -287,10 +272,8 @@ test("the row menu is reachable by keyboard", async ({ page }) => {
   await expect(page.locator(".nf-menu")).toHaveCount(0);
 });
 
-// The pre-paint preference guard and the translation table used to be inline
-// <script> blocks. They are now an external bundle plus a JSON data block so
-// the Content-Security-Policy can drop 'unsafe-inline' from script-src; these
-// tests pin that they still work.
+// The preference guard and translation table are external now so CSP can drop `unsafe-inline`;
+// these pin that both still work.
 test("saved preferences are applied before paint", async ({ page }) => {
   await openLibraries(page);
 

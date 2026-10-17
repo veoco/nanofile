@@ -1,5 +1,4 @@
 // API-key settings page.
-//
 // The page is server-rendered so it works without JavaScript; this module only
 // adds two conveniences: copying the freshly minted secret and pre-ticking the
 // capability checkboxes of a chosen preset.

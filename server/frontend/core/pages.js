@@ -1,13 +1,11 @@
-// pages — small page-scoped interactions that are shared across all pages
-// (trash restore, repo list filter). Kept in the common bundle because their
-// triggering elements appear on non-file-browser pages.
+// pages — page-scoped interactions shared across all pages (trash restore, repo list filter),
+// in the common bundle because their triggers appear outside the file browser.
 import { __t } from "./i18n.js";
 import { getCookie } from "./utils.js";
 import { Toast } from "./toast.js";
 import { ConfirmDialog } from "./confirm.js";
 import { showPreviewFailure } from "./preview-failure.js";
 
-// ─── Trash restore (via API) ────────────────────────────────────────────
 document.addEventListener("submit", async function (e) {
   const form = e.target.closest(".js-restore-form");
   if (!form) return;
@@ -26,7 +24,6 @@ document.addEventListener("submit", async function (e) {
   );
   if (!confirmed) return;
 
-  // Build request body: { commit_id: [path] }
   var body = {};
   body[commitId] = [path];
 
@@ -51,11 +48,9 @@ document.addEventListener("submit", async function (e) {
   }
 });
 
-// ─── Repo filter ────────────────────────────────────────────────────────
 var repoFilter = document.querySelector(".js-repo-filter");
 if (repoFilter) {
-  // Debounce so a fast typist isn't re-filtering a large repo list on
-  // every keystroke.
+// Debounce so a fast typist is not re-filtering a large repo list on every keystroke.
   var filterTimer = null;
   repoFilter.addEventListener("input", function () {
     clearTimeout(filterTimer);
@@ -70,12 +65,9 @@ if (repoFilter) {
   });
 }
 
-// ─── Generic confirm-before-submit ─────────────────────────────────────
-// data-confirm="<i18n key>" plus optional data-confirm-args (JSON) for
-// {placeholder} substitution, e.g. data-confirm-args='{"name":"x"}'.
-// data-confirm-variant="solid" for a non-destructive action (default: danger).
-// The submit is always cancelled up front; when the dialog says yes the form is
-// submitted through the DOM API, which does not re-fire this listener.
+// `data-confirm` names the i18n key, optional `data-confirm-args` (JSON) substitutes placeholders,
+// and `data-confirm-variant="solid"` marks a non-destructive action. The submit is cancelled up
+// front; when the dialog agrees the form is submitted through the DOM API, which does not refire.
 document.addEventListener("submit", async function (e) {
     var form = e.target.closest("[data-confirm]");
     if (!form) return;
@@ -98,13 +90,8 @@ document.addEventListener("submit", async function (e) {
     HTMLFormElement.prototype.submit.call(form);
 });
 
-// ─── Copy-to-clipboard (data-copy="<selector>") ────────────────────────
-// For values that are too long to read at phone width but still have to be
-// handed to someone, e.g. an invitation code: the button copies the target's
-// text, which stays in the DOM, so the page degrades to select-and-copy when
-// this module is absent. `data-copy-msg` names the toast to confirm with, and
-// `data-copy-lines` on the target copies one line per child element, for a
-// grid of separate values.
+// Copies a value too long to read at phone width. The target's text stays in the DOM, so the
+// page degrades to select-and-copy, and `data-copy-lines` copies one line per child.
 document.addEventListener("click", function (e) {
     var btn = e.target.closest("[data-copy]");
     if (!btn) return;
@@ -124,20 +111,15 @@ document.addEventListener("click", function (e) {
     if (btn.dataset.copyMsg) Toast.success(__t(btn.dataset.copyMsg));
 });
 
-// ─── Preview fallback (data-preview-image / data-preview-media) ────────
-// `error` events don't bubble, so capture at the document level. A picture or a
-// player the browser cannot decode is replaced by the same sentence — and the
-// same download escape — the quick-preview dialog shows for that file. A media
-// element that cannot decode otherwise just sits there as a black box with a
-// spinner, which is what the full-page viewer used to do.
+// `error` does not bubble, so capture at the document level. A picture or player that cannot
+// decode gets the same sentence and download escape the quick-preview dialog shows.
 document.addEventListener("error", function (e) {
     var el = e.target;
     if (!el || !el.hasAttribute) return;
     var kind = el.hasAttribute("data-preview-image") ? "image"
         : el.hasAttribute("data-preview-media") ? "media" : null;
     if (!kind || !el.parentElement) return;
-    // `MEDIA_ERR_ABORTED` is what a caller that re-points `src` or calls
-    // `load()` produces; it is not the file failing to decode.
+// `MEDIA_ERR_ABORTED` comes from re-pointing `src` or calling `load()`, not a decode failure.
     if (kind === "media" && el.error && el.error.code === 1) return;
     showPreviewFailure(el.parentElement, kind, el.getAttribute("data-download-url") || "");
 }, true);

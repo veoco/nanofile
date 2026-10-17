@@ -1,7 +1,6 @@
 // common entry — loaded on every page. Bundles the core layer and all
 // page-scoped modules; each module registers its own delegated event handlers
 // (no window globals).
-//
 // i18n-init must be imported first: it publishes `window.__T` from the
 // server-rendered JSON block, and ES module dependencies evaluate in import
 // order, so every later module sees the dictionary.
@@ -22,7 +21,6 @@ import "../pages/api-keys.js";
 import { initLocalTime } from "../core/local-time.js";
 initLocalTime();
 
-// ─── Response time display ──────────────────────────────────────────────
 var respTimeEl = document.getElementById("resp-time");
 if (respTimeEl) {
   window.addEventListener("load", function () {

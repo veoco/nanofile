@@ -5,7 +5,6 @@ import { __t } from "./i18n.js";
 import { getCookie } from "./utils.js";
 import { formatFileSize } from "./format.js";
 
-// ─── Mobile left panel toggle ──────────────────────────────────────────
 const menuToggle = document.querySelector(".js-mobile-menu-toggle");
 const leftPanel = document.querySelector(".js-left-panel");
 
@@ -29,7 +28,6 @@ if (menuToggle) {
   });
 }
 
-// ─── User menu dropdown (Sign out + User Management for admins) ─────────
 const userMenu = document.querySelector(".js-user-menu");
 const userButton = document.querySelector(".js-user-menu-button");
 if (userMenu && userButton) {
@@ -45,9 +43,8 @@ if (userMenu && userButton) {
     var isAdmin = userMenu.getAttribute("data-is-admin") === "true";
     var menuItem = "block px-4 h-8 leading-8 text-[13px] text-ink hover:bg-raised";
     if (isAdmin) {
-      // System management first: the settings pages, where every
-      // runtime-editable setting lives (including the email configuration the
-      // email page below no longer owns).
+// System management first: the settings pages hold every runtime-editable setting, including
+// the email configuration the email page no longer owns.
       var settingsLink = document.createElement("a");
       settingsLink.href = "/sysadmin/settings/";
       settingsLink.className = menuItem;
@@ -66,9 +63,8 @@ if (userMenu && userButton) {
       shareLink.textContent = __t('ui.share_management');
       dropdown.appendChild(shareLink);
 
-      // Task management is two pages behind one entry, the way system
-      // management is ten: this lands on the run list, and the tab bar there
-      // leads to the registered tasks.
+// Task management is two pages behind one entry, the way system management is ten: this lands
+// on the run list, and its tab bar leads to the registered tasks.
       var taskLink = document.createElement("a");
       taskLink.href = "/sysadmin/tasks/";
       taskLink.className = menuItem;
@@ -103,7 +99,6 @@ if (userMenu && userButton) {
   });
 }
 
-// ─── Dark mode toggle ──────────────────────────────────────────────────
 const darkToggle = document.querySelector(".js-dark-toggle");
 if (darkToggle) {
   darkToggle.addEventListener("click", function () {
@@ -118,7 +113,6 @@ if (darkToggle) {
   }
 }
 
-// ─── Quick search ──────────────────────────────────────────────────────
 var searchInput = document.querySelector(".js-quick-search");
 if (searchInput) {
   searchInput.addEventListener("keydown", function (e) {
@@ -129,20 +123,17 @@ if (searchInput) {
   });
 }
 
-// ─── Keyboard shortcuts ────────────────────────────────────────────────
 var searchFocused = false;
 document.addEventListener("keydown", function (e) {
   var tag = (e.target && e.target.tagName) || "";
   var isInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 
-  // "/" key to focus search
   if (e.key === "/" && !isInput) {
     e.preventDefault();
     if (searchInput) { searchInput.focus(); searchInput.select(); }
     return;
   }
 
-  // g then another key for navigation (only when not in an input)
   if (!isInput) {
     if (e.key === "g" && !searchFocused) {
       searchFocused = true;
@@ -164,12 +155,8 @@ document.addEventListener("keydown", function (e) {
   }
 });
 
-// ─── Star toggle (event delegation) ────────────────────────────────────
-// The same hook is used by the always-present star in a file row and by the
-// star in the details drawer. The row is the source of truth for `data-starred`
-// (right-panel.js reads it when it renders the drawer), so mirror the new state
-// onto the owning row — otherwise starring a file and then selecting it shows a
-// stale state in the drawer.
+// The row is the source of truth for `data-starred` (right-panel.js reads it), so mirror the
+// new state onto the owning row; otherwise starring then selecting shows a stale drawer.
 function setStarState(btn, starred) {
   btn.dataset.starred = starred ? "true" : "false";
   btn.classList.toggle("on", starred);
@@ -179,8 +166,8 @@ function setStarState(btn, starred) {
   var row = btn.closest(".js-entry-row");
   if (row) {
     row.dataset.starred = starred ? "true" : "false";
-    // Grid/gallery tiles keep their action chips visible while starred, so the
-    // state is readable without hovering every tile.
+// Grid/gallery tiles keep their action chips visible while starred, so the state is readable
+// without hovering every tile.
     row.classList.toggle("starred", starred);
   }
 }
@@ -224,18 +211,14 @@ document.addEventListener("click", async function (e) {
       if (res.ok) setStarState(btn, true);
     }
   } catch (ignored) {
-    // Ignore network errors silently
   } finally {
     btn.disabled = false;
   }
 });
 
-// ─── Sidebar storage meter ─────────────────────────────────────────────
-// GET /api2/account/info/ already reports `usage` and `total` in bytes
-// (`total` is -1/0 when the quota is unlimited), so the meter needs no
-// server-side plumbing into every page's template struct. The row itself is
-// server-rendered (see includes/left_panel.html) so it holds its space from the
-// first paint — this only fills in the text and the fill width, never the box.
+// GET /api2/account/info/ reports `usage` and `total` in bytes (`total` is -1/0 when unlimited),
+// so the meter needs no server-side plumbing. The row is server-rendered and holds its space; this
+// only fills the text and the bar width.
 (function () {
   var textEl = document.getElementById("nf-storage-text");
   var barEl = document.getElementById("nf-storage-bar");

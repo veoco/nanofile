@@ -9,17 +9,12 @@ import {
 } from "../helpers/server";
 
 /**
- * The first-run setup page.
+* The first-run setup page.
  *
- * An isolated instance started the way a person starts a fresh install — no
- * `--config`, no `NANOFILE_*` configuration, an empty home directory — because
- * that is the only state in which the page exists at all.
- *
- * The tests deliberately stop short of completing the form: doing so hashes the
- * password with the production iteration count (600k PBKDF2 rounds), which the
- * unoptimized test binary takes minutes over. Completion, the account it
- * creates and the configuration file it writes are covered by
- * `server/tests/setup_test.rs`, which can lower the iteration count.
+ * An isolated instance started as a person starts a fresh install — no `--config`, no
+ * `NANOFILE_*`, an empty home — because only that state has the page at all. The tests stop
+ * short of submitting: production PBKDF2 (600k rounds) takes minutes in the test binary, and
+ * completion is covered by `server/tests/setup_test.rs`, which lowers the count.
  */
 let handle: SetupHandle | undefined;
 
@@ -76,18 +71,14 @@ test("the port answers without handing out the setup token", async ({ page }) =>
   await expect(page.getByText("Setup in progress")).toBeVisible();
   expect(await page.content()).not.toContain(token);
 
-  // A wrong token is not a page at all.
   const wrong = await page.goto(`${origin}/setup/not-the-token`);
   expect(wrong?.status()).toBe(404);
 });
 
 /**
- * The whole first run, on an instance of its own: a configuration file written
- * under the empty home directory, an administrator that can sign in, and the
- * listener handed over to the real server on the same port.
- *
- * Its own instance because this one cannot be reused afterwards — the setup
- * exists only while nothing is configured.
+* The whole first run on its own instance: a configuration file under the empty home, an
+ * administrator that can sign in, and the listener handed to the real server on the same port.
+ * Its own instance because it cannot be reused once setup completes.
  */
 test("completing the setup writes the configuration and starts the server", async ({ browser }) => {
   test.setTimeout(120_000);
@@ -97,20 +88,15 @@ test("completing the setup writes the configuration and starts the server", asyn
     const context = await browser.newContext();
     const page = await context.newPage();
     await page.goto(own.setupUrl);
-    // Whatever the page prefilled is what the server has to record: the default
-    // data directory depends on whether the binary's own directory already has
-    // a `data/` (an installation whose configuration was deleted but whose state
-    // stayed must keep pointing there), so the test takes the answer from the
-    // page instead of assuming one location.
+// The server must record what the page prefilled: the default data directory depends on
+// whether the binary's directory already has a `data/`, so the test takes the page's answer.
     const dataDir = await page.inputValue('input[name="data_dir"]');
     await page.fill('input[name="email"]', "first@example.com");
     await page.fill('input[name="password"]', "first-password-1");
     await page.fill('input[name="password_confirm"]', "first-password-1");
 
-    // The prefilled address is the one the page itself is served on, which is
-    // the normal case and is what the socket handover needs. If the configured
-    // port was taken, the page fell back to a random loopback port and the
-    // fields have to name that one instead.
+// The prefilled address is the page's own; if the configured port was taken, the page fell
+// back to a random loopback port and the fields must name that instead.
     if (url.port !== "8082") {
       await page.fill('input[name="addr"]', url.hostname);
       await page.fill('input[name="port"]', url.port);
@@ -118,7 +104,6 @@ test("completing the setup writes the configuration and starts the server", asyn
     await page.click('form button[type="submit"]');
     await expect(page.getByText("Setup complete")).toBeVisible({ timeout: 90_000 });
 
-    // The file the page named exists, and it holds what the page collected.
     const configPath = path.join(own.home, ".nanofile", "config.toml");
     expect(fs.existsSync(configPath)).toBe(true);
     const written = fs.readFileSync(configPath, "utf8");
@@ -126,8 +111,6 @@ test("completing the setup writes the configuration and starts the server", asyn
     expect(written).toContain(`port = ${url.port}`);
     expect(written).toContain(path.join(dataDir, "nanofile.db"));
 
-    // The server is serving on the same origin: the administrator created on
-    // that page can obtain a token.
     const login = async () => {
       try {
         const response = await fetch(`${url.origin}/api2/auth-token/`, {

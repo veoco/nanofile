@@ -6,7 +6,6 @@ import { __t } from "../core/i18n.js";
 import { createSelectionState, reduceSelection } from "./selection-state.js";
 import { openRightPanel, resetRightPanel, openMultiSelectPanel, openQuickPreview } from "./right-panel.js";
 
-// ─── Selection state ────────────────────────────────────────────────────
 var selState = createSelectionState();
 var suppressClick = false;   // Suppress synthetic click after long-press
 
@@ -43,13 +42,10 @@ export function getSelectedPaths() {
   return Array.from(selState.selected);
 }
 
-// Sync the .selected class on every row to match the current selection state.
 function applySelectionToDom() {
-  // Remove .selected from all rows (including hidden views).
   document.querySelectorAll(".js-entry-row.selected").forEach(function (row) {
     row.classList.remove("selected");
   });
-  // Re-apply .selected to rows in the visible views that are selected.
   var visViews = document.querySelectorAll(
     ".js-file-list-view:not(.hidden), .js-file-grid-view:not(.hidden), .js-gallery-view:not(.hidden)"
   );
@@ -80,7 +76,6 @@ function getVisibleRows() {
 }
 
 function updateSelectionBar() {
-  // Auto-clear stale selection (e.g. after partial refresh)
   if (selState.selected.size > 0) {
     var selectedCount = document.querySelectorAll(".js-entry-row.selected").length;
     if (selectedCount === 0 && document.querySelectorAll(".js-entry-row").length > 0) {
@@ -90,7 +85,6 @@ function updateSelectionBar() {
   var count = selState.selected.size;
   var isSelected = count > 0;
 
-  // Toggle selection info and action buttons in the view toggle bar
   var info = document.getElementById("js-selection-info");
   var actions = document.getElementById("js-selection-actions");
   if (info) info.classList.toggle("hidden", !isSelected);
@@ -101,7 +95,6 @@ function updateSelectionBar() {
     if (countEl) countEl.textContent = count;
   }
 
-  // Update Select All button text
   var selBtn = document.getElementById("js-select-all-btn");
   if (selBtn) {
     var visibleRows = getVisibleRows().length;
@@ -116,7 +109,6 @@ export function clearSelection() {
   resetRightPanel();
 }
 
-// Row click — single select, Ctrl toggle, Shift range, or touch multi-select
 document.addEventListener("click", function (e) {
   var row = e.target.closest(".js-entry-row");
 
@@ -126,7 +118,6 @@ document.addEventListener("click", function (e) {
     return;
   }
 
-  // Click on empty space inside file list — clear selection
   if (!row) {
     if (e.target.closest("button, a, #js-select-all-btn, .js-sort-bar")) return;
     if (e.target.closest(".file-list-container")) {
@@ -166,7 +157,6 @@ document.addEventListener("click", function (e) {
   updateSelectionPanel();
 });
 
-// Row dblclick — open quick-preview modal for previewable files.
 document.addEventListener("dblclick", function (e) {
   var row = e.target.closest(".js-entry-row");
   if (!row) return;
@@ -174,7 +164,6 @@ document.addEventListener("dblclick", function (e) {
   if (e.target.closest("a") || e.target.closest("button")) return;
   var name = row.dataset.name;
   if (!name) return;
-  // Directories and non-previewable files do nothing.
   if (row.dataset.type === "dir") return;
   if (row.dataset.isPreviewable !== "true" &&
       row.dataset.isVideo !== "true" &&
@@ -188,7 +177,6 @@ document.addEventListener("dblclick", function (e) {
   openQuickPreview(row);
 });
 
-// Update right panel based on current selection state
 function updateSelectionPanel() {
   var count = selState.selected.size;
   if (count === 0) {
@@ -227,17 +215,14 @@ function updateSelectionPanel() {
   openMultiSelectPanel(getSelectedItems());
 }
 
-// Select All / Deselect All button
 document.addEventListener("click", function (e) {
   var btn = e.target.closest("#js-select-all-btn");
   if (!btn) return;
 
   var visibleRows = getVisibleRows();
   if (selState.selected.size === visibleRows.length) {
-    // Deselect all
     clearSelection();
   } else {
-    // Select all
     var names = [];
     visibleRows.forEach(function (row) {
       if (row.dataset.name) names.push(row.dataset.name);
@@ -245,7 +230,6 @@ document.addEventListener("click", function (e) {
     selState = reduceSelection(selState, { type: "selectAll", names: names });
     applySelectionToDom();
     updateSelectionBar();
-    // Show multi-select panel
     openMultiSelectPanel(getSelectedItems());
   }
 });
@@ -256,7 +240,6 @@ document.addEventListener("click", function (e) {
   }
 });
 
-// ─── Touch selection support (long-press multi-select) ──────────────────
 var touchLongPressTimer = null;
 var touchStartTarget = null;
 var TOUCH_LONG_PRESS_MS = 500;
@@ -311,14 +294,12 @@ document.addEventListener("touchend", function (e) {
   }
 }, { passive: true });
 
-// Escape key exits touch multi-select mode
 document.addEventListener("keydown", function (e) {
   if (e.key === "Escape" && selState.touchMode) {
     clearSelection();
   }
 });
 
-// Sync .selected class to the currently visible view (called after view switch)
 function syncSelectionView() {
   if (selState.selected.size === 0) return;
   applySelectionToDom();

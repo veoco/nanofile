@@ -4,11 +4,9 @@ import { expandDetails } from "../helpers/details";
 import { backdateFileMtimes } from "../helpers/mtime";
 import { localStamp } from "../helpers/time";
 
-// The details panel moved from a 300px right-hand column to an overlay pinned to
-// the bottom of the file-manager column. The whole point of an overlay is that
-// opening it reflows nothing, so these tests measure geometry rather than
-// eyeballing screenshots: the list must keep its exact height and top edge, and
-// the sidebar must not move at all, in every drawer state.
+// The details panel is an overlay pinned to the bottom of the file-manager column, so opening it
+// reflows nothing. These measure geometry: the list keeps its exact height and top edge, and the
+// sidebar does not move, in every drawer state.
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -59,9 +57,8 @@ async function geometry(page: Page) {
 }
 
 /**
- * The drawer slides in over 0.22s, and the class flips synchronously — so a
- * measurement taken right after the click catches it mid-flight. Wait for the
- * transform to actually settle (translateY ≈ 0) instead of sleeping.
+* The drawer slides in over 0.22s and the class flips synchronously, so a measurement right after
+ * the click catches it mid-flight. Wait for the transform to settle (translateY ≈ 0).
  */
 async function settleDrawer(page: Page) {
   await page.waitForFunction(() => {
@@ -222,13 +219,11 @@ const PNG = Buffer.from(
 );
 
 /**
- * Move every file whose name starts with `prefix` to a fixed calendar month.
+* Move every file whose name starts with `prefix` to a fixed calendar month.
  *
- * The gallery's month headers are the only sticky layers that can reach the
- * strip the drawer covers (see the test below), and staging a month boundary
- * needs files in two months — nothing in the API sets a dirent's mtime, so the
- * helper edits the suite's temp DB. The prefixes are unique to this repo so the
- * patch cannot touch another spec's files.
+ * The gallery's month headers can reach the strip the drawer covers, and staging a month boundary
+ * needs files in two months. Nothing in the API sets a dirent's mtime, so this edits the temp DB;
+ * the prefixes are unique to this repo so the patch cannot touch another spec's files.
  */
 const MONTH_PREFIXES = ["dg1-", "dg2-"] as const;
 

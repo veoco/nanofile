@@ -70,7 +70,6 @@ export const Toast = {
   info: function (m) { showToast(m, "info"); },
 };
 
-// ─── Loading bar ────────────────────────────────────────────────────────
 var loadingBar = document.getElementById("loading-bar");
 export function showLoading() {
   if (loadingBar) loadingBar.classList.remove("hidden");

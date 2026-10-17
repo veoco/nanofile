@@ -40,7 +40,6 @@ async function cleanTrash() {
     });
 }
 
-// ─── Deleted libraries ──────────────────────────────────────────────────
 
 /**
  * Call the deleted-repos API, then reload the libraries tab with a status flag.
@@ -73,7 +72,6 @@ async function deletedReposRequest(method, path, body, flag) {
     }
 }
 
-/** Restore one library with its files and history. */
 async function restoreLibrary(el) {
     var name = el.dataset.repoName || '';
     var confirmed = await ConfirmDialog.confirm(
@@ -90,7 +88,6 @@ async function restoreLibrary(el) {
     );
 }
 
-/** Permanently delete one library and free its blocks. */
 async function deleteLibrary(el) {
     var name = el.dataset.repoName || '';
     var confirmed = await ConfirmDialog.confirm(
@@ -107,7 +104,6 @@ async function deleteLibrary(el) {
     );
 }
 
-/** Permanently delete every library in the trash. */
 async function deleteAllLibraries() {
     var rows = document.querySelectorAll('#tab-libraries .nf-prow').length;
     var confirmed = await ConfirmDialog.confirm(

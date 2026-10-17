@@ -1,11 +1,7 @@
-// right-panel — the bottom details drawer: summary + rich tier for a single
-// selection, a batch summary for a multi selection, and the quick-preview modal.
-//
-// The drawer replaced the old 300px right-hand column. It is an OVERLAY pinned
-// to the bottom of the file-manager column, so opening it reflows nothing: the
-// list keeps its exact height and scroll offset. The only thing that changes is
-// `.nf-scroll`'s bottom padding, which reserves room so the final row can still
-// be scrolled clear of the drawer.
+// right-panel — the bottom details drawer: summary and rich tier for one selection, a batch
+// summary for several, and the quick-preview modal. It is an OVERLAY pinned to the bottom of the
+// file-manager column, so opening it reflows nothing: the list keeps its height and scroll
+// offset, and only `.nf-scroll`'s bottom padding grows to keep the final row clear of it.
 import { __t } from "../core/i18n.js";
 import { escapeHtml, escapeAttr, encodeFilePath, safeColor, parentDirOf } from "../core/utils.js";
 import { apiFetch } from "../core/api.js";
@@ -15,12 +11,10 @@ import { renderAll } from "../core/local-time.js";
 import { showPreviewFailure } from "../core/preview-failure.js";
 import { refreshFileList } from "./list.js";
 
-// Monotonic id used to discard stale right-panel async responses when the
-// selection changes faster than the detail requests (share/upload links,
-// index text, EXIF, tags) resolve.
+// Monotonic id used to discard stale async responses when the selection changes faster than
+// the detail requests (links, index text, EXIF, tags) resolve.
 var rpReqId = 0;
 
-// ─── Drawer plumbing ────────────────────────────────────────────────────
 var detailsEl = document.getElementById("nf-details");
 var contentEl = document.getElementById("nf-content");
 var detailsExpandEl = document.getElementById("nf-details-expand");
@@ -31,9 +25,8 @@ function isExpanded() {
   try { return localStorage.getItem(EXPAND_KEY) === "true"; } catch (e) { return false; }
 }
 
-// The rich tier is remembered per browser: it is collapsed by default because
-// the summary answers the common "what is this file" question, but a user who
-// wants tags/EXIF/link lists every time should only have to say so once.
+// The rich tier is remembered per browser: collapsed by default, but a user who wants
+// tags/EXIF/links every time says so once.
 function setExpanded(expanded) {
   if (detailsExpandEl) detailsExpandEl.hidden = !expanded;
   document.querySelectorAll(".js-d-toggle").forEach(function (t) {
@@ -52,8 +45,7 @@ function syncDrawerHeight() {
 function openDrawer() {
   if (!detailsEl || !contentEl) return;
   setExpanded(isExpanded());
-  // Measure before revealing: `visibility: hidden` still has layout, and the
-  // reserved padding must match the drawer's real height.
+// Measure before revealing: `visibility: hidden` still has layout, so the reserve is real.
   syncDrawerHeight();
   detailsEl.classList.add("open");
   contentEl.classList.add("drawer-open");
@@ -70,14 +62,12 @@ document.addEventListener("click", function (e) {
   if (!e.target.closest(".js-d-toggle")) return;
   if (!detailsExpandEl) return;
   setExpanded(detailsExpandEl.hidden);
-  // The drawer just changed height, so the space reserved at the bottom of the
-  // list must follow in the same frame — reading `offsetHeight` forces the
-  // layout that `hidden` just invalidated, so this needs no rAF.
+// The reserve must follow the drawer's new height in the same frame; reading `offsetHeight`
+// forces the layout `hidden` invalidated, so no rAF is needed.
   if (detailsEl && detailsEl.classList.contains("open")) syncDrawerHeight();
 });
 
-// Escape clears the selection (which closes the drawer) unless the quick
-// preview modal is the thing on top.
+// Escape clears the selection (closing the drawer) unless the quick preview is on top.
 document.addEventListener("keydown", function (e) {
   if (e.key !== "Escape") return;
   if (!detailsEl || !detailsEl.classList.contains("open")) return;
@@ -97,15 +87,12 @@ export function openRightPanel(d) {
   var mc = document.querySelector(".js-rp-multi-content");
   if (!ph || !ct) return;
 
-  // Invalidate any in-flight async detail requests from a previous selection.
   var reqId = ++rpReqId;
 
-  // Show content, hide placeholder and multi-select panel
   ph.classList.add("hidden");
   ct.classList.remove("hidden");
   if (mc) mc.classList.add("hidden");
 
-  // ── Preview ──
   var thumbImg = ct.querySelector(".js-rp-thumb-img");
   var extBadge = ct.querySelector(".js-rp-ext-badge");
   var folderIcon = ct.querySelector(".js-rp-folder-icon");
@@ -116,10 +103,8 @@ export function openRightPanel(d) {
   var audioEl = ct.querySelector(".js-rp-audio");
   var mediaSection = ct.querySelector(".js-rp-media");
 
-  // Stop any previously-playing media before switching selection.
   stopRightPanelMedia();
 
-  // Hide all preview variants first
   if (thumbImg) { thumbImg.classList.add("hidden"); thumbImg.style.display = ""; thumbImg.removeAttribute("src"); }
   if (extBadge) extBadge.classList.add("hidden");
   if (folderIcon) folderIcon.classList.add("hidden");
@@ -128,16 +113,14 @@ export function openRightPanel(d) {
   if (audioIcon) audioIcon.classList.add("hidden");
   if (audioRow) audioRow.classList.add("hidden");
 
-  // The summary row only has room for a 54px poster, so playback lives in the
-  // expandable tier; a file is "media" when that tier has something to show.
+// The summary has room for a 54px poster only, so playback lives in the expandable tier.
   var isMedia = false;
 
   if (d.type === "dir") {
     if (folderIcon) folderIcon.classList.remove("hidden");
   } else if (d.isVideo) {
     isMedia = true;
-    // Inline playback via the Range-capable streaming endpoint; the frame
-    // thumbnail (if any) doubles as the native poster and the summary image.
+// Inline playback uses the Range-capable stream; the frame thumbnail doubles as poster.
     if (videoEl && d.repoId && d.path) {
       videoEl.src = "/repos/" + encodeURIComponent(d.repoId) + "/files/" + encodeFilePath(d.path);
       videoEl.poster = d.thumbnailUrlLarge || d.thumbnailUrl || "";
@@ -172,14 +155,11 @@ export function openRightPanel(d) {
 
   if (mediaSection) mediaSection.classList.toggle("hidden", !isMedia);
 
-  // ── Basic Info ──
   setText(ct, ".js-rp-name", d.name || "");
   setText(ct, ".js-rp-type", humanType(d.type, d.extension));
 
-  // ── Starred ──
-  // The hook classes are never replaced: `openRightPanel` runs again for every
-  // selection, and clobbering `className` used to make the button stop
-  // updating from the second selection onward.
+// Never replace the hook classes: `openRightPanel` reruns per selection, and clobbering
+// `className` made the button stop updating from the second selection onward.
   var starBtn = ct.querySelector(".js-rp-star");
   if (starBtn) {
     var isStarred = d.starred === true || d.starred === "true";
@@ -195,15 +175,12 @@ export function openRightPanel(d) {
     starBtn.title = isStarred ? __t('ui.unstar') : __t('ui.star');
   }
 
-  // ── Details ──
   setText(ct, ".js-rp-path", d.path || "");
   setText(ct, ".js-rp-size", d.type === "dir" ? "—" : (d.sizeDisplay || ""));
 
-  // The drawer's date cell is left to core/local-time.js, like every other time
-  // cell: this only hands it the raw timestamp. The node was parsed long before
-  // the panel is filled, so it needs an explicit pass — scoped to the drawer,
-  // not `initLocalTime()` again, which would re-scan (and re-observe) the page
-  // on every selection.
+// The date cell is left to core/local-time.js, like every other time cell. The node was parsed
+// long before the panel fills, so it needs an explicit pass scoped to the drawer, not another
+// `initLocalTime()` that would re-scan the page on every selection.
   var mtimeEl = ct.querySelector(".js-rp-mtime");
   if (mtimeEl) {
     var mtime = parseInt(d.mtime, 10);
@@ -217,8 +194,6 @@ export function openRightPanel(d) {
     }
   }
 
-  // ── Actions ──
-  // Download
   var downloadLink = ct.querySelector(".js-rp-download");
   if (downloadLink) {
     downloadLink.href = d.type === "dir" ? "#" : (d.downloadUrl || "#");
@@ -230,7 +205,6 @@ export function openRightPanel(d) {
     downloadLink.dataset.type = d.type || "";
   }
 
-  // Delete
   var deleteBtn = ct.querySelector(".js-rp-delete-btn");
   if (deleteBtn) {
     deleteBtn.dataset.repoId = d.repoId || "";
@@ -239,7 +213,6 @@ export function openRightPanel(d) {
     deleteBtn.dataset.type = d.type || "";
   }
 
-  // Share
   var shareBtn = ct.querySelector(".js-rp-share");
   if (shareBtn) {
     shareBtn.dataset.repoId = d.repoId || "";
@@ -247,7 +220,6 @@ export function openRightPanel(d) {
     shareBtn.dataset.type = d.type || "";
   }
 
-  // History (only meaningful for files)
   var historyBtn = ct.querySelector(".js-rp-history-btn");
   if (historyBtn) {
     if (d.type === "file") {
@@ -261,14 +233,12 @@ export function openRightPanel(d) {
     }
   }
 
-  // ── Share Links (fetch existing links for this file) ──
   var shareSection = ct.querySelector(".js-rp-share-links-section");
   var shareList = ct.querySelector(".js-rp-share-links-list");
   if (shareSection && shareList) {
     if (d.repoId && d.path) {
-      // Show the section right away with the loading hint in the reserved
-      // (min-h-5) list row, so the panel layout doesn't shift when the links
-      // arrive; only the list content is swapped, not the whole section.
+// Show the section immediately with the loading hint in the reserved row, so the layout does
+// not shift when links arrive; only the list content is swapped.
       shareSection.classList.remove("hidden");
       shareList.innerHTML = '<div class="js-rp-share-links-loading text-[11px] text-ink-3 italic">' + escapeHtml(__t('fb.loading')) + '</div>';
       fetch("/api/v2.1/share-links/?repo_id=" + encodeURIComponent(d.repoId) + "&path=" + encodeURIComponent(d.path))
@@ -294,20 +264,17 @@ export function openRightPanel(d) {
         })
         .catch(function () { /* ignore */ });
     } else {
-      // No repo/path context for this item — keep the section hidden.
       shareSection.classList.add("hidden");
     }
   }
 
-  // ── Tags (fetch for the selected item) ──
   var tagsSection = ct.querySelector(".js-rp-tags-section");
   var tagsList = ct.querySelector(".js-rp-tags-list");
   var tagInput = ct.querySelector(".js-rp-tag-input");
   var tagDatalist = ct.querySelector("#js-rp-tag-options");
   var addTagBtn = ct.querySelector(".js-rp-tag-add");
   if (tagsSection && tagsList && d.repoId && d.recordId) {
-    // Keep the section visible while tags load so the panel layout doesn't
-    // shift when they arrive; the chip row height is reserved via min-h.
+// Keep the section visible while tags load so the layout does not shift.
     tagsSection.classList.remove("hidden");
     tagsList.innerHTML = "";
     if (tagInput) tagInput.value = "";
@@ -317,15 +284,13 @@ export function openRightPanel(d) {
     var recordId = d.recordId;
     var allTags = [];   // [{id, name, color}]
     var fileTagIds = []; // tag ids currently attached
-    // Set once the user saves a change; the initial load response (which
-    // reflects pre-save state) must not roll the panel back over it.
+// Set when the user saves; the initial load (reflecting pre-save state) must not roll it back.
     var userMutated = false;
 
     function renderTagChips() {
       tagsList.innerHTML = "";
-      // When the file has no tags, render the hint inside the chip row (the
-      // slot that would hold chips) so there's no blank reserved area and the
-      // row height stays stable — no separate "no tags" line below the input.
+// With no tags, render the hint inside the chip row so there is no blank reserved area and the
+// row height stays stable.
       if (fileTagIds.length === 0) {
         tagsList.innerHTML =
           '<span class="js-rp-no-tags text-[11px] text-ink-3 italic">' +
@@ -365,7 +330,6 @@ export function openRightPanel(d) {
       });
     }
 
-    // Load repo tags + this file's current tags.
     var pathForQuery = d.path || "/" + (d.name || "");
     var slash = pathForQuery.lastIndexOf("/");
     var parentDir = parentDirOf(pathForQuery);
@@ -413,9 +377,8 @@ export function openRightPanel(d) {
             body: JSON.stringify({ tags_data: [{ _tag_name: name, _tag_color: color }] }),
           }).then(function (r) { return r.json(); }).then(function (data) {
             var created = (data.tags || [])[0];
-            // Mark the panel as user-mutated so the initial tags/record load
-            // (which may still be in flight and reflects pre-save state) is
-            // discarded instead of overwriting the tag we just created.
+// Mark the panel user-mutated so an in-flight initial load is discarded, not overwriting the
+// tag just created.
             userMutated = true;
             allTags.push({ id: created._id, name: created._tag_name, color: created._tag_color });
             if (tagDatalist) {
@@ -450,7 +413,6 @@ export function openRightPanel(d) {
     tagsSection.classList.add("hidden");
   }
 
-  // Upload links (directories only)
   var ulSection = ct.querySelector(".js-rp-upload-links-section");
   var ulList = ct.querySelector(".js-rp-upload-links-list");
   var noUl = ct.querySelector(".js-rp-no-upload-links");
@@ -485,7 +447,6 @@ export function openRightPanel(d) {
     }
   }
 
-  // ── Indexed Content ──
   var indexSection = ct.querySelector(".js-rp-index-section");
   var indexContent = ct.querySelector(".js-rp-index-content");
   var indexEmpty = ct.querySelector(".js-rp-index-empty");
@@ -517,7 +478,6 @@ export function openRightPanel(d) {
     indexSection.classList.add("hidden");
   }
 
-  // ── EXIF Data (image files only) ──
   var exifSection = ct.querySelector(".js-rp-exif-section");
   var exifContent = ct.querySelector(".js-rp-exif-content");
   var noExif = ct.querySelector(".js-rp-no-exif");
@@ -555,7 +515,6 @@ export function openRightPanel(d) {
     exifSection.classList.add("hidden");
   }
 
-  // Upload-link button is only meaningful for directories.
   var uploadLinkBtn = document.getElementById("rp-upload-link-btn");
   if (uploadLinkBtn) {
     uploadLinkBtn.classList.toggle("hidden", d.type !== "dir");
@@ -564,7 +523,6 @@ export function openRightPanel(d) {
   openDrawer();
 }
 
-// ─── Multi-select summary ───────────────────────────────────────────────
 export function openMultiSelectPanel(selectedItems) {
   // selectedItems = [{ name, type }, ...]
   var ph = document.querySelector(".js-rp-placeholder");
@@ -572,8 +530,8 @@ export function openMultiSelectPanel(selectedItems) {
   var mc = document.querySelector(".js-rp-multi-content");
   if (!ph || !ct || !mc) return;
 
-  // The drawer is no longer replaced by this function, so any in-flight
-  // single-selection responses must be invalidated here too.
+// The drawer is no longer replaced here, so in-flight single-selection responses must be
+// invalidated too.
   rpReqId++;
 
   ph.classList.add("hidden");
@@ -585,8 +543,7 @@ export function openMultiSelectPanel(selectedItems) {
     countEl.textContent = selectedItems.length + " " + __t('fb.selected');
   }
 
-  // Only a handful of names fit on one line; the list would otherwise push the
-  // buttons off the row for a large selection.
+// Only a handful of names fit one line; more would push the buttons off the row.
   var listEl = mc.querySelector(".js-rp-multi-list");
   if (listEl) {
     var names = selectedItems.slice(0, 4).map(function (item) {
@@ -599,7 +556,6 @@ export function openMultiSelectPanel(selectedItems) {
   openDrawer();
 }
 
-// Pause and unload any media element currently playing in the right panel.
 function stopRightPanelMedia() {
   var v = document.querySelector(".js-rp-video");
   if (v) {
@@ -616,23 +572,20 @@ function stopRightPanelMedia() {
   }
 }
 
-// Called when a thumbnail <img> fails to load (e.g. audio without cover art,
-// or ffmpeg unavailable) — fall back to the extension badge next to it.
+// A thumbnail that fails to load (audio without cover art, ffmpeg unavailable) falls back to
+// the extension badge.
 export function thumbFailed(img) {
   img.style.display = "none";
-  // Ignore errors for thumbnails that are not part of the active preview (e.g.
-  // a just-cleared right-panel thumbnail); otherwise the fallback badge below
-  // would be revealed for the previously selected file.
+// Ignore errors from thumbnails outside the active preview, or the badge would reveal itself
+// for the previously selected file.
   if (img.classList.contains("hidden")) return;
-  // List thumbnails: show the small extension fallback badge next to the icon.
   var fb = img.parentElement ? img.parentElement.querySelector(".js-thb-fallback") : null;
   if (fb) {
     fb.classList.remove("hidden");
     fb.classList.add("flex");
     return;
   }
-  // Drawer thumbnails (e.g. audio without cover art): fall back to the
-  // extension badge, same as unknown files.
+// Drawer thumbnails fall back to the extension badge, same as unknown files.
   var extBadge = document.querySelector(".js-rp-content .js-rp-ext-badge");
   if (extBadge) {
     extBadge.textContent = img.dataset && img.dataset.extension ? img.dataset.extension : "?";
@@ -640,29 +593,24 @@ export function thumbFailed(img) {
   }
 }
 
-// Reset the drawer to its closed state
 export function resetRightPanel() {
   var ph = document.querySelector(".js-rp-placeholder");
   var ct = document.querySelector(".js-rp-content");
   var mc = document.querySelector(".js-rp-multi-content");
-  // Stop any playing media so it doesn't keep buffering in the background.
   stopRightPanelMedia();
   if (ph) ph.classList.remove("hidden");
   if (ct) ct.classList.add("hidden");
   if (mc) mc.classList.add("hidden");
   var uploadLinkBtn = document.getElementById("rp-upload-link-btn");
   if (uploadLinkBtn) uploadLinkBtn.classList.add("hidden");
-  // Invalidate in-flight detail requests for the selection being dismissed.
   rpReqId++;
   closeDrawer();
 }
 
-// ─── Quick preview modal (dblclick on a file row) ───────────────────────
 var QUICK_PREVIEW_TEXT_LIMIT = 1024 * 1024; // 1MB
 
-// The dialog and the full-page viewer render the same node for the same file
-// (see core/preview-failure.js): one sentence naming the reason, and the ?dl=1
-// escape next to it.
+// The dialog and full-page viewer render the same node: one sentence naming the reason, and
+// the `?dl=1` escape beside it.
 function showQuickPreviewUnsupported(kind, downloadUrl) {
   var overlay = document.getElementById("quick-preview-overlay");
   if (!overlay) return;
@@ -711,8 +659,7 @@ export function openQuickPreview(row) {
   if (!repoId || !path) return;
 
   var encPath = encodeFilePath(path);
-  // One content URL per open, plus the `?dl=1` alias of it: that alias is what
-  // every failure hands the reader to (the viewer's is server-rendered).
+// One content URL per open plus its `?dl=1` alias, which every failure hands the reader.
   var contentUrl = "/repos/" + encodeURIComponent(repoId) + "/files/" + encPath;
   var downloadUrl = contentUrl + "?dl=1";
   var title = overlay.querySelector(".js-qp-title");
@@ -724,11 +671,9 @@ export function openQuickPreview(row) {
   var text = overlay.querySelector(".js-qp-text");
 
   if (isVideo) {
-    // A media element that cannot decode the file fires `error` and just sits
-    // there, so without this the dialog was an empty black box. Which files
-    // decode is the browser's codec list, not the container: an HEVC/H.265 clip
-    // in the same .mp4/.MOV the phone also writes H.264 into plays nowhere on a
-    // stock Windows Chrome/Edge.
+// A media element that cannot decode fires `error` and otherwise sits there, so without this
+// the dialog was an empty black box. Which files decode is the codec list, not the container:
+// an HEVC clip in an .mp4/.MOV plays nowhere on stock Windows Chrome/Edge.
     video.onerror = function () {
       video.classList.add("hidden");
       showQuickPreviewUnsupported("media", downloadUrl);
@@ -750,7 +695,6 @@ export function openQuickPreview(row) {
     };
     img.classList.remove("hidden");
   } else if (isPreviewable) {
-    // Text / code — fetch the first 1MB via Range; huge files are truncated.
     var fileSize = parseInt(row.dataset.size, 10);
     fetch(contentUrl, { headers: { Range: "bytes=0-" + (QUICK_PREVIEW_TEXT_LIMIT - 1) } })
       .then(function (res) {
@@ -773,7 +717,6 @@ export function openQuickPreview(row) {
   overlay.classList.remove("hidden");
 }
 
-// Quick preview modal event bindings (close button, backdrop, ESC).
 (function () {
   var overlay = document.getElementById("quick-preview-overlay");
   if (!overlay) return;
@@ -791,13 +734,11 @@ document.addEventListener("keydown", function (e) {
   }
 });
 
-// ─── Helpers ────────────────────────────────────────────────────────────
 function setText(container, selector, val) {
   var el = container.querySelector(selector);
   if (el) el.textContent = val;
 }
 
-// ─── Reindex single file ────────────────────────────────────────────────
 document.addEventListener("click", async function (e) {
   var btn = e.target.closest(".js-rp-reindex-btn");
   if (!btn) return;
@@ -818,7 +759,6 @@ document.addEventListener("click", async function (e) {
     } else {
       Toast.info(__t('ui.reindex_unsupported'));
     }
-    // Reload the indexed content display
     var ct = document.querySelector(".js-rp-content");
     if (ct) {
       var indexContent = ct.querySelector(".js-rp-index-content");
@@ -842,8 +782,6 @@ document.addEventListener("click", async function (e) {
   }
 });
 
-// Initial check in case an item is pre-selected on load (upload-link button
-// visibility depends on the selected entry type).
 setTimeout(function () {
   var btn = document.getElementById("rp-upload-link-btn");
   if (!btn) return;
@@ -852,9 +790,8 @@ setTimeout(function () {
   btn.classList.toggle("hidden", type !== "dir");
 }, 100);
 
-// Thumbnail error fallback — `error` events don't bubble, so capture at the
-// document level. Matches the `<img data-thumb>` markers emitted by file_list
-// and details_drawer templates.
+// Thumbnail fallback: `error` does not bubble, so capture at the document level, matching the
+// `<img data-thumb>` markers emitted by file_list and details_drawer.
 document.addEventListener("error", function (e) {
   var img = e.target;
   if (!img || img.tagName !== "IMG" || !img.hasAttribute("data-thumb")) return;

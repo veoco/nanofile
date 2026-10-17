@@ -1,10 +1,8 @@
-// list — partial list refresh (refreshFileList) and pagination (load-more /
-// infinite scroll). Dispatches "nanofile:list-refreshed" after a refresh so
-// view.js can re-apply sort/view state without list.js importing it.
+// list — partial list refresh (refreshFileList) and pagination. Dispatches
+// "nanofile:list-refreshed" so view.js can re-apply sort/view state.
 import { getSort, getTagFilter, getVisibleView, getVisibleViewContainer } from "./state.js";
 import { buildListUrl } from "./urls.js";
 
-// ─── Skeleton loading ────────────────────────────────────────────────────
 var skeleton = document.querySelector(".js-skeleton");
 var fileListContainer = document.querySelector(".file-list-container");
 
@@ -30,12 +28,9 @@ export function hideFileSkeleton() {
   }
 }
 
-// ─── Partial refresh ─────────────────────────────────────────────────────
 export async function refreshFileList() {
-  // Render all three views (view=all) so view switching stays a pure
-  // client-side toggle after a mutation. The _viewRefreshing counter
-  // suppresses pagination while a refresh is in flight so the infinite-scroll
-  // observer doesn't load page 2 into the soon-to-be-replaced DOM.
+// Render all three views so view switching stays a pure client-side toggle after a mutation;
+// `_viewRefreshing` suppresses pagination while a refresh is in flight.
   window._viewRefreshing = (window._viewRefreshing || 0) + 1;
   var url = buildListUrl({
     pathname: window.location.pathname,
@@ -53,8 +48,7 @@ export async function refreshFileList() {
         container.outerHTML = html;
         document.dispatchEvent(new CustomEvent("nanofile:list-refreshed"));
         initInfiniteScroll();
-        // A full refresh replaces the list with page 1 — start at the top so
-        // the user isn't dropped at the bottom of the re-sorted/reloaded list.
+// A full refresh starts at page 1, so do not leave the user at the bottom.
         var scroller = listScroller();
         if (scroller) scroller.scrollTop = 0;
       } else {
@@ -70,7 +64,6 @@ export async function refreshFileList() {
   }
 }
 
-// ─── Load more (pagination) ──────────────────────────────────────────────
 export function syncPaginationBar() {
   var container = getVisibleViewContainer();
   if (!container) return;
@@ -87,8 +80,7 @@ export function syncPaginationBar() {
 }
 
 export async function loadMoreEntries() {
-  // A partial refresh (upload/delete/sort) is replacing the list; don't load
-  // page 2 into the old DOM that is about to be swapped out.
+// A partial refresh replaces the list; do not load page 2 into the old DOM.
   if (window._viewRefreshing) return;
   var container = getVisibleViewContainer();
   if (!container) return;
@@ -118,7 +110,6 @@ export async function loadMoreEntries() {
     if (!resp.ok) { btn.disabled = false; if (spinner) spinner.classList.add("hidden"); return; }
     var html = await resp.text();
 
-    // Extract the view container HTML from the partial response
     var parser = document.createElement("div");
     parser.innerHTML = html;
     var newContainer = parser.querySelector(
@@ -128,12 +119,13 @@ export async function loadMoreEntries() {
     );
     if (!newContainer) { btn.disabled = false; if (spinner) spinner.classList.add("hidden"); return; }
 
-    // Append new content: rows for list/grid, month groups for gallery.
+// Append new content. A page boundary usually falls inside a month, so merge the incoming
+// first group into the last on-screen group when the heading matches, or the month heading
+// prints twice and its count splits.
     if (view === "gallery") {
       // The groups the template renders are `.nf-gal-group`; this used to read
       // the gallery's pre-rebuild class name, matched nothing, and so the
       // gallery never grew past its first page.
-      //
       // A page boundary usually falls inside a month, so the incoming page's
       // first group is the tail of the month already on screen; appending it
       // as-is would print that month's heading twice and split its count, so
@@ -161,7 +153,6 @@ export async function loadMoreEntries() {
       var rows = newContainer.querySelectorAll(".js-entry-row");
       rows.forEach(function (row) { container.appendChild(row); });
 
-      // DOM recycling: if more than 3 pages loaded, remove the oldest page
       var allRows = container.querySelectorAll(".js-entry-row");
       if (allRows.length > 600) {
         var oldestPage = Infinity;
@@ -176,12 +167,10 @@ export async function loadMoreEntries() {
       }
     }
 
-    // Update pagination state from the response
     container.dataset.page = newContainer.dataset.page || String(nextPage);
     container.dataset.hasMore = newContainer.dataset.hasMore || "false";
     container.dataset.total = newContainer.dataset.total || container.dataset.total;
 
-    // Update the count display in the load-more bar
     var loadedCount = document.querySelector(".js-loaded-count");
     var totalCount = container.dataset.total;
     if (loadedCount) {
@@ -189,7 +178,6 @@ export async function loadMoreEntries() {
       loadedCount.textContent = Math.min(loadedTotal, parseInt(totalCount, 10));
     }
 
-    // Hide the load-more bar if no more pages
     if (container.dataset.hasMore !== "true") {
       var bar = document.querySelector(".js-load-more-bar");
       if (bar) bar.classList.add("hidden");
@@ -200,14 +188,12 @@ export async function loadMoreEntries() {
   if (spinner) spinner.classList.add("hidden");
 }
 
-// Load more button click handler
 document.addEventListener("click", function (e) {
   if (e.target.closest(".js-load-more-btn")) {
     loadMoreEntries();
   }
 });
 
-// ─── Infinite scroll ─────────────────────────────────────────────────────
 var infiniteScrollTimer = null;
 function onFileListScroll() {
   if (infiniteScrollTimer) return;
@@ -242,8 +228,7 @@ export function initInfiniteScroll() {
   }
 }
 
-// Fallback scroll listener on the list viewport (runs once; it is not replaced
-// on refresh).
+// Fallback scroll listener on the list viewport (runs once; refresh does not replace it).
 if (!("IntersectionObserver" in window)) {
   var mainEl = listScroller();
   if (mainEl) {

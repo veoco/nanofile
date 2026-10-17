@@ -9,7 +9,6 @@ test.beforeAll(async () => {
   state = readState();
 });
 
-/** Seed a fresh repo, delete a uniquely-named file, then land on /trash/. */
 async function deleteAndOpenTrash(
   page: import("@playwright/test").Page,
   suffix: string,
@@ -93,9 +92,7 @@ test("the files tab can empty a library's file trash", async ({ page }) => {
   await expect(page.locator("#clean-dialog")).toBeHidden();
 });
 
-// ── Deleted libraries ───────────────────────────────────────────────────
 
-/** Seed a library, delete it, and land on the deleted-libraries tab. */
 async function deleteLibraryAndOpenTab(
   page: Page,
   suffix: string,

@@ -15,16 +15,13 @@ export async function expandDetails(page: Page): Promise<void> {
   }
 }
 
-/** Selected item's detail row inside the drawer. */
 export const details = (page: Page) => page.locator(".js-rp-content");
 
-/** The always-visible "⋯" at the end of a file row. */
 export const rowMenuButton = (page: Page, name: string) =>
   page.locator(
     `.js-file-list-view:not(.hidden) .js-entry-row[data-name="${name}"] .nf-more`,
   );
 
-/** Open a row's action menu (which is mounted on <body>, outside the list). */
 export async function openRowMenu(page: Page, name: string): Promise<void> {
   await rowMenuButton(page, name).click();
   await expect(page.locator(".nf-menu")).toBeVisible();

@@ -10,7 +10,6 @@ import { registerModalClose } from "../core/modal.js";
 // Reads runtime context from the `#upload-context` element (set by toolbar.html):
 //   maxUploadSizeMb, currentPath, repoId, repoName.
 
-// ─── Upload state ───
 var uploadQueue = [];
 var uploadIdCounter = 0;
 var isUploadPaused = false;
@@ -22,18 +21,15 @@ var uploadCtxEl = document.getElementById('upload-context');
 var uploadCtx = uploadCtxEl ? uploadCtxEl.dataset : {};
 var maxUploadSizeMb = parseInt(uploadCtx.maxUploadSizeMb || '0', 10);
 
-// ─── Chunked upload constants ───
 var CHUNK_SIZE = 8 * 1024 * 1024; // 8MB per chunk
 var CHUNK_UPLOAD_THRESHOLD = 100 * 1024 * 1024; // 100MB – files above this use chunked upload
 var MAX_CHUNK_RETRIES = 3;
 
-// Bitrate tracking
 var bitrateLoaded = 0;
 var bitrateTimestamp = null;
 var currentBitrate = 0;
 var bitrateInterval = 500;
 
-// ─── Warn on page leave during active uploads ───
 window.addEventListener('beforeunload', function (e) {
     if (uploadQueue.some(function (item) { return item.state === 'uploading' || item.state === 'pending'; })) {
         e.preventDefault();
@@ -41,7 +37,6 @@ window.addEventListener('beforeunload', function (e) {
     }
 });
 
-// ─── Standard upload (multi-file selection) ───
 export function triggerUpload() {
     document.getElementById('file-upload-input').click();
 }
@@ -60,7 +55,6 @@ export function onFileSelected(input) {
     }
 }
 
-// ─── Folder upload ───
 export function triggerFolderUpload() {
     document.getElementById('folder-upload-input').click();
 }
@@ -84,7 +78,6 @@ export function uploadFilesFromFolderInput(files) {
     addToQueue(items);
 }
 
-// ─── Drag and drop ───
 export function onDragOver(e) { e.preventDefault(); }
 export function onDragEnter(e) {
     e.preventDefault();
@@ -152,11 +145,9 @@ export async function traverseEntry(entry, parentPath) {
     return results;
 }
 
-// ─── Queue management ───
 export function addToQueue(items) {
     if (items.length === 0) return;
 
-    // Reset bitrate tracking on fresh batch
     bitrateLoaded = 0;
     bitrateTimestamp = null;
     currentBitrate = 0;
@@ -188,11 +179,9 @@ export function addToQueue(items) {
     });
 
     showProgressDialog();
-    // Fetch upload token for the upload-aj endpoint
     fetchUploadToken(repoId).then(function () { processQueue(); });
 }
 
-// Fetch upload link token via Seafile API
 // getCookie is provided by common.js (loaded first).
 export async function fetchUploadToken(repoId) {
     try {
@@ -214,7 +203,6 @@ export async function fetchUploadToken(repoId) {
 }
 
 export function processQueue() {
-    // Find the first pending item and upload it
     for (var i = 0; i < uploadQueue.length; i++) {
         var item = uploadQueue[i];
         if (item.state === 'pending') {
@@ -225,7 +213,6 @@ export function processQueue() {
         }
     }
 
-    // No more pending items — check if everything is terminal
     var allDone = uploadQueue.every(function (item) {
         return item.state === 'completed' || item.state === 'cancelled';
     });
@@ -236,7 +223,6 @@ export function processQueue() {
 }
 
 export function uploadItem(item) {
-    // File size check — reject files exceeding server limit before uploading
     if (maxUploadSizeMb > 0 && item.file.size > maxUploadSizeMb * 1024 * 1024) {
         item.state = 'error';
         item.error = __t('fb.file_too_large', { size: maxUploadSizeMb });
@@ -248,7 +234,6 @@ export function uploadItem(item) {
 
     var url = uploadTokenUrl || '/upload-aj/';
 
-    // Large files use chunked upload; small files go direct
     if (item.file.size >= CHUNK_UPLOAD_THRESHOLD) {
         uploadFileInChunks(item, url);
     } else {
@@ -256,7 +241,6 @@ export function uploadItem(item) {
     }
 }
 
-// ─── Direct (single-request) file upload ───
 export function uploadFileDirect(item, url) {
     item.state = 'uploading';
     updateProgressDialog();
@@ -323,9 +307,7 @@ export function uploadFileDirect(item, url) {
     xhr.send(formData);
 }
 
-// ─── Chunked (resumable) file upload ───
 
-/** Query the server for how many bytes have already been uploaded. */
 export function getUploadedBytes(parentDir, fileName) {
     var repoId = uploadCtx.repoId;
     var url = '/api/v2.1/repos/' + repoId + '/file-uploaded-bytes/'
@@ -338,7 +320,6 @@ export function getUploadedBytes(parentDir, fileName) {
     });
 }
 
-/** Upload a file in 8MB chunks with resume support. */
 export function uploadFileInChunks(item, url) {
     item.state = 'uploading';
     updateProgressDialog();
@@ -347,7 +328,6 @@ export function uploadFileInChunks(item, url) {
     var file = item.file;
     var totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-    // Check for already-uploaded bytes (resume support)
     getUploadedBytes(item.parentDir, item.name).then(function (uploadedBytes) {
         var resumeChunk = Math.floor(uploadedBytes / CHUNK_SIZE);
         if (resumeChunk > 0) {
@@ -356,12 +336,10 @@ export function uploadFileInChunks(item, url) {
         }
         sendNextChunk(item, resumeChunk, totalChunks);
     }).catch(function () {
-        // Resume check failed — start from scratch
         sendNextChunk(item, 0, totalChunks);
     });
 }
 
-/** Send the next pending chunk.  Recurse until done. */
 export function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
     retryCount = retryCount || 0;
     var file = item.file;
@@ -386,7 +364,6 @@ export function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
 
     xhr.upload.onprogress = function (e) {
         if (e.lengthComputable) {
-            // Map this chunk's progress to overall file progress
             var baseProgress = chunkIndex / totalChunks;
             var chunkPart = (e.loaded / e.total) / totalChunks;
             item.progress = Math.round((baseProgress + chunkPart) * 100);
@@ -409,13 +386,11 @@ export function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
         item.xhr = null;
         if (xhr.status >= 200 && xhr.status < 300) {
             if (isLast) {
-                // All chunks done
                 item.state = 'completed';
                 item.progress = 100;
                 updateProgressDialog();
                 setTimeout(processQueue, 50);
             } else {
-                // Send the next chunk
                 sendNextChunk(item, chunkIndex + 1, totalChunks);
             }
         } else {
@@ -437,7 +412,6 @@ export function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
     xhr.send(formData);
 }
 
-/** Retry logic for a failed chunk. */
 export function handleChunkError(item, chunkIndex, totalChunks, retryCount) {
     if (retryCount < MAX_CHUNK_RETRIES) {
         var delay = 1000 * (retryCount + 1);
@@ -453,7 +427,6 @@ export function handleChunkError(item, chunkIndex, totalChunks, retryCount) {
     }
 }
 
-// ─── Bitrate calculation ───
 export function updateBitrate(loaded) {
     var now = new Date().getTime();
     if (bitrateTimestamp) {
@@ -470,9 +443,7 @@ export function updateBitrate(loaded) {
     }
 }
 
-// ─── Queue actions (per-file) ───
 
-/** Cancel a file — if uploading, abort XHR; mark as cancelled. */
 export function cancelUploadItem(id) {
     var item = uploadQueue.find(function (item) { return item.id === id; });
     if (!item || item.state === 'completed' || item.state === 'cancelled') return;
@@ -487,7 +458,6 @@ export function cancelUploadItem(id) {
     processQueue();
 }
 
-/** Pause an actively uploading file. */
 export function pauseUploadItem(id) {
     var item = uploadQueue.find(function (item) { return item.id === id; });
     if (!item || item.state !== 'uploading') return;
@@ -499,7 +469,6 @@ export function pauseUploadItem(id) {
     processQueue();
 }
 
-/** Resume a paused file. */
 export function resumeUploadItem(id) {
     var item = uploadQueue.find(function (item) { return item.id === id; });
     if (!item || item.state !== 'paused') return;
@@ -510,7 +479,6 @@ export function resumeUploadItem(id) {
     processQueue();
 }
 
-/** Retry a failed or cancelled file. */
 export function retryUploadItem(id) {
     var item = uploadQueue.find(function (item) { return item.id === id; });
     if (!item || (item.state !== 'error' && item.state !== 'cancelled')) return;
@@ -522,7 +490,6 @@ export function retryUploadItem(id) {
     processQueue();
 }
 
-// ─── Bulk queue actions ───
 
 export function pauseAllUploads() {
     isUploadPaused = true;
@@ -538,7 +505,6 @@ export function pauseAllUploads() {
 
 export function resumeAllUploads() {
     isUploadPaused = false;
-    // Resume all paused items
     uploadQueue.forEach(function (item) {
         if (item.state === 'paused') {
             item.state = 'pending';
@@ -575,7 +541,6 @@ export function retryAllFailed() {
     processQueue();
 }
 
-// ─── Progress Dialog ───
 
 export function showProgressDialog() {
     isUploadDialogOpen = true;
@@ -611,7 +576,6 @@ export function updateProgressDialog() {
     var dialog = document.getElementById('upload-dialog');
     if (!dialog) return;
 
-    // Auto-close when queue becomes empty
     if (uploadQueue.length === 0) {
         dialog.classList.add('hidden');
         return;
@@ -631,7 +595,6 @@ export function updateProgressDialog() {
     var isActive = uploading > 0 || pending > 0 || paused > 0;
     var hasFailed = failed > 0;
 
-    // Overall progress (by bytes)
     var totalBytes = 0, uploadedBytes = 0;
     uploadQueue.forEach(function (item) {
         totalBytes += item.size;
@@ -640,7 +603,6 @@ export function updateProgressDialog() {
     });
     var totalProgress = totalBytes > 0 ? Math.round(uploadedBytes / totalBytes * 100) : 0;
 
-    // ── Header: status + bitrate ──
     var headerEl = dialog.querySelector('.upload-header-status');
     var bitrateEl = dialog.querySelector('.upload-bitrate');
 
@@ -657,7 +619,6 @@ export function updateProgressDialog() {
         bitrateEl.textContent = '';
     }
 
-    // ── Progress bar (inside header) ──
     var progressBarContainer = dialog.querySelector('.upload-progress-bar-container');
     var progressBar = dialog.querySelector('.upload-progress-bar');
     if (isActive) {
@@ -668,13 +629,11 @@ export function updateProgressDialog() {
         progressBar.style.width = '100%';
     }
 
-    // ── Close button visibility ──
     var closeBtn = dialog.querySelector('.js-close-progress');
     if (closeBtn) {
         closeBtn.classList.toggle('hidden', isActive);
     }
 
-    // ── Content bar: count + bulk actions ──
     var countEl = dialog.querySelector('.upload-count');
     countEl.textContent = __t('fb.upload_count', { completed: completed, total: total });
 
@@ -695,7 +654,6 @@ export function updateProgressDialog() {
         actionsEl.innerHTML = retryAllBtn;
     }
 
-    // ── File list ──
     var bodyEl = dialog.querySelector('.upload-dialog-body');
     var listHtml = '';
     uploadQueue.forEach(function (item) {
@@ -703,7 +661,6 @@ export function updateProgressDialog() {
 
         if (item.state === 'uploading') {
             if (item.finalizing) {
-                // All bytes sent, server still processing (CDC + commit)
                 statusHtml =
                     '<div class="flex items-center gap-1.5">' +
                       '<svg class="animate-spin h-4 w-4 text-accent" fill="none" viewBox="0 0 24 24">' +
@@ -778,7 +735,6 @@ export function updateProgressDialog() {
     bodyEl.innerHTML = listHtml;
 }
 
-// ─── New Folder Dialog ───
 export function showNewFolderDialog() {
     document.getElementById('new-folder-overlay').classList.remove('hidden');
     document.getElementById('new-folder-input').focus();
@@ -794,7 +750,6 @@ export function submitNewFolder(form) {
     var p = currentDir === '/' ? '/' + name : currentDir + '/' + name;
     hideNewFolderDialog();
 
-    // Use fetch to call Seafile API
     var repoId = uploadCtx.repoId;
     var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
     fetch('/api/v2.1/repos/' + repoId + '/dir/', {
@@ -819,7 +774,6 @@ export function submitNewFolder(form) {
     return false;
 }
 
-// ─── Event delegation (replaces inline onclick/onchange/ondrag handlers) ──
 
 document.addEventListener("click", function (e) {
     var btn = e.target.closest("[data-action]");

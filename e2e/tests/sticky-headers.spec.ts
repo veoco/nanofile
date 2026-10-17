@@ -5,10 +5,8 @@ import { backdateFileMtimes } from "../helpers/mtime";
 let state: ReturnType<typeof readState>;
 let repoId: string;
 
-// Enough entries to scroll the list; the scroller is a little over 15 rows tall
-// at the suite's viewport.
+// Enough entries to scroll: the scroller is a little over 15 rows tall at the viewport.
 const ROWS = 30;
-// A valid 1×1 PNG, so the gallery has one month group to head.
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
   "base64",
@@ -29,11 +27,9 @@ test.beforeAll(async () => {
   }
 });
 
-// The sort/view toolbar and these column headers are sticky inside the same
-// scroller (#nf-list-scroll). With every one of them at `top: 0` the header —
-// later in the DOM, same z-index — pinned on top of the toolbar instead of
-// under it, so scrolling a long list hid the view switcher and the sort
-// buttons behind "NAME / SIZE / MODIFIED".
+// The toolbar and the column headers are sticky in the same scroller. With both at `top: 0`
+// the header — later in the DOM, same z-index — pinned over the toolbar, hiding the view
+// switcher and sort buttons behind "NAME / SIZE / MODIFIED".
 test("the column header pins under the toolbar, not over it", async ({ page }) => {
   await page.goto(`/libraries/${repoId}/files/`);
   await page.waitForSelector(".js-entry-row");
@@ -53,9 +49,8 @@ test("the column header pins under the toolbar, not over it", async ({ page }) =
   expect(boxes.head.top).toBe(boxes.toolbar.top + boxes.toolbar.h);
   expect(boxes.head.bottom).toBeGreaterThan(boxes.toolbar.bottom);
 
-  // The header's hairline is the rows' own `--color-line`, not the heavier
-  // `--color-line-strong` it used to draw (the libraries page mirrors this).
-  // Token-agnostic: it asserts the two agree, not which colour that is.
+// The header's hairline is the rows' own `--color-line`, not the heavier one it used to draw;
+// the assertion is that the two agree, not which colour that is.
   const hairline = await page.evaluate(() => {
     const bottom = (sel: string) =>
       getComputedStyle(document.querySelector(sel)!).borderBottomColor;
@@ -64,16 +59,14 @@ test("the column header pins under the toolbar, not over it", async ({ page }) =
   expect(hairline.row).not.toBe("rgba(0, 0, 0, 0)");
   expect(hairline.head).toBe(hairline.row);
 
-  // The controls the header used to cover are reachable: the sort click is
-  // intercepted by the header if this regresses, and the order has to change.
+// The controls the header used to cover are reachable: the sort click would be intercepted.
   const firstFile = page.locator('.js-file-list-view .js-entry-row[data-type="file"]').first();
   const before = await firstFile.getAttribute("data-name");
   await page.locator('.js-sort-btn[data-sort="name"]').click();
   await expect.poll(() => firstFile.getAttribute("data-name")).not.toBe(before);
 });
 
-// The gallery's month header is sticky in that same scroller and shared the
-// same `top: 0`; it has to sit at the toolbar's height too.
+// The gallery's month header is sticky in the same scroller and must sit at the toolbar's height.
 test("the gallery month header pins at the toolbar's height", async ({ page }) => {
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "photo.png", PNG);
 
@@ -93,11 +86,9 @@ test("the gallery month header pins at the toolbar's height", async ({ page }) =
   expect(offsets.headTop).toBe(offsets.toolbarHeight);
 });
 
-// `top` only fixes where a sticky header *rests*. A sticky header is also
-// clamped by the bottom edge of the group it belongs to, so at every month
-// boundary the outgoing header slides up across the toolbar's band before it
-// leaves. Both used to be at z-index 10, and the header — later in the DOM — won
-// that tie, dragging its label and its rule over the view switcher mid-scroll.
+// `top` only fixes where a sticky header rests; it is also clamped by its group's bottom, so at
+// a month boundary the outgoing header slides across the toolbar. Both were at z-index 10 and
+// the header, later in the DOM, dragged its label over the view switcher.
 test("a month header leaving its group does not paint over the toolbar", async ({ page }) => {
   const galleryRepoId = await createRepo(
     state.baseURL,
@@ -116,7 +107,6 @@ test("a month header leaving its group does not paint over the toolbar", async (
       );
     }
   }
-  // Two months, so the gallery has a boundary for a header to leave.
   expect(backdateFileMtimes("sh1-", Date.UTC(2025, 2, 15) / 1000)).toBeGreaterThan(0);
 
   await page.goto(`/libraries/${galleryRepoId}/files/`);
@@ -124,9 +114,8 @@ test("a month header leaving its group does not paint over the toolbar", async (
   await page.locator(".js-view-gallery").click();
   await expect(page.locator(".nf-gal-head")).toHaveCount(2);
 
-  // Walk the whole scroller. Wherever a month header crosses the toolbar's band,
-  // the toolbar has to be what the pointer hits — on the view buttons and
-  // anywhere else along the bar.
+// Walk the scroller: wherever a month header crosses the toolbar's band, the toolbar must be
+// what the pointer hits.
   const sweep = await page.evaluate(() => {
     const scroller = document.getElementById("nf-list-scroll") as HTMLElement;
     const bar = document.querySelector(".js-sort-bar") as HTMLElement;

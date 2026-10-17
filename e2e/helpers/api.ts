@@ -13,7 +13,6 @@ export function readState(): E2EState {
   return JSON.parse(fs.readFileSync(p, "utf-8")) as E2EState;
 }
 
-/** POST /api2/auth-token/ → bearer token (used by API helpers; no CSRF needed). */
 export async function login(baseURL: string, username: string, password: string): Promise<string> {
   const res = await fetch(`${baseURL}/api2/auth-token/`, {
     method: "POST",
@@ -25,7 +24,6 @@ export async function login(baseURL: string, username: string, password: string)
   return data.token;
 }
 
-/** POST /api2/repos/ → repo id (string). */
 export async function createRepo(baseURL: string, token: string, name: string): Promise<string> {
   const res = await fetch(`${baseURL}/api2/repos/`, {
     method: "POST",
@@ -40,7 +38,6 @@ export async function createRepo(baseURL: string, token: string, name: string): 
   return data.id;
 }
 
-/** DELETE /api2/repos/{repo_id}/ → move a library to the trash. */
 export async function deleteRepo(baseURL: string, token: string, repoId: string): Promise<void> {
   const res = await fetch(`${baseURL}/api2/repos/${repoId}/`, {
     method: "DELETE",
@@ -98,7 +95,6 @@ export async function createEncryptedRepo(
   return repoId;
 }
 
-/** POST /api2/repos/{id}/file/ (multipart) → upload a file. */
 export async function uploadFile(
   baseURL: string,
   token: string,
@@ -119,7 +115,6 @@ export async function uploadFile(
   if (!res.ok) throw new Error(`upload ${filename} failed: ${res.status} ${await res.text()}`);
 }
 
-/** POST /api2/repos/{id}/dir/ (JSON {p}) → create a directory. */
 export async function createDir(
   baseURL: string,
   token: string,
@@ -154,7 +149,6 @@ export async function seedRepo(
   return repoId;
 }
 
-/** Sign in via the UI login form (for fresh, non-storageState contexts). */
 export async function loginViaUI(page: Page, email: string, password: string): Promise<void> {
   await page.goto("/accounts/login/");
   await page.fill('input[name="email"]', email);
@@ -163,7 +157,6 @@ export async function loginViaUI(page: Page, email: string, password: string): P
   await page.waitForURL(/\/libraries\//, { timeout: 15_000 });
 }
 
-/** POST /api/v2.1/share-links/ → the created link's token. */
 export async function createShareLink(
   baseURL: string,
   token: string,
@@ -185,7 +178,6 @@ export async function createShareLink(
   return (await res.json()).token;
 }
 
-/** POST /api/v2.1/upload-links/ → the created link's token. */
 export async function createUploadLink(
   baseURL: string,
   token: string,
@@ -207,7 +199,6 @@ export async function createUploadLink(
   return (await res.json()).token;
 }
 
-/** POST /api2/accounts/ — admin-only: create a new (non-admin, active) user. */
 export async function createUser(
   baseURL: string,
   adminToken: string,

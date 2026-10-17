@@ -5,7 +5,6 @@ import { test, expect } from "@playwright/test";
 // filled by fetch() — moves its neighbours, which is what a page load used to
 // look like: the Browse block and the tree's lower edge jumped up by the
 // meter's height once the request landed.
-//
 // The meter must hold its box as well as its row. The layout-shift API alone
 // cannot police that: a move below three pixels is under its reporting
 // threshold, and the row used to grow by half a pixel when the value landed

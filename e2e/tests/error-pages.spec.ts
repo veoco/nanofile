@@ -2,7 +2,6 @@ import { test, expect } from "@playwright/test";
 
 // The error pages. Every wire endpoint keeps its JSON (covered by the Rust
 // tests); these check what a browser actually lands on.
-//
 // The config's default storage state is a logged-in session, which is the
 // interesting case for the in-app pages and the wrong one for the public
 // routes — hence the signed-out block below.

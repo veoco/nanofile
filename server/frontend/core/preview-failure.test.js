@@ -5,7 +5,6 @@ import { PREVIEW_FAILURE } from "./preview-failure.js";
 
 // The module touches `document` only inside its functions, so importing it here
 // needs no DOM.
-//
 // Every sentence a preview shows must exist in both dictionaries: a missing key
 // renders as the key itself (`fb.media_unsupported`), which is the kind of
 // breakage only a screenshot catches otherwise.

@@ -3,11 +3,9 @@ import { mailFor, waitForMail } from "../helpers/mailbox";
 import { createUserViaAdmin, signInAs } from "../helpers/users";
 
 /**
- * The three notifications, each scoped to an address this file invents.
- *
- * The decisions being tested are the product ones: a *first* sign-in from a
- * device/browser is announced, a repeat from the same one is not, and a key
- * created through the API is announced the same way as one created in the UI.
+* The three notifications, each scoped to an address this file invents. The decisions are the
+ * product ones: a first sign-in from a device/browser is announced, a repeat is not, and a key
+ * created through the API is announced like one created in the UI.
  */
 
 test("a client device notifies once, and only the first time", async ({ page }) => {
@@ -33,14 +31,12 @@ test("a client device notifies once, and only the first time", async ({ page }) 
   expect(mail.body).toContain("linux");
   expect(mail.body).toContain("remove the device");
 
-  // The same device again is not news. A fixed pause, because this asserts an
-  // absence: a notification would take a moment to be delivered, and the check
-  // has to outlast that.
+// The same device again is not news. A fixed pause because this asserts an absence: the check
+// must outlast delivery.
   await login();
   await page.waitForTimeout(1500);
   expect(mailFor(email)).toHaveLength(1);
 
-  // A second, different device is.
   device.device_id = `${device.device_id}-other`;
   await login();
   // Delivery is queued, so poll rather than assuming it landed with the request.
@@ -54,8 +50,8 @@ test("a browser sign-in notifies once per browser, not per login", async ({ page
   await first.close();
 
   const mail = await waitForMail({ to: email, subjectIncludes: "New sign-in" });
-  // The browser is described the way the credentials page describes it, so the
-  // reader can match the message against what they see there.
+// The browser is described as the credentials page describes it, so the reader can match the
+// message against what they see.
   expect(mail.body).toContain("Chrome");
   expect(mail.body).toContain("Settings -> Credentials");
 
@@ -71,8 +67,7 @@ test("creating an API key from the API notifies the owner", async ({ page, brows
   const email = await createUserViaAdmin(page, "notify-apikey", "apikey-password-123");
   const session = await signInAs(browser, email, "apikey-password-123");
 
-  // The key is created through the API, which is exactly the path an owner
-  // would not otherwise notice.
+// The key is created through the API, exactly the path an owner would not otherwise notice.
   const csrf = (await session.page.context().cookies()).find(
     (cookie) => cookie.name === "sfcsrftoken",
   );

@@ -1,7 +1,5 @@
-// repos — library list page interactions (create/edit/delete library, the
-// list's own filter and sort, and the per-row "⋯" menu). Migrated from the
-// inline <script> block that used to live in templates/repos/list.html; now
-// driven by data-* event delegation.
+// repos — library list interactions (create/edit/delete, filter, sort and the row menu), driven
+// by data-* event delegation.
 import { __t } from "../core/i18n.js";
 import { getCookie } from "../core/utils.js";
 import { registerModalClose } from "../core/modal.js";
@@ -137,7 +135,6 @@ async function deleteRepo(btn) {
     });
 }
 
-// Read a numeric input; empty/invalid → null so the server leaves it unchanged.
 function numOrNull(id) {
     var v = document.getElementById(id).value.trim();
     if (v === '' || isNaN(Number(v))) return null;
@@ -152,17 +149,14 @@ function copyRepoWebdav(btn) {
     Toast.success(__t('webdav.copied'));
 }
 
-// ─── The list: filter, sort, row menu ───────────────────────────────────
-// Every library is already in the DOM (a user's own list is bounded), so both
-// the filter and the sort are pure DOM work: no request, no pagination state,
-// and the page still works with JavaScript off — just unsorted and unfiltered.
+// Every library is already in the DOM (a user's list is bounded), so filter and sort are pure
+// DOM work: no request, no pagination state, and the page still works without JavaScript.
 var repoListEl = document.getElementById("repo-list");
 var filterEl = document.getElementById("repo-filter");
 var countEl = document.getElementById("repo-count");
 var noMatchEl = document.getElementById("repo-no-match");
 var sortGroup = document.querySelector(".js-repo-sort");
-// The server renders name-ascending (ui/repos.rs), which is the state the
-// buttons are rendered in and the state this starts from.
+// The server renders name-ascending, the state the buttons and this module start from.
 var listState = { key: "name", order: "asc", query: "" };
 
 function repoRows() {
@@ -191,10 +185,8 @@ function applyFilter() {
     }
 }
 
-// Name A→Z, largest and newest: the order a person scans a library list in.
-// Name compares lowercased code points — the same order ui/repos.rs renders, so
-// the default paint is not re-sorted — and the direction is the file list's
-// asc/desc toggle.
+// Name A→Z, largest and newest. Name compares lowercased code points — the order ui/repos.rs
+// renders, so the default paint is not re-sorted — and the direction is the file list's toggle.
 function compareRepos(a, b) {
     var x, y;
     if (listState.key === "name") {
@@ -213,8 +205,7 @@ function compareRepos(a, b) {
     return listState.order === "asc" ? x - y : y - x;
 }
 
-// Mirrors the file list's sort UI: the active field carries `on`, and the arrow
-// for the current direction is lit.
+// Like the file list's sort UI: the active field carries `on` and the current direction is lit.
 function applySortUI() {
     if (!sortGroup) return;
     sortGroup.querySelectorAll(".js-repo-sort-btn").forEach(function (btn) {
@@ -230,8 +221,7 @@ function applySortUI() {
 function applySort() {
     if (repoListEl) {
         var rows = repoRows().sort(compareRepos);
-        // The server renders the default order, so on first load the rows are
-        // usually already in place; re-appending them would only flicker.
+// The server renders the default order, so rows are usually in place; re-appending would flicker.
         var moved = rows.some(function (row, i) { return repoListEl.children[i] !== row; });
         if (moved) {
             rows.forEach(function (row) { repoListEl.appendChild(row); });
@@ -240,9 +230,8 @@ function applySort() {
     applySortUI();
 }
 
-// The menu is built here rather than from a server-rendered row, so the row
-// itself carries only data: five columns of metadata and no buttons until the
-// row is hovered or focused.
+// The menu is built here, so the row carries only data: metadata columns and no buttons until
+// it is hovered or focused.
 function buildRepoMenu(row) {
     var menu = document.createElement("div");
     menu.className = "nf-menu";
@@ -306,8 +295,7 @@ if (sortGroup) {
     sortGroup.addEventListener("click", function (e) {
         var btn = e.target.closest(".js-repo-sort-btn");
         if (!btn) return;
-        // Same field flips the direction, a new field starts ascending — the
-        // file list's rule.
+// The same field flips direction; a new field starts ascending, like the file list.
         listState.order = nextSortOrder(btn.dataset.sort, listState.key, listState.order);
         listState.key = btn.dataset.sort;
         applySort();
@@ -319,7 +307,6 @@ if (repoListEl) {
     applyFilter();
 }
 
-// ─── Event delegation ───────────────────────────────────────────────────
 document.addEventListener("click", function (e) {
     var el = e.target.closest("[data-action]");
     if (!el) return;

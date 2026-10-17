@@ -4,11 +4,8 @@ import { signInAs } from "../helpers/users";
 /**
  * System management: the settings pages.
  *
- * The pages are rendered from the server's settings catalog, so these tests pin
- * the properties an operator relies on rather than a fixed set of fields: every
- * area renders, each row says where its value came from, a live change takes
- * effect without a restart, and a value the environment owns cannot be edited
- * away.
+ * These pin what an operator relies on: every area renders, each row names where its value came
+ * from, a live change takes effect without a restart, and an environment-owned value is read-only.
  */
 
 const AREAS = [
@@ -34,17 +31,14 @@ test("the admin menu reaches system management", async ({ page }) => {
 });
 
 /**
- * The panel is the page's own width: it starts at the same left edge as the
- * title and the filter above it. Inside it a setting is one of the app's list
- * rows, so its text is inset by the row's own padding rather than by the page.
+ * The panel is the page's own width: it starts at the title's left edge. Inside, a setting is one
+ * list row, so its text is inset by the row's padding.
  */
 test("the panel lines up with the page header and the filter", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");
   const title = (await page.locator("main .page-title").boundingBox())!;
-  // The filter's own box: the input inside it starts after the search glyph, so
-  // the control whose left edge is meant to line up is the label. The page also
-  // carries the topbar's and the sidebar's own boxed fields, so the box is
-  // reached through the filter input it wraps.
+// The filter's own box: its input starts after the search glyph, so the label is the control
+// whose left edge lines up. The box is reached through the filter input it wraps.
   const field = page.locator("label.nf-search:has([data-settings-filter])");
   await expect(field).toHaveCount(1);
   const filter = (await field.boundingBox())!;
@@ -53,13 +47,12 @@ test("the panel lines up with the page header and the filter", async ({ page }) 
     expect(Math.abs(box.x - title.x)).toBeLessThan(1);
   }
 
-  // This is the app's boxed search field, not the library list's underlined one:
-  // a border on all four sides is what separates a page-level search box from
-  // the library toolbar's own filter.
+// The app's boxed search field, not the library list's underlined one: a border on all four
+// sides is what separates a page-level search box from the toolbar's filter.
   expect(await field.evaluate((el) => getComputedStyle(el).borderTopWidth)).toBe("1px");
 
-  // A row's text starts one border plus one row padding inside the panel, and
-  // its control column ends the same distance from the other edge.
+// A row's text starts one border plus one row padding inside the panel; its control column ends
+// the same distance from the other edge.
   const row = page.locator('[data-setting="server.addr"]');
   const label = (await row.locator("label").boundingBox())!;
   expect(Math.round(label.x - panel.x)).toBe(15);
@@ -68,10 +61,9 @@ test("the panel lines up with the page header and the filter", async ({ page }) 
 });
 
 /**
- * The group heading is the panel's own band: full width inside the panel, whose
- * border draws the sides the band used to have to draw itself, with the group's
- * count beside the label. It is also a separator — a hairline under it, and the
- * first group leaves the one above it to the panel's border.
+ * The group heading is the panel's own band: full width, with the panel's border drawing its sides,
+ * the group's count beside the label, and a hairline under it. The first group leaves its top
+ * hairline to the panel's border.
  */
 test("a group heading is a full-width band in the panel", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");
@@ -79,28 +71,24 @@ test("a group heading is a full-width band in the panel", async ({ page }) => {
   const panel = page.locator("form.nf-list");
   const box = (await band.boundingBox())!;
   const outer = (await panel.boundingBox())!;
-  // The band spans the panel edge to edge, inside its border...
   expect(Math.abs(box.x - (outer.x + 1))).toBeLessThan(1);
   expect(Math.abs(box.width - (outer.width - 2))).toBeLessThan(1);
-  // ...and the first group draws no top hairline of its own.
   await expect(band).toHaveCSS("border-bottom-width", "1px");
   await expect(band).toHaveCSS("border-top-width", "0px");
 
-  // The label is inset by the band's own 14px.
   const heading = (await band.locator("h2").boundingBox())!;
   expect(Math.round(heading.x - box.x)).toBe(14);
 
-  // 41px: an 11px label at `leading-none`, 14px of padding either side and the
-  // two hairlines. The inherited 1.5 line height would make it 46.5px.
+// 41px: an 11px label at `leading-none`, 14px padding either side and the two hairlines; the
+// inherited 1.5 line height would make it 46.5px.
   expect(box.height).toBeLessThanOrEqual(42);
   const middle = (r: { y: number; height: number }) => r.y + r.height / 2;
   expect(Math.abs(middle(heading) - middle(box))).toBeLessThanOrEqual(1);
 });
 
 /**
- * A group heading's lower hairline closes the heading, so the first row under
- * it must not draw a second hairline right below it — including when the
- * filter has hidden rows, where the visible row is not the first child.
+ * A heading's lower hairline closes it, so the first row under it must not draw another — even
+ * when filtering has hidden the first child.
  */
 test("a group heading is not doubled by its first row's border", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");
@@ -108,7 +96,6 @@ test("a group heading is not doubled by its first row's border", async ({ page }
   await expect(rows.first()).toHaveCSS("border-top-width", "0px");
   await expect(rows.nth(1)).toHaveCSS("border-top-width", "1px");
 
-  // Hide the first row: the row that moves up must not inherit its hairline.
   await page.locator("[data-settings-filter]").fill("bind port");
   await expect(rows.first()).toBeHidden();
   const moved = page.locator('[data-setting="server.port"]');
@@ -117,8 +104,8 @@ test("a group heading is not doubled by its first row's border", async ({ page }
 });
 
 /**
- * Restarting is not a save, so its button is a page-header action: on the
- * title's line and right of it, the way the user and email pages keep theirs.
+ * Restarting is not a save, so its button is a page-header action: on the title's line and right
+ * of it, like the user and email pages.
  */
 test("the restart button sits with the page title", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");
@@ -132,9 +119,7 @@ test("every area renders its rows and its section bar", async ({ page }) => {
   for (const area of AREAS) {
     await page.goto(`/sysadmin/settings/${area}`);
     await expect(page.locator("main .page-title")).toBeVisible();
-    // The section bar is how an operator moves between areas.
     await expect(page.locator("main .nf-tabs a").first()).toBeVisible();
-    // Every row carries an origin badge, and no label fell back to its key.
     const badges = await page.locator("main .badge").count();
     expect(badges, `${area || "general"} rendered no rows`).toBeGreaterThan(1);
     const body = (await page.locator("main").innerText()).trim();
@@ -143,66 +128,55 @@ test("every area renders its rows and its section bar", async ({ page }) => {
 });
 
 /**
- * The Sandbox page is the one page whose subject is a measurement rather than a
- * setting: it says what this host actually gives, one band per profile and one
- * row per protection, and warns when that is not the whole set.
+ * The Sandbox page's subject is a measurement: one band per profile and one row per protection,
+ * with a warning when that is not the whole set.
  */
 test("the sandbox page shows one band per profile and one row per protection", async ({
   page,
 }) => {
   await page.goto("/sysadmin/settings/sandbox/");
 
-  // One band per measured profile, each with its own state — and no verdict
-  // above them: a sentence summarising the bands would only repeat what the
-  // state badges and the item rows already say. The grade the items add up to is
-  // not on the page either, and neither is the strip of numbers that carried it.
+// One band per measured profile, each with its own state, and no verdict above them: a summary
+// would repeat what the badges and item rows already say.
   await expect(page.locator("[data-sandbox-verdict]")).toHaveCount(0);
   await expect(page.locator("[data-sandbox-profile]")).toHaveCount(2);
   await expect(page.locator("[data-sandbox-state]")).toHaveCount(2);
   await expect(page.locator("[data-sandbox-grade]")).toHaveCount(0);
   await expect(page.locator("[data-sandbox-status]")).toHaveCount(0);
 
-  // Whether this host can start a confined child is not this test's to decide, so
-  // the count comes from the bands that were measured. The parser band needs no
-  // helper, so it is the floor every host reads against.
+// Whether this host can start a confined child is not this test's to decide, so the count comes
+// from the bands that were measured; the helper-free parser band is the floor.
   await expect(
     page.locator('[data-sandbox-profile="documents"][data-sandbox-measured="true"]'),
   ).toHaveCount(1);
   const measured = await page.locator('[data-sandbox-measured="true"]').count();
   expect(measured, "no band was measured").toBeGreaterThan(0);
 
-  // One row per protection per measured band, in the order the report carries
-  // them. A band whose probe never answered has no rows at all and says so with
-  // its state, so it can never contribute a partial set.
+// One row per protection per measured band, in the report's order. A band whose probe never
+// answered has no rows, so it cannot contribute a partial set.
   for (const item of ["limits", "files", "network", "process"]) {
     await expect(page.locator(`[data-sandbox-item="${item}"]`)).toHaveCount(measured);
   }
   await expect(page.locator("[data-sandbox-item]")).toHaveCount(measured * 4);
 
-  // The master switch is a control and it appears exactly once: in the form.
   await expect(page.locator("[data-sandbox-switch]")).toHaveCount(1);
   await expect(
     page.locator('input[type="checkbox"][name="sandbox.enabled"]'),
   ).toHaveCount(1);
 
-  // The panel names its states and items rather than a locale key.
   const body = (await page.locator("main").innerText()).trim();
   expect(body).not.toContain("sandbox.");
 });
 
 /**
- * The page is a report, not a log: what each protection is and what its absence
- * opens is one row apiece, and the platform's own residuals — the paragraphs
- * about fork, `setpgid` and the loader, which used to run down the page — are
- * one disclosure away, closed by default.
+ * The page is a report, not a log: each protection and its consequence is one row, and the
+ * platform's residuals are one closed disclosure away.
  */
 test("the sandbox page keeps its technical details in disclosures", async ({ page }) => {
   await page.goto("/sysadmin/settings/sandbox/");
 
-  // The process row is the one whose note is the longest sentence on the page, so
-  // it must not be in the flow of it. The media band says the item cannot exist
-  // for that profile; a host that could not measure it leaves the documents band's
-  // own process row, whose fork note is the one behind the same disclosure.
+// The process row's note is the longest sentence on the page, so it must not be in the flow: the
+// media band says the item cannot exist, and an unmeasured band leaves the documents row's note.
   const mediaBand = page.locator(
     '[data-sandbox-profile="media"][data-sandbox-measured="true"]',
   );
@@ -217,14 +191,10 @@ test("the sandbox page keeps its technical details in disclosures", async ({ pag
   await processRow.locator("details summary").click();
   await expect(note).toBeVisible();
 
-  // The sentence about a profile that cannot have the item is only there when
-  // that profile was measured.
   if (await mediaBand.count()) {
     await expect(processRow.locator("[data-sandbox-media-process]")).toBeVisible();
   }
 
-  // A missing protection keeps its consequence in the row: hiding that would
-  // leave the reader to infer it from a grey badge.
   const missing = page.locator("[data-sandbox-item]").filter({ hasText: "Missing" });
   for (let i = 0; i < (await missing.count()); i++) {
     await expect(missing.nth(i).locator("[data-sandbox-impact]")).toBeVisible();
@@ -236,9 +206,8 @@ test("a live setting takes effect immediately and says where it came from", asyn
 }) => {
   await page.goto("/sysadmin/settings/security/");
   const form = page.locator('form[action="/sysadmin/settings/security/save/"]');
-  // Anonymous share links: a live setting the page can show the effect of.
-  // The row also carries the hidden `false` a checkbox submits when it is off,
-  // so the control has to be named by its type.
+// Anonymous share links: a live setting whose effect the page shows. The row also carries the
+// hidden `false` a checkbox submits when off, so the control is named by its type.
   await form
     .locator('input[type="checkbox"][name="server.share_link_enabled"]')
     .uncheck();
@@ -247,8 +216,6 @@ test("a live setting takes effect immediately and says where it came from", asyn
 
   const row = page.locator('[data-setting="server.share_link_enabled"]');
   await expect(row.locator("span.badge", { hasText: "Database" })).toBeVisible();
-  // ...and a way back to the file, which is what stops a wrong save being a
-  // dead end.
   await row.locator('button[formaction="/sysadmin/settings/reset/"]').click();
   await expect(page.getByText("The saved value was cleared")).toBeVisible();
   await expect(row.locator("span.badge", { hasText: "Default" })).toBeVisible();
@@ -257,15 +224,11 @@ test("a live setting takes effect immediately and says where it came from", asyn
 test("a restart-only setting is marked as such", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");
 
-  // The bind port is restart-only, and this suite sets it in the environment —
-  // which is exactly what makes it read-only here. Both badges have to show.
   const locked = page.locator('[data-setting="server.port"]');
   await expect(locked.locator("span.badge", { hasText: "Needs a restart" })).toBeVisible();
   await expect(locked.locator("span.badge", { hasText: "Environment" })).toBeVisible();
   await expect(page.locator('input[name="server.port"]')).toHaveCount(0);
 
-  // A restart-only setting this run leaves to the config file *is* editable, and
-  // saving it says it waits for a restart rather than pretending it applied.
   const row = page.locator('[data-setting="server.max_json_body_mb"]');
   await expect(row.locator("span.badge", { hasText: "Needs a restart" })).toBeVisible();
   const field = row.locator('input[name="server.max_json_body_mb"]');
@@ -277,13 +240,10 @@ test("a restart-only setting is marked as such", async ({ page }) => {
     .locator('form[action="/sysadmin/settings/server/save/"]')
     .getByRole("button", { name: "Save", exact: true })
     .click();
-  // Three things say it: the save confirmation, the page-wide reminder, and the
-  // button that applies it.
   await expect(page.getByText(/need a restart/).first()).toBeVisible();
   await expect(page.getByText(/Restart server button/).first()).toBeVisible();
   await expect(page.locator("[data-restart-button]")).toBeVisible();
 
-  // Put it back: the rest of the suite must see the value it booted with.
   await row.locator('button[formaction="/sysadmin/settings/reset/"]').click();
   await expect(page.getByText("The saved value was cleared")).toBeVisible();
   await expect(
@@ -292,9 +252,8 @@ test("a restart-only setting is marked as such", async ({ page }) => {
 });
 
 test("an environment-owned row names its variable once", async ({ page }) => {
-  // This suite exports NANOFILE_SERVER_PORT, so the bind port is owned by the
-  // environment: the row has to say which variable, exactly once, next to the
-  // badge that already says where the value came from.
+// NANOFILE_SERVER_PORT is exported by this suite, so the bind port is environment-owned and
+// read-only; the row names the variable once, next to the origin badge.
   await page.goto("/sysadmin/settings/");
   const row = page.locator('[data-setting="server.port"]');
   await expect(row.locator("span.badge", { hasText: "Environment" })).toBeVisible();
@@ -303,9 +262,8 @@ test("an environment-owned row names its variable once", async ({ page }) => {
 });
 
 test("a row the environment does not own still names its variable", async ({ page }) => {
-  // The pages are the NANOFILE_* reference: a container has no other place to
-  // look a name up, so even a row whose value came from a default (or a save)
-  // has to print the variable that would override it.
+// The pages are the NANOFILE_* reference: even a defaulted or saved value has to print the
+// variable that would override it, because a container has nowhere else to look it up.
   await page.goto("/sysadmin/settings/server/");
   const row = page.locator('[data-setting="server.max_json_body_mb"]');
   await expect(row.locator("span.badge", { hasText: "Environment" })).toHaveCount(0);
@@ -313,7 +271,6 @@ test("a row the environment does not own still names its variable", async ({ pag
   expect(text).toContain("NANOFILE_SERVER_MAX_JSON_BODY_MB");
   expect(text.match(/NANOFILE_SERVER_MAX_JSON_BODY_MB/g)).toHaveLength(1);
 
-  // A read-only row names its variable too.
   await page.goto("/sysadmin/settings/advanced/");
   const locked = page.locator('[data-setting="database.url"]');
   expect(await locked.innerText()).toContain("NANOFILE_DATABASE_URL");
@@ -323,9 +280,7 @@ test("a read-only value is shown but has no control", async ({ page }) => {
   await page.goto("/sysadmin/settings/advanced/");
   const row = page.locator('[data-setting="database.url"]');
   await expect(row.locator("span.badge", { hasText: "Read-only" })).toBeVisible();
-  // The value is visible...
   await expect(row.locator("[data-setting-value]")).toContainText("sqlite:");
-  // ...and the secret about the master field is that it has no input at all.
   await page.goto("/sysadmin/settings/security/");
   await expect(page.locator('input[name="server.secret_key"]')).toHaveCount(0);
   await expect(page.locator('input[name="secret:server.secret_key"]')).toHaveCount(0);
@@ -335,7 +290,6 @@ test("a stored secret is never rendered back", async ({ page }) => {
   await page.goto("/sysadmin/settings/email/");
   const field = page.locator('input[name="secret:email.password"]');
   await expect(field).toBeVisible();
-  // The field starts empty: the page says whether something is set, not what.
   await expect(field).toHaveValue("");
 
   await field.fill("e2e-smtp-secret");
@@ -344,13 +298,11 @@ test("a stored secret is never rendered back", async ({ page }) => {
     .getByRole("button", { name: "Save", exact: true })
     .click();
   await expect(page.getByText("Settings saved.")).toBeVisible();
-  // A page reload must not bring it back.
   await page.reload();
   await expect(page.locator('input[name="secret:email.password"]')).toHaveValue("");
   const body = await page.locator("main").innerText();
   expect(body).not.toContain("e2e-smtp-secret");
 
-  // Clear it again: the stub SMTP server needs no credentials.
   await page.locator('input[name="clear:email.password"]').check();
   await page
     .locator('form[action="/sysadmin/settings/email/save/"]')
@@ -362,14 +314,12 @@ test("a stored secret is never rendered back", async ({ page }) => {
 test("a row keeps its internal key out of the text", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");
   const row = page.locator('[data-setting="server.max_upload_size_mb"]');
-  // The key is a hook and a tooltip, not page furniture.
   const text = await row.innerText();
   expect(text).not.toContain("server.max_upload_size_mb");
   await expect(row.locator("label")).toHaveAttribute(
     "title",
     "server.max_upload_size_mb",
   );
-  // One origin badge and at most one state badge.
   expect(await row.locator("span.badge").count()).toBeLessThanOrEqual(2);
 });
 
@@ -377,7 +327,6 @@ test("a numeric row shows its unit beside the field", async ({ page }) => {
   await page.goto("/sysadmin/settings/server/");
   const row = page.locator('[data-setting="server.max_upload_size_mb"]');
   await expect(row.locator('input[type="number"]')).toBeVisible();
-  // The unit is rendered by the form, so the label does not repeat it.
   await expect(row.locator("label")).toHaveText("Max upload size");
   await expect(row).toContainText("MB");
 });
@@ -386,7 +335,6 @@ test("an enum names its choices instead of the wire value", async ({ page }) => 
   await page.goto("/sysadmin/settings/server/");
   const select = page.locator('select[name="ui.tray_language"]');
   await expect(select).toContainText("Follow the operating system");
-  // What is submitted stays the value the server stores.
   await expect(select.locator('option[value="auto"]')).toHaveCount(1);
 });
 
@@ -395,7 +343,6 @@ test("the filter narrows the page to the rows that match", async ({ page }) => {
   const filter = page.locator("[data-settings-filter]");
   const counter = page.locator("[data-settings-count]");
   await expect(page.locator('[data-setting="server.addr"]')).toBeVisible();
-  // Untouched, the counter is the page's own tally, rendered by the server.
   const total = await page.locator("[data-setting]").count();
   expect(total).toBeGreaterThan(2);
   await expect(counter).toHaveText(`${total} settings`);
@@ -403,14 +350,11 @@ test("the filter narrows the page to the rows that match", async ({ page }) => {
   await filter.fill("tray");
   await expect(page.locator('[data-setting="ui.tray_language"]')).toBeVisible();
   await expect(page.locator('[data-setting="server.addr"]')).toBeHidden();
-  // A heading with nothing left under it goes with its rows.
   await expect(page.locator('[data-setting-group="server_addresses"]')).toBeHidden();
   await expect(page.locator('[data-setting-group="server_desktop"]')).toBeVisible();
-  // A heading counts what is left under it, not what it started with.
   await expect(
     page.locator('[data-setting-group="server_desktop"] [data-setting-group-count]'),
   ).toHaveText("2");
-  // The page-wide counter says how much of the page is left.
   await expect(counter).toHaveText(`2 of ${total} settings`);
 
   await filter.fill("no setting says this");

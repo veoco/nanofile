@@ -7,7 +7,6 @@ test.beforeAll(async () => {
   state = readState();
 });
 
-/** Seed an isolated repo so each test starts with unstarred files. */
 async function openFreshRepo(page: import("@playwright/test").Page): Promise<string> {
   const repoId = await seedRepo(state.baseURL, state.adminToken, `starred-${Date.now()}`);
   await page.goto(`/libraries/${repoId}/files`);

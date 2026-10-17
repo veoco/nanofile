@@ -12,11 +12,8 @@ export const ADMIN_EMAIL = "e2e-admin@test.local";
 export const ADMIN_PASSWORD = "e2e-password-123";
 
 /**
- * Server secret for this run.
- *
- * Generated per run rather than committed as a fixture: the value derives the
- * token, TOTP and at-rest block keys, so a fixed one in the repository would
- * make every e2e instance share keys (and invite copy/paste into production).
+ * Server secret for this run. Generated rather than committed: it derives the token, TOTP and
+ * at-rest block keys, so a fixed value would make every e2e instance share keys.
  */
 export const SERVER_SECRET_KEY = crypto.randomBytes(32).toString("hex");
 
@@ -27,7 +24,6 @@ export interface ServerHandle {
   logPath: string;
 }
 
-/** Options for spawning an additional, isolated server instance. */
 export interface StartServerOptions {
   /** Port to bind (default: the shared `PORT`). */
   port?: number;
@@ -35,34 +31,24 @@ export interface StartServerOptions {
   env?: Record<string, string>;
 }
 
-/** Resolve the debug nanofile binary path (used by global-setup and specs that
- * spawn their own isolated instance).
- *
- * The suffix is platform-specific: Windows builds the file as `nanofile.exe`,
- * and a hard-coded `nanofile` is a path that never exists there — every spec
- * then fails in `spawn` with `ENOENT` rather than in an assertion. */
+/** Resolve the debug nanofile binary path. The suffix is platform-specific: Windows builds
+ * `nanofile.exe`, and a hard-coded `nanofile` fails every spawn with `ENOENT`. */
 export function resolveBinary(): string {
   const name = process.platform === "win32" ? "nanofile.exe" : "nanofile";
   return path.resolve(process.cwd(), "..", "target", "debug", name);
 }
 
 /**
- * The directory one server instance's log lives in.
- *
- * Per instance rather than one shared file: three specs spawn their own isolated
- * server, and a shared log opened by whichever of them started last would hide
- * the shared instance's lines from the teardown audit. The directory is named
- * after the instance's temp root, which is unique per run.
+ * The log directory for one server instance: per instance, so an isolated server's output is
+ * not hidden by another's and the teardown audit reads every instance.
  */
 function logDirFor(tmpRoot: string): string {
   return path.join(process.cwd(), "test-results", path.basename(tmpRoot));
 }
 
 /**
- * Spawn the nanofile binary with an isolated temp SQLite DB + storage dirs.
- * stdout/stderr are appended to this instance's log under `test-results/`, so
- * backend logs are preserved for debugging failures — and so the teardown audit
- * reads every instance rather than only the last one to start.
+ * Spawn the binary with an isolated temp SQLite DB and storage dirs; stdout/stderr are appended
+ * to this instance's log under `test-results/`, where the teardown audit reads them.
  */
 export async function startServer(
   binaryPath: string,
@@ -96,21 +82,14 @@ export async function startServer(
     ...opts.env,
   };
 
-  // Pass the config path explicitly via --config so the server does not depend
-  // on the working directory. binaryPath is {repoRoot}/target/debug/nanofile.
-  //
-  // The config file is generated per run rather than copied from the checkout:
-  // a developer's own `config.toml` may point at a real SMTP server, and since
-  // the environment is only used here for process-level values, mail settings
-  // left in a copied file would be the ones actually used.
+// Pass the config path via --config so the server does not depend on the working directory.
+// The config is generated per run rather than copied: a developer's own config.toml may point
+// at a real SMTP server, and its mail settings would be the ones actually used.
   const repoRoot = path.resolve(path.dirname(binaryPath), "..", "..");
   const configPath = path.join(tmpRoot, "config.toml");
-  // Mail is on for the whole suite, pointed at the stub in `helpers/mailbox.ts`:
-  // the password-reset flow and the notifications can only be tested against a
-  // real SMTP conversation. These are *bootstrap* values — the settings page
-  // supersedes any of them as soon as a spec saves one, which is what the email
-  // spec exercises — so they are deliberately not environment variables, which
-  // would win over a saved value.
+// Mail is on for the whole suite, pointed at the stub in helpers/mailbox.ts: the password-reset
+// flow needs a real SMTP conversation. These are bootstrap values the settings page supersedes,
+// so they are not environment variables, which would win over a saved value.
   fs.writeFileSync(
     configPath,
     [
@@ -146,7 +125,6 @@ async function waitForHealth(baseURL: string, timeoutMs = 30_000): Promise<void>
       const res = await fetch(`${baseURL}/health`);
       if (res.ok) return;
     } catch {
-      // server not up yet
     }
     await new Promise((r) => setTimeout(r, 200));
   }
@@ -154,14 +132,9 @@ async function waitForHealth(baseURL: string, timeoutMs = 30_000): Promise<void>
 }
 
 /**
- * Stop one instance and remove its temp tree.
- *
- * `SIGTERM` is named only where it means something: the server installs a
- * `SIGTERM` handler on unix and drains before it exits, but Windows has no
- * signals at all — `child.kill("SIGTERM")` there is `TerminateProcess`, and
- * naming `SIGKILL` for the fallback would be a second spelling of the same
- * call. So the first attempt names the signal on unix and asks for a plain
- * termination elsewhere, and the fallback is always a plain kill.
+ * Stop one instance and remove its temp tree. SIGTERM is named on unix, where the server drains
+ * on it; Windows has no signals, so the first attempt asks for plain termination there. The
+ * fallback is always a plain kill.
  */
 export async function stopServer(handle: ServerHandle): Promise<void> {
   handle.child.kill(process.platform === "win32" ? undefined : "SIGTERM");
@@ -172,27 +145,19 @@ export async function stopServer(handle: ServerHandle): Promise<void> {
   fs.rmSync(handle.tmpRoot, { recursive: true, force: true });
 }
 
-/** One instance spawned with no configuration at all, plus the page it served. */
 export interface SetupHandle {
   child: ChildProcess;
   tmpRoot: string;
-  /** The temporary home directory the first-run setup writes into. */
   home: string;
   logPath: string;
-  /** The one-time setup page, scraped from the instance's log. */
   setupUrl: string;
 }
 
 /**
- * Spawn the binary the way a person starts a fresh install: no `--config`, no
- * `NANOFILE_*` configuration, and a home directory of its own.
- *
- * Every inherited `NANOFILE_*` variable is removed, because presence alone
- * suppresses the first-run setup — including the ones this suite sets for the
- * shared instance. `NANOFILE_DOTENV=0` is added back deliberately: it is on the
- * allowlist of variables that configure nothing, and it keeps a developer's
- * `.env` from quietly configuring this instance. The working directory is the
- * temp root too, so a `./config.toml` in the checkout cannot be found.
+ * Spawn the binary the way a person starts a fresh install: no `--config`, no `NANOFILE_*`
+ * configuration, and a home directory of its own. Every inherited `NANOFILE_*` is removed because
+ * presence alone suppresses first-run setup; `NANOFILE_DOTENV=0` is added back because it
+ * configures nothing and keeps a developer's `.env` out. The working directory is the temp root.
  */
 export async function startSetupServer(binaryPath: string): Promise<SetupHandle> {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "nanofile-e2e-setup-"));
@@ -224,7 +189,6 @@ export async function startSetupServer(binaryPath: string): Promise<SetupHandle>
   return { child, tmpRoot, home, logPath, setupUrl };
 }
 
-/** Poll the instance's log for the line that carries the one-time setup URL. */
 async function waitForSetupUrl(logPath: string, timeoutMs = 30_000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -238,7 +202,6 @@ async function waitForSetupUrl(logPath: string, timeoutMs = 30_000): Promise<str
   throw new Error(`a first-run setup URL never appeared in ${logPath}`);
 }
 
-/** Stop one zero-configuration instance and remove its temp tree. */
 export async function stopSetupServer(handle: SetupHandle): Promise<void> {
   handle.child.kill(process.platform === "win32" ? undefined : "SIGTERM");
   await new Promise((r) => setTimeout(r, 500));

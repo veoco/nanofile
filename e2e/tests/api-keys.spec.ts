@@ -7,8 +7,7 @@ let repoId: string;
 
 test.beforeAll(async () => {
   state = readState();
-  // The scope picker lists the account's libraries; seed one so the page is
-  // never empty when this spec runs in isolation.
+// The scope picker lists the account's libraries; seed one so the page is never empty.
   repoId = await createRepo(state.baseURL, state.adminToken, `key-lib-${Date.now()}`);
 });
 
@@ -35,18 +34,15 @@ test("create a key, see it once, then revoke it", async ({ page }) => {
   await page.locator("#create-key-expiry").selectOption("30");
   await page.locator('#create-key-form button[type="submit"]').click();
 
-  // The plaintext is shown exactly once.
   await expect(page.locator("#new-key-value")).toBeVisible();
   const secret = await page.locator("#new-key-value").inputValue();
   expect(secret).toHaveLength(40);
 
-  // And the key is listed.
   const card = page.locator(".nf-xrow").filter({ hasText: name });
   await expect(card).toBeVisible();
   await expect(card).toContainText("file.write");
 
-  // The row's dates are localized by the browser (`data-ts`), not pre-formatted
-  // in UTC by the server. A freshly minted key has never been used yet.
+// The row's dates are localized by the browser (`data-ts`), not pre-formatted in UTC.
   const value = (label: string) =>
     card.locator(".nf-facts .f").filter({ hasText: label }).locator(".v");
   await expect(value("Created")).toHaveAttribute("data-ts", /^\d+$/);
@@ -55,9 +51,8 @@ test("create a key, see it once, then revoke it", async ({ page }) => {
   await expect(value("Expires")).toHaveText(await localStamp(value("Expires")));
   await expect(value("Last used")).toHaveText("Never");
 
-  // One request with the key stamps its last-used time, which then renders in
-  // the same local form as the other two dates. The key holds `file.read` for
-  // this library, so list its files.
+// One request with the key stamps its last-used time in the same local form. The key holds
+// `file.read` for this library, so list its files.
   const used = await page.request.get(
     `${state.baseURL}/api2/repos/${repoId}/dir/?p=/`,
     { headers: { authorization: `Bearer ${secret}` } },
@@ -67,9 +62,8 @@ test("create a key, see it once, then revoke it", async ({ page }) => {
   await expect(value("Last used")).toHaveAttribute("data-ts", /^\d+$/);
   await expect(value("Last used")).toHaveText(await localStamp(value("Last used")));
 
-  // The reload also drops the one-time secret: the key stays, the plaintext
-  // does not, and no second key appears (the create form redirects, so a
-  // refresh re-reads the list).
+// The reload drops the one-time secret: the key stays, the plaintext does not, and no second
+// key appears.
   await expect(page.locator("#new-key-value")).toHaveCount(0);
   await expect(page.locator(".nf-xrow").filter({ hasText: name })).toHaveCount(1);
 
@@ -86,8 +80,8 @@ test("create a key, see it once, then revoke it", async ({ page }) => {
 test("a preset ticks the matching capabilities", async ({ page }) => {
   await page.locator("#apikey-preset").selectOption("webdav_ro");
   const box = (id: string) => page.locator(`#create-key-form input[name="cap__${id}"]`);
-  // A WebDAV preset stays inside the WebDAV surface: it must not hand the REST
-  // API of the bound libraries to a key created to mount a filesystem.
+// A WebDAV preset stays inside the WebDAV surface: it must not hand the bound libraries' REST
+// API to a key created to mount a filesystem.
   await expect(box("webdav.read")).toBeChecked();
   await expect(box("webdav.write")).not.toBeChecked();
   await expect(box("file.read")).not.toBeChecked();

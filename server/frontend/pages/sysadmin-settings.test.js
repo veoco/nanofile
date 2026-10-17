@@ -17,7 +17,6 @@ import {
   initSettingsFilter,
 } from "./sysadmin-settings.js";
 
-/** Let the promise chain inside `startRestartWatch` settle. */
 function flush() {
   return new Promise(function (resolve) {
     setImmediate(resolve);
@@ -38,7 +37,6 @@ test("waitForServer retries until the probe succeeds", async () => {
   });
   assert.equal(healthy, true);
   assert.equal(calls, 3);
-  // No pointless sleep after the successful probe.
   assert.equal(slept, 2);
 });
 
@@ -159,7 +157,6 @@ test("startRestartWatch is inert on a page without the marker", () => {
   assert.equal(startRestartWatch({ doc: { querySelector: () => null } }), false);
 });
 
-// ─── Filter ───────────────────────────────────────────────────────────────
 
 test("matchesSetting keeps every row when nothing is typed", () => {
   assert.equal(matchesSetting("server.port Bind port", ""), true);
@@ -211,8 +208,7 @@ function fakeSettingsPage() {
     },
   };
   const empty = { hidden: true };
-  // The page-wide counter, carrying the text the server rendered — the same
-  // thing the template does before the filter has been touched.
+// The page-wide counter carries the text the server rendered, as the template does.
   const counter = { textContent: "3 settings" };
   return {
     input,
@@ -252,18 +248,14 @@ test("initSettingsFilter hides rows and a heading left with none", () => {
   assert.equal(page.groups[0].hidden, true, "a heading with no rows goes with them");
   assert.equal(page.groups[1].hidden, false);
   assert.equal(page.empty.hidden, true);
-  // A heading counts what is left under it, not what it started with.
   assert.equal(page.groups[1].count.textContent, "1");
-  // The page-wide counter says how much of the page is left.
   assert.equal(page.counter.textContent, "1 of 3 settings");
 
-  // A query that matches nothing says so rather than showing a blank page.
   page.type("nothing matches this");
   assert.equal(page.groups[1].hidden, true);
   assert.equal(page.empty.hidden, false);
   assert.equal(page.counter.textContent, "0 of 3 settings");
 
-  // Clearing the box brings the page back.
   page.type("");
   assert.equal(page.groups[0].hidden, false);
   assert.equal(page.groups[1].hidden, false);

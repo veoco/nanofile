@@ -6,7 +6,6 @@ import { __t } from "../core/i18n.js";
 import { apiFetch } from "../core/api.js";
 import { switchTab } from "../core/tabs.js";
 
-// ─── Tab switching ─────────────────────────────────────────────────────
 function selectTab(name) {
     switchTab(name, 'share-links');
 
@@ -23,7 +22,6 @@ document.addEventListener("click", function (e) {
     selectTab(el.dataset.tab);
 });
 
-// ─── Edit share link dialog ──────────────────────────────────────────
 (function () {
     var overlay = document.getElementById("share-edit-overlay");
     if (!overlay) return;
@@ -108,7 +106,6 @@ document.addEventListener("click", function (e) {
     });
 })();
 
-// ─── Edit upload link dialog ──────────────────────────────────────────
 (function () {
     var overlay = document.getElementById("ul-edit-overlay");
     if (!overlay) return;

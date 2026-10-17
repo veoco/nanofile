@@ -2,11 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * The server's warning for a request that reached a route nobody classified
- * (`server/src/middleware/route_audit.rs`). Such a request is already a 403 —
- * the route table is fail-closed — so this gate is not about the response: it
- * is about the *gap*. A registered endpoint missing from the table is a bug
- * that otherwise shows up as one line in a log nobody reads.
+* The server's warning for a request that reached a route nobody classified. Such a request is
+ * already a 403 — the table is fail-closed — so this gate is about the *gap*: a registered
+ * endpoint missing from the table is a bug that otherwise shows up as one unread log line.
  */
 const UNCLASSIFIED_ROUTE_WARNING = "credential used on a route with no classification";
 
@@ -16,10 +14,8 @@ export default async function globalTeardown() {
   try {
     const info = JSON.parse(fs.readFileSync(p, "utf-8")) as { pid: number; tmpRoot: string };
     try {
-      // Every platform, one spelling: `SIGTERM` is a real signal only on unix,
-      // and Node rejects the name on Windows, where this is `TerminateProcess`
-      // either way. The teardown cannot make its own kill graceful, so it does
-      // not pretend to.
+// `SIGTERM` is a real signal only on unix; Windows rejects the name and terminates either way.
+// The teardown cannot make its own kill graceful, so it does not pretend to.
       process.kill(info.pid);
       await waitForExit(info.pid);
     } catch {
@@ -34,9 +30,8 @@ export default async function globalTeardown() {
 }
 
 /**
- * Wait for a process to disappear. Each instance's log is truncated (or, for
- * the isolated specs, freshly created) at startup, so the audit below reads only
- * this run — but the last writes still have to land before the logs are read.
+* Wait for a process to disappear. Each instance's log is truncated at startup, so the audit
+ * reads only this run — but the last writes still have to land.
  */
 async function waitForExit(pid: number, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -51,12 +46,9 @@ async function waitForExit(pid: number, timeoutMs = 10_000): Promise<void> {
 }
 
 /**
- * Audit every server instance's log, not just the shared one.
- *
- * Three specs spawn their own isolated server, so a single path here would miss
- * whatever they reached — and the gap this gate looks for is exactly the kind
- * that only one spec would hit. Each instance logs into
- * `test-results/<tmpRoot>/server.log` (see `helpers/server.ts`).
+* Audit every server instance's log, not just the shared one: three specs spawn their own, and
+ * a gap of this kind is exactly what only one spec would hit. Each instance logs into
+ * `test-results/<tmpRoot>/server.log`.
  */
 function assertNoUnclassifiedRoutes(resultsDir: string): void {
   const logs = serverLogs(resultsDir);
@@ -83,7 +75,6 @@ function assertNoUnclassifiedRoutes(resultsDir: string): void {
   }
 }
 
-/** Every `server.log` an instance of this run wrote, oldest directory first. */
 function serverLogs(resultsDir: string): string[] {
   const logs: string[] = [];
   let entries: fs.Dirent[];
@@ -99,7 +90,6 @@ function serverLogs(resultsDir: string): string[] {
     try {
       logs.push(fs.readFileSync(log, "utf-8"));
     } catch {
-      // this instance wrote no log, which is its own problem and not this one
     }
   }
   return logs;

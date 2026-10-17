@@ -1,10 +1,6 @@
-// format — number and timestamp-to-string helpers.
-//
-// The size/bitrate helpers are pure. The time helpers are not: they read
-// `document.documentElement.lang` and ask `Intl` for the reader's own
-// conventions — date order, separators, month names, 12- vs 24-hour clock — so
-// nothing here hand-assembles a stamp except the numeric fallback used when
-// `Intl` rejects the locale tag.
+// format — number and timestamp-to-string helpers. The size/bitrate helpers are pure; the time
+// helpers read `document.documentElement.lang` and ask `Intl` for the reader's conventions, so
+// nothing hand-assembles a stamp except the numeric fallback when `Intl` rejects the tag.
 
 export function formatBitrate(bytesPerSec) {
   if (!bytesPerSec || bytesPerSec <= 0) return '';
@@ -29,17 +25,14 @@ export function formatHistorySize(n) {
   return n + ' B';
 }
 
-// The document's language, which every `Intl` call below formats for.
 function documentLocale() {
   return typeof document !== "undefined" && document.documentElement
     ? document.documentElement.lang
     : undefined;
 }
 
-// `Intl.DateTimeFormat` construction is not free and a page renders one cell per
-// file, so each option set is built once per locale and kept. A locale tag `Intl`
-// rejects is cached as `null`; callers then take the numeric fallback without
-// throwing per cell.
+// `Intl.DateTimeFormat` construction is not free and a page renders one cell per file, so each
+// option set is built once per locale; a rejected tag is cached as `null`.
 var formatters = {};
 
 function intl(options, key) {
@@ -77,50 +70,41 @@ function localized(ts, options, key, fallback) {
   return fmt ? fmt.format(d) : fallback(d);
 }
 
-// The display form for a `data-ts` cell: the reader's own short date and short
-// time — "9/19/25, 3:04 PM" in en, "2025/9/19 15:04" in zh. The width therefore
-// varies with the language and the clock, which is why no column reserves one.
+// The display form for a `data-ts` cell: the reader's short date and time, which varies with
+// language and clock, so no column reserves a width.
 export function formatLocalDateTime(ts) {
   return localized(ts, { dateStyle: "short", timeStyle: "short" }, "short", numericDateTime);
 }
 
-// The `title` form: the same instant spelled out with seconds, so hovering a
-// relative cell ("3 days ago") still gives an exact answer.
+// The `title` form: the same instant with seconds, for an exact answer on hover.
 export function formatLocalDateTimeLong(ts) {
   return localized(ts, { dateStyle: "medium", timeStyle: "medium" }, "medium", numericDateTime);
 }
 
-// A date with no time: the activity page's day headers, and the relative form's
-// fallback once a stamp is too old for "N days ago".
+// A date with no time: the activity page's day headers and the relative form's old-stamp fallback.
 export function formatLocalMediumDate(ts) {
   return localized(ts, { dateStyle: "medium" }, "date", numericDate);
 }
 
-// A compact month/day label for places where the full stamp does not fit (the
-// grid tile's meta line): "Sep 19" in en, "9月19日" in zh. Intl picks the month
-// name for the document's language, so this needs no per-locale month table.
+// A compact month/day label where the full stamp does not fit (the grid tile's meta line);
+// `Intl` picks the month name, so no per-locale table is needed.
 export function formatLocalShortDate(ts) {
   return localized(ts, { month: "short", day: "numeric" }, "monthday", function (d) {
     return pad(d.getMonth() + 1) + "-" + pad(d.getDate());
   });
 }
 
-// A local calendar date `YYYY-MM-DD`. Deliberately not `Intl`: this is the
-// group key the activity feed compares and buckets by, so it has to be
-// locale-independent. Labels for a person come from `formatLocalMediumDate`.
+// A local calendar date `YYYY-MM-DD`, deliberately not `Intl`: it is the group key the activity
+// feed compares and buckets by, so it must be locale-independent.
 export function formatLocalDate(ts) {
   var d = new Date(ts * 1000);
   if (isNaN(d.getTime())) return "";
   return numericDate(d);
 }
 
-// Relative time matching the Android client's `translateCommitTime`:
-// "Just now" → N seconds → N minutes → N hours → N days, then nothing (the
-// caller falls back to `formatLocalMediumDate` at >= 14 days).
-//
-// Returns `{ key, args }` for the i18n table rather than a formatted string, so
-// this stays a pure function with no `window.__T` dependency. A count of 1 gets
-// its own key, so nothing reads "1 days ago".
+// Relative time matching the Android client's `translateCommitTime`: Just now → seconds →
+// minutes → hours → days, then the caller falls back to the medium date at >= 14 days. Returns
+// `{ key, args }` for the i18n table, so the function stays pure; a count of 1 has its own key.
 export function relativeParts(ts, nowSeconds) {
   var diff = nowSeconds - ts;
   if (diff <= 0) return { key: "activity.just_now", args: null };
