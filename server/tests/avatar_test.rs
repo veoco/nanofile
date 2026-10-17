@@ -78,15 +78,20 @@ async fn test_avatar_upload_size_limited() {
         "avatar",
         reqwest::multipart::Part::bytes(vec![0u8; 2 * 1024 * 1024]).file_name("a.png"),
     );
-    let resp = f
-        .client
-        .post_multipart("/api/v2.1/user-avatar/", Some(&f.api_token), form)
-        .await;
-    assert_eq!(
-        resp.status(),
-        413,
-        "oversized avatar must be rejected with 413"
+    let resp = common::client::response_or_early_close(
+        f.client
+            .try_post_multipart("/api/v2.1/user-avatar/", Some(&f.api_token), form)
+            .await,
     );
+    // The part is refused as soon as the cap is passed, so the connection may
+    // close while the rest of it is still going out; `None` is that early close.
+    if let Some(resp) = resp {
+        assert_eq!(
+            resp.status(),
+            413,
+            "oversized avatar must be rejected with 413"
+        );
+    }
 
     // A real small PNG still uploads fine.
     let png = {

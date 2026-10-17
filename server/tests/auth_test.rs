@@ -82,12 +82,16 @@ async fn test_login_body_size_limited() {
     let mut body = String::from("username=test@example.com&password=password123&");
     body.push_str(&"x".repeat(2 * 1024 * 1024));
 
-    let resp = raw.post(&url).body(body).send().await.unwrap();
-    assert_eq!(
-        resp.status(),
-        413,
-        "oversized login body must be rejected with 413"
-    );
+    // The cap is crossed while the body is still going out, so the connection may
+    // close before the response is read; `None` is that early close.
+    let resp = common::client::response_or_early_close(raw.post(&url).body(body).send().await);
+    if let Some(resp) = resp {
+        assert_eq!(
+            resp.status(),
+            413,
+            "oversized login body must be rejected with 413"
+        );
+    }
 }
 
 #[tokio::test]

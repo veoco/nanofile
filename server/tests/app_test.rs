@@ -64,59 +64,59 @@ async fn a_body_over_the_configured_json_limit_is_refused() {
     // config: a route with its own, smaller cap is asserted in the handler
     // tests, and this one would be unbounded if the global layer were missing.
     let body = vec![b'x'; 65 * 1024 * 1024];
-    let resp = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .unwrap()
-        .post(format!("{}/api2/repos/", f.server.base_url))
-        .header("Authorization", format!("Token {}", f.api_token))
-        .header("Content-Type", "application/json")
-        .body(body)
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(
-        resp.status(),
-        413,
-        "a body past the configured JSON limit must be refused before it is buffered"
+    let resp = common::client::response_or_early_close(
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .post(format!("{}/api2/repos/", f.server.base_url))
+            .header("Authorization", format!("Token {}", f.api_token))
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .await,
     );
+
+    // The refusal lands once 64 MiB of the 65 MiB has been read, so the close can
+    // still arrive while the tail is going out; `None` is that early close.
+    if let Some(resp) = resp {
+        assert_eq!(
+            resp.status(),
+            413,
+            "a body past the configured JSON limit must be refused before it is buffered"
+        );
+    }
 }
 
 /// The same 65 MiB the JSON route just refused, sent to an upload route: that
 /// group raised its own limit, so the global cap must not apply to it. Without
 /// the per-group limit in `app_routes` this is the assertion that fails.
 /// `/upload-aj/` rejects a request with no session cookie before it reads the
-/// body, so it can close the connection while 65 MiB is still going out. Which
-/// side wins that race is timing, not platform: the client may then report an
-/// aborted connection instead of the response anywhere. Either way the request
-/// was not refused with a 413, which is what the cap is about.
+/// body, so it can close the connection while 65 MiB is still going out; the
+/// case is about the answer being something other than the 413.
 #[tokio::test]
 async fn an_upload_route_still_takes_a_large_body() {
     let f = TestFixture::new().await;
     let body = vec![b'x'; 65 * 1024 * 1024];
-    let resp = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .unwrap()
-        .post(format!("{}/upload-aj/", f.server.base_url))
-        .header("Authorization", format!("Token {}", f.api_token))
-        .body(body)
-        .send()
-        .await;
+    let resp = common::client::response_or_early_close(
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .post(format!("{}/upload-aj/", f.server.base_url))
+            .header("Authorization", format!("Token {}", f.api_token))
+            .body(body)
+            .send()
+            .await,
+    );
 
-    match resp {
-        Ok(resp) => assert_ne!(
+    // `None` means `/upload-aj/` answered before it read the body, which is not
+    // the 413 this route must never answer with.
+    if let Some(resp) = resp {
+        assert_ne!(
             resp.status(),
             413,
             "an upload route must not inherit the JSON cap"
-        ),
-        // Only a send-stage failure is the early close this case allows: a
-        // server that never came up fails as `is_connect()`, which must not be
-        // mistaken for it.
-        Err(error) => assert!(
-            error.is_request(),
-            "the request must fail at the socket: {error}"
-        ),
+        );
     }
 }

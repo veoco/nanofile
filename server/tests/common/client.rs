@@ -732,11 +732,22 @@ impl TestClient {
         token: Option<&str>,
         form: reqwest::multipart::Form,
     ) -> reqwest::Response {
+        self.try_post_multipart(path, token, form).await.unwrap()
+    }
+
+    /// The same POST, for a caller that has to see a transport error: see
+    /// [`response_or_early_close`] for what a refused upload does to the send.
+    pub async fn try_post_multipart(
+        &self,
+        path: &str,
+        token: Option<&str>,
+        form: reqwest::multipart::Form,
+    ) -> Result<reqwest::Response, reqwest::Error> {
         let mut req = self.client.post(self.url(path));
         if let Some(t) = token {
             req = req.bearer_auth(t);
         }
-        req.multipart(form).send().await.unwrap()
+        req.multipart(form).send().await
     }
 
     pub async fn protocol_version(&self) -> reqwest::Response {
@@ -1181,11 +1192,8 @@ impl TestClient {
         self.try_post_multipart_url(url, form).await.unwrap()
     }
 
-    /// The same POST, for a caller that has to see a transport error.
-    /// A server that refuses a large body before it reads it closes the
-    /// connection while the client is still writing, which Windows reports as an
-    /// aborted connection rather than as the response. A case that asserts *why*
-    /// an oversized body was refused needs both halves of that answer.
+    /// The same POST, for a caller that has to see a transport error: see
+    /// [`response_or_early_close`] for what a refused upload does to the send.
     pub async fn try_post_multipart_url(
         &self,
         url: &str,
@@ -1468,5 +1476,28 @@ impl TestClient {
             .send()
             .await
             .unwrap()
+    }
+}
+
+/// A server may answer an oversized body and close the connection while the
+/// client is still writing it; `send()` then fails at the socket instead of
+/// returning the response (an aborted connection on some platforms). A case that
+/// asserts *why* a body was refused has to treat both as the same answer.
+///
+/// `None` is that early close. A connect error or a timeout is not: the first
+/// means the server never came up, the second that it stopped answering.
+pub fn response_or_early_close(
+    result: Result<reqwest::Response, reqwest::Error>,
+) -> Option<reqwest::Response> {
+    match result {
+        Ok(response) => Some(response),
+        Err(error) => {
+            assert!(
+                error.is_request() && !error.is_timeout(),
+                "the request must fail at the socket: {error}"
+            );
+            eprintln!("the connection closed before the body was read; treating it as the refusal");
+            None
+        }
     }
 }
