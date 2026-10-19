@@ -39,7 +39,7 @@ pub async fn verify_body_sync_token(
         .user
         .find_by_id(record.user_id)
         .await?
-        .is_some_and(|u| u.is_active))
+        .is_some_and(|u| u.is_active && u.email_verified))
 }
 
 /// Return the sync token the caller should use for one repository, or create it.

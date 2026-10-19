@@ -124,4 +124,8 @@ async fn test_registration_records_last_login() {
         new_user.last_login_at.is_some(),
         "last_login_at should be set after registration auto-login"
     );
+    assert!(
+        new_user.email_verified,
+        "invitation registration is trusted and activates the account"
+    );
 }

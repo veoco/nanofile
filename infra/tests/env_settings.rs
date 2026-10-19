@@ -74,9 +74,9 @@ fn every_catalog_env_variable_is_read_and_tracked() {
         "sync.verify_fs_objects",
         "logging.max_backups",
     ] {
-        assert!(loaded.env_keys.contains(key), "{key} not tracked");
+        assert!(loaded.env_keys.contains_key(key), "{key} not tracked");
     }
-    assert!(!loaded.env_keys.contains("server.port"));
+    assert!(!loaded.env_keys.contains_key("server.port"));
 
     for (name, _) in overrides {
         unsafe { std::env::remove_var(name) };

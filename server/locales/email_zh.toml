@@ -39,6 +39,21 @@ email.password_reset.text = '''
 请求来自 {ip}，时间 {time}。如果不是您本人操作，无需处理：链接会自行过期，您的密码不会被修改。
 '''
 
+email.email_verification.subject = "验证您的 {brand} 邮箱"
+email.email_verification.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">{name}，您好：</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;">请用下面的链接完成账号创建。链接 {ttl} 天内有效，且只能使用一次。</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;word-break:break-all;"><a href="{link}" style="color:#2563eb;">{link}</a></p>
+<p style="margin:0;font-size:13px;line-height:1.7;color:#71717a;">请求来自 {ip}，时间 {time}。如果您没有创建账号，可以忽略本邮件。</p>'''
+email.email_verification.text = '''
+{name}，您好：
+
+请用下面的链接完成账号创建。链接 {ttl} 天内有效，且只能使用一次：
+
+{link}
+
+请求来自 {ip}，时间 {time}。如果您没有创建账号，可以忽略本邮件。
+'''
+
 email.new_device.subject = "您的 {brand} 账号有新设备登录"
 email.new_device.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">{name}，您好：</p>
 <p style="margin:0 0 16px;font-size:14px;line-height:1.7;">有设备首次登录了您的账号：</p>

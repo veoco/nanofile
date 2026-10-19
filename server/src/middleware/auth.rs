@@ -102,12 +102,12 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
             let user_id = record.user_id;
             let repo_id = record.repo_id.clone();
 
-            // A deactivated account must not keep syncing.
+            // A deactivated or unverified account must not keep syncing.
             if !repos
                 .user
                 .find_by_id(user_id)
                 .await?
-                .is_some_and(|u| u.is_active)
+                .is_some_and(|u| u.is_active && u.email_verified)
             {
                 return Err(base::error::AppError::Forbidden);
             }
@@ -303,7 +303,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::UNAUTHORIZED)?;
 
-        if !user_record.is_active {
+        if !user_record.is_active || !user_record.email_verified {
             return Err(StatusCode::FORBIDDEN);
         }
 
@@ -585,7 +585,8 @@ fn is_token_expired(expires_at: Option<i64>) -> bool {
 }
 
 /// Ensure the user behind a sync/API token still exists and is active, so a
-/// deactivated account cannot keep syncing through a token issued earlier.
+/// deactivated or unverified account cannot keep syncing through a token issued
+/// earlier.
 async fn ensure_active_user(repos: &Repositories, user_id: i32) -> Result<(), StatusCode> {
     let user = repos
         .user
@@ -593,7 +594,7 @@ async fn ensure_active_user(repos: &Repositories, user_id: i32) -> Result<(), St
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    if !user.is_active {
+    if !user.is_active || !user.email_verified {
         return Err(StatusCode::FORBIDDEN);
     }
     Ok(())

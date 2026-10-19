@@ -382,6 +382,7 @@ async fn an_account_that_already_exists_is_kept_instead_of_replaced() {
         is_admin: Set(true),
         created_at: Set(0),
         last_login_at: Set(None),
+        email_verified: Set(true),
         invited_by: Set(None),
         storage_quota: sea_orm::NotSet,
         name: sea_orm::NotSet,

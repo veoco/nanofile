@@ -13,6 +13,7 @@ use crate::AppState;
 use crate::domain::session_source::SessionSource;
 use crate::i18n::I18n;
 use crate::repository::api_token::CreateSessionTokenParams;
+use crate::service::auth::email_verification::{EmailVerificationService, VerificationOutcome};
 use crate::service::auth::password::{
     dummy_password_hash, hash_password_async, needs_rehash, verify_password_async,
 };
@@ -38,7 +39,7 @@ pub struct LoginTemplate {
     pub enable_password_reset: bool,
     /// Show/hide the "Create account" link; the POST handler enforces the same
     /// flag, so a disabled flow cannot be reached by navigating directly.
-    pub enable_invitations: bool,
+    pub registration_available: bool,
     /// URL to redirect to after login (kept as a hidden form field).
     pub next: String,
 }
@@ -110,7 +111,7 @@ pub async fn login_page(
         error: login_error(&query, t),
         remember_days: state.config().auth.api_token_ttl_days,
         enable_password_reset: password_reset_available(&state).await,
-        enable_invitations: state.config().auth.enable_invitations,
+        registration_available: registration_available(&state),
         next: query.next.unwrap_or_default(),
     };
     let html = tpl
@@ -212,7 +213,7 @@ async fn render_login_page(
         error,
         remember_days: state.config().auth.api_token_ttl_days,
         enable_password_reset: password_reset_available(state).await,
-        enable_invitations: state.config().auth.enable_invitations,
+        registration_available: registration_available(state),
         next: next.to_string(),
     };
     let html = tpl
@@ -221,14 +222,117 @@ async fn render_login_page(
     Ok(Html(html))
 }
 
-/// Reject registration when invitations are disabled. Both the GET page and the
-/// POST use it, so the flag cannot be bypassed by navigating there directly.
-fn ensure_invitations_enabled(state: &Arc<AppState>) -> Result<(), AppError> {
-    if state.config().auth.enable_invitations {
+/// Whether self-registration can complete right now.
+///
+/// In invitation mode the code is the proof, so mail is irrelevant. In open mode
+/// the verification link is the only way to activate the account, so an
+/// installation without working mail must refuse the flow instead of creating
+/// accounts that can never sign in.
+fn registration_available(state: &Arc<AppState>) -> bool {
+    let auth = &state.config().auth;
+    auth.enable_registration && (auth.require_invitation || state.mail.ready())
+}
+
+/// Reject registration when the switch is off or, in open mode, when no
+/// verification mail can be sent. Both the GET page and the POST use it, so the
+/// condition cannot be bypassed by navigating there directly.
+fn ensure_registration_available(state: &Arc<AppState>) -> Result<(), AppError> {
+    if registration_available(state) {
         Ok(())
     } else {
         Err(AppError::NotFound("registration is disabled".into()))
     }
+}
+
+/// The sign-in response for a correct password on an unverified account.
+///
+/// No session is created. When mail is usable, a new link is sent unless one was
+/// issued inside the cooldown window; the page is the same either way, so it does
+/// not become an oracle for whether a send just happened.
+async fn unverified_login_response(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    user: &infra::entity::user::Model,
+    client_ip: &str,
+) -> Result<Response, AppError> {
+    let t = I18n::from_headers(headers, &state.config().ui.default_language);
+
+    if !state.mail.ready() {
+        return render_login_page(
+            state,
+            headers,
+            Some(t.tr("auth.verify_email_required_no_mail").to_string()),
+            "",
+        )
+        .await
+        .map(|html| (StatusCode::OK, Html(html)).into_response());
+    }
+
+    let service = EmailVerificationService::new(state.repos.clone());
+    let now = chrono::Utc::now().timestamp();
+    let send = if service.recently_issued(user.id, now).await? {
+        true
+    } else {
+        let link = service
+            .issue(user.id, &state.config().server.site_url)
+            .await?;
+        match state
+            .mail
+            .send_email_verification(
+                &user.email,
+                user.id,
+                user.language.as_deref(),
+                &link,
+                &user.nickname(),
+                Some(client_ip),
+            )
+            .await
+        {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(
+                    "could not queue an email-verification link for user {}: {e}",
+                    user.id
+                );
+                // Drop the token we just minted so an immediate retry is not
+                // suppressed by the resend cooldown. The old link was already
+                // replaced by issue(), so there is nothing to keep.
+                if let Err(cleanup) = state
+                    .repos
+                    .email_verification_token
+                    .delete_by_user(user.id)
+                    .await
+                {
+                    tracing::warn!(
+                        "could not clear the unusable verification token for user {}: {cleanup}",
+                        user.id
+                    );
+                }
+                false
+            }
+        }
+    };
+
+    if !send {
+        return render_login_page(
+            state,
+            headers,
+            Some(t.tr("auth.verification_email_failed").to_string()),
+            "",
+        )
+        .await
+        .map(|html| (StatusCode::OK, Html(html)).into_response());
+    }
+
+    let tpl = VerifyEmailSentTemplate {
+        urls: crate::static_assets::template_urls(),
+        t,
+        email: user.email.clone(),
+    };
+    let html = tpl
+        .render()
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok((StatusCode::OK, Html(html)).into_response())
 }
 
 /// Post /accounts/login/ — authenticate user, handle 2FA if enabled.
@@ -336,6 +440,14 @@ pub async fn login(
 
     // Success forgives this address/pair but keeps the distinct-account spray history.
     state.auth_limiters.login.clear_login_failure(&login_keys);
+
+    // A correct password is not enough for an unverified account: no session is
+    // created and no last-login is recorded. Instead, offer a fresh link, but only
+    // after the cooldown, so signing in right after registering does not invalidate
+    // the link that was just mailed.
+    if !user_record.email_verified {
+        return unverified_login_response(&state, &headers, &user_record, &client_ip).await;
+    }
 
     // Upgrade a stored hash that predates the embedded cost or used another one.
     // Best-effort: a failed write must not block a correct password.
@@ -834,6 +946,9 @@ pub struct RegisterTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
     pub t: &'static I18n,
     pub error: Option<String>,
+    /// Whether the form asks for an invitation code. Open registration hides the
+    /// field and shows the verification-mail note instead.
+    pub require_invitation: bool,
 }
 
 #[derive(Deserialize)]
@@ -841,7 +956,8 @@ pub struct RegisterForm {
     pub email: String,
     pub password1: String,
     pub password2: String,
-    pub invitation_code: String,
+    /// Absent in open mode; also accepted (and ignored) when an old client sends it.
+    pub invitation_code: Option<String>,
 }
 
 /// GET /accounts/register/ — render the registration form.
@@ -849,12 +965,13 @@ pub async fn register_page(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Html<String>, AppError> {
-    ensure_invitations_enabled(&state)?;
+    ensure_registration_available(&state)?;
 
     let tpl = RegisterTemplate {
         urls: crate::static_assets::template_urls(),
         t: I18n::from_headers(&headers, &state.config().ui.default_language),
         error: None,
+        require_invitation: state.config().auth.require_invitation,
     };
     let html = tpl
         .render()
@@ -873,6 +990,7 @@ fn register_error(
         urls: crate::static_assets::template_urls(),
         t: I18n::from_headers(headers, &state.config().ui.default_language),
         error: Some(message.as_ref().to_string()),
+        require_invitation: state.config().auth.require_invitation,
     };
     let html = tpl
         .render()
@@ -899,7 +1017,7 @@ pub async fn register(
     }
 
     // Registration closed: refuse before any invitation or password work.
-    ensure_invitations_enabled(&state)?;
+    ensure_registration_available(&state)?;
 
     // Rate limit: per IP (TCP peer, not spoofable XFF).
     let client_ip = crate::middleware::effective_client_ip(
@@ -930,11 +1048,13 @@ pub async fn register(
     let cfg = &state.config().auth;
 
     let reg_service = RegistrationService::new(state.repos.clone());
+    let require_invitation = cfg.require_invitation;
     let result = match reg_service
         .register(RegistrationParams {
             email: form.email,
             password: form.password1,
             invitation_code: form.invitation_code,
+            require_invitation,
             password_min_length: cfg.password_min_length as usize,
             require_strong_password: cfg.require_strong_password,
             password_hash_iterations: cfg.password_hash_iterations,
@@ -948,6 +1068,10 @@ pub async fn register(
         Err(AppError::BadRequest(message)) => return register_error(&state, &headers, &message),
         Err(err) => return Err(err),
     };
+
+    if !require_invitation {
+        return finish_open_registration(&state, &headers, &result.user, &client_ip).await;
+    }
 
     let now = chrono::Utc::now().timestamp();
     let session_token = generate_api_token();
@@ -1012,6 +1136,105 @@ pub async fn register(
     );
 
     Ok((StatusCode::FOUND, resp_headers).into_response())
+}
+
+/// Finish an open registration: mint a verification link, queue the mail, and
+/// show the "check your inbox" page. Nothing is logged in here.
+///
+/// A failure to mint or queue is rolled back by deleting the account that was just
+/// created: leaving an address registered with no way to activate it would make
+/// the same address unusable for a retry.
+async fn finish_open_registration(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    user: &infra::entity::user::Model,
+    client_ip: &str,
+) -> Result<Response, AppError> {
+    let service = EmailVerificationService::new(state.repos.clone());
+    let sent = async {
+        let link = service
+            .issue(user.id, &state.config().server.site_url)
+            .await?;
+        state
+            .mail
+            .send_email_verification(
+                &user.email,
+                user.id,
+                user.language.as_deref(),
+                &link,
+                &user.nickname(),
+                Some(client_ip),
+            )
+            .await
+    }
+    .await;
+
+    if let Err(e) = sent {
+        tracing::warn!(
+            "open registration for {} could not send a verification link: {e}; rolling back",
+            user.id
+        );
+        if let Err(cleanup) = state.repos.user.delete_user(user.id).await {
+            tracing::error!(
+                "could not roll back unverified account {}: {cleanup}",
+                user.id
+            );
+        }
+        let message = I18n::from_headers(headers, &state.config().ui.default_language)
+            .tr("auth.verification_email_failed")
+            .to_string();
+        return register_error(state, headers, message);
+    }
+
+    let tpl = VerifyEmailSentTemplate {
+        urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(headers, &state.config().ui.default_language),
+        email: user.email.clone(),
+    };
+    let html = tpl
+        .render()
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok((StatusCode::OK, Html(html)).into_response())
+}
+
+#[derive(Template)]
+#[template(path = "page/verify_email_sent.html")]
+pub struct VerifyEmailSentTemplate {
+    pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
+    pub email: String,
+}
+
+#[derive(Template)]
+#[template(path = "page/verify_email.html")]
+pub struct VerifyEmailTemplate {
+    pub urls: &'static crate::static_assets::TemplateUrls,
+    pub t: &'static I18n,
+    pub verified: bool,
+}
+
+/// GET /accounts/verify-email/{token}/ — claim a one-time link and mark the
+/// account verified. No session is created; the page links to the login form.
+pub async fn verify_email(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+) -> Result<Html<String>, AppError> {
+    let service = EmailVerificationService::new(state.repos.clone());
+    let verified = matches!(
+        service.verify(&token).await?,
+        VerificationOutcome::Verified { .. }
+    );
+
+    let tpl = VerifyEmailTemplate {
+        urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
+        verified,
+    };
+    let html = tpl
+        .render()
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(Html(html))
 }
 
 #[derive(Template)]

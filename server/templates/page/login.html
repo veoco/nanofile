@@ -61,7 +61,7 @@
 
 {% block footer %}
 <div class="flex items-center justify-between gap-3 border-t border-line px-5 py-3">
-    {% if enable_invitations %}
+    {% if registration_available %}
     <a href="/accounts/register/" class="text-[12.5px] text-ink underline underline-offset-2 decoration-line-strong">{{ t.tr("auth.create_account") }}</a>
     {% endif %}
     {% if enable_password_reset %}

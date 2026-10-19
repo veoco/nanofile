@@ -45,6 +45,23 @@ Requested from {ip} on {time}. If this was not you, no action is needed — the
 link expires on its own and your password stays unchanged.
 '''
 
+email.email_verification.subject = "Verify your {brand} email address"
+email.email_verification.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">Hi {name},</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;">Use the link below to finish creating your account. It is valid for {ttl} days and can only be used once.</p>
+<p style="margin:0 0 16px;font-size:14px;line-height:1.7;word-break:break-all;"><a href="{link}" style="color:#2563eb;">{link}</a></p>
+<p style="margin:0;font-size:13px;line-height:1.7;color:#71717a;">Requested from {ip} on {time}. If you did not create an account, you can ignore this message.</p>'''
+email.email_verification.text = '''
+Hi {name},
+
+Use the link below to finish creating your account. It is valid for {ttl} days
+and can only be used once:
+
+{link}
+
+Requested from {ip} on {time}. If you did not create an account, you can ignore
+this message.
+'''
+
 email.new_device.subject = "New device signed in to your {brand} account"
 email.new_device.html = '''<p style="margin:0 0 12px;font-size:14px;line-height:1.7;">Hi {name},</p>
 <p style="margin:0 0 16px;font-size:14px;line-height:1.7;">A device signed in to your account for the first time:</p>

@@ -207,6 +207,9 @@ pub async fn login(
         LoginResult::RateLimited => login_error("Too many login attempts. Please try again later."),
         LoginResult::BadCredentials => login_error("Unable to login with provided credentials."),
         LoginResult::AccountDisabled => login_error("User account is disabled."),
+        LoginResult::EmailUnverified => login_error(
+            "Email address is not verified. Check your inbox, or sign in on the web to send a new verification link.",
+        ),
         LoginResult::TwoFactorRequired => {
             let mut resp_headers = HeaderMap::new();
             resp_headers.insert(

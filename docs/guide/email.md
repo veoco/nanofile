@@ -11,6 +11,8 @@ Mail is off until SMTP is configured. Two places configure it:
 Once enabled, the server sends:
 
 - password-reset links,
+- open-registration email-verification links (required before such an account
+  can sign in),
 - new-device and new-browser sign-in notices,
 - a notice when an API key is created.
 

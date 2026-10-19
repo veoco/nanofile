@@ -36,6 +36,9 @@ pub enum LoginResult {
     RateLimited,
     BadCredentials,
     AccountDisabled,
+    /// The password was correct, but an open registration has not completed its
+    /// email verification. No token may be issued.
+    EmailUnverified,
     TwoFactorRequired,
     TwoFactorInvalid,
 }
@@ -121,6 +124,14 @@ impl LoginService {
         if !user_record.is_active {
             record_failure();
             return Ok(LoginResult::AccountDisabled);
+        }
+
+        if !user_record.email_verified {
+            // The password was right, so this is not a failed guess; do not count
+            // it toward the lockout. The API path does not mint a link (the web
+            // sign-in does), but it must still refuse to issue a token.
+            self.login_rate_limiter.clear_login_failure(&login_keys);
+            return Ok(LoginResult::EmailUnverified);
         }
 
         let mut skip_2fa = false;

@@ -361,7 +361,7 @@ pub async fn zip_download_handler(
             .user
             .find_by_id(task.user_id)
             .await?
-            .is_some_and(|u| u.is_active)
+            .is_some_and(|u| u.is_active && u.email_verified)
     {
         return Err(AppError::NotFound("Zip task not found or expired".into()));
     }

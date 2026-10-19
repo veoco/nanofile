@@ -71,8 +71,8 @@ pub async fn register_user(
     Form(form): Form<RegisterForm>,
 ) -> Result<StatusCode, AppError> {
     // Account creation via the API is admin-only (seahub's `IsAdminUser`); anonymous
-    // self-registration goes through the UI flow, which enforces invitation codes and
-    // rate limits.
+    // self-registration goes through the UI flow, which enforces the registration
+    // mode, invitation codes, email verification and rate limits.
     let user_record = state
         .repos
         .user

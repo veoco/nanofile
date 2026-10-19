@@ -101,6 +101,8 @@ migrations!(
     m20260925_000001_purge_tick_run_history,
     m20260926_000001_drop_retired_settings_keys,
     m20260927_000002_retire_sandbox_grade_settings,
+    m20261019_000001_add_email_verification,
+    m20261019_000002_rename_registration_setting,
 );
 
 #[cfg(test)]

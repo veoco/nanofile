@@ -91,7 +91,7 @@ impl WebUser {
             .await
             .ok()??;
 
-        if !user_record.is_active {
+        if !user_record.is_active || !user_record.email_verified {
             return None;
         }
 

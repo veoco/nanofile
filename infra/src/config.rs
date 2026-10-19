@@ -32,9 +32,11 @@ pub const NON_CONFIG_ENV_VARS: &[&str] = &[
     "NANOFILE_BUILD_TS",
 ];
 
-/// Catalog keys the environment supplied a value for: a value's origin cannot be
-/// recovered from the value itself.
-pub type EnvKeys = std::collections::BTreeSet<&'static str>;
+/// Catalog keys the environment supplied a value for, mapped to the variable
+/// that supplied it. A value's origin cannot be recovered from the value itself,
+/// and a retired variable alias must still be named truthfully in the settings
+/// page.
+pub type EnvKeys = std::collections::BTreeMap<&'static str, &'static str>;
 
 /// A loaded configuration plus where its environment overrides came from.
 pub struct LoadedConfig {
@@ -1118,10 +1120,18 @@ pub struct AuthConfig {
     /// Env: NANOFILE_AUTH_SSO_LINK_MAX_PER_HOUR
     #[serde(default = "default_sso_link_max_per_hour")]
     pub sso_link_max_per_hour: u32,
-    /// Whether to show the "Create Account" link on the login page and
-    /// allow invitation-code-based registration.
+    /// Whether visitors may create their own account. With this off only an
+    /// administrator can add accounts.
+    ///
+    /// Renamed from `enable_invitations`; the old name stays accepted as a serde
+    /// alias so an existing config file cannot silently reopen registration.
+    #[serde(default = "default_true", alias = "enable_invitations")]
+    pub enable_registration: bool,
+    /// Whether self-registration needs an invitation code. When off, anyone can
+    /// register, and the new account must verify its email address before it can
+    /// sign in.
     #[serde(default = "default_true")]
-    pub enable_invitations: bool,
+    pub require_invitation: bool,
     /// Whether to show the "Forgot password?" link on the login page
     /// and enable the password reset flow.
     #[serde(default = "default_true")]
@@ -1191,7 +1201,8 @@ impl Default for AuthConfig {
             lockout_duration_secs: default_lockout_duration_secs(),
             max_distinct_usernames_per_ip: default_spray_distinct_usernames(),
             sso_link_max_per_hour: default_sso_link_max_per_hour(),
-            enable_invitations: default_true(),
+            enable_registration: default_true(),
+            require_invitation: default_true(),
             enable_password_reset: default_true(),
             password_min_length: default_password_min_length(),
             require_strong_password: false,
@@ -1973,7 +1984,7 @@ impl Config {
             }
             match (def.set)(self, &value) {
                 Ok(()) => {
-                    env_keys.insert(def.key);
+                    env_keys.insert(def.key, var);
                 }
                 Err(e) => tracing::warn!("ignoring {var}: {e}"),
             }
@@ -1987,7 +1998,9 @@ impl Config {
             match std::fs::read_to_string(&path) {
                 Ok(secret) => match (def.set)(self, secret.trim()) {
                     Ok(()) => {
-                        env_keys.insert(def.key);
+                        // Report the plain variable, as before, even when a `*_FILE`
+                        // supplied the value.
+                        env_keys.insert(def.key, def.env.unwrap_or(var));
                     }
                     Err(e) => tracing::warn!("ignoring {var}: {e}"),
                 },
@@ -1996,6 +2009,8 @@ impl Config {
                 }
             }
         }
+
+        self.apply_retired_env_aliases(env_keys, |name| std::env::var(name).ok());
 
         // The `[settings]` policy is not a catalog entry: it decides what a
         // database row means, so it can only come from outside that layer.
@@ -2014,6 +2029,40 @@ impl Config {
             && let Ok(parsed) = v.trim().parse::<u64>()
         {
             self.settings.refresh_interval_secs = parsed;
+        }
+    }
+
+    /// Read environment names that this release retired as aliases.
+    ///
+    /// `lookup` is injected so a unit test can exercise the mapping without
+    /// mutating this process's environment (the test suite runs in parallel).
+    fn apply_retired_env_aliases(
+        &mut self,
+        env_keys: &mut EnvKeys,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) {
+        const OLD_NAME: &str = "NANOFILE_AUTH_ENABLE_INVITATIONS";
+        const NEW_NAME: &str = "NANOFILE_AUTH_ENABLE_REGISTRATION";
+
+        if env_keys.contains_key("auth.enable_registration") {
+            if lookup(OLD_NAME).is_some() {
+                tracing::warn!("{OLD_NAME} is deprecated and ignored because {NEW_NAME} is set");
+            }
+            return;
+        }
+
+        let Some(value) = lookup(OLD_NAME) else {
+            return;
+        };
+        let Some(def) = crate::settings::find("auth.enable_registration") else {
+            return;
+        };
+        match (def.set)(self, &value) {
+            Ok(()) => {
+                env_keys.insert(def.key, OLD_NAME);
+                tracing::warn!("{OLD_NAME} is deprecated; use {NEW_NAME}");
+            }
+            Err(e) => tracing::warn!("ignoring {OLD_NAME}: {e}"),
         }
     }
 }
@@ -3271,6 +3320,58 @@ request_timeout_secs = 600
         assert_eq!(
             sqlite_url_file(&config.database.url).map(|(file, _)| PathBuf::from(file)),
             Some(data_dir.join("nanofile.db"))
+        );
+    }
+
+    /// The old key still closes registration; a file written for an older
+    /// release must not reopen it by falling back to the default.
+    #[test]
+    fn the_retired_registration_key_is_still_accepted() {
+        let old: Config = toml::from_str("[auth]\nenable_invitations = false\n").unwrap();
+        assert!(!old.auth.enable_registration);
+
+        let new: Config = toml::from_str("[auth]\nenable_registration = false\n").unwrap();
+        assert!(!new.auth.enable_registration);
+        assert!(Config::default().auth.enable_registration);
+        assert!(Config::default().auth.require_invitation);
+    }
+
+    /// The retired variable still closes registration, and reports itself as the
+    /// origin rather than claiming the new name was set.
+    #[test]
+    fn the_retired_registration_variable_is_still_read() {
+        let mut config = Config::default();
+        let mut env_keys = EnvKeys::new();
+        let lookup =
+            |name: &str| (name == "NANOFILE_AUTH_ENABLE_INVITATIONS").then(|| "false".to_string());
+
+        config.apply_retired_env_aliases(&mut env_keys, lookup);
+
+        assert!(!config.auth.enable_registration);
+        assert_eq!(
+            env_keys.get("auth.enable_registration"),
+            Some(&"NANOFILE_AUTH_ENABLE_INVITATIONS")
+        );
+    }
+
+    /// The new variable wins when both names are present.
+    #[test]
+    fn the_new_registration_variable_beats_the_retired_one() {
+        let mut config = Config::default();
+        let mut env_keys = EnvKeys::new();
+        env_keys.insert(
+            "auth.enable_registration",
+            "NANOFILE_AUTH_ENABLE_REGISTRATION",
+        );
+        let lookup =
+            |name: &str| (name == "NANOFILE_AUTH_ENABLE_INVITATIONS").then(|| "false".to_string());
+
+        config.apply_retired_env_aliases(&mut env_keys, lookup);
+
+        assert!(config.auth.enable_registration, "the new variable must win");
+        assert_eq!(
+            env_keys.get("auth.enable_registration"),
+            Some(&"NANOFILE_AUTH_ENABLE_REGISTRATION")
         );
     }
 }

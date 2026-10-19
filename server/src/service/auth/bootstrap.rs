@@ -62,6 +62,7 @@ pub async fn create_first_admin(
         is_admin: Set(true),
         created_at: Set(now),
         last_login_at: Set(None),
+        email_verified: Set(true),
         invited_by: Set(None),
         storage_quota: sea_orm::NotSet,
         name: sea_orm::NotSet,

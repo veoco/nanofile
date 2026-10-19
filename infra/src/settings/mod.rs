@@ -15,7 +15,7 @@ pub mod catalog;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::config::Config;
+use crate::config::{Config, EnvKeys};
 
 pub use catalog::{CATALOG, GROUPS, GroupDef, groups};
 
@@ -430,7 +430,18 @@ impl SettingsPolicy {
             .settings
             .config_override_keys
             .iter()
-            .map(|key| key.trim().to_string())
+            .map(|key| {
+                let trimmed = key.trim();
+                if trimmed == "auth.enable_invitations" {
+                    tracing::warn!(
+                        "settings.config_override_keys names auth.enable_invitations, which \
+                         was renamed to auth.enable_registration; using the new key"
+                    );
+                    "auth.enable_registration".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            })
             .filter(|key| !key.is_empty())
             .collect();
         Self {
@@ -472,16 +483,14 @@ pub fn resolve(
     def: &'static SettingDef,
     base: &Config,
     defaults: &Config,
-    env_keys: &BTreeSet<&'static str>,
+    env_keys: &EnvKeys,
     rows: &BTreeMap<String, SettingRow>,
     policy: &SettingsPolicy,
 ) -> Resolved {
     let base_value = (def.get)(base);
     let default_value = (def.get)(defaults);
 
-    if let Some(var) = def.env
-        && env_keys.contains(def.key)
-    {
+    if let Some(var) = env_keys.get(def.key).copied() {
         return Resolved {
             def,
             value: base_value,
@@ -526,7 +535,7 @@ pub fn resolve(
 pub fn resolve_all(
     base: &Config,
     defaults: &Config,
-    env_keys: &BTreeSet<&'static str>,
+    env_keys: &EnvKeys,
     rows: &BTreeMap<String, SettingRow>,
     policy: &SettingsPolicy,
 ) -> Vec<Resolved> {
@@ -675,12 +684,12 @@ pub fn parse_enum(value: &str, allowed: &[&str]) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    fn base_with_env(key: &'static str) -> (Config, BTreeSet<&'static str>) {
+    fn base_with_env(key: &'static str) -> (Config, EnvKeys) {
         let mut config = Config::default();
         let def = find(key).expect("catalog entry");
         (def.set)(&mut config, "false").ok();
-        let mut env_keys = BTreeSet::new();
-        env_keys.insert(key);
+        let mut env_keys = EnvKeys::new();
+        env_keys.insert(key, def.env.expect("the catalog entry has a variable"));
         (config, env_keys)
     }
 
@@ -754,7 +763,8 @@ mod tests {
             "auth.lockout_duration_secs",
             "auth.max_distinct_usernames_per_ip",
             "auth.sso_link_max_per_hour",
-            "auth.enable_invitations",
+            "auth.enable_registration",
+            "auth.require_invitation",
             "auth.enable_password_reset",
             "auth.password_min_length",
             "auth.require_strong_password",
@@ -988,6 +998,27 @@ mod tests {
         );
     }
 
+    /// A file that still names the retired key keeps winning for the switch,
+    /// rather than silently losing its override to the saved settings row.
+    #[test]
+    fn a_retired_override_key_is_mapped_to_the_current_one() {
+        let mut config = Config::default();
+        config.settings.config_override_keys = vec![
+            "auth.enable_invitations".to_string(),
+            "auth.enable_registration".to_string(),
+        ];
+
+        let policy = SettingsPolicy::from_config(&config);
+
+        assert_eq!(policy.config_override_keys.len(), 1);
+        assert!(
+            policy
+                .config_override_keys
+                .contains("auth.enable_registration")
+        );
+        assert!(policy.config_wins(find("auth.enable_registration").unwrap()));
+    }
+
     #[test]
     fn resolution_prefers_environment_then_database_then_file_then_default() {
         let defaults = Config::default();
@@ -998,7 +1029,7 @@ mod tests {
             def,
             &defaults,
             &defaults,
-            &BTreeSet::new(),
+            &EnvKeys::new(),
             &BTreeMap::new(),
             &policy,
         );
@@ -1011,7 +1042,7 @@ mod tests {
             def,
             &file,
             &defaults,
-            &BTreeSet::new(),
+            &EnvKeys::new(),
             &BTreeMap::new(),
             &policy,
         );
@@ -1027,7 +1058,7 @@ mod tests {
                 updated_by: Some(3),
             },
         );
-        let resolved = resolve(def, &defaults, &defaults, &BTreeSet::new(), &rows, &policy);
+        let resolved = resolve(def, &defaults, &defaults, &EnvKeys::new(), &rows, &policy);
         assert_eq!(
             resolved.origin,
             Origin::Database {
@@ -1047,7 +1078,7 @@ mod tests {
         );
         assert_eq!(resolved.value, "false");
 
-        let resolved = resolve(def, &defaults, &defaults, &BTreeSet::new(), &rows, &policy);
+        let resolved = resolve(def, &defaults, &defaults, &EnvKeys::new(), &rows, &policy);
         assert_eq!(resolved.origin.id(), "database");
     }
 
@@ -1071,7 +1102,7 @@ mod tests {
         policy
             .config_override_keys
             .insert("server.share_link_enabled".to_string());
-        let resolved = resolve(def, &file, &defaults, &BTreeSet::new(), &rows, &policy);
+        let resolved = resolve(def, &file, &defaults, &EnvKeys::new(), &rows, &policy);
         assert_eq!(resolved.origin.id(), "config");
         assert_eq!(resolved.value, "true");
     }
@@ -1093,7 +1124,7 @@ mod tests {
             def,
             &defaults,
             &defaults,
-            &BTreeSet::new(),
+            &EnvKeys::new(),
             &rows,
             &SettingsPolicy::default(),
         );
@@ -1123,7 +1154,7 @@ mod tests {
         );
 
         let mut config = defaults.clone();
-        let resolved = resolve_all(&defaults, &defaults, &BTreeSet::new(), &rows, &policy);
+        let resolved = resolve_all(&defaults, &defaults, &EnvKeys::new(), &rows, &policy);
         assert!(apply_resolved(&mut config, &resolved, true).is_empty());
         assert!(!config.server.share_link_enabled, "live key applied");
         assert_eq!(

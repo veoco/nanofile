@@ -1,0 +1,23 @@
+{% extends "auth_base.html" %}
+
+{% block title %}{% if verified %}{{ t.tr("auth.verify_email_success_title") }}{% else %}{{ t.tr("auth.verify_email_invalid_title") }}{% endif %} | Nanofile{% endblock %}
+
+{% block heading %}
+{% if verified %}
+<h1 class="text-[19px] font-semibold tracking-tight text-ink">{{ t.tr("auth.verify_email_success_title") }}</h1>
+<p class="mt-1 text-[12.5px] leading-relaxed text-ink-3">{{ t.tr("auth.verify_email_success_body") }}</p>
+{% else %}
+<h1 class="text-[19px] font-semibold tracking-tight text-ink">{{ t.tr("auth.verify_email_invalid_title") }}</h1>
+<p class="mt-1 text-[12.5px] leading-relaxed text-ink-3">{{ t.tr("auth.verify_email_invalid") }}</p>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<a href="/accounts/login/" class="btn btn-solid h-9 w-full text-[13px]">{{ t.tr("auth.sign_in") }}</a>
+{% endblock %}
+
+{% block footer %}
+<div class="flex items-center justify-between gap-3 border-t border-line px-5 py-3">
+    <a href="/accounts/login/" class="text-[12.5px] text-ink underline underline-offset-2 decoration-line-strong">&larr; {{ t.tr("auth.back_to_login") }}</a>
+</div>
+{% endblock %}

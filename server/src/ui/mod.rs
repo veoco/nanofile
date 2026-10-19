@@ -45,11 +45,12 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             get(auth::two_factor_auth_page).post(auth::two_factor_auth),
         )
         .route("/accounts/logout/", get(auth::logout))
-        // Registration — invitation-only
+        // Registration — invitation code or open with email verification, per settings.
         .route(
             "/accounts/register/",
             get(auth::register_page).post(auth::register),
         )
+        .route("/accounts/verify-email/{token}/", get(auth::verify_email))
         .route(
             "/accounts/password/reset/",
             get(auth::password_reset_page).post(auth::password_reset),

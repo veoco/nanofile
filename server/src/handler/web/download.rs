@@ -28,7 +28,7 @@ pub(crate) async fn ensure_token_user_active(
         .find_by_id(user_id)
         .await?
         .ok_or(AppError::Unauthorized)?;
-    if !user.is_active {
+    if !user.is_active || !user.email_verified {
         return Err(AppError::Forbidden);
     }
     Ok(())

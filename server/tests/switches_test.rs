@@ -1,7 +1,7 @@
 //! Server-wide kill switches must fail closed.
 //!
 //! Each case here pinned a switch that was documented as closing a feature but
-//! was never consulted on the server side: `auth.enable_invitations` had no
+//! was never consulted on the server side: `auth.enable_registration` had no
 //! reader at all, `auth.enable_password_reset` only reached the login template,
 //! and `server.share_link_enabled` was skipped by the upload-token mint and by
 //! the token consumers.
@@ -10,11 +10,11 @@ mod common;
 
 use common::TestServer;
 
-/// `auth.enable_invitations = false` closes registration: the page, the POST and
+/// `auth.enable_registration = false` closes registration: the page, the POST and
 /// the login-page link all go away. A valid invitation code must not help.
 #[tokio::test]
-async fn disabled_invitations_close_registration() {
-    let server = TestServer::start_with_auth_config(|auth| auth.enable_invitations = false).await;
+async fn disabled_registration_closes_registration() {
+    let server = TestServer::start_with_auth_config(|auth| auth.enable_registration = false).await;
     let client = server.client();
 
     let body = client

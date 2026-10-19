@@ -305,6 +305,15 @@ pub fn install_default_jobs(
                     crate::repository::token_cleanup::delete_expired_tokens(db.as_ref(), now).await,
                 );
                 part(
+                    "unverified accounts",
+                    repos
+                        .user
+                        .delete_unverified_older_than(
+                            now - crate::service::auth::email_verification::UNVERIFIED_ACCOUNT_TTL_SECS,
+                        )
+                        .await,
+                );
+                part(
                     "expired share links",
                     repos.share_link.delete_expired(now).await,
                 );

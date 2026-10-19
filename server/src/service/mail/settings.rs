@@ -124,6 +124,9 @@ impl EmailSettings {
             // Not a notification: the reset link *is* the feature, and a reset flow that mints a
             // token and mails nothing would "pretend to work". `auth.enable_password_reset` gates it.
             super::MailKind::PasswordReset => true,
+            // Likewise the verification link is what open registration exists to
+            // deliver; `auth.require_invitation = false` gates the flow.
+            super::MailKind::EmailVerification => true,
             super::MailKind::NewDevice => self.notify_new_device,
             super::MailKind::ApiKeyCreated => self.notify_api_key_created,
             super::MailKind::NewLogin => self.notify_new_login,

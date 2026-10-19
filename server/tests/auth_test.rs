@@ -731,6 +731,7 @@ async fn test_legacy_password_hash_verifies_and_is_upgraded() {
         is_admin: sea_orm::Set(false),
         created_at: sea_orm::Set(now),
         last_login_at: sea_orm::NotSet,
+        email_verified: sea_orm::Set(true),
         invited_by: sea_orm::Set(None),
         storage_quota: sea_orm::NotSet,
         name: sea_orm::NotSet,

@@ -41,6 +41,9 @@
                 {% else %}
                 <span class="badge badge-red shrink-0">{{ t.tr("common.inactive") }}</span>
                 {% endif %}
+                {% if !u.email_verified %}
+                <span class="badge badge-gray shrink-0">{{ t.tr("admin.user_unverified") }}</span>
+                {% endif %}
             </div>
             <div class="nf-prow-sub">
                 <span class="t" title="{{ t.tr("common.usage") }}">{{ u.usage_formatted }}</span>

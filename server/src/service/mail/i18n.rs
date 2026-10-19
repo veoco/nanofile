@@ -96,10 +96,10 @@ mod tests {
 
     #[test]
     fn the_source_dictionary_is_not_empty() {
-        // 5 kinds x (subject, html, text) + brand, footer, two layout parts: a lower count means a
+        // 6 kinds x (subject, html, text) + brand, footer, two layout parts: a lower count means a
         // TOML mistake emptied part of the file.
         assert!(
-            EMAIL_EN.len() >= 19,
+            EMAIL_EN.len() >= 22,
             "email_en.toml parsed into only {} entries — a TOML mistake would \
              silently disable every mail translation",
             EMAIL_EN.len()

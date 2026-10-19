@@ -12,6 +12,7 @@ pub mod client_login_token;
 pub mod commit;
 pub mod deleted_repo;
 pub mod email_message;
+pub mod email_verification_token;
 pub mod file_lock_timestamp;
 pub mod file_tag;
 pub mod file_trash;
@@ -51,6 +52,7 @@ use crate::repository::client_login_token::*;
 use crate::repository::commit::*;
 use crate::repository::deleted_repo::*;
 use crate::repository::email_message::*;
+use crate::repository::email_verification_token::*;
 use crate::repository::file_lock_timestamp::*;
 use crate::repository::file_tag::*;
 use crate::repository::file_trash::*;
@@ -109,6 +111,7 @@ pub struct Repositories {
     pub email_message: Arc<dyn EmailMessageRepository>,
     pub job_run: Arc<dyn JobRunRepository>,
     pub password_reset_token: Arc<dyn PasswordResetTokenRepository>,
+    pub email_verification_token: Arc<dyn EmailVerificationTokenRepository>,
     pub user_2fa_backup_code: Arc<dyn User2faBackupCodeRepository>,
     pub file_lock_timestamp: Arc<dyn FileLockTimestampRepository>,
     /// Per-server quota accounting state (committed-usage snapshots and uncommitted-block
@@ -174,6 +177,7 @@ impl Repositories {
             email_message: Arc::new(DbEmailMessageRepository::new(db.clone())),
             job_run: Arc::new(DbJobRunRepository::new(db.clone())),
             password_reset_token: Arc::new(DbPasswordResetTokenRepository::new(db.clone())),
+            email_verification_token: Arc::new(DbEmailVerificationTokenRepository::new(db.clone())),
             user_2fa_backup_code: Arc::new(DbUser2faBackupCodeRepository::new(db.clone())),
             file_lock_timestamp: Arc::new(DbFileLockTimestampRepository::new(db.clone())),
             quota_cache: Arc::new(infra::quota_cache::QuotaCache::new()),

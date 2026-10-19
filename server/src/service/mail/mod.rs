@@ -40,6 +40,8 @@ pub const TASK_NAME: &str = "email delivery";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MailKind {
     PasswordReset,
+    /// Proof that a self-registered account owns its address.
+    EmailVerification,
     /// A client device signed in for the first time.
     NewDevice,
     /// An API key was created.
@@ -51,8 +53,9 @@ pub enum MailKind {
 }
 
 impl MailKind {
-    pub const ALL: [MailKind; 5] = [
+    pub const ALL: [MailKind; 6] = [
         MailKind::PasswordReset,
+        MailKind::EmailVerification,
         MailKind::NewDevice,
         MailKind::ApiKeyCreated,
         MailKind::NewLogin,
@@ -63,6 +66,7 @@ impl MailKind {
     pub const fn id(self) -> &'static str {
         match self {
             MailKind::PasswordReset => "password_reset",
+            MailKind::EmailVerification => "email_verification",
             MailKind::NewDevice => "new_device",
             MailKind::ApiKeyCreated => "api_key_created",
             MailKind::NewLogin => "new_login",
@@ -77,6 +81,7 @@ impl MailKind {
     pub const fn i18n_key(self) -> &'static str {
         match self {
             MailKind::PasswordReset => "admin.email_kind_password_reset",
+            MailKind::EmailVerification => "admin.email_kind_email_verification",
             MailKind::NewDevice => "admin.email_kind_new_device",
             MailKind::ApiKeyCreated => "admin.email_kind_api_key_created",
             MailKind::NewLogin => "admin.email_kind_new_login",
@@ -392,6 +397,58 @@ impl Mailer {
             .await;
     }
 
+    /// Queue the open-registration verification link.
+    ///
+    /// Unlike a notification this must report failure: the registration is rolled
+    /// back when the link cannot be queued, so the caller has to know. The rendered
+    /// body is encrypted into the outbox like every other message.
+    pub async fn send_email_verification(
+        &self,
+        to: &str,
+        user_id: i32,
+        language: Option<&str>,
+        verify_url: &str,
+        display_name: &str,
+        ip: Option<&str>,
+    ) -> Result<(), AppError> {
+        let settings = self.settings();
+        if !settings.ready() {
+            return Err(AppError::BadRequest(
+                "outbound mail is not ready".to_string(),
+            ));
+        }
+        if !settings::is_valid_address(to) {
+            return Err(AppError::BadRequest(format!(
+                "not a valid email address: {to}"
+            )));
+        }
+
+        let now = chrono::Utc::now().timestamp();
+        let params = MailParams {
+            display_name: Some(display_name.to_string()),
+            link: Some(verify_url.to_string()),
+            ttl_days: Some(
+                crate::service::auth::email_verification::EMAIL_VERIFICATION_TOKEN_TTL_SECS
+                    / 86_400,
+            ),
+            ip: ip.map(str::to_string),
+            time_ts: Some(now),
+            ..Default::default()
+        };
+        self.queue(
+            &settings,
+            MailKind::EmailVerification,
+            to,
+            Some(user_id),
+            language,
+            &params,
+            now,
+        )
+        .await?;
+        self.nudge();
+        Ok(())
+    }
+
     /// Deliver everything that is due and apply retention.
     pub async fn drain_once(&self) -> Result<queue::DrainReport, AppError> {
         let settings = self.settings();
@@ -416,6 +473,13 @@ impl Mailer {
     /// value came from is reported by `SettingsService::log_startup_diagnostics`.
     pub fn log_startup_diagnostics(&self) {
         let config = self.config.get();
+        if config.auth.enable_registration && !config.auth.require_invitation && !self.ready() {
+            tracing::warn!(
+                "[auth] require_invitation is off but outbound mail is not ready: open \
+                 registration stays closed (the register page answers 404) until [email] is \
+                 enabled and configured at /sysadmin/settings/email/."
+            );
+        }
         if !config.email.enabled {
             if config.auth.enable_password_reset {
                 tracing::warn!(

@@ -420,14 +420,26 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     // · Registration
     setting!(
-        "auth.enable_invitations",
+        "auth.enable_registration",
         Authentication,
-        "NANOFILE_AUTH_ENABLE_INVITATIONS",
+        "NANOFILE_AUTH_ENABLE_REGISTRATION",
         Kind::Bool,
         Apply::Live,
-        |c| fmt_bool(c.auth.enable_invitations),
+        |c| fmt_bool(c.auth.enable_registration),
         |c, v| {
-            c.auth.enable_invitations = parse_bool(v)?;
+            c.auth.enable_registration = parse_bool(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "auth.require_invitation",
+        Authentication,
+        "NANOFILE_AUTH_REQUIRE_INVITATION",
+        Kind::Bool,
+        Apply::Live,
+        |c| fmt_bool(c.auth.require_invitation),
+        |c, v| {
+            c.auth.require_invitation = parse_bool(v)?;
             Ok(())
         }
     ),
@@ -1545,7 +1557,7 @@ pub static GROUPS: &[GroupDef] = &[
         section: Section::Authentication,
         id: "authentication_registration",
         title_key: "setting.group_authentication_registration",
-        keys: &["auth.enable_invitations"],
+        keys: &["auth.enable_registration", "auth.require_invitation"],
     },
     GroupDef {
         section: Section::Authentication,

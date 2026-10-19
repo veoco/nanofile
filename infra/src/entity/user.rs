@@ -17,6 +17,11 @@ pub struct Model {
     #[sea_orm(not_null)]
     pub created_at: i64,
     pub last_login_at: Option<i64>,
+    /// Whether the address has been proven. Accounts created before email
+    /// verification existed, by an administrator, by an invitation code or by
+    /// `adduser` are verified; only open self-registration starts unverified.
+    #[sea_orm(not_null)]
+    pub email_verified: bool,
     /// User who invited this user (FK → users.id). None for the admin/root user.
     pub invited_by: Option<i32>,
     /// Per-user storage quota in bytes (null = use global default, 0 = unlimited).

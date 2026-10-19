@@ -132,7 +132,7 @@ impl WebDavAuth {
             .await
             .map_err(|_| WebDavAuthError::Unauthorized)?
             .ok_or(WebDavAuthError::Unauthorized)?;
-        if !user.is_active {
+        if !user.is_active || !user.email_verified {
             return Err(WebDavAuthError::Unauthorized);
         }
 

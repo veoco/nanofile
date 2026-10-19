@@ -385,7 +385,7 @@ pub async fn link_creator_may_access(
     }
 
     let allowed = match repos.user.find_by_id(creator_id).await {
-        Ok(Some(user)) if user.is_active => {
+        Ok(Some(user)) if user.is_active && user.email_verified => {
             let member = repos.member.as_ref();
             if need_write {
                 crate::domain::permission::check_repo_write_permission(member, repo_id, creator_id)

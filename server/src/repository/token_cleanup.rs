@@ -8,8 +8,8 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use base::error::AppError;
 use infra::entity::{
-    api_key, api_token, client_login_token, password_reset_token, s2fa_token, sso_login_token,
-    sync_token,
+    api_key, api_token, client_login_token, email_verification_token, password_reset_token,
+    s2fa_token, sso_login_token, sync_token,
 };
 
 /// Client-login tokens are single-use and short-lived; anything older than an hour is certainly
@@ -69,6 +69,18 @@ pub async fn delete_expired_tokens(db: &DatabaseConnection, now: i64) -> Result<
         .rows_affected;
     total += password_reset_token::Entity::delete_many()
         .filter(password_reset_token::Column::ExpiresAt.lt(now))
+        .exec(db)
+        .await?
+        .rows_affected;
+
+    // Email-verification tokens are single-use and short-lived too.
+    total += email_verification_token::Entity::delete_many()
+        .filter(email_verification_token::Column::Used.eq(true))
+        .exec(db)
+        .await?
+        .rows_affected;
+    total += email_verification_token::Entity::delete_many()
+        .filter(email_verification_token::Column::ExpiresAt.lt(now))
         .exec(db)
         .await?
         .rows_affected;

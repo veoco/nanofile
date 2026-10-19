@@ -193,7 +193,7 @@ async fn complete_login(
         .map_err(|_| AppError::internal("database error"))?;
 
     let user_record = match user_record {
-        Some(u) if u.is_active => u,
+        Some(u) if u.is_active && u.email_verified => u,
         _ => {
             let next = resolve_next(next, &allowed_origin);
             return Ok(Redirect::to(&next).into_response());

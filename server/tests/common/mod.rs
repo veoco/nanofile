@@ -340,6 +340,37 @@ impl TestServer {
         .await
     }
 
+    /// Open self-registration with mail ready enough to queue verification
+    /// messages. The SMTP port is closed, so delivery fails and the outbox row
+    /// stays auditable; the request only depends on the queue accepting it.
+    pub async fn start_with_open_registration() -> Self {
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            true,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            |config| {
+                config.auth.require_invitation = false;
+                config.email.enabled = true;
+                config.email.host = "127.0.0.1".to_string();
+                config.email.port = 1;
+                config.email.tls = "none".to_string();
+                config.email.from_address = "noreply@example.com".to_string();
+                config.email.timeout_secs = 1;
+                config.email.max_attempts = 1;
+            },
+        )
+        .await
+    }
+
     async fn start_with_config(
         enable_notification: bool,
         enable_index: bool,
@@ -491,7 +522,8 @@ impl TestServer {
                 lockout_duration_secs: 300,
                 max_distinct_usernames_per_ip: 20,
                 sso_link_max_per_hour: 30,
-                enable_invitations: true,
+                enable_registration: true,
+                require_invitation: true,
                 enable_password_reset: true,
                 password_min_length: 8,
                 require_strong_password: false,
@@ -644,6 +676,7 @@ pub async fn create_test_user(db: &DatabaseConnection, email: &str, password: &s
         is_admin: sea_orm::Set(false),
         created_at: sea_orm::Set(now),
         last_login_at: sea_orm::NotSet,
+        email_verified: sea_orm::Set(true),
         invited_by: sea_orm::Set(None),
         storage_quota: sea_orm::NotSet,
         name: sea_orm::NotSet,
@@ -702,6 +735,7 @@ pub async fn create_test_admin(db: &DatabaseConnection, email: &str, password: &
         is_admin: sea_orm::Set(true),
         created_at: sea_orm::Set(now),
         last_login_at: sea_orm::NotSet,
+        email_verified: sea_orm::Set(true),
         invited_by: sea_orm::Set(None),
         storage_quota: sea_orm::NotSet,
         name: sea_orm::NotSet,

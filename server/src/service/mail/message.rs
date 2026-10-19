@@ -271,8 +271,9 @@ mod tests {
         }
     }
 
-    const KINDS: [MailKind; 5] = [
+    const KINDS: [MailKind; 6] = [
         MailKind::PasswordReset,
+        MailKind::EmailVerification,
         MailKind::NewDevice,
         MailKind::ApiKeyCreated,
         MailKind::NewLogin,

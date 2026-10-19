@@ -16,6 +16,35 @@ it from a file; both keep it out of shell history and `ps` output.
 
 Invitation-code registration can be enabled in `[auth]` for self-registration.
 
+### Registration modes
+
+Two settings, both on **System Settings → Authentication**, decide whether
+visitors can create an account:
+
+| State | `auth.enable_registration` | `auth.require_invitation` |
+|---|---|---|
+| Registration closed | `false` | either |
+| Invitation only (default) | `true` | `true` |
+| Open registration | `true` | `false` |
+
+Their environment variables are `NANOFILE_AUTH_ENABLE_REGISTRATION` and
+`NANOFILE_AUTH_REQUIRE_INVITATION`. The old names — `auth.enable_invitations`
+and `NANOFILE_AUTH_ENABLE_INVITATIONS` — are still accepted as deprecated
+aliases, and a saved setting row is moved to the new key on upgrade.
+
+Invitation registration is active immediately: the code is the proof.
+**Open registration requires a working email setup.** The account is created
+unverified, a verification link valid for 3 days is mailed to it, and the account
+cannot sign in until the link is opened. A user who did not receive the message
+can sign in with their password to send a new link (at most once every 5 minutes).
+While outbound mail is off, paused or incomplete, the registration page answers
+404 and the login page hides the **Create Account** link. Accounts that remain
+unverified for 7 days are removed by the cleanup task.
+
+Administrators can still create accounts directly; those accounts, accounts
+created by `adduser`, the first-run administrator and invitation registrations
+are all considered verified.
+
 ## Share links
 
 Select a file or folder in the web file browser and choose **Share**. The

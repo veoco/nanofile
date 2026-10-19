@@ -35,15 +35,21 @@ pub trait UserRepository: Send + Sync {
     async fn find_all(&self) -> Result<Vec<user::Model>, AppError>;
     async fn update_is_admin(&self, user_id: i32, is_admin: bool) -> Result<(), AppError>;
     async fn update_is_active(&self, user_id: i32, is_active: bool) -> Result<(), AppError>;
+    async fn mark_email_verified(&self, user_id: i32) -> Result<(), AppError>;
     async fn update_storage_quota(&self, user_id: i32, quota: Option<i64>) -> Result<(), AppError>;
     async fn delete_user(&self, user_id: i32) -> Result<(), AppError>;
+    /// Remove accounts that never proved their address, older than `cutoff`.
+    /// Open registration can otherwise let an unauthenticated caller grow the
+    /// users table with rows that can never sign in.
+    async fn delete_unverified_older_than(&self, cutoff: i64) -> Result<u64, AppError>;
 
     async fn update_password(&self, user_id: i32, password_hash: String) -> Result<(), AppError>;
-    async fn create_with_inviter(
+    async fn create_self_registered(
         &self,
         email: String,
         password_hash: String,
         invited_by: Option<i32>,
+        email_verified: bool,
     ) -> Result<user::Model, AppError>;
 }
 
@@ -150,6 +156,7 @@ impl UserRepository for DbUserRepository {
             is_active: Set(is_active),
             is_admin: Set(is_admin),
             created_at: Set(now),
+            email_verified: Set(true),
             storage_quota: Set(storage_quota),
             ..Default::default()
         };
@@ -232,6 +239,27 @@ impl UserRepository for DbUserRepository {
         Ok(())
     }
 
+    async fn mark_email_verified(&self, user_id: i32) -> Result<(), AppError> {
+        user::Entity::update_many()
+            .filter(user::Column::Id.eq(user_id))
+            .set(user::ActiveModel {
+                email_verified: Set(true),
+                ..Default::default()
+            })
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_unverified_older_than(&self, cutoff: i64) -> Result<u64, AppError> {
+        let result = user::Entity::delete_many()
+            .filter(user::Column::EmailVerified.eq(false))
+            .filter(user::Column::CreatedAt.lt(cutoff))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result.rows_affected)
+    }
+
     async fn update_storage_quota(&self, user_id: i32, quota: Option<i64>) -> Result<(), AppError> {
         user::Entity::update_many()
             .filter(user::Column::Id.eq(user_id))
@@ -263,11 +291,12 @@ impl UserRepository for DbUserRepository {
         Ok(())
     }
 
-    async fn create_with_inviter(
+    async fn create_self_registered(
         &self,
         email: String,
         password_hash: String,
         invited_by: Option<i32>,
+        email_verified: bool,
     ) -> Result<user::Model, AppError> {
         let now = chrono::Utc::now().timestamp();
         let model = user::ActiveModel {
@@ -276,6 +305,7 @@ impl UserRepository for DbUserRepository {
             is_active: Set(true),
             is_admin: Set(false),
             created_at: Set(now),
+            email_verified: Set(email_verified),
             invited_by: Set(invited_by),
             ..Default::default()
         };
