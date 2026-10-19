@@ -77,8 +77,9 @@ impl EmailVerificationService {
     /// Claim a link and mark its account verified.
     ///
     /// The claim is the single-use gate: two concurrent visits of the same link
-    /// cannot both succeed. An unknown, used or expired token is [`Invalid`]
-    /// rather than an error, because the page is the same for all of them.
+    /// cannot both succeed. An unknown, used or expired token is
+    /// [`VerificationOutcome::Invalid`] rather than an error, because the page is
+    /// the same for all of them.
     pub async fn verify(&self, raw_token: &str) -> Result<VerificationOutcome, AppError> {
         let token_hash = hash_token(raw_token);
         let Some(record) = self
