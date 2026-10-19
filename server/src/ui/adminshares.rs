@@ -30,7 +30,10 @@ pub struct AdminSharesTemplate {
     pub error: Option<String>,
     pub success: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
+    pub share_download_enabled: bool,
+    pub share_upload_enabled: bool,
 }
 
 pub struct AdminShareLinkInfo {
@@ -225,7 +228,10 @@ async fn render_page(
         error,
         success,
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
+        share_download_enabled: state.config().server.share_download_enabled,
+        share_upload_enabled: state.config().server.share_upload_enabled,
     };
 
     let html = tpl

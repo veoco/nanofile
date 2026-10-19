@@ -56,8 +56,30 @@ resulting link supports:
 
 Anonymous **upload links** accept uploads into a library without an account.
 
-Setting `share_link_enabled` to `false` disables anonymous share and upload links.
-Existing links stop resolving; they do not fall back to signed-in access.
+Sharing has two switches, on **System Settings → Security → Sharing**:
+
+| Direction | Key | Environment |
+|---|---|---|
+| Download sharing (share links) | `server.share_download_enabled` | `NANOFILE_SERVER_SHARE_DOWNLOAD_ENABLED` |
+| Upload sharing (upload links) | `server.share_upload_enabled` | `NANOFILE_SERVER_SHARE_UPLOAD_ENABLED` |
+
+Both default to `true` and apply immediately. Turning one off hides that
+direction's controls in the web UI and in the file browser's row menu, closes
+its public pages (an existing `/f/`, `/d/` or `/u/` link answers as gone rather
+than falling back to signed-in access), and rejects creating new links of that
+kind. The other direction keeps working, and the **Shares** page keeps listing
+whichever direction is still open; with both off its link disappears and the
+page answers 404. Administrative sharing management stays available so dead
+links can still be deleted.
+
+Desktop and mobile clients have a single capability bit, `share-link-disabled`,
+which follows download sharing: while share links are off, clients hide their
+sharing menus entirely. Upload links created before the switch are refused on
+use as well.
+
+The single switch from older releases, `share_link_enabled` /
+`NANOFILE_SERVER_SHARE_LINK_ENABLED`, is still read and closes both directions;
+a saved value is moved to the two keys on upgrade.
 
 ## Encrypted libraries
 

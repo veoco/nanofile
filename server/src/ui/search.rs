@@ -35,6 +35,7 @@ pub struct SearchTemplate {
     pub current_page: i32,
     pub search_filename_only: bool,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
 }
 
@@ -234,6 +235,7 @@ pub async fn search_page(
         current_page: page,
         search_filename_only,
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
     };
     let html = tpl

@@ -56,14 +56,18 @@
                     {{ icons::icon_download("w-3.5 h-3.5") }}
                     <span>{{ t.tr("common.download") }}</span>
                 </a>
+                {% if share_download_enabled %}
                 <button type="button" class="js-rp-share js-share-btn btn btn-line">
                     {{ icons::icon_link("w-3.5 h-3.5") }}
                     <span class="hidden xl:inline">{{ t.tr("fb.get_share_link") }}</span>
                 </button>
+                {% endif %}
+                {% if share_upload_enabled %}
                 <button type="button" id="rp-upload-link-btn" class="btn btn-line hidden">
                     {{ icons::icon_upload("w-3.5 h-3.5") }}
                     <span class="hidden xl:inline">{{ t.tr("fb.get_upload_link") }}</span>
                 </button>
+                {% endif %}
                 <button class="js-rp-delete-btn js-delete-btn btn btn-danger-outline" title="{{ t.tr("common.delete") }}">
                     {{ icons::icon_trash("w-3.5 h-3.5") }}
                     <span class="hidden 2xl:inline">{{ t.tr("common.delete") }}</span>
@@ -127,6 +131,7 @@
                     </button>
                 </section>
 
+                {% if share_download_enabled %}
                 <!-- Share links -->
                 <section class="d-ex js-rp-share-links-section hidden">
                     <h4>{{ icons::icon_link("w-3.5 h-3.5") }}{{ t.tr("fb.share_links") }}</h4>
@@ -134,13 +139,16 @@
                         <div class="js-rp-share-links-loading text-[11px] text-ink-3 italic">{{ t.tr("fb.loading") }}</div>
                     </div>
                 </section>
+                {% endif %}
 
+                {% if share_upload_enabled %}
                 <!-- Upload links (directories only) -->
                 <section class="d-ex js-rp-upload-links-section hidden">
                     <h4>{{ icons::icon_upload("w-3.5 h-3.5") }}{{ t.tr("fb.upload_links") }}</h4>
                     <div class="js-rp-upload-links-list space-y-1 max-h-32 overflow-y-auto"></div>
                     <div class="js-rp-no-upload-links hidden text-[11px] text-ink-3 italic">{{ t.tr("fb.no_upload_links") }}</div>
                 </section>
+                {% endif %}
             </div>
         </div>
     </div>

@@ -148,11 +148,22 @@ pub fn require_csrf_for_cookie_session(
     }
 }
 
-/// Reject a request when external share/upload links are globally disabled by the
-/// `server.share_link_enabled` setting. Call at the top of handlers that create or
-/// serve anonymous share/upload links.
-pub fn ensure_share_links_enabled(state: &std::sync::Arc<AppState>) -> Result<(), AppError> {
-    if state.config().server.share_link_enabled {
+/// Reject a request when the download half of sharing is disabled by
+/// `server.share_download_enabled`. Call at the top of handlers that create or
+/// serve share links (`/f/`, `/d/`).
+pub fn ensure_share_download_enabled(state: &std::sync::Arc<AppState>) -> Result<(), AppError> {
+    if state.config().server.share_download_enabled {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
+/// Reject a request when the upload half of sharing is disabled by
+/// `server.share_upload_enabled`. Call at the top of handlers that create or serve
+/// upload links (`/u/`), and at every place an anonymous upload token is consumed.
+pub fn ensure_share_upload_enabled(state: &std::sync::Arc<AppState>) -> Result<(), AppError> {
+    if state.config().server.share_upload_enabled {
         Ok(())
     } else {
         Err(AppError::Forbidden)

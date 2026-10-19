@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use super::share_view::switched_off_link_page;
 use crate::AppState;
 use crate::i18n::I18n;
 use crate::service::sharing::share::{UPLOAD_LINK_EXPIRED, UPLOAD_LINK_NOT_FOUND};
@@ -133,7 +134,9 @@ pub async fn upload_link_view(
     headers: HeaderMap,
     Path(token): Path<String>,
 ) -> Result<Response, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    if !state.config().server.share_upload_enabled {
+        return Ok(switched_off_link_page(&state, &headers));
+    }
     let link = match validate_upload_link(&state, &token).await {
         Ok(link) => link,
         Err(err) => return link_error_page(&state, err, &headers),
@@ -224,7 +227,9 @@ pub async fn upload_link_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    if !state.config().server.share_upload_enabled {
+        return Ok(switched_off_link_page(&state, &headers));
+    }
     let link = match validate_upload_link(&state, &token).await {
         Ok(link) => link,
         Err(err) => return link_error_page(&state, err, &headers),

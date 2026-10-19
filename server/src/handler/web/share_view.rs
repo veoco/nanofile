@@ -150,6 +150,19 @@ fn link_error_page(
     }
 }
 
+/// The page a visitor gets when the link's direction has been switched off.
+///
+/// "Gone", not "forbidden": a retired feature must not advertise that the link
+/// ever existed, and the existing dead-link copy already says the owner may have
+/// turned it off.
+pub(super) fn switched_off_link_page(state: &AppState, headers: &HeaderMap) -> Response {
+    crate::ui::error_page::link_page(
+        crate::service::sharing::share::LinkFailure::Unknown,
+        state,
+        headers,
+    )
+}
+
 async fn resolve_file_meta(
     repos: &crate::repository::Repositories,
     repo_id: &str,
@@ -168,7 +181,9 @@ pub async fn shared_file_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    if !state.config().server.share_download_enabled {
+        return Ok(switched_off_link_page(&state, &headers));
+    }
     let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
     {
         Ok(link) => link,
@@ -288,7 +303,9 @@ pub async fn shared_file_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    if !state.config().server.share_download_enabled {
+        return Ok(switched_off_link_page(&state, &headers));
+    }
     let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
     {
         Ok(link) => link,
@@ -391,7 +408,9 @@ pub async fn shared_dir_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    if !state.config().server.share_download_enabled {
+        return Ok(switched_off_link_page(&state, &headers));
+    }
     let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
     {
         Ok(link) => link,
@@ -653,7 +672,9 @@ pub async fn shared_dir_file_view(
     Path((token, file_path)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    if !state.config().server.share_download_enabled {
+        return Ok(switched_off_link_page(&state, &headers));
+    }
     let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
     {
         Ok(link) => link,
@@ -725,7 +746,9 @@ pub async fn shared_dir_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    if !state.config().server.share_download_enabled {
+        return Ok(switched_off_link_page(&state, &headers));
+    }
     let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
     {
         Ok(link) => link,

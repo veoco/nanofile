@@ -50,6 +50,9 @@ pub struct FileBrowserTemplate {
     pub render_view: &'static str,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
+    pub share_download_enabled: bool,
+    pub share_upload_enabled: bool,
     pub current_repo_id: Option<String>,
     pub max_upload_size_mb: u64,
     pub sort_field: String,
@@ -106,6 +109,7 @@ pub struct PreviewTextTemplate {
     pub size_display: String,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
 }
 
@@ -126,6 +130,7 @@ pub struct PreviewImageTemplate {
     pub size_display: String,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
 }
 
@@ -148,6 +153,7 @@ pub struct PreviewMediaTemplate {
     pub size_display: String,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
     pub is_video: bool,
 }
@@ -946,6 +952,9 @@ async fn file_browser_inner(
             render_view,
             active_page: "repos",
             left_panel_repos: ctx.left_panel_repos,
+            sharing_enabled: ctx.sharing_enabled,
+            share_download_enabled: state.config().server.share_download_enabled,
+            share_upload_enabled: state.config().server.share_upload_enabled,
             current_repo_id,
             max_upload_size_mb: state.config().server.max_upload_size_mb,
             sort_field: sort_field.to_string(),
@@ -1049,6 +1058,7 @@ async fn serve_file(
             size_display,
             active_page: "repos",
             left_panel_repos: ctx.left_panel_repos,
+            sharing_enabled: ctx.sharing_enabled,
             current_repo_id: Some(repo_id),
             is_video,
         }
@@ -1069,6 +1079,7 @@ async fn serve_file(
             size_display,
             active_page: "repos",
             left_panel_repos: ctx.left_panel_repos,
+            sharing_enabled: ctx.sharing_enabled,
             current_repo_id: Some(repo_id),
         }
         .render()
@@ -1100,6 +1111,7 @@ async fn serve_file(
             size_display,
             active_page: "repos",
             left_panel_repos: ctx.left_panel_repos,
+            sharing_enabled: ctx.sharing_enabled,
             current_repo_id: Some(repo_id),
         }
         .render()

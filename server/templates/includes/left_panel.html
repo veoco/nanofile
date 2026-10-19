@@ -54,11 +54,15 @@
             <span class="ic">{{ icons::icon_star("w-[15px] h-[15px]") }}</span>
             <span class="nm">{{ t.tr("nav.starred") }}</span>
         </a>
+        {# Sharing is a switch, not a permanent feature: both directions off drops
+           the page this link leads to (it answers 404), so the link goes too. #}
+        {% if sharing_enabled %}
         <a href="/shares/"
            class="row-link{% if active_page == "shares" %} on{% endif %}">
             <span class="ic">{{ icons::icon_share("w-[15px] h-[15px]") }}</span>
             <span class="nm">{{ t.tr("nav.shares") }}</span>
         </a>
+        {% endif %}
         <a href="/trash/"
            class="row-link{% if active_page == "trash" %} on{% endif %}">
             <span class="ic">{{ icons::icon_trash("w-[15px] h-[15px]") }}</span>

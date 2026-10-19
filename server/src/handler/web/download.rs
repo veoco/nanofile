@@ -97,7 +97,7 @@ pub(crate) async fn upload_block_key(
     // The server-wide kill switch has to reach the token consumers too: with
     // anonymous links disabled, an already-minted upload URL (still within its
     // TTL) must stop accepting writes, not just stop being created.
-    if anonymous_link && !state.config().server.share_link_enabled {
+    if anonymous_link && !state.config().server.share_upload_enabled {
         return Err(AppError::Forbidden);
     }
 

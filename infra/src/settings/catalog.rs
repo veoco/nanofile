@@ -297,14 +297,26 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
-        "server.share_link_enabled",
+        "server.share_download_enabled",
         Security,
-        "NANOFILE_SERVER_SHARE_LINK_ENABLED",
+        "NANOFILE_SERVER_SHARE_DOWNLOAD_ENABLED",
         Kind::Bool,
         Apply::Live,
-        |c| fmt_bool(c.server.share_link_enabled),
+        |c| fmt_bool(c.server.share_download_enabled),
         |c, v| {
-            c.server.share_link_enabled = parse_bool(v)?;
+            c.server.share_download_enabled = parse_bool(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "server.share_upload_enabled",
+        Security,
+        "NANOFILE_SERVER_SHARE_UPLOAD_ENABLED",
+        Kind::Bool,
+        Apply::Live,
+        |c| fmt_bool(c.server.share_upload_enabled),
+        |c, v| {
+            c.server.share_upload_enabled = parse_bool(v)?;
             Ok(())
         }
     ),
@@ -1520,7 +1532,15 @@ pub static GROUPS: &[GroupDef] = &[
             "server.webdav_enabled",
             "server.sso_enabled",
             "server.file_search_enabled",
-            "server.share_link_enabled",
+        ],
+    },
+    GroupDef {
+        section: Section::Security,
+        id: "security_sharing",
+        title_key: "setting.group_security_sharing",
+        keys: &[
+            "server.share_download_enabled",
+            "server.share_upload_enabled",
         ],
     },
     GroupDef {

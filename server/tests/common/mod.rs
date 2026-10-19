@@ -486,7 +486,8 @@ impl TestServer {
                 encrypted_library_pwd_hash_algo: None,
                 encrypted_library_pwd_hash_params: None,
                 file_search_enabled: true,
-                share_link_enabled: true,
+                share_download_enabled: true,
+                share_upload_enabled: true,
                 trusted_proxies: vec![],
                 allowed_hosts: vec![],
                 trust_request_host: true,
@@ -1001,12 +1002,25 @@ impl TestFixture {
         }
     }
 
-    /// Create a full test environment with the global share-link switch turned
-    /// off (`server.share_link_enabled = false`), for testing that creating and
-    /// accessing external share/upload links is rejected.
-    pub async fn new_with_share_link_disabled() -> Self {
-        let server =
-            TestServer::start_with_server_info_config(|cfg| cfg.share_link_enabled = false).await;
+    /// Create a full test environment with the download half of sharing turned
+    /// off (`server.share_download_enabled = false`): share links cannot be
+    /// created or opened, while upload links keep working.
+    pub async fn new_with_share_download_disabled() -> Self {
+        let server = TestServer::start_with_server_info_config(|cfg| {
+            cfg.share_download_enabled = false;
+        })
+        .await;
+        Self::from_server(server).await
+    }
+
+    /// Create a full test environment with both halves of sharing turned off
+    /// (`server.share_download_enabled` and `server.share_upload_enabled`).
+    pub async fn new_with_sharing_disabled() -> Self {
+        let server = TestServer::start_with_server_info_config(|cfg| {
+            cfg.share_download_enabled = false;
+            cfg.share_upload_enabled = false;
+        })
+        .await;
         Self::from_server(server).await
     }
 

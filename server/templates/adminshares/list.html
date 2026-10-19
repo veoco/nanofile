@@ -15,6 +15,20 @@
 <div class="mt-5">{% include "includes/alert_success.html" %}</div>
 {% endif %}
 
+{# Links stay listable while their direction is off: deleting a dead link is the
+   one thing an operator can still do here, so the page explains why nothing
+   resolves instead of hiding the rows. #}
+{% if !share_download_enabled || !share_upload_enabled %}
+<div class="nf-banner is-warn mt-5">
+    {% if !share_download_enabled %}
+    <p>{{ t.tr("admin.share_download_disabled_note") }}</p>
+    {% endif %}
+    {% if !share_upload_enabled %}
+    <p>{{ t.tr("admin.share_upload_disabled_note") }}</p>
+    {% endif %}
+</div>
+{% endif %}
+
 <!-- Tab bar -->
 <div class="nf-tabs" role="tablist">
     <button type="button" role="tab" class="nf-tab"

@@ -117,6 +117,7 @@ pub struct SystemSettingsTemplate {
     pub csrf_token: String,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
 
     pub section: &'static str,
@@ -329,6 +330,7 @@ async fn render(
         csrf_token: ctx.csrf_token,
         active_page: "sysadmin_settings",
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
 
         section: section.id(),
@@ -1472,16 +1474,25 @@ mod tests {
     fn an_unchecked_box_submits_the_hidden_false() {
         // An unchecked box sends only its hidden field; last-wins makes both alike.
         let off = fold_form(&[
-            ("server.share_link_enabled".to_string(), "false".to_string()),
+            (
+                "server.share_download_enabled".to_string(),
+                "false".to_string(),
+            ),
             ("csrf_token".to_string(), "x".to_string()),
         ]);
-        assert_eq!(off.get("server.share_link_enabled").unwrap(), "false");
+        assert_eq!(off.get("server.share_download_enabled").unwrap(), "false");
 
         let on = fold_form(&[
-            ("server.share_link_enabled".to_string(), "false".to_string()),
-            ("server.share_link_enabled".to_string(), "true".to_string()),
+            (
+                "server.share_download_enabled".to_string(),
+                "false".to_string(),
+            ),
+            (
+                "server.share_download_enabled".to_string(),
+                "true".to_string(),
+            ),
         ]);
-        assert_eq!(on.get("server.share_link_enabled").unwrap(), "true");
+        assert_eq!(on.get("server.share_download_enabled").unwrap(), "true");
     }
 
     #[test]
@@ -1532,13 +1543,13 @@ mod tests {
             Section::Server,
             &form(&[
                 ("server.port", "8082"),
-                ("server.share_link_enabled", "false"),
+                ("server.share_download_enabled", "false"),
             ]),
         )
         .unwrap();
         assert_eq!(parsed.values.get("server.port").unwrap(), "8082");
         assert!(
-            !parsed.values.contains_key("server.share_link_enabled"),
+            !parsed.values.contains_key("server.share_download_enabled"),
             "a key from another page must be ignored, not silently saved"
         );
     }

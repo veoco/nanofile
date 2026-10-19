@@ -47,7 +47,7 @@ pub async fn create_upload_link(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateUploadLinkRequest>,
 ) -> Result<Json<link::UploadLinkInfo>, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    crate::middleware::ensure_share_upload_enabled(&state)?;
     let info = link::create_upload_link(
         &state.repos,
         &state.config(),

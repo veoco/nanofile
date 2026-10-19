@@ -57,6 +57,7 @@ pub struct EmailTemplate {
     pub csrf_token: String,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
 
     pub config_enabled: bool,
@@ -223,6 +224,7 @@ async fn render_page(
         csrf_token: ctx.csrf_token,
         active_page: "sysadmin_email",
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
 
         config_enabled: settings.enabled,

@@ -21,6 +21,7 @@ pub struct RepoListTemplate {
     pub active_page: &'static str,
     pub csrf_token: String,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
     /// Base URL (from site_url) used to build the WebDAV endpoint address.
     pub webdav_base_url: String,
@@ -91,6 +92,7 @@ pub async fn list_repos(
         active_page: "repos",
         csrf_token,
         left_panel_repos,
+        sharing_enabled: crate::ui::ctx::sharing_enabled(&state),
         current_repo_id: None,
         webdav_base_url: state
             .config()

@@ -80,6 +80,7 @@ pub struct SettingsIndexTemplate {
     pub csrf_token: Option<String>,
     pub warning_lines: Vec<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
 }
 
@@ -146,6 +147,7 @@ pub async fn settings_page(
         csrf_token: Some(ctx.csrf_token),
         warning_lines,
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
     };
 
@@ -170,6 +172,7 @@ pub struct ProfileTemplate {
     pub nav: SettingsNav,
     pub csrf_token: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
 }
 
@@ -200,6 +203,7 @@ pub async fn profile_page(
         nav,
         csrf_token: Some(ctx.csrf_token),
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
     };
 
@@ -274,6 +278,7 @@ pub struct SecurityTemplate {
     pub nav: SettingsNav,
     pub csrf_token: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
 }
 
@@ -303,6 +308,7 @@ pub async fn security_page(
         nav,
         csrf_token: Some(ctx.csrf_token),
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
     };
 
@@ -417,6 +423,7 @@ async fn render_security_error(
         nav,
         csrf_token: Some(ctx.csrf_token),
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
     };
     let html = tpl
@@ -449,6 +456,7 @@ pub struct CredentialsTemplate {
     pub flash_count: Option<u64>,
     pub error: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
 }
 
@@ -642,6 +650,7 @@ async fn render_credentials(
         flash_count,
         error,
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
     };
 
@@ -935,6 +944,7 @@ async fn render_profile_error(
         nav,
         csrf_token: Some(ctx.csrf_token),
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
     };
     let html = tpl

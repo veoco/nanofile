@@ -20,6 +20,7 @@ pub struct ActivitiesTemplate {
     pub activities: Vec<ActivityView>,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
 }
 
@@ -264,6 +265,7 @@ pub async fn activities_page(
         activities,
         active_page: "activities",
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
     };
 

@@ -48,8 +48,9 @@ pub async fn server_info(State(state): State<Arc<AppState>>) -> impl IntoRespons
         features.push("client-sso-via-local-browser".to_string());
     }
     // Lets clients hide sharing entry points; keep in sync with
-    // `server.share_link_enabled`.
-    if !state.config().server.share_link_enabled {
+    // `server.share_download_enabled`: the flag names share links, and the upload
+    // half has no client-side capability bit.
+    if !state.config().server.share_download_enabled {
         features.push("share-link-disabled".to_string());
     }
 

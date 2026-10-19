@@ -1282,12 +1282,12 @@ async fn test_share_download_rate_limited() {
     );
 }
 
-/// When `server.share_link_enabled` is false, creating share/upload links is
-/// rejected with 403 and the server advertises the `share-link-disabled`
-/// feature so clients hide sharing UI.
+/// With both halves of sharing off, creating share or upload links is rejected
+/// with 403 and the server advertises the `share-link-disabled` feature so
+/// clients hide sharing UI.
 #[tokio::test]
-async fn test_share_link_disabled_globally() {
-    let f = TestFixture::new_with_share_link_disabled().await;
+async fn test_sharing_disabled_globally() {
+    let f = TestFixture::new_with_sharing_disabled().await;
 
     let up = f
         .client
@@ -1333,11 +1333,11 @@ async fn test_share_link_disabled_globally() {
     );
 }
 
-/// A share link that already existed before the global switch was turned off
-/// becomes inaccessible: `/f/{token}/` returns 403.
+/// A share link that already existed before download sharing was turned off
+/// answers as gone: `/d/{token}/` renders the dead-link page, 404.
 #[tokio::test]
 async fn test_share_link_disabled_blocks_existing_links() {
-    let f = TestFixture::new_with_share_link_disabled().await;
+    let f = TestFixture::new_with_share_download_disabled().await;
 
     // Insert a share link directly (as if created before the switch was off).
     let token = "pre-existing-token".to_string();
@@ -1365,8 +1365,13 @@ async fn test_share_link_disabled_blocks_existing_links() {
     let resp = f.client.get(&format!("/d/{}/", token), None).await;
     assert_eq!(
         resp.status(),
-        403,
-        "existing share link should be inaccessible"
+        404,
+        "an existing share link must read as gone, not forbidden"
+    );
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("Link unavailable"),
+        "the dead-link page explains itself, got: {body}"
     );
 }
 

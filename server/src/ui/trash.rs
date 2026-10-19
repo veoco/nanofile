@@ -52,6 +52,7 @@ pub struct TrashListTemplate {
     pub active_tab: String,
     pub csrf_token: String,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
 }
 
@@ -171,6 +172,7 @@ pub async fn trash_list_page(
         active_tab,
         csrf_token: ctx.csrf_token,
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
     };
 

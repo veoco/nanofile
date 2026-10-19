@@ -29,6 +29,11 @@ pub struct SharesTemplate {
     pub active_tab: String,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
     pub current_repo_id: Option<String>,
+    /// Either direction is open: the left panel's Shares link and the page itself
+    /// exist only while that holds.
+    pub sharing_enabled: bool,
+    pub share_download_enabled: bool,
+    pub share_upload_enabled: bool,
 }
 
 pub struct UploadLinkInfo {
@@ -72,22 +77,38 @@ pub struct SharesQuery {
     pub tab: Option<String>,
 }
 
-/// GET /share/ — list all share links.
+/// GET /shares/ — list all share links.
 pub async fn list_shares(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     Query(query): Query<SharesQuery>,
 ) -> Result<Html<String>, AppError> {
-    let links = state
-        .repos
-        .share_link
-        .find_by_creator_id(user.user_id)
-        .await?;
-    let upload_models = state
-        .repos
-        .upload_link
-        .find_by_creator_id(user.user_id)
-        .await?;
+    let share_download_enabled = state.config().server.share_download_enabled;
+    let share_upload_enabled = state.config().server.share_upload_enabled;
+    // Both halves switched off closes the page itself: there is nothing to manage
+    // and the navigation no longer links here.
+    if !share_download_enabled && !share_upload_enabled {
+        return Err(AppError::NotFound("sharing is turned off".into()));
+    }
+
+    let links = if share_download_enabled {
+        state
+            .repos
+            .share_link
+            .find_by_creator_id(user.user_id)
+            .await?
+    } else {
+        Vec::new()
+    };
+    let upload_models = if share_upload_enabled {
+        state
+            .repos
+            .upload_link
+            .find_by_creator_id(user.user_id)
+            .await?
+    } else {
+        Vec::new()
+    };
 
     let mut repo_ids: Vec<String> = Vec::new();
     for s in &links {
@@ -162,10 +183,15 @@ pub async fn list_shares(
         })
         .collect();
 
-    let active_tab = query
-        .tab
-        .filter(|t| t == "upload-links")
-        .unwrap_or("share-links".to_string());
+    // A `?tab=` naming a switched-off direction falls back to the one that is open,
+    // so a bookmark left behind by a stricter setting still lands somewhere useful.
+    let active_tab = match query.tab.as_deref() {
+        Some("upload-links") if share_upload_enabled => "upload-links",
+        Some("share-links") if share_download_enabled => "share-links",
+        _ if share_download_enabled => "share-links",
+        _ => "upload-links",
+    }
+    .to_string();
 
     let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
     let tpl = SharesTemplate {
@@ -180,6 +206,9 @@ pub async fn list_shares(
         active_tab,
         left_panel_repos: ctx.left_panel_repos,
         current_repo_id: None,
+        sharing_enabled: ctx.sharing_enabled,
+        share_download_enabled,
+        share_upload_enabled,
     };
 
     let html = tpl
@@ -195,7 +224,7 @@ pub async fn create_share(
     State(state): State<Arc<AppState>>,
     axum::Form(form): axum::Form<CreateShareForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    crate::middleware::ensure_share_download_enabled(&state)?;
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,

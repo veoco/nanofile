@@ -23,6 +23,10 @@ var openUploadLinkDialog;
   var expirySelect = document.getElementById('ul-expiry-select');
   var descInput = document.getElementById('ul-description-input');
 
+  // The server omits the dialog while upload sharing is switched off; without
+  // this guard every listener below would attach to null.
+  if (!overlay || !createBtn || !cancelBtn) return;
+
   var currentRepoId = '';
   var currentPath = '';
   var currentToken = '';
@@ -139,6 +143,7 @@ var openUploadLinkDialog;
 
 export function copyUploadLinkUrl() {
   var input = document.getElementById('ul-link-url');
+  if (!input) return;
   input.select();
   input.setSelectionRange(0, 99999);
   navigator.clipboard.writeText(input.value).catch(function () {});
@@ -146,6 +151,7 @@ export function copyUploadLinkUrl() {
 
 export function copyShareLinkUrl() {
   var input = document.getElementById('share-link-url');
+  if (!input) return;
   input.select();
   input.setSelectionRange(0, 99999);
   navigator.clipboard.writeText(input.value).catch(function () {});
@@ -167,7 +173,7 @@ document.addEventListener('click', function (e) {
     Toast.error(__t('fb.upload_links_dir_only'));
     return;
   }
-  openUploadLinkDialog(repoId, path);
+  if (openUploadLinkDialog) openUploadLinkDialog(repoId, path);
 });
 
 // Delegated handlers for the file-list upload-link button and the
@@ -177,7 +183,8 @@ document.addEventListener("click", function (e) {
   if (!el) return;
   var action = el.dataset.action;
   if (action === "open-upload-link") {
-    openUploadLinkDialog(el.dataset.repoId, el.dataset.path);
+    // Undefined while the dialog is not rendered.
+    if (openUploadLinkDialog) openUploadLinkDialog(el.dataset.repoId, el.dataset.path);
   } else if (action === "copy-share-link") {
     copyShareLinkUrl();
   } else if (action === "copy-upload-link") {

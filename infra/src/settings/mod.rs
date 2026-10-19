@@ -426,20 +426,38 @@ impl SettingsPolicy {
                 ConfigPolicy::Bootstrap
             }
         };
+        // A retired name in `config_override_keys` must keep working: the file still
+        // sets the value, so silently dropping the key would stop it from winning.
+        // The sharing master now stands for two settings, so one old name expands.
+        const RENAMED_KEYS: &[(&str, &[&str])] = &[
+            (
+                "server.share_link_enabled",
+                &[
+                    "server.share_download_enabled",
+                    "server.share_upload_enabled",
+                ],
+            ),
+            ("auth.enable_invitations", &["auth.enable_registration"]),
+        ];
         let config_override_keys = config
             .settings
             .config_override_keys
             .iter()
-            .map(|key| {
+            .flat_map(|key| {
                 let trimmed = key.trim();
-                if trimmed == "auth.enable_invitations" {
-                    tracing::warn!(
-                        "settings.config_override_keys names auth.enable_invitations, which \
-                         was renamed to auth.enable_registration; using the new key"
-                    );
-                    "auth.enable_registration".to_string()
-                } else {
-                    trimmed.to_string()
+                match RENAMED_KEYS.iter().find(|(old, _)| *old == trimmed) {
+                    Some((old, new_keys)) => {
+                        tracing::warn!(
+                            "settings.config_override_keys names {old}, which was \
+                             renamed; using {}",
+                            new_keys.join(", ")
+                        );
+                        new_keys
+                            .iter()
+                            .map(|key| key.to_string())
+                            .collect::<Vec<_>>()
+                    }
+                    None => vec![trimmed.to_string()],
                 }
             })
             .filter(|key| !key.is_empty())
@@ -733,7 +751,8 @@ mod tests {
             "server.encrypted_library_pwd_hash_algo",
             "server.encrypted_library_pwd_hash_params",
             "server.file_search_enabled",
-            "server.share_link_enabled",
+            "server.share_download_enabled",
+            "server.share_upload_enabled",
             "server.trusted_proxies",
             "server.allowed_hosts",
             "server.trust_request_host",
@@ -1019,11 +1038,33 @@ mod tests {
         assert!(policy.config_wins(find("auth.enable_registration").unwrap()));
     }
 
+    /// The retired sharing master now names two settings; both have to win for the
+    /// file, or a `false` written for the old key would stop applying to one half.
+    #[test]
+    fn the_retired_sharing_override_key_expands_to_both_directions() {
+        let mut config = Config::default();
+        config.settings.config_override_keys = vec!["server.share_link_enabled".to_string()];
+
+        let policy = SettingsPolicy::from_config(&config);
+
+        assert_eq!(policy.config_override_keys.len(), 2);
+        for key in [
+            "server.share_download_enabled",
+            "server.share_upload_enabled",
+        ] {
+            assert!(
+                policy.config_override_keys.contains(key),
+                "{key} must inherit the retired override"
+            );
+            assert!(policy.config_wins(find(key).unwrap()));
+        }
+    }
+
     #[test]
     fn resolution_prefers_environment_then_database_then_file_then_default() {
         let defaults = Config::default();
         let policy = SettingsPolicy::default();
-        let def = find("server.share_link_enabled").unwrap();
+        let def = find("server.share_download_enabled").unwrap();
 
         let resolved = resolve(
             def,
@@ -1037,7 +1078,7 @@ mod tests {
         assert_eq!(resolved.value, "true");
 
         let mut file = Config::default();
-        file.server.share_link_enabled = false;
+        file.server.share_download_enabled = false;
         let resolved = resolve(
             def,
             &file,
@@ -1068,12 +1109,12 @@ mod tests {
         );
         assert_eq!(resolved.value, "false");
 
-        let (env_config, env_keys) = base_with_env("server.share_link_enabled");
+        let (env_config, env_keys) = base_with_env("server.share_download_enabled");
         let resolved = resolve(def, &env_config, &defaults, &env_keys, &rows, &policy);
         assert_eq!(
             resolved.origin,
             Origin::Environment {
-                var: "NANOFILE_SERVER_SHARE_LINK_ENABLED"
+                var: "NANOFILE_SERVER_SHARE_DOWNLOAD_ENABLED"
             }
         );
         assert_eq!(resolved.value, "false");
@@ -1084,10 +1125,10 @@ mod tests {
 
     #[test]
     fn a_config_override_key_beats_the_database() {
-        let def = find("server.share_link_enabled").unwrap();
+        let def = find("server.share_download_enabled").unwrap();
         let defaults = Config::default();
         let mut file = Config::default();
-        file.server.share_link_enabled = true;
+        file.server.share_download_enabled = true;
         let mut rows = BTreeMap::new();
         rows.insert(
             def.key.to_string(),
@@ -1101,7 +1142,7 @@ mod tests {
         let mut policy = SettingsPolicy::default();
         policy
             .config_override_keys
-            .insert("server.share_link_enabled".to_string());
+            .insert("server.share_download_enabled".to_string());
         let resolved = resolve(def, &file, &defaults, &EnvKeys::new(), &rows, &policy);
         assert_eq!(resolved.origin.id(), "config");
         assert_eq!(resolved.value, "true");
@@ -1137,7 +1178,7 @@ mod tests {
         let policy = SettingsPolicy::default();
         let mut rows = BTreeMap::new();
         rows.insert(
-            "server.share_link_enabled".to_string(),
+            "server.share_download_enabled".to_string(),
             SettingRow {
                 value: "false".to_string(),
                 updated_at: 1,
@@ -1156,7 +1197,7 @@ mod tests {
         let mut config = defaults.clone();
         let resolved = resolve_all(&defaults, &defaults, &EnvKeys::new(), &rows, &policy);
         assert!(apply_resolved(&mut config, &resolved, true).is_empty());
-        assert!(!config.server.share_link_enabled, "live key applied");
+        assert!(!config.server.share_download_enabled, "live key applied");
         assert_eq!(
             config.server.max_json_body_mb, 64,
             "restart key keeps its startup value"

@@ -14,7 +14,7 @@ fn every_catalog_env_variable_is_read_and_tracked() {
 
     // One variable per value shape, including keys newly given environment support.
     let overrides = [
-        ("NANOFILE_SERVER_SHARE_LINK_ENABLED", "false"),
+        ("NANOFILE_SERVER_SHARE_DOWNLOAD_ENABLED", "false"),
         ("NANOFILE_SERVER_TRUST_REQUEST_HOST", "false"),
         ("NANOFILE_SERVER_HSTS_INCLUDE_SUBDOMAINS", "true"),
         ("NANOFILE_SERVER_MAX_PROPFIND_ENTRIES", "1234"),
@@ -38,7 +38,7 @@ fn every_catalog_env_variable_is_read_and_tracked() {
     let loaded = infra::config::Config::load_from_tracked(&path).expect("load");
     let config = &loaded.config;
 
-    assert!(!config.server.share_link_enabled);
+    assert!(!config.server.share_download_enabled);
     assert!(!config.server.trust_request_host);
     assert!(config.server.hsts_include_subdomains);
     assert_eq!(config.server.max_propfind_entries, 1234);
@@ -61,7 +61,7 @@ fn every_catalog_env_variable_is_read_and_tracked() {
         "nothing extra tracked"
     );
     for key in [
-        "server.share_link_enabled",
+        "server.share_download_enabled",
         "server.trust_request_host",
         "server.hsts_include_subdomains",
         "server.max_propfind_entries",

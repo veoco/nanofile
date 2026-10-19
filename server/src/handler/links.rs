@@ -199,7 +199,7 @@ pub async fn create_share_link_v21(
     State(state): State<Arc<AppState>>,
     JsonOrForm(v): JsonOrForm,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    crate::middleware::ensure_share_download_enabled(&state)?;
     let req = parse_link_request(&v)?;
     let expire_days = resolve_expire_days(&req)?;
     let info = share::create_share_link_v21(
@@ -289,7 +289,7 @@ pub async fn create_multi_share_link_v21(
     State(state): State<Arc<AppState>>,
     JsonOrForm(v): JsonOrForm,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    crate::middleware::ensure_share_download_enabled(&state)?;
     let req = parse_link_request(&v)?;
     let expire_days = resolve_expire_days(&req)?;
     let info = share::create_share_link_v21(
@@ -416,7 +416,7 @@ pub async fn create_upload_link_v21(
     State(state): State<Arc<AppState>>,
     JsonOrForm(v): JsonOrForm,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    crate::middleware::ensure_share_upload_enabled(&state)?;
     let req = parse_link_request(&v)?;
     let expire_days = resolve_expire_days(&req)?;
     let has_password = req.password.is_some();
@@ -537,7 +537,7 @@ pub async fn get_upload_link_upload_url_v21(
 ) -> Result<Json<serde_json::Value>, AppError> {
     // The server-wide kill switch must gate this token mint too: otherwise a
     // shared token still yields an upload URL while anonymous links are disabled.
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    crate::middleware::ensure_share_upload_enabled(&state)?;
 
     // No CSRF guard on purpose: the capability is the link token itself, which a
     // holder can already exchange, and `public-upload.js` legitimately calls this

@@ -9,6 +9,9 @@
 <h1 class="page-title">{{ t.tr("nav.shares") }}</h1>
 <p class="page-subtitle">{{ t.tr("share.manage_desc") }}</p>
 
+{# One direction switched off leaves a single list: a tab bar over one tab is
+   noise, so the open direction renders directly under the page head. #}
+{% if share_download_enabled && share_upload_enabled %}
 <!-- Tab bar -->
 <div class="nf-tabs" role="tablist">
     <button type="button" role="tab" class="nf-tab"
@@ -26,9 +29,11 @@
         {{ t.tr("uploadlink.links") }} <span class="nf-tab-n num">{{ upload_links.len() }}</span>
     </button>
 </div>
+{% endif %}
 
 <!-- Share Links -->
-<div id="tab-share-links" class="tab-content {% if active_tab != "share-links" %}hidden{% endif %}">
+{% if share_download_enabled %}
+<div id="tab-share-links" class="tab-content {% if share_upload_enabled && active_tab != "share-links" %}hidden{% endif %}">
 {% if share_links.is_empty() %}
 <div class="nf-list">
     <div class="nf-empty">
@@ -95,9 +100,11 @@
 </div>
 {% endif %}
 </div>
+{% endif %}
 
 <!-- Upload Links -->
-<div id="tab-upload-links" class="tab-content {% if active_tab != "upload-links" %}hidden{% endif %}">
+{% if share_upload_enabled %}
+<div id="tab-upload-links" class="tab-content {% if share_download_enabled && active_tab != "upload-links" %}hidden{% endif %}">
 {% if upload_links.is_empty() %}
 <div class="nf-list">
     <div class="nf-empty">
@@ -158,6 +165,7 @@
 </div>
 {% endif %}
 </div>
+{% endif %}
 
 <!-- Edit dialog overlay -->
 {% call modal::modal("share-edit-overlay") %}

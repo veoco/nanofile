@@ -42,24 +42,24 @@ async fn a_live_setting_takes_effect_without_a_restart() {
     let settings = &server.state.settings;
 
     assert!(
-        server.state.config().server.share_link_enabled,
+        server.state.config().server.share_download_enabled,
         "default is on"
     );
 
     let outcome = settings
         .save(
             Section::Security,
-            &form(&[("server.share_link_enabled", "false")]),
+            &form(&[("server.share_download_enabled", "false")]),
             None,
         )
         .await
         .expect("save");
-    assert_eq!(outcome.changed, vec!["server.share_link_enabled"]);
+    assert_eq!(outcome.changed, vec!["server.share_download_enabled"]);
     assert!(outcome.restart_pending.is_empty(), "this one is live");
 
-    assert!(!server.state.config().server.share_link_enabled);
+    assert!(!server.state.config().server.share_download_enabled);
     assert_eq!(
-        stored(&server, "server.share_link_enabled").map(|row| row.value),
+        stored(&server, "server.share_download_enabled").map(|row| row.value),
         Some("false".to_string())
     );
 }
@@ -201,7 +201,7 @@ async fn a_key_outside_the_page_is_refused() {
         .settings
         .save(
             Section::Server,
-            &form(&[("server.share_link_enabled", "false")]),
+            &form(&[("server.share_download_enabled", "false")]),
             None,
         )
         .await
@@ -303,15 +303,18 @@ async fn a_reload_picks_up_a_change_made_elsewhere() {
     let server = TestServer::start().await;
     let settings = &server.state.settings;
 
-    assert!(server.state.config().server.share_link_enabled);
+    assert!(server.state.config().server.share_download_enabled);
 
     server
         .repos
         .settings
         .upsert_many(
-            &[("server.share_link_enabled".to_string(), "false".to_string())]
-                .into_iter()
-                .collect(),
+            &[(
+                "server.share_download_enabled".to_string(),
+                "false".to_string(),
+            )]
+            .into_iter()
+            .collect(),
             None,
             chrono::Utc::now().timestamp(),
         )
@@ -322,11 +325,11 @@ async fn a_reload_picks_up_a_change_made_elsewhere() {
     assert!(
         outcome
             .changed
-            .contains(&"server.share_link_enabled".to_string()),
+            .contains(&"server.share_download_enabled".to_string()),
         "changed: {:?}",
         outcome.changed
     );
-    assert!(!server.state.config().server.share_link_enabled);
+    assert!(!server.state.config().server.share_download_enabled);
 
     assert!(settings.reload().await.expect("reload").is_empty());
 }
@@ -340,16 +343,19 @@ async fn a_saved_bool_accepts_the_spellings_an_operator_types() {
         settings
             .save(
                 Section::Security,
-                &form(&[("server.share_link_enabled", typed)]),
+                &form(&[("server.share_download_enabled", typed)]),
                 None,
             )
             .await
             .unwrap_or_else(|e| panic!("{typed}: {e:?}"));
-        assert_eq!(server.state.config().server.share_link_enabled, expected);
+        assert_eq!(
+            server.state.config().server.share_download_enabled,
+            expected
+        );
         // The stored form is canonical, so what the page renders cannot differ
         // from what the server parsed.
         assert_eq!(
-            stored(&server, "server.share_link_enabled")
+            stored(&server, "server.share_download_enabled")
                 .expect("a row")
                 .value,
             if expected { "true" } else { "false" }
@@ -881,13 +887,13 @@ async fn saving_from_the_page_applies_and_reports_the_source() {
             ("csrf_token", csrf.as_str()),
             ("section", "security"),
             // A checkbox submits the hidden false too; last one wins.
-            ("server.share_link_enabled", "false"),
+            ("server.share_download_enabled", "false"),
         ])
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 302);
-    assert!(!server.state.config().server.share_link_enabled);
+    assert!(!server.state.config().server.share_download_enabled);
 
     let (_, html) = page(&server, &admin, "/sysadmin/settings/security/").await;
     assert!(
@@ -901,13 +907,13 @@ async fn saving_from_the_page_applies_and_reports_the_source() {
         .form(&[
             ("csrf_token", csrf.as_str()),
             ("section", "security"),
-            ("key", "server.share_link_enabled"),
+            ("key", "server.share_download_enabled"),
         ])
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 302);
-    assert!(server.state.config().server.share_link_enabled);
+    assert!(server.state.config().server.share_download_enabled);
 }
 
 #[tokio::test]
@@ -921,13 +927,13 @@ async fn a_settings_post_without_csrf_is_rejected() {
             "{}/sysadmin/settings/security/save/",
             server.base_url
         ))
-        .form(&[("server.share_link_enabled", "false")])
+        .form(&[("server.share_download_enabled", "false")])
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 400);
     assert!(
-        server.state.config().server.share_link_enabled,
+        server.state.config().server.share_download_enabled,
         "nothing may be saved without the token"
     );
 }
@@ -1176,25 +1182,25 @@ async fn restarting_does_not_save_the_submitted_form() {
     let (_, html) = page(&server, &admin, "/sysadmin/settings/security/").await;
     let csrf = csrf_of(&html);
 
-    let before = server.state.config().server.share_link_enabled;
+    let before = server.state.config().server.share_download_enabled;
     let resp = admin
         .post(format!("{}/sysadmin/settings/restart/", server.base_url))
         .form(&[
             ("csrf_token", csrf.as_str()),
             ("section", "security"),
-            ("server.share_link_enabled", "false"),
+            ("server.share_download_enabled", "false"),
         ])
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(
-        server.state.config().server.share_link_enabled,
+        server.state.config().server.share_download_enabled,
         before,
         "restarting is not a save"
     );
     assert!(
-        stored(&server, "server.share_link_enabled").is_none(),
+        stored(&server, "server.share_download_enabled").is_none(),
         "no row may be written by the restart request"
     );
 }

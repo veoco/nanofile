@@ -139,6 +139,7 @@ struct AppErrorTemplate {
     is_admin: bool,
     active_page: &'static str,
     left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    sharing_enabled: bool,
     current_repo_id: Option<String>,
     status: u16,
     title_key: &'static str,
@@ -171,6 +172,7 @@ async fn render(
                 // Nothing in the navigation is the current page.
                 active_page: "",
                 left_panel_repos: ctx.left_panel_repos,
+                sharing_enabled: ctx.sharing_enabled,
                 current_repo_id: None,
                 status: status.as_u16(),
                 title_key: page.title_key,

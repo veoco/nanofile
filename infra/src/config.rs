@@ -535,12 +535,24 @@ pub struct ServerConfig {
     /// Env: NANOFILE_SERVER_FILE_SEARCH_ENABLED
     #[serde(default = "default_true")]
     pub file_search_enabled: bool,
-    /// Whether anonymous share and upload links are allowed. When false, creating them
-    /// is rejected and existing `/f/`, `/d/`, `/u/` links become inaccessible, while
-    /// the manage pages still list them.
-    /// Env: NANOFILE_SERVER_SHARE_LINK_ENABLED
+    /// Whether the download half of sharing is available: share links (`/f/`, `/d/`)
+    /// can be created and opened. When false, creating one is rejected, existing links
+    /// answer as gone, and the web UI and clients stop offering sharing.
+    ///
+    /// Split out of the retired master switch `share_link_enabled`, which still sets
+    /// both directions when a config file uses the old name.
+    /// Env: NANOFILE_SERVER_SHARE_DOWNLOAD_ENABLED
     #[serde(default = "default_true")]
-    pub share_link_enabled: bool,
+    pub share_download_enabled: bool,
+    /// Whether the upload half of sharing is available: upload links (`/u/`) can be
+    /// created and used. Turning it off rejects new upload links and stops minted
+    /// upload tokens from accepting writes.
+    ///
+    /// Split out of the retired master switch `share_link_enabled`, which still sets
+    /// both directions when a config file uses the old name.
+    /// Env: NANOFILE_SERVER_SHARE_UPLOAD_ENABLED
+    #[serde(default = "default_true")]
+    pub share_upload_enabled: bool,
     /// IP addresses of trusted reverse proxies. Forwarded client-address headers
     /// (`CF-Connecting-IP`, `X-Forwarded-For`) are honored for rate limiting only when
     /// the TCP peer is one of these; otherwise the raw peer address is used, so clients
@@ -659,7 +671,8 @@ impl Default for ServerConfig {
             encrypted_library_pwd_hash_algo: None,
             encrypted_library_pwd_hash_params: None,
             file_search_enabled: default_true(),
-            share_link_enabled: default_true(),
+            share_download_enabled: default_true(),
+            share_upload_enabled: default_true(),
             trusted_proxies: Vec::new(),
             allowed_hosts: Vec::new(),
             trust_request_host: default_true(),
@@ -1952,10 +1965,39 @@ impl Config {
         warn_if_group_or_world_readable(path);
 
         let mut config: Config = toml::from_str(&original)?;
+        // Retired file keys are folded before the environment layer, so a variable
+        // still beats a value written for an older release.
+        config.fold_retired_file_keys(&original);
         let mut env_keys = EnvKeys::new();
         config.apply_env_overrides(&mut env_keys);
         config.normalize();
         Ok(LoadedConfig { config, env_keys })
+    }
+
+    /// Fold a retired config-file key into the settings it now splits into.
+    ///
+    /// `[server] share_link_enabled` was one master switch over both directions of
+    /// sharing. serde cannot map one key onto two fields, so the raw document is
+    /// consulted right after deserialization; the value is applied to **both**
+    /// directions, or an installation that turned sharing off would silently
+    /// reopen anonymous uploads by upgrading.
+    fn fold_retired_file_keys(&mut self, original: &str) {
+        let legacy = toml::from_str::<toml::Value>(original)
+            .ok()
+            .and_then(|doc| {
+                doc.get("server")
+                    .and_then(|server| server.get("share_link_enabled"))
+                    .and_then(toml::Value::as_bool)
+            });
+        let Some(value) = legacy else {
+            return;
+        };
+        tracing::warn!(
+            "[server] share_link_enabled is retired and sets both share_download_enabled \
+             and share_upload_enabled; use the two new keys instead"
+        );
+        self.server.share_download_enabled = value;
+        self.server.share_upload_enabled = value;
     }
 
     /// Apply every `NANOFILE_*` override.
@@ -2034,6 +2076,13 @@ impl Config {
 
     /// Read environment names that this release retired as aliases.
     ///
+    /// A retired variable may stand for more than one setting: the sharing master
+    /// switch `NANOFILE_SERVER_SHARE_LINK_ENABLED` used to close both directions
+    /// and now feeds the two directional switches. The alias applies to every key
+    /// in its group that no current variable set, so an operator who migrated only
+    /// one direction still keeps the old intent for the other. Origins report the
+    /// variable that actually supplied the value.
+    ///
     /// `lookup` is injected so a unit test can exercise the mapping without
     /// mutating this process's environment (the test suite runs in parallel).
     fn apply_retired_env_aliases(
@@ -2041,28 +2090,55 @@ impl Config {
         env_keys: &mut EnvKeys,
         lookup: impl Fn(&str) -> Option<String>,
     ) {
-        const OLD_NAME: &str = "NANOFILE_AUTH_ENABLE_INVITATIONS";
-        const NEW_NAME: &str = "NANOFILE_AUTH_ENABLE_REGISTRATION";
-
-        if env_keys.contains_key("auth.enable_registration") {
-            if lookup(OLD_NAME).is_some() {
-                tracing::warn!("{OLD_NAME} is deprecated and ignored because {NEW_NAME} is set");
-            }
-            return;
+        /// A retired variable and the catalog keys it now feeds, plus the name to
+        /// recommend in the warning.
+        struct RetiredAlias {
+            old: &'static str,
+            keys: &'static [&'static str],
+            replacement: &'static str,
         }
 
-        let Some(value) = lookup(OLD_NAME) else {
-            return;
-        };
-        let Some(def) = crate::settings::find("auth.enable_registration") else {
-            return;
-        };
-        match (def.set)(self, &value) {
-            Ok(()) => {
-                env_keys.insert(def.key, OLD_NAME);
-                tracing::warn!("{OLD_NAME} is deprecated; use {NEW_NAME}");
+        const RETIRED: &[RetiredAlias] = &[
+            RetiredAlias {
+                old: "NANOFILE_SERVER_SHARE_LINK_ENABLED",
+                keys: &[
+                    "server.share_download_enabled",
+                    "server.share_upload_enabled",
+                ],
+                replacement: "NANOFILE_SERVER_SHARE_DOWNLOAD_ENABLED / \
+                              NANOFILE_SERVER_SHARE_UPLOAD_ENABLED",
+            },
+            RetiredAlias {
+                old: "NANOFILE_AUTH_ENABLE_INVITATIONS",
+                keys: &["auth.enable_registration"],
+                replacement: "NANOFILE_AUTH_ENABLE_REGISTRATION",
+            },
+        ];
+
+        for alias in RETIRED {
+            let Some(value) = lookup(alias.old) else {
+                continue;
+            };
+            for key in alias.keys {
+                if env_keys.contains_key(key) {
+                    tracing::warn!(
+                        "{} is deprecated and ignored for {key} because its own \
+                         variable is set",
+                        alias.old
+                    );
+                    continue;
+                }
+                let Some(def) = crate::settings::find(key) else {
+                    continue;
+                };
+                match (def.set)(self, &value) {
+                    Ok(()) => {
+                        env_keys.insert(def.key, alias.old);
+                        tracing::warn!("{} is deprecated; use {}", alias.old, alias.replacement);
+                    }
+                    Err(e) => tracing::warn!("ignoring {}: {e}", alias.old),
+                }
             }
-            Err(e) => tracing::warn!("ignoring {OLD_NAME}: {e}"),
         }
     }
 }
@@ -3372,6 +3448,96 @@ request_timeout_secs = 600
         assert_eq!(
             env_keys.get("auth.enable_registration"),
             Some(&"NANOFILE_AUTH_ENABLE_REGISTRATION")
+        );
+    }
+
+    /// The retired sharing master switch in a config file closes **both**
+    /// directions: mapping it to the download half alone would silently reopen
+    /// anonymous uploads on an installation that had turned sharing off.
+    #[test]
+    fn the_retired_sharing_key_sets_both_directions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server]\nshare_link_enabled = false\n").unwrap();
+
+        let config = Config::load_from(&path).expect("load the retired key");
+
+        assert!(!config.server.share_download_enabled);
+        assert!(!config.server.share_upload_enabled);
+        assert!(Config::default().server.share_download_enabled);
+        assert!(Config::default().server.share_upload_enabled);
+    }
+
+    /// The split keys are independent; the retired name is the only thing that
+    /// still means "both".
+    #[test]
+    fn the_split_sharing_keys_are_independent() {
+        let config: Config = toml::from_str("[server]\nshare_download_enabled = false\n").unwrap();
+        assert!(!config.server.share_download_enabled);
+        assert!(config.server.share_upload_enabled);
+
+        let config: Config = toml::from_str("[server]\nshare_upload_enabled = false\n").unwrap();
+        assert!(config.server.share_download_enabled);
+        assert!(!config.server.share_upload_enabled);
+    }
+
+    /// The retired variable still closes both halves and reports itself as the
+    /// origin rather than claiming the new names were set.
+    #[test]
+    fn the_retired_sharing_variable_closes_both() {
+        let mut config = Config::default();
+        let mut env_keys = EnvKeys::new();
+        let lookup = |name: &str| {
+            (name == "NANOFILE_SERVER_SHARE_LINK_ENABLED").then(|| "false".to_string())
+        };
+
+        config.apply_retired_env_aliases(&mut env_keys, lookup);
+
+        assert!(!config.server.share_download_enabled);
+        assert!(!config.server.share_upload_enabled);
+        for key in [
+            "server.share_download_enabled",
+            "server.share_upload_enabled",
+        ] {
+            assert_eq!(
+                env_keys.get(key),
+                Some(&"NANOFILE_SERVER_SHARE_LINK_ENABLED"),
+                "{key} must report the variable that supplied it"
+            );
+        }
+    }
+
+    /// A current variable is authoritative for its own direction; the retired
+    /// master still covers the direction nobody configured.
+    #[test]
+    fn the_new_sharing_variable_wins_over_the_retired_one() {
+        let mut config = Config::default();
+        let mut env_keys = EnvKeys::new();
+        env_keys.insert(
+            "server.share_download_enabled",
+            "NANOFILE_SERVER_SHARE_DOWNLOAD_ENABLED",
+        );
+        let lookup = |name: &str| {
+            (name == "NANOFILE_SERVER_SHARE_LINK_ENABLED").then(|| "false".to_string())
+        };
+
+        config.apply_retired_env_aliases(&mut env_keys, lookup);
+
+        assert!(
+            config.server.share_download_enabled,
+            "the direction with its own variable keeps it"
+        );
+        assert!(
+            !config.server.share_upload_enabled,
+            "the retired master still covers the other direction"
+        );
+        assert_eq!(
+            env_keys.get("server.share_download_enabled"),
+            Some(&"NANOFILE_SERVER_SHARE_DOWNLOAD_ENABLED")
+        );
+        assert_eq!(
+            env_keys.get("server.share_upload_enabled"),
+            Some(&"NANOFILE_SERVER_SHARE_LINK_ENABLED")
         );
     }
 }

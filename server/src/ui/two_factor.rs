@@ -39,6 +39,7 @@ pub struct TwoFactorTemplate {
     /// CSRF token for the disable form.
     pub csrf_token: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
     /// The shared settings navigation.
     pub nav: super::settings::SettingsNav,
@@ -107,6 +108,7 @@ async fn render_page(
         codes_total,
         csrf_token: Some(ctx.csrf_token),
         left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
     };
 

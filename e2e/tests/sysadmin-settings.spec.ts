@@ -209,12 +209,12 @@ test("a live setting takes effect immediately and says where it came from", asyn
 // Anonymous share links: a live setting whose effect the page shows. The row also carries the
 // hidden `false` a checkbox submits when off, so the control is named by its type.
   await form
-    .locator('input[type="checkbox"][name="server.share_link_enabled"]')
+    .locator('input[type="checkbox"][name="server.share_download_enabled"]')
     .uncheck();
   await form.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Settings saved.")).toBeVisible();
 
-  const row = page.locator('[data-setting="server.share_link_enabled"]');
+  const row = page.locator('[data-setting="server.share_download_enabled"]');
   await expect(row.locator("span.badge", { hasText: "Database" })).toBeVisible();
   await row.locator('button[formaction="/sysadmin/settings/reset/"]').click();
   await expect(page.getByText("The saved value was cleared")).toBeVisible();

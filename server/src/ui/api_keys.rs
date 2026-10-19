@@ -153,6 +153,7 @@ pub struct ApiKeysTemplate {
     pub is_admin: bool,
     pub active_page: &'static str,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
+    pub sharing_enabled: bool,
     pub current_repo_id: Option<String>,
     pub csrf_token: String,
     pub domains: Vec<DomainGroup>,
@@ -245,6 +246,7 @@ async fn render(
         active_page: crate::ui::settings::SettingsNav::API_KEYS,
         nav,
         left_panel_repos,
+        sharing_enabled: crate::ui::ctx::sharing_enabled(state),
         current_repo_id: None,
         csrf_token: crate::service::auth::csrf::generate_csrf_token(
             &state.csrf_secret,

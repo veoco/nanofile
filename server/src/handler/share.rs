@@ -47,7 +47,7 @@ pub async fn create_share_link(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateShareLinkRequest>,
 ) -> Result<Json<share::ShareLinkInfo>, AppError> {
-    crate::middleware::ensure_share_links_enabled(&state)?;
+    crate::middleware::ensure_share_download_enabled(&state)?;
     let info = share::create_share_link(
         &state.repos,
         &state.config(),
