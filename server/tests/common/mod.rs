@@ -502,7 +502,7 @@ impl TestServer {
             storage: infra::config::StorageConfig {
                 block_dir: block_root.join("blocks"),
                 temp_dir: block_root.join("tmp"),
-                max_storage_bytes: 10_737_418_240,
+                default_user_quota_bytes: 10_737_418_240,
                 ffmpeg_path: "ffmpeg".to_string(),
                 max_temp_uploads: temp_limits.unwrap_or_default().max_uploads,
                 max_temp_upload_bytes: temp_limits.unwrap_or_default().max_bytes,
@@ -1022,6 +1022,14 @@ impl TestFixture {
         })
         .await;
         Self::from_server(server).await
+    }
+
+    /// Create a full test environment with arbitrary `storage.*` tweaks, for a
+    /// value read on every request (the default space quota, media paths).
+    pub async fn new_with_storage_config(
+        tweak: impl FnOnce(&mut infra::config::StorageConfig) + Send + 'static,
+    ) -> Self {
+        Self::from_server(TestServer::start_with_storage_config(tweak).await).await
     }
 
     /// Create a full test environment with the encrypted-library policy tweaked

@@ -190,7 +190,7 @@ async fn precheck_quota(
         &state.repos,
         uid,
         len,
-        state.config().storage.max_storage_bytes,
+        state.config().storage.default_user_quota_bytes,
     )
     .await
 }
@@ -345,7 +345,7 @@ async fn try_handle_chunked(
             uid,
             repo_id,
             file_size as i64,
-            state.config().storage.max_storage_bytes,
+            state.config().storage.default_user_quota_bytes,
         )
         .await?;
     }
@@ -1902,7 +1902,7 @@ pub async fn upload_blks_api(
                     info.user_id,
                     &info.repo_id,
                     data.len() as i64,
-                    state.config().storage.max_storage_bytes,
+                    state.config().storage.default_user_quota_bytes,
                 )
                 .await?;
                 let (_, was_new) = state
@@ -1999,7 +1999,7 @@ pub async fn upload_blks_api(
             &state.repos,
             info.user_id,
             real_size,
-            state.config().storage.max_storage_bytes,
+            state.config().storage.default_user_quota_bytes,
         )
         .await
         {

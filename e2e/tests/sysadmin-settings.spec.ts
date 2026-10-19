@@ -276,6 +276,25 @@ test("a row the environment does not own still names its variable", async ({ pag
   expect(await locked.innerText()).toContain("NANOFILE_DATABASE_URL");
 });
 
+/**
+ * The default space quota is what a new registration starts with, so the storage page has to
+ * name both the setting and its variable: this is where an operator looking for "what do new
+ * accounts get" has to land.
+ */
+test("the storage page names the default space quota", async ({ page }) => {
+  await page.goto("/sysadmin/settings/storage/");
+  const row = page.locator(
+    '[data-setting="storage.default_user_quota_bytes"]',
+  );
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("Default space quota");
+  const text = await row.innerText();
+  expect(text).toContain("NANOFILE_STORAGE_DEFAULT_USER_QUOTA_BYTES");
+  expect(text.match(/NANOFILE_STORAGE_DEFAULT_USER_QUOTA_BYTES/g)).toHaveLength(
+    1,
+  );
+});
+
 test("a read-only value is shown but has no control", async ({ page }) => {
   await page.goto("/sysadmin/settings/advanced/");
   const row = page.locator('[data-setting="database.url"]');

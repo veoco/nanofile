@@ -64,6 +64,30 @@ async fn a_live_setting_takes_effect_without_a_restart() {
     );
 }
 
+/// The default space quota is live: saving it re-bounds every account without a
+/// quota of its own, with no restart.
+#[tokio::test]
+async fn the_default_quota_setting_takes_effect_live() {
+    let server = TestServer::start().await;
+    let settings = &server.state.settings;
+
+    let outcome = settings
+        .save(
+            Section::Storage,
+            &form(&[("storage.default_user_quota_bytes", "1048576")]),
+            None,
+        )
+        .await
+        .expect("save");
+    assert_eq!(outcome.changed, vec!["storage.default_user_quota_bytes"]);
+    assert!(outcome.restart_pending.is_empty(), "this one is live");
+
+    assert_eq!(
+        server.state.config().storage.default_user_quota_bytes,
+        1_048_576
+    );
+}
+
 #[tokio::test]
 async fn a_restart_only_setting_is_stored_but_not_applied() {
     let server = TestServer::start().await;

@@ -100,9 +100,9 @@ async fn render_page(
                 Some(q) => crate::ui::files::format_size(q),
                 None => {
                     let g = crate::ui::files::format_size(
-                        state.config().storage.max_storage_bytes as i64,
+                        state.config().storage.default_user_quota_bytes as i64,
                     );
-                    I18n::get(user.language.as_deref()).trf("admin.global_quota", &[("size", &g)])
+                    I18n::get(user.language.as_deref()).trf("admin.default_quota", &[("size", &g)])
                 }
             };
             UserRow {
@@ -147,7 +147,7 @@ pub struct CreateUserForm {
     pub password: String,
     pub is_admin: Option<String>,      // "on" or absent
     pub is_active: Option<String>,     // "on" or absent (default on)
-    pub storage_quota: Option<String>, // empty = use global, "0" = unlimited
+    pub storage_quota: Option<String>, // empty = the default space quota, "0" = unlimited
     pub csrf_token: Option<String>,
 }
 
@@ -277,7 +277,7 @@ pub async fn delete_user(
 }
 
 /// Parse an optional storage quota string.
-/// Empty string → None (use global default); "0" → Some(0) (unlimited).
+/// Empty string → None (the default space quota); "0" → Some(0) (unlimited).
 fn parse_quota(s: Option<&str>) -> Option<i64> {
     match s {
         None | Some("") => None,

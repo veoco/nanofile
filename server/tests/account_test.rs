@@ -202,10 +202,10 @@ async fn test_account_info_quota_user_specific() {
 }
 
 #[tokio::test]
-async fn test_account_info_quota_fallback_global() {
+async fn test_account_info_quota_fallback_default() {
     let f = TestFixture::no_repo("test@example.com", "password").await;
 
-    // storage_quota is None by default -> should return global max_storage_bytes (10 GB)
+    // storage_quota is None by default -> the server's default space quota (10 GB).
     let resp = f
         .client
         .get("/api2/account/info/", Some(&f.api_token))

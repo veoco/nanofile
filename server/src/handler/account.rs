@@ -39,7 +39,7 @@ pub async fn get_account_info(
     let info = svc
         .get_account_info(
             auth.user_id,
-            state.config().storage.max_storage_bytes,
+            state.config().storage.default_user_quota_bytes,
             &state.config().server.site_url_origin(),
         )
         .await?;
@@ -58,7 +58,7 @@ pub async fn update_account_info(
         .update_account_info(
             auth.user_id,
             body.name,
-            state.config().storage.max_storage_bytes,
+            state.config().storage.default_user_quota_bytes,
             &state.config().server.site_url_origin(),
         )
         .await?;

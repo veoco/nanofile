@@ -563,7 +563,7 @@ impl FileService {
                 &self.repos,
                 uid,
                 total_size,
-                self.config.get().storage.max_storage_bytes,
+                self.config.get().storage.default_user_quota_bytes,
             )
             .await
         {

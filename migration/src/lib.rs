@@ -104,6 +104,7 @@ migrations!(
     m20261019_000001_add_email_verification,
     m20261019_000002_rename_registration_setting,
     m20261019_000003_split_share_link_switch,
+    m20261019_000004_rename_default_quota_setting,
 );
 
 #[cfg(test)]

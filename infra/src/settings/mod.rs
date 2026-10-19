@@ -324,7 +324,7 @@ impl SettingDef {
             | "auth.api_key_ttl_presets_days"
             | "auth.api_key_max_ttl_days" => "days",
             "gc.interval_hours" | "storage.temp_upload_ttl_hours" => "hours",
-            "storage.max_storage_bytes"
+            "storage.default_user_quota_bytes"
             | "storage.max_temp_upload_bytes"
             | "storage.max_zip_bytes"
             | "storage.max_zip_task_bytes"
@@ -428,7 +428,8 @@ impl SettingsPolicy {
         };
         // A retired name in `config_override_keys` must keep working: the file still
         // sets the value, so silently dropping the key would stop it from winning.
-        // The sharing master now stands for two settings, so one old name expands.
+        // The sharing master now stands for two settings, so one old name expands;
+        // a plain rename is the same table with one new name.
         const RENAMED_KEYS: &[(&str, &[&str])] = &[
             (
                 "server.share_link_enabled",
@@ -438,6 +439,10 @@ impl SettingsPolicy {
                 ],
             ),
             ("auth.enable_invitations", &["auth.enable_registration"]),
+            (
+                "storage.max_storage_bytes",
+                &["storage.default_user_quota_bytes"],
+            ),
         ];
         let config_override_keys = config
             .settings
@@ -763,7 +768,7 @@ mod tests {
             "database.max_connections",
             "storage.block_dir",
             "storage.temp_dir",
-            "storage.max_storage_bytes",
+            "storage.default_user_quota_bytes",
             "storage.ffmpeg_path",
             "storage.max_temp_uploads",
             "storage.max_temp_upload_bytes",
@@ -1058,6 +1063,24 @@ mod tests {
             );
             assert!(policy.config_wins(find(key).unwrap()));
         }
+    }
+
+    /// The default quota was renamed; a policy that still names the old key has to
+    /// keep the file winning for the new one.
+    #[test]
+    fn the_renamed_quota_override_key_reaches_the_new_setting() {
+        let mut config = Config::default();
+        config.settings.config_override_keys = vec!["storage.max_storage_bytes".to_string()];
+
+        let policy = SettingsPolicy::from_config(&config);
+
+        assert_eq!(policy.config_override_keys.len(), 1);
+        assert!(
+            policy
+                .config_override_keys
+                .contains("storage.default_user_quota_bytes")
+        );
+        assert!(policy.config_wins(find("storage.default_user_quota_bytes").unwrap()));
     }
 
     #[test]

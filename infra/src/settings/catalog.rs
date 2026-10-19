@@ -713,14 +713,14 @@ pub static CATALOG: &[SettingDef] = &[
     ),
     // · Quotas & resumable uploads
     setting!(
-        "storage.max_storage_bytes",
+        "storage.default_user_quota_bytes",
         Storage,
-        "NANOFILE_STORAGE_MAX_STORAGE_BYTES",
+        "NANOFILE_STORAGE_DEFAULT_USER_QUOTA_BYTES",
         Kind::U64,
         Apply::Live,
-        |c| c.storage.max_storage_bytes.to_string(),
+        |c| c.storage.default_user_quota_bytes.to_string(),
         |c, v| {
-            c.storage.max_storage_bytes = parse_u64(v)?;
+            c.storage.default_user_quota_bytes = parse_u64(v)?;
             Ok(())
         }
     ),
@@ -1647,7 +1647,7 @@ pub static GROUPS: &[GroupDef] = &[
         id: "storage_quotas",
         title_key: "setting.group_storage_quotas",
         keys: &[
-            "storage.max_storage_bytes",
+            "storage.default_user_quota_bytes",
             "storage.max_temp_uploads",
             "storage.max_temp_upload_bytes",
             "storage.temp_upload_ttl_hours",

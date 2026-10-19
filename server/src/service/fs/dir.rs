@@ -334,7 +334,8 @@ pub struct DirService {
     /// Needed by `create_sub_repo`: the new library's FS objects reference the parent library's
     /// block ids, so the blocks are copied into the new library's own block directory.
     block_store: infra::storage::DynBlockStorage,
-    /// Server config: the global storage cap charges a sub-repo copy to the caller's quota.
+    /// Server config: the caller's quota (their own, or the default space quota)
+    /// charges a sub-repo copy.
     config: crate::settings::RuntimeConfig,
 }
 
@@ -602,7 +603,7 @@ impl DirService {
             &new_repo_id,
             &source_dir_fs_id,
             user_id,
-            self.config.get().storage.max_storage_bytes,
+            self.config.get().storage.default_user_quota_bytes,
         )
         .await
         {
@@ -936,7 +937,7 @@ async fn copy_subtree_blocks(
     dst_repo_id: &str,
     root_fs_id: &str,
     owner_id: i32,
-    max_storage_bytes: u64,
+    default_quota: u64,
 ) -> Result<i64, AppError> {
     if root_fs_id == EMPTY_SHA1 {
         return Ok(0);
@@ -986,7 +987,7 @@ async fn copy_subtree_blocks(
 
     // Refuse before writing anything: duplicating a folder consumes real disk,
     // and the caller may be over quota already.
-    crate::service::fs::quota::check_upload_quota(repos, owner_id, total_size, max_storage_bytes)
+    crate::service::fs::quota::check_upload_quota(repos, owner_id, total_size, default_quota)
         .await?;
 
     for id in block_ids {

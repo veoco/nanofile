@@ -37,7 +37,7 @@ impl AccountService {
     pub async fn get_account_info(
         &self,
         user_id: i32,
-        max_storage_bytes: u64,
+        default_quota: u64,
         site_url_origin: &str,
     ) -> Result<AccountInfo, AppError> {
         let user_record = self
@@ -50,12 +50,12 @@ impl AccountService {
         let usage = self.compute_usage(user_id).await?;
         let total = match user_record.storage_quota {
             Some(0) => -1, // explicitly unlimited
-            Some(n) => n,  // user-specific quota
+            Some(n) => n,  // the account's own quota
             None => {
-                if max_storage_bytes > 0 {
-                    max_storage_bytes as i64
+                if default_quota > 0 {
+                    default_quota as i64
                 } else {
-                    -1 // global unlimited
+                    -1 // the default quota is unlimited
                 }
             }
         };
@@ -82,7 +82,7 @@ impl AccountService {
         &self,
         user_id: i32,
         name: String,
-        max_storage_bytes: u64,
+        default_quota: u64,
         site_url_origin: &str,
     ) -> Result<AccountInfo, AppError> {
         let display_name = if name.is_empty() {
@@ -106,12 +106,12 @@ impl AccountService {
         let usage = self.compute_usage(user_id).await?;
         let total = match user_record.storage_quota {
             Some(0) => -1, // explicitly unlimited
-            Some(n) => n,  // user-specific quota
+            Some(n) => n,  // the account's own quota
             None => {
-                if max_storage_bytes > 0 {
-                    max_storage_bytes as i64
+                if default_quota > 0 {
+                    default_quota as i64
                 } else {
-                    -1 // global unlimited
+                    -1 // the default quota is unlimited
                 }
             }
         };

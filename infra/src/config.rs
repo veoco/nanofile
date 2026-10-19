@@ -949,8 +949,14 @@ pub struct StorageConfig {
     pub block_dir: PathBuf,
     #[serde(default = "default_temp_dir")]
     pub temp_dir: PathBuf,
+    /// Default space quota, in bytes, for an account that has no quota of its own —
+    /// a user whose `users.storage_quota` is `NULL`, which is every account created
+    /// by self-registration, by `adduser`, or by the admin form with the field left
+    /// empty. `0` leaves them unlimited. A finite value bounds every such account,
+    /// administrators included, so give one account its own quota to exempt it.
+    /// Env: NANOFILE_STORAGE_DEFAULT_USER_QUOTA_BYTES
     #[serde(default)]
-    pub max_storage_bytes: u64,
+    pub default_user_quota_bytes: u64,
     /// `ffmpeg` binary for video thumbnails; when it is not found, videos fall back
     /// to a play-icon placeholder. Env: NANOFILE_STORAGE_FFMPEG_PATH
     #[serde(default = "default_ffmpeg_path")]
@@ -1076,7 +1082,7 @@ impl Default for StorageConfig {
         Self {
             block_dir: default_block_dir(),
             temp_dir: default_temp_dir(),
-            max_storage_bytes: 0,
+            default_user_quota_bytes: 0,
             ffmpeg_path: default_ffmpeg_path(),
             max_temp_uploads: default_max_temp_uploads(),
             max_temp_upload_bytes: default_max_temp_upload_bytes(),
@@ -1974,30 +1980,53 @@ impl Config {
         Ok(LoadedConfig { config, env_keys })
     }
 
-    /// Fold a retired config-file key into the settings it now splits into.
+    /// Fold retired config-file keys into the settings that replaced them.
     ///
     /// `[server] share_link_enabled` was one master switch over both directions of
     /// sharing. serde cannot map one key onto two fields, so the raw document is
     /// consulted right after deserialization; the value is applied to **both**
     /// directions, or an installation that turned sharing off would silently
     /// reopen anonymous uploads by upgrading.
+    ///
+    /// `[storage] max_storage_bytes` was renamed to `default_user_quota_bytes`: the
+    /// value was always the quota of one account with none of its own, never a cap
+    /// on every account together. Reading the raw document (rather than a serde
+    /// alias) lets a file carrying both names keep the new one instead of failing on
+    /// a duplicate field, and tells the operator the old name is going away.
     fn fold_retired_file_keys(&mut self, original: &str) {
-        let legacy = toml::from_str::<toml::Value>(original)
-            .ok()
-            .and_then(|doc| {
-                doc.get("server")
-                    .and_then(|server| server.get("share_link_enabled"))
-                    .and_then(toml::Value::as_bool)
-            });
-        let Some(value) = legacy else {
+        let Ok(doc) = toml::from_str::<toml::Value>(original) else {
             return;
         };
-        tracing::warn!(
-            "[server] share_link_enabled is retired and sets both share_download_enabled \
-             and share_upload_enabled; use the two new keys instead"
-        );
-        self.server.share_download_enabled = value;
-        self.server.share_upload_enabled = value;
+
+        if let Some(value) = doc
+            .get("server")
+            .and_then(|server| server.get("share_link_enabled"))
+            .and_then(toml::Value::as_bool)
+        {
+            tracing::warn!(
+                "[server] share_link_enabled is retired and sets both share_download_enabled \
+                 and share_upload_enabled; use the two new keys instead"
+            );
+            self.server.share_download_enabled = value;
+            self.server.share_upload_enabled = value;
+        }
+
+        // The new name wins when a file carries both, so the rename never means
+        // "whichever key serde happened to see last".
+        let storage = doc.get("storage");
+        if storage
+            .and_then(|storage| storage.get("default_user_quota_bytes"))
+            .is_none()
+            && let Some(value) = storage
+                .and_then(|storage| storage.get("max_storage_bytes"))
+                .and_then(toml::Value::as_integer)
+        {
+            tracing::warn!(
+                "[storage] max_storage_bytes was renamed to default_user_quota_bytes \
+                 (the default quota of an account with none of its own); use the new key"
+            );
+            self.storage.default_user_quota_bytes = value.max(0) as u64;
+        }
     }
 
     /// Apply every `NANOFILE_*` override.
@@ -2083,6 +2112,9 @@ impl Config {
     /// one direction still keeps the old intent for the other. Origins report the
     /// variable that actually supplied the value.
     ///
+    /// A plain rename is the same mechanism with a single key
+    /// (`NANOFILE_STORAGE_MAX_STORAGE_BYTES` → `..._DEFAULT_USER_QUOTA_BYTES`).
+    ///
     /// `lookup` is injected so a unit test can exercise the mapping without
     /// mutating this process's environment (the test suite runs in parallel).
     fn apply_retired_env_aliases(
@@ -2112,6 +2144,11 @@ impl Config {
                 old: "NANOFILE_AUTH_ENABLE_INVITATIONS",
                 keys: &["auth.enable_registration"],
                 replacement: "NANOFILE_AUTH_ENABLE_REGISTRATION",
+            },
+            RetiredAlias {
+                old: "NANOFILE_STORAGE_MAX_STORAGE_BYTES",
+                keys: &["storage.default_user_quota_bytes"],
+                replacement: "NANOFILE_STORAGE_DEFAULT_USER_QUOTA_BYTES",
             },
         ];
 
@@ -3538,6 +3575,78 @@ request_timeout_secs = 600
         assert_eq!(
             env_keys.get("server.share_upload_enabled"),
             Some(&"NANOFILE_SERVER_SHARE_LINK_ENABLED")
+        );
+    }
+
+    /// A config file written before the rename still sets the default quota: the
+    /// key moved because it was never a cap on every account together, not because
+    /// the value changed meaning.
+    #[test]
+    fn the_renamed_quota_key_in_the_file_still_applies() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[storage]\nmax_storage_bytes = 128\n").unwrap();
+
+        let config = Config::load_from(&path).expect("load the retired key");
+
+        assert_eq!(config.storage.default_user_quota_bytes, 128);
+        assert_eq!(Config::default().storage.default_user_quota_bytes, 0);
+    }
+
+    /// A file that carries both names keeps the new one; serde would fail on a
+    /// duplicate field, so the fold has to decide.
+    #[test]
+    fn the_new_quota_key_wins_over_the_retired_file_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[storage]\nmax_storage_bytes = 128\ndefault_user_quota_bytes = 256\n",
+        )
+        .unwrap();
+
+        let config = Config::load_from(&path).expect("load both keys");
+
+        assert_eq!(config.storage.default_user_quota_bytes, 256);
+    }
+
+    /// The retired variable feeds the renamed setting and reports itself as the
+    /// origin, so the settings page can say where the value came from.
+    #[test]
+    fn the_retired_quota_variable_renames() {
+        let mut config = Config::default();
+        let mut env_keys = EnvKeys::new();
+        let lookup =
+            |name: &str| (name == "NANOFILE_STORAGE_MAX_STORAGE_BYTES").then(|| "128".to_string());
+
+        config.apply_retired_env_aliases(&mut env_keys, lookup);
+
+        assert_eq!(config.storage.default_user_quota_bytes, 128);
+        assert_eq!(
+            env_keys.get("storage.default_user_quota_bytes"),
+            Some(&"NANOFILE_STORAGE_MAX_STORAGE_BYTES")
+        );
+    }
+
+    /// The current variable is authoritative; the retired name is skipped rather
+    /// than racing it.
+    #[test]
+    fn the_new_quota_variable_wins_over_the_retired_one() {
+        let mut config = Config::default();
+        let mut env_keys = EnvKeys::new();
+        env_keys.insert(
+            "storage.default_user_quota_bytes",
+            "NANOFILE_STORAGE_DEFAULT_USER_QUOTA_BYTES",
+        );
+        let lookup =
+            |name: &str| (name == "NANOFILE_STORAGE_MAX_STORAGE_BYTES").then(|| "128".to_string());
+
+        config.apply_retired_env_aliases(&mut env_keys, lookup);
+
+        assert_eq!(config.storage.default_user_quota_bytes, 0);
+        assert_eq!(
+            env_keys.get("storage.default_user_quota_bytes"),
+            Some(&"NANOFILE_STORAGE_DEFAULT_USER_QUOTA_BYTES")
         );
     }
 }

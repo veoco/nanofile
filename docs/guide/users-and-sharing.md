@@ -45,6 +45,31 @@ Administrators can still create accounts directly; those accounts, accounts
 created by `adduser`, the first-run administrator and invitation registrations
 are all considered verified.
 
+### Space quota
+
+Every account has one of three quota states, stored per user:
+
+| State | `users.storage_quota` | Meaning |
+|---|---|---|
+| Own quota | `n` | At most `n` bytes |
+| Unlimited | `0` | No limit for this account |
+| Default quota | empty | Follows the server's default space quota |
+
+**System Settings → Storage → Default space quota**
+(`storage.default_user_quota_bytes`, default `0`) is the state a new account
+starts in. Registration never copies a quota into the account, so a new
+registration — by invitation or open — is bounded by this setting, and so is every
+existing account that was never given a quota of its own. Environment variable:
+`NANOFILE_STORAGE_DEFAULT_USER_QUOTA_BYTES`; `0` means unlimited.
+
+Because the default is read on every upload, changing it re-bounds all of those
+accounts at once, administrators included. Give one account its own quota (or `0`)
+on the user page to exempt it. The old key `storage.max_storage_bytes` and its
+variable `NANOFILE_STORAGE_MAX_STORAGE_BYTES` are still accepted as deprecated
+aliases; the name was wrong, not the value — this is the quota of one account, not
+a cap on every account together, and a saved setting row is moved to the new key on
+upgrade.
+
 ## Share links
 
 Select a file or folder in the web file browser and choose **Share**. The

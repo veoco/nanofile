@@ -18,19 +18,20 @@ async fn user_usage(repos: &Repositories, user_id: i32) -> Result<i64, AppError>
 /// Check whether a user has enough remaining quota for a `delta`-byte upload.
 ///
 /// `users.storage_quota` decides: `Some(0)` unlimited, `Some(n)` n bytes, `None`
-/// falls back to `global_max` (its `0` is unlimited). Returns
-/// `AppError::QuotaExceeded` when the allowance would be exceeded.
+/// falls back to `default_quota`, the server's default space quota (its `0` is
+/// unlimited). Returns `AppError::QuotaExceeded` when the allowance would be
+/// exceeded.
 pub async fn check_upload_quota(
     repos: &Repositories,
     user_id: i32,
     delta: i64,
-    global_max: u64,
+    default_quota: u64,
 ) -> Result<(), AppError> {
     if delta <= 0 {
         return Ok(());
     }
 
-    let Some(quota) = effective_quota(repos, user_id, global_max).await? else {
+    let Some(quota) = effective_quota(repos, user_id, default_quota).await? else {
         return Ok(());
     };
 
@@ -51,9 +52,9 @@ pub async fn check_sync_quota(
     repos: &Repositories,
     user_id: i32,
     delta: i64,
-    global_max: u64,
+    default_quota: u64,
 ) -> Result<(), AppError> {
-    let Some(quota) = effective_quota(repos, user_id, global_max).await? else {
+    let Some(quota) = effective_quota(repos, user_id, default_quota).await? else {
         return Ok(());
     };
 
@@ -74,10 +75,13 @@ pub fn invalidate_user(repos: &Repositories, user_id: i32) {
 }
 
 /// Resolve a user's effective quota in bytes, or `None` for unlimited.
+///
+/// An account with no quota of its own follows `default_quota`, so changing that
+/// setting re-bounds every such account — new registrations included.
 async fn effective_quota(
     repos: &Repositories,
     user_id: i32,
-    global_max: u64,
+    default_quota: u64,
 ) -> Result<Option<i64>, AppError> {
     let user = repos
         .user
@@ -88,11 +92,11 @@ async fn effective_quota(
     let quota = match user.storage_quota {
         Some(0) => return Ok(None), // explicitly unlimited
         Some(n) => n,
-        None => global_max as i64, // fall back to global
+        None => default_quota as i64, // the account has no quota of its own
     };
 
     if quota <= 0 {
-        return Ok(None); // global unlimited
+        return Ok(None); // the default quota is unlimited
     }
     Ok(Some(quota))
 }
@@ -110,13 +114,13 @@ pub async fn reserve_block_bytes(
     user_id: i32,
     repo_id: &str,
     delta: i64,
-    global_max: u64,
+    default_quota: u64,
 ) -> Result<(), AppError> {
     if delta <= 0 {
         return Ok(());
     }
 
-    let Some(quota) = effective_quota(repos, user_id, global_max).await? else {
+    let Some(quota) = effective_quota(repos, user_id, default_quota).await? else {
         return Ok(());
     };
 

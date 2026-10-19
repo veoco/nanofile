@@ -72,23 +72,76 @@ async fn test_quota_unlimited_explicit_zero() {
     );
 }
 
+/// A user with no quota of their own is bounded by the server's default space
+/// quota — the value every new registration starts with.
 #[tokio::test]
-async fn test_quota_uses_global_fallback() {
-    let f = TestFixture::new().await;
-    // storage_quota = None => fall back to global max_storage_bytes
-    // (10 GB in the default test config).
+async fn test_quota_uses_default_quota() {
+    let f = TestFixture::new_with_storage_config(|cfg| cfg.default_user_quota_bytes = 1024).await;
+    // storage_quota = None => the server's default space quota (1 KiB here).
     set_user_quota(&f, None).await;
 
-    let data = b"small file within global limit";
     let resp = f
         .client
-        .upload_file(&f.api_token, &f.repo_id, "/", "fallback.txt", data)
+        .upload_file(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            "small.txt",
+            b"inside the default",
+        )
         .await;
     assert_eq!(
         resp.status(),
         200,
-        "global fallback should allow upload, got {}",
+        "a file inside the default quota should upload, got {}",
         resp.status()
+    );
+
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "large.txt", &vec![0u8; 2048])
+        .await;
+    assert_eq!(
+        resp.status(),
+        443,
+        "an upload beyond the default quota should be rejected, got {}",
+        resp.status()
+    );
+}
+
+/// Self-registration writes no quota of its own: the account row stays `NULL`, so
+/// it follows the default quota and a later change to that default reaches it.
+#[tokio::test]
+async fn registration_leaves_the_default_quota_to_the_server() {
+    use common::TestServer;
+
+    let server = TestServer::start_with_open_registration().await;
+    let email = "default-quota@example.com";
+    let resp = server
+        .client()
+        .post_ui_form(
+            "/accounts/register/",
+            &[
+                ("email", email),
+                ("password1", "password123"),
+                ("password2", "password123"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "open registration failed");
+
+    let user = server
+        .repos
+        .user
+        .find_by_email(email)
+        .await
+        .unwrap()
+        .expect("the account exists");
+    assert!(
+        user.storage_quota.is_none(),
+        "registration must not stamp a quota, or the account would stop following \
+         the default: {:?}",
+        user.storage_quota
     );
 }
 
