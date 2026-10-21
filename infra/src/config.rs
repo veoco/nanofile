@@ -1098,6 +1098,60 @@ impl Default for StorageConfig {
     }
 }
 
+/// How the anonymous web forms ask for a proof-of-work challenge.
+///
+/// The challenge is solved in the browser and verified by the server; the API
+/// login, WebDAV and sync clients never see it. `Off` keeps the forms as they are.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptchaMode {
+    /// No challenge anywhere.
+    #[default]
+    Off,
+    /// Registration and password reset always challenge; sign-in challenges only
+    /// after `captcha_trigger_after` failures from the same client address.
+    Adaptive,
+    /// Every protected web form challenges.
+    Always,
+}
+
+/// The lowest accepted [`AuthConfig::captcha_difficulty_bits`].
+pub const CAPTCHA_MIN_BITS: u8 = 12;
+/// The highest accepted [`AuthConfig::captcha_difficulty_bits`].
+pub const CAPTCHA_MAX_BITS: u8 = 22;
+
+impl CaptchaMode {
+    /// Every mode, in settings-page order.
+    pub const ALL: [Self; 3] = [Self::Off, Self::Adaptive, Self::Always];
+
+    /// The config-file / settings value of this mode.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Adaptive => "adaptive",
+            Self::Always => "always",
+        }
+    }
+
+    /// Parse a config-file / settings value, case-insensitively.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let trimmed = value.trim();
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.as_str().eq_ignore_ascii_case(trimmed))
+            .ok_or_else(|| {
+                format!(
+                    "unknown value {trimmed:?}; use one of {}",
+                    Self::ALL
+                        .iter()
+                        .map(|mode| mode.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AuthConfig {
     #[serde(default = "default_password_hash_iterations")]
@@ -1151,6 +1205,20 @@ pub struct AuthConfig {
     /// sign in.
     #[serde(default = "default_true")]
     pub require_invitation: bool,
+    /// Proof-of-work challenge for the web sign-in, registration and password-reset
+    /// forms. The API login (`POST /api2/auth-token/`), WebDAV and sync clients are
+    /// never challenged: they cannot run the browser solver.
+    #[serde(default)]
+    pub captcha_mode: CaptchaMode,
+    /// Base challenge difficulty: the number of leading zero bits the browser must
+    /// find in `SHA-256(seed || nonce)`. Higher costs more CPU on every visitor.
+    /// Accepted range: [`CAPTCHA_MIN_BITS`]–[`CAPTCHA_MAX_BITS`].
+    #[serde(default = "default_captcha_difficulty_bits")]
+    pub captcha_difficulty_bits: u8,
+    /// Failed sign-in attempts from one client address before `adaptive` mode asks
+    /// for a challenge. `0` means every sign-in asks. Ignored in the other modes.
+    #[serde(default = "default_captcha_trigger_after")]
+    pub captcha_trigger_after: u32,
     /// Whether to show the "Forgot password?" link on the login page
     /// and enable the password reset flow.
     #[serde(default = "default_true")]
@@ -1222,6 +1290,9 @@ impl Default for AuthConfig {
             sso_link_max_per_hour: default_sso_link_max_per_hour(),
             enable_registration: default_true(),
             require_invitation: default_true(),
+            captcha_mode: CaptchaMode::Off,
+            captcha_difficulty_bits: default_captcha_difficulty_bits(),
+            captcha_trigger_after: default_captcha_trigger_after(),
             enable_password_reset: default_true(),
             password_min_length: default_password_min_length(),
             require_strong_password: false,
@@ -1237,6 +1308,18 @@ impl Default for AuthConfig {
             api_key_ttl_presets_days: default_api_key_ttl_presets_days(),
             api_key_max_ttl_days: 0,
         }
+    }
+}
+
+impl AuthConfig {
+    /// The configured base challenge difficulty, clamped to the accepted range.
+    ///
+    /// Values outside [`CAPTCHA_MIN_BITS`]–[`CAPTCHA_MAX_BITS`] are rejected on
+    /// save and reported at startup; clamping here keeps an existing config file
+    /// from making every challenge trivial or unusable.
+    pub fn captcha_bits(&self) -> u8 {
+        self.captcha_difficulty_bits
+            .clamp(CAPTCHA_MIN_BITS, CAPTCHA_MAX_BITS)
     }
 }
 
@@ -1260,6 +1343,12 @@ fn default_api_key_ttl_presets_days() -> Vec<u64> {
 }
 fn default_lockout_duration_secs() -> u64 {
     900
+}
+fn default_captcha_difficulty_bits() -> u8 {
+    17
+}
+fn default_captcha_trigger_after() -> u32 {
+    2
 }
 fn default_true() -> bool {
     true
@@ -1728,6 +1817,12 @@ impl Config {
         }
         if self.auth.password_hash_iterations < 1 {
             return Err("auth.password_hash_iterations must be at least 1".to_string());
+        }
+        if !(CAPTCHA_MIN_BITS..=CAPTCHA_MAX_BITS).contains(&self.auth.captcha_difficulty_bits) {
+            return Err(format!(
+                "auth.captcha_difficulty_bits must be between {CAPTCHA_MIN_BITS} and \
+                 {CAPTCHA_MAX_BITS}"
+            ));
         }
 
         if self.email.port == 0 {
@@ -2589,7 +2684,7 @@ request_timeout_secs = 600
         assert_eq!(Config::default().validate(), Ok(()));
 
         type Mutate = fn(&mut Config);
-        let cases: [(&str, Mutate); 8] = [
+        let cases: [(&str, Mutate); 10] = [
             ("server.version", |c| c.server.version = "  ".to_string()),
             ("server.port", |c| c.server.port = 0),
             ("server.max_json_body_mb", |c| c.server.max_json_body_mb = 0),
@@ -2601,6 +2696,12 @@ request_timeout_secs = 600
             }),
             ("auth.password_min_length", |c| {
                 c.auth.password_min_length = 0
+            }),
+            ("auth.captcha_difficulty_bits", |c| {
+                c.auth.captcha_difficulty_bits = CAPTCHA_MIN_BITS - 1
+            }),
+            ("auth.captcha_difficulty_bits", |c| {
+                c.auth.captcha_difficulty_bits = CAPTCHA_MAX_BITS + 1
             }),
             ("email.timeout_secs", |c| c.email.timeout_secs = 0),
             ("logging.level", |c| c.logging.level = String::new()),
@@ -2619,6 +2720,24 @@ request_timeout_secs = 600
         let mut config = Config::default();
         config.server.encrypted_library_version = 3;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn captcha_mode_parses_case_insensitively_and_clamps_difficulty() {
+        assert_eq!(CaptchaMode::parse(" Off "), Ok(CaptchaMode::Off));
+        assert_eq!(CaptchaMode::parse("ADAPTIVE"), Ok(CaptchaMode::Adaptive));
+        assert_eq!(CaptchaMode::parse("always"), Ok(CaptchaMode::Always));
+        assert!(CaptchaMode::parse("sometimes").is_err());
+        assert_eq!(CaptchaMode::default(), CaptchaMode::Off);
+
+        // An old/edited file outside the accepted range is clamped rather than
+        // making every challenge trivial or unusable.
+        let mut auth = AuthConfig::default();
+        assert_eq!(auth.captcha_bits(), 17);
+        auth.captcha_difficulty_bits = 0;
+        assert_eq!(auth.captcha_bits(), CAPTCHA_MIN_BITS);
+        auth.captcha_difficulty_bits = 255;
+        assert_eq!(auth.captcha_bits(), CAPTCHA_MAX_BITS);
     }
 
     #[test]

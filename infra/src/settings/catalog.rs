@@ -11,6 +11,8 @@
 
 use std::path::PathBuf;
 
+use crate::config::CaptchaMode;
+
 use super::{
     Apply, Hook, Kind, Section, SettingDef, fmt_bool, fmt_num_list, fmt_opt_bool, fmt_text_list,
     opt_text, parse_bool, parse_enum, parse_i32, parse_num_list, parse_opt_bool, parse_text_list,
@@ -452,6 +454,44 @@ pub static CATALOG: &[SettingDef] = &[
         |c| fmt_bool(c.auth.require_invitation),
         |c, v| {
             c.auth.require_invitation = parse_bool(v)?;
+            Ok(())
+        }
+    ),
+    // · Bot challenge
+    setting!(
+        "auth.captcha_mode",
+        Authentication,
+        "NANOFILE_AUTH_CAPTCHA_MODE",
+        Kind::Enum(&["off", "adaptive", "always"]),
+        Apply::Live,
+        |c| c.auth.captcha_mode.as_str().to_string(),
+        |c, v| {
+            c.auth.captcha_mode = CaptchaMode::parse(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "auth.captcha_difficulty_bits",
+        Authentication,
+        "NANOFILE_AUTH_CAPTCHA_DIFFICULTY_BITS",
+        Kind::U32,
+        Apply::Live,
+        |c| c.auth.captcha_difficulty_bits.to_string(),
+        |c, v| {
+            c.auth.captcha_difficulty_bits = u8::try_from(parse_u32(v)?)
+                .map_err(|_| "auth.captcha_difficulty_bits must fit in 8 bits")?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "auth.captcha_trigger_after",
+        Authentication,
+        "NANOFILE_AUTH_CAPTCHA_TRIGGER_AFTER",
+        Kind::U32,
+        Apply::Live,
+        |c| c.auth.captcha_trigger_after.to_string(),
+        |c, v| {
+            c.auth.captcha_trigger_after = parse_u32(v)?;
             Ok(())
         }
     ),
@@ -1578,6 +1618,16 @@ pub static GROUPS: &[GroupDef] = &[
         id: "authentication_registration",
         title_key: "setting.group_authentication_registration",
         keys: &["auth.enable_registration", "auth.require_invitation"],
+    },
+    GroupDef {
+        section: Section::Authentication,
+        id: "authentication_captcha",
+        title_key: "setting.group_authentication_captcha",
+        keys: &[
+            "auth.captcha_mode",
+            "auth.captcha_difficulty_bits",
+            "auth.captcha_trigger_after",
+        ],
     },
     GroupDef {
         section: Section::Authentication,

@@ -129,10 +129,11 @@ impl LoginRateLimiter {
     }
 
     /// Record a failed login attempt for the given key.
+    ///
+    /// The timestamp is kept even when the lockout is disabled (`0`): the adaptive
+    /// captcha uses the same failure window as its trigger, and "no lockout" is not
+    /// the same policy as "forget that failures happened".
     pub fn record_failure(&self, key: &str) {
-        if self.lockout_disabled() {
-            return;
-        }
         let now = Self::now();
         let mut map = self.lock();
         let timestamps = map.entry(key.to_string()).or_default();
@@ -140,6 +141,35 @@ impl LoginRateLimiter {
         let cutoff = now - self.window();
         timestamps.retain(|&t| t > cutoff);
         Self::shrink_attempts(&mut map);
+    }
+
+    /// The number of failures currently inside the window for this attempt's
+    /// address or `(address, account)` pair, whichever is larger.
+    ///
+    /// This is the adaptive-captcha trigger. It deliberately reads the same map as
+    /// the lockout, so a successful login that clears the pair/address budget also
+    /// clears the trigger.
+    pub fn failure_count(&self, keys: &LoginKeys) -> u32 {
+        let now = Self::now();
+        let cutoff = now - self.window();
+        let mut map = self.lock();
+        let mut count = 0;
+        let mut stale = Vec::new();
+        for key in [&keys.ip_key, &keys.pair_key] {
+            let Some(timestamps) = map.get_mut(key) else {
+                continue;
+            };
+            timestamps.retain(|&t| t > cutoff);
+            if timestamps.is_empty() {
+                stale.push(key.clone());
+            } else {
+                count = count.max(timestamps.len() as u32);
+            }
+        }
+        for key in stale {
+            map.remove(&key);
+        }
+        count
     }
 
     /// Check if the given key is currently locked out.
@@ -200,10 +230,10 @@ impl LoginRateLimiter {
     }
 
     /// Record failed attempts for several keys in a single lock acquisition.
+    ///
+    /// As in [`Self::record_failure`], timestamps are kept when the lockout is
+    /// disabled because the adaptive captcha reads them.
     pub fn record_failures(&self, keys: &[&str]) {
-        if self.lockout_disabled() {
-            return;
-        }
         let now = Self::now();
         let cutoff = now - self.window();
         let mut map = self.lock();
@@ -508,5 +538,49 @@ mod tests {
             );
         }
         assert!(guard.contains_key("trigger"));
+    }
+
+    /// The adaptive captcha reads failures even when the lockout itself is off.
+    #[test]
+    fn failure_count_survives_a_disabled_lockout() {
+        let limiter = LoginRateLimiter::new(0, 60, 0);
+        let keys = LoginKeys::new("203.0.113.9", "user@example.com");
+        for _ in 0..3 {
+            limiter.record_login_failure(&keys);
+        }
+        assert_eq!(limiter.failure_count(&keys), 3);
+        assert!(
+            !limiter.is_login_blocked(&keys),
+            "0 must still mean no lockout"
+        );
+
+        limiter.clear_login_failure(&keys);
+        assert_eq!(limiter.failure_count(&keys), 0);
+    }
+
+    /// The trigger is the larger of the address and pair counters, and expires
+    /// with the same window as the lockout.
+    #[test]
+    fn failure_count_uses_the_max_and_prunes_the_window() {
+        let limiter = LoginRateLimiter::new(5, 60, 0);
+        let target = LoginKeys::new("203.0.113.9", "victim@example.com");
+        let other = LoginKeys::new("203.0.113.9", "other@example.com");
+        limiter.record_login_failure(&target);
+        limiter.record_login_failure(&other);
+        limiter.record_login_failure(&other);
+        assert_eq!(
+            limiter.failure_count(&target),
+            3,
+            "the address count is larger than the pair count"
+        );
+
+        let old = LoginRateLimiter::now() - 120;
+        {
+            let mut map = limiter.attempts.lock().unwrap();
+            for timestamps in map.values_mut() {
+                timestamps.fill(old);
+            }
+        }
+        assert_eq!(limiter.failure_count(&target), 0);
     }
 }

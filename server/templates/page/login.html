@@ -53,6 +53,8 @@
     <input type="hidden" name="next" value="{{ next }}">
     {% endif %}
 
+    {% include "includes/pow.html" %}
+
     <button type="submit" class="btn btn-solid h-9 w-full text-[13px]">
         {{ t.tr("auth.sign_in") }}
     </button>
@@ -68,4 +70,8 @@
     <a href="/accounts/password/reset/" class="text-[12.5px] text-ink underline underline-offset-2 decoration-line-strong">{{ t.tr("auth.forgot_password") }}</a>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ urls.pow_js }}" defer></script>
 {% endblock %}

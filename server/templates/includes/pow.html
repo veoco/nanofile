@@ -1,0 +1,23 @@
+{# Proof-of-work challenge for the anonymous forms.
+
+   The solver (`pow.js`) disables the submit button, searches for the nonce and
+   fills `pow_nonce`. The server stores the seed and difficulty, so neither value
+   can be forged here; this block only gives the browser its work item. #}
+{% if let Some(p) = pow %}
+<div data-pow-challenge
+     data-pow-seed="{{ p.seed }}"
+     data-pow-bits="{{ p.bits }}"
+     data-pow-working="{{ t.tr("auth.pow_working") }}"
+     data-pow-ready="{{ t.tr("auth.pow_ready") }}"
+     data-pow-error="{{ t.tr("auth.pow_error") }}">
+    <input type="hidden" name="pow_id" value="{{ p.id }}">
+    <input type="hidden" name="pow_nonce" value="">
+    <p class="mt-1 text-[11.5px] leading-relaxed text-ink-3"
+       role="status"
+       aria-live="polite"
+       data-pow-status>{{ t.tr("auth.pow_working") }}</p>
+    <noscript>
+        <p class="mt-1 text-[11.5px] leading-relaxed text-err-text">{{ t.tr("auth.pow_js_required") }}</p>
+    </noscript>
+</div>
+{% endif %}

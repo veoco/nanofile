@@ -18,6 +18,7 @@ use crate::service::auth::password::{
     dummy_password_hash, hash_password_async, needs_rehash, verify_password_async,
 };
 use crate::service::auth::password_reset::PasswordResetService;
+use crate::service::auth::pow::{PowPurpose, PowView, bits_for};
 use crate::service::auth::registration::{RegistrationParams, RegistrationService};
 use crate::service::auth::token::generate_api_token;
 use crate::service::auth::totp::TotpManager;
@@ -42,6 +43,8 @@ pub struct LoginTemplate {
     pub registration_available: bool,
     /// URL to redirect to after login (kept as a hidden form field).
     pub next: String,
+    /// Proof-of-work challenge, when the current policy asks for one.
+    pub pow: Option<PowView>,
 }
 
 /// Template shared with two_factor.rs for the TOTP entry page.
@@ -89,6 +92,9 @@ pub struct LoginForm {
     pub remember_me: Option<String>,
     /// Hidden form field echoing the original `?next=` query value.
     pub next: Option<String>,
+    /// Proof-of-work challenge id and the browser-computed nonce.
+    pub pow_id: Option<String>,
+    pub pow_nonce: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -98,13 +104,71 @@ pub struct TwoFactorAuthForm {
     pub next: Option<String>,
 }
 
+/// Whether the current policy asks the sign-in form for a proof-of-work.
+///
+/// The failure count is the same one the lockout sees, so an address that has been
+/// failing gets a challenge before it is locked out. `trigger_after = 0` makes
+/// adaptive behave like always.
+fn login_requires_pow(state: &AppState, client_ip: &str, username: &str) -> bool {
+    let auth = &state.config().auth;
+    match auth.captcha_mode {
+        infra::config::CaptchaMode::Off => false,
+        infra::config::CaptchaMode::Always => true,
+        infra::config::CaptchaMode::Adaptive => {
+            let keys = infra::rate_limit::LoginKeys::new(client_ip, username);
+            state.auth_limiters.login.failure_count(&keys) >= auth.captcha_trigger_after
+        }
+    }
+}
+
+/// Issue a sign-in challenge when the policy asks for one.
+fn login_pow_challenge(state: &AppState, client_ip: &str, username: &str) -> Option<PowView> {
+    if !login_requires_pow(state, client_ip, username) {
+        return None;
+    }
+    let auth = &state.config().auth;
+    let keys = infra::rate_limit::LoginKeys::new(client_ip, username);
+    let failures = state.auth_limiters.login.failure_count(&keys);
+    Some(
+        state
+            .pow
+            .issue(PowPurpose::Login, bits_for(auth.captcha_bits(), failures)),
+    )
+}
+
+/// Issue a challenge for a form that always asks while the feature is on.
+fn form_pow_challenge(state: &AppState, purpose: PowPurpose) -> Option<PowView> {
+    let auth = &state.config().auth;
+    (auth.captcha_mode != infra::config::CaptchaMode::Off)
+        .then(|| state.pow.issue(purpose, auth.captcha_bits()))
+}
+
+/// Verify the hidden fields; missing fields simply fail.
+fn verify_pow(
+    state: &AppState,
+    id: &Option<String>,
+    nonce: &Option<String>,
+    purpose: PowPurpose,
+) -> bool {
+    match (id.as_deref(), nonce.as_deref()) {
+        (Some(id), Some(nonce)) => state.pow.verify(id, nonce, purpose),
+        _ => false,
+    }
+}
+
 /// GET /accounts/login/ — render the login page.
 pub async fn login_page(
     State(state): State<Arc<AppState>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     Query(query): Query<LoginNextQuery>,
 ) -> Result<Html<String>, AppError> {
     let t = I18n::from_headers(&headers, &state.config().ui.default_language);
+    let client_ip = crate::middleware::effective_client_ip(
+        &addr,
+        &headers,
+        &state.config().server.trusted_proxies,
+    );
     let tpl = LoginTemplate {
         urls: crate::static_assets::template_urls(),
         t,
@@ -113,6 +177,7 @@ pub async fn login_page(
         enable_password_reset: password_reset_available(&state).await,
         registration_available: registration_available(&state),
         next: query.next.unwrap_or_default(),
+        pow: login_pow_challenge(&state, &client_ip, ""),
     };
     let html = tpl
         .render()
@@ -206,6 +271,7 @@ async fn render_login_page(
     headers: &HeaderMap,
     error: Option<String>,
     next: &str,
+    pow: Option<PowView>,
 ) -> Result<Html<String>, AppError> {
     let tpl = LoginTemplate {
         urls: crate::static_assets::template_urls(),
@@ -215,6 +281,7 @@ async fn render_login_page(
         enable_password_reset: password_reset_available(state).await,
         registration_available: registration_available(state),
         next: next.to_string(),
+        pow,
     };
     let html = tpl
         .render()
@@ -263,6 +330,7 @@ async fn unverified_login_response(
             headers,
             Some(t.tr("auth.verify_email_required_no_mail").to_string()),
             "",
+            login_pow_challenge(state, client_ip, &user.email),
         )
         .await
         .map(|html| (StatusCode::OK, Html(html)).into_response());
@@ -319,6 +387,7 @@ async fn unverified_login_response(
             headers,
             Some(t.tr("auth.verification_email_failed").to_string()),
             "",
+            login_pow_challenge(state, client_ip, &user.email),
         )
         .await
         .map(|html| (StatusCode::OK, Html(html)).into_response());
@@ -362,6 +431,7 @@ pub async fn login(
                     .to_string(),
             ),
             &next,
+            None,
         )
         .await
         .map(|html| (StatusCode::FORBIDDEN, Html(html)).into_response());
@@ -389,9 +459,30 @@ pub async fn login(
                     .to_string(),
             ),
             &next,
+            None,
         )
         .await
         .map(|html| (StatusCode::TOO_MANY_REQUESTS, Html(html)).into_response());
+    }
+
+    // The proof-of-work comes before any password work: a missing or wrong answer
+    // must not buy a PBKDF2 run, and it is not counted as a credential failure.
+    if login_requires_pow(&state, &client_ip, &form.email)
+        && !verify_pow(&state, &form.pow_id, &form.pow_nonce, PowPurpose::Login)
+    {
+        return render_login_page(
+            &state,
+            &headers,
+            Some(
+                I18n::from_headers(&headers, &state.config().ui.default_language)
+                    .tr("auth.pow_invalid")
+                    .to_string(),
+            ),
+            &next,
+            login_pow_challenge(&state, &client_ip, &form.email),
+        )
+        .await
+        .map(|html| (StatusCode::OK, Html(html)).into_response());
     }
 
     let user_record = state.repos.user.find_by_email(&form.email).await?;
@@ -433,6 +524,7 @@ pub async fn login(
                     .to_string(),
             ),
             &next,
+            login_pow_challenge(&state, &client_ip, &form.email),
         )
         .await
         .map(|html| (StatusCode::OK, Html(html)).into_response());
@@ -949,6 +1041,8 @@ pub struct RegisterTemplate {
     /// Whether the form asks for an invitation code. Open registration hides the
     /// field and shows the verification-mail note instead.
     pub require_invitation: bool,
+    /// Proof-of-work challenge, when the feature is on.
+    pub pow: Option<PowView>,
 }
 
 #[derive(Deserialize)]
@@ -958,6 +1052,9 @@ pub struct RegisterForm {
     pub password2: String,
     /// Absent in open mode; also accepted (and ignored) when an old client sends it.
     pub invitation_code: Option<String>,
+    /// Proof-of-work challenge id and the browser-computed nonce.
+    pub pow_id: Option<String>,
+    pub pow_nonce: Option<String>,
 }
 
 /// GET /accounts/register/ — render the registration form.
@@ -972,6 +1069,7 @@ pub async fn register_page(
         t: I18n::from_headers(&headers, &state.config().ui.default_language),
         error: None,
         require_invitation: state.config().auth.require_invitation,
+        pow: form_pow_challenge(&state, PowPurpose::Register),
     };
     let html = tpl
         .render()
@@ -991,6 +1089,7 @@ fn register_error(
         t: I18n::from_headers(headers, &state.config().ui.default_language),
         error: Some(message.as_ref().to_string()),
         require_invitation: state.config().auth.require_invitation,
+        pow: form_pow_challenge(state, PowPurpose::Register),
     };
     let html = tpl
         .render()
@@ -1035,6 +1134,19 @@ pub async fn register(
         );
     }
     state.auth_limiters.registration.record_attempt(&rl_key);
+
+    // The challenge is checked before any password or invitation work. A failed
+    // answer re-renders the form with a fresh challenge.
+    if state.config().auth.captcha_mode != infra::config::CaptchaMode::Off
+        && !verify_pow(&state, &form.pow_id, &form.pow_nonce, PowPurpose::Register)
+    {
+        return register_error(
+            &state,
+            &headers,
+            I18n::from_headers(&headers, &state.config().ui.default_language)
+                .tr("auth.pow_invalid"),
+        );
+    }
 
     if form.password1 != form.password2 {
         return register_error(
@@ -1243,6 +1355,8 @@ pub struct PasswordResetFormTemplate {
     pub urls: &'static crate::static_assets::TemplateUrls,
     pub t: &'static I18n,
     pub error: Option<String>,
+    /// Proof-of-work challenge, when the feature is on.
+    pub pow: Option<PowView>,
 }
 
 #[derive(Template)]
@@ -1272,12 +1386,33 @@ pub struct PasswordResetCompleteTemplate {
 #[derive(Deserialize)]
 pub struct PasswordResetForm {
     pub email: String,
+    /// Proof-of-work challenge id and the browser-computed nonce.
+    pub pow_id: Option<String>,
+    pub pow_nonce: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct PasswordResetConfirmForm {
     pub password1: String,
     pub password2: String,
+}
+
+/// Render the reset request form (fresh or with the reason it was refused).
+fn render_password_reset_form(
+    state: &AppState,
+    headers: &HeaderMap,
+    error: Option<String>,
+) -> Result<Html<String>, AppError> {
+    let tpl = PasswordResetFormTemplate {
+        urls: crate::static_assets::template_urls(),
+        t: I18n::from_headers(headers, &state.config().ui.default_language),
+        error,
+        pow: form_pow_challenge(state, PowPurpose::PasswordReset),
+    };
+    let html = tpl
+        .render()
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    Ok(Html(html))
 }
 
 /// GET /accounts/password/reset/ — show the reset request form. Answers 404 when
@@ -1290,15 +1425,7 @@ pub async fn password_reset_page(
     if !password_reset_available(&state).await {
         return Err(AppError::NotFound("password reset is unavailable".into()));
     }
-    let tpl = PasswordResetFormTemplate {
-        urls: crate::static_assets::template_urls(),
-        t: I18n::from_headers(&headers, &state.config().ui.default_language),
-        error: None,
-    };
-    let html = tpl
-        .render()
-        .map_err(|e| AppError::internal(e.to_string()))?;
-    Ok(Html(html))
+    render_password_reset_form(&state, &headers, None)
 }
 
 /// POST /accounts/password/reset/ — request a reset. The link is **never** in the
@@ -1362,6 +1489,28 @@ pub async fn password_reset(
         return Ok(Html(html));
     }
     state.auth_limiters.password_reset.record_attempt(&rl_key);
+
+    // The challenge is checked before minting a token or queueing mail. A failed
+    // answer re-renders the form with a fresh challenge; it reveals nothing about
+    // whether the address exists.
+    if state.config().auth.captcha_mode != infra::config::CaptchaMode::Off
+        && !verify_pow(
+            &state,
+            &form.pow_id,
+            &form.pow_nonce,
+            PowPurpose::PasswordReset,
+        )
+    {
+        return render_password_reset_form(
+            &state,
+            &headers,
+            Some(
+                I18n::from_headers(&headers, &state.config().ui.default_language)
+                    .tr("auth.pow_invalid")
+                    .to_string(),
+            ),
+        );
+    }
 
     // Mint a token and mail it to the owner; the response deliberately carries no
     // link. The send is queued in the background rather than awaited: a known

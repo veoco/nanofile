@@ -6,6 +6,8 @@
 
 use std::collections::BTreeSet;
 
+use infra::config::CaptchaMode;
+
 #[test]
 fn every_catalog_env_variable_is_read_and_tracked() {
     let dir = tempfile::tempdir().unwrap();
@@ -20,6 +22,8 @@ fn every_catalog_env_variable_is_read_and_tracked() {
         ("NANOFILE_SERVER_MAX_PROPFIND_ENTRIES", "1234"),
         ("NANOFILE_AUTH_MAX_LOGIN_ATTEMPTS", "1"),
         ("NANOFILE_AUTH_SEARCH_MAX_PER_MINUTE", "9"),
+        ("NANOFILE_AUTH_CAPTCHA_MODE", "always"),
+        ("NANOFILE_AUTH_CAPTCHA_DIFFICULTY_BITS", "19"),
         ("NANOFILE_SERVER_TRUSTED_PROXIES", "10.0.0.1, 10.0.0.2"),
         ("NANOFILE_UI_DEFAULT_LANGUAGE", "zh"),
         ("NANOFILE_EMAIL_NOTIFY_NEW_LOGIN", "false"),
@@ -44,6 +48,8 @@ fn every_catalog_env_variable_is_read_and_tracked() {
     assert_eq!(config.server.max_propfind_entries, 1234);
     assert_eq!(config.auth.max_login_attempts, 1);
     assert_eq!(config.auth.search_max_per_minute, 9);
+    assert_eq!(config.auth.captcha_mode, CaptchaMode::Always);
+    assert_eq!(config.auth.captcha_difficulty_bits, 19);
     assert_eq!(config.server.trusted_proxies, vec!["10.0.0.1", "10.0.0.2"]);
     assert_eq!(config.ui.default_language, "zh");
     assert!(!config.email.notify_new_login);
@@ -67,6 +73,8 @@ fn every_catalog_env_variable_is_read_and_tracked() {
         "server.max_propfind_entries",
         "auth.max_login_attempts",
         "auth.search_max_per_minute",
+        "auth.captcha_mode",
+        "auth.captcha_difficulty_bits",
         "server.trusted_proxies",
         "ui.default_language",
         "email.notify_new_login",

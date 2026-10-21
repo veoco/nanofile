@@ -114,6 +114,13 @@ asset_data!(
     FP_PUBLIC_SHARE_JS,
     "js/public-share.bundle.js"
 );
+asset_data!(
+    POW_JS_HASH,
+    POW_JS_LM,
+    ETAG_POW_JS,
+    FP_POW_JS,
+    "js/pow.bundle.js"
+);
 
 /// Pre-computed static asset URLs with a content-hash fingerprint in the filename,
 /// e.g. `"/static/css/app.abc123ef.css"`; the strings are `'static`.
@@ -128,6 +135,8 @@ pub struct TemplateUrls {
     pub theme_init_js: &'static str,
     /// Timestamp formatting for the public share pages.
     pub public_share_js: &'static str,
+    /// Browser solver for the anonymous form proof-of-work challenge.
+    pub pow_js: &'static str,
     pub favicon: &'static str,
     pub version: &'static str,
 }
@@ -141,6 +150,7 @@ pub fn template_urls() -> &'static TemplateUrls {
         public_upload_js: Box::leak(format!("/static/{}", *FP_PUBLIC_UPLOAD_JS).into_boxed_str()),
         theme_init_js: Box::leak(format!("/static/{}", *FP_THEME_INIT_JS).into_boxed_str()),
         public_share_js: Box::leak(format!("/static/{}", *FP_PUBLIC_SHARE_JS).into_boxed_str()),
+        pow_js: Box::leak(format!("/static/{}", *FP_POW_JS).into_boxed_str()),
         favicon: Box::leak(format!("/static/{}", *FP_FAVICON).into_boxed_str()),
         version: env!("CARGO_PKG_VERSION"),
     });
@@ -187,6 +197,8 @@ fn resolve_asset(path: &str) -> Option<(&'static str, &'static str, &'static str
             &*ETAG_PUBLIC_SHARE_JS,
             &*PUBLIC_SHARE_JS_LM,
         ))
+    } else if path == "js/pow.bundle.js" || path == *FP_POW_JS {
+        Some(("js/pow.bundle.js", &*ETAG_POW_JS, &*POW_JS_LM))
     } else if path == "img/favicon.svg" || path == *FP_FAVICON {
         Some(("img/favicon.svg", &*ETAG_FAVICON, &*FAVICON_LM))
     } else {

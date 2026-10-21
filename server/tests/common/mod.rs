@@ -371,6 +371,39 @@ impl TestServer {
         .await
     }
 
+    /// The proof-of-work policy on, with a low difficulty and a ready (but
+    /// deliberately unreachable) mail backend, so registration and reset pages
+    /// render without sending anything.
+    pub async fn start_with_pow_and_mail() -> Self {
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            true,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            |config| {
+                config.auth.captcha_mode = infra::config::CaptchaMode::Always;
+                config.auth.captcha_difficulty_bits = 12;
+                config.auth.require_invitation = false;
+                config.email.enabled = true;
+                config.email.host = "127.0.0.1".to_string();
+                config.email.port = 1;
+                config.email.tls = "none".to_string();
+                config.email.from_address = "noreply@example.com".to_string();
+                config.email.timeout_secs = 1;
+                config.email.max_attempts = 1;
+            },
+        )
+        .await
+    }
+
     async fn start_with_config(
         enable_notification: bool,
         enable_index: bool,
@@ -525,6 +558,9 @@ impl TestServer {
                 sso_link_max_per_hour: 30,
                 enable_registration: true,
                 require_invitation: true,
+                captcha_mode: infra::config::CaptchaMode::Off,
+                captcha_difficulty_bits: 12,
+                captcha_trigger_after: 2,
                 enable_password_reset: true,
                 password_min_length: 8,
                 require_strong_password: false,

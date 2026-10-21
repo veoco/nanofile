@@ -42,6 +42,7 @@ use crate::handler::web::temp_file::TempFileManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
 use crate::service::auth::access_token::AccessTokenManager;
+use crate::service::auth::pow::PowStore;
 use crate::service::auth::rate_limit::AuthRateLimiters;
 use crate::settings::{RuntimeConfig, SettingsLayers, SettingsService};
 use crate::tasks::TaskSystem;
@@ -95,6 +96,9 @@ pub struct AppState {
     pub repos: Arc<crate::repository::Repositories>,
     /// Aggregated authentication rate limiters: login, reset, registration, TOTP, 2FA-disable.
     pub auth_limiters: Arc<AuthRateLimiters>,
+    /// One-time proof-of-work challenges for the anonymous web forms. Process-local:
+    /// a restart drops them and the visitor reloads the form.
+    pub pow: Arc<PowStore>,
     /// Server-wide secret for CSRF token generation.
     pub csrf_secret: Arc<Vec<u8>>,
     /// Domain-separated AEAD key for encrypting repository sync tokens at rest.
@@ -270,6 +274,27 @@ impl AppState {
             };
 
         let auth_limiters = AuthRateLimiters::new(&config.auth);
+        let pow = Arc::new(PowStore::new());
+
+        // A migration-free feature can still be misconfigured into never firing;
+        // say so before the operator concludes it is broken.
+        if config.auth.captcha_mode == infra::config::CaptchaMode::Adaptive {
+            if config.auth.lockout_duration_secs == 0 && config.auth.captcha_trigger_after > 0 {
+                tracing::warn!(
+                    "auth.captcha_mode is adaptive but auth.lockout_duration_secs is 0; \
+                     the failure window is empty, so the challenge can never trigger"
+                );
+            } else if config.auth.max_login_attempts != 0
+                && config.auth.captcha_trigger_after >= config.auth.max_login_attempts
+            {
+                tracing::warn!(
+                    "auth.captcha_mode is adaptive but captcha_trigger_after ({}) is not below \
+                     max_login_attempts ({}); the lockout fires first",
+                    config.auth.captcha_trigger_after,
+                    config.auth.max_login_attempts
+                );
+            }
+        }
 
         let mut hasher = sha2::Sha256::new();
         hasher.update(b"csrf-v1:");
@@ -390,6 +415,7 @@ impl AppState {
             notification_manager,
             indexer,
             auth_limiters,
+            pow,
             csrf_secret,
             token_cipher,
             temp_file_manager,

@@ -66,6 +66,8 @@
     <p class="text-[11.5px] leading-relaxed text-ink-3">{{ t.tr("auth.register_verify_note") }}</p>
     {% endif %}
 
+    {% include "includes/pow.html" %}
+
     <button type="submit" class="btn btn-solid h-9 w-full text-[13px]">
         {{ t.tr("auth.create_account") }}
     </button>
@@ -77,4 +79,8 @@
     <span class="text-[12.5px] text-ink-3">{{ t.tr("auth.already_have_account") }}</span>
     <a href="/accounts/login/" class="text-[12.5px] text-ink underline underline-offset-2 decoration-line-strong">{{ t.tr("auth.sign_in") }}</a>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ urls.pow_js }}" defer></script>
 {% endblock %}

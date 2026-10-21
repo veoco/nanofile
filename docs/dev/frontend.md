@@ -24,6 +24,12 @@ is no hot reload.
 The bundle is compiled into the binary, so editing a frontend file does nothing
 until `cargo build` runs.
 
+The auth pages also load a separate `pow.bundle.js`; it does nothing unless the
+server rendered a proof-of-work element. It is the browser half of the self-hosted challenge: it
+solves `SHA-256(seed || nonce)` in time-bounded chunks, then fills the hidden
+nonce. Its SHA-256 and solver live in `frontend/core/pow.js` and are covered by
+Node's `--test` runner; without a rendered challenge the entry does nothing.
+
 ## Internationalization
 
 The UI translations live in `server/locales/` (`en.toml`, `zh.toml`, plus the email
