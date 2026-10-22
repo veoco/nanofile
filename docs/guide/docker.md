@@ -63,6 +63,31 @@ docker run -d --name nanofile \
 
 The `nanofile-secret` value is generated above and reused across starts.
 
+## A compose file
+
+```yaml
+# docker-compose.yml
+services:
+  nanofile:
+    image: ghcr.io/veoco/nanofile:latest
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./data:/data
+      - ./config.toml:/etc/nanofile/config.toml:ro
+      - ./nanofile-secret:/run/secrets/nanofile-secret:ro
+    environment:
+      NANOFILE_CONFIG: /etc/nanofile/config.toml
+      NANOFILE_DATABASE_URL: sqlite:/data/nanofile.db?mode=rwc
+      NANOFILE_STORAGE_BLOCK_DIR: /data/blocks
+      NANOFILE_STORAGE_TEMP_DIR: /data/temp
+      NANOFILE_SERVER_SECRET_KEY: ${NANOFILE_SECRET:?set NANOFILE_SECRET in .env first}
+```
+
+`${NANOFILE_SECRET:?…}` refuses to start when the variable is missing, rather
+than coming up with an empty master secret.
+
 ## Upgrades and permissions
 
 An upgrade can leave an existing data directory owned by a different uid. Make
@@ -80,3 +105,5 @@ writable by whatever uid the server runs as.
 - [Data directory](/guide/data-directory) — what each mounted directory holds.
 - [Configuration](/guide/configuration) — every `NANOFILE_*` variable.
 - [Security](/guide/security) — the master secret and reverse-proxy settings.
+- [Backup, restore and upgrade](/guide/backup-and-upgrade) — what the image tags
+  (`latest`, `vX.Y.Z`, `edge`) are for.

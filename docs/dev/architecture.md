@@ -69,10 +69,13 @@ the server does not read. See [Configuration](/guide/configuration).
 
 `server/build.rs` compiles the Tailwind stylesheet and bundles the frontend entry
 points with esbuild. Frontend changes need a `cargo build`; there is no hot
-reload. See [Frontend](/dev/frontend).
+reload. Requirements, the `tray` feature and cross-compilation are in
+[Building](/dev/build); the frontend conventions are in [Frontend](/dev/frontend).
 
 ## Related
 
+- [Building](/dev/build) — compiling from source: toolchain, frontend assets,
+  cross targets.
 - [Seafile compatibility](/dev/protocol) — commit ids, `fs_id`, capabilities.
 - [Sandbox internals](/dev/sandbox) — the confined worker.
 - [Testing](/dev/testing) — the suite and the platform matrix.

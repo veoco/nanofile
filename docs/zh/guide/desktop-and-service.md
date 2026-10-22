@@ -1,5 +1,7 @@
 # 桌面托盘与 Windows 服务
 
+Windows 的托盘与开机服务见本页；Linux 与 macOS 上让服务随系统启动见[后台运行与自启动](/zh/guide/running-in-background)。
+
 `--features tray` 构建的二进制带系统托盘菜单：
 
 - **登录启动** —— 写入当前用户的启动项，登录后启动。

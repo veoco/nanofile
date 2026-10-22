@@ -17,12 +17,13 @@ Nanofile 是一个可自行部署的文件同步与分享服务。它兼容 Seaf
 
 ## 快速开始
 
-环境要求：稳定的 Rust 工具链（edition 2024）与 Node.js（CI 使用 24）。`ffmpeg` 可选，用于媒体缩略图。
+从 [GitHub Releases](https://github.com/veoco/nanofile/releases) 下载对应平台的归档——`nanofile-v<版本>-<后缀>.tar.gz`（Windows 是 `.zip`），带 `-tray` 的变体多了桌面托盘菜单——然后运行里面的二进制：
 
 ```bash
-npm install                       # 前端打包工具（esbuild 必需）
-cargo build --release -p server   # 产物是 target/release/nanofile
-./target/release/nanofile
+tar xzf nanofile-v1.2.3-linux-amd64.tar.gz
+cd nanofile-v1.2.3-linux-amd64
+chmod +x nanofile
+./nanofile
 ```
 
 既没有配置文件、环境里也没有任何 `NANOFILE_*` 变量时，会进入首次初始化：起一个一次性页面 `http://127.0.0.1:8082/setup/<token>`，创建第一个管理员，写出 `~/.nanofile/config.toml`，并在同一个端口上启动服务。删掉该文件即可重新初始化。
@@ -32,16 +33,16 @@ cargo build --release -p server   # 产物是 target/release/nanofile
 ```bash
 cp config.toml.example config.toml
 chmod 600 config.toml             # 文件里存有主密钥
-./target/release/nanofile --config config.toml
+./nanofile --config config.toml
 ```
 
 服务监听 <http://localhost:8082>。创建管理员（首次初始化时设置页会替你做）：
 
 ```bash
-./target/release/nanofile adduser --email admin@example.com
+./nanofile adduser --email admin@example.com
 ```
 
-`--regular` 创建普通用户。更多见[快速开始](https://veoco.github.io/nanofile/zh/guide/getting-started)。
+`--regular` 创建普通用户。更多见[安装与首次运行](https://veoco.github.io/nanofile/zh/guide/getting-started)。
 
 ## Docker
 
@@ -68,9 +69,13 @@ docker run -d --name nanofile \
 
 | | |
 |---|---|
-| [快速开始](https://veoco.github.io/nanofile/zh/guide/getting-started) | 构建、首次运行、管理员 |
+| [安装与首次运行](https://veoco.github.io/nanofile/zh/guide/getting-started) | 下载归档或镜像、首次初始化、管理员 |
+| [网页界面](https://veoco.github.io/nanofile/zh/guide/web-interface) | 资料库、上传下载、搜索与回收站 |
+| [客户端接入](https://veoco.github.io/nanofile/zh/guide/clients) | Seafile 客户端、WebDAV、API 密钥 |
 | [配置](https://veoco.github.io/nanofile/zh/guide/configuration) | 配置文件、`NANOFILE_*`、设置页 |
-| [沙盒](https://veoco.github.io/nanofile/zh/guide/sandbox) | 约束了什么、没约束什么 |
+| [后台运行与自启动](https://veoco.github.io/nanofile/zh/guide/running-in-background) | systemd、launchd、容器重启策略 |
+| [备份、恢复与升级](https://veoco.github.io/nanofile/zh/guide/backup-and-upgrade) | 备份数据、恢复、换版本 |
+| [维护与故障排查](https://veoco.github.io/nanofile/zh/guide/maintenance) | 日志、垃圾回收、常见问题 |
 | [安全](https://veoco.github.io/nanofile/zh/guide/security) | 反向代理、TLS、主密钥 |
 | [命令行](https://veoco.github.io/nanofile/zh/reference/cli) | 全部运维命令 |
 | [开发](https://veoco.github.io/nanofile/zh/dev/architecture) | 架构、测试、CI |
@@ -79,12 +84,16 @@ docker run -d --name nanofile \
 
 项目是包含四个 crate 的 Cargo workspace：`base`（领域类型）、`infra`（数据库、存储、加密、配置）、`server`（HTTP、同步协议、WebDAV、网页界面）与 `migration`。依赖方向 `base → infra → server`。
 
+环境要求：稳定的 Rust 工具链（edition 2024）与 Node.js（CI 使用 24，用于前端打包工具）；`ffmpeg` 可选，用于媒体缩略图。
+
 ```bash
+npm ci                            # esbuild 与 Tailwind
+cargo build --release -p server   # 产物是 target/release/nanofile
 cargo test --workspace
 node --test "server/frontend/**/*.test.js"
 ```
 
-浏览器套件、平台矩阵与依赖规则见[测试](https://veoco.github.io/nanofile/zh/dev/testing)与[贡献指南](https://veoco.github.io/nanofile/zh/dev/contributing)。
+`tray` feature 与交叉编译见[构建](https://veoco.github.io/nanofile/zh/dev/build)，浏览器套件、平台矩阵与依赖规则见[测试](https://veoco.github.io/nanofile/zh/dev/testing)与[贡献指南](https://veoco.github.io/nanofile/zh/dev/contributing)。
 
 ## 许可证
 

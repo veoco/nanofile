@@ -36,9 +36,13 @@ features:
 
 ## Start here
 
-- [Getting started](/guide/getting-started) — build the binary and run the first-run setup.
+- [Installing and first run](/guide/getting-started) — download an archive or pull the image, then run the first-run setup.
+- [Web interface](/guide/web-interface) — what you can do once you are signed in.
+- [Connecting clients](/guide/clients) — the official Seafile clients and WebDAV.
 - [Configuration](/guide/configuration) — config file, `NANOFILE_*` variables and the settings pages.
 - [Docker](/guide/docker) — run the published image.
-- [Sandbox](/guide/sandbox) — what the server does and does not confine.
+- [Running in the background](/guide/running-in-background) — keep it up on a server.
+- [Backup, restore and upgrade](/guide/backup-and-upgrade) — your data and your version.
+- [Maintenance and troubleshooting](/guide/maintenance) — logs and common problems.
 - [CLI reference](/reference/cli) — every operator command.
 - [Development](/dev/architecture) — crate layout, testing and CI.

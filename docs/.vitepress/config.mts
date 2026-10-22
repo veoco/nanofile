@@ -5,16 +5,21 @@ const enSidebar = {
     {
       text: 'Guide',
       items: [
-        { text: 'Getting started', link: '/guide/getting-started' },
+        { text: 'Installing and first run', link: '/guide/getting-started' },
+        { text: 'Web interface', link: '/guide/web-interface' },
+        { text: 'Connecting clients', link: '/guide/clients' },
         { text: 'Docker', link: '/guide/docker' },
         { text: 'Configuration', link: '/guide/configuration' },
+        { text: 'Data directory', link: '/guide/data-directory' },
         { text: 'Users and sharing', link: '/guide/users-and-sharing' },
         { text: 'Account security', link: '/guide/account-security' },
         { text: 'Email notifications', link: '/guide/email' },
+        { text: 'Running in the background', link: '/guide/running-in-background' },
+        { text: 'Backup, restore and upgrade', link: '/guide/backup-and-upgrade' },
+        { text: 'Maintenance and troubleshooting', link: '/guide/maintenance' },
         { text: 'Sandbox', link: '/guide/sandbox' },
         { text: 'Security', link: '/guide/security' },
-        { text: 'Desktop tray and service', link: '/guide/desktop-and-service' },
-        { text: 'Data directory', link: '/guide/data-directory' }
+        { text: 'Desktop tray and service', link: '/guide/desktop-and-service' }
       ]
     }
   ],
@@ -29,6 +34,7 @@ const enSidebar = {
       text: 'Development',
       items: [
         { text: 'Architecture', link: '/dev/architecture' },
+        { text: 'Building', link: '/dev/build' },
         { text: 'Seafile compatibility', link: '/dev/protocol' },
         { text: 'Sandbox internals', link: '/dev/sandbox' },
         { text: 'Frontend', link: '/dev/frontend' },
@@ -45,16 +51,21 @@ const zhSidebar = {
     {
       text: '指南',
       items: [
-        { text: '快速开始', link: '/zh/guide/getting-started' },
+        { text: '安装与首次运行', link: '/zh/guide/getting-started' },
+        { text: '网页界面', link: '/zh/guide/web-interface' },
+        { text: '客户端接入', link: '/zh/guide/clients' },
         { text: 'Docker 部署', link: '/zh/guide/docker' },
         { text: '配置', link: '/zh/guide/configuration' },
+        { text: '数据目录', link: '/zh/guide/data-directory' },
         { text: '用户与分享', link: '/zh/guide/users-and-sharing' },
         { text: '账号安全', link: '/zh/guide/account-security' },
         { text: '邮件通知', link: '/zh/guide/email' },
+        { text: '后台运行与自启动', link: '/zh/guide/running-in-background' },
+        { text: '备份、恢复与升级', link: '/zh/guide/backup-and-upgrade' },
+        { text: '维护与故障排查', link: '/zh/guide/maintenance' },
         { text: '沙盒', link: '/zh/guide/sandbox' },
         { text: '安全', link: '/zh/guide/security' },
-        { text: '桌面托盘与服务', link: '/zh/guide/desktop-and-service' },
-        { text: '数据目录', link: '/zh/guide/data-directory' }
+        { text: '桌面托盘与服务', link: '/zh/guide/desktop-and-service' }
       ]
     }
   ],
@@ -69,6 +80,7 @@ const zhSidebar = {
       text: '开发',
       items: [
         { text: '架构', link: '/zh/dev/architecture' },
+        { text: '构建', link: '/zh/dev/build' },
         { text: 'Seafile 兼容性', link: '/zh/dev/protocol' },
         { text: '沙盒内部', link: '/zh/dev/sandbox' },
         { text: '前端', link: '/zh/dev/frontend' },

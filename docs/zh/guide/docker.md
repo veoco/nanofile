@@ -52,6 +52,30 @@ docker run -d --name nanofile \
 
 `nanofile-secret` 为上方生成、跨启动复用的持久值。
 
+## Compose 文件
+
+```yaml
+# docker-compose.yml
+services:
+  nanofile:
+    image: ghcr.io/veoco/nanofile:latest
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./data:/data
+      - ./config.toml:/etc/nanofile/config.toml:ro
+      - ./nanofile-secret:/run/secrets/nanofile-secret:ro
+    environment:
+      NANOFILE_CONFIG: /etc/nanofile/config.toml
+      NANOFILE_DATABASE_URL: sqlite:/data/nanofile.db?mode=rwc
+      NANOFILE_STORAGE_BLOCK_DIR: /data/blocks
+      NANOFILE_STORAGE_TEMP_DIR: /data/temp
+      NANOFILE_SERVER_SECRET_KEY: ${NANOFILE_SECRET:?先在 .env 里设置 NANOFILE_SECRET}
+```
+
+`${NANOFILE_SECRET:?…}` 会在变量缺失时拒绝启动，而不是带着空主密钥起来。
+
 ## 升级与权限
 
 升级后，已有数据目录可能属于别的 uid。重启前先让它对 `1000:1000` 可写：
@@ -67,3 +91,4 @@ chown -R 1000:1000 data
 - [数据目录](/zh/guide/data-directory) — 各个挂载目录里有什么。
 - [配置](/zh/guide/configuration) — 全部 `NANOFILE_*` 变量。
 - [安全](/zh/guide/security) — 主密钥与反向代理设置。
+- [备份、恢复与升级](/zh/guide/backup-and-upgrade) — 镜像标签（`latest`、`vX.Y.Z`、`edge`）分别适合谁。

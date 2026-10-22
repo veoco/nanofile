@@ -20,13 +20,16 @@ seahub stack.
 
 ## Quick start
 
-Requirements: a stable Rust toolchain (edition 2024) and Node.js (CI uses 24).
-`ffmpeg` is optional and enables media thumbnails.
+Download an archive for your platform from
+[GitHub Releases](https://github.com/veoco/nanofile/releases) — `nanofile-v<version>-<suffix>.tar.gz`
+(`.zip` on Windows), with `-tray` variants that add a desktop tray menu — and run
+the binary inside it:
 
 ```bash
-npm install                       # frontend bundler (esbuild is required)
-cargo build --release -p server   # the binary is target/release/nanofile
-./target/release/nanofile
+tar xzf nanofile-v1.2.3-linux-amd64.tar.gz
+cd nanofile-v1.2.3-linux-amd64
+chmod +x nanofile
+./nanofile
 ```
 
 A start with no configuration file and no `NANOFILE_*` variable runs the first-run
@@ -40,14 +43,14 @@ running:
 ```bash
 cp config.toml.example config.toml
 chmod 600 config.toml             # it holds the master secret
-./target/release/nanofile --config config.toml
+./nanofile --config config.toml
 ```
 
 The server listens on <http://localhost:8082>. Create an administrator (the setup
 page does this on a first run):
 
 ```bash
-./target/release/nanofile adduser --email admin@example.com
+./nanofile adduser --email admin@example.com
 ```
 
 `--regular` creates a non-admin account. More in the
@@ -82,9 +85,13 @@ variant, the first-run caveat and upgrade permissions.
 
 | | |
 |---|---|
-| [Getting started](https://veoco.github.io/nanofile/guide/getting-started) | Build, first run, administrator |
+| [Installing and first run](https://veoco.github.io/nanofile/guide/getting-started) | Download an archive or the image, first run, administrator |
+| [Web interface](https://veoco.github.io/nanofile/guide/web-interface) | Libraries, upload and download, search, trash |
+| [Connecting clients](https://veoco.github.io/nanofile/guide/clients) | Seafile clients, WebDAV, API keys |
 | [Configuration](https://veoco.github.io/nanofile/guide/configuration) | Config file, `NANOFILE_*`, settings pages |
-| [Sandbox](https://veoco.github.io/nanofile/guide/sandbox) | What is confined, and what is not |
+| [Running in the background](https://veoco.github.io/nanofile/guide/running-in-background) | systemd, launchd, container restart policy |
+| [Backup, restore and upgrade](https://veoco.github.io/nanofile/guide/backup-and-upgrade) | Backing up data, restoring, changing versions |
+| [Maintenance and troubleshooting](https://veoco.github.io/nanofile/guide/maintenance) | Logs, garbage collection, common problems |
 | [Security](https://veoco.github.io/nanofile/guide/security) | Reverse proxy, TLS, secret key |
 | [CLI reference](https://veoco.github.io/nanofile/reference/cli) | Every operator command |
 | [Development](https://veoco.github.io/nanofile/dev/architecture) | Architecture, testing, CI |
@@ -95,14 +102,20 @@ The project is a Cargo workspace of four crates: `base` (domain types), `infra`
 (database, storage, crypto, config), `server` (HTTP, sync protocol, WebDAV, web UI)
 and `migration`. Dependencies flow `base → infra → server`.
 
+Requirements: a stable Rust toolchain (edition 2024) and Node.js (CI uses 24) for
+the frontend bundler; `ffmpeg` is optional and enables media thumbnails.
+
 ```bash
+npm ci                            # esbuild and Tailwind
+cargo build --release -p server   # the binary is target/release/nanofile
 cargo test --workspace
 node --test "server/frontend/**/*.test.js"
 ```
 
-See [Testing](https://veoco.github.io/nanofile/dev/testing) and
-[Contributing](https://veoco.github.io/nanofile/dev/contributing) for the browser
-suite, the platform matrix and the dependency rules.
+See [Building](https://veoco.github.io/nanofile/dev/build) for the `tray` feature
+and cross-compilation, and [Testing](https://veoco.github.io/nanofile/dev/testing)
+and [Contributing](https://veoco.github.io/nanofile/dev/contributing) for the
+browser suite, the platform matrix and the dependency rules.
 
 ## License
 

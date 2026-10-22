@@ -1,5 +1,8 @@
 # Desktop tray and Windows service
 
+This page is the Windows tray and its boot service; starting with the system on
+Linux and macOS is in [Running in the background](/guide/running-in-background).
+
 Binaries built with `--features tray` carry a system tray menu:
 
 - **Start at login** — a per-user entry, so it starts once somebody logs in.

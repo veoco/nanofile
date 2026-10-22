@@ -5,8 +5,8 @@
 `adduser` 创建账号，默认为管理员；`--regular` 创建普通用户。
 
 ```bash
-./target/release/nanofile adduser --email admin@example.com
-./target/release/nanofile adduser --email someone@example.com --regular
+./nanofile adduser --email admin@example.com
+./nanofile adduser --email someone@example.com --regular
 ```
 
 默认从交互式提示读取密码。`--password-stdin` 从标准输入的第一行读取，`--password-file <路径>` 从文件读取；两者都能避免密码出现在 shell 历史与 `ps` 输出里。
@@ -35,6 +35,19 @@
 管理员仍可直接创建账号；管理员创建的账号、`adduser` 创建的账号、首次初始化管理员和邀请码注册的账号
 都视为已验证。
 
+### 邀请码
+
+**设置 → 邀请码**（管理员可见）生成邀请码：
+
+- 不填邮箱生成的邀请码**任何人**都能用；
+- 填了邮箱的邀请码**只能被该邮箱**使用；
+- 列表里标出每条邀请码是未使用，还是已被哪个邮箱在什么时候用过；可以复制，也可以删除。
+
+### 用户管理（管理员）
+
+**系统设置 → 用户管理**列出所有账号，并可以新建、编辑与删除：管理员身份、启用/停用、以及单独的空间配额都在编辑框里。
+命令行等价物是 `adduser`，见[命令行](/zh/reference/cli)。
+
 ### 空间配额
 
 每个账号的配额只有三种状态，存放在用户行上：
@@ -58,6 +71,7 @@
 ## 分享链接
 
 在网页文件浏览器选中文件或文件夹并选择**分享**，生成的链接支持：
+（管理员还能在**系统设置 → 分享管理**看到所有人的链接，并删除其中失效的。）
 
 - 访问密码，
 - 过期时间，

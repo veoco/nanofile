@@ -36,9 +36,13 @@ features:
 
 ## 从这里开始
 
-- [快速开始](/zh/guide/getting-started) — 构建二进制并完成首次初始化。
+- [安装与首次运行](/zh/guide/getting-started) — 下载归档或拉镜像，完成首次初始化。
+- [网页界面](/zh/guide/web-interface) — 登录后能做什么。
+- [客户端接入](/zh/guide/clients) — 官方 Seafile 客户端与 WebDAV。
 - [配置](/zh/guide/configuration) — 配置文件、`NANOFILE_*` 变量与设置页。
 - [Docker 部署](/zh/guide/docker) — 运行已发布的镜像。
-- [沙盒](/zh/guide/sandbox) — 服务约束了什么、没有约束什么。
+- [后台运行与自启动](/zh/guide/running-in-background) — 放到服务器上长期跑。
+- [备份、恢复与升级](/zh/guide/backup-and-upgrade) — 数据与版本。
+- [维护与故障排查](/zh/guide/maintenance) — 日志与常见问题。
 - [命令行](/zh/reference/cli) — 全部运维命令。
 - [开发](/zh/dev/architecture) — crate 布局、测试与 CI。

@@ -131,3 +131,12 @@ A key the file does not mention keeps its built-in default. The file is never
 rewritten, so what you write is what stays on disk. The one exception is
 `[logging] file`, which a desktop run resolves next to the binary and records
 there so every later run uses the same file.
+
+## Related
+
+- [Web interface](/guide/web-interface) — where the settings and task pages sit.
+- [Maintenance and troubleshooting](/guide/maintenance) — when the logging,
+  garbage-collection and index settings matter.
+- [Running in the background](/guide/running-in-background) — how a service gets
+  its configuration.
+- [Command line](/reference/cli) — the operator commands.

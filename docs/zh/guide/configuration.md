@@ -72,3 +72,10 @@
 `[server]` 网络与功能开关；`[database]` 数据库连接；`[storage]` 存储目录与配额；`[auth]` 登录/密码/限流；`[ui]` 语言；`[email]` 发信；`[admin_init]` 首次启动自动建管理员；`[logging]` 日志；`[gc]` 垃圾回收；`[index]` 搜索；`[sandbox]` 不可信解析的沙盒；`[notification]` 通知；`[tasks]` 后台任务；`[settings]` 文件与已保存设置的分层策略。
 
 配置文件中没写的键使用内置默认值。服务器**不会改写配置文件**，你写的什么样就一直是什么样。唯一例外是 `[logging] file`：桌面运行会把解析出的日志路径记进去，好让后续每次启动都用同一个文件。
+
+## 相关
+
+- [网页界面](/zh/guide/web-interface) — 设置页与任务页在界面里的位置。
+- [维护与故障排查](/zh/guide/maintenance) — 日志、垃圾回收与索引这些设置什么时候用得上。
+- [后台运行与自启动](/zh/guide/running-in-background) — 服务化部署时怎么把配置传进去。
+- [命令行](/zh/reference/cli) — 运维命令。

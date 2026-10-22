@@ -59,7 +59,7 @@ nanofile service status
 nanofile service run
 ```
 
-- `install` 注册自动启动服务（开机即运行，无需登录），并移除本安装的"登录启动"项。默认账号是 `NT SERVICE\Nanofile`；见[桌面托盘与 Windows 服务](/zh/guide/desktop-and-service#开机启动-管理员)。
+- `install` 注册自动启动服务（开机即运行，无需登录），并移除本安装的"登录启动"项。默认账号是 `NT SERVICE\Nanofile`；见[桌面托盘与 Windows 服务](/zh/guide/desktop-and-service#开机启动管理员)。
 - `uninstall` 停止并删除服务，回收授予它的目录权限。
 - `status` 查询注册状态与运行账号；已注册时退出码 0。
 - `run` 由 SCM 调用。手工执行会直接报错退出。

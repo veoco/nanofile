@@ -1,8 +1,9 @@
 # Data directory
 
 State lives under the binary's directory in `data/` by default, since relative
-paths resolve against that directory. A section in `config.toml` can name absolute
-paths instead.
+paths resolve against that directory. The `[storage]`, `[index]` and `[database]`
+sections of `config.toml` can name absolute paths instead and put each part
+elsewhere.
 
 ## What the first-run setup decides
 
@@ -30,10 +31,49 @@ data/
 └── index/             # full-text search index
 ```
 
-The `[storage]` and `[index]` settings can move each directory. `[database] url`
-sets the database path.
+The parts are not alike, which matters when you back up or clean up:
+
+| Item | Losing it | Rebuildable |
+|---|---|---|
+| `nanofile.db` | accounts, the library structure, share links and settings are gone | no |
+| `blocks/` | all file content is gone | no |
+| `index/` | search matches names only | yes, by re-indexing |
+| `thumbnails/`, `avatars/` | thumbnails and avatars regenerate | yes |
+| `temp/` | nothing (upload staging) | does not need backing up |
+
+They are set by `block_dir`, `temp_dir`, `thumbnail_dir` and `avatar_dir` under
+`[storage]`, `index_dir` under `[index]`, and `[database] url`.
+
+## Moving one
+
+**Stop the server first.** A directory location takes effect on the next start, so
+moving it while the server runs only means it keeps writing to the old place.
+
+1. Stop the service.
+2. Move the directory (`mv /opt/nanofile/data /srv/nanofile-data`).
+3. Point the corresponding key at the new **absolute** path — a relative one
+   resolves against the binary's directory, not against the old location.
+4. Start it, check the log for a directory that could not be used, then download
+   one file to confirm.
+
+The database path is `[database] url`, for example
+`sqlite:/srv/nanofile-data/nanofile.db?mode=rwc`.
+
+## Permissions
+
+The user running the service has to read and write the whole data directory; in a
+container that is uid/gid `1000:1000`:
+
+```bash
+chown -R 1000:1000 data
+```
+
+On Windows, installing the service grants the service account what it needs, see
+[Desktop tray and Windows service](/guide/desktop-and-service).
 
 ## Related
 
+- [Backup, restore and upgrade](/guide/backup-and-upgrade) — what must be backed
+  up and how a restore goes.
 - [Docker](/guide/docker) — mounting the data directory into the container.
 - [Configuration](/guide/configuration) — storage and database settings.

@@ -26,6 +26,67 @@
 
 只有在源站无法被其他来源访问时才可信任 `private`，否则同网段设备可伪造该头。
 
+### 反向代理示例
+
+两份能直接用的配置，假定 Nanofile 监听 `127.0.0.1:8082`、对外域名是 `files.example.com`。
+
+nginx：
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name files.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/files.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/files.example.com/privkey.pem;
+
+    # 上传大小交给服务端自己限制；nginx 默认 1m 会挡住大文件。
+    client_max_body_size 0;
+
+    location / {
+        proxy_pass http://127.0.0.1:8082;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # 站内通知走 WebSocket，握手头必须透传。
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
+
+        # 大文件下载与长连接同步不能被中途掐断。
+        proxy_read_timeout 3600s;
+        proxy_buffering off;
+    }
+}
+```
+
+`$connection_upgrade` 需要在 `http` 块里先定义一次：
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+```
+
+Caddy 自带 TLS 与转发头，等价配置就是一行：
+
+```caddyfile
+files.example.com {
+	reverse_proxy 127.0.0.1:8082
+}
+```
+
+配好代理后，把 `server.site_url` 设为 `https://files.example.com`，并把 `server.trusted_proxies` 设为代理的地址——两者在同一台机器上时就是 `["loopback"]`：
+
+```toml
+[server]
+site_url = "https://files.example.com"
+trusted_proxies = ["loopback"]
+```
+
 ## 工作量证明挑战
 
 `auth.captcha_mode` 为匿名网页表单增加一次自托管的工作量证明（PoW）挑战。这是图片验证码的实用替代：当前的 AI 模型可以直接识别扭曲文字和物体网格，而自建视觉题需要自己的模型，却并不会真正更难解。

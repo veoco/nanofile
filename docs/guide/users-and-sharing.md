@@ -6,8 +6,8 @@
 creates a non-admin account.
 
 ```bash
-./target/release/nanofile adduser --email admin@example.com
-./target/release/nanofile adduser --email someone@example.com --regular
+./nanofile adduser --email admin@example.com
+./nanofile adduser --email someone@example.com --regular
 ```
 
 The password is read from an interactive prompt by default. `--password-stdin`
@@ -45,6 +45,22 @@ Administrators can still create accounts directly; those accounts, accounts
 created by `adduser`, the first-run administrator and invitation registrations
 are all considered verified.
 
+### Invitation codes
+
+**Settings → Invitations** (admins only) generates them:
+
+- a code generated without an email address can be used by **anybody**;
+- one generated with an email address can only be used by **that address**;
+- the list shows whether each code is unused, or who used it and when; codes can
+  be copied and deleted.
+
+### User management (admins)
+
+**System Settings → User Management** lists every account and can create, edit
+and delete one: admin rights, active/inactive and an individual space quota are
+all in the edit dialog. `adduser` is the command-line equivalent, see
+[Command line](/reference/cli).
+
 ### Space quota
 
 Every account has one of three quota states, stored per user:
@@ -73,7 +89,8 @@ upgrade.
 ## Share links
 
 Select a file or folder in the web file browser and choose **Share**. The
-resulting link supports:
+resulting link supports: (an administrator can also see everybody's links under
+**System Settings → Share Management** and delete the dead ones.)
 
 - a password,
 - an expiry time,

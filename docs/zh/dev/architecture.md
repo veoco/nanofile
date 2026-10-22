@@ -49,10 +49,11 @@ Nanofile 是一个包含四个 crate 的 Cargo workspace。依赖方向是单向
 
 ## 构建与前端
 
-`server/build.rs` 编译 Tailwind 样式表，并用 esbuild 打包前端入口。改前端后需要重新 `cargo build`，没有热重载。见[前端](/zh/dev/frontend)。
+`server/build.rs` 编译 Tailwind 样式表，并用 esbuild 打包前端入口。改前端后需要重新 `cargo build`，没有热重载。环境要求、`tray` feature 与交叉编译见[构建](/zh/dev/build)，前端约定见[前端](/zh/dev/frontend)。
 
 ## 相关
 
+- [构建](/zh/dev/build) — 从源码编译：工具链、前端资源、交叉编译目标。
 - [Seafile 兼容性](/zh/dev/protocol) — 提交 id、`fs_id`、能力。
 - [沙盒内部](/zh/dev/sandbox) — 受限 worker。
 - [测试](/zh/dev/testing) — 测试套件与平台矩阵。
