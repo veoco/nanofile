@@ -73,7 +73,7 @@ map $http_upgrade $connection_upgrade {
 
 Caddy 自带 TLS 与转发头，等价配置就是一行：
 
-```caddyfile
+```txt
 files.example.com {
 	reverse_proxy 127.0.0.1:8082
 }

@@ -86,7 +86,7 @@ map $http_upgrade $connection_upgrade {
 
 Caddy brings its own TLS and forwarding headers, so the equivalent is one line:
 
-```caddyfile
+```txt
 files.example.com {
 	reverse_proxy 127.0.0.1:8082
 }
