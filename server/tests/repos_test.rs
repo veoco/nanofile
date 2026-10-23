@@ -962,3 +962,49 @@ async fn test_compat_uppercase_client_uuid_round_trips_consistently() {
         200
     );
 }
+
+/// Regression: uploading a file advances the library's modification time, and the
+/// value is the new head commit's `ctime` (Seafile's `RepoInfo.update_time`), not
+/// the server's wall clock.
+#[tokio::test]
+async fn test_upload_bumps_repo_mtime_to_head_commit_time() {
+    let f = TestFixture::new().await;
+    let before = f.repo_mtime().await;
+
+    // `updated_at` is second-resolution, so make creation and upload distinct seconds.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "mtime.txt", b"x")
+        .await;
+    assert!(resp.status().is_success(), "upload failed");
+
+    let after = f.repo_mtime().await;
+    assert!(
+        after > before,
+        "upload must advance the library mtime: {before} -> {after}"
+    );
+
+    let repo = f
+        .server
+        .repos
+        .repo
+        .find_by_id(&f.repo_id)
+        .await
+        .unwrap()
+        .expect("fixture repo");
+    let head = repo.head_commit_id.expect("upload created a head commit");
+    let commit = f
+        .server
+        .repos
+        .commit
+        .find_by_repo_and_commit_id(&f.repo_id, &head)
+        .await
+        .unwrap()
+        .expect("head commit row");
+    assert_eq!(
+        after, commit.ctime,
+        "mtime must be the head commit's ctime, not the wall clock"
+    );
+}

@@ -648,10 +648,11 @@ impl SyncService {
         &self,
         repo_id: &str,
         head_commit_id: Option<String>,
+        updated_at: i64,
     ) -> Result<(), AppError> {
         self.repos
             .repo
-            .update_head_commit(repo_id, head_commit_id)
+            .update_head_commit(repo_id, head_commit_id, updated_at)
             .await
     }
 
@@ -1358,10 +1359,28 @@ impl SyncService {
                 .await?
             };
 
+            // The library's modification time is the new head commit's `ctime`, matching
+            // upstream's `on_branch_updated()` → `seaf_repo_manager_update_repo_info()`.
+            // A fast-forward reuses the uploaded commit; a merge reads the commit the
+            // server just created, whose ctime is its own creation time.
+            let target_updated_at = if is_merge {
+                self.find_commit(repo_id, &target_head)
+                    .await?
+                    .ok_or_else(|| AppError::Internal("merged commit not found".into()))?
+                    .ctime
+            } else {
+                new_commit.ctime
+            };
+
             if !self
                 .repos
                 .repo
-                .test_and_update_head_commit(repo_id, current_head.as_deref(), &target_head)
+                .test_and_update_head_commit(
+                    repo_id,
+                    current_head.as_deref(),
+                    &target_head,
+                    target_updated_at,
+                )
                 .await?
             {
                 // Another writer advanced HEAD between the read above and the swap

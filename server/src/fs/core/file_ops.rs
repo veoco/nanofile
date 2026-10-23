@@ -351,7 +351,7 @@ impl FileOps {
         // REST writes only, so an upload may have advanced HEAD since it was read.
         if !repos
             .repo
-            .test_and_update_head_commit(repo_id, parent_commit_id.as_deref(), &commit_id)
+            .test_and_update_head_commit(repo_id, parent_commit_id.as_deref(), &commit_id, now)
             .await?
         {
             return Err(AppError::Conflict(format!(
@@ -691,7 +691,12 @@ impl FileOps {
         // HEAD, and the caller can re-read and retry.
         if !repos
             .repo
-            .test_and_update_head_commit(repo_id, parent_commit_id.as_deref(), &commit_id_clone)
+            .test_and_update_head_commit(
+                repo_id,
+                parent_commit_id.as_deref(),
+                &commit_id_clone,
+                now,
+            )
             .await?
         {
             return Err(AppError::Conflict(format!(

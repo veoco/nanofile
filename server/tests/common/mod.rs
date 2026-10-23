@@ -1010,6 +1010,20 @@ impl TestFixture {
         Self::with("test@example.com", "password", "test-repo").await
     }
 
+    /// The library's `mtime` as the v2.1 API reports it — the value the web list renders.
+    pub async fn repo_mtime(&self) -> i64 {
+        let resp = self
+            .client
+            .get(
+                &format!("/api/v2.1/repos/{}/", self.repo_id),
+                Some(&self.api_token),
+            )
+            .await;
+        assert_eq!(resp.status(), 200, "get repo for mtime failed");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        body["mtime"].as_i64().expect("repo mtime is an integer")
+    }
+
     /// Create a test environment with notification server enabled.
     pub async fn new_with_notification() -> Self {
         let server = TestServer::start_with_notification().await;

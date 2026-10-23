@@ -963,15 +963,16 @@ pub async fn restore_deleted_repo(
     // The recorded head only works if the commit came back with the archive: a
     // library that had content always has one, so a missing commit is unrecoverable.
     if let Some(head) = trashed.head_id.as_deref() {
-        if repos
+        if let Some(commit) = repos
             .commit
             .find_by_repo_and_commit_id(&trashed.repo_id, head)
             .await?
-            .is_some()
         {
+            // Restoring is not a new modification: the library's time is the archived
+            // head commit's, as upstream's RepoInfo restore records `commit->ctime`.
             repos
                 .repo
-                .update_head_commit(&trashed.repo_id, Some(head.to_owned()))
+                .update_head_commit(&trashed.repo_id, Some(head.to_owned()), commit.ctime)
                 .await?;
         } else {
             tracing::warn!(

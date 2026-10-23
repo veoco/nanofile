@@ -1,7 +1,7 @@
 mod common;
 
 use base::common::CommitData;
-use common::{TestServer, create_test_user, get_sync_token};
+use common::{TestFixture, TestServer, create_test_user, get_sync_token};
 
 fn random_hex_id() -> String {
     use sha1::{Digest, Sha1};
@@ -494,4 +494,55 @@ async fn test_update_branch_verifies_commit() {
     // Seafile returns 500 (EVHTP_RES_SERVERR) when the commit does not
     // exist — matching put_update_branch_cb behavior.
     assert_eq!(resp.status(), 500);
+}
+
+/// Regression: a client upload advances the library's modification time too. The
+/// value is the uploaded commit's `ctime`, matching the server branch-update hook.
+#[tokio::test]
+async fn test_update_branch_bumps_repo_mtime_to_commit_time() {
+    let f = TestFixture::new().await;
+    let before = f.repo_mtime().await;
+
+    // `updated_at` is second-resolution, so make creation and upload distinct seconds.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+    let zero = "0".repeat(40);
+    let commit_id = random_hex_id();
+    let ctime = chrono::Utc::now().timestamp();
+    let commit_data = serde_json::json!({
+        "commit_id": commit_id,
+        "repo_id": f.repo_id,
+        // An empty repo's root is the EMPTY_SHA1 sentinel; no object is needed.
+        "root_id": zero,
+        "creator_name": "test@example.com",
+        "creator": zero,
+        "description": "sync mtime test",
+        "ctime": ctime,
+        "parent_id": zero,
+        "second_parent_id": null,
+        "version": 1,
+    });
+
+    let body = serde_json::to_string(&commit_data).unwrap();
+    let resp = f
+        .client
+        .put_commit(&f.sync_token, &f.repo_id, &commit_id, body.into_bytes())
+        .await;
+    assert_eq!(resp.status(), 200, "put_commit failed");
+
+    let resp = f
+        .client
+        .update_branch(&f.sync_token, &f.repo_id, &commit_id)
+        .await;
+    assert_eq!(resp.status(), 200, "update_branch failed");
+
+    let after = f.repo_mtime().await;
+    assert!(
+        after > before,
+        "client upload must advance the library mtime: {before} -> {after}"
+    );
+    assert_eq!(
+        after, ctime,
+        "mtime must be the uploaded commit's ctime, not the wall clock"
+    );
 }

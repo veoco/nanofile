@@ -73,10 +73,17 @@ pub trait RepoRepository: Send + Sync {
     async fn create(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
     async fn create_repo(&self, params: CreateRepoParams) -> Result<repo::Model, AppError>;
     async fn update(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
+    /// Set HEAD unconditionally and stamp the repo's modification time with it.
+    ///
+    /// `updated_at` is the new head commit's `ctime`, not the wall clock: upstream's
+    /// `seaf_repo_manager_update_repo_info()` copies `head->ctime` into `RepoInfo.update_time`
+    /// after every branch update, and the library lists read that field back. A zero `ctime`
+    /// is replaced with the current time, as upstream does for the "Created library" commit.
     async fn update_head_commit(
         &self,
         repo_id: &str,
         head_commit_id: Option<String>,
+        updated_at: i64,
     ) -> Result<(), AppError>;
     /// Compare-and-swap the HEAD commit: set `to` only if the stored value is still `from`;
     /// returns whether the row matched.
@@ -87,11 +94,17 @@ pub trait RepoRepository: Send + Sync {
     /// the first client's commit. Upstream's `seaf_branch_manager_test_and_update_branch()` does
     /// the comparison inside the same transaction as the write; here SQLite serialises writes and
     /// `rows_affected()` tells the caller whether it won.
+    ///
+    /// A successful swap also writes `updated_at` in the same row update, so a failed CAS leaves
+    /// both HEAD and the library's modification time untouched. `updated_at` is the new head
+    /// commit's `ctime`, mirroring upstream's `on_branch_updated()` →
+    /// `seaf_repo_manager_update_repo_info()`; a zero value becomes the current time.
     async fn test_and_update_head_commit(
         &self,
         repo_id: &str,
         from: Option<&str>,
         to: &str,
+        updated_at: i64,
     ) -> Result<bool, AppError>;
     async fn delete_by_id(&self, repo_id: &str) -> Result<(), AppError>;
     /// Add a delta to the repo's size (can be negative).
@@ -123,6 +136,17 @@ pub struct DbRepoRepository {
 impl DbRepoRepository {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self { db }
+    }
+}
+
+/// Upstream replaces a zero commit `ctime` with the current time both when it creates the
+/// commit (`seaf_commit_new()`) and when it writes `RepoInfo.update_time`
+/// (`set_repo_commit_to_db()`); a library must never be stamped with the epoch.
+fn normalized_updated_at(updated_at: i64) -> i64 {
+    if updated_at == 0 {
+        chrono::Utc::now().timestamp()
+    } else {
+        updated_at
     }
 }
 
@@ -255,11 +279,13 @@ impl RepoRepository for DbRepoRepository {
         &self,
         repo_id: &str,
         head_commit_id: Option<String>,
+        updated_at: i64,
     ) -> Result<(), AppError> {
         repo::Entity::update_many()
             .filter(repo::Column::Id.eq(repo_id))
             .set(repo::ActiveModel {
                 head_commit_id: Set(head_commit_id),
+                updated_at: Set(normalized_updated_at(updated_at)),
                 ..Default::default()
             })
             .exec(self.db.as_ref())
@@ -272,11 +298,13 @@ impl RepoRepository for DbRepoRepository {
         repo_id: &str,
         from: Option<&str>,
         to: &str,
+        updated_at: i64,
     ) -> Result<bool, AppError> {
         let mut query = repo::Entity::update_many()
             .filter(repo::Column::Id.eq(repo_id))
             .set(repo::ActiveModel {
                 head_commit_id: Set(Some(to.to_string())),
+                updated_at: Set(normalized_updated_at(updated_at)),
                 ..Default::default()
             });
         query = match from {
@@ -422,25 +450,35 @@ mod tests {
             .head_commit_id
     }
 
+    async fn updated_at(repo: &DbRepoRepository, repo_id: &str) -> i64 {
+        repo.find_by_id(repo_id).await.unwrap().unwrap().updated_at
+    }
+
     /// A NULL HEAD only matches `from = None`, and wins.
     #[tokio::test]
     async fn test_and_update_matches_null_head() {
         let repo = setup().await;
 
         assert!(
-            repo.test_and_update_head_commit("repo-empty", None, "c1")
+            repo.test_and_update_head_commit("repo-empty", None, "c1", 1_700_000_000)
                 .await
                 .unwrap()
         );
         assert_eq!(head(&repo, "repo-empty").await.as_deref(), Some("c1"));
+        assert_eq!(updated_at(&repo, "repo-empty").await, 1_700_000_000);
 
         assert!(
             !repo
-                .test_and_update_head_commit("repo-empty", None, "c2")
+                .test_and_update_head_commit("repo-empty", None, "c2", 1_700_000_100)
                 .await
                 .unwrap()
         );
         assert_eq!(head(&repo, "repo-empty").await.as_deref(), Some("c1"));
+        assert_eq!(
+            updated_at(&repo, "repo-empty").await,
+            1_700_000_000,
+            "a failed CAS must not move the library's modification time"
+        );
     }
 
     /// Only one of two writers racing on the same expected HEAD may win.
@@ -449,31 +487,64 @@ mod tests {
         let repo = setup().await;
 
         assert!(
-            repo.test_and_update_head_commit("repo-h1", Some("h1"), "c1")
+            repo.test_and_update_head_commit("repo-h1", Some("h1"), "c1", 1_700_000_000)
                 .await
                 .unwrap()
         );
         assert!(
             !repo
-                .test_and_update_head_commit("repo-h1", Some("h1"), "c2")
+                .test_and_update_head_commit("repo-h1", Some("h1"), "c2", 1_700_000_100)
                 .await
                 .unwrap(),
             "a stale expected HEAD must not overwrite the winner"
         );
         assert_eq!(head(&repo, "repo-h1").await.as_deref(), Some("c1"));
+        assert_eq!(
+            updated_at(&repo, "repo-h1").await,
+            1_700_000_000,
+            "the loser must not stamp the modification time"
+        );
 
         assert!(
-            repo.test_and_update_head_commit("repo-h1", Some("c1"), "c3")
+            repo.test_and_update_head_commit("repo-h1", Some("c1"), "c3", 1_700_000_200)
                 .await
                 .unwrap()
         );
         assert_eq!(head(&repo, "repo-h1").await.as_deref(), Some("c3"));
+        assert_eq!(updated_at(&repo, "repo-h1").await, 1_700_000_200);
 
         assert!(
             !repo
-                .test_and_update_head_commit("nope", None, "c4")
+                .test_and_update_head_commit("nope", None, "c4", 1_700_000_300)
                 .await
                 .unwrap()
         );
+    }
+
+    /// A zero commit `ctime` must not put the library at the Unix epoch; upstream replaces
+    /// it with the current time in both `seaf_commit_new()` and `set_repo_commit_to_db()`.
+    #[tokio::test]
+    async fn zero_commit_time_is_not_stamped_as_the_epoch() {
+        let repo = setup().await;
+
+        assert!(
+            repo.test_and_update_head_commit("repo-empty", None, "c1", 0)
+                .await
+                .unwrap()
+        );
+        assert!(updated_at(&repo, "repo-empty").await > 0);
+    }
+
+    /// The unconditional swap (used by the trash restore) also stamps the head commit's time.
+    #[tokio::test]
+    async fn unconditional_head_update_stamps_updated_at() {
+        let repo = setup().await;
+
+        repo.update_head_commit("repo-h1", Some("c9".to_string()), 1_700_000_009)
+            .await
+            .unwrap();
+
+        assert_eq!(head(&repo, "repo-h1").await.as_deref(), Some("c9"));
+        assert_eq!(updated_at(&repo, "repo-h1").await, 1_700_000_009);
     }
 }
