@@ -2454,12 +2454,16 @@ pub fn write_new_config(
     }
 
     // `create_new` fails when the path exists, which a concurrent first run cannot
-    // get around.
-    if let Err(e) = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
+    // get around. The reservation is owner-only from the start, like the document
+    // that replaces it.
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    if let Err(e) = options.open(path) {
         return Err(if e.kind() == std::io::ErrorKind::AlreadyExists {
             WriteConfigError::AlreadyExists(path.to_path_buf())
         } else {
@@ -2482,6 +2486,32 @@ fn tmp_path(path: &Path) -> PathBuf {
     let mut s = path.as_os_str().to_owned();
     s.push(format!(".{}.tmp", std::process::id()));
     PathBuf::from(s)
+}
+
+/// Create `path` for writing: owner-only from the first byte, refusing to follow a symlink or to
+/// reuse a file left behind by a crash.
+///
+/// The config file holds the master secret. Creating it with the process umask and tightening it
+/// afterwards leaves a window in which another local user can read it — and the temporary name is
+/// predictable, so plain `create` would also follow a symlink planted at it.
+fn open_owner_only_new(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(path) {
+        Ok(file) => Ok(file),
+        // A leftover temporary file from a crash is this process's own to replace; nothing else
+        // may reuse the name.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(path)?;
+            options.open(path)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Atomically replace `path` with `filled`, keeping the previous content as
@@ -2552,11 +2582,12 @@ fn atomic_write(path: &Path, content: &str) -> anyhow::Result<()> {
     let tmp = tmp_path(path);
     let result = (|| -> anyhow::Result<()> {
         {
-            let mut f = std::fs::File::create(&tmp)?;
+            // Owner-only from creation, so the secret is never readable by anyone else.
+            let mut f = open_owner_only_new(&tmp)?;
             f.write_all(content.as_bytes())?;
             f.sync_all()?;
         }
-        // The config file holds the master secret: never inherit a permissive mode.
+        // Belt and braces: the mode is already set at creation where that is possible.
         restrict_to_owner(&tmp)?;
         #[cfg(windows)]
         {
@@ -3042,6 +3073,48 @@ request_timeout_secs = 600
                 .mode()
                 & 0o777;
             assert_eq!(backup_mode, 0o600, "the backup must be tightened as well");
+        }
+
+        /// The replacement file is created owner-only, not tightened afterwards, so the master
+        /// secret is never briefly readable — and a symlink planted at the predictable temporary
+        /// name is not followed.
+        #[test]
+        fn the_replacement_file_is_owner_only_from_creation() {
+            let dir = tempfile::tempdir().unwrap();
+            let tmp = dir.path().join("config.toml.123.tmp");
+
+            let file = open_owner_only_new(&tmp).expect("a fresh temp file must be created");
+            drop(file);
+            let mode = std::fs::metadata(&tmp).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "the temp file holds the master secret");
+
+            // A leftover file is replaced, not appended to.
+            std::fs::write(&tmp, "stale").unwrap();
+            let mut file = open_owner_only_new(&tmp).unwrap();
+            use std::io::Write as _;
+            file.write_all(b"fresh").unwrap();
+            drop(file);
+            assert_eq!(std::fs::read_to_string(&tmp).unwrap(), "fresh");
+
+            // A symlink at the temp name is removed rather than followed.
+            std::fs::remove_file(&tmp).unwrap();
+            let target = dir.path().join("target");
+            std::fs::write(&target, "secret").unwrap();
+            std::os::unix::fs::symlink(&target, &tmp).unwrap();
+            let file = open_owner_only_new(&tmp).expect("the planted symlink must be replaced");
+            drop(file);
+            assert_eq!(
+                std::fs::read_to_string(&target).unwrap(),
+                "secret",
+                "the symlink target must not be written through"
+            );
+            assert!(
+                !std::fs::symlink_metadata(&tmp)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                "the temp path must be a regular file afterwards"
+            );
         }
 
         #[test]
