@@ -10,7 +10,7 @@ use crate::repository::Repositories;
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::activity_log;
-use infra::common::util::{get_head_commit_id, timestamp_rfc3339};
+use infra::common::util::{get_head_commit_id, get_head_root_id_opt, timestamp_rfc3339};
 use infra::entity::{deleted_repo, file_trash, repo, repo_member};
 use infra::serialization::S_IFDIR;
 use infra::storage::DynBlockStorage;
@@ -418,25 +418,11 @@ pub async fn restore_trash_items(
     let mut success = Vec::new();
     let mut failed = Vec::new();
 
-    // Resolve the repo + head commit once, rather than per item.
-    let head_root_id: Option<String> = {
-        let repo_record = repos
-            .repo
-            .find_by_id(repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-        match repo_record.head_commit_id {
-            Some(cid) => {
-                let head = repos
-                    .commit
-                    .find_by_repo_and_commit_id(repo_id, &cid)
-                    .await?
-                    .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
-                Some(head.root_id)
-            }
-            None => None,
-        }
-    };
+    // Each successful restore creates a commit, so the head is re-read (and
+    // re-resolved below) for every item. Resolving it once up front let the
+    // second item build its tree from the pre-restore snapshot, which the
+    // commit then stored as the new head, silently dropping the first restore.
+    let mut head_root_id = get_head_root_id_opt(db, repo_id).await?;
 
     // Phase A: flatten `commit_id -> paths` into an ordered item list.
     struct Item {
@@ -499,43 +485,8 @@ pub async fn restore_trash_items(
         .find_existing_fs_ids(repo_id, &obj_ids)
         .await?;
 
-    // Phase D: batch-resolve the non-"/" parents, then batch-read them for the
-    // name-collision check.
-    let mut parent_dirs: Vec<String> = items
-        .iter()
-        .map(|i| i.parent_dir.clone())
-        .filter(|p| p != "/")
-        .collect();
-    parent_dirs.sort();
-    parent_dirs.dedup();
-    let mut parent_fs_id_map: HashMap<String, Option<String>> = HashMap::new();
-    if let Some(root) = &head_root_id {
-        let targets: Vec<(String, String)> = parent_dirs
-            .iter()
-            .map(|p| (root.clone(), p.clone()))
-            .collect();
-        let resolved = crate::fs::core::resolve_fs_ids_batch(repos, repo_id, &targets).await?;
-        for (p, r) in parent_dirs.iter().zip(resolved) {
-            parent_fs_id_map.insert(p.clone(), r);
-        }
-    }
-
-    let mut parent_ids: Vec<String> = parent_fs_id_map
-        .values()
-        .filter_map(|v| v.clone())
-        .collect();
-    // The root's dirents are needed too: a `/`-level restore must notice an
-    // existing entry with the same name, and the map above only holds non-"/" parents.
-    if let Some(root) = &head_root_id {
-        parent_ids.push(root.clone());
-    }
-    parent_ids.retain(|id| id != infra::common::EMPTY_SHA1);
-    parent_ids.sort();
-    parent_ids.dedup();
-    let dir_map = crate::fs::core::read_fs_dir_data_batch(repos, repo_id, &parent_ids).await?;
-
-    // Phase E: sequential commits — each item creates a new commit, so this
-    // cannot be batched.
+    // Phase D: sequential commits — each item changes HEAD, so its parent is
+    // resolved again inside the loop instead of being read once up front.
     let mut successful_ids: Vec<i32> = Vec::new();
     for item in &items {
         let Some(model) = trash_by_key.get(&(
@@ -578,9 +529,17 @@ pub async fn restore_trash_items(
                 }
             }
         } else {
-            match parent_fs_id_map.get(&item.parent_dir) {
-                Some(Some(id)) => id.clone(),
-                _ => {
+            let Some(root) = &head_root_id else {
+                failed.push(RevertFailedItem {
+                    commit_id: item.commit_id.clone(),
+                    path: item.full_path.clone(),
+                    error_msg: format!("Directory {} not found.", item.parent_dir),
+                });
+                continue;
+            };
+            match crate::fs::core::resolve_dir_fs_id(repos, repo_id, root, &item.parent_dir).await {
+                Ok(id) => id,
+                Err(_) => {
                     failed.push(RevertFailedItem {
                         commit_id: item.commit_id.clone(),
                         path: item.full_path.clone(),
@@ -594,10 +553,26 @@ pub async fn restore_trash_items(
         // `parent_fs_id` may legitimately be `EMPTY_SHA1`: the sentinel of an
         // existing but *empty* directory, which is what the root of a library whose
         // last file was deleted is. Restoring into it works (readers synthesize an
-        // empty directory), and a parent that disappeared resolved to `None` above.
+        // empty directory), and a parent that disappeared resolved to an error above.
 
-        if let Some(dir_data) = dir_map.get(&parent_fs_id)
-            && dir_data.dirents.iter().any(|d| d.name == item.obj_name)
+        // Read the parent again for this item: an earlier restore in this request
+        // has already advanced HEAD and rewritten its dirents.
+        let parent_dir_data =
+            match crate::fs::core::read_fs_dir_data(repos, repo_id, &parent_fs_id).await {
+                Ok(data) => data,
+                Err(_) => {
+                    failed.push(RevertFailedItem {
+                        commit_id: item.commit_id.clone(),
+                        path: item.full_path.clone(),
+                        error_msg: format!("Directory {} not found.", item.parent_dir),
+                    });
+                    continue;
+                }
+            };
+        if parent_dir_data
+            .dirents
+            .iter()
+            .any(|d| d.name == item.obj_name)
         {
             failed.push(RevertFailedItem {
                 commit_id: item.commit_id.clone(),
@@ -649,7 +624,9 @@ pub async fn restore_trash_items(
         .map_err(|e| AppError::Internal(format!("Restore commit failed: {e}")));
 
         match result {
-            Ok(_) => {
+            Ok(new_root) => {
+                // Later items in this request must see this item's restore.
+                head_root_id = Some(new_root);
                 successful_ids.push(trash_id);
 
                 // The commit linked the entry (and a directory's whole subtree) back

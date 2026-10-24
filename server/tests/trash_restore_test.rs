@@ -148,6 +148,73 @@ async fn restore_file_adds_its_size_back() {
     );
 }
 
+/// Every item in one request must be restored against the HEAD the previous
+/// item left behind. Reusing the request's opening snapshot made the second
+/// commit store the pre-restore tree, silently dropping the first restore while
+/// both items reported success.
+#[tokio::test]
+async fn restore_two_files_in_one_request_keeps_both() {
+    let f = TestFixture::new().await;
+    upload(&f, "/", "a.txt", b"0123456789").await;
+    upload(&f, "/", "b.txt", b"01234").await;
+    delete(&f, "file", "/a.txt").await;
+    delete(&f, "file", "/b.txt").await;
+    assert_eq!(repo_size(&f).await, 0);
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/trash2/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "both deletes are in the trash: {body}");
+
+    let mut map = serde_json::Map::new();
+    for item in items {
+        let commit_id = item["commit_id"].as_str().unwrap().to_string();
+        let parent_dir = item["parent_dir"].as_str().unwrap();
+        let obj_name = item["obj_name"].as_str().unwrap();
+        let path = if parent_dir == "/" {
+            format!("/{obj_name}")
+        } else {
+            format!("{parent_dir}/{obj_name}")
+        };
+        map.entry(commit_id)
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+            .unwrap()
+            .push(Value::String(path));
+    }
+
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api/v2.1/repos/{}/trash2/revert/", f.repo_id),
+            Some(&f.api_token),
+            &Value::Object(map),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["success"].as_array().unwrap().len(),
+        2,
+        "both items report success: {body}"
+    );
+    assert!(body["failed"].as_array().unwrap().is_empty(), "{body}");
+
+    assert_eq!(
+        listing(&f, "/").await,
+        vec![("a.txt".to_string(), 10), ("b.txt".to_string(), 5)],
+        "the second restore must keep the first one"
+    );
+    assert_eq!(repo_size(&f).await, 15);
+}
+
 /// A directory dirent carries no size of its own, so the deleted subtree is only
 /// recoverable by walking the restored object.
 #[tokio::test]
