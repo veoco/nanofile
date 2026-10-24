@@ -542,6 +542,13 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // `Config::validate` is advisory at startup, so enforce this one here: an
+    // unparsable mode used to read as `Off`, silently writing plaintext blocks
+    // (or making previously encrypted blocks unreadable) after a config typo.
+    if let Err(e) = config.storage.validate_block_encryption_mode() {
+        anyhow::bail!("{e}");
+    }
+
     let enc_mode = config.storage.block_encryption_mode();
     if enc_mode != infra::storage::encrypting_block_store::BlockEncryptionMode::Off
         && config.storage.encryption_key.is_none()

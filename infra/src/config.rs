@@ -1063,16 +1063,41 @@ fn default_block_encryption_mode() -> String {
 }
 
 impl StorageConfig {
-    /// Parse `block_encryption_mode` into the runtime mode. Invalid values default to
-    /// `Off`, so a bad value can never silently encrypt or decrypt blocks.
+    /// Parse `block_encryption_mode` into the runtime mode. Callers must have
+    /// validated it (see [`Self::validate_block_encryption_mode`]): an unknown
+    /// value reads as `Off` here so no code path can panic, but a typo in the
+    /// configuration file must not survive startup, or a deployment that meant to
+    /// encrypt silently starts writing plaintext blocks.
     pub fn block_encryption_mode(
         &self,
     ) -> crate::storage::encrypting_block_store::BlockEncryptionMode {
         use crate::storage::encrypting_block_store::BlockEncryptionMode;
-        match self.block_encryption_mode.to_ascii_lowercase().as_str() {
+        match self
+            .block_encryption_mode
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "on" => BlockEncryptionMode::On,
             "lazy" => BlockEncryptionMode::Lazy,
             _ => BlockEncryptionMode::Off,
+        }
+    }
+
+    /// Reject a mode the runtime parser would read as `off` only because of a
+    /// typo or stray whitespace. Case and surrounding whitespace are accepted.
+    pub fn validate_block_encryption_mode(&self) -> Result<(), String> {
+        match self
+            .block_encryption_mode
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "off" | "on" | "lazy" => Ok(()),
+            _ => Err(format!(
+                "storage.block_encryption_mode = {:?} is not one of off, on, lazy",
+                self.block_encryption_mode
+            )),
         }
     }
 }
@@ -1755,6 +1780,7 @@ impl Config {
     /// email address parser) are added by the settings service.
     pub fn validate(&self) -> Result<(), String> {
         self.server.validate_encrypted_library()?;
+        self.storage.validate_block_encryption_mode()?;
 
         if self.server.version.trim().is_empty() {
             return Err("server.version must not be empty".to_string());
@@ -2684,12 +2710,15 @@ request_timeout_secs = 600
         assert_eq!(Config::default().validate(), Ok(()));
 
         type Mutate = fn(&mut Config);
-        let cases: [(&str, Mutate); 10] = [
+        let cases: [(&str, Mutate); 11] = [
             ("server.version", |c| c.server.version = "  ".to_string()),
             ("server.port", |c| c.server.port = 0),
             ("server.max_json_body_mb", |c| c.server.max_json_body_mb = 0),
             ("server.cors_allowed_origins", |c| {
                 c.server.cors_allowed_origins = vec!["not-an-origin".to_string()]
+            }),
+            ("storage.block_encryption_mode", |c| {
+                c.storage.block_encryption_mode = "enabled".to_string()
             }),
             ("storage.block_dir", |c| {
                 c.storage.block_dir = PathBuf::new()
@@ -2720,6 +2749,41 @@ request_timeout_secs = 600
         let mut config = Config::default();
         config.server.encrypted_library_version = 3;
         assert!(config.validate().is_err());
+    }
+
+    /// Case and padding are harmless, a typo is not: read as `off` it would start
+    /// a deployment that meant to encrypt with plaintext blocks.
+    #[test]
+    fn block_encryption_mode_is_normalized_but_not_guessed() {
+        use crate::storage::encrypting_block_store::BlockEncryptionMode;
+
+        let mut config = Config::default();
+        assert_eq!(
+            config.storage.block_encryption_mode(),
+            BlockEncryptionMode::Off
+        );
+        for (value, expected) in [
+            ("on", BlockEncryptionMode::On),
+            (" On ", BlockEncryptionMode::On),
+            ("LAZY", BlockEncryptionMode::Lazy),
+            ("off", BlockEncryptionMode::Off),
+        ] {
+            config.storage.block_encryption_mode = value.to_string();
+            assert_eq!(
+                config.storage.block_encryption_mode(),
+                expected,
+                "{value:?}"
+            );
+            assert!(
+                config.storage.validate_block_encryption_mode().is_ok(),
+                "{value:?} should be accepted"
+            );
+        }
+        config.storage.block_encryption_mode = "true".to_string();
+        assert!(
+            config.storage.validate_block_encryption_mode().is_err(),
+            "a value the parser would read as off must be rejected"
+        );
     }
 
     #[test]
