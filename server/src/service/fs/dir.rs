@@ -12,6 +12,19 @@ use infra::common::DirEntry;
 use infra::common::util::{basename, get_head_root_id, get_head_root_id_opt, parent_path_from};
 use infra::serialization::S_IFDIR;
 
+/// Seahub's reserved internal directory.
+pub(crate) const RESERVED_INTERNAL_DIR: &str = "_Internal";
+
+/// Whether an entry belongs to seahub's reserved `_Internal` tree.
+///
+/// The name is hidden from every listing a user can reach — the plain listing, the recursive
+/// one, WebDAV and the `reloaddir` responses — so a rename/inspection of the rest of the tree
+/// never reveals the server's own bookkeeping. Both listing paths share this predicate rather
+/// than each spelling the comparison, which is how the recursive one drifted and leaked it.
+pub(crate) fn is_reserved_internal(name: &str) -> bool {
+    name == RESERVED_INTERNAL_DIR
+}
+
 /// List directory entries by traversing the FS object tree from the head commit.
 pub(crate) async fn list_dir_from_fs_tree(
     repos: &Repositories,
@@ -66,8 +79,7 @@ pub(crate) async fn list_dir_from_root(
         dir_data
             .dirents
             .into_iter()
-            // `_Internal` is seahub's reserved prefix, hidden in every repo.
-            .filter(|d| d.name != "_Internal")
+            .filter(|d| !is_reserved_internal(&d.name))
             .map(|d| DirEntry {
                 id: d.id,
                 entry_type: if d.mode & S_IFDIR != 0 {
@@ -111,20 +123,28 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
         .await?
         .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 
-    list_dir_recursive_from_root(repos, repo_id, &head.root_id, path, true).await
+    let (dir_id, entries, _truncated) =
+        list_dir_recursive_from_root(repos, repo_id, &head.root_id, path, true, None).await?;
+    Ok((dir_id, entries))
 }
 
 /// Like [`list_dir_recursive_from_fs_tree`], but reuses an already-resolved root fs_id.
 ///
 /// `include_modifier_names` controls whether nicknames are batch-fetched for file entries; WebDAV
 /// PROPFIND does not use those fields and passes `false` to skip the `find_by_emails` query.
+///
+/// `max_entries` stops the walk once it has collected more than that many entries and reports the
+/// truncation in the returned flag. A caller with an entry cap needs this: checking the collected
+/// vec afterwards still materialises the whole tree first, which is exactly the work the cap exists
+/// to refuse.
 pub(crate) async fn list_dir_recursive_from_root(
     repos: &Repositories,
     repo_id: &str,
     root_id: &str,
     path: &str,
     include_modifier_names: bool,
-) -> Result<(String, Vec<DirEntry>), AppError> {
+    max_entries: Option<usize>,
+) -> Result<(String, Vec<DirEntry>, bool), AppError> {
     let dir_id = match crate::fs::core::resolve_fs_id(repos, repo_id, root_id, path).await {
         Ok(id) => id,
         Err(e) => {
@@ -163,6 +183,11 @@ pub(crate) async fn list_dir_recursive_from_root(
             };
 
             for dirent in &dir_data.dirents {
+                // The reserved tree is neither listed nor descended into: skipping only the
+                // entry would still emit its children, each carrying `_Internal` as parent_dir.
+                if is_reserved_internal(&dirent.name) {
+                    continue;
+                }
                 let is_dir = dirent.mode & S_IFDIR != 0;
                 let modifier_email = dirent.modifier.clone();
 
@@ -182,6 +207,11 @@ pub(crate) async fn list_dir_recursive_from_root(
                     modifier_name: None,
                     modifier_contact_email: None,
                 });
+                // Stop as soon as the cap is exceeded; one entry of slack keeps the check out of
+                // the hot path and still bounds memory to `max + 1`.
+                if max_entries.is_some_and(|max| entries.len() > max) {
+                    return Ok((dir_id, entries, true));
+                }
 
                 if !is_dir && !modifier_email.is_empty() {
                     modifier_emails.insert(modifier_email);
@@ -224,7 +254,7 @@ pub(crate) async fn list_dir_recursive_from_root(
         }
     }
 
-    Ok((dir_id, entries))
+    Ok((dir_id, entries, false))
 }
 
 pub(crate) async fn create_dir_by_path(

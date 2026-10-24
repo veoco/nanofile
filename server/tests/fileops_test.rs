@@ -130,11 +130,25 @@ async fn test_batch_delete_reloaddir() {
     upload_test_file(&f, "del1.txt", b"del1", "/").await;
     upload_test_file(&f, "del2.txt", b"del2", "/").await;
 
+    // seahub's reserved `_Internal` tree exists in every repo; the reloaddir listing must not
+    // reveal it (or its contents) even though the deleter can read the rest of the directory.
+    create_subdir(&f, "/_Internal").await;
+    upload_test_file(&f, "index.db", b"internal", "/_Internal").await;
+
     let resp = f
         .client
         .batch_delete_with_dir(&f.api_token, &f.repo_id, "/", &["del1.txt", "del2.txt"])
         .await;
     assert_eq!(resp.status(), 200);
+    // The same `oid`/`dir_perm` headers every other reloaddir response carries.
+    assert!(
+        resp.headers().contains_key("oid"),
+        "reloaddir must report the parent's oid"
+    );
+    assert_eq!(
+        resp.headers().get("dir_perm").map(|v| v.to_str().unwrap()),
+        Some("rw")
+    );
     let body: serde_json::Value = resp.json().await.unwrap();
     // seahub's `reloaddir_if_necessary` returns the parent directory's dirents
     // as a bare array (the iOS client rejects any other wrapper).
@@ -148,6 +162,10 @@ async fn test_batch_delete_reloaddir() {
     assert!(
         !arr.iter().any(|e| e["name"] == "del2.txt"),
         "deleted entry still listed: {body:?}"
+    );
+    assert!(
+        !arr.iter().any(|e| e["name"] == "_Internal"),
+        "the reserved tree leaked into the listing: {body:?}"
     );
 }
 
@@ -787,4 +805,52 @@ async fn a_path_inside_a_zero_byte_file_does_not_resolve() {
     create_subdir(&f, "/empty").await;
     create_subdir(&f, "/empty/sub").await;
     assert_eq!(dir_names(&f, "/empty").await, vec!["sub"]);
+}
+
+/// The reserved `_Internal` tree is hidden from the recursive listing just like the plain one —
+/// including its children, which would otherwise show up with `_Internal` as their `parent_dir`.
+#[tokio::test]
+async fn test_dir_recursive_hides_reserved_internal() {
+    let f = TestFixture::new().await;
+
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "visible.txt", b"a")
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/_Internal")
+        .await;
+    f.client
+        .upload_file(
+            &f.api_token,
+            &f.repo_id,
+            "/_Internal",
+            "bookkeeping.db",
+            b"b",
+        )
+        .await;
+    f.client
+        .create_dir(&f.api_token, &f.repo_id, "/_Internal/nested")
+        .await;
+
+    let resp = f
+        .client
+        .list_dir_with_params(&f.api_token, &f.repo_id, "/", Some("1"), None)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+
+    assert!(
+        entries.iter().all(|e| e["name"] != "_Internal"),
+        "the reserved tree leaked into the recursive listing: {entries:?}"
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|e| !e["parent_dir"].as_str().unwrap_or("").contains("_Internal")),
+        "children of the reserved tree leaked into the recursive listing: {entries:?}"
+    );
+    assert!(
+        entries.iter().any(|e| e["name"] == "visible.txt"),
+        "the recursive listing dropped ordinary entries: {entries:?}"
+    );
 }

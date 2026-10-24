@@ -96,16 +96,24 @@ pub async fn propfind(
                 }
             }
             Depth::Infinity => {
-                if let Ok((_, entries)) = list_dir_recursive_from_root(
+                // The walk stops at the cap instead of building the whole tree and only then
+                // refusing it, so a refused request costs about as much as an accepted one.
+                let budget = if limit > 0 {
+                    Some(limit.saturating_sub(responses.len()))
+                } else {
+                    None
+                };
+                if let Ok((_, entries, truncated)) = list_dir_recursive_from_root(
                     &state.repos,
                     &auth.repo_id,
                     &head.root_id,
                     &path,
                     false,
+                    budget,
                 )
                 .await
                 {
-                    if exceeds_limit(entries.len() + responses.len()) {
+                    if truncated || exceeds_limit(entries.len() + responses.len()) {
                         return StatusCode::INSUFFICIENT_STORAGE.into_response();
                     }
                     for e in entries {

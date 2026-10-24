@@ -12,72 +12,9 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::handler::{MAX_SMALL_BODY_BYTES, read_body_limited};
 use crate::middleware::repo_extractor::RepoPathWrite;
-use crate::repository::Repositories;
 use crate::service::fs::fileops::{self as fops_svc};
 use base::error::AppError;
 use base::sanitize::safe_normalize_path;
-
-#[derive(Serialize)]
-pub struct DirEntry {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub entry_type: String,
-    pub name: String,
-    pub size: i64,
-    pub mtime: i64,
-    pub permission: String,
-}
-
-async fn list_dir_from_fs_tree(
-    repos: &Repositories,
-    repo_id: &str,
-    path: &str,
-) -> Result<(String, Vec<DirEntry>), AppError> {
-    let repo_record = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Repository not found".into()))?;
-
-    let head_commit_id = match repo_record.head_commit_id {
-        Some(id) => id,
-        None => return Ok((String::new(), vec![])),
-    };
-
-    let head = repos
-        .commit
-        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
-
-    let dir_id = crate::fs::core::resolve_dir_fs_id(repos, repo_id, &head.root_id, path)
-        .await
-        .map_err(|e| AppError::internal(format!("resolve_fs_id failed: {e}")))?;
-
-    let dir_data = crate::fs::core::read_fs_dir_data(repos, repo_id, &dir_id)
-        .await
-        .map_err(|e| AppError::internal(format!("read fs_dir_data failed: {e}")))?;
-
-    Ok((
-        dir_id,
-        dir_data
-            .dirents
-            .into_iter()
-            .map(|d| DirEntry {
-                id: d.id,
-                entry_type: if d.mode & infra::serialization::S_IFDIR != 0 {
-                    "dir".to_string()
-                } else {
-                    "file".to_string()
-                },
-                name: d.name,
-                size: d.size,
-                mtime: d.mtime,
-                permission: "rw".to_string(),
-            })
-            .collect(),
-    ))
-}
 
 #[derive(Deserialize)]
 pub struct FileOpsQuery {
@@ -90,14 +27,6 @@ pub struct CopyMoveResult {
     pub repo_id: String,
     pub parent_dir: String,
     pub obj_name: String,
-}
-
-#[derive(Serialize)]
-pub struct CopyMoveWithDirResult {
-    pub repo_id: String,
-    pub parent_dir: String,
-    pub obj_name: String,
-    pub dir_listing: Option<Vec<DirEntry>>,
 }
 
 pub fn fileops_routes() -> Router<Arc<AppState>> {
@@ -156,10 +85,11 @@ pub async fn batch_delete_handler(
 
     // reloaddir=true: seahub's `reloaddir_if_necessary` answers with the parent
     // directory's dirents as a **bare** array; the iOS client's `SeafDir.handleData:`
-    // rejects any other wrapper, so `{"dir_listing": …}` left its list stale.
+    // rejects any other wrapper, so `{"dir_listing": …}` left its list stale. The
+    // listing (and its `oid`/`dir_perm` headers) comes from the one directory
+    // service the other reloaddir endpoints use.
     if crate::handler::dir::is_true(query.reloaddir.as_deref()) {
-        let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &parent_dir).await?;
-        return Ok(Json(json!(entries)).into_response());
+        return crate::handler::dir::reload_dir_response(&state, repo_id, &parent_dir).await;
     }
 
     Ok(StatusCode::OK.into_response())
@@ -217,8 +147,7 @@ pub async fn batch_copy_handler(
 
     // seahub reloads the **source** directory (`parent_dir = ?p`) after a copy.
     if crate::handler::dir::is_true(query.reloaddir.as_deref()) {
-        let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &src_parent_dir).await?;
-        return Ok(Json(json!(entries)).into_response());
+        return crate::handler::dir::reload_dir_response(&state, repo_id, &src_parent_dir).await;
     }
 
     Ok(Json(json!(json_results)).into_response())
@@ -276,8 +205,7 @@ pub async fn batch_move_handler(
 
     // seahub reloads the **source** directory (`parent_dir = ?p`) after a move.
     if crate::handler::dir::is_true(query.reloaddir.as_deref()) {
-        let (_, entries) = list_dir_from_fs_tree(&state.repos, repo_id, &src_parent_dir).await?;
-        return Ok(Json(json!(entries)).into_response());
+        return crate::handler::dir::reload_dir_response(&state, repo_id, &src_parent_dir).await;
     }
 
     Ok(Json(json!(json_results)).into_response())
