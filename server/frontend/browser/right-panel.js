@@ -257,7 +257,7 @@ export function openRightPanel(d) {
                 '<a href="' + escapeAttr(link.link || "") + '" target="_blank" class="text-[11px] text-ink truncate block hover:underline">' +
                   escapeHtml(link.token || "") +
                 '</a>' +
-                '<span class="mono flex-shrink-0 ml-2">' + (link.view_cnt || 0) + ' views</span>';
+                '<span class="mono flex-shrink-0 ml-2">' + escapeHtml(__t('share.views_n', { n: link.view_cnt || 0 })) + '</span>';
               shareList.appendChild(div);
             });
           }
@@ -437,7 +437,7 @@ export function openRightPanel(d) {
                 '<a href="' + escapeAttr(linkUrl) + '" target="_blank" class="text-[11px] text-ink truncate block hover:underline">' +
                   escapeHtml(link.token || "") +
                 '</a>' +
-                '<span class="mono flex-shrink-0 ml-2">' + (link.view_cnt || 0) + ' uploads</span>';
+                '<span class="mono flex-shrink-0 ml-2">' + escapeHtml(__t('share.uploads_n', { n: link.view_cnt || 0 })) + '</span>';
               ulList.appendChild(div);
             });
           }
