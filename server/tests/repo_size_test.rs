@@ -96,14 +96,15 @@ async fn commit(
 /// an official client represents "no entries" as the `EMPTY_SHA1` sentinel, which
 /// has no object at all — that case needs its own path.
 async fn put_root_commit(f: &TestFixture, root_id: &str, parent: Option<&str>) -> String {
-    let commit_id = random_hex_id();
+    // The id is content-addressed, so uniqueness comes from the description (a hashed field).
+    let nonce = random_hex_id();
     let commit = base::common::CommitData {
-        commit_id: commit_id.clone(),
+        commit_id: String::new(),
         repo_id: f.repo_id.clone(),
         root_id: root_id.to_string(),
         creator_name: f.email.clone(),
         creator: EMPTY_SHA1.to_string(),
-        description: "sync commit".to_string(),
+        description: format!("sync commit {nonce}"),
         ctime: chrono::Utc::now().timestamp(),
         parent_id: parent.map(|p| p.to_string()),
         second_parent_id: None,
@@ -122,10 +123,11 @@ async fn put_root_commit(f: &TestFixture, root_id: &str, parent: Option<&str>) -
         conflict: None,
         new_merge: None,
     };
-    let body = serde_json::to_string(&commit).unwrap().into_bytes();
+    let body = serde_json::to_string(&commit).unwrap();
+    let (commit_id, body) = common::stamp_commit_id(&body);
     let resp = f
         .client
-        .put_commit(&f.sync_token, &f.repo_id, &commit_id, body)
+        .put_commit(&f.sync_token, &f.repo_id, &commit_id, body.into_bytes())
         .await;
     assert_eq!(resp.status(), 200, "put_commit failed");
     let resp = f

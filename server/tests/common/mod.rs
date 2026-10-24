@@ -934,29 +934,19 @@ pub async fn sync_commit(
     let resp = client.recv_fs(sync_token, repo_id, pack).await;
     assert_eq!(resp.status(), 200, "recv_fs for root failed");
 
-    let commit_id = {
-        // Unique commit id (40 hex chars). A counter keeps repeated commits in
-        // the same test distinct even within the same nanosecond/millisecond.
-        static COMMIT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let seq = COMMIT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        fs_object_id(
-            format!(
-                "{repo_id}:{}:{seq}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or_default()
-            )
-            .as_bytes(),
-        )
-    };
-    let commit = CommitData {
-        commit_id: commit_id.clone(),
+    // `put_commit` verifies that a client's id is the hash of its content, so this helper
+    // computes it the way an official client does instead of inventing one. A counter in the
+    // description keeps repeated commits over an identical tree distinct, which a random id used
+    // to do for free.
+    static COMMIT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = COMMIT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut commit = CommitData {
+        commit_id: String::new(),
         repo_id: repo_id.to_string(),
         root_id,
         creator_name: "test@example.com".to_string(),
         creator: "0".repeat(40),
-        description: "sync commit".to_string(),
+        description: format!("sync commit {seq}"),
         ctime: now,
         parent_id: parent.map(|p| p.to_string()),
         second_parent_id: None,
@@ -975,6 +965,8 @@ pub async fn sync_commit(
         conflict: None,
         new_merge: None,
     };
+    commit.commit_id = server::domain::commit::compute_commit_id(&commit);
+    let commit_id = commit.commit_id.clone();
     let body = serde_json::to_string(&commit).unwrap().into_bytes();
     let resp = client
         .put_commit(sync_token, repo_id, &commit_id, body)
@@ -983,6 +975,26 @@ pub async fn sync_commit(
     let resp = client.update_branch(sync_token, repo_id, &commit_id).await;
     assert_eq!(resp.status(), 200, "update_branch failed");
     commit_id
+}
+
+/// Stamp a commit JSON body with the content-addressed id an official client computes.
+///
+/// `put_commit` now verifies that the id is the hash of the commit's fields, so a test that wants
+/// a *valid* commit has to derive one instead of inventing it. Returns the id and the re-serialized
+/// body; a caller that deliberately uploads an invalid commit skips this helper.
+pub fn stamp_commit_id(body: &str) -> (String, String) {
+    use base::common::CommitData;
+
+    let mut value: serde_json::Value =
+        serde_json::from_str(body).expect("a commit body must be a JSON object");
+    let data: CommitData =
+        serde_json::from_value(value.clone()).expect("a commit body must deserialize");
+    let commit_id = server::domain::commit::compute_commit_id(&data);
+    value["commit_id"] = serde_json::Value::String(commit_id.clone());
+    (
+        commit_id,
+        serde_json::to_string(&value).expect("a stamped commit must serialize"),
+    )
 }
 
 /// Opinionated test fixture that sets up a server, user, repo, and tokens.

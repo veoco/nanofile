@@ -80,15 +80,17 @@ async fn push_commit(
     root_id: &str,
     parent_id: Option<&str>,
 ) -> String {
-    let commit_id = random_hex_id();
+    // The commit id is content-addressed, so the nonce that used to make the id unique lives in
+    // the description instead (it is one of the hashed fields).
+    let nonce = random_hex_id();
     let now = chrono::Utc::now().timestamp();
     let commit_data = CommitData {
-        commit_id: commit_id.clone(),
+        commit_id: String::new(),
         repo_id: repo_id.to_string(),
         root_id: root_id.to_string(),
         creator_name: "test@example.com".to_string(),
         creator: "0000000000000000000000000000000000000000".to_string(),
-        description: "test commit".to_string(),
+        description: format!("test commit {nonce}"),
         ctime: now,
         parent_id: parent_id.map(|s| s.to_string()),
         second_parent_id: None,
@@ -108,6 +110,7 @@ async fn push_commit(
         new_merge: None,
     };
     let json_str = serde_json::to_string(&commit_data).unwrap();
+    let (commit_id, json_str) = common::stamp_commit_id(&json_str);
     let resp = client
         .put_commit(sync_token, repo_id, &commit_id, json_str.into_bytes())
         .await;

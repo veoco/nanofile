@@ -255,6 +255,7 @@ async fn test_upload_sync_flow() {
     });
 
     let json_str = serde_json::to_string(&commit_data).unwrap();
+    let (commit_id, json_str) = common::stamp_commit_id(&json_str);
 
     // Upload commit (raw JSON, not compressed)
     let resp = client

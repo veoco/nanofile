@@ -140,6 +140,7 @@ async fn test_full_upload_flow() {
         new_merge: None,
     };
     let json_str = serde_json::to_string(&commit_data).unwrap();
+    let (commit_id, json_str) = common::stamp_commit_id(&json_str);
     let resp = client
         .put_commit(&sync_token, &repo_id, &commit_id, json_str.into_bytes())
         .await;
@@ -302,6 +303,7 @@ async fn test_incremental_upload() {
         new_merge: None,
     };
     let json_str = serde_json::to_string(&commit_data).unwrap();
+    let (commit_id, json_str) = common::stamp_commit_id(&json_str);
     let resp = client
         .put_commit(&sync_token, &repo_id, &commit_id, json_str.into_bytes())
         .await;
@@ -404,6 +406,7 @@ async fn test_incremental_upload_second_commit() {
         new_merge: None,
     };
     let json1 = serde_json::to_string(&commit1).unwrap();
+    let (commit1_id, json1) = common::stamp_commit_id(&json1);
     let resp = client
         .put_commit(&sync_token, &repo_id, &commit1_id, json1.into_bytes())
         .await;
@@ -484,6 +487,7 @@ async fn test_incremental_upload_second_commit() {
         new_merge: None,
     };
     let json2 = serde_json::to_string(&commit2).unwrap();
+    let (commit2_id, json2) = common::stamp_commit_id(&json2);
     let resp = client
         .put_commit(&sync_token, &repo_id, &commit2_id, json2.into_bytes())
         .await;
@@ -560,6 +564,7 @@ async fn test_incremental_upload_second_commit() {
         new_merge: None,
     };
     let json3 = serde_json::to_string(&commit3).unwrap();
+    let (commit3_id, json3) = common::stamp_commit_id(&json3);
     let resp = client
         .put_commit(&sync_token, &repo_id, &commit3_id, json3.into_bytes())
         .await;
@@ -811,6 +816,7 @@ fn commit_with_root(repo_id: &str, root_id: &str, creator_name: &str) -> (String
         new_merge: None,
     };
     let json = serde_json::to_string(&commit_data).unwrap();
+    let (commit_id, json) = common::stamp_commit_id(&json);
     (commit_id, json.into_bytes())
 }
 

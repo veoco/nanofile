@@ -178,7 +178,7 @@ pub async fn get_commit(
 pub async fn put_commit(
     State(state): State<Arc<AppState>>,
     auth: SyncAuth,
-    Path((repo_id, _commit_id)): Path<(String, String)>,
+    Path((repo_id, commit_id)): Path<(String, String)>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
     // A read-only member must not inject commit objects; checked before the body is read.
@@ -191,17 +191,53 @@ pub async fn put_commit(
 
     let data = axum::body::to_bytes(body, MAX_COMMIT_BYTES)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| AppError::BadRequest(format!("cannot read the commit body: {e}")))?;
 
     let commit_data: base::common::CommitData = serde_json::from_slice(&data)
-        .map_err(|e| AppError::Internal(format!("invalid commit JSON: {}", e)))?;
+        .map_err(|e| AppError::BadRequest(format!("invalid commit JSON: {}", e)))?;
 
     if commit_data.repo_id != repo_id {
         return Err(AppError::BadRequest("repo_id mismatch".into()));
     }
 
+    // The commit object is content-addressed: an official client computes its id from those same
+    // fields before uploading it. A body whose id is malformed, disagrees with the URL, or is not
+    // the hash of its content is corruption or an attempt to seed an id that other clients will
+    // then map to different history. The root is deliberately *not* validated here: seaf-daemon
+    // uploads the commit before the fs objects it references (`update_branch` checks it).
+    validate_commit_id(&commit_id, &commit_data)?;
+
     state.sync_service().put_commit(&commit_data).await?;
     Ok(StatusCode::OK)
+}
+
+/// Reject a commit whose id is malformed, disagrees with the path it was uploaded to, or is not
+/// the hash of the commit's own fields.
+///
+/// The empty-`creator_name` spelling is accepted both ways: a client that sends the field as `""`
+/// hashed a NUL terminator for it, while one that omits it hashed nothing, and the parsed
+/// [`base::common::CommitData`] cannot tell which happened (see
+/// [`crate::domain::commit::compute_commit_id_with_empty_name`]).
+fn validate_commit_id(
+    url_commit_id: &str,
+    data: &base::common::CommitData,
+) -> Result<(), AppError> {
+    if data.commit_id.len() != 40 || !data.commit_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(AppError::BadRequest("invalid commit id".into()));
+    }
+    if data.commit_id != url_commit_id {
+        return Err(AppError::BadRequest(
+            "commit_id does not match the request path".into(),
+        ));
+    }
+    let canonical = crate::domain::commit::compute_commit_id(data);
+    let empty_named = crate::domain::commit::compute_commit_id_with_empty_name(data, true);
+    if data.commit_id != canonical && data.commit_id != empty_named {
+        return Err(AppError::BadRequest(
+            "commit_id is not the hash of the commit".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub async fn update_branch(

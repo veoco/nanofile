@@ -312,7 +312,8 @@ async fn test_put_commit_rejects_oversized_body() {
             vec![0u8; 4 * 1024 * 1024 + 1],
         )
         .await;
-    assert_eq!(resp.status(), 500);
+    // A body over the cap is a client error; it used to surface as a 500.
+    assert_eq!(resp.status(), 400);
 }
 
 /// Security: a read-only shared member can download but must not be able to
@@ -399,13 +400,15 @@ async fn test_rw_member_can_write_to_repo() {
         "ctime": 1234567890,
         "version": 1,
     });
+    let (commit_id, commit_json) =
+        common::stamp_commit_id(&serde_json::to_string(&commit_json).unwrap());
     let resp = f
         .client
         .put_commit(
             &rw_sync_token,
             &f.repo_id,
             &commit_id,
-            serde_json::to_vec(&commit_json).unwrap(),
+            commit_json.into_bytes(),
         )
         .await;
     assert_eq!(resp.status(), 200);

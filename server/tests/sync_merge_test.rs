@@ -635,11 +635,11 @@ async fn test_merge_missing_block_is_446() {
         "second_parent_id": null,
         "version": 1,
     }))
-    .unwrap()
-    .into_bytes();
+    .unwrap();
+    let (commit_id, body) = common::stamp_commit_id(&body);
     let resp = f
         .client
-        .put_commit(&f.sync_token, &f.repo_id, &commit_id, body)
+        .put_commit(&f.sync_token, &f.repo_id, &commit_id, body.into_bytes())
         .await;
     assert_eq!(resp.status(), 200);
 
@@ -947,11 +947,11 @@ async fn upload_root_commit(
         "second_parent_id": null,
         "version": 1,
     }))
-    .unwrap()
-    .into_bytes();
+    .unwrap();
+    let (commit_id, body) = common::stamp_commit_id(&body);
     let resp = f
         .client
-        .put_commit(&f.sync_token, &f.repo_id, &commit_id, body)
+        .put_commit(&f.sync_token, &f.repo_id, &commit_id, body.into_bytes())
         .await;
     assert_eq!(resp.status(), 200, "put_commit failed");
 

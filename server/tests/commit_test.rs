@@ -314,6 +314,7 @@ async fn test_put_get_commit_raw_json() {
     };
 
     let json_str = serde_json::to_string(&commit_data).unwrap();
+    let (commit_id, json_str) = common::stamp_commit_id(&json_str);
 
     let resp = client
         .put_commit(&sync_token, &repo_id, &commit_id, json_str.into_bytes())
@@ -406,6 +407,7 @@ async fn test_update_branch_accepts_zero_sentinel_parent() {
     });
 
     let json_str = serde_json::to_string(&commit_data).unwrap();
+    let (commit_id, json_str) = common::stamp_commit_id(&json_str);
     let resp = client
         .put_commit(&sync_token, &repo_id, &commit_id, json_str.into_bytes())
         .await;
@@ -442,6 +444,7 @@ async fn test_update_branch_accepts_zero_sentinel_parent() {
     });
 
     let json_str2 = serde_json::to_string(&commit_data2).unwrap();
+    let (commit_id2, json_str2) = common::stamp_commit_id(&json_str2);
     let resp = client
         .put_commit(&sync_token, &repo_id, &commit_id2, json_str2.into_bytes())
         .await;
@@ -496,6 +499,119 @@ async fn test_update_branch_verifies_commit() {
     assert_eq!(resp.status(), 500);
 }
 
+/// A commit ready to upload: `commit_id` is left for the caller to fill in.
+fn commit_for(repo_id: &str, description: &str) -> CommitData {
+    CommitData {
+        commit_id: String::new(),
+        repo_id: repo_id.to_string(),
+        root_id: "0".repeat(40),
+        creator_name: "test@example.com".to_string(),
+        creator: "0".repeat(40),
+        description: description.to_string(),
+        ctime: chrono::Utc::now().timestamp(),
+        parent_id: None,
+        second_parent_id: None,
+        repo_name: None,
+        repo_desc: None,
+        repo_category: None,
+        encrypted: None,
+        enc_version: None,
+        magic: None,
+        salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
+        key: None,
+        version: 1,
+        conflict: None,
+        new_merge: None,
+    }
+}
+
+/// The commit id is content-addressed, so a body whose id is not the hash of its own fields must
+/// be refused: other clients dedupe and skip history by that id.
+#[tokio::test]
+async fn test_put_commit_rejects_an_id_that_is_not_the_hash() {
+    let f = TestFixture::new().await;
+
+    let mut commit = commit_for(&f.repo_id, "fabricated id");
+    commit.commit_id = random_hex_id();
+    let body = serde_json::to_string(&commit).unwrap();
+
+    let resp = f
+        .client
+        .put_commit(
+            &f.sync_token,
+            &f.repo_id,
+            &commit.commit_id,
+            body.into_bytes(),
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "a fabricated id must be refused");
+}
+
+/// A commit uploaded to another commit's URL is refused as well: the path names the object.
+#[tokio::test]
+async fn test_put_commit_rejects_an_id_that_does_not_match_the_path() {
+    let f = TestFixture::new().await;
+
+    let mut commit = commit_for(&f.repo_id, "path mismatch");
+    commit.commit_id = server::domain::commit::compute_commit_id(&commit);
+    let body = serde_json::to_string(&commit).unwrap();
+
+    let resp = f
+        .client
+        .put_commit(
+            &f.sync_token,
+            &f.repo_id,
+            &random_hex_id(),
+            body.into_bytes(),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "the URL must name the commit the body describes"
+    );
+}
+
+/// A client that sends `creator_name: ""` hashed a NUL terminator for it; one that omits the field
+/// hashed nothing. A parsed `CommitData` cannot tell them apart, so both spellings of the same
+/// commit must upload.
+#[tokio::test]
+async fn test_put_commit_accepts_both_empty_creator_name_spellings() {
+    let f = TestFixture::new().await;
+
+    for (index, include_empty_name) in [false, true].into_iter().enumerate() {
+        let mut commit = commit_for(&f.repo_id, &format!("empty creator name {index}"));
+        commit.creator_name = String::new();
+        let id =
+            server::domain::commit::compute_commit_id_with_empty_name(&commit, include_empty_name);
+        commit.commit_id = id.clone();
+
+        // `CommitData` skips an empty name when serializing, which the server cannot parse back
+        // (the field has no `default`), so spell it explicitly the way a client does.
+        let mut value = serde_json::to_value(&commit).unwrap();
+        value["creator_name"] = serde_json::Value::String(String::new());
+        let body = serde_json::to_string(&value).unwrap();
+
+        let resp = f
+            .client
+            .put_commit(&f.sync_token, &f.repo_id, &id, body.into_bytes())
+            .await;
+        assert_eq!(
+            resp.status(),
+            200,
+            "the {} spelling of an empty creator_name must be accepted",
+            if include_empty_name {
+                "hashed"
+            } else {
+                "omitted"
+            }
+        );
+    }
+}
+
 /// Regression: a client upload advances the library's modification time too. The
 /// value is the uploaded commit's `ctime`, matching the server branch-update hook.
 #[tokio::test]
@@ -524,6 +640,7 @@ async fn test_update_branch_bumps_repo_mtime_to_commit_time() {
     });
 
     let body = serde_json::to_string(&commit_data).unwrap();
+    let (commit_id, body) = common::stamp_commit_id(&body);
     let resp = f
         .client
         .put_commit(&f.sync_token, &f.repo_id, &commit_id, body.into_bytes())
