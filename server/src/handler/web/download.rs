@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
@@ -174,9 +174,15 @@ pub async fn repo_file_download(
 
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
 
-    // A matching validator with no Range means 304, skipping the block reads.
+    // A matching validator with no Range means 304, skipping the block reads. The response still
+    // carries the validator the client matched, as RFC 9110 asks, so it can reuse the stored body
+    // without a second conditional request.
     if range_header.is_none() && crate::fs::core::download::if_none_match(&headers, &etag) {
-        return Ok(StatusCode::NOT_MODIFIED.into_response());
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        if let Ok(value) = HeaderValue::from_str(&etag) {
+            response.headers_mut().insert(header::ETAG, value);
+        }
+        return Ok(response);
     }
 
     // seahub's `accessV2CB` distinguishes `op=view` (inline) from `op=download`
