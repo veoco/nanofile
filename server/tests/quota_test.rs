@@ -53,6 +53,45 @@ async fn test_quota_rejects_over_limit() {
     );
 }
 
+/// Replacing a file frees its old bytes, so the quota may only be charged for
+/// the increase. Charging the whole upload rejected a same-size replacement
+/// whenever the owner was close to the quota.
+#[tokio::test]
+async fn test_quota_charges_an_overwrite_for_its_delta() {
+    let f = TestFixture::new().await;
+    set_user_quota(&f, Some(1500)).await;
+
+    let data = vec![7u8; 1000];
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "a.bin", &data)
+        .await;
+    assert_eq!(resp.status(), 200, "initial upload should fit the quota");
+
+    let resp = f
+        .client
+        .upload_file_with_replace(&f.api_token, &f.repo_id, "/", "a.bin", &data, true)
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "a same-size overwrite adds no bytes and must not be rejected, got {}",
+        resp.status()
+    );
+
+    // A new file still has to fit in what the first one left over.
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "b.bin", &data)
+        .await;
+    assert_eq!(
+        resp.status(),
+        443,
+        "a new file over the remaining quota must still be rejected, got {}",
+        resp.status()
+    );
+}
+
 #[tokio::test]
 async fn test_quota_unlimited_explicit_zero() {
     let f = TestFixture::new().await;

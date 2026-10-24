@@ -538,10 +538,20 @@ impl FileService {
         let fp = base::sanitize::safe_join_path(target_dir, filename)
             .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
 
-        let size_result = crate::fs::core::get_entry_total_size(&self.repos, repo_id, &fp).await;
-        let old_size = size_result.ok().unwrap_or(0);
-        let replace_eff = replace;
-        let old_size_eff = if replace_eff { old_size } else { 0 };
+        // An overwrite frees the bytes of the file it replaces, so only the
+        // increase may be charged: billing the whole upload rejected a same-size
+        // replacement whenever the owner was close to the quota. A lookup failure
+        // other than "no such entry" must not be read as zero old bytes.
+        let old_size = if replace {
+            match crate::fs::core::get_entry_total_size(&self.repos, repo_id, &fp).await {
+                Ok(size) => size,
+                Err(AppError::NotFound(_)) => 0,
+                Err(e) => return Err(e),
+            }
+        } else {
+            0
+        };
+        let size_delta = total_size - old_size;
 
         // On quota failure, remove newly-written blocks so they don't accumulate as orphans
         // (GC is disabled by default). Deduped blocks are left alone.
@@ -549,7 +559,7 @@ impl FileService {
             && let Err(e) = crate::service::fs::quota::check_upload_quota(
                 &self.repos,
                 uid,
-                total_size,
+                size_delta,
                 self.config.get().storage.default_user_quota_bytes,
             )
             .await
@@ -573,7 +583,7 @@ impl FileService {
             block_ids,
             total_size,
             modifier,
-            replace_eff,
+            replace,
         )
         .await
         .map_err(|e| AppError::Internal(format!("upload failed: {e}")))?;
@@ -583,7 +593,7 @@ impl FileService {
         let effective_fp = base::sanitize::safe_join_path(target_dir, &effective_name)
             .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
 
-        crate::fs::core::adjust_repo_size(&self.repos, repo_id, total_size - old_size_eff).await?;
+        crate::fs::core::adjust_repo_size(&self.repos, repo_id, size_delta).await?;
 
         // The bytes are now part of the repo's committed `size`, which `user_usage` counts, so drop
         // this uploader's uncommitted-block reservation (keeping it would double-count the file and
@@ -595,7 +605,7 @@ impl FileService {
         }
 
         if let Some(uid) = user_id {
-            let op_type = if replace_eff { "edit" } else { "create" };
+            let op_type = if replace { "edit" } else { "create" };
             activity_log::log_activity(
                 self.db(),
                 repo_id,

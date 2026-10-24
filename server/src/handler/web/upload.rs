@@ -916,14 +916,10 @@ pub async fn update_api(
     headers: HeaderMap,
     body: axum::body::Body,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if headers.get("content-range").is_none() {
-        precheck_quota(
-            &state,
-            Some(user.user_id),
-            headers.get("content-length").and_then(|v| v.to_str().ok()),
-        )
-        .await?;
-    }
+    // An update always replaces an existing file, so the bytes it frees are part
+    // of the budget. A Content-Length precheck cannot know that delta and used to
+    // reject a same-size replacement near the quota; the commit-time check in
+    // `upload_file_committed_stream` applies the correct delta instead.
     let boundary = extract_multipart_boundary(&headers)?;
     let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
 
@@ -1035,14 +1031,8 @@ pub async fn update_aj(
     headers: HeaderMap,
     body: axum::body::Body,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if headers.get("content-range").is_none() {
-        precheck_quota(
-            &state,
-            Some(user.user_id),
-            headers.get("content-length").and_then(|v| v.to_str().ok()),
-        )
-        .await?;
-    }
+    // See `update_api`: an update replaces the file, so only the commit-time
+    // size delta is a correct quota check.
     let boundary = extract_multipart_boundary(&headers)?;
     let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
 
@@ -1547,12 +1537,6 @@ pub async fn update_api_handler(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned())
         .unwrap_or_default();
-    let content_length = req
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_owned());
-    let has_range = req.headers().get("content-range").is_some();
 
     let info = state
         .token_manager
@@ -1583,9 +1567,8 @@ pub async fn update_api_handler(
     .await?;
     let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
 
-    if !has_range {
-        precheck_quota(&state, Some(info.user_id), content_length.as_deref()).await?;
-    }
+    // See `update_api`: this endpoint only replaces an existing file, so the
+    // commit-time delta is the only correct quota check.
 
     let boundary = ct
         .split("boundary=")
