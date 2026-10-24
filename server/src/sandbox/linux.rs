@@ -173,7 +173,7 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
 
     close_extra_descriptors();
 
-    let limits = super::clamp_resources();
+    let limits = super::clamp_resources(profile);
     // The address-space limit is this platform's memory bound; there is no other.
     if limits.enforced(limits.address_space) {
         layers.limits = true;
@@ -203,14 +203,22 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
         }
         .to_string(),
     );
+    // PR_SET_PDEATHSIG only fires for a parent that dies *after* it is installed, so this process
+    // may already be an orphan by the time it reaches here: the server can exit between the fork
+    // and this call. Nothing would ever reap it then, and it would parse a document for nobody.
+    let parent = unsafe { libc::getppid() };
     detail.push(
-        if set_parent_death_signal() {
+        if set_parent_death_signal(parent) {
             "pdeathsig=on"
         } else {
             "pdeathsig=refused"
         }
         .to_string(),
     );
+    if parent <= 1 || unsafe { libc::getppid() } != parent {
+        // No parent is left to read an exit code, so any value will do.
+        unsafe { libc::_exit(1) };
+    }
 
     match install_landlock(profile, grants) {
         Ok(landlock) => {
@@ -277,7 +285,14 @@ fn set_dumpable() -> bool {
 
 /// Ask the kernel to end this process when its parent ends: the parent's timeout and
 /// group kill cover everything but the parent itself being gone.
-fn set_parent_death_signal() -> bool {
+///
+/// `expected_parent` is the parent this child was started with. The signal is not queued for a
+/// death that already happened, so a parent that is gone before the call is reported as a refusal —
+/// the caller exits in that case instead of parsing for a parent that will never read the answer.
+fn set_parent_death_signal(expected_parent: libc::pid_t) -> bool {
+    if expected_parent <= 1 {
+        return false;
+    }
     unsafe {
         libc::prctl(
             libc::PR_SET_PDEATHSIG,
@@ -286,6 +301,7 @@ fn set_parent_death_signal() -> bool {
             0,
             0,
         ) == 0
+            && libc::getppid() == expected_parent
     }
 }
 

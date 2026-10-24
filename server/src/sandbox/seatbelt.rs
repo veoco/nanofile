@@ -279,7 +279,7 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
     let mut protections = Protections::default();
     let mut detail = Vec::new();
 
-    let limits = super::clamp_resources();
+    let limits = super::clamp_resources(profile);
     if limits.enforced(false) {
         protections.limits = true;
     }

@@ -47,18 +47,22 @@ pub(crate) const MAGIC: &[u8; 4] = b"NFX1";
 
 /// Wall-clock ceiling for one document.
 ///
-/// The child also carries its own CPU limit, so this only has to catch a hang.
-const TIMEOUT: Duration = Duration::from_secs(20);
+/// The child also carries its own CPU limit, derived from this same budget so the two cannot
+/// disagree, so this only has to catch a hang.
+const TIMEOUT: Duration =
+    Duration::from_secs(crate::sandbox::profile_wall_seconds(Profile::Documents));
 
 /// Wall-clock ceiling for the startup self-test.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Wall-clock ceiling for one image request: decode, resize, encode.
-pub const IMAGE_TIMEOUT: Duration = Duration::from_secs(15);
+pub const IMAGE_TIMEOUT: Duration =
+    Duration::from_secs(crate::sandbox::profile_wall_seconds(Profile::Images));
 
 /// Wall-clock ceiling for one media request: ffmpeg plus the resize of the frame.
 /// Longer than the others because ffmpeg seeks a whole container first.
-pub const MEDIA_TIMEOUT: Duration = Duration::from_secs(35);
+pub const MEDIA_TIMEOUT: Duration =
+    Duration::from_secs(crate::sandbox::profile_wall_seconds(Profile::Media));
 
 /// Most bytes of a reply the parent will read.
 const MAX_REPLY_BYTES: u64 = (MAX_INDEXED_CONTENT_BYTES + (1 << 20)) as u64;

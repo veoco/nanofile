@@ -158,13 +158,28 @@ pub fn container_shortfall() -> Option<String> {
 #[cfg(unix)]
 const ADDRESS_SPACE_LIMIT: u64 = 1 << 30;
 
-/// CPU seconds before the soft (`SIGXCPU`) and hard (`SIGKILL`) limits. The parent's
-/// wall-clock timeout bounds a hang; this holds even when the parent is not
-/// scheduled.
+/// Wall-clock seconds a profile's child gets. The parent's timers use the same numbers, so the
+/// CPU limit can be derived from them instead of being one fixed cap for every profile.
+pub(crate) const fn profile_wall_seconds(profile: Profile) -> u64 {
+    match profile {
+        Profile::Documents => 20,
+        Profile::Images => 15,
+        Profile::Media => 35,
+    }
+}
+
+/// CPU seconds before the soft (`SIGXCPU`) and hard (`SIGKILL`) limits.
+///
+/// The parent's wall-clock timeout bounds a hang; this holds even when the parent is not
+/// scheduled. `RLIMIT_CPU` counts total CPU time across the process's threads, so a multi-threaded
+/// helper reaches it much sooner than the wall clock: a 15 s cap killed ffmpeg about four seconds
+/// into a 35 s media budget. The cap therefore follows the profile's own budget, with a little
+/// slack for the hard limit.
 #[cfg(unix)]
-const CPU_SOFT_SECONDS: u64 = 15;
-#[cfg(unix)]
-const CPU_HARD_SECONDS: u64 = 18;
+const fn cpu_limit_seconds(profile: Profile) -> (u64, u64) {
+    let wall = profile_wall_seconds(profile);
+    (wall, wall + 5)
+}
 
 /// Open descriptors: the three standard streams and slack for the runtime.
 #[cfg(unix)]
@@ -1304,7 +1319,7 @@ fn address_space_limit() -> (u64, String) {
 /// process it is meant to bound. The detail lists every limit that took and every
 /// one refused. Darwin has no address-space cap; `watchdog` stands in for it.
 #[cfg(unix)]
-fn clamp_resources() -> Clamped {
+fn clamp_resources(profile: Profile) -> Clamped {
     macro_rules! clamp {
         ($resource:expr, $soft:expr, $hard:expr) => {{
             let limit = libc::rlimit {
@@ -1317,7 +1332,8 @@ fn clamp_resources() -> Clamped {
 
     let (address_space_value, address_space_label) = address_space_limit();
     let address_space = clamp!(libc::RLIMIT_AS, address_space_value, address_space_value);
-    let cpu = clamp!(libc::RLIMIT_CPU, CPU_SOFT_SECONDS, CPU_HARD_SECONDS);
+    let (cpu_soft, cpu_hard) = cpu_limit_seconds(profile);
+    let cpu = clamp!(libc::RLIMIT_CPU, cpu_soft, cpu_hard);
     let descriptors = clamp!(libc::RLIMIT_NOFILE, NOFILE_LIMIT, NOFILE_LIMIT);
     let file_size = clamp!(libc::RLIMIT_FSIZE, FILE_SIZE_LIMIT, FILE_SIZE_LIMIT);
     // A crash must not write a core file, and the child has no business writing
@@ -1326,11 +1342,7 @@ fn clamp_resources() -> Clamped {
 
     let mut detail = Vec::new();
     detail.push(took(address_space, "as", &address_space_label));
-    detail.push(took(
-        cpu,
-        "cpu",
-        &format!("{CPU_SOFT_SECONDS}/{CPU_HARD_SECONDS}"),
-    ));
+    detail.push(took(cpu, "cpu", &format!("{cpu_soft}/{cpu_hard}")));
     detail.push(took(descriptors, "nofile", &NOFILE_LIMIT.to_string()));
     detail.push(took(
         file_size,
