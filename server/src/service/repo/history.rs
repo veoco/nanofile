@@ -12,7 +12,7 @@ use base::common::{EMPTY_SHA1, FsFileData};
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::util::{get_head_root_id, parent_path_from};
-use infra::serialization::{S_IFDIR, S_IFREG};
+use infra::serialization::S_IFREG;
 
 #[derive(Serialize)]
 pub struct HistoryChangesResponse {
@@ -73,12 +73,14 @@ async fn collect_files(
                     format!("{}/{}", dir_prefix, entry.name)
                 };
 
-                if entry.mode == S_IFREG || entry.size > 0 {
-                    files.insert(child_path.clone(), entry.size);
-                } else if entry.mode == S_IFDIR {
+                // Classify the type bits, not the whole mode: dirents written by
+                // clients may carry permission bits (`0o040755` for a directory).
+                if crate::fs::core::tree::is_dir_mode(entry.mode) {
                     if visited.insert(entry.id.clone()) {
                         next.push((entry.id.clone(), child_path));
                     }
+                } else if entry.mode == S_IFREG || entry.size > 0 {
+                    files.insert(child_path.clone(), entry.size);
                 } else {
                     // Skip — could be a symlink or other type
                 }

@@ -390,6 +390,65 @@ async fn test_fs_id_list_with_server_head() {
     assert!(fs_ids.contains(&serde_json::Value::String(root_fs_id)));
 }
 
+/// A dirent written by a client may carry permission bits (`0o040755`), so the
+/// history walk must classify by the type bits. Comparing the whole mode against
+/// `S_IFDIR` skipped such a directory, hiding every file under it.
+#[tokio::test]
+async fn history_traverses_a_directory_with_permission_bits() {
+    let (server, api_token, repo_id, sync_token) = setup_repo().await;
+    let client = server.client();
+
+    let file_data = make_file_fs_data(vec![], 0);
+    let (file_fs_id, file_rc) = make_fs_entry(&file_data);
+
+    let sub_dir = make_dir_fs_data(vec![DirEntryData {
+        id: file_fs_id.clone(),
+        mode: 33188, // S_IFREG
+        modifier: "test@example.com".to_string(),
+        mtime: chrono::Utc::now().timestamp(),
+        name: "f.txt".to_string(),
+        size: 0,
+    }]);
+    let (sub_fs_id, sub_rc) = make_fs_entry(&sub_dir);
+
+    let root_dir = make_dir_fs_data(vec![DirEntryData {
+        id: sub_fs_id.clone(),
+        mode: 0o040755, // directory *with* permission bits
+        modifier: "test@example.com".to_string(),
+        mtime: chrono::Utc::now().timestamp(),
+        name: "d".to_string(),
+        size: 0,
+    }]);
+    let (root_fs_id, root_rc) = make_fs_entry(&root_dir);
+
+    upload_fs_objects(
+        &client,
+        &sync_token,
+        &repo_id,
+        &[
+            (root_fs_id.clone(), root_rc),
+            (sub_fs_id, sub_rc),
+            (file_fs_id, file_rc),
+        ],
+    )
+    .await;
+    let commit_id = push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
+
+    let resp = client
+        .get(
+            &format!("/api2/repo_history_changes/{repo_id}/?commit_id={commit_id}"),
+            Some(&api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let new_files = body["new_files"].as_array().unwrap();
+    assert!(
+        new_files.iter().any(|f| f["path"] == "/d/f.txt"),
+        "a directory with permission bits must still be traversed: {body}"
+    );
+}
+
 #[tokio::test]
 async fn test_fs_id_list_with_matching_client_head() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;

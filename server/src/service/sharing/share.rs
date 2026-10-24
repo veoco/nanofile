@@ -50,7 +50,7 @@ pub async fn resolve_entry_type_raw(
         .dirents
         .iter()
         .find(|d| d.name == entry_name)
-        .map(|d| d.mode == infra::common::S_IFDIR)
+        .map(|d| crate::fs::core::tree::is_dir_mode(d.mode))
         .unwrap_or(false);
 
     Ok(if is_dir {
