@@ -217,21 +217,28 @@ impl BlockStorageBackend for EncryptingBlockStore {
             // header. A header-less block is handed back verbatim, so its logical size is the
             // stored size — the two must agree.
             BlockEncryptionMode::Lazy => {
-                let raw = self.inner.read_block(repo_id, block_id).await?;
-                if !BlockCipher::looks_encrypted(&raw) {
-                    return Ok(raw.len() as i64);
+                // Only the header is needed: a versioned block is ciphertext by
+                // construction, and `/block-sizes` asks for this on every block of a
+                // listing. Reading and decrypting the whole block for its length was
+                // the most expensive metadata query in the migration window.
+                let prefix = self
+                    .inner
+                    .read_block_prefix(repo_id, block_id, HEADER_LEN)
+                    .await?;
+                if !BlockCipher::looks_encrypted(&prefix) {
+                    return Ok(stored);
                 }
-                let cipher = self.cipher.clone();
-                tokio::task::spawn_blocking(move || {
-                    cipher.decrypt(&raw).map(|pt| pt.len() as i64).map_err(|_| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "block at-rest decryption failed",
-                        )
-                    })
-                })
-                .await
-                .map_err(|e| io::Error::other(e.to_string()))?
+                let stored_len = usize::try_from(stored).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "negative stored block size")
+                })?;
+                let logical = BlockCipher::plaintext_len(&prefix, stored_len).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "encrypted block shorter than its header and authentication tag",
+                    )
+                })?;
+                i64::try_from(logical)
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "block size overflow"))
             }
         }
     }
@@ -414,6 +421,34 @@ mod tests {
         // In `on` mode a tampered block is a hard read error.
         assert!(store.read_block(REPO, &id).await.is_err());
         drop((dir, store));
+    }
+
+    /// Sizing a versioned block must not decrypt it: the header and the stored
+    /// length already determine the logical size. A corrupted body makes a read
+    /// fail, which proves the size came from the header and not the plaintext.
+    #[tokio::test]
+    async fn lazy_block_size_does_not_decrypt_versioned_blocks() {
+        let (dir, store, raw) = temp_store(BlockEncryptionMode::Lazy);
+        let data = b"size comes from the header".to_vec();
+        let id = store.write_block(REPO, &data).await.unwrap();
+
+        let mut ciphertext = raw.read_block(REPO, &id).await.unwrap();
+        let last = ciphertext.len() - 1;
+        ciphertext[last] ^= 0xFF;
+        raw.remove_block(REPO, &id).await.unwrap();
+        raw.write_block_with_id(REPO, &id, &ciphertext)
+            .await
+            .unwrap();
+
+        assert!(
+            store.read_block(REPO, &id).await.is_err(),
+            "the corrupted body must fail authentication"
+        );
+        assert_eq!(
+            store.block_size(REPO, &id).await.unwrap(),
+            data.len() as i64
+        );
+        drop(dir);
     }
 
     #[tokio::test]
