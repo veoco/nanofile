@@ -44,7 +44,6 @@ pub struct TestServer {
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     /// Directories created under `/tmp` for this server (block root and full-text index
     /// dir). Removed on `Drop` so repeated runs do not leak inodes in the temp filesystem.
-    /// leak inodes in the temp filesystem.
     temp_dirs: Vec<std::path::PathBuf>,
 }
 

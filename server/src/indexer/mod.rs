@@ -1095,10 +1095,6 @@ impl TextIndexer {
     }
 }
 
-/// Build an HTML snippet from `content` highlighting matches of any
-/// whitespace-separated term in `query`; empty when no term matches. The output is
-/// HTML-escaped except for the injected `<mark>` tags, so it is safe to render as
-/// raw HTML.
 /// Locate every case-insensitive occurrence of `terms` in `hay`, returning byte
 /// ranges guaranteed to be valid char boundaries of `hay` so callers can slice
 /// with them.
@@ -1152,6 +1148,10 @@ fn find_match_ranges(hay: &str, hay_lower: &str, terms: &[String]) -> Vec<(usize
     ranges
 }
 
+/// Build an HTML snippet from `content` highlighting matches of any
+/// whitespace-separated term in `query`; empty when no term matches. The output is
+/// HTML-escaped except for the injected `<mark>` tags, so it is safe to render as
+/// raw HTML.
 fn build_content_highlight(content: &str, query: &str) -> String {
     let terms: Vec<String> = query
         .split_whitespace()
