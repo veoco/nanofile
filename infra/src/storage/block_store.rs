@@ -159,13 +159,22 @@ impl BlockStorage {
         self.ensure_repo_dirs(repo_id).await?;
         let path = self.block_path(repo_id, block_id);
         let tmp = path.with_file_name(format!("{block_id}.{}.tmp", uuid::Uuid::new_v4()));
-        if let Err(e) = tokio::fs::write(&tmp, data).await {
+        // One exclusive create + write + flush: a failure at any step must not
+        // publish the block, or a crash could leave a visible short block.
+        use tokio::io::AsyncWriteExt;
+        let staged = async {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+                .await?;
+            file.write_all(data).await?;
+            file.sync_all().await
+        }
+        .await;
+        if let Err(e) = staged {
             let _ = tokio::fs::remove_file(&tmp).await;
             return Err(e);
-        }
-        // Flush before publishing: a crash must not leave a published-but-empty block.
-        if let Ok(f) = tokio::fs::OpenOptions::new().write(true).open(&tmp).await {
-            let _ = f.sync_all().await;
         }
         Ok((tmp, path))
     }
