@@ -1,7 +1,10 @@
 use axum::{
+    Json,
     extract::FromRequestParts,
-    http::{StatusCode, request::Parts},
+    http::{HeaderMap, StatusCode, request::Parts},
+    response::{IntoResponse, Response},
 };
+use axum_extra::headers::{Cookie, Header};
 
 use crate::AppState;
 use crate::domain::api_key::KeyAuthority;
@@ -229,8 +232,45 @@ fn extract_url_repo_id(path: &str) -> Result<Option<String>, ()> {
     Err(())
 }
 
+/// Rejection for [`AuthUser`]: the status, plus the JSON error document every other API surface
+/// returns.
+///
+/// This used to be a bare [`StatusCode`], so an unauthenticated `/api2/…` request got a 401 with an
+/// empty body while every other error on the same endpoint carried `{"error_msg": …}`. Clients that
+/// surface the server's message showed nothing.
+pub struct AuthRejection(StatusCode);
+
+impl From<StatusCode> for AuthRejection {
+    fn from(status: StatusCode) -> Self {
+        Self(status)
+    }
+}
+
+impl AuthRejection {
+    /// The status this rejection answers with, for extractors that wrap [`AuthUser`] and carry
+    /// their own error shape.
+    pub fn status(&self) -> StatusCode {
+        self.0
+    }
+}
+
+impl IntoResponse for AuthRejection {
+    fn into_response(self) -> Response {
+        let status = self.0;
+        // A 5xx must not describe the failure; the cause is logged where it happens.
+        let message = match status {
+            StatusCode::UNAUTHORIZED => {
+                "Authentication credentials were not provided or are invalid."
+            }
+            StatusCode::FORBIDDEN => "You do not have permission to perform this action.",
+            _ => "Internal server error",
+        };
+        (status, Json(serde_json::json!({ "error_msg": message }))).into_response()
+    }
+}
+
 impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
-    type Rejection = StatusCode;
+    type Rejection = AuthRejection;
 
     async fn from_request_parts(
         parts: &mut Parts,
@@ -247,7 +287,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             Some(t) => t,
             None => match try_extract_cookie_session(&parts.headers, state, &parts.method) {
                 Some(t) => t,
-                None => return Err(StatusCode::UNAUTHORIZED),
+                None => return Err(StatusCode::UNAUTHORIZED.into()),
             },
         };
 
@@ -266,7 +306,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
 
         let (user_id, credential, device) = if let Some(lookup) = key_lookup {
             if is_token_expired(lookup.key.expires_at) {
-                return Err(StatusCode::UNAUTHORIZED);
+                return Err(StatusCode::UNAUTHORIZED.into());
             }
             let authority = KeyAuthority::from_lookup(&lookup).map_err(|error| {
                 // An unreadable grant means this build cannot honour what the
@@ -282,18 +322,18 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             (lookup.key.user_id, credential, None)
         } else if let Some(token_record) = api_record {
             if is_token_expired(token_record.expires_at) {
-                return Err(StatusCode::UNAUTHORIZED);
+                return Err(StatusCode::UNAUTHORIZED.into());
             }
             // A 2FA pending token must not be usable as a full session.
             if token_record.is_pending {
-                return Err(StatusCode::UNAUTHORIZED);
+                return Err(StatusCode::UNAUTHORIZED.into());
             }
             let credential = Credential::Session;
             enforce_route_access(&credential, parts)?;
             let device = device_from_api_token(&token_record);
             (token_record.user_id, credential, device)
         } else {
-            return Err(StatusCode::UNAUTHORIZED);
+            return Err(StatusCode::UNAUTHORIZED.into());
         };
 
         let user_record = repos
@@ -304,7 +344,7 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             .ok_or(StatusCode::UNAUTHORIZED)?;
 
         if !user_record.is_active || !user_record.email_verified {
-            return Err(StatusCode::FORBIDDEN);
+            return Err(StatusCode::FORBIDDEN.into());
         }
 
         Ok(AuthUser {
@@ -425,21 +465,48 @@ fn extract_auth_header_token(headers: &axum::http::HeaderMap) -> Option<String> 
     None
 }
 
+/// The value of one cookie from a request's `Cookie` headers.
+///
+/// One parser for every caller: the Web UI extractor and this module each scanned the header
+/// themselves before, so a header the HTTP library can decode (quoted values, several `Cookie`
+/// headers) authenticated on one surface and not the other.
+///
+/// `Cookie::decode` is the primary path because it knows those rules, but it rejects the whole
+/// header on a segment it cannot parse — and a browser will happily send one. The plain scan stays
+/// as a fallback so a malformed neighbour does not turn a working session into a 401.
+pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    if let Ok(cookie) = Cookie::decode(&mut headers.get_all("cookie").iter())
+        && let Some(value) = cookie.get(name)
+    {
+        return Some(value.to_string());
+    }
+    headers
+        .get_all("cookie")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|header| header.split(';'))
+        .map(str::trim)
+        .find_map(|pair| {
+            pair.strip_prefix(name)
+                .and_then(|rest| rest.strip_prefix('='))
+                .map(str::to_string)
+        })
+}
+
+/// The `seahub-session` cookie's value, if the request carries one.
+pub fn session_cookie_value(headers: &HeaderMap) -> Option<String> {
+    cookie_value(headers, "seahub-session")
+}
+
 /// Authenticate via the `seahub-session` cookie plus an `X-CSRFToken` header:
 /// JavaScript reads `sfcsrftoken` from its non-HttpOnly cookie and echoes it,
 /// while the browser sends the HttpOnly session cookie automatically.
 fn try_extract_cookie_session(
-    headers: &axum::http::HeaderMap,
+    headers: &HeaderMap,
     state: &std::sync::Arc<AppState>,
     method: &axum::http::Method,
 ) -> Option<String> {
-    let cookie_str = headers.get("cookie").and_then(|v| v.to_str().ok())?;
-
-    let session_token = cookie_str
-        .split(';')
-        .map(|s| s.trim())
-        .find(|s| s.starts_with("seahub-session="))
-        .and_then(|s| s.strip_prefix("seahub-session="))?;
+    let session_token = session_cookie_value(headers)?;
 
     // CSRF applies to state-changing methods only. Safe methods are idempotent
     // and come from tags that cannot attach custom headers.
@@ -448,13 +515,13 @@ fn try_extract_cookie_session(
         && !crate::service::auth::csrf::validate_csrf_header(
             headers,
             &state.csrf_secret,
-            session_token,
+            &session_token,
         )
     {
         return None;
     }
 
-    Some(session_token.to_string())
+    Some(session_token)
 }
 
 impl SyncAuth {
@@ -641,12 +708,81 @@ async fn note_key_usage(repos: &Repositories, key_id: i32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_url_repo_id, route_decision};
+    use super::{AuthRejection, cookie_value, extract_url_repo_id, route_decision};
     use crate::domain::api_key::{KeyAuthority, RepoCeiling};
     use crate::domain::capability::{Capability, CapabilitySet};
     use crate::domain::credential::Credential;
-    use axum::http::{Method, StatusCode};
+    use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
+    use axum::response::IntoResponse;
     use std::collections::HashMap;
+
+    /// A rejected API request carries the same error document every other endpoint sends, so a
+    /// client can show the reason instead of an empty body.
+    #[tokio::test]
+    async fn an_auth_rejection_carries_the_error_document() {
+        let response = AuthRejection::from(StatusCode::UNAUTHORIZED).into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("application/json")),
+            "the rejection must be JSON"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            body["error_msg"].as_str().is_some_and(|m| !m.is_empty()),
+            "a rejection must name the reason: {body:?}"
+        );
+    }
+
+    /// The cookie parser finds the session cookie in the header shapes a browser actually sends,
+    /// and still finds it next to a segment `Cookie::decode` rejects.
+    #[test]
+    fn the_session_cookie_is_found_whatever_the_header_shape() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "cookie",
+            HeaderValue::from_static("seahub-session=first; sfcsrftoken=x"),
+        );
+        assert_eq!(
+            cookie_value(&headers, "seahub-session").as_deref(),
+            Some("first")
+        );
+
+        // A segment without `=` makes the strict decoder reject the whole header; the scan still
+        // finds the session cookie, so a malformed neighbour does not log the browser out.
+        headers.insert(
+            "cookie",
+            HeaderValue::from_static("garbage; seahub-session=plain"),
+        );
+        assert_eq!(
+            cookie_value(&headers, "seahub-session").as_deref(),
+            Some("plain")
+        );
+
+        // Split across two headers, as a request that accumulated cookies can be.
+        let mut headers = HeaderMap::new();
+        headers.append("cookie", HeaderValue::from_static("a=1"));
+        headers.append("cookie", HeaderValue::from_static("seahub-session=second"));
+        assert_eq!(
+            cookie_value(&headers, "seahub-session").as_deref(),
+            Some("second")
+        );
+
+        // A cookie whose name merely ends with the one asked for is not a match.
+        let mut headers = HeaderMap::new();
+        headers.insert("cookie", HeaderValue::from_static("xseahub-session=nope"));
+        assert_eq!(cookie_value(&headers, "seahub-session"), None);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("cookie", HeaderValue::from_static("other=1"));
+        assert_eq!(cookie_value(&headers, "seahub-session"), None);
+    }
 
     const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
     const OTHER_REPO: &str = "11111111-1111-1111-1111-111111111111";

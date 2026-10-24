@@ -260,6 +260,13 @@ async fn test_ping_invalid_token() {
         .ping("invalid_token_40chars____________________")
         .await;
     assert_eq!(resp.status(), 401);
+    // A rejected API request answers with the same error document as every other endpoint; an
+    // empty body left clients that show the server's message with nothing to show.
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error_msg"].as_str().is_some_and(|m| !m.is_empty()),
+        "a 401 must name the reason: {body:?}"
+    );
 }
 
 fn totp_secret() -> &'static str {

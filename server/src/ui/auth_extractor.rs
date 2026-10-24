@@ -5,10 +5,9 @@
 /// instead of 401, so browsers see the login page rather than a raw error.
 use axum::{
     extract::FromRequestParts,
-    http::{HeaderMap, header, request::Parts},
+    http::{HeaderMap, request::Parts},
     response::{IntoResponse, Redirect, Response},
 };
-use axum_extra::headers::{Cookie, Header};
 use std::sync::Arc;
 
 use crate::AppState;
@@ -54,10 +53,11 @@ impl FromRequestParts<Arc<AppState>> for WebUser {
 
 /// The `seahub-session` cookie from a request's headers, if it carries one.
 /// Shared with the error-page middleware, which only has a clone of the headers.
+///
+/// The parser itself lives beside the API extractor so the two surfaces cannot disagree about
+/// which request carries a session.
 pub fn session_cookie(headers: &HeaderMap) -> Option<String> {
-    let mut values = headers.get_all(header::COOKIE).iter();
-    let cookie = Cookie::decode(&mut values).ok()?;
-    cookie.get("seahub-session").map(str::to_string)
+    crate::middleware::auth::session_cookie_value(headers)
 }
 
 impl WebUser {

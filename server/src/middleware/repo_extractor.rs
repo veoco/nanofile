@@ -8,12 +8,12 @@ use axum::http::request::Parts;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::{AuthRejection, AuthUser};
 use axum::http::StatusCode;
 use base::error::AppError;
 
-fn auth_rejection_to_app_error(status: StatusCode) -> AppError {
-    match status {
+fn auth_rejection_to_app_error(rejection: AuthRejection) -> AppError {
+    match rejection.status() {
         StatusCode::FORBIDDEN => AppError::Forbidden,
         _ => AppError::Unauthorized,
     }
