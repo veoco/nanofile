@@ -112,20 +112,7 @@ impl LoginRateLimiter {
     /// Evict the least recently active keys once [`MAX_ATTEMPT_KEYS`] is exceeded, so the
     /// common path stays a couple of hash operations.
     fn shrink_attempts(map: &mut HashMap<String, Vec<i64>>) {
-        let Some(excess) = map.len().checked_sub(MAX_ATTEMPT_KEYS) else {
-            return;
-        };
-        if excess == 0 {
-            return;
-        }
-        let mut by_age: Vec<(i64, String)> = map
-            .iter()
-            .map(|(key, ts)| (ts.iter().copied().max().unwrap_or(i64::MIN), key.clone()))
-            .collect();
-        by_age.sort_unstable();
-        for (_, key) in by_age.into_iter().take(excess) {
-            map.remove(&key);
-        }
+        super::evict_oldest(map, MAX_ATTEMPT_KEYS);
     }
 
     /// Record a failed login attempt for the given key.
