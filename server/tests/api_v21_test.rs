@@ -886,3 +886,41 @@ async fn test_v21_dir_recursive_invalid_params() {
         .await;
     assert_eq!(resp.status(), 400);
 }
+
+/// `/api/v2.1/search-file/` collects the whole budgeted match set, not one page of it: it used to
+/// ask the search service for a "page" and then discard the pagination, which clamped the result at
+/// the 100-entry page size instead of the 200-entry search budget.
+#[tokio::test]
+async fn test_search_file_returns_more_than_one_page_of_matches() {
+    let f = TestFixture::new().await;
+
+    // One sync commit carrying every file, rather than 120 uploads and 120 commits.
+    let names: Vec<String> = (0..120).map(|i| format!("bulk-{i:03}.txt")).collect();
+    let entries: Vec<common::SyncFileSpec<'_>> = names
+        .iter()
+        .map(|name| (name.as_str(), b"bulk\n".as_slice(), 0o100644))
+        .collect();
+    common::sync_commit(&f.client, &f.sync_token, &f.repo_id, &entries, &[], None).await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/search-file/?repo_id={}&q=bulk-", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let data = body["data"].as_array().expect("data must be an array");
+    assert_eq!(
+        data.len(),
+        120,
+        "search-file must use the search budget, not one page of it"
+    );
+    assert!(
+        data.iter()
+            .any(|entry| entry["path"].as_str() == Some("/bulk-000.txt")),
+        "every match must be reported: {} entries",
+        data.len()
+    );
+}

@@ -632,10 +632,11 @@ async fn test_download_file_returns_content() {
     let body = resp.text().await.unwrap();
     assert_eq!(body, "Download test content", "should return file content");
 
-    // Conditional revalidation → 304 without re-sending the body.
+    // Conditional revalidation → 304 without re-sending the body, but with the validator the
+    // client matched.
     let resp = client
         .get(&url)
-        .header("If-None-Match", etag)
+        .header("If-None-Match", etag.as_str())
         .send()
         .await
         .unwrap();
@@ -643,6 +644,11 @@ async fn test_download_file_returns_content() {
         resp.status(),
         304,
         "matching If-None-Match should return 304"
+    );
+    assert_eq!(
+        resp.headers().get("etag").and_then(|v| v.to_str().ok()),
+        Some(etag.as_str()),
+        "a 304 must repeat the validator"
     );
 }
 
@@ -1616,5 +1622,68 @@ async fn test_left_panel_reflects_repo_changes() {
     assert!(
         !body.contains(&format!("data-repo-id=\"{}\"", second_id)),
         "deleted repo must disappear from the left panel"
+    );
+}
+
+/// The web page and `/api2/search/` must report the same hits: they used to be two copies of the
+/// same pipeline, which is how the page and the JSON endpoints drifted apart.
+#[tokio::test]
+async fn test_search_page_and_api_report_the_same_hits() {
+    let fixture = TestFixture::new().await;
+    let client = login_client(&fixture).await;
+
+    for name in ["parity-one.txt", "parity-two.txt"] {
+        let resp = fixture
+            .client
+            .upload_file(&fixture.api_token, &fixture.repo_id, "/", name, b"x")
+            .await;
+        assert_eq!(resp.status(), 200, "upload {name} failed");
+    }
+
+    let body = client
+        .get(format!("{}/search/?q=parity", fixture.server.base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    // The template marks each row's path slot with `data-f="path"`.
+    let mut from_page: Vec<String> = body
+        .match_indices("data-f=\"path\">")
+        .filter_map(|(index, marker)| {
+            body[index + marker.len()..]
+                .split('<')
+                .next()
+                .map(|path| path.trim().to_string())
+        })
+        .collect();
+    from_page.sort();
+
+    let resp = fixture
+        .client
+        .get(
+            "/api2/search/?q=parity&per_page=20&page=1",
+            Some(&fixture.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let json: serde_json::Value = resp.json().await.unwrap();
+    let mut from_api: Vec<String> = json["results"]
+        .as_array()
+        .expect("results must be an array")
+        .iter()
+        .filter_map(|hit| hit["fullpath"].as_str().map(str::to_string))
+        .collect();
+    from_api.sort();
+
+    assert_eq!(
+        from_page, from_api,
+        "the web page and the JSON endpoint disagree on the hits"
+    );
+    assert_eq!(
+        from_page,
+        vec!["/parity-one.txt".to_string(), "/parity-two.txt".to_string()],
+        "both surfaces must report the uploaded files"
     );
 }
