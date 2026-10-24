@@ -265,7 +265,16 @@ impl IntoResponse for AuthRejection {
             StatusCode::FORBIDDEN => "You do not have permission to perform this action.",
             _ => "Internal server error",
         };
-        (status, Json(serde_json::json!({ "error_msg": message }))).into_response()
+        // Both spellings on purpose: seahub's DRF layer answers an authentication
+        // failure with `{"detail": …}` while its functional errors use `{"error_msg":
+        // …}`, and every official client reads `error_msg` at least somewhere
+        // (`seahub/api2/authentication.py`, `seafile-client`'s requests). Emitting the
+        // same text under both keys is a superset of either shape.
+        (
+            status,
+            Json(serde_json::json!({ "detail": message, "error_msg": message })),
+        )
+            .into_response()
     }
 }
 

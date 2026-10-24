@@ -261,11 +261,18 @@ async fn test_ping_invalid_token() {
         .await;
     assert_eq!(resp.status(), 401);
     // A rejected API request answers with the same error document as every other endpoint; an
-    // empty body left clients that show the server's message with nothing to show.
+    // empty body left clients that show the server's message with nothing to show. `detail` is
+    // seahub's DRF spelling for an authentication failure, `error_msg` is what the official
+    // clients read, so both carry the same text.
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(
-        body["error_msg"].as_str().is_some_and(|m| !m.is_empty()),
-        "a 401 must name the reason: {body:?}"
+    let error_msg = body["error_msg"]
+        .as_str()
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| panic!("a 401 must name the reason: {body:?}"));
+    assert_eq!(
+        body["detail"].as_str(),
+        Some(error_msg),
+        "seahub spells an auth failure as `detail`: {body:?}"
     );
 }
 
