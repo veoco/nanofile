@@ -2,20 +2,7 @@
 
 This page compares every operation in Seafile's official API reference with what Nanofile serves. It answers two questions: which official endpoints exist here, and which endpoints exist here that the official reference never mentions.
 
-The baseline is the upstream reference **v13.0** (the version the site serves by default), fetched on **2026-10-24**: 304 operations across five sections. Upstream's `haiwen/seahub` at `59e5b84` was used to judge whether an endpoint exists server-side but is missing from the reference.
-
-## How this comparison was produced {#sources}
-
-Sources and revisions:
-
-| Source | Revision | What it anchors |
-| --- | --- | --- |
-| [Seafile API reference](https://seafile-api.readme.io/reference/introduction) | v13.0, 2026-10-24 | The 304 operations; each page embeds the operation's OpenAPI definition, which supplied the exact method and path. |
-| [llms.txt](https://seafile-api.readme.io/llms.txt) | same snapshot | The section and group order this page mirrors. |
-| `haiwen/seahub` | `59e5b84` | `urls.py` and `api2/urls.py`: whether an endpoint exists upstream outside the reference. |
-| `server/src/domain/capability.rs` | `ROUTES` | The 150 classified method/path pairs Nanofile serves. |
-
-Each official operation was matched to a local route by method and by path template (path parameter names ignored). A match is a starting point, not a verdict: the response and behaviour were then checked in the handler, and every difference is recorded below. Operations with no local route are `Missing` unless a differently-shaped local API covers the same job, which is `Differs`.
+The baseline is the upstream reference **v13.0** (the version the site serves by default), fetched on **2026-10-24**: 304 operations across five sections.
 
 ## Legend {#legend}
 
@@ -755,10 +742,7 @@ Route-level rows cannot capture everything. These differences apply across the s
 - **WebDAV.** It lives at `/dav/{repo_id}/` (not `/seafdav`), takes an email plus a WebDAV API key as Basic credentials, refuses encrypted libraries with `403`, and does not store properties or enforce locks.
 - **Notification.** `/notification` speaks the Seafile notification protocol with per-subscription JWTs; it is not part of the Web API reference.
 - **No user-to-user sharing.** There are no shares to users or groups, no per-folder permissions, no comments, wikis, invitations, snapshot labels, OCR or face recognition. Those official groups are `Missing` above.
+
 ## WebDAV {#webdav}
 
 WebDAV is not part of Seafile's Web API reference. Nanofile's surface is documented in [WebDAV](/reference/api/webdav); the deliberate differences are authentication (WebDAV key, not the account password), the `/dav/{repo_id}/` path, the refusal to serve encrypted libraries, and the no-op `PROPPATCH`/`LOCK`.
-
-## Keeping this page current {#maintenance}
-
-To refresh the comparison, fetch `https://seafile-api.readme.io/llms.txt` (it lists every operation page and its group), fetch each `<page>.md` — every one embeds the operation's OpenAPI JSON — extract `paths`, and diff the method/path list against `route_inventory()` in `server/src/domain/capability.rs`. Then re-check the `Differs` rows against the handlers: the notes are the part that cannot be generated. The upstream versions above are pinned; update them only when deliberately re-baselining.

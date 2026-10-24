@@ -1,21 +1,8 @@
 # 与 Seafile API 的兼容性
 
-# 本页把 Seafile 官方 API 参考中的每个操作与 Nanofile 实际提供的接口逐项对照，回答两个问题：官方接口哪些这里有，以及这里有哪些官方参考从未提到的接口。
+本页把 Seafile 官方 API 参考中的每个操作与 Nanofile 实际提供的接口逐项对照，回答两个问题：官方接口哪些这里有，以及这里有哪些官方参考从未提到的接口。
 
-# 基线是上游参考的 **v13.0**（站点默认版本），抓取于 **2026-10-24**：五个分节共 304 个操作。另以 `haiwen/seahub` `59e5b84` 判断某个接口是否存在于服务端、只是参考里没写。
-
-## 对照是怎么做出来的 {#sources}
-
-来源与版本：
-
-| 来源 | 版本 | 用来核对什么 |
-| --- | --- | --- |
-| [Seafile API 参考](https://seafile-api.readme.io/reference/introduction) | v13.0，2026-10-24 | 304 个操作；每页内嵌该操作的 OpenAPI 定义，提供精确的 method 与 path。 |
-| [llms.txt](https://seafile-api.readme.io/llms.txt) | 同一次快照 | 本页照搬的分节与分组顺序。 |
-| `haiwen/seahub` | `59e5b84` | `urls.py` 与 `api2/urls.py`：接口是否存在于上游、只是参考没写。 |
-| `server/src/domain/capability.rs` | `ROUTES` | Nanofile 提供的 150 个已分类 method/path。 |
-
-官方操作按 method 与路径模板（忽略参数名）匹配本地路由。匹配只是起点，不是结论：随后在 handler 里核对响应与行为，差异逐条记录在下面。没有本地路由的操作标为 `未实现`；若存在形状不同但完成同一件事的本地接口，标为 `有差异`。
+基线是上游参考的 **v13.0**（站点默认版本），抓取于 **2026-10-24**：五个分节共 304 个操作。
 
 ## 图例 {#legend}
 
@@ -759,7 +746,3 @@ Nanofile 没有 Wiki。
 ## WebDAV {#webdav}
 
 WebDAV 不在 Seafile 的 Web API 参考里。Nanofile 的接口面见 [WebDAV](/zh/reference/api/webdav)；刻意保留的差异是认证方式（WebDAV 密钥而不是账号密码）、`/dav/{repo_id}/` 路径、拒绝加密资料库，以及空实现的 `PROPPATCH`/`LOCK`。
-
-## 如何更新本页 {#maintenance}
-
-要刷新对照：抓 `https://seafile-api.readme.io/llms.txt`（列出每个操作页及其分组），再抓每个 `<page>.md`（每页内嵌该操作的 OpenAPI JSON），取出 `paths`，把 method/path 列表与 `server/src/domain/capability.rs` 里的 `route_inventory()` 做差集。然后逐条复核 `有差异` 的行：说明部分无法自动生成。上面的上游版本是固定的，只有刻意重定基线时才更新。

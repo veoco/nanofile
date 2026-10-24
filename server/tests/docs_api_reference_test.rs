@@ -3,8 +3,9 @@
 //! The reference pages under `docs/reference/api/` are prose, but their endpoint
 //! markers and anchors are a contract: every classified route must appear once,
 //! no documented `/api2/` or `/api/v2.1/` route may be invented, the English and
-//! Chinese pages must describe the same endpoints, and every cross-link must land
-//! on an existing explicit anchor. This test is the guard for all four.
+//! Chinese pages must describe the same endpoints, every cross-link must land on
+//! an existing explicit anchor, and a page must have exactly one level-one
+//! heading. This test is the guard for all five.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -238,4 +239,40 @@ fn transfer_endpoints_are_documented() {
         missing.is_empty(),
         "these transfer endpoints lost their documentation: {missing:?}"
     );
+}
+
+#[test]
+fn every_page_has_a_single_title() {
+    // The Chinese comparison page once had its intro paragraphs written as `#`
+    // headings, so the top of the page read as three long titles. Body text
+    // stays body text: one level-one heading, at the top, per page. Lines in
+    // fenced code blocks are ignored so a `#` comment cannot trip this.
+    let root = repo_root();
+    for locale in ["", "zh"] {
+        for (name, text) in pages(&api_dir(&root, locale)) {
+            let title = text
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or_else(|| panic!("{locale}/{name}.md is empty"));
+            assert!(
+                title.starts_with("# "),
+                "{locale}/{name}.md must open with its level-one heading"
+            );
+            let mut fenced = false;
+            let mut extra = Vec::new();
+            for line in text.lines() {
+                if line.trim_start().starts_with("```") {
+                    fenced = !fenced;
+                    continue;
+                }
+                if !fenced && line != title && line.starts_with("# ") {
+                    extra.push(line);
+                }
+            }
+            assert!(
+                extra.is_empty(),
+                "{locale}/{name}.md has level-one headings beyond its title: {extra:?}"
+            );
+        }
+    }
 }
