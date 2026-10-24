@@ -393,6 +393,9 @@ pub struct FileDownloadParams {
     /// Strong validator (e.g. `"<sha1-of-blocks>"`) sent as `ETag` so browsers
     /// can revalidate with `If-None-Match` instead of re-downloading the body.
     pub etag: Option<String>,
+    /// Answer a `HEAD`: the status and every header a `GET` would carry, with no body and no
+    /// block reads. WebDAV clients compare `HEAD` against `GET`, so the two must agree.
+    pub head_only: bool,
 }
 
 /// Strong validator for a file body: identical content always yields the same ETag.
@@ -404,6 +407,18 @@ pub fn blocks_etag(block_ids: &[String]) -> String {
         hasher.update(b"|");
     }
     format!("\"{}\"", hex::encode(hasher.finalize()))
+}
+
+/// Whether a request's `If-None-Match` selects `etag` (`*` or a comma-separated list).
+pub fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {
+    match headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    {
+        Some("*") => true,
+        Some(value) => value.split(',').any(|candidate| candidate.trim() == etag),
+        None => false,
+    }
 }
 
 /// Build a streaming file response honoring a single `Range` request: a satisfiable
@@ -448,6 +463,10 @@ pub fn file_download_response(p: FileDownloadParams) -> Response {
                     HeaderValue::from_str(&(end - start + 1).to_string())
                         .expect("Content-Length header value must be valid ASCII"),
                 );
+                // A HEAD answers with the same status and headers but reads no blocks.
+                if p.head_only {
+                    return (StatusCode::PARTIAL_CONTENT, headers).into_response();
+                }
                 let stream =
                     range_stream(p.repo_id, p.block_ids, p.block_store, p.enc_key, start, end);
                 return (
@@ -476,6 +495,9 @@ pub fn file_download_response(p: FileDownloadParams) -> Response {
         HeaderValue::from_str(&p.total_size.to_string())
             .expect("Content-Length header value must be valid ASCII"),
     );
+    if p.head_only {
+        return (StatusCode::OK, headers).into_response();
+    }
     let stream = stream_blocks(p.repo_id, p.block_ids, p.block_store, p.enc_key);
     (StatusCode::OK, headers, Body::from_stream(stream)).into_response()
 }
@@ -759,6 +781,7 @@ mod tests {
             content_disposition: None,
             range_header: Some(format!("bytes={start}-")),
             etag: None,
+            head_only: false,
         });
         assert_eq!(resp.status(), axum::http::StatusCode::PARTIAL_CONTENT);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)

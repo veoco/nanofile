@@ -64,8 +64,8 @@ async fn route_request(
         "PROPFIND" => {
             crate::webdav::propfind::propfind(state, auth, webdav_path, &headers, body, &head).await
         }
-        "GET" => get_handler(&state, &auth, &webdav_path, false, &head).await,
-        "HEAD" => get_handler(&state, &auth, &webdav_path, true, &head).await,
+        "GET" => get_handler(&state, &auth, &webdav_path, false, &head, &headers).await,
+        "HEAD" => get_handler(&state, &auth, &webdav_path, true, &head, &headers).await,
         "PUT" => put_handler(&state, &auth, &webdav_path, &headers, body, &head).await,
         "MKCOL" => mkcol_handler(&state, &auth, &webdav_path, &head).await,
         "DELETE" => delete_handler(&state, &auth, &webdav_path, &head).await,
@@ -84,9 +84,10 @@ async fn get_handler(
     path: &str,
     is_head: bool,
     head: &HeadContext,
+    headers: &HeaderMap,
 ) -> Response {
     // Resolve fs_id + metadata in one tree walk, then read the fs_object directly.
-    let (fs_id, size) = match crate::fs::core::resolve_file_entry_with_head(
+    let fs_id = match crate::fs::core::resolve_file_entry_with_head(
         &state.repos,
         &auth.repo_id,
         &head.root_id,
@@ -95,7 +96,7 @@ async fn get_handler(
     .await
     {
         Ok(Some((_, true, _, _))) => return StatusCode::METHOD_NOT_ALLOWED.into_response(),
-        Ok(Some((fs_id, false, size, _))) => (fs_id, size),
+        Ok(Some((fs_id, false, _, _))) => fs_id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
@@ -108,27 +109,40 @@ async fn get_handler(
             Err(_) => return StatusCode::NOT_FOUND.into_response(),
         };
     let block_ids = file_data.block_ids;
+    // The response body comes from the block list, so its size is authoritative; the tree's
+    // `size` is only what the entry recorded.
+    let total_size = file_data.size.max(0) as u64;
 
     let filename = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("download");
-    let mime = crate::ui::files::mime_guess(filename);
 
-    let mut resp_headers = HeaderMap::new();
-    resp_headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
-    resp_headers.insert(
-        header::CONTENT_LENGTH,
-        HeaderValue::from_str(&size.to_string()).unwrap(),
-    );
-
-    if is_head {
-        return (StatusCode::OK, resp_headers).into_response();
+    // A strong validator, so a client can revalidate instead of re-downloading, and `Range`
+    // works for media players and resumable clients. Both come from the one download builder the
+    // web endpoints use, so `ETag`/`Accept-Ranges`/`Content-Range` cannot drift from theirs.
+    // Encrypted libraries never reach here: `WebDavAuth` refuses them, so no key is passed.
+    let etag = crate::fs::core::download::blocks_etag(&block_ids);
+    let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    if range_header.is_none() && crate::fs::core::download::if_none_match(headers, &etag) {
+        let mut resp = StatusCode::NOT_MODIFIED.into_response();
+        if let Ok(value) = HeaderValue::from_str(&etag) {
+            resp.headers_mut().insert(header::ETAG, value);
+        }
+        return resp;
     }
-    let stream = crate::fs::core::download::stream_blocks(
-        auth.repo_id.clone(),
-        block_ids,
-        state.block_store.clone(),
-        None,
-    );
-    (StatusCode::OK, resp_headers, Body::from_stream(stream)).into_response()
+
+    crate::fs::core::download::file_download_response(
+        crate::fs::core::download::FileDownloadParams {
+            repo_id: auth.repo_id.clone(),
+            block_ids,
+            block_store: state.block_store.clone(),
+            enc_key: None,
+            total_size,
+            content_type: crate::ui::files::mime_guess(filename),
+            content_disposition: None,
+            range_header: range_header.map(str::to_string),
+            etag: Some(etag),
+            head_only: is_head,
+        },
+    )
 }
 
 async fn put_handler(

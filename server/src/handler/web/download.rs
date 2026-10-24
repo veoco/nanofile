@@ -169,28 +169,13 @@ pub async fn repo_file_download(
         .to_string();
 
     // Strong ETag: the block ids are content-addressed, so identical content
-    // always yields the same validator and any edit changes it. Hash them
-    // incrementally rather than joining them into one large string.
-    use sha1::Digest;
-    let mut hasher = sha1::Sha1::new();
-    for id in &block_ids {
-        hasher.update(id.as_bytes());
-        hasher.update(b"|");
-    }
-    let etag = format!("\"{}\"", hex::encode(hasher.finalize()));
+    // always yields the same validator and any edit changes it.
+    let etag = crate::fs::core::download::blocks_etag(&block_ids);
 
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
 
     // A matching validator with no Range means 304, skipping the block reads.
-    let if_none_match = headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok());
-    let matches = match if_none_match {
-        Some("*") => true,
-        Some(v) => v.split(',').any(|t| t.trim() == etag),
-        None => false,
-    };
-    if matches && range_header.is_none() {
+    if range_header.is_none() && crate::fs::core::download::if_none_match(&headers, &etag) {
         return Ok(StatusCode::NOT_MODIFIED.into_response());
     }
 
@@ -231,6 +216,7 @@ pub async fn repo_file_download(
             content_disposition,
             range_header: range_header.map(|s| s.to_string()),
             etag: Some(etag),
+            head_only: false,
         },
     ))
 }
@@ -285,6 +271,7 @@ pub async fn download_api(
             content_disposition: Some(disposition),
             range_header: range_header.map(|s| s.to_string()),
             etag: Some(etag),
+            head_only: false,
         },
     ))
 }

@@ -445,6 +445,167 @@ async fn test_put_overwrite_returns_204() {
     assert_eq!(resp.bytes().await.unwrap().as_ref(), b"two");
 }
 
+/// A WebDAV GET serves a single range, advertises that it can, and carries a strong validator —
+/// without them a media player seeking or a resumable client had to re-download the whole file.
+#[tokio::test]
+async fn test_get_serves_ranges_and_validators() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+    let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
+    let data = b"hello webdav webdav";
+    dav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/range.txt",
+        &f.email,
+        &key,
+        data,
+    )
+    .await;
+
+    let resp = dav_get(&client, base, &f.repo_id, "/range.txt", &f.email, &key).await;
+    assert_eq!(resp.status(), 200);
+    let etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .expect("a WebDAV GET must carry an ETag");
+    assert_eq!(
+        resp.headers()
+            .get("accept-ranges")
+            .map(|v| v.to_str().unwrap()),
+        Some("bytes")
+    );
+
+    let m = Method::from_bytes(b"GET").unwrap();
+    let resp = client
+        .request(m, dav_url(base, &f.repo_id, "/range.txt"))
+        .basic_auth(&f.email, Some(&key))
+        .header("Range", "bytes=0-4")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 206);
+    assert_eq!(
+        resp.headers()
+            .get("content-range")
+            .map(|v| v.to_str().unwrap()),
+        Some(format!("bytes 0-4/{len}", len = data.len()).as_str())
+    );
+    assert_eq!(
+        resp.headers().get("etag").map(|v| v.to_str().unwrap()),
+        Some(etag.as_str())
+    );
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"hello");
+
+    let m = Method::from_bytes(b"GET").unwrap();
+    let resp = client
+        .request(m, dav_url(base, &f.repo_id, "/range.txt"))
+        .basic_auth(&f.email, Some(&key))
+        .header("Range", "bytes=999-")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 416);
+    assert_eq!(
+        resp.headers()
+            .get("content-range")
+            .map(|v| v.to_str().unwrap()),
+        Some(format!("bytes */{}", data.len()).as_str())
+    );
+}
+
+/// A matching `If-None-Match` with no `Range` is a 304, so revalidation skips the body.
+#[tokio::test]
+async fn test_get_revalidates_with_etag() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+    let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
+    dav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/etag.txt",
+        &f.email,
+        &key,
+        b"cached",
+    )
+    .await;
+
+    let resp = dav_get(&client, base, &f.repo_id, "/etag.txt", &f.email, &key).await;
+    let etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .unwrap()
+        .to_string();
+
+    let m = Method::from_bytes(b"GET").unwrap();
+    let resp = client
+        .request(m, dav_url(base, &f.repo_id, "/etag.txt"))
+        .basic_auth(&f.email, Some(&key))
+        .header("If-None-Match", etag.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 304);
+    assert_eq!(
+        resp.headers().get("etag").map(|v| v.to_str().unwrap()),
+        Some(etag.as_str())
+    );
+    assert_eq!(resp.bytes().await.unwrap().len(), 0);
+}
+
+/// `HEAD` answers with the headers a `GET` carries — same length, validator and range support —
+/// and no body.
+#[tokio::test]
+async fn test_head_matches_get_headers() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+    let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
+    let data = b"head test body";
+    dav_put(&client, base, &f.repo_id, "/head.txt", &f.email, &key, data).await;
+
+    let get = dav_get(&client, base, &f.repo_id, "/head.txt", &f.email, &key).await;
+    let get_etag = get
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .unwrap()
+        .to_string();
+    let head = dav(
+        &client,
+        "HEAD",
+        &dav_url(base, &f.repo_id, "/head.txt"),
+        &f.email,
+        &key,
+    )
+    .await;
+    assert_eq!(head.status(), 200);
+    assert_eq!(
+        head.headers()
+            .get("content-length")
+            .map(|v| v.to_str().unwrap()),
+        Some(data.len().to_string().as_str())
+    );
+    assert_eq!(
+        head.headers().get("etag").map(|v| v.to_str().unwrap()),
+        Some(get_etag.as_str())
+    );
+    assert_eq!(
+        head.headers()
+            .get("accept-ranges")
+            .map(|v| v.to_str().unwrap()),
+        Some("bytes")
+    );
+    assert_eq!(head.bytes().await.unwrap().len(), 0);
+}
+
 #[tokio::test]
 async fn test_put_missing_parent_conflict() {
     let f = TestFixture::new().await;
@@ -504,6 +665,69 @@ async fn test_mkcol_and_propfind() {
     let body = resp.text().await.unwrap();
     assert!(body.contains("D:multistatus"));
     assert!(body.contains("folder"));
+}
+
+/// The reserved `_Internal` tree is hidden from PROPFIND at every depth — an unbounded walk
+/// would otherwise list the server's own bookkeeping next to the user's files.
+#[tokio::test]
+async fn test_propfind_hides_reserved_internal() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+    let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
+
+    dav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/keep.txt",
+        &f.email,
+        &key,
+        b"keep",
+    )
+    .await;
+    let resp = dav(
+        &client,
+        "MKCOL",
+        &dav_url(base, &f.repo_id, "/_Internal"),
+        &f.email,
+        &key,
+    )
+    .await;
+    assert_eq!(resp.status(), 201);
+    dav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/_Internal/bookkeeping.txt",
+        &f.email,
+        &key,
+        b"internal",
+    )
+    .await;
+
+    let m = Method::from_bytes(b"PROPFIND").unwrap();
+    let resp = client
+        .request(m, dav_url(base, &f.repo_id, "/"))
+        .basic_auth(&f.email, Some(&key))
+        .header("Depth", "infinity")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 207);
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("keep.txt"),
+        "ordinary files must still be listed: {body}"
+    );
+    assert!(
+        !body.contains("_Internal"),
+        "the reserved tree leaked into the multistatus: {body}"
+    );
+    assert!(
+        !body.contains("bookkeeping.txt"),
+        "a child of the reserved tree leaked into the multistatus: {body}"
+    );
 }
 
 #[tokio::test]
