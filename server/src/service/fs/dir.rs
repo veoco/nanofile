@@ -17,12 +17,58 @@ pub(crate) const RESERVED_INTERNAL_DIR: &str = "_Internal";
 
 /// Whether an entry belongs to seahub's reserved `_Internal` tree.
 ///
-/// The name is hidden from every listing a user can reach — the plain listing, the recursive
-/// one, WebDAV and the `reloaddir` responses — so a rename/inspection of the rest of the tree
-/// never reveals the server's own bookkeeping. Both listing paths share this predicate rather
-/// than each spelling the comparison, which is how the recursive one drifted and leaked it.
+/// nanofile has no wiki/seadoc tree, so `_Internal` is never part of what a user should see;
+/// it is hidden from the plain listing, the recursive one, WebDAV and the `reloaddir`
+/// responses. Upstream only skips it in `get_recursive_file_list` (the zip/index walk, and
+/// there only at the repo root, together with `images`), so this is deliberately stricter
+/// than seahub — the one place a client could tell is a library migrated from seahub.
+/// Both listing paths share this predicate rather than each spelling the comparison, which
+/// is how the recursive one drifted and leaked it.
 pub(crate) fn is_reserved_internal(name: &str) -> bool {
     name == RESERVED_INTERNAL_DIR
+}
+
+/// Fill the display fields seahub computes for file entries of a listing: the modifier's
+/// nickname and contact email (`get_dir_entrys_by_id` / `get_dir_file_info_list` in
+/// `seahub/api2/views.py` and `seahub/api2/endpoints/dir.py`).
+///
+/// One batched lookup per listing; directories carry no modifier. Callers that already
+/// ran it (the recursive walk) must not call it twice.
+pub(crate) async fn fill_modifier_names(
+    repos: &Repositories,
+    entries: &mut [DirEntry],
+) -> Result<(), AppError> {
+    let emails: Vec<String> = entries
+        .iter()
+        .filter(|e| e.entry_type == "file" && !e.modifier.is_empty())
+        .map(|e| e.modifier.clone())
+        .collect();
+    if emails.is_empty() {
+        return Ok(());
+    }
+
+    let nickname_by_email: HashMap<String, String> = repos
+        .user
+        .find_by_emails(&emails)
+        .await?
+        .into_iter()
+        .map(|u| (u.email.clone(), u.nickname()))
+        .collect();
+
+    for entry in entries
+        .iter_mut()
+        .filter(|e| e.entry_type == "file" && !e.modifier.is_empty())
+    {
+        let fallback = entry.modifier.split('@').next().unwrap_or("").to_string();
+        entry.modifier_name = Some(
+            nickname_by_email
+                .get(&entry.modifier)
+                .cloned()
+                .unwrap_or(fallback),
+        );
+        entry.modifier_contact_email = Some(entry.modifier.clone());
+    }
+    Ok(())
 }
 
 /// List directory entries by traversing the FS object tree from the head commit.
@@ -159,7 +205,6 @@ pub(crate) async fn list_dir_recursive_from_root(
     // Level frontier: each level reads all its directories with one batched `IN` query.
     let mut frontier: Vec<(String, String)> = vec![(dir_id.clone(), path.to_string())];
     let mut entries: Vec<DirEntry> = Vec::new();
-    let mut modifier_emails: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
@@ -213,10 +258,6 @@ pub(crate) async fn list_dir_recursive_from_root(
                     return Ok((dir_id, entries, true));
                 }
 
-                if !is_dir && !modifier_email.is_empty() {
-                    modifier_emails.insert(modifier_email);
-                }
-
                 if is_dir {
                     let child_path = if parent_path == "/" {
                         format!("/{}", dirent.name)
@@ -232,26 +273,7 @@ pub(crate) async fn list_dir_recursive_from_root(
     }
 
     if include_modifier_names {
-        let emails: Vec<String> = modifier_emails.into_iter().collect();
-        let nickname_by_email: std::collections::HashMap<String, String> = repos
-            .user
-            .find_by_emails(&emails)
-            .await?
-            .into_iter()
-            .map(|u| (u.email.clone(), u.nickname()))
-            .collect();
-
-        for entry in &mut entries {
-            if entry.entry_type == "file" && !entry.modifier.is_empty() {
-                let fallback = entry.modifier.split('@').next().unwrap_or("").to_string();
-                let nickname = nickname_by_email
-                    .get(&entry.modifier)
-                    .cloned()
-                    .unwrap_or(fallback);
-                entry.modifier_name = Some(nickname);
-                entry.modifier_contact_email = Some(entry.modifier.clone());
-            }
-        }
+        fill_modifier_names(repos, &mut entries).await?;
     }
 
     Ok((dir_id, entries, false))
@@ -796,22 +818,22 @@ impl DirService {
     }
 
     /// Build the v21 directory listing response data (non-recursive), including starred info.
+    ///
+    /// `permission` is the caller's effective permission on the repo (`"rw"`/`"r"`), the same
+    /// string seahub derives with `check_folder_permission`: it is the body's `user_perm` and
+    /// every entry's `permission`, because nanofile has no per-folder shares. Both mobile
+    /// clients use it to decide whether a folder is editable.
     pub async fn build_list_dir_v21_json(
         &self,
         repo_id: &str,
         path: &str,
         user_id: i32,
+        permission: &'static str,
         with_thumbnail: bool,
         entries: Vec<DirEntry>,
         dir_id: String,
     ) -> Result<serde_json::Value, AppError> {
-        let user_perm = self
-            .repos
-            .member
-            .find_by_repo_and_user(repo_id, user_id)
-            .await?
-            .map(|m| m.permission)
-            .unwrap_or_else(|| "rw".to_string());
+        let user_perm = permission;
 
         let mut dir_list: Vec<_> = Vec::new();
         let mut file_list: Vec<_> = Vec::new();
@@ -849,7 +871,7 @@ impl DirService {
                 "id": e.id,
                 "name": e.name,
                 "mtime": e.mtime,
-                "permission": e.permission,
+                "permission": permission,
                 "parent_dir": parent_dir,
                 "starred": starred_set.contains(&entry_path),
             }));
@@ -885,7 +907,7 @@ impl DirService {
                 "name": e.name,
                 "size": e.size,
                 "mtime": e.mtime,
-                "permission": e.permission,
+                "permission": permission,
                 "parent_dir": parent_dir,
                 "starred": starred_set.contains(&entry_path),
                 "modifier_email": modifier_email,
@@ -906,11 +928,14 @@ impl DirService {
     }
 
     /// Get directory detail (v21 API).
+    ///
+    /// `permission` is the caller's effective repo permission, already narrowed by the
+    /// credential ceiling (see `RepoPathRead`).
     pub async fn dir_detail(
         &self,
         repo_id: &str,
         path: &str,
-        user_id: i32,
+        permission: &'static str,
     ) -> Result<serde_json::Value, AppError> {
         let repo_record = self
             .repos
@@ -940,14 +965,6 @@ impl DirService {
             crate::fs::core::resolve_file_entry(&self.repos, repo_id, &head_commit.root_id, path)
                 .await
                 .map_err(|_| AppError::NotFound("Folder not found.".into()))?;
-
-        let permission = self
-            .repos
-            .member
-            .find_by_repo_and_user(repo_id, user_id)
-            .await?
-            .map(|m| m.permission)
-            .unwrap_or_else(|| "rw".to_string());
 
         Ok(serde_json::json!({
             "repo_id": repo_id,

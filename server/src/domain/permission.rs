@@ -107,6 +107,30 @@ pub async fn check_repo_owner(
     }
 }
 
+/// The caller's permission on the repo as seahub spells it: `"rw"` for the owner
+/// and rw members, `"r"` for any other member — the same strings seahub puts in a
+/// listing's `dir_perm` header, each entry's `permission` and v2.1's `user_perm`.
+///
+/// `Ok(None)` means the user has no membership grant, while a missing repo is
+/// `NotFound`: the query is a `repos` LEFT JOIN, so the two are distinguishable.
+pub async fn repo_permission(
+    member_repo: &dyn MemberRepository,
+    repo_id: &str,
+    user_id: i32,
+) -> Result<Option<&'static str>, AppError> {
+    let row = member_repo
+        .find_repo_owner_and_permission(repo_id, user_id)
+        .await?;
+
+    match row {
+        None => Err(AppError::NotFound("repo not found".into())),
+        Some((owner_id, _)) if owner_id == user_id => Ok(Some("rw")),
+        Some((_, Some(perm))) if perm == "rw" => Ok(Some("rw")),
+        Some((_, Some(_))) => Ok(Some("r")),
+        Some((_, None)) => Ok(None),
+    }
+}
+
 /// Check if `user_id` has read permission on the repo. The owner always has
 /// access and any member (r or rw) has access; non-members get `Forbidden`.
 pub async fn check_repo_read_permission(
@@ -114,14 +138,8 @@ pub async fn check_repo_read_permission(
     repo_id: &str,
     user_id: i32,
 ) -> Result<(), AppError> {
-    let row = member_repo
-        .find_repo_owner_and_permission(repo_id, user_id)
-        .await?;
-
-    match row {
-        None => Err(AppError::NotFound("repo not found".into())),
-        Some((owner_id, _)) if owner_id == user_id => Ok(()),
-        Some((_, Some(_))) => Ok(()), // any membership grants read access
-        _ => Err(AppError::Forbidden),
+    match repo_permission(member_repo, repo_id, user_id).await? {
+        Some(_) => Ok(()),
+        None => Err(AppError::Forbidden),
     }
 }

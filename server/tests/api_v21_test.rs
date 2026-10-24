@@ -924,3 +924,74 @@ async fn test_search_file_returns_more_than_one_page_of_matches() {
         data.len()
     );
 }
+
+/// iOS (`SeafDir.handleResponse:`) and Android (`DirentWrapperModel`) read the folder's
+/// permission from the body's `user_perm` and each entry's `permission`; a hardcoded
+/// `"rw"` made a read-only library look editable in both.
+#[tokio::test]
+async fn test_v21_dir_listing_reports_read_only_permission() {
+    let f = TestFixture::new().await;
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "readme.txt", b"x")
+        .await;
+    assert!(up.status().is_success());
+    assert_eq!(
+        f.client
+            .create_dir(&f.api_token, &f.repo_id, "/folder")
+            .await
+            .status(),
+        201
+    );
+
+    let reader = "reader@example.com";
+    let reader_id = common::create_test_user(&f.server.db, reader, "password").await;
+    common::add_repo_member(&f.server.db, &f.repo_id, reader_id, "r").await;
+    let resp = f.client.login(reader, "password").await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap();
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/dir/?p=/", f.repo_id),
+            Some(token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["user_perm"], "r");
+    let dir_id = body["dir_id"].as_str().unwrap();
+    assert_eq!(dir_id.len(), 40, "dir_id must be a SHA-1: {body}");
+    let entries = body["dirent_list"].as_array().unwrap();
+    assert!(entries.len() >= 2, "got {body}");
+    for entry in entries {
+        assert_eq!(
+            entry["permission"], "r",
+            "every entry must report the real permission: {entry}"
+        );
+    }
+}
+
+/// A headless library's v2.1 listing still needs a `dir_id` (iOS/Android keep it as
+/// the directory's oid); the empty-directory sentinel is what every other endpoint
+/// answers for such a library.
+#[tokio::test]
+async fn test_v21_headless_library_listing_uses_empty_dir_id() {
+    let f = TestFixture::new().await;
+    let repo_id = common::create_test_repo(&f.client, &f.api_token, "Headless v21").await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{repo_id}/dir/?p=/&with_thumbnail=true"),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["dir_id"], "0000000000000000000000000000000000000000");
+    assert_eq!(body["user_perm"], "rw");
+    assert_eq!(body["dirent_list"].as_array().unwrap().len(), 0);
+}

@@ -250,7 +250,7 @@ pub async fn file_post_handler(
             )
             .await?;
             if reload_requested(query.reloaddir.as_deref()) {
-                return reload_dir_response(&state, repo_id, &parent_dir_of(&path)).await;
+                return reload_dir_response(&state, repo_id, &parent_dir_of(&path), "rw").await;
             }
             return Ok(Json(serde_json::Value::String("success".to_string())).into_response());
         }
@@ -282,7 +282,7 @@ pub async fn file_post_handler(
         )
         .await?;
         if reload_requested(query.reloaddir.as_deref()) {
-            return reload_dir_response(&state, repo_id, &parent_dir).await;
+            return reload_dir_response(&state, repo_id, &parent_dir, "rw").await;
         }
         Ok(ok_json().into_response())
     } else {
@@ -300,7 +300,7 @@ pub async fn file_post_handler(
                     .create_empty_file(repo_id, &path, &access.user.email, access.user.user_id)
                     .await?;
                 if reload_requested(query.reloaddir.as_deref()) {
-                    return reload_dir_response(&state, repo_id, &parent_dir_of(&path)).await;
+                    return reload_dir_response(&state, repo_id, &parent_dir_of(&path), "rw").await;
                 }
                 Ok(ok_json().into_response())
             }
@@ -317,7 +317,7 @@ pub async fn file_post_handler(
                 )
                 .await?;
                 if reload_requested(query.reloaddir.as_deref()) {
-                    return reload_dir_response(&state, repo_id, &parent_dir_of(&path)).await;
+                    return reload_dir_response(&state, repo_id, &parent_dir_of(&path), "rw").await;
                 }
                 Ok(ok_json().into_response())
             }
@@ -336,7 +336,7 @@ pub async fn file_post_handler(
                 .await?;
                 // seahub reloads the *destination* directory after a move.
                 if reload_requested(query.reloaddir.as_deref()) {
-                    return reload_dir_response(&state, repo_id, dst_dir).await;
+                    return reload_dir_response(&state, repo_id, dst_dir, "rw").await;
                 }
                 Ok(ok_json().into_response())
             }

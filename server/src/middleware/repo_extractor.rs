@@ -24,6 +24,11 @@ fn auth_rejection_to_app_error(rejection: AuthRejection) -> AppError {
 pub struct RepoPathRead {
     pub user: AuthUser,
     pub repo_id: String,
+    /// The effective permission as seahub spells it (`"rw"` or `"r"`): the
+    /// membership grant, narrowed by the credential's library ceiling. Listings
+    /// echo it as `dir_perm` and per-entry `permission`, and the official clients
+    /// treat `"r"` as read-only.
+    pub permission: &'static str,
 }
 
 /// Authenticated user plus a checked repo write permission.
@@ -51,20 +56,32 @@ impl FromRequestParts<Arc<AppState>> for RepoPathRead {
             .await
             .map_err(|_| AppError::BadRequest("missing repo_id in path".into()))?;
 
-        crate::domain::permission::check_repo_read_permission(
+        let permission = crate::domain::permission::repo_permission(
             state.repos.member.as_ref(),
             &repo_id,
             user.user_id,
         )
-        .await?;
+        .await?
+        .ok_or(AppError::Forbidden)?;
 
         // A unified API key adds a library-scope ceiling on top of membership:
-        // the key must be bound to this library (or bound to all of them).
+        // the key must be bound to this library (or bound to all of them), and a
+        // read ceiling narrows what a listing advertises to `"r"` so a client
+        // never offers a write the next request would refuse.
         if !user.credential.allows_repo(&repo_id, false) {
             return Err(AppError::Forbidden);
         }
+        let permission = if permission == "rw" && user.credential.allows_repo(&repo_id, true) {
+            "rw"
+        } else {
+            "r"
+        };
 
-        Ok(RepoPathRead { user, repo_id })
+        Ok(RepoPathRead {
+            user,
+            repo_id,
+            permission,
+        })
     }
 }
 

@@ -616,3 +616,175 @@ async fn test_upload_link_echoes_request_host_when_site_url_is_default() {
         "upload link must echo the request host, got {url}"
     );
 }
+
+/// A read-only member's listing must report `dir_perm: r` and a per-entry
+/// `permission: r`.
+///
+/// The desktop client sets `current_readonly_ = rawHeader("dir_perm") == "r"`
+/// (`file-browser-requests.cpp`) and `SeafDirent.readonly = permission == "r"`,
+/// and Android builds its action menu from the entry permission. A hardcoded
+/// `"rw"` therefore offered writes that the server then refused with 403.
+#[tokio::test]
+async fn test_read_only_member_listing_reports_read_permission() {
+    let f = TestFixture::new().await;
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "shared.txt", b"data")
+        .await;
+    assert!(up.status().is_success());
+    assert_eq!(
+        f.client
+            .create_dir(&f.api_token, &f.repo_id, "/folder")
+            .await
+            .status(),
+        201
+    );
+
+    let reader = "reader@example.com";
+    let reader_id = common::create_test_user(&f.server.db, reader, "password").await;
+    common::add_repo_member(&f.server.db, &f.repo_id, reader_id, "r").await;
+    let resp = f.client.login(reader, "password").await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let token = body["token"].as_str().unwrap();
+
+    let resp = f.client.list_dir(token, &f.repo_id, "/").await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers().get("dir_perm").map(|v| v.to_str().unwrap()),
+        Some("r"),
+        "a read-only member must get dir_perm=r"
+    );
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(entries.len() >= 2, "got {entries:?}");
+    for entry in &entries {
+        assert_eq!(
+            entry["permission"], "r",
+            "every entry must report the real permission: {entry}"
+        );
+    }
+
+    // The owner still sees rw.
+    let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
+    assert_eq!(
+        resp.headers().get("dir_perm").map(|v| v.to_str().unwrap()),
+        Some("rw")
+    );
+}
+
+/// The legacy listing follows seahub's order: directories first, then files, each by
+/// lowercased name — not the object's stored descending-name identity order.
+#[tokio::test]
+async fn test_legacy_listing_is_dirs_first_then_files_by_name() {
+    let f = TestFixture::new().await;
+    for name in ["b.txt", "a.txt", "Z.txt"] {
+        let up = f
+            .client
+            .upload_file(&f.api_token, &f.repo_id, "/", name, b"x")
+            .await;
+        assert!(up.status().is_success(), "upload {name}");
+    }
+    assert_eq!(
+        f.client
+            .create_dir(&f.api_token, &f.repo_id, "/c_dir")
+            .await
+            .status(),
+        201
+    );
+
+    let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
+    assert_eq!(resp.status(), 200);
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let names: Vec<&str> = entries.iter().filter_map(|e| e["name"].as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["c_dir", "a.txt", "b.txt", "Z.txt"],
+        "seahub lists directories first, then files by lowercased name"
+    );
+}
+
+/// `?t=f` / `?t=d` also filter the plain listing (seahub's `request_type`).
+#[tokio::test]
+async fn test_legacy_listing_honours_type_filter() {
+    let f = TestFixture::new().await;
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "file.txt", b"x")
+        .await;
+    assert!(up.status().is_success());
+    assert_eq!(
+        f.client
+            .create_dir(&f.api_token, &f.repo_id, "/dir")
+            .await
+            .status(),
+        201
+    );
+
+    let resp = f
+        .client
+        .list_dir_with_params(&f.api_token, &f.repo_id, "/", None, Some("f"))
+        .await;
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(entries.len(), 1, "got {entries:?}");
+    assert_eq!(entries[0]["name"], "file.txt");
+
+    let resp = f
+        .client
+        .list_dir_with_params(&f.api_token, &f.repo_id, "/", None, Some("d"))
+        .await;
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(entries.len(), 1, "got {entries:?}");
+    assert_eq!(entries[0]["name"], "dir");
+}
+
+/// The legacy recursive listing (Android's `?t=f&recursive=1`) spells the modifier key
+/// `modifier_email`, which is what `seadroid`'s `DirentRecursiveModel` reads.
+#[tokio::test]
+async fn test_legacy_recursive_listing_uses_modifier_email() {
+    let f = TestFixture::new().await;
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "mine.txt", b"x")
+        .await;
+    assert!(up.status().is_success());
+
+    let resp = f
+        .client
+        .list_dir_with_params(&f.api_token, &f.repo_id, "/", Some("1"), Some("f"))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let entry = entries
+        .iter()
+        .find(|e| e["name"] == "mine.txt")
+        .expect("uploaded file in the recursive listing");
+    assert_eq!(
+        entry["modifier_email"], f.email,
+        "the entry must carry seahub's modifier_email key: {entry}"
+    );
+    assert!(
+        entry.get("modifier").is_none(),
+        "the legacy `modifier` key must be gone: {entry}"
+    );
+    assert_eq!(entry["permission"], "rw");
+}
+
+/// A library without a head commit (nanofile creates those; seahub always writes an
+/// initial commit) must still answer a listing the desktop client accepts: the `oid`
+/// header is required to be 40 characters or the client fails the whole request.
+#[tokio::test]
+async fn test_headless_library_listing_has_oid_sentinel() {
+    let f = TestFixture::new().await;
+    // A repo created through the API has no head commit until the first write.
+    let repo_id = common::create_test_repo(&f.client, &f.api_token, "Headless").await;
+
+    let resp = f.client.list_dir(&f.api_token, &repo_id, "/").await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers().get("oid").map(|v| v.to_str().unwrap()),
+        Some("0000000000000000000000000000000000000000"),
+        "a headless library must advertise the empty-directory oid"
+    );
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(entries.is_empty(), "got {entries:?}");
+}

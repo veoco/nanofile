@@ -30,8 +30,11 @@ pub struct DirEntry {
     pub mtime: i64,
     pub permission: String,
     /// Last modifier email (empty when unknown). Upstream records it for files;
-    /// nanofile stores it for every entry.
-    #[serde(default)]
+    /// nanofile stores it for every entry. Serialized under seahub's key name:
+    /// the official clients read `modifier_email` for the "modified by" column
+    /// (`seadroid`'s `DirentModel`), and seahub's `get_dir_entrys_by_id` spells it
+    /// the same way.
+    #[serde(rename = "modifier_email", default)]
     pub modifier: String,
     /// Parent directory path. Present only in recursive listings.
     #[serde(default, skip_serializing_if = "Option::is_none")]

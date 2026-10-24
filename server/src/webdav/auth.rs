@@ -149,18 +149,16 @@ impl WebDavAuth {
             return Err(WebDavAuthError::Forbidden);
         }
 
-        let row = state
-            .repos
-            .member
-            .find_repo_owner_and_permission(repo_id, user.id)
-            .await
-            .map_err(|_| WebDavAuthError::Unauthorized)?;
-        let permission = match row {
-            Some((owner_id, _)) if owner_id == user.id => "rw",
-            Some((_, Some(p))) if p == "rw" => "rw",
-            Some((_, Some(_))) => "r",
-            _ => return Err(WebDavAuthError::Unauthorized),
-        };
+        // Same permission strings the JSON listings report (`"rw"`/`"r"`), from the
+        // one helper that owns the owner-vs-member rule.
+        let permission = crate::domain::permission::repo_permission(
+            state.repos.member.as_ref(),
+            repo_id,
+            user.id,
+        )
+        .await
+        .map_err(|_| WebDavAuthError::Unauthorized)?
+        .ok_or(WebDavAuthError::Unauthorized)?;
 
         // The secret must be this user's unified API key with WebDAV access;
         // keys are stored as a SHA-256 hash, so only the hash is compared.

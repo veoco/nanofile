@@ -40,6 +40,80 @@ pub(crate) fn parent_dir_of(path: &str) -> String {
     }
 }
 
+/// seahub's listing order (`get_dir_entrys_by_id`, `seahub/api2/views.py:2455-2460`):
+/// directories first, then files, each by lowercased name. The stored order is the
+/// object's descending-name identity order, which no client should be shown.
+fn sort_api_entries(entries: &mut [DirEntry]) {
+    entries.sort_by_cached_key(|e| (e.entry_type != "dir", e.name.to_lowercase()));
+}
+
+/// Quote the directory's `oid` header, or the empty-directory sentinel when the
+/// library has no head commit yet.
+///
+/// seahub always has a root directory (a new library gets a "Created library" commit),
+/// so its listing answers `oid=000…0` for an empty one; nanofile creates headless
+/// libraries, and the official desktop client rejects a listing whose `oid` is not 40
+/// characters (`GetDirentsRequest::requestSuccess`). The sentinel is the same value
+/// `GET /repo/{id}/commit/HEAD` already answers for such a library.
+fn oid_header(dir_id: &str) -> HeaderValue {
+    HeaderValue::from_str(if dir_id.is_empty() {
+        EMPTY_SHA1
+    } else {
+        dir_id
+    })
+    .unwrap_or_else(|_| HeaderValue::from_static(EMPTY_SHA1))
+}
+
+/// The headers both legacy listing shapes carry: `oid` and the caller's real
+/// `dir_perm` (`"rw"`/`"r"`), which the desktop client reads to decide whether the
+/// library is read-only.
+fn dir_headers(dir_id: &str, permission: &'static str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(HeaderName::from_static("oid"), oid_header(dir_id));
+    headers.insert(
+        HeaderName::from_static("dir_perm"),
+        HeaderValue::from_static(permission),
+    );
+    headers
+}
+
+/// Fill what the tree walk does not know: the caller's permission on every entry and
+/// the modifier display names seahub adds for files.
+async fn present_api_entries(
+    state: &AppState,
+    mut entries: Vec<DirEntry>,
+    permission: &'static str,
+) -> Result<Vec<DirEntry>, AppError> {
+    for entry in &mut entries {
+        entry.permission = permission.to_string();
+    }
+    // The recursive walk already resolved the nicknames; do not pay for the batched
+    // lookup twice.
+    let needs_names = entries
+        .iter()
+        .any(|e| e.entry_type == "file" && e.modifier_name.is_none() && !e.modifier.is_empty());
+    if needs_names {
+        crate::service::fs::dir::fill_modifier_names(&state.repos, &mut entries).await?;
+    }
+    Ok(entries)
+}
+
+/// Keep the entries `t` selects (`f` files, `d` directories), seahub's meaning for the
+/// parameter on both the plain and the recursive listing.
+fn filter_by_type(entries: Vec<DirEntry>, request_type: Option<&str>) -> Vec<DirEntry> {
+    match request_type {
+        Some("f") => entries
+            .into_iter()
+            .filter(|e| e.entry_type == "file")
+            .collect(),
+        Some("d") => entries
+            .into_iter()
+            .filter(|e| e.entry_type == "dir")
+            .collect(),
+        _ => entries,
+    }
+}
+
 /// Build the `reloaddir=true` response: the dirents as a **bare** JSON array plus the
 /// `oid`/`dir_perm` headers seahub's `reloaddir()` produces
 /// (`seahub/api2/views.py:2560-2576`). The iOS client's `SeafDir.handleData:` accepts
@@ -49,20 +123,12 @@ pub(crate) async fn reload_dir_response(
     state: &AppState,
     repo_id: &str,
     path: &str,
+    permission: &'static str,
 ) -> Result<Response, AppError> {
     let (dir_id, entries) = state.dir_service().list_dir(repo_id, path).await?;
-    let mut headers = HeaderMap::new();
-    if !dir_id.is_empty() {
-        headers.insert(
-            HeaderName::from_static("oid"),
-            HeaderValue::from_str(&dir_id).unwrap_or_else(|_| HeaderValue::from_static(EMPTY_SHA1)),
-        );
-    }
-    headers.insert(
-        HeaderName::from_static("dir_perm"),
-        HeaderValue::from_static("rw"),
-    );
-    Ok((headers, Json(entries)).into_response())
+    let mut entries = present_api_entries(state, entries, permission).await?;
+    sort_api_entries(&mut entries);
+    Ok((dir_headers(&dir_id, permission), Json(entries)).into_response())
 }
 
 pub fn dir_routes() -> Router<Arc<AppState>> {
@@ -116,32 +182,18 @@ pub async fn list_dir(
 
     if query.recursive.as_deref() == Some("1") {
         let (dir_id, all_entries) = svc.list_dir_recursive(repo_id, &path).await?;
-        let filtered: Vec<DirEntry> = match query.t.as_deref() {
-            Some("f") => all_entries
-                .into_iter()
-                .filter(|e| e.entry_type == "file")
-                .collect(),
-            Some("d") => all_entries
-                .into_iter()
-                .filter(|e| e.entry_type == "dir")
-                .collect(),
-            _ => all_entries,
-        };
-        let mut headers = HeaderMap::new();
-        if !dir_id.is_empty() {
-            headers.insert("oid", dir_id.parse().unwrap());
-        }
-        headers.insert("dir_perm", "rw".parse().unwrap());
-        return Ok((headers, Json(filtered)));
+        let filtered = filter_by_type(all_entries, query.t.as_deref());
+        // seahub's recursive listing is a depth-first walk, so its order is a traversal
+        // artifact; only the permission is a contract.
+        let entries = present_api_entries(&state, filtered, access.permission).await?;
+        return Ok((dir_headers(&dir_id, access.permission), Json(entries)));
     }
 
     let (dir_id, entries) = svc.list_dir(repo_id, &path).await?;
-    let mut headers = HeaderMap::new();
-    if !dir_id.is_empty() {
-        headers.insert("oid", dir_id.parse().unwrap());
-    }
-    headers.insert("dir_perm", "rw".parse().unwrap());
-    Ok((headers, Json(entries)))
+    let entries = filter_by_type(entries, query.t.as_deref());
+    let mut entries = present_api_entries(&state, entries, access.permission).await?;
+    sort_api_entries(&mut entries);
+    Ok((dir_headers(&dir_id, access.permission), Json(entries)))
 }
 
 pub async fn dir_post_handler(
@@ -208,7 +260,7 @@ pub async fn dir_post_handler(
             // body; otherwise the new folder would not appear until a refresh.
             if is_true(query.reloaddir.as_deref()) {
                 let parent = parent_dir_of(&path);
-                return reload_dir_response(&state, repo_id, &parent).await;
+                return reload_dir_response(&state, repo_id, &parent, "rw").await;
             }
             // Otherwise seahub answers 201 with a `Location` for the new folder.
             let mut headers = HeaderMap::new();
@@ -248,7 +300,7 @@ pub async fn delete_dir(
 
     // seahub's `DirView.delete` ends in `reloaddir_if_necessary`.
     if is_true(query.reloaddir.as_deref()) {
-        return reload_dir_response(&state, repo_id, &parent_dir_of(&path)).await;
+        return reload_dir_response(&state, repo_id, &parent_dir_of(&path), "rw").await;
     }
     Ok(ok_json().into_response())
 }
@@ -413,40 +465,17 @@ pub async fn list_dir_v21(
 
     if query.recursive.as_deref() == Some("1") {
         let (dir_id, all_entries) = svc.list_dir_recursive(repo_id, &normalized).await?;
-        let dirent_list: Vec<DirEntry> = match query.t.as_deref() {
-            Some("f") => all_entries
-                .into_iter()
-                .filter(|e| e.entry_type == "file")
-                .collect(),
-            Some("d") => all_entries
-                .into_iter()
-                .filter(|e| e.entry_type == "dir")
-                .collect(),
-            _ => all_entries,
-        };
+        let dirent_list = filter_by_type(all_entries, query.t.as_deref());
+        // seahub's recursive listing is a depth-first walk, so its order is a traversal
+        // artifact; iOS and Android sort locally, and the permission is the contract.
+        let dirent_list = present_api_entries(&state, dirent_list, access.permission).await?;
 
-        let user_perm = state
-            .repos
-            .member
-            .find_by_repo_and_user(repo_id, access.user.user_id)
-            .await?
-            .map(|m| m.permission)
-            .unwrap_or_else(|| "rw".to_string());
-
-        let mut headers = HeaderMap::new();
-        if !dir_id.is_empty() {
-            headers.insert(
-                HeaderName::from_static("oid"),
-                HeaderValue::from_str(&dir_id)
-                    .unwrap_or_else(|_| HeaderValue::from_static(EMPTY_SHA1)),
-            );
-        }
         let body = serde_json::json!({
-            "user_perm": user_perm,
-            "dir_id": dir_id,
+            "user_perm": access.permission,
+            "dir_id": if dir_id.is_empty() { EMPTY_SHA1 } else { &dir_id },
             "dirent_list": dirent_list,
         });
-        return Ok((headers, Json(body)).into_response());
+        return Ok((dir_headers(&dir_id, access.permission), Json(body)).into_response());
     }
 
     let (dir_id, entries) = svc.list_dir(repo_id, &normalized).await?;
@@ -456,21 +485,18 @@ pub async fn list_dir_v21(
             repo_id,
             &normalized,
             access.user.user_id,
+            access.permission,
             query.with_thumbnail.unwrap_or(false),
             entries,
-            dir_id.clone(),
+            if dir_id.is_empty() {
+                EMPTY_SHA1.to_string()
+            } else {
+                dir_id.clone()
+            },
         )
         .await?;
 
-    let mut headers = HeaderMap::new();
-    if !dir_id.is_empty() {
-        headers.insert(
-            HeaderName::from_static("oid"),
-            HeaderValue::from_str(&dir_id).unwrap_or_else(|_| HeaderValue::from_static(EMPTY_SHA1)),
-        );
-    }
-
-    Ok((headers, Json(json_body)).into_response())
+    Ok((dir_headers(&dir_id, access.permission), Json(json_body)).into_response())
 }
 
 #[derive(Deserialize)]
@@ -525,7 +551,7 @@ pub async fn dir_detail_v21(
 
     let svc = state.dir_service();
     let result = svc
-        .dir_detail(repo_id, &normalized, access.user.user_id)
+        .dir_detail(repo_id, &normalized, access.permission)
         .await?;
 
     Ok(Json(result))

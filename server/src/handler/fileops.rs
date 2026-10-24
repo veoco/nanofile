@@ -89,7 +89,7 @@ pub async fn batch_delete_handler(
     // listing (and its `oid`/`dir_perm` headers) comes from the one directory
     // service the other reloaddir endpoints use.
     if crate::handler::dir::is_true(query.reloaddir.as_deref()) {
-        return crate::handler::dir::reload_dir_response(&state, repo_id, &parent_dir).await;
+        return crate::handler::dir::reload_dir_response(&state, repo_id, &parent_dir, "rw").await;
     }
 
     Ok(StatusCode::OK.into_response())
@@ -147,7 +147,8 @@ pub async fn batch_copy_handler(
 
     // seahub reloads the **source** directory (`parent_dir = ?p`) after a copy.
     if crate::handler::dir::is_true(query.reloaddir.as_deref()) {
-        return crate::handler::dir::reload_dir_response(&state, repo_id, &src_parent_dir).await;
+        return crate::handler::dir::reload_dir_response(&state, repo_id, &src_parent_dir, "rw")
+            .await;
     }
 
     Ok(Json(json!(json_results)).into_response())
@@ -205,7 +206,8 @@ pub async fn batch_move_handler(
 
     // seahub reloads the **source** directory (`parent_dir = ?p`) after a move.
     if crate::handler::dir::is_true(query.reloaddir.as_deref()) {
-        return crate::handler::dir::reload_dir_response(&state, repo_id, &src_parent_dir).await;
+        return crate::handler::dir::reload_dir_response(&state, repo_id, &src_parent_dir, "rw")
+            .await;
     }
 
     Ok(Json(json!(json_results)).into_response())
