@@ -402,7 +402,12 @@ if (renameForm) {
     var repoId = renameForm.action.match(/\/libraries\/([^/]+)\//)[1];
     var oldPath = renameOldPath.value;
 
-    var renameBtn = document.querySelector('.js-rename-btn[data-path="' + oldPath + '"]');
+    // A linear lookup rather than `[data-path="…"]`: the path is user data, and a file name may
+    // contain characters a selector would have to escape. One would only have to look at a selector
+    // built from it to worry about the day the name filter stops rejecting quotes.
+    var renameBtn = Array.from(document.querySelectorAll(".js-rename-btn")).find(function (el) {
+      return el.dataset.path === oldPath;
+    });
     var entryType = renameBtn ? renameBtn.dataset.type || "file" : "file";
 
     var apiPath = buildEntryApiPath(repoId, oldPath, entryType);

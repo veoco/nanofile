@@ -13,7 +13,8 @@ import { formatFileSize } from "./format.js";
     var page = parseInt(list.dataset.page) || 1;
     var perPage = parseInt(list.dataset.perPage) || 20;
     var query = list.dataset.query;
-    var filenameOnly = list.dataset.searchFilenameOnly !== 'false'; // default true
+    // The template always writes "true" or "false"; anything else means the attribute is missing.
+    var filenameOnly = list.dataset.searchFilenameOnly === 'true';
     var hasMore = list.dataset.hasMore === 'true';
     var loading = false;
 
@@ -69,33 +70,38 @@ import { formatFileSize } from "./format.js";
     var observer = new IntersectionObserver(async function (entries) {
         for (var i = 0; i < entries.length; i++) {
             var entry = entries[i];
-            if (entry.isIntersecting && hasMore && !loading) {
-                loading = true;
-                spinner.classList.remove('hidden');
+            if (!entry.isIntersecting || !hasMore || loading) continue;
+            loading = true;
+            spinner.classList.remove('hidden');
 
-                try {
-                    page++;
-                    var params = new URLSearchParams({ q: query, page: page, per_page: perPage });
-                    params.set('search_filename_only', filenameOnly ? 'true' : 'false');
+            // The page number is committed only once the request succeeded. Incrementing it up
+            // front meant one failed (or non-2xx) request silently skipped a whole page.
+            var next = page + 1;
+            try {
+                var params = new URLSearchParams({ q: query, page: next, per_page: perPage });
+                params.set('search_filename_only', filenameOnly ? 'true' : 'false');
 
-                    var resp = await fetch('/api2/search/?' + params.toString());
-                    var data = await resp.json();
+                var resp = await fetch('/api2/search/?' + params.toString());
+                // An error body is not a result page; parsing it would have appended nothing and
+                // still lost the page number.
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                var data = await resp.json();
 
-                    for (var j = 0; j < data.results.length; j++) {
-                        list.appendChild(createResultItem(data.results[j]));
-                    }
-
-                    hasMore = data.has_more;
-                    if (!hasMore) {
-                        sentinel.style.display = 'none';
-                        observer.unobserve(sentinel);
-                    }
-                } catch (e) {
-                    console.error('Failed to load more results:', e);
-                } finally {
-                    loading = false;
-                    spinner.classList.add('hidden');
+                for (var j = 0; j < data.results.length; j++) {
+                    list.appendChild(createResultItem(data.results[j]));
                 }
+                page = next;
+
+                hasMore = data.has_more;
+                if (!hasMore) {
+                    sentinel.style.display = 'none';
+                    observer.unobserve(sentinel);
+                }
+            } catch (e) {
+                console.error('Failed to load more results:', e);
+            } finally {
+                loading = false;
+                spinner.classList.add('hidden');
             }
         }
     }, { rootMargin: '200px' });

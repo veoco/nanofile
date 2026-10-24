@@ -28,9 +28,15 @@ export function hideFileSkeleton() {
   }
 }
 
+// Monotonic token for partial refreshes. Two refreshes can be in flight at once (delete a file,
+// delete another before the first response lands); without it the older response could replace the
+// DOM of the newer one and bring the deleted row back.
+var refreshSeq = 0;
+
 export async function refreshFileList() {
 // Render all three views so view switching stays a pure client-side toggle after a mutation;
 // `_viewRefreshing` suppresses pagination while a refresh is in flight.
+  var seq = ++refreshSeq;
   window._viewRefreshing = (window._viewRefreshing || 0) + 1;
   var url = buildListUrl({
     pathname: window.location.pathname,
@@ -41,8 +47,11 @@ export async function refreshFileList() {
   });
   try {
     var resp = await fetch(url);
+    // A newer refresh already started: its response is the current list, this one is history.
+    if (seq !== refreshSeq) return;
     if (resp.ok) {
       var html = await resp.text();
+      if (seq !== refreshSeq) return;
       var container = document.querySelector(".file-list-container");
       if (container) {
         container.outerHTML = html;
@@ -104,11 +113,19 @@ export async function loadMoreEntries() {
     sort: getSort(),
     tag: getTagFilter(),
   });
+  // A refresh started while this page was in flight replaces the list; appending this page into
+  // the detached container would lose it and leave the pagination attributes on a dead node.
+  var generation = refreshSeq;
 
   try {
     var resp = await fetch(url);
     if (!resp.ok) { btn.disabled = false; if (spinner) spinner.classList.add("hidden"); return; }
     var html = await resp.text();
+    if (generation !== refreshSeq || !container.isConnected) {
+      btn.disabled = false;
+      if (spinner) spinner.classList.add("hidden");
+      return;
+    }
 
     var parser = document.createElement("div");
     parser.innerHTML = html;

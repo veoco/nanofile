@@ -572,6 +572,100 @@ export function toggleMinimize() {
     if (btn) btn.textContent = isDialogMinimized ? '□' : '−';
 }
 
+// Structure key of what the dialog shows: one entry per queued file, with its state and whether it
+/// is in server-side finalization. Progress itself is not part of it.
+var renderedStructure = '';
+
+function structureKey() {
+    return uploadQueue
+        .map(function (item) { return item.id + ':' + item.state + (item.finalizing ? '*' : ''); })
+        .join('|');
+}
+
+// One queued file's row. `data-upload-id` and the `data-slot` markers let progress updates touch
+/// only the bar and the percentage instead of rebuilding the row.
+function uploadRowHtml(item) {
+    var statusHtml, actionHtml;
+
+    if (item.state === 'uploading') {
+        if (item.finalizing) {
+            statusHtml =
+                '<div class="flex items-center gap-1.5">' +
+                  '<svg class="animate-spin h-4 w-4 text-accent" fill="none" viewBox="0 0 24 24">' +
+                    '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+                    '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>' +
+                  '</svg>' +
+                  '<span class="text-xs text-accent font-medium">' + __t('fb.processing') + '</span>' +
+                '</div>';
+        } else {
+            var pct = Math.round(item.progress);
+            statusHtml =
+                '<div class="flex items-center gap-2">' +
+                  '<span class="inline-block w-28 h-2 bg-raised rounded-full overflow-hidden">' +
+                    '<span data-slot="bar" class="block h-full bg-accent rounded-full" style="width:' + pct + '%;transition:width 0.3s ease"></span>' +
+                  '</span>' +
+                  '<span data-slot="pct" class="text-xs text-ink-2 font-medium w-10 text-right">' + pct + '%</span>' +
+                '</div>';
+        }
+        actionHtml = item.finalizing
+            ? ''  // No pause/cancel during server-side processing
+            : '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-ink hover:bg-raised active:scale-90 transition-all" data-action="pause" data-id="' + item.id + '" title="' + __t('fb.pause') + '">' +
+              '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>' +
+            '</button>' +
+            '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-err hover:bg-err/10 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
+              '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
+            '</button>';
+    } else if (item.state === 'pending') {
+        statusHtml = '<span class="text-xs text-ink-3 italic">' + __t('fb.waiting') + '</span>';
+        actionHtml =
+            '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-err hover:bg-err/10 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
+              '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
+            '</button>';
+    } else if (item.state === 'paused') {
+        statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-warn-text font-medium"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' + __t('fb.paused') + '</span>';
+        actionHtml =
+            '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-ink hover:bg-raised active:scale-90 transition-all" data-action="resume" data-id="' + item.id + '" title="' + __t('fb.resume') + '">' +
+              '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>' +
+            '</button>' +
+            '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-err hover:bg-err/10 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
+              '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
+            '</button>';
+    } else if (item.state === 'completed') {
+        statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-ok-text font-medium"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' + __t('fb.uploaded') + '</span>';
+        actionHtml = '';
+    } else if (item.state === 'error') {
+        statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-err-text font-medium"><svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="truncate max-w-[7rem]">' + escapeHtml(item.error || __t('fb.error')) + '</span></span>';
+        actionHtml =
+            '<button class="btn btn-line btn-sm active:scale-95" data-action="retry" data-id="' + item.id + '">' +
+              '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
+              __t('fb.retry') + '</button>';
+    } else { // cancelled
+        statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-ink-3"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' + __t('fb.cancelled') + '</span>';
+        actionHtml =
+            '<button class="btn btn-line btn-sm active:scale-95" data-action="retry" data-id="' + item.id + '">' +
+              '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
+              __t('fb.retry') + '</button>';
+    }
+
+    return '<div class="flex items-center gap-3 px-3 py-2.5 border-b border-line hover:bg-raised transition-colors" data-upload-id="' + item.id + '">' +
+          '<div class="flex-1 min-w-0">' +
+            '<div class="flex items-center gap-2">' +
+              '<svg class="w-4 h-4 shrink-0 text-ink-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>' +
+              '<span class="text-[13px] text-ink font-medium truncate" title="' + escapeAttr(item.name) + '">' + escapeHtml(item.name) + '</span>' +
+            '</div>' +
+            '<div class="ml-6 text-xs text-ink-3 mt-0.5">' + formatFileSize(item.size) + '</div>' +
+          '</div>' +
+          '<div class="shrink-0">' + statusHtml + '</div>' +
+          '<div class="shrink-0 flex items-center gap-0.5">' + actionHtml + '</div>' +
+        '</div>';
+}
+
+// Update the progress dialog.
+///
+/// Progress events arrive every ~50 ms; rebuilding the whole body on each one reset the width
+/// transition, reset the body's scroll position, and — worst — replaced the pause/cancel buttons
+/// between mousedown and mouseup, so the click landed on a detached node and was swallowed. Only a
+/// change in what is *shown* (a file's state, or the action set) rebuilds anything now.
 export function updateProgressDialog() {
     var dialog = document.getElementById('upload-dialog');
     if (!dialog) return;
@@ -582,14 +676,13 @@ export function updateProgressDialog() {
     }
 
     var total = uploadQueue.length;
-    var completed = 0, failed = 0, uploading = 0, pending = 0, paused = 0, cancelled = 0;
+    var completed = 0, failed = 0, uploading = 0, pending = 0, paused = 0;
     uploadQueue.forEach(function (item) {
         if (item.state === 'completed') completed++;
         else if (item.state === 'error') failed++;
         else if (item.state === 'uploading') uploading++;
         else if (item.state === 'pending') pending++;
         else if (item.state === 'paused') paused++;
-        else if (item.state === 'cancelled') cancelled++;
     });
 
     var isActive = uploading > 0 || pending > 0 || paused > 0;
@@ -605,134 +698,63 @@ export function updateProgressDialog() {
 
     var headerEl = dialog.querySelector('.upload-header-status');
     var bitrateEl = dialog.querySelector('.upload-bitrate');
+    var progressBarContainer = dialog.querySelector('.upload-progress-bar-container');
+    var progressBar = dialog.querySelector('.upload-progress-bar');
+    var closeBtn = dialog.querySelector('.js-close-progress');
+    var countEl = dialog.querySelector('.upload-count');
+    var actionsEl = dialog.querySelector('.upload-content-actions');
+    var bodyEl = dialog.querySelector('.upload-dialog-body');
 
-    if (isActive) {
-        var statusText = uploading > 0 ? __t('fb.uploading') : (pending > 0 ? __t('fb.waiting') : __t('fb.paused'));
-        headerEl.textContent = statusText;
-        bitrateEl.textContent = uploading > 0 ? formatBitrate(currentBitrate) : '';
-    } else {
-        if (hasFailed) {
+    var key = structureKey();
+    if (key !== renderedStructure) {
+        renderedStructure = key;
+
+        if (isActive) {
+            headerEl.textContent = uploading > 0 ? __t('fb.uploading') : (pending > 0 ? __t('fb.waiting') : __t('fb.paused'));
+        } else if (hasFailed) {
             headerEl.innerHTML = '<span class="text-err-text">' + __t('fb.failed_upload_count', { count: failed }) + '</span>';
         } else {
             headerEl.textContent = __t('fb.all_uploaded');
         }
-        bitrateEl.textContent = '';
-    }
 
-    var progressBarContainer = dialog.querySelector('.upload-progress-bar-container');
-    var progressBar = dialog.querySelector('.upload-progress-bar');
-    if (isActive) {
-        progressBarContainer.classList.remove('hidden');
-        progressBar.style.width = totalProgress + '%';
-    } else {
-        progressBarContainer.classList.add('hidden');
-        progressBar.style.width = '100%';
-    }
+        if (progressBarContainer) progressBarContainer.classList.toggle('hidden', !isActive);
+        if (progressBar) progressBar.style.width = (isActive ? totalProgress : 100) + '%';
+        if (closeBtn) closeBtn.classList.toggle('hidden', isActive);
 
-    var closeBtn = dialog.querySelector('.js-close-progress');
-    if (closeBtn) {
-        closeBtn.classList.toggle('hidden', isActive);
-    }
-
-    var countEl = dialog.querySelector('.upload-count');
-    countEl.textContent = __t('fb.upload_count', { completed: completed, total: total });
-
-    var actionsEl = dialog.querySelector('.upload-content-actions');
-    if (isActive) {
-        var pauseBtnHtml = isUploadPaused
-            ? '<button class="btn btn-line btn-sm" data-action="resume-all">' + __t('fb.resume_all') + '</button>'
-            : '<button class="btn btn-line btn-sm" data-action="pause-all">' + __t('fb.pause_all') + '</button>';
-        var retryAllBtn = hasFailed
-            ? '<button class="btn btn-line btn-sm" data-action="retry-all">' + __t('fb.retry_all') + '</button>'
-            : '';
-        var cancelAllBtn = '<button class="btn btn-danger-outline btn-sm" data-action="cancel-all">' + __t('fb.cancel_all') + '</button>';
-        actionsEl.innerHTML = pauseBtnHtml + retryAllBtn + cancelAllBtn;
-    } else {
-        var retryAllBtn = hasFailed
-            ? '<button class="btn btn-line btn-sm" data-action="retry-all">' + __t('fb.retry_all') + '</button>'
-            : '';
-        actionsEl.innerHTML = retryAllBtn;
-    }
-
-    var bodyEl = dialog.querySelector('.upload-dialog-body');
-    var listHtml = '';
-    uploadQueue.forEach(function (item) {
-        var statusHtml, actionHtml;
-
-        if (item.state === 'uploading') {
-            if (item.finalizing) {
-                statusHtml =
-                    '<div class="flex items-center gap-1.5">' +
-                      '<svg class="animate-spin h-4 w-4 text-accent" fill="none" viewBox="0 0 24 24">' +
-                        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
-                        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>' +
-                      '</svg>' +
-                      '<span class="text-xs text-accent font-medium">' + __t('fb.processing') + '</span>' +
-                    '</div>';
+        if (actionsEl) {
+            var retryAllBtn = hasFailed
+                ? '<button class="btn btn-line btn-sm" data-action="retry-all">' + __t('fb.retry_all') + '</button>'
+                : '';
+            if (isActive) {
+                var pauseBtnHtml = isUploadPaused
+                    ? '<button class="btn btn-line btn-sm" data-action="resume-all">' + __t('fb.resume_all') + '</button>'
+                    : '<button class="btn btn-line btn-sm" data-action="pause-all">' + __t('fb.pause_all') + '</button>';
+                var cancelAllBtn = '<button class="btn btn-danger-outline btn-sm" data-action="cancel-all">' + __t('fb.cancel_all') + '</button>';
+                actionsEl.innerHTML = pauseBtnHtml + retryAllBtn + cancelAllBtn;
             } else {
-                var pct = Math.round(item.progress);
-                statusHtml =
-                    '<div class="flex items-center gap-2">' +
-                      '<span class="inline-block w-28 h-2 bg-raised rounded-full overflow-hidden">' +
-                        '<span class="block h-full bg-accent rounded-full" style="width:' + pct + '%;transition:width 0.3s ease"></span>' +
-                      '</span>' +
-                      '<span class="text-xs text-ink-2 font-medium w-10 text-right">' + pct + '%</span>' +
-                    '</div>';
+                actionsEl.innerHTML = retryAllBtn;
             }
-            actionHtml = item.finalizing
-                ? ''  // No pause/cancel during server-side processing
-                : '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-ink hover:bg-raised active:scale-90 transition-all" data-action="pause" data-id="' + item.id + '" title="' + __t('fb.pause') + '">' +
-                  '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>' +
-                '</button>' +
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-err hover:bg-err/10 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
-                  '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
-                '</button>';
-        } else if (item.state === 'pending') {
-            statusHtml = '<span class="text-xs text-ink-3 italic">' + __t('fb.waiting') + '</span>';
-            actionHtml =
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-err hover:bg-err/10 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
-                  '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
-                '</button>';
-        } else if (item.state === 'paused') {
-            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-warn-text font-medium"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' + __t('fb.paused') + '</span>';
-            actionHtml =
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-ink hover:bg-raised active:scale-90 transition-all" data-action="resume" data-id="' + item.id + '" title="' + __t('fb.resume') + '">' +
-                  '<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>' +
-                '</button>' +
-                '<button class="inline-flex items-center justify-center w-8 h-8 rounded-ctl text-ink-3 hover:text-err hover:bg-err/10 active:scale-90 transition-all" data-action="cancel" data-id="' + item.id + '" title="' + __t('common.cancel') + '">' +
-                  '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' +
-                '</button>';
-        } else if (item.state === 'completed') {
-            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-ok-text font-medium"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' + __t('fb.uploaded') + '</span>';
-            actionHtml = '';
-        } else if (item.state === 'error') {
-            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-err-text font-medium"><svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="truncate max-w-[7rem]">' + escapeHtml(item.error || __t('fb.error')) + '</span></span>';
-            actionHtml =
-                '<button class="btn btn-line btn-sm active:scale-95" data-action="retry" data-id="' + item.id + '">' +
-                  '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
-                  __t('fb.retry') + '</button>';
-        } else { // cancelled
-            statusHtml = '<span class="inline-flex items-center gap-1 text-xs text-ink-3"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>' + __t('fb.cancelled') + '</span>';
-            actionHtml =
-                '<button class="btn btn-line btn-sm active:scale-95" data-action="retry" data-id="' + item.id + '">' +
-                  '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>' +
-                  __t('fb.retry') + '</button>';
         }
 
-        listHtml +=
-            '<div class="flex items-center gap-3 px-3 py-2.5 border-b border-line hover:bg-raised transition-colors">' +
-              '<div class="flex-1 min-w-0">' +
-                '<div class="flex items-center gap-2">' +
-                  '<svg class="w-4 h-4 shrink-0 text-ink-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>' +
-                  '<span class="text-[13px] text-ink font-medium truncate" title="' + escapeAttr(item.name) + '">' + escapeHtml(item.name) + '</span>' +
-                '</div>' +
-                '<div class="ml-6 text-xs text-ink-3 mt-0.5">' + formatFileSize(item.size) + '</div>' +
-              '</div>' +
-              '<div class="shrink-0">' + statusHtml + '</div>' +
-              '<div class="shrink-0 flex items-center gap-0.5">' + actionHtml + '</div>' +
-            '</div>';
-    });
-    bodyEl.innerHTML = listHtml;
+        if (bodyEl) bodyEl.innerHTML = uploadQueue.map(uploadRowHtml).join('');
+    }
+
+    // The cheap half: numbers that change on every progress event.
+    if (bitrateEl) bitrateEl.textContent = uploading > 0 ? formatBitrate(currentBitrate) : '';
+    if (countEl) countEl.textContent = __t('fb.upload_count', { completed: completed, total: total });
+    if (progressBar && isActive) progressBar.style.width = totalProgress + '%';
+    if (bodyEl) {
+        uploadQueue.forEach(function (item) {
+            if (item.state !== 'uploading' || item.finalizing) return;
+            var row = bodyEl.querySelector('[data-upload-id="' + item.id + '"]');
+            if (!row) return;
+            var pct = Math.round(item.progress);
+            var bar = row.querySelector('[data-slot="bar"]');
+            var label = row.querySelector('[data-slot="pct"]');
+            if (bar) bar.style.width = pct + '%';
+            if (label) label.textContent = pct + '%';
+        });
+    }
 }
 
 export function showNewFolderDialog() {

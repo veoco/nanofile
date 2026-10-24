@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { readState, seedRepo } from "../helpers/api";
+import { createRepo, readState, seedRepo, uploadFile } from "../helpers/api";
 
 test.beforeAll(async () => {
   const state = readState();
@@ -48,4 +48,45 @@ test("filename-only toggle updates the query", async ({ page }) => {
   await page.locator('input[name="search_filename_only"]').check();
   await page.waitForURL(/search_filename_only=true/);
   await expect(page.locator("#search-results li").first()).toBeVisible();
+});
+
+// A failed "load more" must not consume the page it was fetching: `search.js` used to increment the
+// page number before the request, so one 500 skipped a whole page of results.
+test("a failed page load does not skip results", async ({ page }) => {
+  const state = readState();
+  const repoId = await createRepo(state.baseURL, state.adminToken, "search-paging-repo");
+  // 21 files: one full page of 20, and one left over for the second page.
+  const files = Array.from({ length: 21 }, (_, i) => `pagedonly-${String(i + 1).padStart(2, "0")}.txt`);
+  for (const name of files) {
+    await uploadFile(state.baseURL, state.adminToken, repoId, "/", name, `content ${name}\n`);
+  }
+
+  await page.goto("/search/?q=pagedonly");
+  const rows = page.locator("#search-results li");
+  // The page renders one full page server-side; the rest arrives through /api2/search/.
+  await expect(rows).toHaveCount(20);
+
+  // Break exactly the first "load more" request.
+  await page.route("**/api2/search/**", (route) => route.fulfill({ status: 500, body: "boom" }), {
+    times: 1,
+  });
+  const failed = page.waitForResponse(
+    (response) => response.url().includes("/api2/search/") && response.status() === 500,
+  );
+  await page.locator("#scroll-sentinel").scrollIntoViewIfNeeded();
+  await failed;
+  await expect(page.locator("#loading-spinner")).toBeHidden();
+  await expect(rows).toHaveCount(20);
+
+  // The retry must ask for page 2 again, not page 3. The list scrolls inside <main>, so the
+  // sentinel has to leave and re-enter that viewport for the observer to fire again.
+  await page.locator("main").evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  const retried = page.waitForResponse(
+    (response) => response.url().includes("/api2/search/") && response.url().includes("page=2"),
+  );
+  await page.locator("#scroll-sentinel").scrollIntoViewIfNeeded();
+  await retried;
+  await expect(rows).toHaveCount(21);
 });
