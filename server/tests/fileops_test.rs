@@ -485,6 +485,62 @@ async fn dir_entries(f: &TestFixture, path: &str) -> Vec<(String, String)> {
     entries
 }
 
+/// HEAD of the fixture's repo, to prove a failed move commits nothing.
+async fn repo_head(f: &TestFixture) -> Option<String> {
+    use sea_orm::EntityTrait;
+    infra::entity::repo::Entity::find_by_id(f.repo_id.clone())
+        .one(&*f.server.db)
+        .await
+        .unwrap()
+        .expect("repo row")
+        .head_commit_id
+}
+
+/// Both tree edits are stored before one commit moves HEAD, so a move that cannot
+/// finish (here: the destination does not exist) must leave the source in place
+/// and HEAD unchanged instead of committing the removal on its own.
+#[tokio::test]
+async fn a_move_to_a_missing_destination_leaves_the_source_untouched() {
+    let f = TestFixture::new().await;
+    create_subdir(&f, "/a").await;
+    upload_test_file(&f, "f.txt", b"payload", "/a").await;
+    let before = repo_head(&f).await;
+
+    let resp = f
+        .client
+        .move_file(&f.api_token, &f.repo_id, "/a/f.txt", &f.repo_id, "/missing")
+        .await;
+    assert!(
+        resp.status().is_client_error(),
+        "move to a missing directory was accepted: {}",
+        resp.status()
+    );
+
+    let resp = f
+        .client
+        .batch_move(
+            &f.api_token,
+            &f.repo_id,
+            "/a",
+            &["f.txt"],
+            &f.repo_id,
+            "/missing",
+        )
+        .await;
+    assert!(
+        resp.status().is_client_error(),
+        "batch move to a missing directory was accepted: {}",
+        resp.status()
+    );
+
+    assert_eq!(dir_names(&f, "/a").await, vec!["f.txt"]);
+    assert_eq!(
+        repo_head(&f).await,
+        before,
+        "a rejected move must not advance HEAD"
+    );
+}
+
 /// Moving a file into an ancestor of its own directory used to reuse the
 /// destination object read before the removal. That object still pointed at the
 /// subtree containing the file, so phase 2 copied the pre-removal subtree back

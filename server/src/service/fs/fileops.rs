@@ -434,8 +434,10 @@ impl FileOpsService {
         // Pre-validate the destination exists before mutating the source tree.
         let _ = FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir).await?;
 
-        // Step 1: Remove entries from source
-        // O(1) membership set for the retain filter below, not an O(n) Vec scan.
+        // Both tree mutations are stored without committing, then one commit moves
+        // HEAD. Committing the removal first lost every moved entry whenever the
+        // destination update failed (CAS conflict, database error), and a move
+        // writes no trash entry to recover from.
         let src_names_for_closure: std::collections::HashSet<&str> =
             entries_to_move.iter().map(|e| e.name.as_str()).collect();
 
@@ -446,13 +448,13 @@ impl FileOpsService {
             src_parent_dir,
             &src_parent_fs_id,
             &src_ancestor_chain,
+            None,
             |dirents| {
                 dirents.retain(|d| !src_names_for_closure.contains(d.name.as_str()));
                 Ok(())
             },
         )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .await?;
 
         let remove_desc = if entries_to_move.len() == 1 {
             format!("Moved \"{}\"", entries_to_move[0].name)
@@ -464,31 +466,31 @@ impl FileOpsService {
             )
         };
 
-        FileOps::create_commit(
+        // Step 2: add the entries to the destination. Resolve it in the uncommitted
+        // tree: a destination that is an ancestor of the source directory was just
+        // rewritten by step 1, and HEAD still points at the pre-removal tree.
+        let (new_dst_fs_id, dst_ancestor_chain) = FileOps::resolve_fs_id_chain_from_root(
             &self.repos,
             repo_id,
             &intermediate_root,
-            email,
-            &remove_desc,
+            dst_dir,
         )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-        // Step 2: Add entries to destination.
-        // resolve_fs_id_chain reads the newest head commit, the one step 1 made.
-        let (new_dst_fs_id, dst_ancestor_chain) =
-            FileOps::resolve_fs_id_chain(&self.repos, repo_id, dst_dir).await?;
+        .await?;
 
         let new_dst_data = crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &new_dst_fs_id)
             .await
             .map_err(|e| AppError::Internal(format!("read dest dir failed: {e}")))?;
 
+        // Plan the final names against the destination plus the entries planned
+        // before them, so the response and the tree agree even when one batch holds
+        // two names that both collide with an existing entry.
+        let mut planned_dirents = new_dst_data.dirents;
         let mut results: Vec<BatchOpResult> = Vec::new();
         let mut entries_to_add: Vec<DirEntryData> = Vec::new();
 
         for entry in &entries_to_move {
-            let obj_name = if new_dst_data.dirents.iter().any(|d| d.name == entry.name) {
-                generate_unique_filename(&new_dst_data.dirents, &entry.name)
+            let obj_name = if planned_dirents.iter().any(|d| d.name == entry.name) {
+                generate_unique_filename(&planned_dirents, &entry.name)
             } else {
                 entry.name.clone()
             };
@@ -499,43 +501,35 @@ impl FileOpsService {
                 obj_name: obj_name.clone(),
             });
 
-            entries_to_add.push(DirEntryData {
+            let added = DirEntryData {
                 name: obj_name,
                 ..entry.clone()
-            });
+            };
+            planned_dirents.push(added.clone());
+            entries_to_add.push(added);
         }
 
-        FileOps::update_dir_tree_and_commit(
+        let new_root = FileOps::update_dir_tree_no_commit(
             db,
             &self.repos,
             repo_id,
             dst_dir,
             &new_dst_fs_id,
-            email,
-            &remove_desc,
             &dst_ancestor_chain,
+            Some(&intermediate_root),
             |dirents| {
-                for entry in &entries_to_add {
-                    if dirents.iter().any(|d| d.name == entry.name) {
-                        let unique_name = generate_unique_filename(dirents, &entry.name);
-                        dirents.push(DirEntryData {
-                            name: unique_name,
-                            ..entry.clone()
-                        });
-                    } else {
-                        dirents.push(entry.clone());
-                    }
-                }
+                dirents.extend(entries_to_add.iter().cloned());
                 Ok(())
             },
         )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .await?;
 
-        for entry in &entries_to_add {
-            let old_fp = join_path(src_parent_dir, &entry.name);
-            let new_fp = join_path(dst_dir, &entry.name);
-            let obj_type = if entry.mode & S_IFDIR != 0 {
+        FileOps::create_commit(&self.repos, repo_id, &new_root, email, &remove_desc).await?;
+
+        for (source, added) in entries_to_move.iter().zip(&entries_to_add) {
+            let old_fp = join_path(src_parent_dir, &source.name);
+            let new_fp = join_path(dst_dir, &added.name);
+            let obj_type = if added.mode & S_IFDIR != 0 {
                 "dir"
             } else {
                 "file"
@@ -548,8 +542,8 @@ impl FileOpsService {
                 &new_fp,
                 user_id,
                 Some(&old_fp),
-                Some(entry.size),
-                Some(entry.id.as_str()),
+                Some(added.size),
+                Some(added.id.as_str()),
                 None,
                 None,
             )
@@ -567,7 +561,7 @@ impl FileOpsService {
             }
         }
         if self.scheduler.is_enabled() {
-            let targets: Vec<IndexTarget> = entries_to_move
+            let targets: Vec<IndexTarget> = entries_to_add
                 .iter()
                 .map(|entry| {
                     IndexTarget::new(join_path(dst_dir, &entry.name), Some(entry.id.clone()))

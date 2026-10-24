@@ -280,6 +280,7 @@ impl FileOps {
                 parent_path,
                 &new_dir_fs_id,
                 &ancestor_chain,
+                None,
             )
             .await?
         };
@@ -370,6 +371,10 @@ impl FileOps {
     /// `FsDirData` to reference the new child fs_id; returns the new root fs_id.
     /// `ancestor_chain` (root-down `(path, fs_id)` pairs) turns each level's
     /// `resolve_fs_id` into a lookup, reducing O(d²) to O(d).
+    ///
+    /// `root_override` replaces the root object read from HEAD when this walk
+    /// continues a tree update that has not been committed yet (see
+    /// [`Self::update_dir_tree_no_commit`]); `None` resolves the root from HEAD.
     pub(crate) async fn walk_up_ancestors(
         repos: &Repositories,
         db: &DatabaseConnection,
@@ -377,6 +382,7 @@ impl FileOps {
         immediate_parent_path: &str,
         new_immediate_parent_fs_id: &str,
         ancestor_chain: &[(String, String)],
+        root_override: Option<&str>,
     ) -> Result<String, AppError> {
         let mut current_child_fs_id = new_immediate_parent_fs_id.to_string();
         let mut current_child_path = immediate_parent_path.to_string();
@@ -399,7 +405,10 @@ impl FileOps {
 
             // Use the chain when it has this level, else resolve from root.
             let ancestor_fs_id = if parent_path == "/" {
-                Self::resolve_root_fs_id(repos, repo_id).await?
+                match root_override {
+                    Some(root) => root.to_string(),
+                    None => Self::resolve_root_fs_id(repos, repo_id).await?,
+                }
             } else {
                 match chain_map.get(parent_path.as_str()) {
                     Some(id) => id.to_string(),
@@ -485,12 +494,26 @@ impl FileOps {
         path: &str,
     ) -> Result<(String, Vec<(String, String)>), AppError> {
         let root_fs_id = Self::resolve_root_fs_id(repos, repo_id).await?;
+        Self::resolve_fs_id_chain_from_root(repos, repo_id, &root_fs_id, path).await
+    }
+
+    /// Same as [`Self::resolve_fs_id_chain`], but walks from an explicit root.
+    ///
+    /// A multi-step tree update that stores objects before committing (move)
+    /// must resolve its second path in the *uncommitted* tree, which HEAD does
+    /// not point at yet; passing the root the first step returned does that.
+    pub(crate) async fn resolve_fs_id_chain_from_root(
+        repos: &Repositories,
+        repo_id: &str,
+        root_fs_id: &str,
+        path: &str,
+    ) -> Result<(String, Vec<(String, String)>), AppError> {
         if path == "/" || path.is_empty() {
-            return Ok((root_fs_id, Vec::new()));
+            return Ok((root_fs_id.to_string(), Vec::new()));
         }
 
         let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
-        let mut current_fs_id = root_fs_id;
+        let mut current_fs_id = root_fs_id.to_string();
         let mut chain = Vec::with_capacity(parts.len());
         let mut accumulated = String::new();
 
@@ -544,6 +567,7 @@ impl FileOps {
             parent_path,
             parent_fs_id,
             ancestor_chain,
+            None,
             update_fn,
         )
         .await?;
@@ -556,6 +580,11 @@ impl FileOps {
     /// Same as `update_dir_tree_and_commit` without the commit, so a multi-step
     /// operation (e.g. move) can update several parts of the tree and commit
     /// once. Returns the new root fs_id.
+    ///
+    /// `root_override` names the root the update is layered on: after a first
+    /// no-commit step this is the root that step returned, so the ancestor walk
+    /// rewrites *that* tree instead of re-reading HEAD (which still points at
+    /// the pre-update tree). `None` resolves the root from HEAD.
     pub(crate) async fn update_dir_tree_no_commit(
         db: &DatabaseConnection,
         repos: &Repositories,
@@ -563,6 +592,7 @@ impl FileOps {
         parent_path: &str,
         parent_fs_id: &str,
         ancestor_chain: &[(String, String)],
+        root_override: Option<&str>,
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
     ) -> Result<String, AppError> {
         Self::apply_tree_update(
@@ -572,6 +602,7 @@ impl FileOps {
             parent_path,
             parent_fs_id,
             ancestor_chain,
+            root_override,
             update_fn,
         )
         .await
@@ -579,6 +610,7 @@ impl FileOps {
 
     /// Shared body of the two `update_dir_tree_*` helpers: lock the repo, apply
     /// `update_fn`, persist and walk up the ancestors to get the root fs_id.
+    #[allow(clippy::too_many_arguments)]
     async fn apply_tree_update(
         db: &DatabaseConnection,
         repos: &Repositories,
@@ -586,6 +618,7 @@ impl FileOps {
         parent_path: &str,
         parent_fs_id: &str,
         ancestor_chain: &[(String, String)],
+        root_override: Option<&str>,
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
     ) -> Result<String, AppError> {
         let _lock = acquire_repo_lock(repo_id).await;
@@ -605,6 +638,7 @@ impl FileOps {
                 parent_path,
                 &new_parent_fs_id,
                 ancestor_chain,
+                root_override,
             )
             .await
         }

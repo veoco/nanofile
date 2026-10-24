@@ -243,10 +243,9 @@ pub(crate) async fn move_entry(
     let new_parent_path = base::sanitize::safe_normalize_path(new_parent_dir)
         .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
 
-    // Reject a move into the entry itself or its own subtree *before* any mutation: phase 1 commits
-    // the removal, and a destination inside the moved subtree would be destroyed by it, so phase 2
-    // would fail after the subtree left HEAD (no trash entry, 500 to the client). WebDAV rejects
-    // this case explicitly; this path did not.
+    // Reject a move into the entry itself or its own subtree *before* any mutation: the
+    // destination would be removed by the source-side update, so the destination could no
+    // longer resolve when the entry is added back.
     if crate::domain::fs::is_self_or_subpath(path, &new_parent_path) {
         return Err(AppError::BadRequest(if is_dir {
             "cannot move a directory into itself".into()
@@ -255,11 +254,21 @@ pub(crate) async fn move_entry(
         }));
     }
 
-    let pre_removal_dst_fs_id =
-        crate::fs::core::resolve_dir_fs_id(repos, repo_id, &head_root_id, &new_parent_path)
-            .await
-            .map_err(|_| AppError::BadRequest("destination directory not found".into()))?;
+    // Validate the destination before touching the tree.
+    crate::fs::core::resolve_dir_fs_id(repos, repo_id, &head_root_id, &new_parent_path)
+        .await
+        .map_err(|_| AppError::BadRequest("destination directory not found".into()))?;
 
+    let description = if is_dir {
+        format!("Moved directory {entry_name}")
+    } else {
+        format!("Moved {entry_name}")
+    };
+
+    // Both tree mutations are stored without committing, then a single commit moves
+    // HEAD. Committing the removal first left the entry out of HEAD whenever the
+    // destination update failed (a CAS conflict or a database error), and a move
+    // never writes a trash entry, so that failure lost the file.
     let intermediate_root = FileOps::update_dir_tree_no_commit(
         db,
         repos,
@@ -267,61 +276,38 @@ pub(crate) async fn move_entry(
         parent_path,
         &old_parent_fs_id,
         crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
+        None,
         |dirents| {
             dirents.retain(|d| d.name != entry_name);
             Ok(())
         },
     )
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
+    .await?;
 
-    FileOps::create_commit(
+    // Resolve the destination in the uncommitted tree: when it is the entry's own
+    // directory or one of its ancestors, the removal just rewrote that path. HEAD
+    // still points at the pre-removal tree, so resolving from it would either be
+    // stale (leaving the entry at both paths) or fail.
+    let (new_dst_fs_id, dst_ancestor_chain) = FileOps::resolve_fs_id_chain_from_root(
         repos,
         repo_id,
         &intermediate_root,
-        email,
-        &if is_dir {
-            format!("Moved directory {entry_name}")
-        } else {
-            format!("Moved {entry_name}")
-        },
+        &new_parent_path,
     )
     .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
-
-    // Destination directory object. A destination on the path from the root down to the entry's own
-    // parent (its current directory `/a/b` → `/a`, or an ancestor `/a/b/f` → `/a`) was rewritten by
-    // phase 1: the pre-removal id is stale there and still points at the subtree *with* the entry,
-    // so reusing it would leave the entry at both paths. Every other destination is untouched by the
-    // removal (the guard above rules out one inside the moved subtree), so the pre-removal id is
-    // reused; re-resolving those from the new HEAD failed once the removal was already durable.
-    let new_dst_fs_id = if crate::domain::fs::is_self_or_subpath(&new_parent_path, parent_path) {
-        let new_head_root = get_head_root_id(db, repo_id).await?;
-        crate::fs::core::resolve_dir_fs_id(repos, repo_id, &new_head_root, &new_parent_path)
-            .await
-            .map_err(|e| {
-                AppError::Internal(format!("resolve dest dir after removal failed: {e}"))
-            })?
-    } else {
-        pre_removal_dst_fs_id
-    };
+    .map_err(|_| AppError::BadRequest("destination directory not found".into()))?;
 
     let now = chrono::Utc::now().timestamp();
     let email_clone = email.to_string();
     let entry_name_clone = entry_name.to_string();
-    let new_root = FileOps::update_dir_tree_and_commit(
+    let new_root = FileOps::update_dir_tree_no_commit(
         db,
         repos,
         repo_id,
         &new_parent_path,
         &new_dst_fs_id,
-        email,
-        &if is_dir {
-            format!("Moved directory {entry_name}")
-        } else {
-            format!("Moved {entry_name}")
-        },
-        crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
+        &dst_ancestor_chain,
+        Some(&intermediate_root),
         |dirents| {
             if !dirents.iter().any(|d| d.name == entry_name_clone) {
                 dirents.push(DirEntryData {
@@ -336,8 +322,9 @@ pub(crate) async fn move_entry(
             Ok(())
         },
     )
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
+    .await?;
+
+    FileOps::create_commit(repos, repo_id, &new_root, email, &description).await?;
 
     let new_path = join_path(&new_parent_path, entry_name);
     activity_log::log_activity(
