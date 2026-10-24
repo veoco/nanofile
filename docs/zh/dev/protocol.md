@@ -42,6 +42,80 @@ NUL 终止符是哈希的一部分：每个字符串都按 C 字符串（`strlen
 
 路由到能力的映射表在 `server/src/domain/capability.rs`；新增路由若未分类会直接失败。`server/tests/capability_coverage_test.rs` 检查映射表覆盖每个路由。
 
+## 与上游的核对
+
+本页的规则都对照过上游源码，不是凭记忆写的。核对用的版本：
+
+| 仓库 | 版本 | 用来核对什么 |
+| --- | --- | --- |
+| `haiwen/seafile` | `af6539c` | commit id 计算、客户端守护进程的提交/对象写入 |
+| `haiwen/seafile-server` | `a652460` | 同步 API 的服务端（C 的 `http-server.c` 与 Go 的 `fileserver/`）、仓库操作 |
+| `haiwen/seahub` | `59e5b84` | `api2` / `api/v2.1` 的响应形状 |
+| `haiwen/seafile-client` | `7b5a95a` | 桌面客户端的请求与解析 |
+| `haiwen/seafile-ios` | `2aedcc3` | iOS 客户端的请求与解析 |
+| `haiwen/seadroid` | `9d6d490` | Android 客户端的请求与解析 |
+| `haiwen/seafdav` | `11295ad` | WebDAV 行为（wsgidav） |
+
+下表行号来自这些版本；行号会漂移，commit id 不会。
+
+| 行为 | 上游依据 |
+| --- | --- |
+| commit id 的输入顺序、NUL 终止符、空名称整段省略 | `seafile/common/commit-mgr.c:39-60`、`seafile-server/common/commit-mgr.c:41-60` |
+| `creator_name` 非空才写入；读入时转小写 | `commit-mgr.c:606-609`、`:791-794` |
+| 客户端先算 id，再把资料库元数据写进 commit | `seafile/daemon/repo-mgr.c:4567-4590` |
+| 提交上传：解析失败/仓库不符 400，不校验哈希 | `seafile-server/fileserver/sync_api.go:941-984` |
+| `recv-fs`：包格式错误 400，不校验内容 | `sync_api.go:453-517` |
+| 文件/目录对象 id = `sha1(json_dumps(obj, JSON_SORT_KEYS))`；`modifier`/`size` 只出现在文件条目；降序排列 | `seafile-server/common/fs-mgr.c:381-392`、`:1795-1820`、`:1906-1911` |
+| 同库移动是一个提交（先加后删，再提交） | `seafile-server/server/repo-op.c:3161-3245` |
+| 旧版列表：字段、`dir_perm` 取真实权限、目录组+文件组各自按 `name.lower()` 排序 | `seahub/api2/views.py:2380-2462` |
+| v2.1 列表：`{dirent_list, dir_id, user_perm}`、逐条 `permission`、`parent_dir`、`starred`、`modifier_email` | `seahub/api2/endpoints/dir.py:45-215`、`:343-344` |
+| `/api/v2.1/search-file/`：`{"data": [{path, size, mtime(ISO), type: file/folder}]}`，无上限，文件名子串匹配 | `seahub/api2/endpoints/search_file.py` |
+| `/api2/search/`：`{results, total, has_more}`，`per_page <= 100`，仅 Pro 版 | `seahub/api2/views.py:452-700` |
+| 认证失败体是 `{"detail": …}`；功能错误才是 `{"error_msg": …}` | `seahub/api2/authentication.py:28-33`、`seahub/api2/utils.py:49-51` |
+| 桌面端要求 `oid` 长 40、`dir_perm == "r"` 即只读、逐条 `permission == "r"` | `seafile-client/src/filebrowser/file-browser-requests.cpp:73-96`、`seaf-dirent.cpp:19-45` |
+| 桌面端按服务端返回的顺序渲染列表 | `seafile-client/src/filebrowser/file-table.cpp:926-937` |
+| 桌面端 `/api2/search/` 读取的字段 | `seafile-client/src/api/requests.cpp:939-980` |
+| iOS v2.1 列表：`dirent_list`/`dir_id`/`user_perm`，逐条 `permission` 决定子目录可编辑；本地排序 | `seafile-ios/Pod/Classes/SeafDir.m:264-355`、`:160-170`、`:386-409` |
+| iOS search-file 形状（`type == "folder"`、绝对 `path`）；`/api2/search/` 仅在 `seafile-pro`+`file-search` 时使用 | `seafile-ios/Pod/Classes/SeafConnection+Search.m:47-100`、`SeafConnection.m:1321-1338` |
+| Android v2.1 列表模型；逐条 `permission` 生成操作菜单；`modifier_email` | `seadroid/.../ui/repo/RepoService.java:34-38`、`.../framework/db/entities/DirentModel.java:50-78`、`.../ui/repo/sheetaction/BottomSheetMenuManager.java:190-228` |
+| WebDAV 的 `ETag` 是 FS 对象 id，GET 与 `getetag` 属性一致 | `seafdav/wsgidav/seafile_dav_provider.py:153-185`、`:637-640`、`dav_provider.py:747-749` |
+| 条件请求先于 Range 求值；只支持单个区间；416 带 `Content-Range: bytes */size` | `seafdav/wsgidav/request_server.py:1477-1560`、`util.py:1485-1492` |
+| `Depth: infinity` 可以用 403 + `<D:propfind-finite-depth/>` 拒绝（RFC 4918 §9.1） | `seafdav/wsgidav/request_server.py:282-296` |
+| WebDAV 不提供加密资料库 | `seafdav/wsgidav/seafile_dav_provider.py:871-874` |
+
+## 列表响应
+
+`/api2/repos/{id}/dir/` 与 `/api/v2.1/repos/{id}/dir/` 报告调用者的**真实**权限，因为官方客户端据此决定哪些操作可用：
+
+- 旧版列表的 `dir_perm` 头与每个条目的 `permission` 是 `"rw"` 或 `"r"`；
+- v2.1 另外带 `user_perm`（同值）与 `dir_id`；
+- nanofile 没有子目录共享，因此同一资料库里所有条目共用该值。
+
+旧版列表按 seahub 的顺序返回（目录在前、文件在后，各自按小写名称排序），并支持 `?t=f`/`?t=d`。目录对象的存储顺序是它按名称降序的身份顺序，不是展示契约。
+
+没有 head 提交的资料库（nanofile 会创建这种库；seahub 总会写一个 `Created library` 初始提交）列表返回 `oid`/`dir_id` = `EMPTY_SHA1` 和空列表。桌面端会拒绝 `oid` 不是 40 字符的列表，所以这是必需的，不是装饰。
+
+列表键名使用 seahub 的拼写：`modifier_email`（不是 `modifier`），文件条目另带 `modifier_name`/`modifier_contact_email`。
+
+## WebDAV 校验值
+
+文件的 `ETag` 是加引号的 FS 对象 id —— 与 GET 和 PROPFIND 的 `getetag` 属性同值（seafdav 两处都报 `obj_id`）。`If-None-Match` 先于 `Range` 求值，弱比较接受 `W/` 前缀。`Depth: infinity`/`1` 的列表超过 `server.max_propfind_entries` 时返回 403 与 RFC 4918 的 `propfind-finite-depth` 体，告诉客户端改用更浅的 Depth；集合不再输出 `getcontentlength`。
+
+## 刻意保留的偏差
+
+以下与上游不同，是刻意的：
+
+- **`_Internal` 在所有列表中隐藏**（普通、递归、WebDAV、`reloaddir`）。上游只在打包/索引的递归遍历里跳过它（仅根级，连同 `images`），因为 seahub 用它存 wiki/seadoc 的内部数据；nanofile 没有这棵树。从 seahub 迁移来的资料库会少看到一项。
+- **`/api/v2.1/search-file/` 有上限**（共享的 200 条预算），上游无界遍历整棵树。两个移动客户端拿到的 `data` 会被截断。
+- **`/api2/search/` 忽略 Pro 专属过滤参数**（`search_type`、`obj_type`、`time_from`、`size_from`、`search_path`、`with_permission`），并且在索引关闭时也可用（只匹配文件名）。
+- **覆盖上传的额度按 `新 - 旧` 计**；上游上传路径按整个新 `Content-Length` 计，`update-branch` 处按 0。
+- **不写 `Created library` 初始提交**：资料库可以没有 head，`commit/HEAD` 返回 `000…0` 哨兵，`get_commit` 合成它（上游总有一个真实提交）。
+- **`dir/detail/` 的 `mtime` 是数字**，seahub 是 ISO 字符串（Android 的模型声明为 `long`，且从未调用该接口）。
+- **未实现 `?oid=` 复用校验**（seahub 回 `"uptodate"`）：官方客户端不发它。
+- **未实现 `If-Match`/`If-Unmodified-Since`/`If-Modified-Since` 与 `PROPPATCH`**。
+- **WebDAV 对加密资料库返回 403**；seafdav 直接从列表里略过它（请求会变 404）。
+- **`encoded_thumbnail_src` 恒为空**。iOS 与 Android 只把它当能力信号，并按服务端版本（低于 14.0，nanofile 即如此）自行拼旧的 `/api2/repos/{id}/thumbnail/` 地址。
+
 ## 保留的客户端怪癖
 
 这些行为是刻意的，因为官方客户端依赖它们：
@@ -52,4 +126,4 @@ NUL 终止符是哈希的一部分：每个字符串都按 C 字符串（`strlen
 
 ## 测试
 
-兼容性面由 `server/tests/` 下的 `commit_test.rs`、`fs_test.rs`、`fs_id_compat.rs`、`dir_order_test.rs`、`sync_test.rs`、`sync_merge_test.rs`、`client_compat_test.rs` 与 `capability_coverage_test.rs` 覆盖。套件如何运行见[测试](/zh/dev/testing)。
+兼容性面由 `server/tests/` 下的 `commit_test.rs`、`fs_test.rs`、`fs_id_compat.rs`、`dir_order_test.rs`、`sync_test.rs`、`sync_merge_test.rs`、`client_compat_test.rs`、`api_v21_test.rs`、`webdav_test.rs`、`auth_test.rs` 与 `capability_coverage_test.rs` 覆盖。套件如何运行见[测试](/zh/dev/testing)。
