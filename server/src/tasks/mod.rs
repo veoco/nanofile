@@ -36,7 +36,7 @@ use self::context::JobContext;
 use self::registry::{JobRegistry, RegisteredJob, RegistryError};
 use self::run::{JobRun, JobState, Params, RunId, Viewer};
 use self::spec::{Dedup, JobKey, OverlapPolicy, Priority, SkippedTask};
-use self::store::{RunFilter, RunLimits, RunStore};
+use self::store::{Admission, RunFilter, RunLimits, RunStore};
 
 pub use self::run::{JobFailure, Origin, Outcome, Progress};
 pub use self::spec::{
@@ -372,40 +372,6 @@ impl TaskSystem {
             .ok_or_else(|| AppError::Internal(format!("job {key:?} is not registered")))?;
         let now = chrono::Utc::now().timestamp();
 
-        // Checked before the run exists, so a refusal leaves no trace to sweep.
-        let limits = self.limits();
-        if job.spec.queue_depth > 0
-            && self.inner.store.count_active(key, owner) >= job.spec.queue_depth
-        {
-            return Err(AppError::TooManyRequests);
-        }
-        if limits.max_active_total > 0
-            && self.inner.store.count_active_all(None) >= limits.max_active_total
-        {
-            return Err(AppError::TooManyRequests);
-        }
-        if limits.max_active_per_user > 0
-            && owner.is_some()
-            && self.inner.store.count_active_all(owner) >= limits.max_active_per_user
-        {
-            return Err(AppError::TooManyRequests);
-        }
-
-        // Deduplication serves as the per-repo reindex lock.
-        if let Dedup::ByParams(field) = job.spec.dedup
-            && let Some(value) = params.get(field)
-            && self
-                .inner
-                .store
-                .find_active_by_param(key, field, value)
-                .is_some()
-        {
-            return Err(AppError::Conflict(format!(
-                "{} is already in progress",
-                job.spec.name
-            )));
-        }
-
         let mut run = JobRun::queued(
             key,
             origin,
@@ -420,6 +386,29 @@ impl TaskSystem {
             run.set_detail(name, value);
         }
         let id = run.id.clone();
+
+        // Admission and the insert happen in one step: a refusal leaves no trace to sweep, and —
+        // unlike separate `count_active` / dedup reads followed by an insert — nothing can slip in
+        // between them. That gap was real for a durable job, whose journal row is written before
+        // the run is stored, so two concurrent submits both passed the per-repo dedup "lock".
+        let dedup = match job.spec.dedup {
+            Dedup::ByParams(field) => params.get(field).map(|value| (field, value)),
+            Dedup::None => None,
+        };
+        let limits = self.limits();
+        self.inner.store.reserve(
+            run.clone(),
+            &Admission {
+                key,
+                owner,
+                queue_depth: job.spec.queue_depth,
+                max_active_total: limits.max_active_total,
+                max_active_per_user: limits.max_active_per_user,
+                dedup,
+                job_name: job.spec.name,
+            },
+        )?;
+
         // Written down before it starts so a crash leaves a row: `Audit` is
         // closed by recovery, `Durable` is resumed, a `Memory` or idle
         // `Notable` run is not recorded at all. The condition has to match the
@@ -431,7 +420,7 @@ impl TaskSystem {
             && journaled_from_the_start
         {
             let now = chrono::Utc::now().timestamp();
-            journal
+            if let Err(error) = journal
                 .enqueue(
                     crate::repository::job_run::NewJobRun {
                         id: id.as_str().to_string(),
@@ -443,9 +432,13 @@ impl TaskSystem {
                     },
                     crate::tasks::queue::QueuePolicy::DEFAULT.lease_until(now),
                 )
-                .await?;
+                .await
+            {
+                // Nothing ran, so the reservation must not outlive the failed journal write.
+                self.inner.store.discard(&id);
+                return Err(error);
+            }
         }
-        self.inner.store.insert(run.clone())?;
 
         let cancel = CancellationToken::new();
         self.inner
@@ -1454,6 +1447,32 @@ mod tests {
 
     fn copy_params(names: &[&str]) -> Params {
         serde_json::json!({ "names": names, "repo_id": "r1" })
+    }
+
+    /// Two concurrent submissions of the same durable job must not both be admitted: the dedup
+    /// key is what makes a per-repo reindex a single run, and a durable job writes its journal row
+    /// between the old dedup check and the insert. `join!` polls the futures on one task, so the
+    /// first one parks on that journal write and the second runs right past the check.
+    #[tokio::test]
+    async fn a_duplicate_durable_submit_is_refused() {
+        let (system, _repos) = journal_system().await;
+        let params = serde_json::json!({ "repo_id": "repo-1" });
+
+        let (first, second) = tokio::join!(
+            system.submit(JobKey::Reindex, Some(1), params.clone(), "reindex", None),
+            system.submit(JobKey::Reindex, Some(1), params.clone(), "reindex", None),
+        );
+
+        assert_eq!(
+            usize::from(first.is_ok()) + usize::from(second.is_ok()),
+            1,
+            "exactly one submit may be admitted: {first:?} / {second:?}"
+        );
+        assert_eq!(
+            system.inner.store.count_active(JobKey::Reindex, None),
+            1,
+            "the store must hold exactly one active reindex"
+        );
     }
 
     #[tokio::test]

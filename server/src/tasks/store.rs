@@ -81,6 +81,23 @@ struct Inner {
     terminal_ttl_secs: AtomicI64,
 }
 
+/// Everything a submission has to satisfy before its run may exist.
+///
+/// Passed to [`RunStore::reserve`] so the checks and the insert happen under one lock. `dedup`
+/// carries the job's declared dedup key (`Dedup::ByParams`) as `(field, value)`.
+pub struct Admission<'a> {
+    pub key: JobKey,
+    /// The submitting user; also what the per-user cap counts.
+    pub owner: Option<i32>,
+    /// How many active runs of this job one owner may have; `0` is unlimited.
+    pub queue_depth: usize,
+    pub max_active_total: usize,
+    pub max_active_per_user: usize,
+    pub dedup: Option<(&'a str, &'a serde_json::Value)>,
+    /// The job's display name, used in the "already in progress" message.
+    pub job_name: &'a str,
+}
+
 /// A bounded table of job runs, shared behind an `Arc`.
 #[derive(Clone)]
 pub struct RunStore {
@@ -167,6 +184,70 @@ impl RunStore {
         }
 
         let mut runs = self.write();
+        self.evict_until_room(&mut runs, size);
+        runs.insert(run.id.clone(), run);
+        self.inner.bytes.fetch_add(size, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Check every admission rule and insert the run in **one** write-locked step.
+    ///
+    /// Submitting cannot use separate `count_active` / `find_active_by_param` reads followed by
+    /// [`RunStore::insert`]: a durable job writes its journal row (an `.await`) between them, so
+    /// two concurrent submissions both pass the checks and both insert — the per-repo dedup that
+    /// is supposed to be a lock stops being one. Doing the checks and the insert under the same
+    /// lock is what makes "reserved" mean reserved.
+    pub fn reserve(&self, run: JobRun, admission: &Admission<'_>) -> Result<(), AppError> {
+        let size = run.bytes();
+        let limits = self.limits();
+        if limits.max_retained_bytes > 0 && size > limits.max_retained_bytes {
+            return Err(AppError::TooManyRequests);
+        }
+
+        let mut runs = self.write();
+        let active = |r: &&JobRun| r.state.is_active();
+        if admission.queue_depth > 0
+            && runs
+                .values()
+                .filter(active)
+                .filter(|r| r.key == admission.key)
+                .filter(|r| admission.owner.is_none_or(|o| r.owner == Some(o)))
+                .count()
+                >= admission.queue_depth
+        {
+            return Err(AppError::TooManyRequests);
+        }
+        if admission.max_active_total > 0
+            && runs.values().filter(active).count() >= admission.max_active_total
+        {
+            return Err(AppError::TooManyRequests);
+        }
+        if admission.max_active_per_user > 0
+            && let Some(owner) = admission.owner
+            && runs
+                .values()
+                .filter(active)
+                .filter(|r| r.owner == Some(owner))
+                .count()
+                >= admission.max_active_per_user
+        {
+            return Err(AppError::TooManyRequests);
+        }
+        if let Some((field, value)) = admission.dedup
+            && runs.values().filter(active).any(|r| {
+                r.key == admission.key
+                    && r.params
+                        .as_ref()
+                        .and_then(|p| p.get(field))
+                        .is_some_and(|v| v == value)
+            })
+        {
+            return Err(AppError::Conflict(format!(
+                "{} is already in progress",
+                admission.job_name
+            )));
+        }
+
         self.evict_until_room(&mut runs, size);
         runs.insert(run.id.clone(), run);
         self.inner.bytes.fetch_add(size, Ordering::Relaxed);
