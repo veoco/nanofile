@@ -302,13 +302,18 @@ jobs:
         with:
           tool: cargo-audit
       # Fails on vulnerabilities only; unmaintained/unsound crates are reported
-      # as warnings. The one ignored advisory is unreachable here:
-      # RUSTSEC-2023-0071 (Marvin attack) is in `rsa`, which jsonwebtoken pulls
-      # in with its rust_crypto feature, but nanofile only signs and verifies
-      # HS256 (HMAC-SHA256) tokens and upstream has no fixed release. Re-check
-      # this ignore when jsonwebtoken gains algorithm-level features.
+      # as warnings. Both ignored advisories are unreachable here, and both come
+      # from jsonwebtoken's rust_crypto feature pulling in the RSA and ECDSA
+      # implementations even though nanofile only signs and verifies HS256
+      # (HMAC-SHA256) tokens:
+      # * RUSTSEC-2023-0071 (Marvin attack) is in `rsa`.
+      # * RUSTSEC-2026-0387 (timing variability in constant-time operations) is
+      #   in `crypto-bigint`, reached only through `p256`/`p384`
+      #   (`elliptic-curve` 0.13). jsonwebtoken 11.1.0 pins that line; the fix
+      #   needs crypto-bigint >= 0.7.6, which only the 0.14 curve crates pull
+      #   in. Re-check both when jsonwebtoken gains algorithm-level features.
       - name: Check for known vulnerabilities
-        run: cargo audit --ignore RUSTSEC-2023-0071
+        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0387
 
   # ── Every Linux target we ship that has no runner ───────────────────
   # The build matrices carry six Linux targets. x86_64-linux-gnu runs natively
