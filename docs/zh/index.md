@@ -8,7 +8,7 @@ hero:
   actions:
     - theme: brand
       text: 快速开始
-      link: /zh/guide/getting-started
+      link: /zh/guide/start/getting-started
     - theme: alt
       text: GitHub
       link: https://github.com/veoco/nanofile
@@ -36,14 +36,14 @@ features:
 
 ## 从这里开始
 
-- [安装与首次运行](/zh/guide/getting-started) — 下载归档或拉镜像，完成首次初始化。
-- [网页界面](/zh/guide/web-interface) — 登录后能做什么。
-- [客户端接入](/zh/guide/clients) — 官方 Seafile 客户端与 WebDAV。
-- [配置](/zh/guide/configuration) — 配置文件、`NANOFILE_*` 变量与设置页。
-- [Docker 部署](/zh/guide/docker) — 运行已发布的镜像。
-- [后台运行与自启动](/zh/guide/running-in-background) — 放到服务器上长期跑。
-- [备份、恢复与升级](/zh/guide/backup-and-upgrade) — 数据与版本。
-- [维护与故障排查](/zh/guide/maintenance) — 日志与常见问题。
+- [安装与首次运行](/zh/guide/start/getting-started) — 下载归档或拉镜像，完成首次初始化。
+- [网页界面](/zh/guide/start/web-interface) — 登录后能做什么。
+- [客户端接入](/zh/guide/start/clients) — 官方 Seafile 客户端与 WebDAV。
+- [配置](/zh/guide/configure/configuration) — 配置文件、`NANOFILE_*` 变量与设置页。
+- [Docker 部署](/zh/guide/deploy/docker) — 运行已发布的镜像。
+- [后台运行与自启动](/zh/guide/deploy/running-in-background) — 放到服务器上长期跑。
+- [备份、恢复与升级](/zh/guide/operate/backup-and-upgrade) — 数据与版本。
+- [维护与故障排查](/zh/guide/operate/maintenance) — 日志与常见问题。
 - [API 参考](/zh/reference/api/) — 全部 HTTP 接口，以及与 Seafile 官方 API 的对比。
 - [命令行](/zh/reference/cli) — 全部运维命令。
 - [开发](/zh/dev/architecture) — crate 布局、测试与 CI。

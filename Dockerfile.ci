@@ -12,7 +12,7 @@ EXPOSE 8082
 # data directory is normally owned by uid 1000 (the usual first host user).
 # `scratch` has no /etc/passwd, so use a numeric id; pass `--user` to override.
 # Upgrading an existing deployment needs `chown -R 1000:1000 <data dir>` —
-# see docs/guide/docker.md.
+# see docs/guide/deploy/docker.md.
 USER 1000:1000
 
 ENTRYPOINT ["/nanofile"]

@@ -53,7 +53,7 @@ npm run --prefix docs preview   # http://localhost:4173/nanofile/
 ```
 
 - `base` 是 `/nanofile/`；fork 需要改 `docs/.vitepress/config.mts`。
-- 站内链接写 `/guide/...`（英文）或 `/zh/guide/...`（中文）。指向 `docs/` 之外的文件时用 GitHub URL，不要用相对路径。
+- 站内链接写 `/guide/<章节>/<页面>`（英文）或 `/zh/guide/<章节>/<页面>`（中文）。指南按章节目录组织——`start`、`deploy`、`configure`、`admin`、`operate`——新页面放进对应章节目录。指向 `docs/` 之外的文件时用 GitHub URL，不要用相对路径。
 - 正文里的 `<owner>` 这类尖括号占位符要放进反引号；代码块之外会被当成 HTML。
 - `docs/public/favicon.svg` 是 `server/static/img/favicon.svg` 的副本。
 

@@ -1,7 +1,7 @@
 # Building
 
 This page is where compiling Nanofile from source lives. Running the server does
-not require a build: see [Installing and first run](/guide/getting-started).
+not require a build: see [Installing and first run](/guide/start/getting-started).
 
 ## Requirements
 
@@ -48,7 +48,7 @@ cargo build --bin nanofile        # the binary is target/debug/nanofile
 
 The two profiles differ at startup: a release build **refuses to start** without
 `server.secret_key`, while a debug build generates an ephemeral one, so sessions
-do not survive a restart. See [Security](/guide/security).
+do not survive a restart. See [Security](/guide/admin/security).
 
 ## Optional feature: `tray`
 
@@ -66,7 +66,7 @@ cargo build --release -p server --features tray
 
 GTK cannot be cross-compiled, so only the three native runner platforms ship a
 tray variant (Linux amd64, macOS arm64, Windows amd64). What the tray itself does
-is in [Desktop tray and Windows service](/guide/desktop-and-service).
+is in [Desktop tray and Windows service](/guide/deploy/desktop-and-service).
 
 ## Cross-compilation
 
@@ -106,5 +106,5 @@ are in [Contributing](/dev/contributing) and [Testing](/dev/testing).
 - [Testing](/dev/testing) — the Rust, frontend and browser suites.
 - [CI and releases](/dev/ci-releases) — per-platform builds, the sandbox smoke
   test and the published artifacts.
-- [Installing and first run](/guide/getting-started) — running it without
+- [Installing and first run](/guide/start/getting-started) — running it without
   building.

@@ -8,7 +8,7 @@ hero:
   actions:
     - theme: brand
       text: Get started
-      link: /guide/getting-started
+      link: /guide/start/getting-started
     - theme: alt
       text: GitHub
       link: https://github.com/veoco/nanofile
@@ -36,14 +36,14 @@ features:
 
 ## Start here
 
-- [Installing and first run](/guide/getting-started) — download an archive or pull the image, then run the first-run setup.
-- [Web interface](/guide/web-interface) — what you can do once you are signed in.
-- [Connecting clients](/guide/clients) — the official Seafile clients and WebDAV.
-- [Configuration](/guide/configuration) — config file, `NANOFILE_*` variables and the settings pages.
-- [Docker](/guide/docker) — run the published image.
-- [Running in the background](/guide/running-in-background) — keep it up on a server.
-- [Backup, restore and upgrade](/guide/backup-and-upgrade) — your data and your version.
-- [Maintenance and troubleshooting](/guide/maintenance) — logs and common problems.
+- [Installing and first run](/guide/start/getting-started) — download an archive or pull the image, then run the first-run setup.
+- [Web interface](/guide/start/web-interface) — what you can do once you are signed in.
+- [Connecting clients](/guide/start/clients) — the official Seafile clients and WebDAV.
+- [Configuration](/guide/configure/configuration) — config file, `NANOFILE_*` variables and the settings pages.
+- [Docker](/guide/deploy/docker) — run the published image.
+- [Running in the background](/guide/deploy/running-in-background) — keep it up on a server.
+- [Backup, restore and upgrade](/guide/operate/backup-and-upgrade) — your data and your version.
+- [Maintenance and troubleshooting](/guide/operate/maintenance) — logs and common problems.
 - [API reference](/reference/api/) — every HTTP endpoint, and how it compares with Seafile's.
 - [CLI reference](/reference/cli) — every operator command.
 - [Development](/dev/architecture) — crate layout, testing and CI.

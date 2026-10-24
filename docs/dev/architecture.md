@@ -63,7 +63,7 @@ always recorded, and a failure is always recorded.
 names its `NANOFILE_*` variable, how the value is parsed and when a change takes
 effect. The environment layer is applied from that table, so a setting cannot be
 added without wiring its variable, and the admin UI cannot advertise a variable
-the server does not read. See [Configuration](/guide/configuration).
+the server does not read. See [Configuration](/guide/configure/configuration).
 
 ## Build and frontend
 

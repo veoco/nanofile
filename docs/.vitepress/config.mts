@@ -3,23 +3,44 @@ import { defineConfig } from 'vitepress'
 const enSidebar = {
   '/guide/': [
     {
-      text: 'Guide',
+      text: 'Getting started',
       items: [
-        { text: 'Installing and first run', link: '/guide/getting-started' },
-        { text: 'Web interface', link: '/guide/web-interface' },
-        { text: 'Connecting clients', link: '/guide/clients' },
-        { text: 'Docker', link: '/guide/docker' },
-        { text: 'Configuration', link: '/guide/configuration' },
-        { text: 'Data directory', link: '/guide/data-directory' },
-        { text: 'Users and sharing', link: '/guide/users-and-sharing' },
-        { text: 'Account security', link: '/guide/account-security' },
-        { text: 'Email notifications', link: '/guide/email' },
-        { text: 'Running in the background', link: '/guide/running-in-background' },
-        { text: 'Backup, restore and upgrade', link: '/guide/backup-and-upgrade' },
-        { text: 'Maintenance and troubleshooting', link: '/guide/maintenance' },
-        { text: 'Sandbox', link: '/guide/sandbox' },
-        { text: 'Security', link: '/guide/security' },
-        { text: 'Desktop tray and service', link: '/guide/desktop-and-service' }
+        { text: 'Overview', link: '/guide/' },
+        { text: 'Installing and first run', link: '/guide/start/getting-started' },
+        { text: 'Web interface', link: '/guide/start/web-interface' },
+        { text: 'Connecting clients', link: '/guide/start/clients' }
+      ]
+    },
+    {
+      text: 'Deployment',
+      items: [
+        { text: 'Docker', link: '/guide/deploy/docker' },
+        { text: 'Running in the background', link: '/guide/deploy/running-in-background' },
+        { text: 'Desktop tray and service', link: '/guide/deploy/desktop-and-service' }
+      ]
+    },
+    {
+      text: 'Configuration',
+      items: [
+        { text: 'Configuration', link: '/guide/configure/configuration' },
+        { text: 'Data directory', link: '/guide/configure/data-directory' },
+        { text: 'Email notifications', link: '/guide/configure/email' }
+      ]
+    },
+    {
+      text: 'Administration and security',
+      items: [
+        { text: 'Users and sharing', link: '/guide/admin/users-and-sharing' },
+        { text: 'Account security', link: '/guide/admin/account-security' },
+        { text: 'Security', link: '/guide/admin/security' },
+        { text: 'Sandbox', link: '/guide/admin/sandbox' }
+      ]
+    },
+    {
+      text: 'Operations',
+      items: [
+        { text: 'Backup, restore and upgrade', link: '/guide/operate/backup-and-upgrade' },
+        { text: 'Maintenance and troubleshooting', link: '/guide/operate/maintenance' }
       ]
     }
   ],
@@ -74,23 +95,44 @@ const enSidebar = {
 const zhSidebar = {
   '/zh/guide/': [
     {
-      text: '指南',
+      text: '上手',
       items: [
-        { text: '安装与首次运行', link: '/zh/guide/getting-started' },
-        { text: '网页界面', link: '/zh/guide/web-interface' },
-        { text: '客户端接入', link: '/zh/guide/clients' },
-        { text: 'Docker 部署', link: '/zh/guide/docker' },
-        { text: '配置', link: '/zh/guide/configuration' },
-        { text: '数据目录', link: '/zh/guide/data-directory' },
-        { text: '用户与分享', link: '/zh/guide/users-and-sharing' },
-        { text: '账号安全', link: '/zh/guide/account-security' },
-        { text: '邮件通知', link: '/zh/guide/email' },
-        { text: '后台运行与自启动', link: '/zh/guide/running-in-background' },
-        { text: '备份、恢复与升级', link: '/zh/guide/backup-and-upgrade' },
-        { text: '维护与故障排查', link: '/zh/guide/maintenance' },
-        { text: '沙盒', link: '/zh/guide/sandbox' },
-        { text: '安全', link: '/zh/guide/security' },
-        { text: '桌面托盘与服务', link: '/zh/guide/desktop-and-service' }
+        { text: '概述', link: '/zh/guide/' },
+        { text: '安装与首次运行', link: '/zh/guide/start/getting-started' },
+        { text: '网页界面', link: '/zh/guide/start/web-interface' },
+        { text: '客户端接入', link: '/zh/guide/start/clients' }
+      ]
+    },
+    {
+      text: '部署',
+      items: [
+        { text: 'Docker 部署', link: '/zh/guide/deploy/docker' },
+        { text: '后台运行与自启动', link: '/zh/guide/deploy/running-in-background' },
+        { text: '桌面托盘与服务', link: '/zh/guide/deploy/desktop-and-service' }
+      ]
+    },
+    {
+      text: '配置',
+      items: [
+        { text: '配置', link: '/zh/guide/configure/configuration' },
+        { text: '数据目录', link: '/zh/guide/configure/data-directory' },
+        { text: '邮件通知', link: '/zh/guide/configure/email' }
+      ]
+    },
+    {
+      text: '管理与安全',
+      items: [
+        { text: '用户与分享', link: '/zh/guide/admin/users-and-sharing' },
+        { text: '账号安全', link: '/zh/guide/admin/account-security' },
+        { text: '安全', link: '/zh/guide/admin/security' },
+        { text: '沙盒', link: '/zh/guide/admin/sandbox' }
+      ]
+    },
+    {
+      text: '运维',
+      items: [
+        { text: '备份、恢复与升级', link: '/zh/guide/operate/backup-and-upgrade' },
+        { text: '维护与故障排查', link: '/zh/guide/operate/maintenance' }
       ]
     }
   ],
@@ -185,7 +227,7 @@ export default defineConfig({
       lang: 'en-US',
       themeConfig: {
         nav: [
-          { text: 'Guide', link: '/guide/getting-started' },
+          { text: 'Guide', link: '/guide/' },
           { text: 'Reference', link: '/reference/api/' },
           { text: 'Development', link: '/dev/architecture' }
         ],
@@ -198,7 +240,7 @@ export default defineConfig({
       link: '/zh/',
       themeConfig: {
         nav: [
-          { text: '指南', link: '/zh/guide/getting-started' },
+          { text: '指南', link: '/zh/guide/' },
           { text: '参考', link: '/zh/reference/api/' },
           { text: '开发', link: '/zh/dev/architecture' }
         ],

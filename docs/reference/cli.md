@@ -6,7 +6,7 @@ nanofile [--config <path>] server    start the server explicitly
 ```
 
 `--config <path>` overrides `NANOFILE_CONFIG` and the default lookup order. See
-[Configuration](/guide/configuration#where-the-config-file-is-looked-for).
+[Configuration](/guide/configure/configuration#where-the-config-file-is-looked-for).
 
 ## Server and account management
 
@@ -76,7 +76,7 @@ nanofile service run
 - `install` registers an auto-start service (starts at boot, no login) and removes
   this installation's "Start at login" entry. The default account is
   `NT SERVICE\Nanofile`; see
-  [Desktop tray and Windows service](/guide/desktop-and-service#start-at-boot-admin).
+  [Desktop tray and Windows service](/guide/deploy/desktop-and-service#start-at-boot-admin).
 - `uninstall` stops and removes the service and takes back the directory access it
   was granted.
 - `status` reports the registration and its account; exit code 0 when the service

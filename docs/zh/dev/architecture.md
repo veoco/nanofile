@@ -45,7 +45,7 @@ Nanofile 是一个包含四个 crate 的 Cargo workspace。依赖方向是单向
 
 ## 设置
 
-`infra::settings::catalog` 是 `Config` 字段的唯一目录。每个条目写明它的 `NANOFILE_*` 变量、如何解析，以及修改后何时生效。环境变量层就是按这张表应用的，因此新增设置不可能漏接变量，管理界面也不可能宣传服务器不读的变量。见[配置](/zh/guide/configuration)。
+`infra::settings::catalog` 是 `Config` 字段的唯一目录。每个条目写明它的 `NANOFILE_*` 变量、如何解析，以及修改后何时生效。环境变量层就是按这张表应用的，因此新增设置不可能漏接变量，管理界面也不可能宣传服务器不读的变量。见[配置](/zh/guide/configure/configuration)。
 
 ## 构建与前端
 

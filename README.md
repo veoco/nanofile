@@ -54,7 +54,7 @@ page does this on a first run):
 ```
 
 `--regular` creates a non-admin account. More in the
-[getting started guide](https://veoco.github.io/nanofile/guide/getting-started).
+[getting started guide](https://veoco.github.io/nanofile/guide/start/getting-started).
 
 ## Docker
 
@@ -78,21 +78,21 @@ docker run -d --name nanofile \
 
 The master secret is generated once and reused: rotating it logs out every
 session, breaks sync clients and makes encrypted blocks unreadable. See the
-[Docker guide](https://veoco.github.io/nanofile/guide/docker) for the config-file
+[Docker guide](https://veoco.github.io/nanofile/guide/deploy/docker) for the config-file
 variant, the first-run caveat and upgrade permissions.
 
 ## Documentation
 
 | | |
 |---|---|
-| [Installing and first run](https://veoco.github.io/nanofile/guide/getting-started) | Download an archive or the image, first run, administrator |
-| [Web interface](https://veoco.github.io/nanofile/guide/web-interface) | Libraries, upload and download, search, trash |
-| [Connecting clients](https://veoco.github.io/nanofile/guide/clients) | Seafile clients, WebDAV, API keys |
-| [Configuration](https://veoco.github.io/nanofile/guide/configuration) | Config file, `NANOFILE_*`, settings pages |
-| [Running in the background](https://veoco.github.io/nanofile/guide/running-in-background) | systemd, launchd, container restart policy |
-| [Backup, restore and upgrade](https://veoco.github.io/nanofile/guide/backup-and-upgrade) | Backing up data, restoring, changing versions |
-| [Maintenance and troubleshooting](https://veoco.github.io/nanofile/guide/maintenance) | Logs, garbage collection, common problems |
-| [Security](https://veoco.github.io/nanofile/guide/security) | Reverse proxy, TLS, secret key |
+| [Installing and first run](https://veoco.github.io/nanofile/guide/start/getting-started) | Download an archive or the image, first run, administrator |
+| [Web interface](https://veoco.github.io/nanofile/guide/start/web-interface) | Libraries, upload and download, search, trash |
+| [Connecting clients](https://veoco.github.io/nanofile/guide/start/clients) | Seafile clients, WebDAV, API keys |
+| [Configuration](https://veoco.github.io/nanofile/guide/configure/configuration) | Config file, `NANOFILE_*`, settings pages |
+| [Running in the background](https://veoco.github.io/nanofile/guide/deploy/running-in-background) | systemd, launchd, container restart policy |
+| [Backup, restore and upgrade](https://veoco.github.io/nanofile/guide/operate/backup-and-upgrade) | Backing up data, restoring, changing versions |
+| [Maintenance and troubleshooting](https://veoco.github.io/nanofile/guide/operate/maintenance) | Logs, garbage collection, common problems |
+| [Security](https://veoco.github.io/nanofile/guide/admin/security) | Reverse proxy, TLS, secret key |
 | [API reference](https://veoco.github.io/nanofile/reference/api/) | Every HTTP endpoint, plus the Seafile comparison |
 | [CLI reference](https://veoco.github.io/nanofile/reference/cli) | Every operator command |
 | [Development](https://veoco.github.io/nanofile/dev/architecture) | Architecture, testing, CI |

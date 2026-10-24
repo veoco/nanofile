@@ -68,7 +68,10 @@ npm run --prefix docs preview   # http://localhost:4173/nanofile/
 
 - `base` is `/nanofile/`; a fork has to change it in
   `docs/.vitepress/config.mts`.
-- Site-internal links are `/guide/...` (English) or `/zh/guide/...` (Chinese).
+- Site-internal links are `/guide/<chapter>/<page>` (English) or
+  `/zh/guide/<chapter>/<page>` (Chinese). The guide is split into chapter
+  directories — `start`, `deploy`, `configure`, `admin`, `operate` — so a new
+  guide page goes in the matching chapter.
   Link to files outside `docs/` with their GitHub URL, not a relative path.
 - Put angle-bracket placeholders such as `<owner>` in backticks; outside code
   fences they are parsed as HTML.

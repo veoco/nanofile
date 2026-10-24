@@ -1,6 +1,6 @@
 # 构建
 
-本页是从源码编译 Nanofile 的地方。只想把服务跑起来，不需要编译：见指南的[安装与首次运行](/zh/guide/getting-started)。
+本页是从源码编译 Nanofile 的地方。只想把服务跑起来，不需要编译：见指南的[安装与首次运行](/zh/guide/start/getting-started)。
 
 ## 环境要求
 
@@ -35,7 +35,7 @@ cargo build --release -p server   # 产物是 target/release/nanofile
 cargo build --bin nanofile        # 产物是 target/debug/nanofile
 ```
 
-两种 profile 在启动行为上有差别：release 构建在没有 `server.secret_key` 时**拒绝启动**，debug 构建会临时生成一个，因此会话无法跨重启保留。见[安全](/zh/guide/security)。
+两种 profile 在启动行为上有差别：release 构建在没有 `server.secret_key` 时**拒绝启动**，debug 构建会临时生成一个，因此会话无法跨重启保留。见[安全](/zh/guide/admin/security)。
 
 ## 可选 feature：`tray`
 
@@ -49,7 +49,7 @@ cargo build --release -p server --features tray
 - **Windows** 用 `winresource` 嵌入图标与版本资源，需要 `rc.exe` 或 `llvm-rc`。
 - **macOS** 无额外系统依赖；托盘图标用模板图，由菜单栏自行反色。
 
-GTK 无法交叉编译，因此发布产物里只有三个原生 runner 平台带 tray 变体（Linux amd64、macOS arm64、Windows amd64）。托盘本身的行为在[桌面托盘与 Windows 服务](/zh/guide/desktop-and-service)。
+GTK 无法交叉编译，因此发布产物里只有三个原生 runner 平台带 tray 变体（Linux amd64、macOS arm64、Windows amd64）。托盘本身的行为在[桌面托盘与 Windows 服务](/zh/guide/deploy/desktop-and-service)。
 
 ## 交叉编译
 
@@ -81,4 +81,4 @@ musl 产物是静态链接的，容器镜像（`FROM scratch`）用的就是它�
 - [前端](/zh/dev/frontend) — 模板、样式与 JavaScript 约定。
 - [测试](/zh/dev/testing) — Rust、前端与浏览器套件。
 - [CI 与发布](/zh/dev/ci-releases) — 各平台构建、沙盒冒烟测试与发布产物。
-- [安装与首次运行](/zh/guide/getting-started) — 不编译，直接运行。
+- [安装与首次运行](/zh/guide/start/getting-started) — 不编译，直接运行。

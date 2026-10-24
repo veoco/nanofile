@@ -42,7 +42,7 @@ chmod 600 config.toml             # 文件里存有主密钥
 ./nanofile adduser --email admin@example.com
 ```
 
-`--regular` 创建普通用户。更多见[安装与首次运行](https://veoco.github.io/nanofile/zh/guide/getting-started)。
+`--regular` 创建普通用户。更多见[安装与首次运行](https://veoco.github.io/nanofile/zh/guide/start/getting-started)。
 
 ## Docker
 
@@ -63,20 +63,20 @@ docker run -d --name nanofile \
   ghcr.io/veoco/nanofile:latest
 ```
 
-主密钥生成一次并长期保存：更换后所有会话登出、同步客户端失效、已加密块无法解密。配置文件方式、容器内首次初始化的注意事项与升级权限见 [Docker 部署](https://veoco.github.io/nanofile/zh/guide/docker)。
+主密钥生成一次并长期保存：更换后所有会话登出、同步客户端失效、已加密块无法解密。配置文件方式、容器内首次初始化的注意事项与升级权限见 [Docker 部署](https://veoco.github.io/nanofile/zh/guide/deploy/docker)。
 
 ## 文档
 
 | | |
 |---|---|
-| [安装与首次运行](https://veoco.github.io/nanofile/zh/guide/getting-started) | 下载归档或镜像、首次初始化、管理员 |
-| [网页界面](https://veoco.github.io/nanofile/zh/guide/web-interface) | 资料库、上传下载、搜索与回收站 |
-| [客户端接入](https://veoco.github.io/nanofile/zh/guide/clients) | Seafile 客户端、WebDAV、API 密钥 |
-| [配置](https://veoco.github.io/nanofile/zh/guide/configuration) | 配置文件、`NANOFILE_*`、设置页 |
-| [后台运行与自启动](https://veoco.github.io/nanofile/zh/guide/running-in-background) | systemd、launchd、容器重启策略 |
-| [备份、恢复与升级](https://veoco.github.io/nanofile/zh/guide/backup-and-upgrade) | 备份数据、恢复、换版本 |
-| [维护与故障排查](https://veoco.github.io/nanofile/zh/guide/maintenance) | 日志、垃圾回收、常见问题 |
-| [安全](https://veoco.github.io/nanofile/zh/guide/security) | 反向代理、TLS、主密钥 |
+| [安装与首次运行](https://veoco.github.io/nanofile/zh/guide/start/getting-started) | 下载归档或镜像、首次初始化、管理员 |
+| [网页界面](https://veoco.github.io/nanofile/zh/guide/start/web-interface) | 资料库、上传下载、搜索与回收站 |
+| [客户端接入](https://veoco.github.io/nanofile/zh/guide/start/clients) | Seafile 客户端、WebDAV、API 密钥 |
+| [配置](https://veoco.github.io/nanofile/zh/guide/configure/configuration) | 配置文件、`NANOFILE_*`、设置页 |
+| [后台运行与自启动](https://veoco.github.io/nanofile/zh/guide/deploy/running-in-background) | systemd、launchd、容器重启策略 |
+| [备份、恢复与升级](https://veoco.github.io/nanofile/zh/guide/operate/backup-and-upgrade) | 备份数据、恢复、换版本 |
+| [维护与故障排查](https://veoco.github.io/nanofile/zh/guide/operate/maintenance) | 日志、垃圾回收、常见问题 |
+| [安全](https://veoco.github.io/nanofile/zh/guide/admin/security) | 反向代理、TLS、主密钥 |
 | [API 参考](https://veoco.github.io/nanofile/zh/reference/api/) | 全部 HTTP 接口，以及与 Seafile 官方 API 的对比 |
 | [命令行](https://veoco.github.io/nanofile/zh/reference/cli) | 全部运维命令 |
 | [开发](https://veoco.github.io/nanofile/zh/dev/architecture) | 架构、测试、CI |

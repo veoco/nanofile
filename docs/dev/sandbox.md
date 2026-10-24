@@ -6,7 +6,7 @@ then reads a request on stdin. There is no in-process path: if the child cannot 
 started, or refuses to run without confinement, the document is a failure — retried
 later, never parsed by the server.
 
-See [Sandbox](/guide/sandbox) for the operator-facing behaviour and the admin page.
+See [Sandbox](/guide/admin/sandbox) for the operator-facing behaviour and the admin page.
 
 ## Profiles
 

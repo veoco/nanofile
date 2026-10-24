@@ -14,7 +14,7 @@
 //!
 //! This bounds a parser's effect on the host, not a kernel vulnerability or
 //! another process running as the same user. The operator-facing description is
-//! `docs/guide/sandbox.md`; the mechanisms and probe are in `docs/dev/sandbox.md`.
+//! `docs/guide/admin/sandbox.md`; the mechanisms and probe are in `docs/dev/sandbox.md`.
 
 use std::path::Path;
 
