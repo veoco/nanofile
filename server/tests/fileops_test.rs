@@ -541,6 +541,54 @@ async fn a_move_to_a_missing_destination_leaves_the_source_untouched() {
     );
 }
 
+/// A head commit that cannot be read is not an empty library. Treating the two
+/// alike based the next directory commit on an empty tree, which replaced HEAD's
+/// whole tree with the one new directory.
+#[tokio::test]
+async fn creating_a_directory_does_not_treat_a_missing_head_commit_as_empty() {
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    let f = TestFixture::new().await;
+    create_subdir(&f, "/a").await;
+    upload_test_file(&f, "f.txt", b"payload", "/a").await;
+    let head = repo_head(&f).await.expect("head after upload");
+
+    let commits_before = infra::entity::commit::Entity::find()
+        .filter(infra::entity::commit::Column::RepoId.eq(f.repo_id.clone()))
+        .all(&*f.server.db)
+        .await
+        .unwrap()
+        .len();
+
+    // Break the head pointer: the repo names a commit that no longer exists.
+    infra::entity::commit::Entity::delete_many()
+        .filter(infra::entity::commit::Column::CommitId.eq(head))
+        .exec(&*f.server.db)
+        .await
+        .unwrap();
+
+    let resp = f
+        .client
+        .create_dir(&f.api_token, &f.repo_id, "/still-here")
+        .await;
+    assert!(
+        !resp.status().is_success(),
+        "a broken head must not be reported as an empty repository"
+    );
+
+    let commits_after = infra::entity::commit::Entity::find()
+        .filter(infra::entity::commit::Column::RepoId.eq(f.repo_id.clone()))
+        .all(&*f.server.db)
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(
+        commits_after,
+        commits_before - 1,
+        "no replacement commit may be written on top of an empty tree"
+    );
+}
+
 /// Moving a file into an ancestor of its own directory used to reuse the
 /// destination object read before the removal. That object still pointed at the
 /// subtree containing the file, so phase 2 copied the pre-removal subtree back

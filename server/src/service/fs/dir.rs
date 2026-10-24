@@ -9,7 +9,7 @@ use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::DirEntry;
-use infra::common::util::{basename, get_head_root_id, parent_path_from};
+use infra::common::util::{basename, get_head_root_id, get_head_root_id_opt, parent_path_from};
 use infra::serialization::S_IFDIR;
 
 /// List directory entries by traversing the FS object tree from the head commit.
@@ -261,9 +261,12 @@ pub(crate) async fn create_dir_by_path(
     let now = chrono::Utc::now().timestamp();
 
     let parent_fs_id = if parent_path == "/" {
-        match get_head_root_id(db, repo_id).await {
-            Ok(root_id) => root_id,
-            Err(_) => {
+        // Only `Ok(None)` means "no commits yet". Treating a failed lookup as an
+        // empty library would base this commit on an empty tree and replace
+        // HEAD's whole tree with the new directory.
+        match get_head_root_id_opt(db, repo_id).await? {
+            Some(root_id) => root_id,
+            None => {
                 let empty_root = FsDirData {
                     dirents: vec![],
                     obj_type: SEAF_METADATA_TYPE_DIR,
@@ -304,8 +307,7 @@ pub(crate) async fn create_dir_by_path(
             Ok(())
         },
     )
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
+    .await?;
 
     activity_log::log_activity(
         db, repo_id, "create", "dir", &path, user_id, None, None, None, None, None,

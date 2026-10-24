@@ -639,10 +639,11 @@ impl FileService {
             return Ok(());
         }
 
-        // Quick check: if the head commit root can't be resolved, the repo is empty.
-        let root_id = match get_head_root_id(self.db(), repo_id).await {
-            Ok(root_id) => root_id,
-            Err(_) => return Ok(()),
+        // Only `Ok(None)` means "the repo is empty". A failed lookup must be
+        // propagated: continuing here would create the directory chain on top of
+        // an empty tree and drop the library's existing entries.
+        let Some(root_id) = get_head_root_id_opt(self.db(), repo_id).await? else {
+            return Ok(());
         };
 
         let parts: Vec<&str> = path
