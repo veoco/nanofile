@@ -3,7 +3,9 @@
 Nanofile implements the Seafile sync protocol and the APIs the official desktop
 and mobile clients use. This page records the compatibility rules that the code
 has to preserve. It documents behaviour asserted by code and tests; it does not
-claim support for features that are not implemented.
+claim support for features that are not implemented. The endpoint-by-endpoint
+comparison with Seafile's Web API is on [Seafile API compatibility](/reference/api/compatibility);
+this page covers the protocol rules that page cannot.
 
 ## Commit ids
 

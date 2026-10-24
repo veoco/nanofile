@@ -25,7 +25,32 @@ const enSidebar = {
   ],
   '/reference/': [
     {
-      text: 'Reference',
+      text: 'API reference',
+      items: [
+        { text: 'Overview', link: '/reference/api/' },
+        { text: 'Authentication', link: '/reference/api/authentication' },
+        { text: 'API keys and credentials', link: '/reference/api/api-keys' },
+        { text: 'Accounts and administration', link: '/reference/api/accounts' },
+        { text: 'Libraries', link: '/reference/api/libraries' },
+        { text: 'Directories', link: '/reference/api/directories' },
+        { text: 'Files and batch operations', link: '/reference/api/files' },
+        { text: 'Uploads and downloads', link: '/reference/api/transfers' },
+        { text: 'History, revisions and trash', link: '/reference/api/history' },
+        { text: 'Sharing', link: '/reference/api/sharing' },
+        { text: 'Metadata and search', link: '/reference/api/metadata' },
+        { text: 'Seafile API compatibility', link: '/reference/api/compatibility' }
+      ]
+    },
+    {
+      text: 'Protocols',
+      items: [
+        { text: 'Sync protocol', link: '/reference/api/sync' },
+        { text: 'Notification WebSocket', link: '/reference/api/notification' },
+        { text: 'WebDAV', link: '/reference/api/webdav' }
+      ]
+    },
+    {
+      text: 'Command line',
       items: [{ text: 'Command line', link: '/reference/cli' }]
     }
   ],
@@ -71,7 +96,32 @@ const zhSidebar = {
   ],
   '/zh/reference/': [
     {
-      text: '参考',
+      text: 'API 参考',
+      items: [
+        { text: '概述', link: '/zh/reference/api/' },
+        { text: '认证', link: '/zh/reference/api/authentication' },
+        { text: 'API 密钥与凭据', link: '/zh/reference/api/api-keys' },
+        { text: '账号与管理', link: '/zh/reference/api/accounts' },
+        { text: '资料库', link: '/zh/reference/api/libraries' },
+        { text: '目录', link: '/zh/reference/api/directories' },
+        { text: '文件与批量操作', link: '/zh/reference/api/files' },
+        { text: '上传与下载', link: '/zh/reference/api/transfers' },
+        { text: '历史、版本与回收站', link: '/zh/reference/api/history' },
+        { text: '分享', link: '/zh/reference/api/sharing' },
+        { text: '元数据与搜索', link: '/zh/reference/api/metadata' },
+        { text: '与 Seafile API 的兼容性', link: '/zh/reference/api/compatibility' }
+      ]
+    },
+    {
+      text: '协议',
+      items: [
+        { text: '同步协议', link: '/zh/reference/api/sync' },
+        { text: '通知 WebSocket', link: '/zh/reference/api/notification' },
+        { text: 'WebDAV', link: '/zh/reference/api/webdav' }
+      ]
+    },
+    {
+      text: '命令行',
       items: [{ text: '命令行', link: '/zh/reference/cli' }]
     }
   ],
@@ -136,7 +186,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: 'Guide', link: '/guide/getting-started' },
-          { text: 'Reference', link: '/reference/cli' },
+          { text: 'Reference', link: '/reference/api/' },
           { text: 'Development', link: '/dev/architecture' }
         ],
         sidebar: enSidebar
@@ -149,7 +199,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: '指南', link: '/zh/guide/getting-started' },
-          { text: '参考', link: '/zh/reference/cli' },
+          { text: '参考', link: '/zh/reference/api/' },
           { text: '开发', link: '/zh/dev/architecture' }
         ],
         sidebar: zhSidebar

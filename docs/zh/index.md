@@ -44,5 +44,6 @@ features:
 - [后台运行与自启动](/zh/guide/running-in-background) — 放到服务器上长期跑。
 - [备份、恢复与升级](/zh/guide/backup-and-upgrade) — 数据与版本。
 - [维护与故障排查](/zh/guide/maintenance) — 日志与常见问题。
+- [API 参考](/zh/reference/api/) — 全部 HTTP 接口，以及与 Seafile 官方 API 的对比。
 - [命令行](/zh/reference/cli) — 全部运维命令。
 - [开发](/zh/dev/architecture) — crate 布局、测试与 CI。

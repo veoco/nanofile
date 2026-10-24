@@ -77,6 +77,7 @@ docker run -d --name nanofile \
 | [备份、恢复与升级](https://veoco.github.io/nanofile/zh/guide/backup-and-upgrade) | 备份数据、恢复、换版本 |
 | [维护与故障排查](https://veoco.github.io/nanofile/zh/guide/maintenance) | 日志、垃圾回收、常见问题 |
 | [安全](https://veoco.github.io/nanofile/zh/guide/security) | 反向代理、TLS、主密钥 |
+| [API 参考](https://veoco.github.io/nanofile/zh/reference/api/) | 全部 HTTP 接口，以及与 Seafile 官方 API 的对比 |
 | [命令行](https://veoco.github.io/nanofile/zh/reference/cli) | 全部运维命令 |
 | [开发](https://veoco.github.io/nanofile/zh/dev/architecture) | 架构、测试、CI |
 

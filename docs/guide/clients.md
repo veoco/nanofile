@@ -106,6 +106,7 @@ because they are not a browser and cannot solve it.
 
 ## Related
 
+- [API reference](/reference/api/) — the HTTP interface behind these clients.
 - [Web interface](/guide/web-interface) — what the browser can do.
 - [Account security](/guide/account-security) — two-factor, trusted devices and
   credential revocation.

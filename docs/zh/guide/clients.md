@@ -65,6 +65,7 @@ API 密钥给脚本与第三方工具用，避免把账号密码交给它们。�
 
 ## 相关
 
+- [API 参考](/zh/reference/api/) — 这些客户端背后的 HTTP 接口。
 - [网页界面](/zh/guide/web-interface) — 浏览器里能做的部分。
 - [账号安全](/zh/guide/account-security) — 两步验证、受信设备与凭据吊销。
 - [安全](/zh/guide/security) — `site_url`、TLS 与反向代理。

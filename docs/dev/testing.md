@@ -7,7 +7,9 @@ cargo test --workspace
 ```
 
 This runs the unit tests, the integration tests under `server/tests/` and the
-documentation tests. The workspace suite is the main gate.
+documentation tests. The workspace suite is the main gate. `server/tests/docs_api_reference_test.rs`
+keeps the API reference tied to the route table and the explicit anchors it links
+to; see [API reference](/reference/api/).
 
 The optional tray feature is compiled out by default, so its unit tests need the
 feature explicitly:

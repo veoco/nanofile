@@ -44,5 +44,6 @@ features:
 - [Running in the background](/guide/running-in-background) — keep it up on a server.
 - [Backup, restore and upgrade](/guide/backup-and-upgrade) — your data and your version.
 - [Maintenance and troubleshooting](/guide/maintenance) — logs and common problems.
+- [API reference](/reference/api/) — every HTTP endpoint, and how it compares with Seafile's.
 - [CLI reference](/reference/cli) — every operator command.
 - [Development](/dev/architecture) — crate layout, testing and CI.

@@ -1,6 +1,6 @@
 # Seafile 兼容性
 
-Nanofile 实现 Seafile 的同步协议，以及官方桌面端与移动端客户端使用的接口。本页记录代码必须保持的兼容规则。它只记录由代码与测试证实的行为，不宣称支持尚未实现的功能。
+Nanofile 实现 Seafile 的同步协议，以及官方桌面端与移动端客户端使用的接口。本页记录代码必须保持的兼容规则。它只记录由代码与测试证实的行为，不宣称支持尚未实现的功能。与 Seafile Web API 的逐接口对照见 [与 Seafile API 的兼容性](/zh/reference/api/compatibility)；本页覆盖那页装不下的协议规则。
 
 ## 提交 id
 

@@ -6,7 +6,7 @@
 cargo test --workspace
 ```
 
-它会跑单元测试、`server/tests/` 下的集成测试与文档测试。workspace 套件是主门禁。
+它会跑单元测试、`server/tests/` 下的集成测试与文档测试。workspace 套件是主门禁。`server/tests/docs_api_reference_test.rs` 把 API 参考与路由表、被链接的显式锚点钉在一起，见 [API 参考](/zh/reference/api/)。
 
 可选的 tray feature 默认不编译，因此它的单元测试要显式开启：
 

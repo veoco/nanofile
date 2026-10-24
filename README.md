@@ -93,6 +93,7 @@ variant, the first-run caveat and upgrade permissions.
 | [Backup, restore and upgrade](https://veoco.github.io/nanofile/guide/backup-and-upgrade) | Backing up data, restoring, changing versions |
 | [Maintenance and troubleshooting](https://veoco.github.io/nanofile/guide/maintenance) | Logs, garbage collection, common problems |
 | [Security](https://veoco.github.io/nanofile/guide/security) | Reverse proxy, TLS, secret key |
+| [API reference](https://veoco.github.io/nanofile/reference/api/) | Every HTTP endpoint, plus the Seafile comparison |
 | [CLI reference](https://veoco.github.io/nanofile/reference/cli) | Every operator command |
 | [Development](https://veoco.github.io/nanofile/dev/architecture) | Architecture, testing, CI |
 
