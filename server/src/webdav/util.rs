@@ -128,21 +128,37 @@ pub async fn resolve_head(repos: &Repositories, repo_id: &str) -> Result<HeadCon
     Ok(HeadContext { root_id })
 }
 
-/// Resolve a path's `(is_dir, size, mtime)` from the FS tree, reusing a resolved
-/// head context; `Ok(None)` when the path does not exist.
+/// A path's metadata, as the WebDAV handlers need it.
+#[derive(Clone, Debug)]
+pub struct EntryMeta {
+    pub is_dir: bool,
+    pub size: i64,
+    pub mtime: i64,
+    /// The FS object id: seafdav reports it as the resource's `ETag` and so does the
+    /// `getetag` property, so both must come from here.
+    pub fs_id: String,
+}
+
+/// Resolve a path's metadata from the FS tree, reusing a resolved head context;
+/// `Ok(None)` when the path does not exist.
 pub async fn entry_metadata_with_head(
     repos: &Repositories,
     repo_id: &str,
     head: &HeadContext,
     path: &str,
-) -> Result<Option<(bool, i64, i64)>, AppError> {
+) -> Result<Option<EntryMeta>, AppError> {
     if path == "/" || path.is_empty() {
         let repo = repos
             .repo
             .find_by_id(repo_id)
             .await?
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-        return Ok(Some((true, repo.size, repo.updated_at)));
+        return Ok(Some(EntryMeta {
+            is_dir: true,
+            size: repo.size,
+            mtime: repo.updated_at,
+            fs_id: head.root_id.clone(),
+        }));
     }
 
     let parent = parent_path_from(path);
@@ -159,7 +175,12 @@ pub async fn entry_metadata_with_head(
         Some(e) => e,
         None => return Ok(None),
     };
-    Ok(Some((entry.mode & S_IFDIR != 0, entry.size, entry.mtime)))
+    Ok(Some(EntryMeta {
+        is_dir: entry.mode & S_IFDIR != 0,
+        size: entry.size,
+        mtime: entry.mtime,
+        fs_id: entry.id.clone(),
+    }))
 }
 
 /// Format a unix timestamp as an HTTP-date (RFC 1123) string.

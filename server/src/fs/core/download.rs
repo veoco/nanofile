@@ -410,13 +410,20 @@ pub fn blocks_etag(block_ids: &[String]) -> String {
 }
 
 /// Whether a request's `If-None-Match` selects `etag` (`*` or a comma-separated list).
+///
+/// Comparison is the weak one RFC 9110 §13.1.2 specifies for this header, so a
+/// `W/"…"` candidate matches the strong `"…"` validator.
 pub fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {
     match headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
     {
         Some("*") => true,
-        Some(value) => value.split(',').any(|candidate| candidate.trim() == etag),
+        Some(value) => value.split(',').any(|candidate| {
+            let candidate = candidate.trim();
+            let candidate = candidate.strip_prefix("W/").unwrap_or(candidate);
+            candidate == etag
+        }),
         None => false,
     }
 }

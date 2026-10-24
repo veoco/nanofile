@@ -294,6 +294,27 @@ impl TestServer {
         .await
     }
 
+    /// Start a server with a custom PROPFIND entry cap (for testing the
+    /// `propfind-finite-depth` refusal).
+    pub async fn start_with_propfind_limit(limit: usize) -> Self {
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            move |config| config.server.max_propfind_entries = limit,
+        )
+        .await
+    }
+
     /// Start a server with arbitrary `storage.*` tweaks (for testing the media
     /// helper the sandbox grants, and the directories a request writes to).
     pub async fn start_with_storage_config(
@@ -1179,6 +1200,34 @@ impl TestFixture {
             ..Default::default()
         })
         .await;
+        let client = server.client();
+        let db = &*server.db;
+
+        let user_id = create_test_user(db, "test@example.com", "password").await;
+
+        let resp = client.login("test@example.com", "password").await;
+        assert_eq!(resp.status(), 200, "login failed");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let api_token = body["token"].as_str().unwrap().to_string();
+
+        let repo_id = create_test_repo(&client, &api_token, "test-repo").await;
+        let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
+
+        Self {
+            server,
+            client,
+            email: "test@example.com".to_string(),
+            password: "password".to_string(),
+            api_token,
+            repo_id,
+            sync_token,
+            user_id,
+        }
+    }
+
+    /// Create a test environment with a custom PROPFIND entry cap.
+    pub async fn new_with_propfind_limit(limit: usize) -> Self {
+        let server = TestServer::start_with_propfind_limit(limit).await;
         let client = server.client();
         let db = &*server.db;
 

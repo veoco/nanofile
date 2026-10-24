@@ -13,8 +13,8 @@ use crate::AppState;
 use crate::fs::core::FileOps;
 use crate::webdav::auth::WebDavAuth;
 use crate::webdav::util::{
-    HeadContext, entry_metadata_with_head, join_path, normalize_webdav_path, parse_destination,
-    parse_overwrite, resolve_head,
+    EntryMeta, HeadContext, entry_metadata_with_head, join_path, normalize_webdav_path,
+    parse_destination, parse_overwrite, resolve_head,
 };
 use crate::webdav::xml::{build_empty_multistatus, build_lock_body};
 
@@ -115,13 +115,15 @@ async fn get_handler(
 
     let filename = path.rsplit_once('/').map(|(_, n)| n).unwrap_or("download");
 
-    // A strong validator, so a client can revalidate instead of re-downloading, and `Range`
-    // works for media players and resumable clients. Both come from the one download builder the
-    // web endpoints use, so `ETag`/`Accept-Ranges`/`Content-Range` cannot drift from theirs.
-    // Encrypted libraries never reach here: `WebDavAuth` refuses them, so no key is passed.
-    let etag = crate::fs::core::download::blocks_etag(&block_ids);
+    // seafdav reports the FS object id as the strong validator (`get_etag()` returns
+    // `obj.obj_id`), so `ETag`, `If-None-Match` and the PROPFIND `getetag` property all
+    // agree on one value. Encrypted libraries never reach here: `WebDavAuth` refuses
+    // them, so the id is the plaintext object's and no key is passed.
+    let etag = format!("\"{fs_id}\"");
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
-    if range_header.is_none() && crate::fs::core::download::if_none_match(headers, &etag) {
+    // RFC 9110 §13.1.2: `If-None-Match` is evaluated before `Range`, so a matching
+    // validator answers 304 even when the request also asks for a range.
+    if crate::fs::core::download::if_none_match(headers, &etag) {
         let mut resp = StatusCode::NOT_MODIFIED.into_response();
         if let Ok(value) = HeaderValue::from_str(&etag) {
             resp.headers_mut().insert(header::ETAG, value);
@@ -170,7 +172,7 @@ async fn put_handler(
     let parent = parent_path_from(path);
     // The parent must exist (RFC 4918: 409 Conflict otherwise).
     match entry_metadata_with_head(&state.repos, &auth.repo_id, head, parent).await {
-        Ok(Some((true, _, _))) => {}
+        Ok(Some(m)) if m.is_dir => {}
         _ => return StatusCode::CONFLICT.into_response(),
     }
 
@@ -266,7 +268,7 @@ async fn mkcol_handler(
     }
     let parent = parent_path_from(path);
     match entry_metadata_with_head(&state.repos, &auth.repo_id, head, parent).await {
-        Ok(Some((true, _, _))) => {}
+        Ok(Some(m)) if m.is_dir => {}
         _ => return StatusCode::CONFLICT.into_response(),
     }
     match state
@@ -295,10 +297,10 @@ async fn delete_handler(
         Ok(m) => m,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let Some((is_dir, _, _)) = meta else {
+    let Some(meta) = meta else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let obj = if is_dir { "dir" } else { "file" };
+    let obj = if meta.is_dir { "dir" } else { "file" };
     match state
         .dir_service()
         .delete_dirent(&auth.repo_id, obj, path, &auth.email, auth.user_id)
@@ -311,19 +313,19 @@ async fn delete_handler(
 
 /// Memoized `entry_metadata_with_head`; MOVE/COPY probes src and dst twice.
 async fn cached_entry_metadata(
-    cache: &mut HashMap<String, Option<(bool, i64, i64)>>,
+    cache: &mut HashMap<String, Option<EntryMeta>>,
     repos: &crate::repository::Repositories,
     repo_id: &str,
     head: &HeadContext,
     path: &str,
-) -> Option<Option<(bool, i64, i64)>> {
+) -> Option<Option<EntryMeta>> {
     if let Some(v) = cache.get(path) {
-        return Some(*v);
+        return Some(v.clone());
     }
     let v = entry_metadata_with_head(repos, repo_id, head, path)
         .await
         .ok()?;
-    cache.insert(path.to_string(), v);
+    cache.insert(path.to_string(), v.clone());
     Some(v)
 }
 
@@ -336,7 +338,7 @@ async fn move_copy_handler(
     head: &HeadContext,
 ) -> Response {
     // Per-path metadata cache: repeated src/dst probes skip the tree walk.
-    let mut meta_cache: HashMap<String, Option<(bool, i64, i64)>> = HashMap::new();
+    let mut meta_cache: HashMap<String, Option<EntryMeta>> = HashMap::new();
 
     if auth.permission != "rw" {
         return StatusCode::FORBIDDEN.into_response();
@@ -359,8 +361,9 @@ async fn move_copy_handler(
         return StatusCode::FORBIDDEN.into_response();
     }
     // Moving/copying a directory into its own subtree is invalid.
-    if let Some(Some((true, _, _))) =
+    if let Some(Some(meta)) =
         cached_entry_metadata(&mut meta_cache, &state.repos, &auth.repo_id, head, src_path).await
+        && meta.is_dir
     {
         let prefix = format!("{}/", src_path);
         if dst_path.starts_with(&prefix) {
@@ -381,7 +384,7 @@ async fn move_copy_handler(
     )
     .await
     {
-        Some(Some((true, _, _))) => {}
+        Some(Some(meta)) if meta.is_dir => {}
         _ => return StatusCode::CONFLICT.into_response(),
     }
 
@@ -399,8 +402,8 @@ async fn move_copy_handler(
             return StatusCode::PRECONDITION_FAILED.into_response();
         }
         // Remove the target first, else batch_copy/move auto-renames it (Overwrite).
-        if let Some(Some((is_dir, _, _))) = dst_meta {
-            let obj = if is_dir { "dir" } else { "file" };
+        if let Some(Some(dst)) = dst_meta {
+            let obj = if dst.is_dir { "dir" } else { "file" };
             if state
                 .dir_service()
                 .delete_dirent(&auth.repo_id, obj, &dst_path, &auth.email, auth.user_id)
@@ -446,7 +449,7 @@ async fn do_move(
 
     let is_dir = entry_metadata_with_head(&state.repos, &auth.repo_id, head, src)
         .await?
-        .map(|m| m.0)
+        .map(|m| m.is_dir)
         .unwrap_or(false);
 
     if src_parent == dst_parent {
@@ -534,7 +537,7 @@ async fn do_copy(
         let copied_path = join_path(dst_parent, src_name);
         let is_dir = entry_metadata_with_head(&state.repos, &auth.repo_id, head, &copied_path)
             .await?
-            .map(|m| m.0)
+            .map(|m| m.is_dir)
             .unwrap_or(false);
         if is_dir {
             state

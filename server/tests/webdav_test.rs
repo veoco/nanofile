@@ -1282,3 +1282,135 @@ async fn a_key_minted_from_the_webdav_preset_is_a_webdav_key() {
         .await;
     assert_eq!(resp.status(), 403, "a WebDAV key must not delete over REST");
 }
+
+/// `getetag` in PROPFIND must be the same value a GET answers with (seafdav reports
+/// the FS object id in both places), so a client can cache on the listing and
+/// revalidate with `If-None-Match`. Before this, PROPFIND had no `getetag` at all and
+/// the GET used a different (block-list) hash.
+#[tokio::test]
+async fn test_propfind_getetag_matches_get_etag() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+    let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
+    dav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/etagged.txt",
+        &f.email,
+        &key,
+        b"etag me",
+    )
+    .await;
+
+    let get = dav_get(&client, base, &f.repo_id, "/etagged.txt", &f.email, &key).await;
+    let etag = get
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .expect("GET must carry an ETag")
+        .to_string();
+
+    let m = Method::from_bytes(b"PROPFIND").unwrap();
+    let resp = client
+        .request(m, dav_url(base, &f.repo_id, "/etagged.txt"))
+        .basic_auth(&f.email, Some(&key))
+        .header("Depth", "0")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 207);
+    let body = resp.text().await.unwrap();
+    // quick-xml escapes the quoting characters in element text; the parsed value is
+    // the same ETag string the header carries.
+    let escaped = etag.replace('"', "&quot;");
+    assert!(
+        body.contains(&format!("<D:getetag>{escaped}</D:getetag>")),
+        "PROPFIND must report the GET's ETag {etag}; got {body}"
+    );
+}
+
+/// `If-None-Match` is evaluated before `Range` (RFC 9110 §13.1.2), so a matching
+/// revalidation of a range request is a 304, not a 206.
+#[tokio::test]
+async fn test_if_none_match_wins_over_range() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+    let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
+    dav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/revalidate.txt",
+        &f.email,
+        &key,
+        b"0123456789",
+    )
+    .await;
+
+    let get = dav_get(&client, base, &f.repo_id, "/revalidate.txt", &f.email, &key).await;
+    let etag = get
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .unwrap()
+        .to_string();
+
+    let m = Method::from_bytes(b"GET").unwrap();
+    let resp = client
+        .request(m, dav_url(base, &f.repo_id, "/revalidate.txt"))
+        .basic_auth(&f.email, Some(&key))
+        .header("Range", "bytes=0-3")
+        .header("If-None-Match", etag.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 304, "If-None-Match must win over Range");
+    assert!(
+        resp.headers().get("content-range").is_none(),
+        "a 304 must not describe a range"
+    );
+    assert_eq!(
+        resp.headers().get("etag").map(|v| v.to_str().unwrap()),
+        Some(etag.as_str())
+    );
+    assert_eq!(resp.bytes().await.unwrap().len(), 0);
+}
+
+/// Over `max_propfind_entries`, a `Depth: infinity`/`1` listing is refused with the
+/// RFC 4918 §9.1 precondition (403 + `propfind-finite-depth`), which tells the client
+/// to retry shallower; 507 wrongly claimed the storage was full.
+#[tokio::test]
+async fn test_propfind_over_limit_refuses_finite_depth() {
+    let f = TestFixture::new_with_propfind_limit(1).await;
+    let base = &f.server.base_url;
+    let client = http();
+    let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
+    dav_put(&client, base, &f.repo_id, "/one.txt", &f.email, &key, b"1").await;
+    dav_put(&client, base, &f.repo_id, "/two.txt", &f.email, &key, b"2").await;
+
+    let m = Method::from_bytes(b"PROPFIND").unwrap();
+    let resp = client
+        .request(m, dav_url(base, &f.repo_id, "/"))
+        .basic_auth(&f.email, Some(&key))
+        .header("Depth", "1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403);
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .starts_with("application/xml"),
+        "the refusal must be an XML precondition body"
+    );
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains("propfind-finite-depth"),
+        "expected the RFC 4918 precondition, got {body}"
+    );
+}

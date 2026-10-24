@@ -11,7 +11,9 @@ use crate::webdav::auth::WebDavAuth;
 use crate::webdav::util::{
     Depth, HeadContext, build_href, entry_metadata_with_head, http_date, join_path, parse_depth,
 };
-use crate::webdav::xml::{PropResponse, ResourceProps, build_multistatus};
+use crate::webdav::xml::{
+    PropResponse, ResourceProps, build_finite_depth_error, build_multistatus,
+};
 
 /// PROPFIND handler: a 207 Multi-Status listing the target and its descendants.
 pub async fn propfind(
@@ -34,15 +36,18 @@ pub async fn propfind(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let (target_is_dir, target_size, target_mtime) = target_meta;
+    let target_is_dir = target_meta.is_dir;
 
     // Depth infinity on a non-collection is a client error.
     if !target_is_dir && matches!(depth, Depth::Infinity) {
         return StatusCode::BAD_REQUEST.into_response();
     }
 
-    // The multistatus is built in memory and an absent `Depth` means infinity,
-    // so over the cap the client is told to retry shallower, not given a truncated list.
+    // The multistatus is built in memory and an absent `Depth` means infinity, so
+    // over the cap the client is told to retry shallower, not given a truncated list.
+    // RFC 4918 §9.1 spells exactly that refusal: 403 with a
+    // `<D:propfind-finite-depth/>` precondition (wsgidav/seafdav answers the same
+    // when it disables infinite depth; 507 would claim the storage is full).
     let limit = state.config().server.max_propfind_entries;
     let exceeds_limit = |count: usize| limit > 0 && count > limit;
 
@@ -74,8 +79,10 @@ pub async fn propfind(
         props: Some(ResourceProps {
             is_collection: target_is_dir,
             displayname,
-            getcontentlength: if target_is_dir { 0 } else { target_size },
-            getlastmodified: http_date(target_mtime),
+            // Collections carry no size (wsgidav omits `getcontentlength` for them).
+            getcontentlength: (!target_is_dir).then_some(target_meta.size),
+            getlastmodified: http_date(target_meta.mtime),
+            etag: file_etag(!target_is_dir, &target_meta.fs_id),
         }),
     });
 
@@ -87,7 +94,7 @@ pub async fn propfind(
                     list_dir_from_root(&state.repos, &auth.repo_id, &head.root_id, &path).await
                 {
                     if exceeds_limit(entries.len() + responses.len()) {
-                        return StatusCode::INSUFFICIENT_STORAGE.into_response();
+                        return finite_depth_refusal();
                     }
                     for e in entries {
                         let child = join_path(&path, &e.name);
@@ -114,7 +121,7 @@ pub async fn propfind(
                 .await
                 {
                     if truncated || exceeds_limit(entries.len() + responses.len()) {
-                        return StatusCode::INSUFFICIENT_STORAGE.into_response();
+                        return finite_depth_refusal();
                     }
                     for e in entries {
                         let parent = e.parent_dir.as_deref().unwrap_or(&path);
@@ -150,8 +157,9 @@ fn push_entry(responses: &mut Vec<PropResponse>, repo_id: &str, full_path: &str,
         props: Some(ResourceProps {
             is_collection: is_dir,
             displayname: e.name.clone(),
-            getcontentlength: if is_dir { 0 } else { e.size },
+            getcontentlength: (!is_dir).then_some(e.size),
             getlastmodified: http_date(e.mtime),
+            etag: file_etag(!is_dir, &e.id),
         }),
     });
 }
@@ -165,4 +173,22 @@ async fn body_requests_propname(body: Body) -> bool {
             .contains("propname"),
         Err(_) => false,
     }
+}
+
+/// The `getetag` property value of a file, quoted exactly like the `ETag` header a
+/// `GET` returns for it (`seafdav` reports the FS object id in both places, so a
+/// client that caches on one value can revalidate against the other). Directories
+/// have no `GET`, so they carry no validator.
+fn file_etag(emit: bool, fs_id: &str) -> Option<String> {
+    emit.then(|| format!("\"{fs_id}\""))
+}
+
+/// Response to a `Depth: infinity` listing that would exceed `max_propfind_entries`.
+fn finite_depth_refusal() -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/xml; charset=\"utf-8\""),
+    );
+    (StatusCode::FORBIDDEN, headers, build_finite_depth_error()).into_response()
 }

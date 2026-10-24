@@ -16,8 +16,13 @@ pub struct PropResponse {
 pub struct ResourceProps {
     pub is_collection: bool,
     pub displayname: String,
-    pub getcontentlength: i64,
+    /// Absent for collections, like wsgidav's `getcontentlength` (it has no
+    /// meaningful size).
+    pub getcontentlength: Option<i64>,
     pub getlastmodified: String,
+    /// The `getetag` property, quoted like the `ETag` response header. Files only:
+    /// the value is the FS object id, which is what `GET` answers with.
+    pub etag: Option<String>,
 }
 
 fn w_start(w: &mut Writer<Vec<u8>>, tag: &str) {
@@ -34,8 +39,10 @@ fn w_empty(w: &mut Writer<Vec<u8>>, tag: &str) {
 
 fn w_text(w: &mut Writer<Vec<u8>>, tag: &str, value: &str) {
     w_start(w, tag);
-    let escaped = quick_xml::escape::escape(value);
-    let _ = w.write_event(Event::Text(BytesText::new(escaped.as_ref())));
+    // `BytesText::new` escapes exactly once; escaping here too turned `&` into
+    // `&amp;amp;` and an ETag's quotes into `&amp;quot;`, i.e. a different value for
+    // any client that compares it with the header.
+    let _ = w.write_event(Event::Text(BytesText::new(value)));
     w_end(w, tag);
 }
 
@@ -69,19 +76,25 @@ pub fn build_multistatus(responses: &[PropResponse], propname_only: bool) -> Vec
                 }
 
                 if propname_only {
-                    w_empty(&mut w, "D:getcontentlength");
+                    if props.getcontentlength.is_some() {
+                        w_empty(&mut w, "D:getcontentlength");
+                    }
+                    if props.etag.is_some() {
+                        w_empty(&mut w, "D:getetag");
+                    }
                     w_empty(&mut w, "D:getlastmodified");
                     w_empty(&mut w, "D:displayname");
                     w_empty(&mut w, "D:supportedlock");
                     w_empty(&mut w, "D:lockdiscovery");
                 } else {
                     w_text(&mut w, "D:displayname", &props.displayname);
-                    w_text(
-                        &mut w,
-                        "D:getcontentlength",
-                        &props.getcontentlength.to_string(),
-                    );
+                    if let Some(length) = props.getcontentlength {
+                        w_text(&mut w, "D:getcontentlength", &length.to_string());
+                    }
                     w_text(&mut w, "D:getlastmodified", &props.getlastmodified);
+                    if let Some(etag) = props.etag.as_deref() {
+                        w_text(&mut w, "D:getetag", etag);
+                    }
                     w_empty(&mut w, "D:supportedlock");
                     w_empty(&mut w, "D:lockdiscovery");
                 }
@@ -116,5 +129,19 @@ pub fn build_empty_multistatus() -> Vec<u8> {
     let mut multistatus = BytesStart::new("D:multistatus");
     multistatus.push_attribute(("xmlns:D", DAV_NS));
     let _ = w.write_event(Event::Empty(multistatus));
+    w.into_inner()
+}
+
+/// The RFC 4918 §9.1 refusal for a `Depth: infinity` listing a server will not expand:
+/// 403 with the `propfind-finite-depth` precondition tells the client to retry with
+/// `Depth: 1` (wsgidav/seafdav emit the same body when infinite depth is disabled).
+pub fn build_finite_depth_error() -> Vec<u8> {
+    let mut w = Writer::new(Vec::new());
+    let _ = w.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)));
+    let mut error = BytesStart::new("D:error");
+    error.push_attribute(("xmlns:D", DAV_NS));
+    let _ = w.write_event(Event::Start(error));
+    w_empty(&mut w, "D:propfind-finite-depth");
+    let _ = w.write_event(Event::End(BytesEnd::new("D:error")));
     w.into_inner()
 }
