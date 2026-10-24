@@ -94,11 +94,18 @@ impl BlockStorage {
     }
 
     /// Stored length of a fresh cached entry, or `None`.
+    ///
+    /// Every block read and write passes through here, so an expired entry is a
+    /// miss and *not* swept: a `retain` over a full cache (100k entries) under the
+    /// mutex made the cache cost more than the `stat` it replaces. The sweep is in
+    /// [`Self::exists_cache_insert`], which already takes the lock for a write.
     fn exists_cache_len(&self, repo_id: &str, block_id: &str) -> Option<u64> {
         let key = Self::cache_key(repo_id, block_id);
-        let mut cache = self.exists_cache.lock().unwrap();
-        Self::evict_expired(&mut cache);
-        cache.get(&key).map(|(_, len)| *len)
+        let cache = self.exists_cache.lock().unwrap();
+        cache
+            .get(&key)
+            .filter(|(at, _)| at.elapsed() < EXISTS_CACHE_TTL)
+            .map(|(_, len)| *len)
     }
 
     fn exists_cache_contains(&self, repo_id: &str, block_id: &str) -> bool {
@@ -108,10 +115,12 @@ impl BlockStorage {
     fn exists_cache_insert(&self, repo_id: &str, block_id: &str, stored_len: u64) {
         let key = Self::cache_key(repo_id, block_id);
         let mut cache = self.exists_cache.lock().unwrap();
-        Self::evict_expired(&mut cache);
         if cache.len() >= EXISTS_CACHE_CAPACITY {
-            // Capacity reached with all entries fresh: drop the whole cache.
-            cache.clear();
+            Self::evict_expired(&mut cache);
+            if cache.len() >= EXISTS_CACHE_CAPACITY {
+                // Capacity reached with all entries fresh: drop the whole cache.
+                cache.clear();
+            }
         }
         cache.insert(key, (Instant::now(), stored_len));
     }
@@ -965,6 +974,32 @@ mod tests {
             !store.has_block(REPO, &id).await,
             "recheck after invalidation"
         );
+    }
+
+    /// An expired entry is a miss on the read path, but the read no longer sweeps
+    /// the map under the lock: the sweep only happens on the next insert.
+    #[tokio::test]
+    async fn an_expired_exists_entry_is_a_miss_without_sweeping() {
+        let (_root, store) = temp_storage();
+        let id = store.write_block(REPO, b"cache-me").await.unwrap();
+        store.exists_cache_insert(REPO, &id, 8);
+        {
+            let key = BlockStorage::cache_key(REPO, &id);
+            let mut cache = store.exists_cache.lock().unwrap();
+            let entry = cache.get_mut(&key).expect("cached entry");
+            entry.0 = Instant::now() - EXISTS_CACHE_TTL - Duration::from_secs(1);
+        }
+
+        assert_eq!(store.exists_cache_len(REPO, &id), None);
+        let key = BlockStorage::cache_key(REPO, &id);
+        assert!(
+            store.exists_cache.lock().unwrap().contains_key(&key),
+            "the read path must not sweep the cache"
+        );
+
+        // The insert path is where the sweep happens.
+        store.exists_cache_insert(REPO, &id, 8);
+        assert_eq!(store.exists_cache_len(REPO, &id), Some(8));
     }
 
     /// Build a legacy flat layout holding `blocks`, then return the store.
