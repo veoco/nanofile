@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::middleware::auth::AuthUser;
+use crate::service::fs::search::{MAX_SEARCH_PAGE, MAX_SEARCH_PER_PAGE, SearchRequest};
 use base::error::AppError;
 
 #[derive(Deserialize)]
@@ -58,32 +59,26 @@ pub async fn search_file(
     }
 
     let svc = state.search_service();
-    // Filename-only, single-repo: fetch one large page, paginate the reshaped result.
-    let (results, _total, _has_more) = svc
-        .search(
-            &q,
-            auth.user_id,
-            1000,
-            1,
-            Some(&query.repo_id),
-            true,
-            &auth.repo_scope(),
-        )
+    // Filename-only, single-repo: collect the whole (budgeted) match set and shape it below,
+    // rather than asking for a "page" merely to discard its pagination.
+    let hits = svc
+        .collect_hits(&SearchRequest {
+            q: &q,
+            user_id: auth.user_id,
+            search_repo: Some(&query.repo_id),
+            filename_only: true,
+            repo_scope: &auth.repo_scope(),
+        })
         .await?;
 
-    let mut data: Vec<serde_json::Value> = results
+    let mut data: Vec<serde_json::Value> = hits
         .iter()
-        .map(|r| {
-            let is_dir = r["is_dir"].as_bool().unwrap_or(false);
-            let mtime = r["mtime"]
-                .as_i64()
-                .or_else(|| r["last_modified"].as_i64())
-                .unwrap_or(0);
+        .map(|hit| {
             serde_json::json!({
-                "path": r["fullpath"].as_str().unwrap_or(""),
-                "size": r["size"].as_i64().unwrap_or(0),
-                "mtime": infra::common::util::timestamp_rfc3339(mtime),
-                "type": if is_dir { "folder" } else { "file" },
+                "path": hit.fullpath,
+                "size": hit.size,
+                "mtime": infra::common::util::timestamp_rfc3339(hit.mtime),
+                "type": if hit.is_dir { "folder" } else { "file" },
             })
         })
         .collect();
@@ -110,14 +105,8 @@ pub async fn search(
     let q = query.q.unwrap_or_default().trim().to_string();
     // Clamp both bounds: `per_page` is client-controlled and feeds an offset
     // calculation, so an unbounded value makes the server do maximal work per request.
-    let per_page = query
-        .per_page
-        .unwrap_or(10)
-        .clamp(1, crate::service::fs::search::MAX_SEARCH_PER_PAGE);
-    let page = query
-        .page
-        .unwrap_or(1)
-        .clamp(1, crate::service::fs::search::MAX_SEARCH_PAGE);
+    let per_page = query.per_page.unwrap_or(10).clamp(1, MAX_SEARCH_PER_PAGE);
+    let page = query.page.unwrap_or(1).clamp(1, MAX_SEARCH_PAGE);
     let search_filename_only = query.search_filename_only.unwrap_or(false);
 
     let rl_key = format!("search:{}", auth.user_id);
@@ -127,21 +116,29 @@ pub async fn search(
     state.auth_limiters.search.record_attempt(&rl_key);
 
     let svc = state.search_service();
-    let (results, total, has_more) = svc
+    let page_result = svc
         .search(
-            &q,
-            auth.user_id,
+            &SearchRequest {
+                q: &q,
+                user_id: auth.user_id,
+                search_repo: query.search_repo.as_deref(),
+                filename_only: search_filename_only,
+                repo_scope: &auth.repo_scope(),
+            },
             per_page,
             page,
-            query.search_repo.as_deref(),
-            search_filename_only,
-            &auth.repo_scope(),
         )
         .await?;
 
     Ok(Json(SearchResponse {
-        results,
-        total,
-        has_more,
+        // The JSON shape is a client contract (iOS reads `mtime`, the desktop client
+        // `last_modified`), so the entry is serialized as-is rather than reshaped.
+        results: page_result
+            .results
+            .into_iter()
+            .map(|hit| serde_json::json!(hit))
+            .collect(),
+        total: page_result.total,
+        has_more: page_result.has_more,
     }))
 }

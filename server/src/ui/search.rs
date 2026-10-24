@@ -7,17 +7,13 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::domain::permission::RepoScope;
 use crate::i18n::I18n;
+use crate::service::fs::search::{FileSearchResult, SearchRequest};
 use crate::ui::files::format_size;
-use base::common::EMPTY_SHA1;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
-
-/// Cap the total result set so a huge repo can't force a full-tree walk and
-/// unbounded memory. Phase 1 (content) and Phase 2 (filename) share this budget
-/// and skip the rest once it is reached.
-const MAX_SEARCH_RESULTS: usize = 200;
 
 #[derive(Template)]
 #[template(path = "search.html")]
@@ -58,6 +54,25 @@ pub struct SearchResultItem {
     pub content_highlight: String,
 }
 
+impl From<FileSearchResult> for SearchResultItem {
+    fn from(hit: FileSearchResult) -> Self {
+        Self {
+            repo_id: hit.repo_id,
+            repo_name: hit.repo_name,
+            name: hit.name,
+            oid: hit.oid,
+            last_modified: hit.last_modified,
+            // Only the page renders a human-readable size; the JSON endpoints send bytes.
+            size_display: format_size(hit.size),
+            fullpath: hit.fullpath,
+            size: hit.size,
+            is_dir: hit.is_dir,
+            dir_url: hit.dir_url,
+            content_highlight: hit.content_highlight,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct SearchQuery {
     pub q: Option<String>,
@@ -66,6 +81,10 @@ pub struct SearchQuery {
 }
 
 /// GET /search?q=xxx — search page (Web UI).
+///
+/// The page renders the first page itself and appends further pages from `/api2/search/`, so it
+/// shares the one [`crate::service::fs::search::SearchService`] pipeline with that endpoint instead
+/// of walking the tree a second way.
 pub async fn search_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -76,149 +95,29 @@ pub async fn search_page(
     let per_page: i32 = 20;
     let page: i32 = 1;
 
-    let (results, total, has_more) = if q.trim().is_empty() {
-        (Vec::new(), 0, false)
+    let hits = if q.trim().is_empty() {
+        Vec::new()
     } else {
-        let repo_ids = get_accessible_repo_ids(&state.repos, user.user_id, None).await?;
-        // An empty allow-list means the caller can see nothing; never let it
-        // degrade into an unscoped index search.
-        let has_accessible_repos = !repo_ids.is_empty();
-        let mut seen = std::collections::HashSet::new();
-        let mut all_results: Vec<SearchResultItem> = Vec::new();
-
-        // Phase 1: full-text (content) search via Tantivy; filename-only mode
-        // skips it, since the FS walk below is the authoritative name matcher.
-        if has_accessible_repos
-            && !search_filename_only
-            && let Some(indexer) = &state.indexer
-        {
-            let ft_results = match indexer
-                .search(&q, &repo_ids, MAX_SEARCH_RESULTS, 0, false)
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("Tantivy search failed: {e}");
-                    Vec::new()
-                }
-            };
-            // Group unique hits by repo so the record, head commit and paths resolve once.
-            let mut unique_hits: Vec<crate::indexer::IndexHit> = Vec::new();
-            for hit in &ft_results {
-                if seen.insert((hit.repo_id.clone(), hit.fullpath.clone())) {
-                    unique_hits.push(hit.clone());
-                }
-            }
-
-            let mut by_repo: std::collections::HashMap<String, Vec<usize>> =
-                std::collections::HashMap::new();
-            for (idx, hit) in unique_hits.iter().enumerate() {
-                by_repo.entry(hit.repo_id.clone()).or_default().push(idx);
-            }
-
-            for (found_repo_id, indices) in by_repo {
-                let repo_record = match state.repos.repo.find_by_id(&found_repo_id).await {
-                    Ok(Some(r)) => r,
-                    _ => continue,
-                };
-                let head_commit_id = match &repo_record.head_commit_id {
-                    Some(id) => id.clone(),
-                    None => continue,
-                };
-                let head = match state
-                    .repos
-                    .commit
-                    .find_by_repo_and_commit_id(&found_repo_id, &head_commit_id)
-                    .await
-                {
-                    Ok(Some(h)) => h,
-                    _ => continue,
-                };
-                if head.root_id == EMPTY_SHA1 {
-                    continue;
-                }
-
-                let fullpaths: Vec<String> = indices
-                    .iter()
-                    .map(|&i| unique_hits[i].fullpath.clone())
-                    .collect();
-                let highlights: Vec<String> = indices
-                    .iter()
-                    .map(|&i| unique_hits[i].content_highlight.clone())
-                    .collect();
-                let items = resolve_file_metadata_batch(
-                    &state.repos,
-                    &found_repo_id,
-                    &repo_record.name,
-                    &head.root_id,
-                    &fullpaths,
-                    &highlights,
-                )
-                .await;
-                all_results.extend(items.into_iter().flatten());
-            }
-        }
-
-        // Phase 2: filename search via FS tree walk, always run because it is the
-        // only complete filename matcher (binary/non-indexed files, true substring
-        // match); it tops up Phase 1's budget and stops once the cap is reached.
-        let phase2_budget = MAX_SEARCH_RESULTS.saturating_sub(all_results.len());
-        if phase2_budget > 0 {
-            for repo_id in &repo_ids {
-                let repo_record = match state.repos.repo.find_by_id(repo_id).await {
-                    Ok(Some(r)) => r,
-                    _ => continue,
-                };
-
-                let head_commit_id = match &repo_record.head_commit_id {
-                    Some(id) => id.clone(),
-                    None => continue,
-                };
-
-                let head = match state
-                    .repos
-                    .commit
-                    .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-                    .await
-                {
-                    Ok(Some(h)) => h,
-                    _ => continue,
-                };
-
-                if head.root_id == EMPTY_SHA1 {
-                    continue;
-                }
-
-                search_fs_tree(
-                    &state.repos,
-                    repo_id,
-                    &repo_record.name,
-                    &head.root_id,
-                    "",
-                    &q,
-                    &mut all_results,
-                    &mut seen,
-                    phase2_budget,
-                )
-                .await;
-            }
-        }
-
-        all_results.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
-
-        let total = all_results.len() as i32;
-        let offset = ((page - 1) * per_page) as usize;
-
-        let results = if offset < all_results.len() {
-            let end = (offset + per_page as usize).min(all_results.len());
-            all_results[offset..end].to_vec()
-        } else {
-            Vec::new()
-        };
-
-        let has_more = (offset + per_page as usize) < all_results.len();
-        (results, total, has_more)
+        state
+            .search_service()
+            .collect_hits(&SearchRequest {
+                q: &q,
+                user_id: user.user_id,
+                search_repo: None,
+                filename_only: search_filename_only,
+                // A browser session is not narrowed by a bound API key.
+                repo_scope: &RepoScope::all(),
+            })
+            .await?
     };
+
+    let total = hits.len() as i32;
+    let has_more = total > per_page;
+    let results: Vec<SearchResultItem> = hits
+        .into_iter()
+        .take(per_page as usize)
+        .map(SearchResultItem::from)
+        .collect();
 
     let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
     let tpl = SearchTemplate {
@@ -242,218 +141,4 @@ pub async fn search_page(
         .render()
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Html(html))
-}
-
-/// Resolve file metadata for many fullpaths of one repo in a shared batched
-/// walk, returning `None` for paths that no longer resolve; `repo_name` and
-/// `root_id` are resolved once per repo by the caller.
-async fn resolve_file_metadata_batch(
-    repos: &crate::repository::Repositories,
-    repo_id: &str,
-    repo_name: &str,
-    root_id: &str,
-    fullpaths: &[String],
-    highlights: &[String],
-) -> Vec<Option<SearchResultItem>> {
-    if root_id == EMPTY_SHA1 || fullpaths.is_empty() {
-        return vec![None; fullpaths.len()];
-    }
-
-    let metas: Vec<(String, String)> = fullpaths
-        .iter()
-        .map(|fullpath| {
-            let segments: Vec<&str> = fullpath
-                .trim_start_matches('/')
-                .split('/')
-                .filter(|s| !s.is_empty())
-                .collect();
-            let name = segments.last().map(|s| s.to_string()).unwrap_or_default();
-            let parent_path = if segments.len() <= 1 {
-                String::from("/")
-            } else {
-                format!("/{}", segments[..segments.len() - 1].join("/"))
-            };
-            (name, parent_path)
-        })
-        .collect();
-
-    let targets: Vec<(String, String)> = metas
-        .iter()
-        .map(|(_, parent_path)| (root_id.to_string(), parent_path.clone()))
-        .collect();
-    let Ok(resolved) = crate::fs::core::resolve_fs_ids_batch(repos, repo_id, &targets).await else {
-        return vec![None; fullpaths.len()];
-    };
-
-    let mut parent_ids: Vec<String> = resolved.iter().filter_map(|r| r.clone()).collect();
-    parent_ids.sort();
-    parent_ids.dedup();
-    let Ok(dir_map) = crate::fs::core::read_fs_dir_data_batch(repos, repo_id, &parent_ids).await
-    else {
-        return vec![None; fullpaths.len()];
-    };
-
-    let mut results = Vec::with_capacity(fullpaths.len());
-    for (i, fullpath) in fullpaths.iter().enumerate() {
-        let (name, _) = &metas[i];
-        let Some(parent_fs_id) = &resolved[i] else {
-            results.push(None);
-            continue;
-        };
-        let Some(dir_data) = dir_map.get(parent_fs_id) else {
-            results.push(None);
-            continue;
-        };
-        let Some(entry) = dir_data.dirents.iter().find(|d| d.name.as_str() == name) else {
-            results.push(None);
-            continue;
-        };
-
-        let is_dir = entry.mode & infra::serialization::S_IFDIR != 0;
-        let dir_url = if is_dir {
-            format!("/libraries/{}/files{}", repo_id, fullpath)
-        } else {
-            let parent = fullpath
-                .rsplit_once('/')
-                .map(|(parent, _)| parent)
-                .unwrap_or("/");
-            format!("/libraries/{}/files{}", repo_id, parent)
-        };
-
-        results.push(Some(SearchResultItem {
-            repo_id: repo_id.to_string(),
-            repo_name: repo_name.to_string(),
-            name: entry.name.clone(),
-            oid: entry.id.clone(),
-            last_modified: entry.mtime,
-            size_display: format_size(entry.size),
-            fullpath: fullpath.clone(),
-            size: entry.size,
-            is_dir,
-            dir_url,
-            content_highlight: highlights.get(i).cloned().unwrap_or_default(),
-        }));
-    }
-    results
-}
-
-async fn get_accessible_repo_ids(
-    repos: &crate::repository::Repositories,
-    user_id: i32,
-    _repo_id_filter: Option<&str>,
-) -> Result<Vec<String>, AppError> {
-    let member_repos = repos.member.find_by_user_id(user_id).await?;
-
-    let owned_repos = repos.repo.find_by_owner_id(user_id).await?;
-
-    let mut ids: Vec<String> = member_repos
-        .into_iter()
-        .map(|m| m.repo_id)
-        .chain(owned_repos.into_iter().map(|r| r.id))
-        .collect();
-
-    ids.sort();
-    ids.dedup();
-
-    Ok(ids)
-}
-
-/// Recursively search the FS tree for names containing `keyword`, stopping early
-/// once `results.len()` reaches `max_results`.
-#[allow(clippy::too_many_arguments)]
-async fn search_fs_tree(
-    repos: &crate::repository::Repositories,
-    repo_id: &str,
-    repo_name: &str,
-    root_fs_id: &str,
-    base_path: &str,
-    keyword: &str,
-    results: &mut Vec<SearchResultItem>,
-    seen: &mut std::collections::HashSet<(String, String)>,
-    max_results: usize,
-) {
-    let keyword_lower = keyword.to_lowercase();
-    // Each level reads all its directories with one batched `IN` query.
-    let mut frontier: Vec<(String, String)> = vec![(root_fs_id.to_string(), base_path.to_string())];
-    let max_depth = crate::fs::core::traversal::max_tree_depth();
-    let mut depth = 0usize;
-
-    while !frontier.is_empty() && results.len() < max_results {
-        // Cycle guard: cap the depth and stop rather than expand forever.
-        depth += 1;
-        if depth > max_depth {
-            tracing::warn!(
-                repo_id,
-                max_depth,
-                "file-tree search hit the traversal depth cap; truncating"
-            );
-            break;
-        }
-        let ids: Vec<String> = frontier
-            .iter()
-            .map(|(fs_id, _)| fs_id.clone())
-            .filter(|id| id != EMPTY_SHA1)
-            .collect();
-        let dir_map = match crate::fs::core::read_fs_dir_data_batch(repos, repo_id, &ids).await {
-            Ok(m) => m,
-            Err(_) => break,
-        };
-        let mut next: Vec<(String, String)> = Vec::new();
-
-        for (fs_id, path) in &frontier {
-            // Missing/EMPTY dirs are absent from the batch map → skip.
-            let Some(dir_data) = dir_map.get(fs_id) else {
-                continue;
-            };
-
-            for entry in &dir_data.dirents {
-                let full_path = if path.is_empty() {
-                    format!("/{}", entry.name)
-                } else if path.starts_with('/') {
-                    format!("{}/{}", path, entry.name)
-                } else {
-                    format!("/{}/{}", path, entry.name)
-                };
-
-                if entry.name.to_lowercase().contains(&keyword_lower) {
-                    let key = (repo_id.to_string(), full_path.clone());
-                    if !seen.insert(key) {
-                        continue; // Already seen from full-text search
-                    }
-                    let is_dir = entry.mode & infra::serialization::S_IFDIR != 0;
-                    let dir_url = if is_dir {
-                        format!("/libraries/{}/files{}", repo_id, full_path)
-                    } else {
-                        let parent = full_path
-                            .rsplit_once('/')
-                            .map(|(parent, _)| parent)
-                            .unwrap_or("/");
-                        format!("/libraries/{}/files{}", repo_id, parent)
-                    };
-                    results.push(SearchResultItem {
-                        repo_id: repo_id.to_string(),
-                        repo_name: repo_name.to_string(),
-                        name: entry.name.clone(),
-                        oid: entry.id.clone(),
-                        last_modified: entry.mtime,
-                        size_display: format_size(entry.size),
-                        fullpath: full_path.clone(),
-                        size: entry.size,
-                        is_dir,
-                        dir_url,
-                        content_highlight: String::new(),
-                    });
-                    if results.len() >= max_results {
-                        return;
-                    }
-                }
-
-                if entry.mode & infra::serialization::S_IFDIR != 0 {
-                    next.push((entry.id.clone(), full_path));
-                }
-            }
-        }
-
-        frontier = next;
-    }
 }

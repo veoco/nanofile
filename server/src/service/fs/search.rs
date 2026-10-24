@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::domain::permission::{RepoScope, accessible_repo_ids};
 use crate::repository::Repositories;
 use base::error::AppError;
 use infra::common::EMPTY_SHA1;
@@ -39,6 +40,30 @@ pub struct FileSearchResult {
     pub content_highlight: String,
 }
 
+/// What to search for, and whose access it is searched under.
+///
+/// One implementation serves both the JSON endpoints and the Web UI page: the two used to be
+/// separate copies of the same pipeline (filename walk, content index, dedup, ordering), which
+/// drifted in query count, access scoping and result caps.
+pub struct SearchRequest<'a> {
+    pub q: &'a str,
+    pub user_id: i32,
+    /// A single library id, a seahub scope keyword (`all`/`mine`/`shared`/`group`/`public`), or
+    /// `None` for every accessible library.
+    pub search_repo: Option<&'a str>,
+    /// Filename-only mode skips the content index; the tree walk always runs.
+    pub filename_only: bool,
+    /// The caller's library allow-list (a bound API key narrows it).
+    pub repo_scope: &'a RepoScope,
+}
+
+/// One page of results, plus the totals the endpoints report.
+pub struct SearchPage {
+    pub results: Vec<FileSearchResult>,
+    pub total: i32,
+    pub has_more: bool,
+}
+
 pub struct SearchService {
     repos: Arc<Repositories>,
     indexer: Option<crate::indexer::TextIndexer>,
@@ -49,27 +74,55 @@ impl SearchService {
         Self { repos, indexer }
     }
 
-    /// Search files across all accessible repos.
+    /// Search files across all accessible repos, returning one page of the collected hits.
     pub async fn search(
         &self,
-        q: &str,
-        user_id: i32,
+        req: &SearchRequest<'_>,
         per_page: i32,
         page: i32,
-        search_repo: Option<&str>,
-        search_filename_only: bool,
-        repo_scope: &crate::domain::permission::RepoScope,
-    ) -> Result<(Vec<serde_json::Value>, i32, bool), AppError> {
-        if q.is_empty() {
-            return Ok((Vec::new(), 0, false));
-        }
+    ) -> Result<SearchPage, AppError> {
+        let hits = self.collect_hits(req).await?;
 
         // Clamp defensively here too: every caller must get bounded pagination, and the offset
         // below must not overflow.
         let per_page = per_page.clamp(1, MAX_SEARCH_PER_PAGE);
         let page = page.clamp(1, MAX_SEARCH_PAGE);
+        let total = hits.len() as i32;
+        // Both operands are clamped already, but compute in `i64` so a future change to the clamps
+        // cannot silently overflow `i32` (a debug panic, a wrapped offset in release).
+        let offset = (i64::from(page) - 1).saturating_mul(i64::from(per_page)) as usize;
+        let page_end = offset.saturating_add(per_page as usize);
+
+        let results = if offset < hits.len() {
+            let end = page_end.min(hits.len());
+            hits[offset..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        let has_more = page_end < hits.len();
+
+        Ok(SearchPage {
+            results,
+            total,
+            has_more,
+        })
+    }
+
+    /// Collect every hit the caller may see, up to the shared result budget.
+    ///
+    /// Callers that paginate themselves (the Web UI page, `/api/v2.1/search-file/`) use this
+    /// directly instead of requesting one enormous page from [`SearchService::search`].
+    pub async fn collect_hits(
+        &self,
+        req: &SearchRequest<'_>,
+    ) -> Result<Vec<FileSearchResult>, AppError> {
+        let q = req.q.trim();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let repo_ids = self
-            .get_accessible_repo_ids(user_id, search_repo, repo_scope)
+            .get_accessible_repo_ids(req.user_id, req.search_repo, req.repo_scope)
             .await?;
         // `repo_ids` is the caller's access-control allow-list: an empty list must never be handed
         // to the indexer as "no filter" (that leaked every repo's filenames and content snippets).
@@ -83,7 +136,7 @@ impl SearchService {
         // mode skips it because the FS tree walk below is the authoritative filename matcher and
         // covers binary files the index never sees.
         if has_accessible_repos
-            && !search_filename_only
+            && !req.filename_only
             && let Some(indexer) = &self.indexer
         {
             match indexer
@@ -216,45 +269,20 @@ impl SearchService {
         }
 
         all_results.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
-
-        let total = all_results.len() as i32;
-        // Both operands are clamped already, but compute in `i64` so a future change to the clamps
-        // cannot silently overflow `i32` (a debug panic, a wrapped offset in release).
-        let offset = (i64::from(page) - 1).saturating_mul(i64::from(per_page)) as usize;
-        let page_end = offset.saturating_add(per_page as usize);
-
-        let results: Vec<serde_json::Value> = if offset < all_results.len() {
-            let end = page_end.min(all_results.len());
-            all_results[offset..end]
-                .iter()
-                .map(|r| serde_json::json!(r))
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        let has_more = page_end < all_results.len();
-
-        Ok((results, total, has_more))
+        Ok(all_results)
     }
 
     async fn get_accessible_repo_ids(
         &self,
         user_id: i32,
         repo_id_filter: Option<&str>,
-        repo_scope: &crate::domain::permission::RepoScope,
+        repo_scope: &RepoScope,
     ) -> Result<Vec<String>, AppError> {
-        let member_repos = self.repos.member.find_by_user_id(user_id).await?;
-        let owned_repos = self.repos.repo.find_by_owner_id(user_id).await?;
-
-        let mut ids: Vec<String> = member_repos
+        let mut ids: Vec<String> = accessible_repo_ids(&self.repos, user_id, repo_scope)
+            .await?
             .into_iter()
-            .map(|m| m.repo_id)
-            .chain(owned_repos.into_iter().map(|r| r.id))
             .collect();
-
         ids.sort();
-        ids.dedup();
 
         if let Some(filter) = repo_id_filter {
             // seahub scope keywords ("all"/"mine"/"shared"/"group"/"public") mean "search across
@@ -271,20 +299,17 @@ impl SearchService {
             if !is_scope {
                 // A filter naming a repo the caller cannot access leaves the list empty, which
                 // means "no access" — NOT "no filter". It must never widen the search (see
-                // `search`).
+                // `collect_hits`).
                 ids.retain(|id| id == filter);
             }
         }
-
-        // A key bound to specific libraries searches only those, like every other listing.
-        ids.retain(|id| repo_scope.allows(id));
 
         Ok(ids)
     }
 
     /// Resolve file metadata for many fullpaths of a single repo in a shared batched walk, returning
     /// `None` for paths that no longer resolve. `repo_name`/`root_id` are resolved once per repo by
-    /// the caller (see [`SearchService::search`]).
+    /// the caller (see [`SearchService::collect_hits`]).
     async fn resolve_file_metadata_batch(
         &self,
         repo_id: &str,
@@ -433,6 +458,11 @@ async fn search_fs_tree(
             };
 
             for entry in &dir_data.dirents {
+                // The reserved `_Internal` tree is not part of what a search may reveal.
+                if crate::service::fs::dir::is_reserved_internal(&entry.name) {
+                    continue;
+                }
+
                 let full_path = if path.is_empty() {
                     format!("/{}", entry.name)
                 } else if path.starts_with('/') {
