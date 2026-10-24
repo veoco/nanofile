@@ -302,28 +302,6 @@ impl RunStore {
         out
     }
 
-    /// The first active run of `key` whose `params[field]` equals `value`, used
-    /// for [`super::spec::Dedup::ByParams`].
-    pub fn find_active_by_param(
-        &self,
-        key: JobKey,
-        field: &str,
-        value: &serde_json::Value,
-    ) -> Option<JobRun> {
-        self.read()
-            .values()
-            .find(|run| {
-                run.key == key
-                    && run.state.is_active()
-                    && run
-                        .params
-                        .as_ref()
-                        .and_then(|p| p.get(field))
-                        .is_some_and(|v| v == value)
-            })
-            .cloned()
-    }
-
     /// How many active runs exist for `key`, optionally limited to one owner.
     pub fn count_active(&self, key: JobKey, owner: Option<i32>) -> usize {
         self.read()
@@ -659,38 +637,87 @@ mod tests {
         );
     }
 
+    /// A submission whose dedup key is already active is refused by the same locked step that
+    /// inserts it, so nothing can slip in between the check and the insert.
     #[test]
-    fn dedup_finds_an_active_run_by_a_param() {
+    fn reserve_refuses_an_active_run_with_the_same_dedup_key() {
         let s = store(10, 0, 3600);
-        let mut run = run_at(1, 100);
-        run.key = JobKey::Reindex;
-        run.params = Some(serde_json::json!({"repo_id": "r1"}));
-        let id = run.id.clone();
-        s.insert(run).unwrap();
+        let repo = serde_json::json!("r1");
+        fn admission(repo: &serde_json::Value) -> Admission<'_> {
+            Admission {
+                key: JobKey::Reindex,
+                owner: Some(1),
+                queue_depth: 0,
+                max_active_total: 0,
+                max_active_per_user: 0,
+                dedup: Some(("repo_id", repo)),
+                job_name: "reindex",
+            }
+        }
 
-        assert!(
-            s.find_active_by_param(JobKey::Reindex, "repo_id", &serde_json::json!("r1"))
-                .is_some()
-        );
-        assert!(
-            s.find_active_by_param(JobKey::Reindex, "repo_id", &serde_json::json!("r2"))
-                .is_none()
-        );
-        assert!(
-            s.find_active_by_param(JobKey::Copy, "repo_id", &serde_json::json!("r1"))
-                .is_none(),
-            "a different job key does not match"
-        );
+        let mut first = run_at(1, 100);
+        first.key = JobKey::Reindex;
+        first.params = Some(serde_json::json!({"repo_id": "r1"}));
+        let first_id = first.id.clone();
+        assert!(s.reserve(first, &admission(&repo)).is_ok());
+
+        let mut duplicate = run_at(1, 110);
+        duplicate.key = JobKey::Reindex;
+        duplicate.params = Some(serde_json::json!({"repo_id": "r1"}));
+        assert!(matches!(
+            s.reserve(duplicate, &admission(&repo)),
+            Err(AppError::Conflict(_))
+        ));
+
+        // Another library is a different piece of work, and so is another job key.
+        let other_repo = serde_json::json!("r2");
+        let mut elsewhere = run_at(1, 120);
+        elsewhere.key = JobKey::Reindex;
+        elsewhere.params = Some(serde_json::json!({"repo_id": "r2"}));
+        assert!(s.reserve(elsewhere, &admission(&other_repo)).is_ok());
+
+        let mut other_job = run_at(1, 125);
+        other_job.params = Some(serde_json::json!({"repo_id": "r1"}));
+        let copy_admission = Admission {
+            key: JobKey::Copy,
+            ..admission(&repo)
+        };
+        assert!(s.reserve(other_job, &copy_admission).is_ok());
 
         // A terminal run no longer blocks a fresh submission.
-        s.update(&id, |r| {
+        s.update(&first_id, |r| {
             r.state = JobState::Succeeded;
             r.drop_params();
         });
-        assert!(
-            s.find_active_by_param(JobKey::Reindex, "repo_id", &serde_json::json!("r1"))
-                .is_none()
-        );
+        let mut again = run_at(1, 130);
+        again.key = JobKey::Reindex;
+        again.params = Some(serde_json::json!({"repo_id": "r1"}));
+        assert!(s.reserve(again, &admission(&repo)).is_ok());
+    }
+
+    /// The queue depth is part of the same admission step: one active run of the job leaves no room
+    /// for a second, whatever its params.
+    #[test]
+    fn reserve_enforces_the_queue_depth() {
+        let s = store(10, 0, 3600);
+        let admission = Admission {
+            key: JobKey::Copy,
+            owner: Some(1),
+            queue_depth: 1,
+            max_active_total: 0,
+            max_active_per_user: 0,
+            dedup: None,
+            job_name: "copy",
+        };
+        assert!(s.reserve(run_at(1, 100), &admission).is_ok());
+        assert!(matches!(
+            s.reserve(run_at(1, 110), &admission),
+            Err(AppError::TooManyRequests)
+        ));
+        // Another owner has their own depth budget.
+        let mut other_owner = admission;
+        other_owner.owner = Some(2);
+        assert!(s.reserve(run_at(2, 120), &other_owner).is_ok());
     }
 
     #[test]
