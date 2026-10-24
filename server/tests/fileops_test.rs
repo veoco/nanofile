@@ -589,6 +589,69 @@ async fn creating_a_directory_does_not_treat_a_missing_head_commit_as_empty() {
     );
 }
 
+/// The commit id is a hash over the stored description. Hashing the requested
+/// name while storing the de-duplicated one (`name (1).ext`) made the persisted
+/// `commit_id` not match its own row and showed the wrong name in history.
+#[tokio::test]
+async fn a_kept_both_upload_stores_the_description_it_hashes() {
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    let f = TestFixture::new().await;
+    for payload in [b"first".as_slice(), b"second".as_slice()] {
+        let resp = f
+            .client
+            .upload_file_with_replace(&f.api_token, &f.repo_id, "/", "dup.txt", payload, false)
+            .await;
+        assert_eq!(resp.status(), 200, "keep-both upload failed");
+    }
+
+    let head = repo_head(&f).await.expect("head after upload");
+    let row = infra::entity::commit::Entity::find()
+        .filter(infra::entity::commit::Column::RepoId.eq(f.repo_id.clone()))
+        .filter(infra::entity::commit::Column::CommitId.eq(head))
+        .one(&*f.server.db)
+        .await
+        .unwrap()
+        .expect("head commit row");
+
+    assert!(
+        row.description.contains("dup (1).txt"),
+        "description names the stored file, got {:?}",
+        row.description
+    );
+
+    let data = base::common::CommitData {
+        commit_id: row.commit_id.clone(),
+        repo_id: row.repo_id.clone(),
+        root_id: row.root_id.clone(),
+        creator_name: row.creator_name.clone(),
+        creator: row.creator.clone(),
+        description: row.description.clone(),
+        ctime: row.ctime,
+        parent_id: row.parent_id.clone(),
+        second_parent_id: row.second_parent_id.clone(),
+        repo_name: None,
+        repo_desc: None,
+        repo_category: None,
+        encrypted: None,
+        enc_version: None,
+        magic: None,
+        salt: None,
+        pwd_hash: None,
+        pwd_hash_algo: None,
+        pwd_hash_params: None,
+        key: None,
+        version: i32::from(row.version),
+        conflict: None,
+        new_merge: None,
+    };
+    assert_eq!(
+        server::domain::commit::compute_commit_id(&data),
+        row.commit_id,
+        "the stored description must reproduce the stored commit id"
+    );
+}
+
 /// Moving a file into an ancestor of its own directory used to reuse the
 /// destination object read before the removal. That object still pointed at the
 /// subtree containing the file, so phase 2 copied the pre-removal subtree back

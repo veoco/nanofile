@@ -300,13 +300,19 @@ impl FileOps {
             }
         }
 
+        // The effective name is the one actually stored (`name (1).ext` when the
+        // upload kept both). The commit id is a hash of the description, so the
+        // description that is hashed must be the one persisted, not the requested
+        // name.
+        let description = format!("Added {effective_name}");
+
         let commit_data = base::common::CommitData {
             commit_id: String::new(),
             repo_id: repo_id.to_string(),
             root_id: root_fs_id.clone(),
             creator_name: modifier.to_string(),
             creator: EMPTY_SHA1.to_string(),
-            description: format!("Added {}", effective_name),
+            description: description.clone(),
             ctime: now,
             parent_id: parent_commit_id.clone(),
             second_parent_id: None,
@@ -336,7 +342,7 @@ impl FileOps {
             second_parent_id: sea_orm::NotSet,
             creator_name: sea_orm::Set(modifier.to_string()),
             creator: sea_orm::Set(EMPTY_SHA1.to_string()),
-            description: sea_orm::Set(format!("Added {}", name)),
+            description: sea_orm::Set(description),
             ctime: sea_orm::Set(now),
             version: sea_orm::Set(1i8),
             new_merge: sea_orm::NotSet,
