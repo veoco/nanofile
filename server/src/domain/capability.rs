@@ -1207,6 +1207,18 @@ const ROUTES: &[(&str, &str, RouteAccess)] = &[
     ("DELETE", "/api2/api-keys/{id}/", RouteAccess::SessionOnly),
 ];
 
+/// Every classified route as a `(method, path pattern)` pair.
+///
+/// Exposed for the documentation coverage test
+/// (`server/tests/docs_api_reference_test.rs`), which asserts that the API
+/// reference documents every route and that it documents no route that does not
+/// exist. The table itself stays private so nothing can bypass classification.
+pub fn route_inventory() -> impl Iterator<Item = (&'static str, &'static str)> {
+    ROUTES
+        .iter()
+        .map(|(method, pattern, _)| (*method, *pattern))
+}
+
 /// Classify a request path for the credential guard.
 ///
 /// `None` means the path is outside the classified surface or absent from
