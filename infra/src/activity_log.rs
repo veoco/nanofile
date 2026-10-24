@@ -18,6 +18,16 @@ const ACTIVITY_MAX_AGGREGATE_ITEMS: usize = 200;
 /// Window within which repeated edits of one path collapse into a row (seafevents).
 const EDIT_DEDUP_WINDOW: i64 = 1800;
 
+/// Serializes the read-modify-write of an aggregated `detail` array.
+///
+/// `create`/`delete` append to the newest batch row inside a 5-minute window: read the JSON array,
+/// push the new item, write the array back. Two concurrent calls for the same user and library (two
+/// browser tabs, or a delete next to a create) both read the same array, so the second write drops
+/// the first item — the activity page under-counts, permanently. SQLite serializes the individual
+/// statements, not the read-then-write pair, so this needs a lock; the server is a single process
+/// and SQLite is its single writer, which is why an in-process mutex is enough.
+static AGGREGATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Log a file operation activity.
 ///
 /// `op_type` (`create`/`delete`/`edit`/`rename`/`move`/`recover`) and `obj_type`
@@ -70,6 +80,8 @@ pub async fn log_activity(
 
     // Only create/delete aggregate (seafevents' BATCH_AGGREGATE_OP_TYPES).
     if op_type == "create" || op_type == "delete" {
+        // Held across the read, the append and the write, which is the whole point.
+        let _aggregate = AGGREGATE_LOCK.lock().await;
         let batch_types = [op_type.to_string(), format!("batch_{}", op_type)];
         let cutoff = now - 300; // 5-minute window
 

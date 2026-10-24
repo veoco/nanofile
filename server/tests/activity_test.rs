@@ -1828,3 +1828,55 @@ async fn test_webdav_failed_auth_is_throttled() {
     .await;
     assert_eq!(resp.status(), 429);
 }
+
+/// Concurrent aggregation must not lose an item: `create`/`delete` append to the newest batch row
+/// by reading its `detail` array, pushing, and writing it back, so two calls in the same window
+/// used to overwrite each other (the activity page then under-counts, permanently).
+#[tokio::test]
+async fn concurrent_creates_are_all_aggregated() {
+    const CALLS: usize = 8;
+
+    let f = TestFixture::new().await;
+
+    let mut tasks = Vec::new();
+    for index in 0..CALLS {
+        let db = f.server.db.clone();
+        let repo_id = f.repo_id.clone();
+        let user_id = f.user_id;
+        tasks.push(tokio::spawn(async move {
+            infra::activity_log::log_activity(
+                db.as_ref(),
+                &repo_id,
+                "create",
+                "file",
+                &format!("/concurrent-{index}.txt"),
+                user_id,
+                None,
+                Some(1),
+                Some("0000000000000000000000000000000000000000"),
+                None,
+                None,
+            )
+            .await;
+        }));
+    }
+    for task in tasks {
+        task.await.expect("the logging task must not panic");
+    }
+
+    let rows = infra::entity::activity::Entity::find()
+        .filter(infra::entity::activity::Column::RepoId.eq(&f.repo_id))
+        .all(f.server.db.as_ref())
+        .await
+        .unwrap();
+    let batch = rows
+        .iter()
+        .find(|row| row.op_type == "batch_create")
+        .unwrap_or_else(|| panic!("expected one aggregated batch_create row, got {rows:?}"));
+    let detail: Vec<serde_json::Value> = serde_json::from_str(&batch.detail).unwrap();
+    assert_eq!(
+        detail.len(),
+        CALLS,
+        "an aggregated activity item was lost: {detail:?}"
+    );
+}
