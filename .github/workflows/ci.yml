@@ -135,9 +135,10 @@ jobs:
           fi
       # An unused direct dependency, and a dependency that comes back as a side
       # effect of some default feature, are both invisible to rustc: AWS-LC
-      # returned once through `reqwest`'s TLS, and the ravif/rav1e AV1 encoder
-      # through `image`'s default formats. These two checks are what would have
-      # caught either of them.
+      # returned once through `reqwest`'s TLS, the ravif/rav1e AV1 encoder
+      # through `image`'s default formats, and zstd-sys through `include-flate`'s
+      # default features. The content analyzer is dictionary-free and embedded
+      # assets are DEFLATE-only now; these two checks keep both properties.
       - name: Install cargo-machete
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2
         with:
@@ -148,8 +149,8 @@ jobs:
           # `cargo tree` failing must fail the step too, so its output is taken
           # with an assignment rather than piped straight into `grep`.
           tree="$(cargo tree --workspace --prefix none)"
-          if printf '%s\n' "$tree" | grep -E '^(aws-lc-rs|aws-lc-sys|rav1e|ravif) v'; then
-            echo "::error::A default feature pulled back in a dependency this project avoids; see the note on server/Cargo.toml's dev-dependencies."
+          if printf '%s\n' "$tree" | grep -E '^(aws-lc-rs|aws-lc-sys|rav1e|ravif|zstd-sys|jieba-rs) v'; then
+            echo "::error::A default feature pulled back in a dependency this project avoids; see the notes in server/Cargo.toml."
             exit 1
           fi
 

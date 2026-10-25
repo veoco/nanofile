@@ -1,6 +1,6 @@
-//! Full-text search indexing using Tantivy + jieba tokenizer: creates/opens a
-//! Tantivy index directory on disk and registers the `jieba` tokenizer for
-//! content fields so both CJK and Latin text are searchable.
+//! Full-text search indexing using Tantivy: creates/opens an index directory on
+//! disk and registers the `cjk_bigram` analyzer for content fields so both CJK
+//! and Latin text are searchable without an embedded dictionary.
 //!
 //! This module is deliberately only the *document store*: it writes, deletes
 //! and searches index documents, and knows nothing about where a file's bytes
@@ -12,6 +12,7 @@
 //! "never seen". A tokio task commits the writer every 30 seconds.
 
 pub mod extract;
+mod tokenizer;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -30,10 +31,15 @@ use tantivy::tokenizer::TextAnalyzer;
 use crate::repository::Repositories;
 use base::error::AppError;
 
+use tokenizer::CjkBigramTokenizer;
+
 const FIELD_REPO_ID: &str = "repo_id";
 const FIELD_FULLPATH: &str = "fullpath";
 const FIELD_FILENAME: &str = "filename";
 const FIELD_CONTENT: &str = "content";
+/// Analyzer registered for [`FIELD_CONTENT`]. The name is stored in the index
+/// schema, so changing the tokenizer is a schema change (see [`SCHEMA_VERSION`]).
+const CONTENT_ANALYZER: &str = "cjk_bigram";
 /// Content identity of the file the document was built from (the repo's `fs_id`).
 const FIELD_FS_ID: &str = "fs_id";
 /// [`extract::EXTRACTOR_VERSION`] that produced this document.
@@ -45,8 +51,9 @@ const FIELD_ATTEMPTED_AT: &str = "attempted_at";
 /// Marks the on-disk schema generation inside `index_dir`; a mismatch turns a
 /// later panic on a missing field into an explicit rebuild at startup.
 const SCHEMA_VERSION_FILE: &str = ".nanofile_schema_version";
-/// Bump whenever the field set below changes.
-const SCHEMA_VERSION: u32 = 2;
+/// Bump when the field set **or** the content analyzer changes: either makes an
+/// index written by the old code unservable by this one.
+const SCHEMA_VERSION: u32 = 3;
 /// Fields the on-disk schema must expose for this code to serve it.
 ///
 /// [`SCHEMA_VERSION_FILE`] alone is not sufficient: an index opened before the
@@ -254,8 +261,9 @@ pub struct TextIndexer {
 }
 
 impl TextIndexer {
-    /// Create or open a Tantivy index at `index_dir`, registering the `jieba` Chinese
-    /// tokenizer. Errors if the directory cannot be created or the index is incompatible.
+    /// Create or open a Tantivy index at `index_dir`, registering the
+    /// dictionary-free CJK analyzer. Errors if the directory cannot be created or
+    /// the index is incompatible.
     pub fn new(index_dir: &Path) -> Result<Self, AppError> {
         std::fs::create_dir_all(index_dir)
             .map_err(|e| AppError::internal(format!("create index dir: {e}")))?;
@@ -268,7 +276,7 @@ impl TextIndexer {
             FIELD_CONTENT,
             TextOptions::default().set_stored().set_indexing_options(
                 TextFieldIndexing::default()
-                    .set_tokenizer("jieba")
+                    .set_tokenizer(CONTENT_ANALYZER)
                     .set_index_option(IndexRecordOption::WithFreqsAndPositions),
             ),
         );
@@ -346,11 +354,13 @@ impl TextIndexer {
         let schema = index.schema();
         let fields = SchemaFields::resolve(&schema)?;
 
-        // Register the jieba Chinese tokenizer for content fields; LowerCaser makes
-        // matching case-insensitive for non-CJK text.
+        // Register the dictionary-free analyzer for content fields; LowerCaser
+        // makes matching case-insensitive for non-CJK text. CJK runs become
+        // overlapping bigrams, so a multi-character query is a phrase query over
+        // adjacent bigrams instead of a dictionary lookup.
         index.tokenizers().register(
-            "jieba",
-            TextAnalyzer::builder(tantivy_jieba::JiebaTokenizer::new())
+            CONTENT_ANALYZER,
+            TextAnalyzer::builder(CjkBigramTokenizer::new())
                 .filter(tantivy::tokenizer::LowerCaser)
                 .build(),
         );
@@ -762,9 +772,11 @@ impl TextIndexer {
     /// Search the full-text index.
     ///
     /// Exact term matching via Tantivy's QueryParser; case-insensitivity comes from
-    /// the LowerCaser filter on the jieba tokenizer. For substring/prefix filename
-    /// matching the caller should also run the filename fallback (FS tree traversal
-    /// with `strcasestr`). `filename_only` restricts the query to the filename
+    /// the LowerCaser filter on the content analyzer. A CJK query of two or more
+    /// characters is analyzed into adjacent bigrams, which QueryParser turns into a
+    /// phrase query. For substring/prefix filename matching the caller should also
+    /// run the filename fallback (FS tree traversal with `strcasestr`).
+    /// `filename_only` restricts the query to the filename
     /// field. Hits are limited by `limit` and offset by `offset`, and each carries a
     /// `content_highlight` snippet only when the stored content matches a term.
     ///
@@ -1478,6 +1490,68 @@ mod tests {
             results[0].content_highlight.contains("<mark>"),
             "content match should produce a highlighted snippet, got {:?}",
             results[0].content_highlight
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cjk_content_search_matches_an_adjacent_phrase() -> Result<(), AppError> {
+        let dir = tempfile::tempdir().unwrap();
+        let indexer = TextIndexer::new(dir.path())?;
+        indexer.index_file("repo-1", "/cn.txt", "cn.txt", "这是一个测试文档的内容")?;
+        indexer.commit()?;
+
+        let results = indexer
+            .search("测试文档", &["repo-1".to_string()], 10, 0, false)
+            .await?;
+        assert_eq!(results.len(), 1, "adjacent CJK phrase should match");
+        assert!(
+            results[0]
+                .content_highlight
+                .contains("<mark>测试文档</mark>"),
+            "CJK match should be highlighted, got {:?}",
+            results[0].content_highlight
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cjk_phrase_requires_adjacent_bigrams() -> Result<(), AppError> {
+        let dir = tempfile::tempdir().unwrap();
+        let indexer = TextIndexer::new(dir.path())?;
+        indexer.index_file("repo-1", "/gap.txt", "gap.txt", "北京 大学")?;
+        indexer.index_file("repo-1", "/joined.txt", "joined.txt", "北京大学")?;
+        indexer.commit()?;
+
+        let results = indexer
+            .search("北京大学", &["repo-1".to_string()], 10, 0, false)
+            .await?;
+        let paths: Vec<&str> = results.iter().map(|hit| hit.fullpath.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["/joined.txt"],
+            "separated words are not the adjacent phrase"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_single_character_cjk_query_uses_prefix_fallback() -> Result<(), AppError> {
+        let dir = tempfile::tempdir().unwrap();
+        let indexer = TextIndexer::new(dir.path())?;
+        indexer.index_file("repo-1", "/cn.txt", "cn.txt", "这是一个测试文档的内容")?;
+        indexer.commit()?;
+
+        let results = indexer
+            .search("测", &["repo-1".to_string()], 10, 0, false)
+            .await?;
+        assert_eq!(
+            results.len(),
+            1,
+            "a single CJK character should still find the bigram it starts"
         );
 
         Ok(())

@@ -42,8 +42,8 @@ fn flatten_toml(value: &toml::Value, prefix: &str, out: &mut HashMap<String, Str
     }
 }
 
-include_flate::flate!(static EN_TOML: str from "locales/en.toml" with zstd);
-include_flate::flate!(static ZH_TOML: str from "locales/zh.toml" with zstd);
+include_flate::flate!(static EN_TOML: str from "locales/en.toml" with deflate);
+include_flate::flate!(static ZH_TOML: str from "locales/zh.toml" with deflate);
 
 static EN: LazyLock<HashMap<String, String>> = LazyLock::new(|| parse_translations(&EN_TOML));
 static ZH: LazyLock<HashMap<String, String>> = LazyLock::new(|| parse_translations(&ZH_TOML));

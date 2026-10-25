@@ -1,8 +1,8 @@
 //! Embedded static assets service.
 //!
-//! `rust-embed` compiles `static/` into the binary; assets are served with
-//! content-hash fingerprints in the filename, `ETag` / `Last-Modified` and
-//! `304 Not Modified` handling.
+//! Assets are compiled into the binary with `include-flate` (pure-Rust DEFLATE)
+//! and served with content-hash fingerprints in the filename, `ETag` /
+//! `Last-Modified` and `304 Not Modified` handling.
 
 use axum::{
     body::Body,
@@ -10,13 +10,124 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use rust_embed::Embed;
+use sha2::{Digest, Sha256};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
-#[derive(Embed)]
-#[folder = "static/"]
+// The files this service can serve. A path that is not listed here is a 404,
+// even if it exists under `static/`: add it here (and to `ASSET_CACHE`) when a
+// template starts referencing a new asset.
+include_flate::flate!(static APP_CSS: [u8] from "static/css/app.css" with deflate);
+include_flate::flate!(static COMMON_JS: [u8] from "static/js/common.bundle.js" with deflate);
+include_flate::flate!(static FB_JS: [u8] from "static/js/file-browser.bundle.js" with deflate);
+include_flate::flate!(static PUBLIC_UPLOAD_JS: [u8] from "static/js/public-upload.bundle.js" with deflate);
+include_flate::flate!(static THEME_INIT_JS: [u8] from "static/js/theme-init.bundle.js" with deflate);
+include_flate::flate!(static PUBLIC_SHARE_JS: [u8] from "static/js/public-share.bundle.js" with deflate);
+include_flate::flate!(static POW_JS: [u8] from "static/js/pow.bundle.js" with deflate);
+include_flate::flate!(static FAVICON: [u8] from "static/img/favicon.svg" with deflate);
+
+/// What the serving code needs from an embedded file: the inflated bytes and the
+/// metadata an `ETag` / `Last-Modified` is derived from.
+struct EmbeddedFile {
+    data: Cow<'static, [u8]>,
+    metadata: Metadata,
+}
+
+#[derive(Clone, Copy)]
+struct Metadata {
+    sha256: [u8; 32],
+    last_modified: u64,
+}
+
+impl Metadata {
+    fn sha256_hash(&self) -> [u8; 32] {
+        self.sha256
+    }
+
+    fn last_modified(&self) -> Option<u64> {
+        Some(self.last_modified)
+    }
+}
+
+struct CachedAsset {
+    bytes: bytes::Bytes,
+    sha256: [u8; 32],
+    last_modified: u64,
+}
+
+impl CachedAsset {
+    fn new(raw: &[u8], last_modified: u64) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(raw);
+        let mut sha256 = [0u8; 32];
+        sha256.copy_from_slice(&hasher.finalize());
+        Self {
+            bytes: bytes::Bytes::copy_from_slice(raw),
+            sha256,
+            last_modified,
+        }
+    }
+}
+
+/// Every asset is inflated and hashed once, on the first lookup, and the bytes
+/// are shared from here on. The whole set is ~300 KiB, so the one-time cost is
+/// small; inflating per request is what this avoids.
+static ASSET_CACHE: LazyLock<HashMap<&'static str, CachedAsset>> = LazyLock::new(|| {
+    // The assets are build products, so they all share the build timestamp; the
+    // ETag, which is content-derived, is what browsers actually revalidate on.
+    let last_modified: u64 = env!("NANOFILE_BUILD_TS").parse().unwrap_or(0);
+    HashMap::from([
+        (
+            "css/app.css",
+            CachedAsset::new(APP_CSS.as_slice(), last_modified),
+        ),
+        (
+            "js/common.bundle.js",
+            CachedAsset::new(COMMON_JS.as_slice(), last_modified),
+        ),
+        (
+            "js/file-browser.bundle.js",
+            CachedAsset::new(FB_JS.as_slice(), last_modified),
+        ),
+        (
+            "js/public-upload.bundle.js",
+            CachedAsset::new(PUBLIC_UPLOAD_JS.as_slice(), last_modified),
+        ),
+        (
+            "js/theme-init.bundle.js",
+            CachedAsset::new(THEME_INIT_JS.as_slice(), last_modified),
+        ),
+        (
+            "js/public-share.bundle.js",
+            CachedAsset::new(PUBLIC_SHARE_JS.as_slice(), last_modified),
+        ),
+        (
+            "js/pow.bundle.js",
+            CachedAsset::new(POW_JS.as_slice(), last_modified),
+        ),
+        (
+            "img/favicon.svg",
+            CachedAsset::new(FAVICON.as_slice(), last_modified),
+        ),
+    ])
+});
+
+/// Look up a path under `static/` and get its inflated bytes plus metadata.
 struct Assets;
+
+impl Assets {
+    fn get(path: &str) -> Option<EmbeddedFile> {
+        let cached = ASSET_CACHE.get(path)?;
+        Some(EmbeddedFile {
+            data: Cow::Borrowed(cached.bytes.as_ref()),
+            metadata: Metadata {
+                sha256: cached.sha256,
+                last_modified: cached.last_modified,
+            },
+        })
+    }
+}
 
 fn hex_prefix(bytes: &[u8; 32]) -> String {
     let mut s = String::with_capacity(8);
@@ -74,13 +185,11 @@ macro_rules! asset_data {
 
 asset_data!(CSS_HASH, CSS_LM, ETAG_CSS, FP_CSS, "css/app.css");
 
-/// Decompress one embedded asset once and keep the bytes for the life of the
-/// process.
+/// A shareable `Bytes` handle for one embedded asset.
 ///
-/// `rust-embed`'s `compression` feature inflates on every `get`; without this
-/// cache a browser page load would decompress the same CSS/JS on every request.
-/// The decompressed set is ~300 KiB, which is a fair trade for keeping the
-/// binary smaller and the hot path allocation-free.
+/// `ASSET_CACHE` inflates each file once; this wrapper hands the response path a
+/// cheap clone of the inflated bytes. The set is ~300 KiB, a fair trade for the
+/// smaller binary and an allocation-free hot path.
 macro_rules! asset_bytes {
     ($name:ident, $path:expr) => {
         static $name: LazyLock<bytes::Bytes> = LazyLock::new(|| {

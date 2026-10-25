@@ -126,26 +126,24 @@ percent-encoding = "2.3"
 clap = { version = "4", features = ["derive"] }
 rpassword = "7"
 askama = { version = "0.16", features = ["serde_json", "urlencode"] }
-# `compression` stores static/ deflated and inflates it on `get`; the assets are
-# cached as `Bytes` at first use, so the inflation happens once per process. The
-# decompressor (`include-flate`) is already in the graph through jieba.
-rust-embed = { version = "8", features = ["compression"] }
-# The locale tables are ~200 KiB of TOML; compress them with the zstd decoder
-# that rust-embed/jieba already link, and inflate once inside their LazyLock.
-include-flate = { version = "0.3", default-features = false, features = ["zstd"] }
+# Static assets and locale tables (~230 KiB of CSS/JS/SVG and ~200 KiB of TOML)
+# are embedded DEFLATE-compressed and inflated once on first use. `deflate`
+# (libflate) is pure Rust; `zstd` must stay off: enabling it would compile
+# zstd-sys into the binary for ~400 KiB, and these few hundred KiB of assets do
+# not save enough with zstd to pay for that.
+include-flate = { version = "0.3", default-features = false, features = ["deflate"] }
 serde_urlencoded = { workspace = true }
 multer = "3.1"
 
 # Full-text search. Only the features this schema uses are on: `mmap` for reading
 # segments without copying them and `lz4-compression` for the document store's
-# default compressor. `stemmer`/`stopwords` are off (the only analyzer is jieba +
-# LowerCaser), and `columnar-zstd-compression` is off because the schema declares
-# no fast fields; zstd itself stays linked through jieba's compressed dictionary.
+# default compressor. `stemmer`/`stopwords` are off (the only analyzer is the
+# in-tree CJK bigram tokenizer + LowerCaser), and `columnar-zstd-compression` is
+# off because the schema declares no fast fields. Nothing links zstd any more.
 tantivy = { version = "0.26.1", default-features = false, features = [
     "mmap",
     "lz4-compression",
 ] }
-tantivy-jieba = "0.21.0"
 
 # Document text extraction for the full-text index. Both are pure Rust (no
 # pdfium, no C/C++), so the "no system library" property holds. Neither drags

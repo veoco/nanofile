@@ -9,10 +9,10 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 include_flate::flate!(
-    static EMAIL_EN_TOML: str from "locales/email_en.toml" with zstd
+    static EMAIL_EN_TOML: str from "locales/email_en.toml" with deflate
 );
 include_flate::flate!(
-    static EMAIL_ZH_TOML: str from "locales/email_zh.toml" with zstd
+    static EMAIL_ZH_TOML: str from "locales/email_zh.toml" with deflate
 );
 
 static EMAIL_EN: LazyLock<HashMap<String, String>> =

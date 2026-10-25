@@ -61,6 +61,12 @@ binary, check the per-crate split with:
 cargo bloat --release --crates -n 60 -p server --bin nanofile
 ```
 
+The release binary embeds the web assets and locale tables DEFLATE-compressed
+(`include-flate`) and uses a dictionary-free CJK bigram analyzer for content, so
+it carries no word list and links no C compression library. Keep the transitive
+`include-flate` features at `deflate`: enabling `zstd` compiles `zstd-sys` into
+every build, and CI rejects it.
+
 The hot-path probe is `server/tests/perf_probe.rs`. It is `#[ignore]`d, so it
 never runs in CI; run it before and after a performance change and diff the
 `perf ...` lines (Linux reports the process's `VmRSS`):

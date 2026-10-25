@@ -45,6 +45,8 @@ cargo build --bin nanofile        # 产物是 target/debug/nanofile
 cargo bloat --release --crates -n 60 -p server --bin nanofile
 ```
 
+release 二进制把 Web 资源与语言包用 DEFLATE（`include-flate`）内嵌，内容分析器是无词典的 CJK bigram，因此不携带词表，也不链接 C 压缩库。`include-flate` 的传递特性必须保持只有 `deflate`：打开 `zstd` 会把 `zstd-sys` 编进每次构建，CI 会拒绝。
+
 热路径探针在 `server/tests/perf_probe.rs`，带 `#[ignore]`，因此从不在 CI 里跑；性能改动前后各跑一次并对比 `perf ...` 行（Linux 会打印进程 `VmRSS`）：
 
 ```bash

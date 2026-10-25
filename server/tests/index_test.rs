@@ -114,6 +114,47 @@ async fn test_search_content_not_filename() {
     );
 }
 
+/// Chinese content is indexed as adjacent CJK bigrams, so a multi-character query is
+/// searchable as a phrase through the HTTP API.
+#[tokio::test]
+async fn test_cjk_content_search() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    let resp = f
+        .client
+        .upload_file(
+            token,
+            &f.repo_id,
+            "/",
+            "cn.txt",
+            "这是一个测试文档的内容".as_bytes(),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed");
+
+    // `测试文档`, percent-encoded.
+    let query = "%E6%B5%8B%E8%AF%95%E6%96%87%E6%A1%A3";
+    assert!(
+        wait_for(std::time::Duration::from_secs(15), || async {
+            !search_results(&f, token, query).await.is_empty()
+        })
+        .await,
+        "adjacent Chinese phrase should be searchable"
+    );
+
+    let results = search_results(&f, token, query).await;
+    assert_eq!(results[0]["fullpath"], "/cn.txt");
+    assert!(
+        results[0]["content_highlight"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("<mark>测试文档</mark>"),
+        "CJK match should be highlighted, got {:?}",
+        results[0]["content_highlight"]
+    );
+}
+
 /// Upload a binary file → should NOT be indexed.
 #[tokio::test]
 async fn test_binary_file_skipped() {
