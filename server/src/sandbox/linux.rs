@@ -203,19 +203,19 @@ pub(super) fn confine(profile: Profile, grants: Grants<'_>) -> (Protections, Vec
         }
         .to_string(),
     );
-    // PR_SET_PDEATHSIG only fires for a parent that dies *after* it is installed, so this process
-    // may already be an orphan by the time it reaches here: the server can exit between the fork
-    // and this call. Nothing would ever reap it then, and it would parse a document for nobody.
-    let parent = unsafe { libc::getppid() };
+    // A parent that dies before the signal is armed is never signalled, so read the id the
+    // server named first and compare it after arming. In a container that id is 1: the
+    // server is the entrypoint, and PID 1 there is a live parent, not an orphan marker.
+    let parent = expected_parent();
     detail.push(
-        if set_parent_death_signal(parent) {
+        if set_parent_death_signal() {
             "pdeathsig=on"
         } else {
             "pdeathsig=refused"
         }
         .to_string(),
     );
-    if parent <= 1 || unsafe { libc::getppid() } != parent {
+    if parent_is_gone(parent, unsafe { libc::getppid() }) {
         // No parent is left to read an exit code, so any value will do.
         unsafe { libc::_exit(1) };
     }
@@ -286,13 +286,10 @@ fn set_dumpable() -> bool {
 /// Ask the kernel to end this process when its parent ends: the parent's timeout and
 /// group kill cover everything but the parent itself being gone.
 ///
-/// `expected_parent` is the parent this child was started with. The signal is not queued for a
-/// death that already happened, so a parent that is gone before the call is reported as a refusal —
-/// the caller exits in that case instead of parsing for a parent that will never read the answer.
-fn set_parent_death_signal(expected_parent: libc::pid_t) -> bool {
-    if expected_parent <= 1 {
-        return false;
-    }
+/// The signal only fires for a parent that dies *after* this call, so [`confine`] pairs it
+/// with [`parent_is_gone`]: a server that died in the window before the call leaves a child
+/// that can still see the change and exit instead of parsing for nobody.
+fn set_parent_death_signal() -> bool {
     unsafe {
         libc::prctl(
             libc::PR_SET_PDEATHSIG,
@@ -301,8 +298,33 @@ fn set_parent_death_signal(expected_parent: libc::pid_t) -> bool {
             0,
             0,
         ) == 0
-            && libc::getppid() == expected_parent
     }
+}
+
+/// The environment variable the server puts its own pid in when it spawns a worker.
+///
+/// The child cannot otherwise tell a live PID 1 — in a container the server *is* PID 1 —
+/// from a reparent to PID 1 after the server died before the signal was armed.
+pub(super) const PARENT_PID_ENV: &str = "NANOFILE_SANDBOX_PARENT_PID";
+
+/// The parent this process was started by.
+///
+/// The server names itself; a worker started by hand has no such variable, so its current
+/// parent is the best answer available.
+fn expected_parent() -> libc::pid_t {
+    std::env::var(PARENT_PID_ENV)
+        .ok()
+        .and_then(|pid| pid.parse().ok())
+        .filter(|pid| *pid > 0)
+        .unwrap_or_else(|| unsafe { libc::getppid() })
+}
+
+/// Whether the parent this process was started with is gone.
+///
+/// A changed id is the only evidence: PID 1 is a real parent in a container, and a child
+/// reparented to it from any *other* parent has an id that no longer matches.
+fn parent_is_gone(expected_parent: libc::pid_t, current_parent: libc::pid_t) -> bool {
+    current_parent != expected_parent
 }
 
 /// Close every descriptor above stderr.
@@ -1496,6 +1518,21 @@ mod tests {
                 "{name} reaches a process outside the sandbox"
             );
         }
+    }
+
+    /// A container's entrypoint is the server, so the worker's parent is PID 1 there. That
+    /// is a live parent, not the mark of an orphan: only a changed id says the parent died.
+    #[test]
+    fn pid_one_is_a_parent_like_any_other() {
+        assert!(
+            !parent_is_gone(1, 1),
+            "a server that is PID 1 is still the parent"
+        );
+        assert!(!parent_is_gone(4242, 4242), "an unchanged parent is alive");
+        assert!(
+            parent_is_gone(4242, 1),
+            "reparenting to PID 1 means the server died"
+        );
     }
 
     /// A process that may copy itself must not leave the group the parent started it in:

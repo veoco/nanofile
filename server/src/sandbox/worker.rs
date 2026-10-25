@@ -1683,6 +1683,13 @@ fn spawn_child(
         // Nothing here is relative, and the server's own directory is not the
         // child's business.
         .current_dir(Path::new("/"));
+    // Tells the child which parent it was started by: PID 1 is a live parent in a
+    // container (the server itself), not evidence that this one already died.
+    #[cfg(target_os = "linux")]
+    command.env(
+        crate::sandbox::linux::PARENT_PID_ENV,
+        std::process::id().to_string(),
+    );
     // The child leads its own group, so a timeout can end what it started. macOS's
     // media profile is where this matters: a helper that got code running can leave
     // copies holding the pipes. Parser profiles deny the fork.
