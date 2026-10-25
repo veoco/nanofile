@@ -9,26 +9,20 @@ pub fn to_json(data: &CommitData) -> String {
     serde_json::to_string(data).unwrap()
 }
 
-/// Compute the commit_id exactly like seafile's `compute_commit_id()`
-/// (upstream `common/commit-mgr.c`):
+/// Compute the commit_id with the wire format's input order:
 ///
-/// ```c
-/// SHA1_Init (&ctx);
-/// SHA1_Update (&ctx, commit->root_id, 41);     /* 40 hex chars + NUL */
-/// SHA1_Update (&ctx, commit->creator_id, 41);  /* 40 hex chars + NUL */
-/// if (commit->creator_name)
-///     SHA1_Update (&ctx, commit->creator_name, strlen(...) + 1);  /* + NUL */
-/// SHA1_Update (&ctx, commit->desc, strlen(...) + 1);             /* + NUL */
-/// ctime_n = hton64 (commit->ctime);
-/// SHA1_Update (&ctx, &ctime_n, sizeof (ctime_n));  /* 8 bytes, big-endian */
-/// SHA1_Final (sha1, &ctx);
-/// ```
+/// 1. `root_id` (40 hex characters) followed by a NUL byte;
+/// 2. `creator` (40 hex characters) followed by a NUL byte;
+/// 3. `creator_name` followed by a NUL byte, omitted entirely when the name is
+///    empty (the format's nullable-field case);
+/// 4. `description` followed by a NUL byte;
+/// 5. `ctime` as eight big-endian bytes.
 ///
-/// The NUL terminators are part of the hash: every string is fed as a C
-/// string (`strlen + 1`), never as a bare byte slice. Omitting them yields
-/// ids that no official seafile client or server would compute for the same
-/// logical commit, so a library written through the web API and the same
-/// library written by a desktop client would disagree on history.
+/// The NUL terminators are part of the hash, not a serialization detail:
+/// omitting them yields ids that no official seafile client or server would
+/// compute for the same logical commit, so a library written through the web
+/// API and the same library written by a desktop client would disagree on
+/// history. The format is documented on the compatibility page.
 ///
 /// `creator_name` is nullable upstream and the field is skipped entirely when
 /// NULL. nanofile models it as a `String` that is not serialised when empty

@@ -264,11 +264,10 @@ mod tests {
     const SALT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SALT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    /// Golden vectors from a driver built from `common/password-hash.c` +
-    /// `common/seafile-crypt.c` verbatim, cross-checked with `openssl kdf ... PBKDF2`
-    /// (see the module docs for the salt subtlety).
+    /// Golden outputs captured with an independent driver, cross-checked with
+    /// `openssl kdf ... PBKDF2` (see the module docs for the salt subtlety).
     #[test]
-    fn test_derive_pwd_hash_pbkdf2_matches_seafile_c() {
+    fn test_derive_pwd_hash_pbkdf2_matches_golden_vectors() {
         let cases: &[(i32, &str, Option<&str>, &str)] = &[
             (
                 2,

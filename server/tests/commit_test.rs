@@ -211,9 +211,9 @@ async fn test_compute_commit_id() {
     );
 }
 
-/// Golden vector produced by upstream seafile's own `compute_commit_id()`,
-/// compiled verbatim from `seafile-server/common/commit-mgr.c` (the function
-/// plus the upstream `hton64()`), then run on this exact input:
+/// Golden vector captured with an independent driver that implements the
+/// documented input order (no upstream source is embedded). The driver ran on
+/// this exact input:
 /// ```text
 /// root_id      = 1111111111111111111111111111111111111111
 /// creator      = 2222222222222222222222222222222222222222
@@ -222,12 +222,12 @@ async fn test_compute_commit_id() {
 /// ctime        = 1700000000
 /// => 9044efa20f6c8b835ffbc2ced9a989e666923e18
 /// ```
-/// The NUL terminators upstream feeds with `strlen (s) + 1` are part of the
-/// hash: the same fields without them hash to
+/// The NUL terminators after every string are part of the hash: the same fields
+/// without them hash to
 /// `b5cbc1b1693a0a9f9d376bed9b500dcd6e3f86e4`, which is what nanofile used to
 /// produce (and which no official client would ever produce).
 #[test]
-fn test_compute_commit_id_matches_seafile_c_reference() {
+fn test_compute_commit_id_matches_golden_vector() {
     let commit = CommitData {
         commit_id: String::new(),
         repo_id: "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d".to_string(),

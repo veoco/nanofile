@@ -1,23 +1,23 @@
-use std::sync::LazyLock;
+//! Content-defined chunk boundaries for file blocks.
+//!
+//! A rolling fingerprint over a 48-byte window decides where a chunk ends. The
+//! scan starts at the minimum chunk size and stops at the first position whose
+//! low bits match the target, or at the maximum size. The final chunk is whatever
+//! remains at end of input, which is also how short files stay in one piece.
+//!
+//! [`Chunker`] performs the same scan incrementally. It retains only the current
+//! candidate chunk, never the whole stream, so its buffer is bounded by the
+//! configured chunk size. Complete chunks are returned by [`Chunker::feed`] and
+//! the last chunk is returned by [`Chunker::finish`].
 
-const POLY: u64 = 0xbfe6b8a5bf378d83;
-const WINDOW_SIZE: usize = 48;
-const BREAK_VALUE: u32 = 0x0013;
-
-/// seafile's official CDC block sizing.
-///
-/// `common/fs-mgr.h` defines `CDC_AVERAGE_BLOCK_SIZE` = 8 MiB, `CDC_MIN_BLOCK_SIZE`
-/// = 6 MiB and `CDC_MAX_BLOCK_SIZE` = 10 MiB, and `seaf_fs_manager_index_blocks()`
-/// always chunks with them (seafile commit `31dcd928`, 2017).
-///
-/// The sizes are **fixed and independent of file size**: the legacy size-dependent
-/// `calculate_chunk_size()` is only the pre-6.1 fallback, never the indexing path.
-/// Using it here would change every block boundary and `seafile` object id.
+/// Average block size used by the production file format.
 pub const SEAFILE_AVG_BLOCK: usize = 8 * 1024 * 1024;
+/// Minimum block size used by the production file format.
 pub const SEAFILE_MIN_BLOCK: usize = 6 * 1024 * 1024;
+/// Maximum block size used by the production file format.
 pub const SEAFILE_MAX_BLOCK: usize = 10 * 1024 * 1024;
 
-/// Block-size triple for [`file_chunk_cdc_with`] / [`Chunker::with_sizes`].
+/// Chunk-size parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChunkSizes {
     pub avg: usize,
@@ -26,7 +26,7 @@ pub struct ChunkSizes {
 }
 
 impl ChunkSizes {
-    /// The triple every seafile client and server has used since 2017.
+    /// The production parameters for file blocks.
     pub const SEAFILE: ChunkSizes = ChunkSizes {
         avg: SEAFILE_AVG_BLOCK,
         min: SEAFILE_MIN_BLOCK,
@@ -34,956 +34,307 @@ impl ChunkSizes {
     };
 }
 
-/// seafile-compatible Rabin fingerprint.
-///
-/// Matches `common/cdc/rabin-checksum.c`: polynomial `0xbfe6b8a5bf378d83`,
-/// 48-byte window, GF(2) arithmetic with precomputed T/U tables.
-struct RabinState {
-    window: [u8; WINDOW_SIZE],
-    pos: usize,
-    count: usize,
-    fingerprint: u64,
-    t: [u64; 256],
-    u: [u64; 256],
-    shift: usize,
+/// Polynomial over GF(2) used by the rolling fingerprint.
+const POLYNOMIAL: u64 = 0xbfe6_b8a5_bf37_8d83;
+/// Number of bytes covered by one fingerprint value.
+const WINDOW_BYTES: usize = 48;
+/// Fingerprint bits that select a boundary.
+const BREAK_PATTERN: u32 = 0x0013;
+/// Number of fingerprint bits discarded when indexing the byte table.
+const TABLE_INDEX_SHIFT: u32 = 55;
+/// Fingerprint values are kept in this many low bits while scanning.
+const FINGERPRINT_MASK: u64 = 0xffff_ffff;
+
+/// Lookup tables for advancing and retiring one byte of the rolling window.
+struct FingerprintTables {
+    /// Contribution of an incoming byte, indexed by the high fingerprint bits.
+    incoming: [u64; 256],
+    /// Contribution of an outgoing byte, indexed by its value.
+    outgoing: [u64; 256],
 }
 
-impl RabinState {
-    /// Find last set bit (MSB index, 1-based) — matches seafile's fls64.
-    fn fls64(v: u64) -> usize {
-        if v == 0 {
-            return 0;
-        }
-        64 - v.leading_zeros() as usize
-    }
-
-    /// GF(2) polynomial multiplication: (x * y) → (high, low).
-    fn polymult(x: u64, y: u64) -> (u64, u64) {
-        let mut ph: u64 = 0;
-        let mut pl: u64 = 0;
-        if x & 1 != 0 {
-            pl = y;
-        }
-        for i in 1..64 {
-            if x & (1u64 << i) != 0 {
-                ph ^= y >> (64 - i);
-                pl ^= y << i;
-            }
-        }
-        (ph, pl)
-    }
-
-    /// GF(2) polynomial modulo: (nh, nl) mod d.
-    fn polymod(nh: u64, nl: u64, d: u64) -> u64 {
-        let k = Self::fls64(d) - 1;
-        let d_shifted = d << (63 - k);
-        let mut nh = nh;
-        let mut nl = nl;
-        if nh != 0 {
-            if nh & (1u64 << 63) != 0 {
-                nh ^= d_shifted;
-            }
-            for i in (0..=62).rev() {
-                if nh & (1u64 << i) != 0 {
-                    nh ^= d_shifted >> (63 - i);
-                    nl ^= d_shifted << (i + 1);
-                }
-            }
-        }
-        for i in (k..=63).rev() {
-            if nl & (1u64 << i) != 0 {
-                nl ^= d_shifted >> (63 - i);
-            }
-        }
-        nl
-    }
-
-    /// GF(2) multiply-then-mod: (x * y) mod d.
-    fn polymmult(x: u64, y: u64, d: u64) -> u64 {
-        let (h, l) = Self::polymult(x, y);
-        Self::polymod(h, l, d)
-    }
-
-    fn new() -> Self {
-        // Copy the 4 KiB precomputed tables instead of recomputing them per chunk.
-        let (shift, t, u) = *RABIN_TABLES;
-        Self {
-            window: [0; WINDOW_SIZE],
-            pos: 0,
-            count: 0,
-            fingerprint: 0,
-            t,
-            u,
-            shift,
-        }
-    }
-
-    /// Core update: `(p * x^8 + m) mod poly`, using the T table.
-    fn append8(&self, p: u64, m: u8) -> u64 {
-        let idx = (p >> self.shift) as usize;
-        ((p << 8) | m as u64) ^ self.t[idx]
-    }
-
-    /// Seed from the first WINDOW_SIZE bytes (seafile's `rabin_checksum`).
-    fn init(&mut self, data: &[u8]) {
-        self.fingerprint = 0;
-        self.count = 0;
-        self.pos = 0;
-
-        if data.len() >= WINDOW_SIZE {
-            for (i, &byte) in data.iter().enumerate().take(WINDOW_SIZE) {
-                self.fingerprint = self.append8(self.fingerprint, byte) & 0xFFFF_FFFF;
-                self.window[i] = byte;
-            }
-            self.count = WINDOW_SIZE;
-            self.pos = WINDOW_SIZE % WINDOW_SIZE;
-        }
-    }
-
-    /// Slide the window by one byte (seafile's `rabin_rolling_checksum`).
-    fn update(&mut self, byte: u8) {
-        let out = self.window[self.pos];
-        self.fingerprint =
-            self.append8(self.fingerprint ^ self.u[out as usize], byte) & 0xFFFF_FFFF;
-        self.window[self.pos] = byte;
-        self.pos = (self.pos + 1) % WINDOW_SIZE;
-        self.count += 1;
-    }
-
-    fn get_fingerprint(&self) -> u32 {
-        self.fingerprint as u32
-    }
+/// 1-based position of the highest set bit, or zero for zero.
+const fn msb_position(value: u64) -> u32 {
+    64 - value.leading_zeros()
 }
 
-/// Precomputed Rabin lookup tables for `POLY`/`WINDOW_SIZE`, computed once and
-/// shared by every `RabinState::new()`. Recomputing them per chunk cost ~512
-/// `polymult`/`polymod` operations per chunk.
-static RABIN_TABLES: LazyLock<(usize, [u64; 256], [u64; 256])> = LazyLock::new(|| {
-    let poly = POLY;
-    let xshift = RabinState::fls64(poly) - 1;
-    let shift = xshift - 8;
+/// Carry-less multiplication of two 64-bit words into a 128-bit product.
+const fn multiply_wide(x: u64, y: u64) -> (u64, u64) {
+    let mut high = 0u64;
+    let mut low = if x & 1 == 0 { 0 } else { y };
+    let mut bit = 1u32;
+    while bit < 64 {
+        if x & (1u64 << bit) != 0 {
+            high ^= y >> (64 - bit);
+            low ^= y << bit;
+        }
+        bit += 1;
+    }
+    (high, low)
+}
 
-    // Precompute T[256]: T[j] = (j * x^62 mod poly) | (j << 62)
-    let t1 = RabinState::polymod(0, 1u64 << xshift, poly);
-    let mut t = [0u64; 256];
-    for j in 0..256u64 {
-        t[j as usize] = RabinState::polymmult(j, t1, poly) | (j << xshift);
+/// Reduce a 128-bit carry-less product modulo `divisor`.
+const fn reduce_product(mut high: u64, mut low: u64, divisor: u64) -> u64 {
+    let degree = msb_position(divisor) - 1;
+    let scaled = divisor << (63 - degree);
+
+    if high != 0 {
+        if high & (1u64 << 63) != 0 {
+            high ^= scaled;
+        }
+        let mut bit = 63u32;
+        while bit > 0 {
+            bit -= 1;
+            if high & (1u64 << bit) != 0 {
+                high ^= scaled >> (63 - bit);
+                low ^= scaled << (bit + 1);
+            }
+        }
     }
 
-    // Precompute U[256]: U[i] = i * x^(8*WINDOW_SIZE) mod poly
-    let mut sizeshift: u64 = 1;
-    for _ in 1..WINDOW_SIZE {
-        let idx = (sizeshift >> shift) as usize;
-        sizeshift = (sizeshift << 8) ^ t[idx];
+    let mut bit = 64u32;
+    while bit > degree {
+        bit -= 1;
+        if low & (1u64 << bit) != 0 {
+            low ^= scaled >> (63 - bit);
+        }
     }
-    let mut u = [0u64; 256];
-    for i in 0..256u64 {
-        u[i as usize] = RabinState::polymmult(i, sizeshift, poly);
+    low
+}
+
+/// Multiply two field elements modulo `divisor`.
+const fn multiply_mod(x: u64, y: u64, divisor: u64) -> u64 {
+    let (high, low) = multiply_wide(x, y);
+    reduce_product(high, low, divisor)
+}
+
+/// Build the incoming- and outgoing-byte tables.
+const fn build_tables() -> FingerprintTables {
+    let unit = reduce_product(0, 1u64 << 63, POLYNOMIAL);
+
+    let mut incoming = [0u64; 256];
+    let mut byte = 0usize;
+    while byte < 256 {
+        incoming[byte] = multiply_mod(byte as u64, unit, POLYNOMIAL) | ((byte as u64) << 63);
+        byte += 1;
     }
 
-    (shift, t, u)
-});
+    let mut window_contribution = 1u64;
+    let mut step = 1usize;
+    while step < WINDOW_BYTES {
+        window_contribution = (window_contribution << 8)
+            ^ incoming[(window_contribution >> TABLE_INDEX_SHIFT) as usize];
+        step += 1;
+    }
 
-/// Content-defined chunking matching seafile's `file_chunk_cdc` exactly, using its
-/// official fixed block sizes ([`ChunkSizes::SEAFILE`]).
-///
-/// Same buffer management as the C code: skip `min - WINDOW_SIZE` bytes, seed the
-/// fingerprint at `min - 1`, then roll until a break point or max size.
+    let mut outgoing = [0u64; 256];
+    byte = 0;
+    while byte < 256 {
+        outgoing[byte] = multiply_mod(byte as u64, window_contribution, POLYNOMIAL);
+        byte += 1;
+    }
+
+    FingerprintTables { incoming, outgoing }
+}
+
+/// Tables are fixed by [`POLYNOMIAL`], so they are evaluated at compile time.
+static TABLES: FingerprintTables = build_tables();
+
+/// Advance the fingerprint with one incoming byte.
+#[inline]
+fn advance(fingerprint: u64, byte: u8) -> u64 {
+    let shifted = (fingerprint << 8) | u64::from(byte);
+    let index = (fingerprint >> TABLE_INDEX_SHIFT) as usize;
+    shifted ^ TABLES.incoming[index]
+}
+
+/// Fingerprint of one complete 48-byte window.
+fn window_fingerprint(window: &[u8]) -> u64 {
+    debug_assert_eq!(window.len(), WINDOW_BYTES);
+    let mut fingerprint = 0u64;
+    for &byte in window {
+        fingerprint = advance(fingerprint, byte) & FINGERPRINT_MASK;
+    }
+    fingerprint
+}
+
+/// Advance the fingerprint by one byte on each side of the window.
+#[inline]
+fn roll(fingerprint: u64, outgoing: u8, incoming: u8) -> u64 {
+    advance(fingerprint ^ TABLES.outgoing[outgoing as usize], incoming) & FINGERPRINT_MASK
+}
+
+/// Compute the chunk offsets of `data` with the production sizes.
 pub fn file_chunk_cdc(data: &[u8]) -> Vec<(usize, usize)> {
     file_chunk_cdc_with(data, ChunkSizes::SEAFILE)
 }
 
-/// [`file_chunk_cdc`] with an explicit block-size triple. Production always uses
-/// [`ChunkSizes::SEAFILE`]; the parameter lets tests exercise multi-block boundaries
-/// on small fixtures.
+/// Compute contiguous, non-empty `(offset, length)` chunks covering `data`.
 pub fn file_chunk_cdc_with(data: &[u8], sizes: ChunkSizes) -> Vec<(usize, usize)> {
-    let file_size = data.len();
-    if file_size == 0 {
-        return vec![];
-    }
-    let ChunkSizes { avg, min, max } = sizes;
-    let mask = (avg as u32).wrapping_sub(1);
-    let target = BREAK_VALUE & mask;
+    debug_assert!(
+        sizes.min >= WINDOW_BYTES,
+        "minimum chunk size must hold a full rolling window"
+    );
 
+    let mask = (sizes.avg as u32).wrapping_sub(1);
+    let target = BREAK_PATTERN & mask;
+    let total = data.len();
     let mut chunks = Vec::new();
-    let mut chunk_start = 0usize;
+    let mut start = 0usize;
 
-    while chunk_start < file_size {
-        // If remaining data <= min, emit the rest as final chunk
-        if file_size - chunk_start <= min {
-            chunks.push((chunk_start, file_size - chunk_start));
+    while start < total {
+        if total - start <= sizes.min {
+            chunks.push((start, total - start));
             break;
         }
 
-        // Compute initial fingerprint at position `min - 1` from scratch (like C's finger)
-        let scan_start = chunk_start + min - 1;
-        // `min` far exceeds the Rabin window, so the last window before `scan_start` exists.
-        debug_assert!(
-            scan_start >= WINDOW_SIZE - 1,
-            "scan_start too small for window"
-        );
-        let mut state = RabinState::new();
-        state.init(&data[scan_start - (WINDOW_SIZE - 1)..]);
-        let mut fp = state.get_fingerprint();
-
-        // Scan forward looking for break
-        let max_pos = chunk_start + max;
-        let end = file_size;
-        let mut pos = scan_start;
+        let mut position = start + sizes.min - 1;
+        let mut fingerprint = window_fingerprint(&data[position + 1 - WINDOW_BYTES..=position]);
 
         loop {
-            if (fp & mask) == target {
-                // Break found — emit chunk including this byte
-                chunks.push((chunk_start, pos - chunk_start + 1));
-                chunk_start = pos + 1;
+            if (fingerprint as u32) & mask == target {
+                chunks.push((start, position - start + 1));
+                start = position + 1;
                 break;
             }
 
-            if pos + 1 >= max_pos || pos + 1 >= end {
-                // Max size or end of file — emit max-size chunk
-                let chunk_end = chunk_start + max;
-                if chunk_end <= file_size {
-                    chunks.push((chunk_start, max));
-                } else {
-                    chunks.push((chunk_start, file_size - chunk_start));
-                }
-                chunk_start += max;
+            if position + 1 >= start + sizes.max || position + 1 >= total {
+                chunks.push((start, sizes.max.min(total - start)));
+                start += sizes.max;
                 break;
             }
 
-            // Move to next byte
-            pos += 1;
-            state.update(data[pos]);
-            fp = state.get_fingerprint();
+            position += 1;
+            fingerprint = roll(fingerprint, data[position - WINDOW_BYTES], data[position]);
         }
     }
 
     chunks
 }
 
-/// Content-defined chunker that consumes bytes incrementally and emits chunks, so
-/// the caller never buffers the whole file in memory.
+/// Incremental chunker with the same boundaries as [`file_chunk_cdc_with`].
 ///
-/// Boundaries are **identical** to [`file_chunk_cdc`]: the same windowing, break and
-/// max-size state machine, with each chunk's bytes buffered and the fingerprint
-/// rolled forward. Memory is O(max chunk size) regardless of file size.
+/// The chunker buffers the current candidate chunk only. `file_size` is accepted
+/// for API symmetry with whole-file callers; the boundary scan itself never needs
+/// the total length, and the trailing chunk is always returned by [`Self::finish`].
 pub struct Chunker {
-    file_size: usize,
-    min: usize,
-    max: usize,
-    mask: u32,
-    target: u32,
-    /// Bytes accumulated for the current chunk (always `data[chunk_start..=pos]`).
-    chunk_buf: Vec<u8>,
-    /// Global offset of the current chunk's first byte.
-    chunk_start: usize,
-    /// Rabin state, meaningful once the chunk has reached `min` bytes.
-    state: RabinState,
-    /// `false` until the chunk has its first `min` bytes (no break checks), `true` once
-    /// the rolling fingerprint advances byte by byte.
-    rolling: bool,
+    sizes: ChunkSizes,
+    pending: Vec<u8>,
+    fingerprint: u64,
+    next_probe: usize,
+    probing: bool,
 }
 
 impl Chunker {
-    /// Streaming CDC with seafile's fixed block sizes ([`ChunkSizes::SEAFILE`]).
-    /// `file_size` drives only the end-of-file test; the block sizes do **not** depend
-    /// on it, so this agrees with [`file_chunk_cdc`] for any size. For an unknown size
-    /// pass `0` and let [`Chunker::finish`] produce the trailing chunk.
+    /// Create a chunker with the production sizes.
     pub fn new(file_size: usize) -> Self {
         Self::with_sizes(file_size, ChunkSizes::SEAFILE)
     }
 
-    /// [`Chunker::new`] with an explicit triple (tests; see [`file_chunk_cdc_with`]).
+    /// Create a chunker with explicit sizes.
     pub fn with_sizes(file_size: usize, sizes: ChunkSizes) -> Self {
-        let ChunkSizes { avg, min, max } = sizes;
-        let mask = (avg as u32).wrapping_sub(1);
-        Self {
-            file_size,
-            min,
-            max,
-            mask,
-            target: BREAK_VALUE & mask,
-            chunk_buf: Vec::with_capacity(max),
-            chunk_start: 0,
-            state: RabinState::new(),
-            rolling: false,
-        }
-    }
-
-    /// Feed a slice, returning any chunks that become complete. Chunk boundaries come
-    /// from the content, not the feed sizes. The prefix phase is a bulk memcpy; the
-    /// rolling phase scans byte by byte.
-    pub fn feed(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
-        let mut out = Vec::new();
-        let mut i = 0usize;
-        // Local mirror of the chunk length, so the loop avoids a capacity check per byte.
-        let mut chunk_len = self.chunk_buf.len();
-
-        while i < bytes.len() {
-            if !self.rolling {
-                // Prefix phase: accumulate up to `min` bytes in one memcpy.
-                while !self.rolling && i < bytes.len() {
-                    let take = (self.min - chunk_len).min(bytes.len() - i);
-                    self.chunk_buf.extend_from_slice(&bytes[i..i + take]);
-                    chunk_len += take;
-                    i += take;
-                    if chunk_len == self.min {
-                        self.finish_min_chunk(&mut out);
-                        // Emitted (buffer empty) or rolling flipped on (length stays `min`).
-                        chunk_len = self.chunk_buf.len();
-                    }
-                }
-            } else {
-                // Rolling phase: the fingerprint covers the last byte in `chunk_buf`; `bytes[i]`
-                // is the next byte.
-                while self.rolling && i < bytes.len() {
-                    let b = bytes[i];
-                    let pos = self.chunk_start + chunk_len - 1;
-                    let fp = self.state.get_fingerprint();
-                    let next_pos = pos + 1;
-
-                    // Break point at `pos` — emit this chunk (without `b`).
-                    if (fp & self.mask) == self.target {
-                        out.push(self.take_chunk());
-                        self.rolling = false;
-                        self.chunk_start = next_pos;
-                        self.chunk_buf.push(b);
-                        chunk_len = 1;
-                        i += 1;
-                        continue;
-                    }
-
-                    // Max size or end of file. `file_size == 0` means unknown (the A2 multipart path
-                    // has no field size), so the end test is suppressed; `finish()` ends the tail.
-                    if next_pos >= self.chunk_start + self.max
-                        || (self.file_size > 0 && next_pos >= self.file_size)
-                    {
-                        out.push(self.take_chunk());
-                        self.rolling = false;
-                        self.chunk_start = next_pos;
-                        self.chunk_buf.push(b);
-                        chunk_len = 1;
-                        i += 1;
-                        continue;
-                    }
-
-                    // Roll `b` into the window.
-                    self.state.update(b);
-                    self.chunk_buf.push(b);
-                    chunk_len += 1;
-                    i += 1;
-                }
-            }
-        }
-        out
-    }
-
-    /// Finish the stream and return the final (possibly empty) chunk.
-    pub fn finish(self) -> Vec<u8> {
-        self.chunk_buf
-    }
-
-    /// Emit the chunk, leaving a buffer pre-sized to `max` for the next one.
-    fn take_chunk(&mut self) -> Vec<u8> {
-        std::mem::replace(&mut self.chunk_buf, Vec::with_capacity(self.max))
-    }
-
-    /// Seed the fingerprint once the chunk reaches `min` bytes (matching the whole-
-    /// buffer `scan_start`), then decide whether it ends here.
-    fn finish_min_chunk(&mut self, out: &mut Vec<Vec<u8>>) {
         debug_assert!(
-            self.chunk_buf.len() >= WINDOW_SIZE,
-            "chunk must exceed the window before fingerprint init"
+            sizes.min >= WINDOW_BYTES,
+            "minimum chunk size must hold a full rolling window"
         );
-        self.state
-            .init(&self.chunk_buf[self.chunk_buf.len() - WINDOW_SIZE..]);
-        let fp = self.state.get_fingerprint();
-        let pos = self.chunk_start + self.chunk_buf.len() - 1;
-        let next_pos = pos + 1;
-
-        // Break point at `pos` — chunk is `min` bytes.
-        if (fp & self.mask) == self.target {
-            out.push(self.take_chunk());
-            self.chunk_start = next_pos;
-            self.rolling = false;
-            return;
+        let _ = file_size;
+        Self {
+            sizes,
+            pending: Vec::new(),
+            fingerprint: 0,
+            next_probe: 0,
+            probing: false,
         }
-
-        // Max size or end of file. `file_size == 0` (A2 multipart) suppresses the end
-        // test; `finish()` ends the tail.
-        if next_pos >= self.chunk_start + self.max
-            || (self.file_size > 0 && next_pos >= self.file_size)
-        {
-            out.push(self.take_chunk());
-            self.chunk_start = next_pos;
-            self.rolling = false;
-            return;
-        }
-
-        self.rolling = true;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Small triple for boundary/equivalence tests: the production 8/6/10 MiB sizes
-    /// need ~30 MiB fixtures. The production triple is locked by
-    /// [`test_default_block_sizes_match_seafile`].
-    const TEST_SIZES: ChunkSizes = ChunkSizes {
-        avg: 1024 * 1024,
-        min: 256 * 1024,
-        max: 4 * 1024 * 1024,
-    };
-
-    /// Deterministic pseudo-random bytes (no rand dependency), matching the generator
-    /// of the C reference test.
-    fn lcg_bytes(n: usize, seed: u64) -> Vec<u8> {
-        let mut x = seed;
-        (0..n)
-            .map(|_| {
-                x = x
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
-                (x >> 33) as u8
-            })
-            .collect()
     }
 
-    /// Feed `data` in `feed_len` slices and collect the chunks.
-    fn stream_blocks(data: &[u8], feed_len: usize, sizes: ChunkSizes) -> Vec<Vec<u8>> {
-        if data.is_empty() {
-            return Vec::new();
+    /// Consume bytes and return every chunk that is now complete.
+    pub fn feed(&mut self, mut bytes: &[u8]) -> Vec<Vec<u8>> {
+        let mut completed = Vec::new();
+        // The scan starts only once there is at least one byte beyond the
+        // minimum, matching the whole-input rule that a remainder of exactly
+        // `min` is a tail rather than a scan. The extra byte also lets a
+        // maximum below the minimum make progress.
+        let buffer_limit = self.sizes.max.max(self.sizes.min.saturating_add(1));
+
+        while !bytes.is_empty() {
+            let room = buffer_limit.saturating_sub(self.pending.len());
+            if room == 0 {
+                self.scan(&mut completed);
+                debug_assert!(
+                    self.pending.len() < buffer_limit,
+                    "a full pending chunk must yield a boundary"
+                );
+                if self.pending.len() >= buffer_limit {
+                    // Degenerate sizes (for example max == 0); avoid an endless loop.
+                    return completed;
+                }
+                continue;
+            }
+
+            let take = room.min(bytes.len());
+            self.pending.extend_from_slice(&bytes[..take]);
+            bytes = &bytes[take..];
+            self.scan(&mut completed);
         }
-        let mut ch = Chunker::with_sizes(data.len(), sizes);
-        let mut blocks = Vec::new();
-        for chunk in data.chunks(feed_len) {
-            blocks.extend(ch.feed(chunk));
-        }
-        let last = ch.finish();
-        if !last.is_empty() {
-            blocks.push(last);
-        }
-        blocks
+
+        completed
     }
 
-    /// The streaming chunker must produce boundaries *identical* to the whole-buffer
-    /// chunker for the same content, under many feed slice sizes.
-    fn assert_chunkers_agree(data: &[u8], sizes: ChunkSizes) {
-        let expected: Vec<usize> = file_chunk_cdc_with(data, sizes)
-            .iter()
-            .map(|(_, s)| *s)
-            .collect();
-        for feed_len in [1usize, 7, 64, 999, 4096] {
-            let blocks = stream_blocks(data, feed_len, sizes);
-            let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
-            assert_eq!(sizes, expected, "feed_len={feed_len} len={}", data.len());
-            assert_eq!(
-                blocks.concat(),
-                data,
-                "feed_len={feed_len} len={}",
-                data.len()
+    /// Return the final, possibly empty, chunk.
+    pub fn finish(self) -> Vec<u8> {
+        self.pending
+    }
+
+    /// Find boundaries in the buffered data and retire the completed chunks.
+    fn scan(&mut self, completed: &mut Vec<Vec<u8>>) {
+        let mask = (self.sizes.avg as u32).wrapping_sub(1);
+        let target = BREAK_PATTERN & mask;
+
+        loop {
+            if !self.probing {
+                if self.pending.len() <= self.sizes.min {
+                    return;
+                }
+                let window_start = self.sizes.min - WINDOW_BYTES;
+                self.fingerprint = window_fingerprint(&self.pending[window_start..self.sizes.min]);
+                self.next_probe = self.sizes.min - 1;
+                self.probing = true;
+            }
+
+            if self.next_probe >= self.pending.len() {
+                return;
+            }
+
+            let position = self.next_probe;
+            if (self.fingerprint as u32) & mask == target {
+                self.emit(position + 1, completed);
+                continue;
+            }
+
+            if position + 1 >= self.sizes.max {
+                self.emit(self.sizes.max, completed);
+                continue;
+            }
+
+            if position + 1 >= self.pending.len() {
+                return;
+            }
+
+            self.fingerprint = roll(
+                self.fingerprint,
+                self.pending[position + 1 - WINDOW_BYTES],
+                self.pending[position + 1],
             );
+            self.next_probe = position + 1;
         }
     }
 
-    #[test]
-    fn test_chunker_matches_file_chunk_cdc() {
-        assert_chunkers_agree(&[], TEST_SIZES);
-        assert_chunkers_agree(&[0u8; 1], TEST_SIZES);
-        assert_chunkers_agree(&[0u8; 1000], TEST_SIZES);
-        assert_chunkers_agree(&[0xFFu8; 500], TEST_SIZES);
-        assert_chunkers_agree(
-            &(0..256 * 1024).map(|i| i as u8).collect::<Vec<_>>(),
-            TEST_SIZES,
-        );
-        assert_chunkers_agree(&[0u8; 256 * 1024 + 100], TEST_SIZES);
-        assert_chunkers_agree(
-            &(0..300_000)
-                .map(|i| if i % 2 == 0 { 0xAA } else { 0x55 })
-                .collect::<Vec<_>>(),
-            TEST_SIZES,
-        );
-        assert_chunkers_agree(&[0xFFu8; 1_000_000], TEST_SIZES);
-        let data: Vec<u8> = (0..3_000_000)
-            .map(|i: usize| (i.wrapping_mul(31) ^ (i >> 2) ^ (i.wrapping_mul(7))) as u8)
-            .collect();
-        assert_chunkers_agree(&data, TEST_SIZES);
-    }
-
-    /// The A2 multipart path uses `Chunker::new(0)` (field size unknown) while the
-    /// whole-buffer path uses `file_chunk_cdc`; both must agree on boundaries.
-    #[test]
-    fn test_chunker_new_zero_matches_file_chunk_cdc() {
-        fn feed_zero(data: &[u8], feed_len: usize, sizes: ChunkSizes) -> Vec<Vec<u8>> {
-            if data.is_empty() {
-                return Vec::new();
-            }
-            let mut ch = Chunker::with_sizes(0, sizes);
-            let mut blocks = Vec::new();
-            for chunk in data.chunks(feed_len) {
-                blocks.extend(ch.feed(chunk));
-            }
-            let last = ch.finish();
-            if !last.is_empty() {
-                blocks.push(last);
-            }
-            blocks
-        }
-
-        let cases: Vec<(&str, Vec<u8>)> = vec![
-            ("empty", Vec::new()),
-            ("sub-min", vec![0u8; 1000]),
-            ("exact-min", vec![0xABu8; 256 * 1024]),
-            ("min-plus-1", vec![0xCDu8; 256 * 1024 + 1]),
-            ("few-MB", lcg_bytes(3 * 1024 * 1024 + 123, 99)),
-            ("random-800k", lcg_bytes(800_000, 12345)),
-        ];
-
-        for (label, data) in &cases {
-            let expected: Vec<usize> = file_chunk_cdc_with(data, TEST_SIZES)
-                .iter()
-                .map(|(_, s)| *s)
-                .collect();
-            for feed_len in [1usize, 3, 17, 64, 4096] {
-                let blocks = feed_zero(data, feed_len, TEST_SIZES);
-                let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
-                assert_eq!(
-                    sizes,
-                    expected,
-                    "Chunker::new(0) mismatch: case={label} feed_len={feed_len} len={}",
-                    data.len()
-                );
-                assert!(
-                    blocks.concat() == data.as_slice(),
-                    "Chunker::new(0) concat mismatch: case={label} feed_len={feed_len}"
-                );
-            }
-        }
-    }
-
-    /// Feed sizes straddling `min` must not shift boundaries; one large feed must emit
-    /// multiple chunks in a single call.
-    #[test]
-    fn test_chunker_feed_len_across_min_boundary() {
-        let data: Vec<u8> = (0..2 * 1024 * 1024)
-            .map(|i: usize| (i.wrapping_mul(41) ^ (i >> 3)) as u8)
-            .collect();
-        let expected: Vec<usize> = file_chunk_cdc_with(&data, TEST_SIZES)
-            .iter()
-            .map(|(_, s)| *s)
-            .collect();
-        for feed_len in [256 * 1024 - 1, 256 * 1024, 256 * 1024 + 1, 5 * 1024 * 1024] {
-            let blocks = stream_blocks(&data, feed_len, TEST_SIZES);
-            let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
-            assert_eq!(sizes, expected, "feed_len={feed_len}");
-            assert_eq!(blocks.concat(), data, "feed_len={feed_len}");
-        }
-    }
-
-    /// Known size `max + min`: the first chunk is forced out by max size, the second
-    /// by the end-of-file check in `finish_min_chunk`.
-    #[test]
-    fn test_chunker_max_min_known_size() {
-        let data = vec![0u8; 4 * 1024 * 1024 + 256 * 1024];
-        let expected: Vec<usize> = file_chunk_cdc_with(&data, TEST_SIZES)
-            .iter()
-            .map(|(_, s)| *s)
-            .collect();
-        let blocks = stream_blocks(&data, 1024, TEST_SIZES);
-        let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
-        assert_eq!(sizes, expected);
-        assert_eq!(blocks.concat(), data);
-    }
-
-    /// Unknown size (`new(0)`) over break-free zero content forces the max-size branch.
-    #[test]
-    fn test_chunker_zero_unknown_size_over_max() {
-        let data = vec![0u8; 4 * 1024 * 1024 + 512 * 1024];
-        let expected: Vec<usize> = file_chunk_cdc_with(&data, TEST_SIZES)
-            .iter()
-            .map(|(_, s)| *s)
-            .collect();
-        for feed_len in [64usize, 1024, 4 * 1024 * 1024, 5 * 1024 * 1024] {
-            let mut ch = Chunker::with_sizes(0, TEST_SIZES);
-            let mut blocks = Vec::new();
-            for slice in data.chunks(feed_len) {
-                blocks.extend(ch.feed(slice));
-            }
-            let last = ch.finish();
-            if !last.is_empty() {
-                blocks.push(last);
-            }
-            let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
-            assert_eq!(sizes, expected, "feed_len={feed_len}");
-            assert_eq!(blocks.concat(), data, "feed_len={feed_len}");
-        }
-    }
-
-    /// The streaming chunker must use seafile's fixed sizes regardless of `file_size`.
-    #[test]
-    fn test_chunker_size_independent() {
-        let a = Chunker::new(0);
-        let b = Chunker::new(2 * 1024 * 1024); // 2 MiB
-        let c = Chunker::new(3 * 1024 * 1024 * 1024); // 3 GiB
-        assert_eq!(a.min, SEAFILE_MIN_BLOCK);
-        assert_eq!(a.max, SEAFILE_MAX_BLOCK);
-        assert_eq!(a.min, b.min, "min must not depend on file_size");
-        assert_eq!(a.max, b.max, "max must not depend on file_size");
-        assert_eq!(a.min, c.min, "min must not depend on file_size");
-        assert_eq!(a.max, c.max, "max must not depend on file_size");
-    }
-
-    /// Must equal seafile's `CDC_*_BLOCK_SIZE` constants: 8 / 6 / 10 MiB.
-    #[test]
-    fn test_default_block_sizes_match_seafile() {
-        assert_eq!(ChunkSizes::SEAFILE.avg, 8 * 1024 * 1024);
-        assert_eq!(ChunkSizes::SEAFILE.min, 6 * 1024 * 1024);
-        assert_eq!(ChunkSizes::SEAFILE.max, 10 * 1024 * 1024);
-    }
-
-    /// Golden test: boundaries for 40 MiB of deterministic `lcg_bytes` (seed 1) must
-    /// match byte for byte those of **unmodified upstream C** (`common/cdc/rabin-
-    /// checksum.c`) with 8/6/10 MiB. This is the compatibility contract: a client
-    /// chunking the same bytes derives the same `seafile` object id.
-    #[test]
-    fn test_default_boundaries_match_seafile_c_reference() {
-        const EXPECTED: &[usize] = &[6_431_339, 10_485_760, 10_485_760, 10_485_760, 4_054_421];
-        let data = lcg_bytes(40 * 1024 * 1024, 1);
-
-        let chunks = file_chunk_cdc(&data);
-        let sizes: Vec<usize> = chunks.iter().map(|(_, s)| *s).collect();
-        assert_eq!(sizes, EXPECTED);
-
-        // Offsets must be the running prefix sums.
-        let mut offset = 0usize;
-        for (chunk_offset, size) in &chunks {
-            assert_eq!(*chunk_offset, offset);
-            offset += size;
-        }
-        assert_eq!(offset, data.len());
-
-        // The streaming chunker (the actual upload path) must agree.
-        for feed_len in [4096usize, 65_536, 5 * 1024 * 1024] {
-            let blocks = stream_blocks(&data, feed_len, ChunkSizes::SEAFILE);
-            let sizes: Vec<usize> = blocks.iter().map(|b| b.len()).collect();
-            assert_eq!(sizes, EXPECTED, "feed_len={feed_len}");
-            assert_eq!(blocks.concat(), data, "feed_len={feed_len}");
-        }
-    }
-
-    #[test]
-    fn test_cdc_small_file() {
-        let data = vec![0u8; 1024 * 100];
-        let chunks = file_chunk_cdc(&data);
-        assert!(!chunks.is_empty());
-        let total: usize = chunks.iter().map(|(_, s)| s).sum();
-        assert_eq!(total, data.len());
-    }
-
-    /// Fingerprint must match a pure-Rust port of seafile's rabin-checksum.c line for
-    /// line, independently of `RabinState`.
-    #[test]
-    fn test_fingerprint_matches_seafile() {
-        // Reference: port of seafile's rabin-checksum.c.
-        fn fls64_ref(v: u64) -> usize {
-            if v == 0 {
-                return 0;
-            }
-            64 - v.leading_zeros() as usize
-        }
-
-        fn polymod_ref(nh: u64, nl: u64, d: u64) -> u64 {
-            let k = fls64_ref(d) - 1;
-            let d_shifted = d << (63 - k);
-            let mut nh = nh;
-            let mut nl = nl;
-            if nh != 0 {
-                if nh & (1u64 << 63) != 0 {
-                    nh ^= d_shifted;
-                }
-                for i in (0..=62).rev() {
-                    if nh & (1u64 << i) != 0 {
-                        nh ^= d_shifted >> (63 - i);
-                        nl ^= d_shifted << (i + 1);
-                    }
-                }
-            }
-            for i in (k..=63).rev() {
-                if nl & (1u64 << i) != 0 {
-                    nl ^= d_shifted >> (63 - i);
-                }
-            }
-            nl
-        }
-
-        fn polymmult_ref(x: u64, y: u64, d: u64) -> u64 {
-            let (mut ph, mut pl) = (0u64, 0u64);
-            if x & 1 != 0 {
-                pl = y;
-            }
-            for i in 1..64 {
-                if x & (1u64 << i) != 0 {
-                    ph ^= y >> (64 - i);
-                    pl ^= y << i;
-                }
-            }
-            polymod_ref(ph, pl, d)
-        }
-
-        let poly: u64 = 0xbfe6b8a5bf378d83;
-        let xshift = fls64_ref(poly) - 1;
-        let shift = xshift - 8;
-
-        let t1 = polymod_ref(0, 1u64 << xshift, poly);
-        let mut t_ref = [0u64; 256];
-        for j in 0..256u64 {
-            t_ref[j as usize] = polymmult_ref(j, t1, poly) | (j << xshift);
-        }
-
-        let mut sizeshift: u64 = 1;
-        for _ in 1..48 {
-            let idx = (sizeshift >> shift) as usize;
-            sizeshift = (sizeshift << 8) ^ t_ref[idx];
-        }
-        let mut u_ref = [0u64; 256];
-        for i in 0..256u64 {
-            u_ref[i as usize] = polymmult_ref(i, sizeshift, poly);
-        }
-
-        let append8_ref = |p: u64, m: u8| -> u64 {
-            let idx = (p >> shift) as usize;
-            ((p << 8) | m as u64) ^ t_ref[idx]
-        };
-
-        let rabin_checksum_ref = |buf: &[u8]| -> u64 {
-            let mut fp: u64 = 0;
-            for &b in buf.iter().take(48) {
-                fp = append8_ref(fp, b) & 0xFFFF_FFFF;
-            }
-            fp
-        };
-
-        let rolling_ref =
-            |csum: u64, c1: u8, c2: u8| -> u64 { append8_ref(csum ^ u_ref[c1 as usize], c2) };
-
-        // Test vectors:
-        let data_zeros = vec![0u8; 100];
-        let expected_init = rabin_checksum_ref(&data_zeros);
-
-        let mut state = RabinState::new();
-        state.init(&data_zeros);
-        assert_eq!(
-            state.fingerprint, expected_init,
-            "fingerprint mismatch for zeros init: got {:016x}, expected {:016x}",
-            state.fingerprint, expected_init
-        );
-
-        let mut expected_fp = expected_init;
-        expected_fp = rolling_ref(expected_fp, 0, 0x42);
-        state.update(0x42);
-        assert_eq!(
-            state.fingerprint, expected_fp,
-            "fingerprint mismatch after rolling update"
-        );
-
-        let data_ff = vec![0xFFu8; 100];
-        let expected_ff_init = rabin_checksum_ref(&data_ff);
-        let mut state2 = RabinState::new();
-        state2.init(&data_ff);
-        assert_eq!(
-            state2.fingerprint, expected_ff_init,
-            "fingerprint mismatch for 0xFF init"
-        );
-
-        let data_alt: Vec<u8> = (0..100)
-            .map(|i| if i % 2 == 0 { 0xAA } else { 0x55 })
-            .collect();
-        let expected_alt_init = rabin_checksum_ref(&data_alt);
-        let mut state3 = RabinState::new();
-        state3.init(&data_alt);
-        assert_eq!(
-            state3.fingerprint, expected_alt_init,
-            "fingerprint mismatch for alternating init"
-        );
-
-        let state = RabinState::new();
-        for i in 0..256 {
-            assert_eq!(state.t[i], t_ref[i], "T[{}] mismatch", i);
-            assert_eq!(state.u[i], u_ref[i], "U[{}] mismatch", i);
-        }
-    }
-
-    /// Verify CDC determinism: same content, multiple runs → same chunks.
-    #[test]
-    fn test_cdc_determinism() {
-        let data: Vec<u8> = (0..(1024 * 1024))
-            .map(|i: usize| (i.wrapping_mul(7) ^ (i >> 3)) as u8)
-            .collect();
-        let chunks1 = file_chunk_cdc(&data);
-        let chunks2 = file_chunk_cdc(&data);
-        assert_eq!(chunks1, chunks2, "CDC must be deterministic");
-    }
-
-    /// Verify all chunk sizes sum to the original file size.
-    #[test]
-    fn test_cdc_total_size() {
-        let data: Vec<u8> = (0..(512 * 1024))
-            .map(|i: usize| (i.wrapping_mul(13)) as u8)
-            .collect();
-        let chunks = file_chunk_cdc(&data);
-        let total: usize = chunks.iter().map(|(_, s)| s).sum();
-        assert_eq!(total, data.len(), "chunks must cover entire file");
-    }
-
-    /// Golden proof that the fingerprint matches the reference at every byte position,
-    /// so break-point decisions are identical.
-    #[test]
-    fn test_fingerprint_stream_matches_reference() {
-        // Reference implementation ported from seafile rabin-checksum.c
-        fn fls64_ref(v: u64) -> usize {
-            if v == 0 {
-                0
-            } else {
-                64 - v.leading_zeros() as usize
-            }
-        }
-        fn polymod_ref(nh: u64, nl: u64, d: u64) -> u64 {
-            let k = fls64_ref(d) - 1;
-            let ds = d << (63 - k);
-            let (mut nh, mut nl) = (nh, nl);
-            if nh != 0 {
-                if nh & (1u64 << 63) != 0 {
-                    nh ^= ds;
-                }
-                for i in (0..=62).rev() {
-                    if nh & (1u64 << i) != 0 {
-                        nh ^= ds >> (63 - i);
-                        nl ^= ds << (i + 1);
-                    }
-                }
-            }
-            for i in (k..=63).rev() {
-                if nl & (1u64 << i) != 0 {
-                    nl ^= ds >> (63 - i);
-                }
-            }
-            nl
-        }
-        fn polymmult_ref(x: u64, y: u64, d: u64) -> u64 {
-            let (mut ph, mut pl) = (0u64, 0u64);
-            if x & 1 != 0 {
-                pl = y;
-            }
-            for i in 1..64 {
-                if x & (1u64 << i) != 0 {
-                    ph ^= y >> (64 - i);
-                    pl ^= y << i;
-                }
-            }
-            polymod_ref(ph, pl, d)
-        }
-        let poly: u64 = 0xbfe6b8a5bf378d83;
-        let xshift = fls64_ref(poly) - 1;
-        let shift = xshift - 8;
-        let t1 = polymod_ref(0, 1u64 << xshift, poly);
-        let mut t_ref = [0u64; 256];
-        for j in 0..256u64 {
-            t_ref[j as usize] = polymmult_ref(j, t1, poly) | (j << xshift);
-        }
-        let mut sizeshift: u64 = 1;
-        for _ in 1..WINDOW_SIZE {
-            let idx = (sizeshift >> shift) as usize;
-            sizeshift = (sizeshift << 8) ^ t_ref[idx];
-        }
-        let mut u_ref = [0u64; 256];
-        for i in 0..256u64 {
-            u_ref[i as usize] = polymmult_ref(i, sizeshift, poly);
-        }
-
-        let append8_ref =
-            |p: u64, m: u8| -> u64 { ((p << 8) | m as u64) ^ t_ref[(p >> shift) as usize] };
-        let mut ref_fp: u64 = 0;
-        let mut ref_window = [0u8; WINDOW_SIZE];
-        let mut ref_pos: usize = WINDOW_SIZE % WINDOW_SIZE;
-
-        let mut prod = RabinState::new();
-
-        let data: Vec<u8> = (0..(500 * 1024))
-            .map(|i: usize| (i.wrapping_mul(37) ^ (i >> 5) ^ (i.wrapping_mul(13))) as u8)
-            .collect();
-
-        prod.init(&data);
-        for i in 0..WINDOW_SIZE {
-            ref_fp = append8_ref(ref_fp, data[i]) & 0xFFFF_FFFF;
-            ref_window[i] = data[i];
-        }
-        assert_eq!(
-            prod.fingerprint, ref_fp,
-            "fingerprint mismatch after init (first {} bytes)",
-            WINDOW_SIZE
-        );
-
-        // Rolling: compare fingerprint at EVERY byte position
-        let mut mismatch_count = 0;
-        let mut first_mismatch = None;
-        for (pos, &byte) in data.iter().enumerate().skip(WINDOW_SIZE) {
-            let out = ref_window[ref_pos];
-            ref_fp = append8_ref(ref_fp ^ u_ref[out as usize], byte) & 0xFFFF_FFFF;
-            ref_window[ref_pos] = byte;
-            ref_pos = (ref_pos + 1) % WINDOW_SIZE;
-
-            prod.update(byte);
-
-            if prod.fingerprint != ref_fp {
-                mismatch_count += 1;
-                if first_mismatch.is_none() {
-                    first_mismatch = Some(pos);
-                }
-            }
-        }
-
-        if mismatch_count > 0 {
-            panic!(
-                "fingerprint stream diverged at {} positions (first at byte {}). \
-                 CDC chunk boundaries WILL NOT match seafile.",
-                mismatch_count,
-                first_mismatch.unwrap()
-            );
-        }
-
-        // Also check the u32 truncation seafile uses for break-point decisions.
-        let prod_fp_u32 = prod.get_fingerprint();
-        let ref_fp_u32 = ref_fp as u32;
-        assert_eq!(
-            prod_fp_u32, ref_fp_u32,
-            "final fingerprint u32 mismatch: prod={:08x} ref={:08x}",
-            prod_fp_u32, ref_fp_u32
-        );
-
-        println!(
-            "Verified {} byte positions — all fingerprints match",
-            data.len() - WINDOW_SIZE
-        );
-    }
-
-    /// Verify CDC boundary conditions: min block size is respected.
-    #[test]
-    fn test_cdc_min_block_respected() {
-        let data = vec![0u8; TEST_SIZES.min + 100]; // just above min
-        let chunks = file_chunk_cdc_with(&data, TEST_SIZES);
-        // With uniform zero data there may be no break points: every non-final chunk must
-        // be >= min or == max.
-        for (i, &(_offset, size)) in chunks.iter().enumerate() {
-            if i < chunks.len() - 1 {
-                assert!(
-                    size >= TEST_SIZES.min || size == TEST_SIZES.max,
-                    "non-last chunk {} size {} violated bounds",
-                    i,
-                    size
-                );
-            }
-        }
+    /// Remove the first `length` bytes as one completed chunk and reset the scan.
+    fn emit(&mut self, length: usize, completed: &mut Vec<Vec<u8>>) {
+        let chunk: Vec<u8> = self.pending.drain(..length).collect();
+        completed.push(chunk);
+        self.fingerprint = 0;
+        self.next_probe = 0;
+        self.probing = false;
     }
 }
