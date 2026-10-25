@@ -139,4 +139,36 @@ mod tests {
 
         let _ = db.close().await;
     }
+
+    /// The two commit indexes the hot read paths depend on must survive the chain:
+    /// one migration adds them and a later one replaces the history index with a
+    /// wider `(repo_id, ctime, id)` variant.
+    #[tokio::test]
+    async fn commit_query_indexes_exist_after_migrating() {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db =
+            crate::tests_support::connect(&crate::tests_support::file_uri(dir.path(), "test.db"))
+                .await;
+        Migrator::up(&db, None).await.expect("run all migrations");
+
+        for index in ["idx_commits_commit_id", "idx_commits_repo_ctime_id"] {
+            let row = db
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Sqlite,
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+                    [index.into()],
+                ))
+                .await
+                .expect("query an index")
+                .unwrap_or_else(|| panic!("missing index {index}"));
+            assert_eq!(
+                row.try_get::<String>("", "name").expect("name column"),
+                index
+            );
+        }
+
+        let _ = db.close().await;
+    }
 }

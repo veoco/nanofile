@@ -11,6 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use rust_embed::Embed;
+use std::borrow::Cow;
 use std::sync::LazyLock;
 
 #[derive(Embed)]
@@ -72,6 +73,35 @@ macro_rules! asset_data {
 }
 
 asset_data!(CSS_HASH, CSS_LM, ETAG_CSS, FP_CSS, "css/app.css");
+
+/// Decompress one embedded asset once and keep the bytes for the life of the
+/// process.
+///
+/// `rust-embed`'s `compression` feature inflates on every `get`; without this
+/// cache a browser page load would decompress the same CSS/JS on every request.
+/// The decompressed set is ~300 KiB, which is a fair trade for keeping the
+/// binary smaller and the hot path allocation-free.
+macro_rules! asset_bytes {
+    ($name:ident, $path:expr) => {
+        static $name: LazyLock<bytes::Bytes> = LazyLock::new(|| {
+            let file =
+                Assets::get($path).unwrap_or_else(|| panic!("embedded asset not found: {}", $path));
+            match file.data {
+                Cow::Borrowed(data) => bytes::Bytes::from_static(data),
+                Cow::Owned(data) => bytes::Bytes::from(data),
+            }
+        });
+    };
+}
+
+asset_bytes!(CSS_BYTES, "css/app.css");
+asset_bytes!(COMMON_JS_BYTES, "js/common.bundle.js");
+asset_bytes!(FB_JS_BYTES, "js/file-browser.bundle.js");
+asset_bytes!(PUBLIC_UPLOAD_JS_BYTES, "js/public-upload.bundle.js");
+asset_bytes!(THEME_INIT_JS_BYTES, "js/theme-init.bundle.js");
+asset_bytes!(PUBLIC_SHARE_JS_BYTES, "js/public-share.bundle.js");
+asset_bytes!(POW_JS_BYTES, "js/pow.bundle.js");
+asset_bytes!(FAVICON_BYTES, "img/favicon.svg");
 asset_data!(
     COMMON_JS_HASH,
     COMMON_JS_LM,
@@ -170,37 +200,67 @@ fn mime_for(path: &str) -> &'static str {
     }
 }
 
-/// Resolve a request path (fingerprinted or plain) to its embedded original path
-/// and associated ETag / Last-Modified strings.
-fn resolve_asset(path: &str) -> Option<(&'static str, &'static str, &'static str)> {
+/// Resolve a request path (fingerprinted or plain) to its embedded original path,
+/// associated ETag / Last-Modified strings, and the cached decompressed bytes.
+fn resolve_asset(
+    path: &str,
+) -> Option<(
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static bytes::Bytes,
+)> {
     if path == "css/app.css" || path == *FP_CSS {
-        Some(("css/app.css", &*ETAG_CSS, &*CSS_LM))
+        Some(("css/app.css", &*ETAG_CSS, &*CSS_LM, &*CSS_BYTES))
     } else if path == "js/common.bundle.js" || path == *FP_COMMON_JS {
-        Some(("js/common.bundle.js", &*ETAG_COMMON_JS, &*COMMON_JS_LM))
+        Some((
+            "js/common.bundle.js",
+            &*ETAG_COMMON_JS,
+            &*COMMON_JS_LM,
+            &*COMMON_JS_BYTES,
+        ))
     } else if path == "js/file-browser.bundle.js" || path == *FP_FB_JS {
-        Some(("js/file-browser.bundle.js", &*ETAG_FB_JS, &*FB_JS_LM))
+        Some((
+            "js/file-browser.bundle.js",
+            &*ETAG_FB_JS,
+            &*FB_JS_LM,
+            &*FB_JS_BYTES,
+        ))
     } else if path == "js/public-upload.bundle.js" || path == *FP_PUBLIC_UPLOAD_JS {
         Some((
             "js/public-upload.bundle.js",
             &*ETAG_PUBLIC_UPLOAD_JS,
             &*PUBLIC_UPLOAD_JS_LM,
+            &*PUBLIC_UPLOAD_JS_BYTES,
         ))
     } else if path == "js/theme-init.bundle.js" || path == *FP_THEME_INIT_JS {
         Some((
             "js/theme-init.bundle.js",
             &*ETAG_THEME_INIT_JS,
             &*THEME_INIT_JS_LM,
+            &*THEME_INIT_JS_BYTES,
         ))
     } else if path == "js/public-share.bundle.js" || path == *FP_PUBLIC_SHARE_JS {
         Some((
             "js/public-share.bundle.js",
             &*ETAG_PUBLIC_SHARE_JS,
             &*PUBLIC_SHARE_JS_LM,
+            &*PUBLIC_SHARE_JS_BYTES,
         ))
     } else if path == "js/pow.bundle.js" || path == *FP_POW_JS {
-        Some(("js/pow.bundle.js", &*ETAG_POW_JS, &*POW_JS_LM))
+        Some((
+            "js/pow.bundle.js",
+            &*ETAG_POW_JS,
+            &*POW_JS_LM,
+            &*POW_JS_BYTES,
+        ))
     } else if path == "img/favicon.svg" || path == *FP_FAVICON {
-        Some(("img/favicon.svg", &*ETAG_FAVICON, &*FAVICON_LM))
+        Some((
+            "img/favicon.svg",
+            &*ETAG_FAVICON,
+            &*FAVICON_LM,
+            &*FAVICON_BYTES,
+        ))
     } else {
         None
     }
@@ -215,13 +275,9 @@ fn resolve_asset(path: &str) -> Option<(&'static str, &'static str, &'static str
 pub async fn serve_static(Path(path): Path<String>, headers: HeaderMap) -> Response {
     let path = path.trim_start_matches('/');
 
-    let (original_path, etag, last_modified) = match resolve_asset(path) {
+    let (original_path, etag, last_modified, data) = match resolve_asset(path) {
         Some(r) => r,
         None => return (StatusCode::NOT_FOUND, "404 Not Found").into_response(),
-    };
-
-    let Some(file) = Assets::get(original_path) else {
-        return (StatusCode::NOT_FOUND, "404 Not Found").into_response();
     };
 
     if headers
@@ -245,7 +301,7 @@ pub async fn serve_static(Path(path): Path<String>, headers: HeaderMap) -> Respo
         resp = resp.header(header::LAST_MODIFIED, last_modified);
     }
 
-    resp.body(Body::from(file.data))
+    resp.body(Body::from(data.clone()))
         .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "500").into_response())
 }
 
@@ -282,5 +338,33 @@ mod tests {
         assert_eq!(attr(favicon, "viewBox"), attr(mark, "viewBox"));
         assert_eq!(attr(favicon, "rx"), attr(mark, "rx"));
         assert_eq!(attr(favicon, "d"), attr(mark, "d"));
+    }
+
+    /// The compressed embed is inflated once and served byte-for-byte; the ETag
+    /// that makes the URL immutable must still match the uncompressed content.
+    #[tokio::test]
+    async fn serves_the_cached_decompressed_asset_and_revalidates() {
+        let resp = serve_static(Path("css/app.css".to_string()), HeaderMap::new()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let etag = resp
+            .headers()
+            .get(header::ETAG)
+            .expect("ETag header")
+            .to_str()
+            .expect("ASCII ETag")
+            .to_string();
+        let body = axum::body::to_bytes(resp.into_body(), 8 * 1024 * 1024)
+            .await
+            .expect("read body");
+        let expected = Assets::get("css/app.css").expect("embedded CSS");
+        assert_eq!(&body[..], expected.data.as_ref());
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_NONE_MATCH,
+            etag.parse().expect("valid ETag header value"),
+        );
+        let resp = serve_static(Path("css/app.css".to_string()), headers).await;
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
     }
 }

@@ -152,6 +152,11 @@ impl Downloader {
 }
 
 /// Stream the given blocks one at a time as the response body.
+///
+/// Two blocks in flight (not four) bound a single download's block buffers to
+/// roughly 16–20 MiB at Seafile's 8–10 MiB block sizes; the previous four-way
+/// pipeline doubled the per-connection peak for a throughput gain that the
+/// benchmark did not show.
 pub fn stream_blocks(
     repo_id: String,
     block_ids: Vec<String>,
@@ -174,7 +179,7 @@ pub fn stream_blocks(
             Ok(bytes::Bytes::from(data))
         }
     }))
-    .buffered(4)
+    .buffered(2)
 }
 
 /// Parse a single-range `Range` header (`bytes=start-end`, `bytes=start-`, `bytes=-suffix`)

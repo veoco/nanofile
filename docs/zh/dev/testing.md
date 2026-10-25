@@ -48,6 +48,16 @@ NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo test --workspace --no-fai
 
 `server/tests/sandbox_probe_test.rs` 断言每个沙盒 profile 的类型化报告、平台机制 token、解析器的产物与整条媒体流水线。它检查什么见[沙盒内部](/zh/dev/sandbox)。
 
+## 性能探针
+
+`server/tests/perf_probe.rs` 测量存在性缓存、CDC 吞吐、PBKDF2 以及一个 HTTP 上传/列表/历史场景。每个用例都带 `#[ignore]`，保证测试套件仍然确定；用 release 模式跑，并对比 `perf ...` 行：
+
+```bash
+cargo test -p server --release --test perf_probe -- --ignored --nocapture
+```
+
+release profile 说明与 `cargo bloat` 命令见[构建](/zh/dev/build#二进制体积与性能探针)。
+
 ## CI 跑什么
 
 | Job | 平台 | 内容 |

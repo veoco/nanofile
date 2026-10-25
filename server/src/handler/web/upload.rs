@@ -101,10 +101,7 @@ async fn require_target_exists(
 ) -> Result<(), AppError> {
     let path = base::sanitize::safe_join_path(target_dir, name)
         .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
-    if crate::fs::core::get_entry_total_size(&state.repos, repo_id, &path)
-        .await
-        .is_err()
-    {
+    if !crate::fs::core::entry_exists(&state.repos, repo_id, &path).await {
         return Err(AppError::NotExists);
     }
     Ok(())
@@ -285,7 +282,7 @@ async fn try_handle_chunked(
     repo_id: &str,
     target_dir: &str,
     file_name: &str,
-    file_data: &[u8],
+    file_data: bytes::Bytes,
     content_range: Option<&str>,
     modifier: &str,
     user_id: Option<i32>,
@@ -351,7 +348,7 @@ async fn try_handle_chunked(
     }
 
     temp_mgr
-        .write_chunk(repo_id, &file_path, start, file_data)
+        .write_chunk(repo_id, &file_path, start, file_data.clone())
         .await
         .map_err(map_temp_error)?;
 
@@ -361,7 +358,7 @@ async fn try_handle_chunked(
     // stream hashes plaintext (`sha1(blk)`), but they must store `sha1(ciphertext)`.
     if enc_key.is_none() {
         let _ = temp_mgr
-            .feed_stream(&state.block_store, repo_id, &file_path, start, file_data)
+            .feed_stream(&state.block_store, repo_id, &file_path, start, &file_data)
             .await;
     }
 
@@ -668,7 +665,7 @@ pub async fn upload_aj(
     let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
 
     if is_chunked {
-        let file_data = chunked_file_data.unwrap_or_default();
+        let file_data = bytes::Bytes::from(chunked_file_data.unwrap_or_default());
         if !file_data.is_empty()
             && let Some(result) = try_handle_chunked(
                 &state.temp_file_manager,
@@ -676,7 +673,7 @@ pub async fn upload_aj(
                 repo_id,
                 &target_dir,
                 &filename,
-                &file_data,
+                file_data,
                 content_range,
                 &user.email,
                 Some(user.user_id),
@@ -1113,7 +1110,7 @@ pub async fn update_aj(
     require_target_exists(&state, repo_id, parent, name).await?;
 
     if is_chunked {
-        let file_data = chunked_file_data.unwrap_or_default();
+        let file_data = bytes::Bytes::from(chunked_file_data.unwrap_or_default());
         if !file_data.is_empty()
             && let Some(result) = try_handle_chunked(
                 &state.temp_file_manager,
@@ -1121,7 +1118,7 @@ pub async fn update_aj(
                 repo_id,
                 parent,
                 name,
-                &file_data,
+                file_data,
                 content_range,
                 &user.email,
                 Some(user.user_id),
@@ -1285,7 +1282,7 @@ pub async fn upload_aj_token(
     )?;
 
     if is_chunked {
-        let file_data = chunked_file_data.unwrap_or_default();
+        let file_data = bytes::Bytes::from(chunked_file_data.unwrap_or_default());
         if !file_data.is_empty()
             && let Some(result) = try_handle_chunked(
                 &state.temp_file_manager,
@@ -1293,7 +1290,7 @@ pub async fn upload_aj_token(
                 &info.repo_id,
                 &target_dir,
                 &filename,
-                &file_data,
+                file_data,
                 content_range,
                 &info.username,
                 // Upload-link chunked uploads count against the owner's quota.
@@ -1472,7 +1469,7 @@ pub async fn upload_api(
     let ret_json = wants_ret_json(&query, &fields);
 
     if is_chunked {
-        let file_data = chunked_file_data.unwrap_or_default();
+        let file_data = bytes::Bytes::from(chunked_file_data.unwrap_or_default());
         if !file_data.is_empty()
             && let Some(result) = try_handle_chunked(
                 &state.temp_file_manager,
@@ -1480,7 +1477,7 @@ pub async fn upload_api(
                 &info.repo_id,
                 &target_dir,
                 &filename,
-                &file_data,
+                file_data,
                 content_range.as_deref(),
                 &info.username,
                 Some(info.user_id),

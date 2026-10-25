@@ -6,7 +6,7 @@ use rand::Rng;
 use sha2::Digest;
 
 use crate::repository::Repositories;
-use crate::service::auth::password::hash_password;
+use crate::service::auth::password::hash_password_async;
 use base::error::AppError;
 use infra::entity::password_reset_token;
 
@@ -170,7 +170,8 @@ impl PasswordResetService {
             ));
         }
 
-        let password_hash = hash_password(new_password, password_hash_iterations);
+        let password_hash =
+            hash_password_async(new_password.to_string(), password_hash_iterations).await;
         self.repos
             .user
             .update_password(record.user_id, password_hash)

@@ -625,8 +625,12 @@ fn default_max_upload_size_mb() -> u64 {
 fn default_max_json_body_mb() -> u64 {
     64
 }
+/// The largest single `Content-Range` chunk a client may send. The official
+/// clients send 4 MiB chunks; the cap exists so a buggy or hostile client cannot
+/// make the server buffer an arbitrary amount for one request. Raise it only for a
+/// client that really sends larger chunks.
 fn default_max_chunk_size_mb() -> u64 {
-    256
+    32
 }
 fn default_header_read_timeout_secs() -> u64 {
     30
@@ -3904,6 +3908,14 @@ request_timeout_secs = 600
             env_keys.get("storage.default_user_quota_bytes"),
             Some(&"NANOFILE_STORAGE_DEFAULT_USER_QUOTA_BYTES")
         );
+    }
+
+    /// One chunk is buffered while it is validated and written, so the default
+    /// must stay small enough that a handful of simultaneous uploads cannot
+    /// exhaust a modest server. The official clients send 4 MiB chunks.
+    #[test]
+    fn resumable_upload_chunk_default_is_bounded() {
+        assert_eq!(Config::default().server.max_chunk_size_mb, 32);
     }
 }
 

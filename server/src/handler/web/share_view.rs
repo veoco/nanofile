@@ -465,7 +465,7 @@ pub async fn shared_dir_view(
     let head_commit = state
         .repos
         .commit
-        .find_by_id(&head_commit_id)
+        .find_by_repo_and_commit_id(&link.repo_id, &head_commit_id)
         .await?
         .ok_or_else(|| AppError::Internal("Head commit not found".into()))?;
 

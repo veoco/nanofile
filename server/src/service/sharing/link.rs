@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::Config;
 use crate::repository::Repositories;
-use crate::service::auth::password::hash_password;
+use crate::service::auth::password::hash_password_async;
 use crate::service::auth::token::{generate_share_link_token, generate_upload_link_token};
 use base::error::AppError;
 use infra::entity::upload_link;
@@ -109,7 +109,12 @@ async fn create_upload_link_impl(
     }
 
     let now = chrono::Utc::now().timestamp();
-    let password_hash = password.map(|p| hash_password(p, config.auth.password_hash_iterations));
+    let password_hash = match password {
+        Some(p) => {
+            Some(hash_password_async(p.to_string(), config.auth.password_hash_iterations).await)
+        }
+        None => None,
+    };
 
     repos
         .upload_link
@@ -337,10 +342,9 @@ pub async fn update_upload_link_v21(
 
     // Hash password if it's a new value (Some(Some(pwd)))
     let password_hash = match password {
-        Some(Some(pwd)) => Some(Some(hash_password(
-            &pwd,
-            config.auth.password_hash_iterations,
-        ))),
+        Some(Some(pwd)) => Some(Some(
+            hash_password_async(pwd, config.auth.password_hash_iterations).await,
+        )),
         Some(None) => Some(None), // explicitly clearing password
         None => None,             // don't change
     };

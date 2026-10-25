@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::crypto::fs_id::sha1_hex;
+use crate::crypto::fs_id::{sha1_bytes, sha1_hex};
 use crate::storage::{BlockStorageBackend, LegacyCopyOutcome, MAX_BLOCK_PREFIX_LEN};
 
 /// Subdirectory of the block root holding the per-repository directories.
@@ -25,12 +25,24 @@ pub const LAYOUT_MARKER_FILE: &str = ".block_layout";
 pub const LAYOUT_VERSION: &str = "v2";
 
 /// Upper bound on cached block ids. Content-addressed blocks are immutable and a
-/// large common id set is expected; this bounds memory.
-const EXISTS_CACHE_CAPACITY: usize = 100_000;
+/// large common id set is expected; this bounds memory. The key is a fixed-size
+/// digest, so each entry is ~80 bytes rather than a `String` plus a heap
+/// allocation; 32k entries keep the cache under a few MiB.
+const EXISTS_CACHE_CAPACITY: usize = 32_000;
 
 /// TTL for a cached "block exists" entry. Only GC or `remove_block` makes a block
 /// disappear, and GC runs rarely, so a short TTL bounds the false-positive window.
 const EXISTS_CACHE_TTL: Duration = Duration::from_secs(60);
+
+/// Fixed-size presence-cache key: the repository id's SHA-1 and the block id's
+/// raw 20 bytes. `valid` keeps an invalid id (never inserted by a validated
+/// caller) from aliasing a real all-zero digest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct BlockKey {
+    repo: [u8; 20],
+    block: [u8; 20],
+    valid: bool,
+}
 
 #[derive(Debug)]
 pub struct BlockStorage {
@@ -42,7 +54,7 @@ pub struct BlockStorage {
     /// `remove_block`/GC; the TTL and capacity bound the worst case. The length
     /// separates "already stored with these bytes" from "partial write", which must be
     /// replaced. The `Mutex` is never held across an `.await`.
-    exists_cache: Mutex<HashMap<String, (Instant, u64)>>,
+    exists_cache: Mutex<HashMap<BlockKey, (Instant, u64)>>,
 }
 
 impl BlockStorage {
@@ -80,27 +92,32 @@ impl BlockStorage {
     }
 
     /// Composite cache key for the presence cache.
-    fn cache_key(repo_id: &str, block_id: &str) -> String {
-        let mut key = String::with_capacity(repo_id.len() + block_id.len() + 1);
-        key.push_str(repo_id);
-        key.push('\u{0}');
-        key.push_str(block_id);
-        key
+    fn cache_key(repo_id: &str, block_id: &str) -> BlockKey {
+        let mut block = [0u8; 20];
+        let valid = block_id.len() == 40 && hex::decode_to_slice(block_id, &mut block).is_ok();
+        BlockKey {
+            repo: sha1_bytes(repo_id.as_bytes()),
+            block,
+            valid,
+        }
     }
 
     /// Drop entries older than [`EXISTS_CACHE_TTL`]; `elapsed()` so it cannot panic.
-    fn evict_expired(cache: &mut HashMap<String, (Instant, u64)>) {
+    fn evict_expired(cache: &mut HashMap<BlockKey, (Instant, u64)>) {
         cache.retain(|_, (t, _)| t.elapsed() < EXISTS_CACHE_TTL);
     }
 
     /// Stored length of a fresh cached entry, or `None`.
     ///
     /// Every block read and write passes through here, so an expired entry is a
-    /// miss and *not* swept: a `retain` over a full cache (100k entries) under the
+    /// miss and *not* swept: a `retain` over a full cache (32k entries) under the
     /// mutex made the cache cost more than the `stat` it replaces. The sweep is in
     /// [`Self::exists_cache_insert`], which already takes the lock for a write.
     fn exists_cache_len(&self, repo_id: &str, block_id: &str) -> Option<u64> {
         let key = Self::cache_key(repo_id, block_id);
+        if !key.valid {
+            return None;
+        }
         let cache = self.exists_cache.lock().unwrap();
         cache
             .get(&key)
@@ -114,6 +131,9 @@ impl BlockStorage {
 
     fn exists_cache_insert(&self, repo_id: &str, block_id: &str, stored_len: u64) {
         let key = Self::cache_key(repo_id, block_id);
+        if !key.valid {
+            return;
+        }
         let mut cache = self.exists_cache.lock().unwrap();
         if cache.len() >= EXISTS_CACHE_CAPACITY {
             Self::evict_expired(&mut cache);
@@ -127,6 +147,9 @@ impl BlockStorage {
 
     fn exists_cache_remove(&self, repo_id: &str, block_id: &str) {
         let key = Self::cache_key(repo_id, block_id);
+        if !key.valid {
+            return;
+        }
         self.exists_cache.lock().unwrap().remove(&key);
     }
 

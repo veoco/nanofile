@@ -93,7 +93,9 @@ pub async fn register_user(
     .map_err(AppError::BadRequest)?;
 
     let iterations = state.config().auth.password_hash_iterations;
-    let password_hash = crate::service::auth::password::hash_password(&form.password, iterations);
+    let password_hash =
+        crate::service::auth::password::hash_password_async(form.password.clone(), iterations)
+            .await;
 
     let svc = AccountService::new(state.repos.clone());
     svc.register_user(form.email, password_hash).await?;

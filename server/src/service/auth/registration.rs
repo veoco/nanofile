@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use crate::repository::Repositories;
-use crate::service::auth::password::{hash_password, validate_password};
+use crate::service::auth::password::{hash_password_async, validate_password};
 use base::error::AppError;
 use infra::entity::user;
 
@@ -102,7 +102,8 @@ impl RegistrationService {
         )
         .map_err(AppError::BadRequest)?;
 
-        let password_hash = hash_password(&params.password, params.password_hash_iterations);
+        let password_hash =
+            hash_password_async(params.password.clone(), params.password_hash_iterations).await;
         let new_user = match self
             .repos
             .user

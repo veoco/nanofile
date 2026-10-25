@@ -1,9 +1,10 @@
 //! Minimal i18n support for the web UI.
 //!
 //! Translations live in `server/locales/{en,zh}.toml` as flat key/value tables,
-//! compiled in via `include_str!`, read through `{{ t.tr("key") }}` /
-//! `{{ t.trf("key", &[("name", "value")]) }}`. Missing keys fall back to the key
-//! itself, so untranslated strings are easy to spot during development.
+//! compressed into the binary with `include-flate`, read through
+//! `{{ t.tr("key") }}` / `{{ t.trf("key", &[("name", "value")]) }}`. Missing keys
+//! fall back to the key itself, so untranslated strings are easy to spot during
+//! development.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -41,10 +42,11 @@ fn flatten_toml(value: &toml::Value, prefix: &str, out: &mut HashMap<String, Str
     }
 }
 
-static EN: LazyLock<HashMap<String, String>> =
-    LazyLock::new(|| parse_translations(include_str!("../../locales/en.toml")));
-static ZH: LazyLock<HashMap<String, String>> =
-    LazyLock::new(|| parse_translations(include_str!("../../locales/zh.toml")));
+include_flate::flate!(static EN_TOML: str from "locales/en.toml" with zstd);
+include_flate::flate!(static ZH_TOML: str from "locales/zh.toml" with zstd);
+
+static EN: LazyLock<HashMap<String, String>> = LazyLock::new(|| parse_translations(&EN_TOML));
+static ZH: LazyLock<HashMap<String, String>> = LazyLock::new(|| parse_translations(&ZH_TOML));
 
 /// Escape a pre-serialized JSON string for an inline `<script>` block: `<`, `>`,
 /// `&` and the U+2028/U+2029 separators, so a value cannot close the element.

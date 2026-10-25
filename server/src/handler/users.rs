@@ -96,7 +96,8 @@ async fn create_user(
 
     let iterations = state.config().auth.password_hash_iterations;
     let password_hash =
-        crate::service::auth::password::hash_password(&payload.password, iterations);
+        crate::service::auth::password::hash_password_async(payload.password.clone(), iterations)
+            .await;
 
     let svc = state.admin_user_service();
     svc.create_user(

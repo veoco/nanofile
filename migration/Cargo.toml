@@ -12,7 +12,11 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
-sea-orm-migration = { version = "2", features = [
+# `default` enables sea-orm-migration's `cli` feature, which pulls the whole
+# sea-orm-cli binary crate into the dependency graph. The server only needs the
+# migrator; LTO already drops the unused code, so this is build-time hygiene
+# rather than a size change.
+sea-orm-migration = { version = "2", default-features = false, features = [
     "sqlx-sqlite",
     "runtime-tokio",
 ] }

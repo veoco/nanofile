@@ -64,6 +64,11 @@ Storage caps: open resumable uploads may declare 32 GiB in total and one archive
 may build 8 GiB by default. Setting either limit to `0` on the Storage page (or in
 `[storage]`) removes that cap.
 
+`server.max_chunk_size_mb` caps one resumable upload chunk (default 32 MiB). The
+official clients send 4 MiB chunks; the cap is what keeps one request from
+buffering an arbitrary amount of memory. Raise it only for a client that really
+sends larger chunks.
+
 ## When a change takes effect
 
 Most settings apply immediately. The listener, transfer limits and cache

@@ -94,13 +94,18 @@ pub async fn adjust_repo_size(
     Ok(())
 }
 
-/// Total size of the entry at `path`: the stored size for a file, a recursive
-/// traversal for a directory.
-pub async fn get_entry_total_size(
+/// Resolve the directory entry at `path`, or `None` when it does not exist.
+///
+/// This is the common half of [`get_entry_total_size`] and [`entry_exists`]: the
+/// former may then walk a directory's whole subtree, while the latter only needs
+/// to know whether the entry is there. The existence path used to call the total
+/// size function and throw the size away, which made an upload targeting a large
+/// directory walk the entire directory first.
+async fn resolve_dirent(
     repos: &Repositories,
     repo_id: &str,
     path: &str,
-) -> Result<i64, AppError> {
+) -> Result<Option<base::common::DirEntryData>, AppError> {
     let parent_path = match path.rsplit_once('/') {
         Some(("", _)) => "/",
         Some((parent, _)) => parent,
@@ -130,10 +135,18 @@ pub async fn get_entry_total_size(
         .await
         .map_err(|e| AppError::internal(format!("read dir failed: {e}")))?;
 
-    let entry = dir_data
-        .dirents
-        .iter()
-        .find(|d| d.name == name)
+    Ok(dir_data.dirents.into_iter().find(|d| d.name == name))
+}
+
+/// Total size of the entry at `path`: the stored size for a file, a recursive
+/// traversal for a directory.
+pub async fn get_entry_total_size(
+    repos: &Repositories,
+    repo_id: &str,
+    path: &str,
+) -> Result<i64, AppError> {
+    let entry = resolve_dirent(repos, repo_id, path)
+        .await?
         .ok_or_else(|| AppError::NotFound("entry not found".into()))?;
 
     if entry.mode & S_IFDIR != 0 {
@@ -141,4 +154,12 @@ pub async fn get_entry_total_size(
     } else {
         Ok(entry.size)
     }
+}
+
+/// Whether the entry at `path` exists, without computing a directory's size.
+///
+/// Any lookup failure is reported as "does not exist": the only caller is the
+/// upload pre-check, whose existing answer for an unreadable path was 404 too.
+pub async fn entry_exists(repos: &Repositories, repo_id: &str, path: &str) -> bool {
+    matches!(resolve_dirent(repos, repo_id, path).await, Ok(Some(_)))
 }

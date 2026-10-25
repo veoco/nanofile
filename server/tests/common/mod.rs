@@ -524,7 +524,7 @@ impl TestServer {
                 site_url: format!("http://127.0.0.1:{}", port),
                 max_upload_size_mb: 4096,
                 max_json_body_mb: 64,
-                max_chunk_size_mb: 256,
+                max_chunk_size_mb: 32,
                 request_timeout_secs: 36000,
                 header_read_timeout_secs: 30,
                 body_timeout_secs: 0,

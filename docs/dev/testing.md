@@ -59,6 +59,19 @@ the media assertions are measured there rather than silently skipped.
 the platform's mechanism tokens, the parsers' products and the media pipeline end
 to end. See [Sandbox internals](/dev/sandbox) for what it checks.
 
+## Performance probe
+
+`server/tests/perf_probe.rs` measures the block-existence cache, CDC throughput,
+PBKDF2 and an HTTP upload/list/history scenario. Every case is `#[ignore]`d so the
+suite stays deterministic; run it in release mode and diff the `perf ...` lines:
+
+```bash
+cargo test -p server --release --test perf_probe -- --ignored --nocapture
+```
+
+See [Building](/dev/build#binary-size-and-the-performance-probe) for the release
+profile notes and the `cargo bloat` command.
+
 ## What CI runs
 
 | Job | Platforms | What it does |

@@ -28,7 +28,7 @@ Action 固定到完整 commit SHA，tag 写在行尾注释里，因此被移动�
 - 有未使用的直接依赖（`cargo machete`），或
 - `aws-lc-rs`、`aws-lc-sys`、`rav1e`、`ravif` 重新进入依赖图。它们会通过 `reqwest` 的 TLS 与 `image` 的格式默认特性被拽回来，因此 `server/Cargo.toml` 的 dev-dependencies 关掉了这些默认特性。
 
-`cargo audit` 忽略 `RUSTSEC-2023-0071`（`rsa` 里的 Marvin 攻击，由 `jsonwebtoken` 的 rust_crypto 特性引入）。Nanofile 只签发与校验 HS256 令牌，该公告在这里不可达；等 `jsonwebtoken` 支持算法级特性时再重新评估这个忽略。
+`cargo audit` 不再带忽略项：内置的 HS256 编解码把 RSA/ECDSA 算法及其公告挡在了依赖图之外。
 
 ### 构建缓存
 

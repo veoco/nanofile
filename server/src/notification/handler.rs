@@ -4,7 +4,6 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, extract::State};
 use futures_util::{SinkExt, StreamExt};
-use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -338,27 +337,17 @@ pub async fn post_event(
 /// `accept_legacy` additionally allows the undivided root key for external
 /// publishers on the old scheme; it is off by default.
 fn validate_event_jwt(token: &str, private_key: &str, accept_legacy: bool) -> bool {
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
     let event_key = crate::notification::keys::event_key(private_key);
-    if jsonwebtoken::decode::<serde_json::Value>(
-        token,
-        &DecodingKey::from_secret(&event_key),
-        &validation,
-    )
-    .is_ok()
-    {
+    if crate::service::auth::hs256::decode::<serde_json::Value>(token, &event_key).is_some() {
         return true;
     }
 
     if accept_legacy {
-        return jsonwebtoken::decode::<serde_json::Value>(
+        return crate::service::auth::hs256::decode::<serde_json::Value>(
             token,
-            &DecodingKey::from_secret(private_key.as_bytes()),
-            &validation,
+            private_key.as_bytes(),
         )
-        .is_ok();
+        .is_some();
     }
 
     false
@@ -367,4 +356,48 @@ fn validate_event_jwt(token: &str, private_key: &str, accept_legacy: bool) -> bo
 /// GET /notification/ping — health check.
 pub async fn ping() -> impl IntoResponse {
     Json(serde_json::json!({"ret": "pong"}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_event_jwt;
+    use crate::notification::keys::{event_key, subscription_key};
+    use crate::service::auth::hs256;
+
+    const PRIVATE_KEY: &str = "notification-private-key-for-tests";
+
+    fn token(key: &[u8], exp: i64) -> String {
+        hs256::encode(&serde_json::json!({ "exp": exp }), key).expect("encode token")
+    }
+
+    #[test]
+    fn event_token_validates_only_against_the_event_subkey() {
+        let event = event_key(PRIVATE_KEY);
+        assert!(validate_event_jwt(
+            &token(&event, 4_102_444_800),
+            PRIVATE_KEY,
+            false
+        ));
+
+        let subscription = subscription_key(PRIVATE_KEY);
+        assert!(
+            !validate_event_jwt(&token(&subscription, 4_102_444_800), PRIVATE_KEY, false),
+            "a subscription token must not authorise event posting"
+        );
+    }
+
+    #[test]
+    fn legacy_root_key_is_opt_in_and_exp_is_required() {
+        let legacy = token(PRIVATE_KEY.as_bytes(), 4_102_444_800);
+        assert!(!validate_event_jwt(&legacy, PRIVATE_KEY, false));
+        assert!(validate_event_jwt(&legacy, PRIVATE_KEY, true));
+
+        let event = event_key(PRIVATE_KEY);
+        assert!(
+            !validate_event_jwt(&token(&event, 1_000), PRIVATE_KEY, false),
+            "an expired event token must be rejected"
+        );
+        let no_exp = hs256::encode(&serde_json::json!({ "repo_id": "r" }), &event).unwrap();
+        assert!(!validate_event_jwt(&no_exp, PRIVATE_KEY, false));
+    }
 }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::Config;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
-use crate::service::auth::password::hash_password;
+use crate::service::auth::password::hash_password_async;
 use crate::service::auth::token::generate_share_link_token;
 use base::error::AppError;
 use infra::entity::share_link;
@@ -173,7 +173,12 @@ pub(crate) async fn create_share_link_impl(
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
 
-    let password_hash = password.map(|p| hash_password(p, config.auth.password_hash_iterations));
+    let password_hash = match password {
+        Some(p) => {
+            Some(hash_password_async(p.to_string(), config.auth.password_hash_iterations).await)
+        }
+        None => None,
+    };
 
     repos
         .share_link
@@ -309,8 +314,13 @@ pub async fn update_share_link_v21(
         return Err(AppError::NotFound("Share link not found".into()));
     }
 
-    let new_password =
-        password.map(|pwd| pwd.map(|p| hash_password(&p, config.auth.password_hash_iterations)));
+    let new_password = match password {
+        Some(Some(p)) => Some(Some(
+            hash_password_async(p, config.auth.password_hash_iterations).await,
+        )),
+        Some(None) => Some(None),
+        None => None,
+    };
     let new_expire_at = expire_days.map(|days| days.map(|d| now + d * 86400));
     let new_description = description.clone();
 

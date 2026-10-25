@@ -47,9 +47,10 @@ impl FileOps {
     /// `enc_key` encrypts each block with a deterministic IV (matching
     /// `create_file`), yielding `block_id == sha1(encrypted_block)` so Seafile
     /// sync clients can re-derive the ids for encrypted repos. `producer` feeds
-    /// `(idx, chunk)` pairs to a bounded concurrent writer; `buffered(4)`
-    /// preserves input order and the channel back-pressures the producer when
-    /// the disk is the bottleneck.
+    /// `(idx, chunk)` pairs to a bounded concurrent writer; two blocks in flight
+    /// plus a two-slot channel keep the per-upload buffer near three blocks
+    /// (roughly 24–30 MiB at Seafile's 8–10 MiB block sizes) instead of growing
+    /// with the number of concurrent uploads.
     pub(crate) async fn stream_blocks_pipelined<F, Fut>(
         store: &DynBlockStorage,
         repo_id: &str,
@@ -60,14 +61,18 @@ impl FileOps {
         F: FnOnce(tokio::sync::mpsc::Sender<(usize, Vec<u8>)>) -> Fut,
         Fut: futures::Future<Output = Result<i64, AppError>>,
     {
-        const CONCURRENCY: usize = 4;
+        // Two writes in flight: enough to overlap a block's fsync with the next
+        // decrypt/hash, without holding four 8–10 MiB blocks per upload.
+        const CONCURRENCY: usize = 2;
 
         let store = store.clone();
         let repo_id = repo_id.to_string();
         let enc_key_owned: Option<(Vec<u8>, Vec<u8>)> =
             enc_key.map(|(key, iv)| (key.to_vec(), iv.to_vec()));
 
-        let (tx, rx) = tokio::sync::mpsc::channel::<(usize, Vec<u8>)>(CONCURRENCY * 2);
+        // One queued block per writer slot; `buffered` already keeps two payloads
+        // alive, so a wider channel only adds memory without buying throughput.
+        let (tx, rx) = tokio::sync::mpsc::channel::<(usize, Vec<u8>)>(CONCURRENCY);
 
         let writer = tokio::spawn(async move {
             futures::stream::unfold(rx, |mut rx| async move {

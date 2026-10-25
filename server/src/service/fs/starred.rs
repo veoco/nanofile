@@ -248,7 +248,12 @@ impl StarredService {
             None
         } else {
             match repo_record.head_commit_id.as_ref() {
-                Some(cid) => self.repos.commit.find_by_id(cid).await?,
+                Some(cid) => {
+                    self.repos
+                        .commit
+                        .find_by_repo_and_commit_id(repo_id, cid)
+                        .await?
+                }
                 None => None,
             }
         };

@@ -174,7 +174,9 @@ pub async fn create_user(
     let is_active = form.is_active.is_some();
 
     let iterations = state.config().auth.password_hash_iterations;
-    let password_hash = crate::service::auth::password::hash_password(&form.password, iterations);
+    let password_hash =
+        crate::service::auth::password::hash_password_async(form.password.clone(), iterations)
+            .await;
 
     if let Err(e) = svc
         .create_user(

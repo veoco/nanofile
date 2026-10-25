@@ -732,7 +732,7 @@ impl DirService {
         let head_commit = self
             .repos
             .commit
-            .find_by_id(&head_commit_id)
+            .find_by_repo_and_commit_id(repo_id, &head_commit_id)
             .await?
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 
@@ -844,8 +844,10 @@ impl DirService {
                 file_list.push(e);
             }
         }
-        dir_list.sort_by_key(|a| a.name.to_lowercase());
-        file_list.sort_by_key(|a| a.name.to_lowercase());
+        // `sort_by_key` would allocate a lowercased String on every comparison;
+        // cached keys allocate once per entry, which matters for wide directories.
+        dir_list.sort_by_cached_key(|a| a.name.to_lowercase());
+        file_list.sort_by_cached_key(|a| a.name.to_lowercase());
 
         let starred_set: HashSet<String> = self
             .repos
@@ -949,7 +951,7 @@ impl DirService {
         let head_commit = self
             .repos
             .commit
-            .find_by_id(&head_commit_id)
+            .find_by_repo_and_commit_id(repo_id, &head_commit_id)
             .await?
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
 

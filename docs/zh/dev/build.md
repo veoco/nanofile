@@ -37,6 +37,21 @@ cargo build --bin nanofile        # 产物是 target/debug/nanofile
 
 两种 profile 在启动行为上有差别：release 构建在没有 `server.secret_key` 时**拒绝启动**，debug 构建会临时生成一个，因此会话无法跨重启保留。见[安全](/zh/guide/admin/security)。
 
+## 二进制体积与性能探针
+
+`[profile.release]` 已经启用 fat LTO、单 codegen unit 与 `strip`。刻意不使用 `panic = "abort"`，因为任务执行器与索引提取依赖捕获 panic。依赖变更导致体积上涨时，用下面的命令看各 crate 的占比：
+
+```bash
+cargo bloat --release --crates -n 60 -p server --bin nanofile
+```
+
+热路径探针在 `server/tests/perf_probe.rs`，带 `#[ignore]`，因此从不在 CI 里跑；性能改动前后各跑一次并对比 `perf ...` 行（Linux 会打印进程 `VmRSS`）：
+
+```bash
+cargo test -p server --release --test perf_probe -- --ignored --nocapture
+PERF_FILES=500 cargo test -p server --release --test perf_probe -- --ignored --nocapture
+```
+
 ## 可选 feature：`tray`
 
 `--features tray` 构建出带系统托盘菜单的二进制：

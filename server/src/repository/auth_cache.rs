@@ -29,6 +29,12 @@ use super::sync_token::SyncTokenRepository;
 
 const TOKEN_CACHE_TTL: Duration = Duration::from_secs(300);
 
+/// Hard cap on cached tokens. A token is keyed by its raw value and most clients
+/// reuse one per device, so the working set is small; the cap only matters when a
+/// caller mints many short-lived tokens. Hitting it drops expired entries first,
+/// then the whole cache, which is safe because every miss falls back to the DB.
+const TOKEN_CACHE_MAX_ENTRIES: usize = 10_000;
+
 struct CachedEntry<T> {
     value: T,
     cached_at: Instant,
@@ -60,6 +66,12 @@ impl<T: Clone> TokenCache<T> {
 
     fn insert(&self, key: &str, value: T) {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        if entries.len() >= TOKEN_CACHE_MAX_ENTRIES {
+            entries.retain(|_, entry| entry.cached_at.elapsed() <= self.ttl);
+            if entries.len() >= TOKEN_CACHE_MAX_ENTRIES {
+                entries.clear();
+            }
+        }
         entries.insert(
             key.to_string(),
             CachedEntry {

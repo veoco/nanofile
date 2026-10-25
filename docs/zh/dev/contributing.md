@@ -17,7 +17,7 @@ cargo test -p server --features tray --bin nanofile
 cargo machete
 NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo test --workspace --no-fail-fast
 node --test "server/frontend/**/*.test.js"
-cargo audit --ignore RUSTSEC-2023-0071
+cargo audit
 ```
 
 浏览器套件见[测试](/zh/dev/testing)。CI 是权威；它还会跑单机无法覆盖的平台 lint 与交叉目标构建。

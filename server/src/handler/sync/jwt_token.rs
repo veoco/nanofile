@@ -62,14 +62,12 @@ pub async fn get_jwt_token(
         "exp": exp,
     });
 
-    let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
     // Sign with the subscription-specific subkey, never the raw notification key: the
     // raw key also authorises posting events, and this token goes to every member.
     let sub_key = crate::notification::keys::subscription_key(private_key);
-    let key = jsonwebtoken::EncodingKey::from_secret(&sub_key);
 
-    let token = jsonwebtoken::encode(&header, &claims, &key)
-        .map_err(|e| AppError::Internal(format!("JWT encoding error: {}", e)))?;
+    let token = crate::service::auth::hs256::encode(&claims, &sub_key)
+        .map_err(|e| AppError::Internal(format!("JWT encoding error: {e}")))?;
 
     Ok(Json(JwtTokenResponse { jwt_token: token }))
 }

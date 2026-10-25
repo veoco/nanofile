@@ -100,7 +100,7 @@ impl ThumbnailService {
         let head_commit = self
             .repos
             .commit
-            .find_by_id(&head_commit_id)
+            .find_by_repo_and_commit_id(repo_id, &head_commit_id)
             .await?
             .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
 

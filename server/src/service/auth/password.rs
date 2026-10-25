@@ -1,9 +1,24 @@
+use std::sync::LazyLock;
+
 use rand::Rng;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
+use tokio::sync::Semaphore;
 
 const SALT_LEN: usize = 16;
 const HASH_LEN: usize = 32;
+
+/// How many PBKDF2 hashes may run at once, process-wide.
+///
+/// The count is deliberately small: each hash occupies a blocking-pool thread and
+/// a full core for the configured iteration count (600k by default), and every
+/// unauthenticated password path funnels through here. Queueing behind this gate
+/// is what keeps a burst of sign-ups or resets from starving the rest of the
+/// server; four in flight still drains a normal login rate comfortably.
+const MAX_CONCURRENT_HASHES: usize = 4;
+
+/// Gate shared by [`hash_password_async`] and [`verify_password_async`].
+static HASH_GATE: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(MAX_CONCURRENT_HASHES));
 
 /// Algorithm tag of the versioned hash format written by [`hash_password`].
 const HASH_ALGO: &str = "pbkdf2_sha256";
@@ -91,6 +106,7 @@ pub async fn verify_password_async(
     password_hash: String,
     iterations: u32,
 ) -> bool {
+    let _permit = HASH_GATE.acquire().await.ok();
     tokio::task::spawn_blocking(move || verify_password(&password, &password_hash, iterations))
         .await
         .unwrap_or(false)
@@ -102,6 +118,7 @@ pub async fn verify_password_async(
 /// path uses this to re-hash a legacy password on a *successful* login, and a
 /// broken hash would lock the account out. Fall back to hashing inline instead.
 pub async fn hash_password_async(password: String, iterations: u32) -> String {
+    let _permit = HASH_GATE.acquire().await.ok();
     let inline = password.clone();
     match tokio::task::spawn_blocking(move || hash_password(&password, iterations)).await {
         Ok(hash) => hash,
@@ -286,5 +303,26 @@ mod tests {
         assert!(!verify_password("anything", &dummy, 1000));
         assert!(!needs_rehash(&dummy, 1000));
         assert!(needs_rehash(&dummy, 2000));
+    }
+
+    /// Both async wrappers go through the same gate; concurrent callers must all
+    /// complete rather than deadlock on a permit.
+    #[tokio::test]
+    async fn async_wrappers_complete_under_concurrency() {
+        let hashes = futures::future::join_all(
+            (0..8).map(|i| hash_password_async(format!("password-{i}"), 1000)),
+        )
+        .await;
+
+        for (i, hash) in hashes.iter().enumerate() {
+            assert!(
+                verify_password_async(format!("password-{i}"), hash.clone(), 1000).await,
+                "hash {i} must verify"
+            );
+        }
+        assert!(
+            !verify_password_async("wrong".to_string(), hashes[0].clone(), 1000).await,
+            "a wrong password must not verify"
+        );
     }
 }

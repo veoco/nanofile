@@ -1,4 +1,3 @@
-use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -398,22 +397,12 @@ pub fn validate_notification_jwt(
     private_key: &str,
     expected_repo_id: &str,
 ) -> Option<NotificationJwtClaims> {
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-    // `exp` is required: an otherwise-valid signature without it would never
-    // expire. (Issuance always sets it.)
-    validation.required_spec_claims = std::collections::HashSet::from(["exp".to_string()]);
-    validation.sub = None;
-    validation.iss = None;
-
     // Verify against the subscription subkey, so an event token (signed with a
-    // different subkey) cannot be replayed as a subscription.
+    // different subkey) cannot be replayed as a subscription. The decoder requires
+    // `exp`, rejects an `aud` claim and applies the same 60-second leeway the
+    // previous jsonwebtoken configuration used.
     let sub_key = super::keys::subscription_key(private_key);
-    let key = DecodingKey::from_secret(&sub_key);
-    let token_data =
-        jsonwebtoken::decode::<NotificationJwtClaims>(token, &key, &validation).ok()?;
-
-    let claims = token_data.claims;
+    let claims: NotificationJwtClaims = crate::service::auth::hs256::decode(token, &sub_key)?;
 
     if claims.repo_id != expected_repo_id {
         return None;

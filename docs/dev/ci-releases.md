@@ -40,10 +40,8 @@ The `lint` job fails when:
   through the default features of `reqwest`'s TLS and `image`'s formats, which is
   why the dev-dependencies in `server/Cargo.toml` disable them.
 
-`cargo audit` ignores `RUSTSEC-2023-0071` (the Marvin attack in `rsa`, pulled in by
-`jsonwebtoken`'s rust_crypto feature). Nanofile only signs and verifies HS256
-tokens, so the advisory is unreachable; the ignore is re-checked when
-`jsonwebtoken` gains algorithm-level features.
+`cargo audit` runs without ignores: the in-tree HS256 codec keeps the
+RSA/ECDSA algorithms (and their advisories) out of the dependency graph.
 
 ### Build caches
 

@@ -8,12 +8,17 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-static EMAIL_EN: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
-    crate::i18n::parse_translations(include_str!("../../../locales/email_en.toml"))
-});
-static EMAIL_ZH: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
-    crate::i18n::parse_translations(include_str!("../../../locales/email_zh.toml"))
-});
+include_flate::flate!(
+    static EMAIL_EN_TOML: str from "locales/email_en.toml" with zstd
+);
+include_flate::flate!(
+    static EMAIL_ZH_TOML: str from "locales/email_zh.toml" with zstd
+);
+
+static EMAIL_EN: LazyLock<HashMap<String, String>> =
+    LazyLock::new(|| crate::i18n::parse_translations(&EMAIL_EN_TOML));
+static EMAIL_ZH: LazyLock<HashMap<String, String>> =
+    LazyLock::new(|| crate::i18n::parse_translations(&EMAIL_ZH_TOML));
 
 static MAIL_EN: MailStrings = MailStrings {
     lang: "en",

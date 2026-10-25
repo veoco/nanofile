@@ -257,7 +257,7 @@ impl TempFileManager {
         repo_id: &str,
         file_path: &str,
         offset: u64,
-        data: &[u8],
+        data: bytes::Bytes,
     ) -> std::io::Result<()> {
         let key = (repo_id.to_string(), file_path.to_string());
         let tmp_path = {
@@ -277,7 +277,8 @@ impl TempFileManager {
             entry.tmp_path.clone()
         };
 
-        let data = data.to_vec(); // clone for the blocking closure
+        // The blocking closure needs an owned value; `Bytes` makes that a
+        // refcount bump rather than a second copy of the chunk.
         tokio::task::spawn_blocking(move || {
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
@@ -638,6 +639,11 @@ mod tests {
         TempFileManager::new(tmp, max_uploads, max_bytes).await
     }
 
+    /// A chunk as the blocking writer receives it (refcounted, no copy).
+    fn chunk(data: &'static [u8]) -> bytes::Bytes {
+        bytes::Bytes::from_static(data)
+    }
+
     #[tokio::test]
     async fn write_chunk_beyond_file_size_rejected() {
         let mgr = capped_manager(0, 0).await;
@@ -645,14 +651,16 @@ mod tests {
         let path = "/f.bin";
         mgr.get_or_create(repo, path, 10).await.unwrap();
 
-        let result = mgr.write_chunk(repo, path, 9, b"xx").await;
+        let result = mgr.write_chunk(repo, path, 9, chunk(b"xx")).await;
         assert_eq!(
             result.err().map(|e| e.kind()),
             Some(std::io::ErrorKind::InvalidInput)
         );
 
         // Writing exactly up to the declared size is still allowed.
-        mgr.write_chunk(repo, path, 0, b"0123456789").await.unwrap();
+        mgr.write_chunk(repo, path, 0, chunk(b"0123456789"))
+            .await
+            .unwrap();
         mgr.finish(repo, path).await;
     }
 
@@ -702,10 +710,14 @@ mod tests {
         let tmp = mgr.get_or_create(repo, path, 100).await.unwrap();
         assert!(tmp.exists());
 
-        mgr.write_chunk(repo, path, 0, b"hello ").await.unwrap();
+        mgr.write_chunk(repo, path, 0, chunk(b"hello "))
+            .await
+            .unwrap();
         assert_eq!(mgr.get_uploaded_bytes(repo, path).await, Some(6));
 
-        mgr.write_chunk(repo, path, 6, b"world").await.unwrap();
+        mgr.write_chunk(repo, path, 6, chunk(b"world"))
+            .await
+            .unwrap();
         assert_eq!(mgr.get_uploaded_bytes(repo, path).await, Some(11));
 
         let data = mgr.read_complete(repo, path).await.unwrap();
@@ -735,7 +747,7 @@ mod tests {
         let repo = "test-repo-3";
         let path = "/noexist.dat";
 
-        let result = mgr.write_chunk(repo, path, 0, b"data").await;
+        let result = mgr.write_chunk(repo, path, 0, chunk(b"data")).await;
         assert!(result.is_err());
     }
 
@@ -746,7 +758,9 @@ mod tests {
         let path = "/cleanup.txt";
 
         let tmp = mgr.get_or_create(repo, path, 10).await.unwrap();
-        mgr.write_chunk(repo, path, 0, b"12345").await.unwrap();
+        mgr.write_chunk(repo, path, 0, chunk(b"12345"))
+            .await
+            .unwrap();
         assert!(tmp.exists());
 
         mgr.finish(repo, path).await;
@@ -773,7 +787,7 @@ mod tests {
         let path = "/stream.bin";
 
         mgr.get_or_create(repo, path, 11).await.unwrap();
-        mgr.write_chunk(repo, path, 0, b"hello world")
+        mgr.write_chunk(repo, path, 0, chunk(b"hello world"))
             .await
             .unwrap();
 

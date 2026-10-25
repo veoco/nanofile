@@ -50,6 +50,26 @@ The two profiles differ at startup: a release build **refuses to start** without
 `server.secret_key`, while a debug build generates an ephemeral one, so sessions
 do not survive a restart. See [Security](/guide/admin/security).
 
+## Binary size and the performance probe
+
+`[profile.release]` already uses fat LTO, one codegen unit and `strip`.
+`panic = "abort"` is deliberately not used because the task executor and the
+index extractor rely on catching panics. When a dependency change grows the
+binary, check the per-crate split with:
+
+```bash
+cargo bloat --release --crates -n 60 -p server --bin nanofile
+```
+
+The hot-path probe is `server/tests/perf_probe.rs`. It is `#[ignore]`d, so it
+never runs in CI; run it before and after a performance change and diff the
+`perf ...` lines (Linux reports the process's `VmRSS`):
+
+```bash
+cargo test -p server --release --test perf_probe -- --ignored --nocapture
+PERF_FILES=500 cargo test -p server --release --test perf_probe -- --ignored --nocapture
+```
+
 ## Optional feature: `tray`
 
 `--features tray` builds a binary with a system tray menu:

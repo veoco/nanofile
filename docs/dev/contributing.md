@@ -17,7 +17,7 @@ cargo test -p server --features tray --bin nanofile
 cargo machete
 NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo test --workspace --no-fail-fast
 node --test "server/frontend/**/*.test.js"
-cargo audit --ignore RUSTSEC-2023-0071
+cargo audit
 ```
 
 The browser suite is described in [Testing](/dev/testing). CI is the authority;
