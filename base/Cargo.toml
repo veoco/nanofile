@@ -1,6 +1,6 @@
 [package]
 name = "base"
-version = "0.1.19"
+version = "0.1.20"
 edition = "2024"
 description = "Base types for nanofile — pure types, no axum dependency"
 license = "MIT"
