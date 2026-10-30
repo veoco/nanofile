@@ -268,6 +268,7 @@ impl AppState {
                 Some(NotificationManager::new(
                     config.notification.max_connections,
                     config.notification.max_connections_per_ip,
+                    repos.clone(),
                 ))
             } else {
                 None

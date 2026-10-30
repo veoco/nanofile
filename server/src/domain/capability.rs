@@ -7,6 +7,13 @@
 //! every capability because it *is* the account, so the table records what a route
 //! needs of a key plus the routes closed to keys ([`RouteAccess::SessionOnly`]).
 //!
+//! The table classifies the route and, when one is present, the library id in
+//! the URI. A handler whose library id arrives in a JSON body, query string or
+//! link token must enforce that id too, via
+//! [`AuthUser::ensure_repo_allowed`](crate::middleware::auth::AuthUser::ensure_repo_allowed)
+//! or a [`RepoScope`](crate::domain::permission::RepoScope) passed into its
+//! service; the route-table check cannot see those values.
+//!
 //! Capabilities are stable ids persisted as a canonical comma-separated list:
 //! [`Capability::id`] is the on-disk contract, not the enum discriminant.
 

@@ -245,6 +245,15 @@ async fn process_client_message(
                 if let Some(claims) =
                     validate_notification_jwt(&repo.jwt_token, private_key, &repo.id)
                 {
+                    // The JWT only proves it was issued for this repo; the user
+                    // may have lost access or been deactivated since.
+                    if !mgr.subscription_allowed(&claims.username, &repo.id).await {
+                        let event = JwtExpiredEvent {
+                            repo_id: repo.id.clone(),
+                        };
+                        mgr.notify_client(client_id, &event.into()).await;
+                        continue;
+                    }
                     if username.is_empty() {
                         username = claims.username;
                     }

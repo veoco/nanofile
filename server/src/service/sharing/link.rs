@@ -2,6 +2,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use crate::Config;
+use crate::domain::permission::RepoScope;
 use crate::repository::Repositories;
 use crate::service::auth::password::hash_password_async;
 use crate::service::auth::token::{generate_share_link_token, generate_upload_link_token};
@@ -80,7 +81,12 @@ async fn create_upload_link_impl(
     expires_at: Option<i64>,
     description: Option<String>,
     creator_id: i32,
+    scope: &RepoScope,
 ) -> Result<UploadLinkInfo, AppError> {
+    if !scope.allows(repo_id) {
+        return Err(AppError::Forbidden);
+    }
+
     // An upload link grants anonymous *write* access to the repo, so only
     // members with write permission may create one (a read-only member must
     // not be able to mint a link that bypasses their read-only role).
@@ -147,10 +153,11 @@ pub async fn create_upload_link(
     password: Option<&str>,
     expires_at: Option<i64>,
     creator_id: i32,
+    scope: &RepoScope,
 ) -> Result<UploadLinkInfo, AppError> {
     let token = generate_upload_link_token();
     create_upload_link_impl(
-        repos, config, repo_id, path, token, password, expires_at, None, creator_id,
+        repos, config, repo_id, path, token, password, expires_at, None, creator_id, scope,
     )
     .await
 }
@@ -160,10 +167,16 @@ pub async fn delete_upload_link(
     token: &str,
     user_id: i32,
     token_manager: Option<&Arc<crate::AccessTokenManager>>,
+    scope: &RepoScope,
 ) -> Result<(), AppError> {
     // Resolve the row first: deleting the link must also revoke the upload tokens already minted from
     // it, otherwise someone who exchanged the link for a token can keep uploading for its remaining TTL.
     let link = repos.upload_link.find_by_token(token).await?;
+    if let Some(link) = &link
+        && (link.creator_id != user_id || !scope.allows(&link.repo_id))
+    {
+        return Err(AppError::NotFound("Upload link not found".into()));
+    }
     repos
         .upload_link
         .delete_by_token_and_user(token, user_id)
@@ -217,6 +230,7 @@ pub async fn create_upload_link_v21(
     expire_days: Option<i64>,
     description: Option<String>,
     creator_id: i32,
+    scope: &RepoScope,
 ) -> Result<UploadLinkInfo, AppError> {
     let token = generate_share_link_token();
     let now = chrono::Utc::now().timestamp();
@@ -231,6 +245,7 @@ pub async fn create_upload_link_v21(
         expires_at,
         description,
         creator_id,
+        scope,
     )
     .await
 }
@@ -258,6 +273,7 @@ pub async fn delete_upload_link_v21_by_token(
     token: &str,
     user_id: i32,
     token_manager: Option<&Arc<crate::AccessTokenManager>>,
+    scope: &RepoScope,
 ) -> Result<bool, AppError> {
     let link = repos
         .upload_link
@@ -267,6 +283,9 @@ pub async fn delete_upload_link_v21_by_token(
 
     if link.creator_id != user_id {
         return Err(AppError::Forbidden);
+    }
+    if !scope.allows(&link.repo_id) {
+        return Err(AppError::NotFound("Upload link not found".into()));
     }
 
     let result = repos
@@ -288,13 +307,14 @@ pub async fn get_upload_link_v21(
     base_url: &str,
     token: &str,
     user_id: i32,
+    scope: &RepoScope,
 ) -> Result<serde_json::Value, AppError> {
     let link = repos
         .upload_link
         .find_by_token(token)
         .await?
         .ok_or_else(|| AppError::NotFound("Upload link not found".into()))?;
-    if link.creator_id != user_id {
+    if link.creator_id != user_id || !scope.allows(&link.repo_id) {
         return Err(AppError::NotFound("Upload link not found".into()));
     }
 
@@ -331,7 +351,17 @@ pub async fn update_upload_link_v21(
     expire_days: Option<Option<i64>>,
     password: Option<Option<String>>,
     description: Option<Option<String>>,
+    scope: &RepoScope,
 ) -> Result<bool, AppError> {
+    let link = repos
+        .upload_link
+        .find_by_token(token)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Upload link not found".into()))?;
+    if link.creator_id != user_id || !scope.allows(&link.repo_id) {
+        return Err(AppError::NotFound("Upload link not found".into()));
+    }
+
     let expire_at: Option<Option<i64>> = if let Some(Some(days)) = expire_days {
         let now = chrono::Utc::now().timestamp();
         Some(Some(now + days * 86400))
@@ -399,6 +429,7 @@ pub async fn list_upload_links_for_repo_v21(
 pub async fn clean_invalid_upload_links_v21(
     repos: &Repositories,
     user_id: i32,
+    scope: &RepoScope,
 ) -> Result<i32, AppError> {
     let links = repos.upload_link.find_by_creator_id(user_id).await?;
 
@@ -411,6 +442,9 @@ pub async fn clean_invalid_upload_links_v21(
     let mut deleted = 0i32;
 
     for link in &links {
+        if !scope.allows(&link.repo_id) {
+            continue;
+        }
         let mut should_delete = false;
 
         if let Some(exp) = link.expires_at

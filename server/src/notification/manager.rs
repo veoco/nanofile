@@ -9,6 +9,8 @@ use tokio_util::sync::CancellationToken;
 use super::events::{JwtExpiredEvent, NotificationJwtClaims, NotificationMessage};
 use infra::events;
 
+use crate::repository::Repositories;
+
 /// A connected WebSocket client.
 pub struct ClientState {
     /// The authenticated username (email), set on first successful subscribe.
@@ -35,6 +37,11 @@ impl ClientState {
     /// The username is only ever set, never cleared, so the transition is one-way.
     pub fn is_authenticated(&self) -> bool {
         !self.read_user().is_empty()
+    }
+    fn read_subscribed_repos(&self) -> RwLockReadGuard<'_, HashSet<String>> {
+        self.subscribed_repos
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
     }
     fn write_subscribed_repos(&self) -> RwLockWriteGuard<'_, HashSet<String>> {
         self.subscribed_repos
@@ -67,6 +74,9 @@ pub struct NotificationManager {
     max_connections: Arc<AtomicU64>,
     /// Cap on concurrent connections per client IP (0 = unlimited).
     max_connections_per_ip: Arc<AtomicU64>,
+    /// Library membership is re-checked on subscribe and by the periodic
+    /// token-expiry pass, so a removed member stops receiving notifications.
+    repos: Arc<Repositories>,
 }
 
 impl NotificationManager {
@@ -87,14 +97,39 @@ impl NotificationManager {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub fn new(max_connections: u64, max_connections_per_ip: u64) -> Self {
+    pub fn new(
+        max_connections: u64,
+        max_connections_per_ip: u64,
+        repos: Arc<Repositories>,
+    ) -> Self {
         Self {
             clients: Arc::new(RwLock::new(HashMap::new())),
             subscriptions: Arc::new(RwLock::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(1)),
             max_connections: Arc::new(AtomicU64::new(max_connections)),
             max_connections_per_ip: Arc::new(AtomicU64::new(max_connections_per_ip)),
+            repos,
         }
+    }
+
+    /// Whether `username` may still read `repo_id`.
+    ///
+    /// A notification JWT lives three days; without this check a removed member
+    /// or a deactivated account keeps receiving repo-update/file-lock events.
+    pub async fn subscription_allowed(&self, username: &str, repo_id: &str) -> bool {
+        let Ok(Some(user)) = self.repos.user.find_by_email(username).await else {
+            return false;
+        };
+        if !user.is_active || !user.email_verified {
+            return false;
+        }
+        crate::domain::permission::check_repo_read_permission(
+            self.repos.member.as_ref(),
+            repo_id,
+            user.id,
+        )
+        .await
+        .is_ok()
     }
 
     /// Replace the caps. Connected clients are not dropped; the next registration
@@ -326,15 +361,39 @@ impl NotificationManager {
     pub async fn check_expired_tokens(&self) -> u64 {
         let now = chrono::Utc::now().timestamp();
         let mut expired_total = 0u64;
-        let clients = self.read_clients();
-        for (client_id, client) in clients.iter() {
-            let expired: Vec<String> = {
+        // Snapshot the clients and drop the lock before the membership queries:
+        // holding a `std::sync::RwLockReadGuard` across an await would make this
+        // future non-Send.
+        let clients: Vec<(u64, Arc<ClientState>)> = self
+            .read_clients()
+            .iter()
+            .map(|(id, client)| (*id, client.clone()))
+            .collect();
+        for (client_id, client) in &clients {
+            let mut expired: Vec<String> = {
                 let exps = client.read_token_expirations();
                 exps.iter()
                     .filter(|&(_, exp)| *exp <= now)
                     .map(|(repo_id, _)| repo_id.clone())
                     .collect()
             };
+
+            // Revalidate the remaining subscriptions as well: a JWT can be
+            // signature-valid long after the member lost access to the library.
+            let username = client.read_user().clone();
+            if !username.is_empty() {
+                let subscribed: Vec<String> =
+                    client.read_subscribed_repos().iter().cloned().collect();
+                for repo_id in subscribed {
+                    if expired.contains(&repo_id) {
+                        continue;
+                    }
+                    if !self.subscription_allowed(&username, &repo_id).await {
+                        expired.push(repo_id);
+                    }
+                }
+            }
+
             if expired.is_empty() {
                 continue;
             }
@@ -382,12 +441,6 @@ impl NotificationManager {
         tracing::info!("Shutting down notification manager");
         self.write_clients().clear();
         self.write_subscriptions().clear();
-    }
-}
-
-impl Default for NotificationManager {
-    fn default() -> Self {
-        Self::new(1024, 64)
     }
 }
 

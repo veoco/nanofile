@@ -328,3 +328,94 @@ async fn test_websocket_subscribe_timeout_closes_connection() {
         }
     }
 }
+
+/// A notification JWT lives for days. If the account is deactivated (or the
+/// member is removed) after it was issued, the subscribe handshake must not
+/// keep the client on the repo's event stream.
+#[tokio::test]
+async fn deactivated_user_cannot_keep_a_notification_subscription() {
+    let f = TestFixture::new_with_notification().await;
+
+    let resp = f
+        .client
+        .get_sync(
+            &format!("/seafhttp/repo/{}/jwt-token", f.repo_id),
+            &f.sync_token,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let jwt = resp.json::<serde_json::Value>().await.unwrap()["jwt_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Deactivate after the JWT was issued: the token is still signed and not
+    // expired, so only a fresh membership/account check can reject it.
+    f.server
+        .repos
+        .user
+        .update_is_active(f.user_id, false)
+        .await
+        .expect("deactivate the user");
+
+    let ws_url = f.server.base_url.replace("http", "ws") + "/notification";
+    let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
+    let sub = serde_json::json!({
+        "type": "subscribe",
+        "content": {
+            "repos": [{ "id": f.repo_id, "jwt_token": jwt }]
+        }
+    });
+    ws.send(Message::Text(sub.to_string().into()))
+        .await
+        .unwrap();
+
+    let expired = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            match ws.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    if value["type"] == "jwt-expired" {
+                        break value;
+                    }
+                }
+                Some(Ok(_)) => {}
+                Some(Err(err)) => panic!("WebSocket error: {err}"),
+                None => panic!("WebSocket closed before jwt-expired"),
+            }
+        }
+    })
+    .await
+    .expect("deactivated user must be told to re-authenticate");
+    assert_eq!(expired["content"]["repo_id"], f.repo_id.as_str());
+
+    if let Some(manager) = &f.server.state.notification_manager {
+        manager
+            .notify(server::notification::events::RepoUpdateEvent {
+                repo_id: f.repo_id.clone(),
+                commit_id: "0000000000000000000000000000000000000000".to_string(),
+            })
+            .await;
+    }
+
+    let leaked = tokio::time::timeout(std::time::Duration::from_millis(750), async {
+        loop {
+            match ws.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    if value["type"] == "repo-update" {
+                        break value;
+                    }
+                }
+                Some(Ok(_)) => {}
+                Some(Err(err)) => panic!("WebSocket error: {err}"),
+                None => break serde_json::Value::Null,
+            }
+        }
+    })
+    .await;
+    assert!(
+        leaked.is_err(),
+        "a deactivated user received a repo-update: {leaked:?}"
+    );
+}

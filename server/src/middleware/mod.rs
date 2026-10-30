@@ -85,11 +85,14 @@ pub(crate) fn apply_security_headers(
     // response's own content type so every path serving an SVG inherits it; the
     // page policy is deliberately not sent, as nothing in an upload is a document
     // of this application.
-    let uploaded_svg = headers
+    let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.split(';').next())
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("image/svg+xml"));
+        .map(str::trim);
+    let uploaded_svg =
+        content_type.is_some_and(|value| value.eq_ignore_ascii_case("image/svg+xml"));
+    let is_html = content_type.is_some_and(|value| value.eq_ignore_ascii_case("text/html"));
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(if uploaded_svg {
@@ -98,6 +101,13 @@ pub(crate) fn apply_security_headers(
             BASELINE_CSP
         }),
     );
+    // Authenticated HTML carries CSRF tokens, file names and, on the 2FA page,
+    // the TOTP secret. A shared cache must never store it; `no-store` also keeps
+    // a password-protected share page out of a reverse proxy's cache.
+    if is_html {
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    }
     if secure {
         headers.insert(
             header::STRICT_TRANSPORT_SECURITY,
@@ -353,6 +363,32 @@ mod security_header_tests {
         apply_security_headers(&mut headers, false, false);
         assert_eq!(headers.get("content-security-policy").unwrap(), "sandbox");
         assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+    }
+
+    /// Pages that carry per-user state (CSRF tokens, file names, TOTP secrets)
+    /// are never stored by a browser or shared cache. Static assets keep their
+    /// long cache: the header is keyed off the response's own content type.
+    #[test]
+    fn html_is_not_cacheable_but_assets_are() {
+        let mut html = axum::http::HeaderMap::new();
+        html.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("text/html; charset=utf-8"),
+        );
+        apply_security_headers(&mut html, false, false);
+        assert_eq!(html.get("cache-control").unwrap(), "no-store");
+        assert_eq!(html.get("pragma").unwrap(), "no-cache");
+
+        let mut css = axum::http::HeaderMap::new();
+        css.insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("text/css"),
+        );
+        apply_security_headers(&mut css, false, false);
+        assert!(
+            css.get("cache-control").is_none(),
+            "static CSS must keep its long cache"
+        );
     }
 
     /// Everything else keeps the baseline policy, even a near-miss Content-Type.

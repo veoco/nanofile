@@ -945,3 +945,25 @@ async fn logout_is_not_triggerable_cross_site() {
         "a same-origin logout must clear the session"
     );
 }
+
+/// Authenticated pages contain CSRF tokens, file names and (at 2FA setup) the
+/// TOTP secret. They must not be stored by a browser or a shared cache.
+#[tokio::test]
+async fn authenticated_pages_are_not_cacheable() {
+    let server = TestServer::start().await;
+    create_test_user(server.db.as_ref(), "test@example.com", "password").await;
+    let client = ui_login(&server).await;
+
+    let resp = client
+        .get(format!("{}/settings/", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "settings page");
+    assert_eq!(
+        resp.headers().get("cache-control").unwrap(),
+        "no-store",
+        "authenticated HTML must not be cached"
+    );
+    assert_eq!(resp.headers().get("pragma").unwrap(), "no-cache");
+}

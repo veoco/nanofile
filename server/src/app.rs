@@ -38,6 +38,13 @@ const TOKEN_PATH_PREFIXES: &[&str] = &[
     "client-sso",
     "client-login",
     "client-sso-link",
+    // Capability URLs the API itself mints and returns.
+    "share-links",
+    "shared-links",
+    "upload-links",
+    // One-shot account credentials carried in a browser path.
+    "reset",
+    "verify-email",
 ];
 
 /// Replace capability-token path segments with `{token}` for logging. The query
@@ -246,6 +253,30 @@ mod tests {
         assert_eq!(
             redact_request_path("/blks/abc123/file-id/block-id"),
             "/blks/{token}/file-id/block-id"
+        );
+        assert_eq!(
+            redact_request_path("/api/v2.1/share-links/abc123/"),
+            "/api/v2.1/share-links/{token}/"
+        );
+        assert_eq!(
+            redact_request_path("/api2/shared-links/abc123"),
+            "/api2/shared-links/{token}"
+        );
+        assert_eq!(
+            redact_request_path("/api/v2.1/upload-links/abc123/upload/"),
+            "/api/v2.1/upload-links/{token}/upload/"
+        );
+        assert_eq!(
+            redact_request_path("/api2/upload-links/abc123"),
+            "/api2/upload-links/{token}"
+        );
+        assert_eq!(
+            redact_request_path("/accounts/password/reset/abc123/"),
+            "/accounts/password/reset/{token}/"
+        );
+        assert_eq!(
+            redact_request_path("/accounts/verify-email/abc123/"),
+            "/accounts/verify-email/{token}/"
         );
     }
 

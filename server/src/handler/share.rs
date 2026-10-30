@@ -56,6 +56,7 @@ pub async fn create_share_link(
         req.password.as_deref(),
         req.expires_at,
         auth.user_id,
+        &auth.repo_scope(),
     )
     .await?;
     Ok(Json(info))
@@ -66,6 +67,6 @@ pub async fn delete_share_link(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    share::delete_share_link(&state.repos, &token, auth.user_id).await?;
+    share::delete_share_link(&state.repos, &token, auth.user_id, &auth.repo_scope()).await?;
     Ok(ok_json())
 }

@@ -178,6 +178,462 @@ async fn a_bound_key_cannot_reach_another_library() {
     );
 }
 
+/// The route-table scope check only reads the URI. These endpoints put the
+/// library id in the JSON body or query string, so a bound key would otherwise
+/// reach any library its owner can access. All of them must refuse the request
+/// and leave the other library untouched.
+#[tokio::test]
+async fn body_and_query_repo_ids_cannot_escape_a_bound_key() {
+    let f = TestFixture::new().await;
+    let other = second_repo(&f).await;
+    let key = create_key(
+        &f,
+        &key_body(
+            &[
+                "file.read",
+                "file.write",
+                "library.read",
+                "library.delete",
+                "share_link.write",
+                "upload_link.write",
+                "search.reindex",
+                "search.write",
+                "star.read",
+                "star.write",
+                "device.read",
+                "device.write",
+            ],
+            false,
+            &[(&f.repo_id, "rw")],
+        ),
+    )
+    .await;
+
+    // Seed content in B so a leaked write would be observable.
+    let upload = f
+        .client
+        .upload_file(&f.api_token, &other, "/", "keep.txt", b"original")
+        .await;
+    assert!(upload.status().is_success(), "seed B file");
+    let mkdir = f.client.create_dir(&f.api_token, &other, "/keepdir").await;
+    assert_eq!(mkdir.status(), 201, "seed B directory");
+
+    // The path says A; the body says B. The key covers A only, so the body
+    // cannot be used to smuggle B past the guard. The handler rejects the
+    // mismatch before any mutation.
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/repos/{}/file/move/", f.repo_id),
+            Some(&key),
+            &json!({"repo_id": other, "p": "/keep.txt", "new_parent_dir": "/moved"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "file move path/body mismatch");
+
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/repos/{}/file/rename/", f.repo_id),
+            Some(&key),
+            &json!({"repo_id": other, "p": "/keep.txt", "new_name": "renamed.txt"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "file rename path/body mismatch");
+
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/repos/{}/dir/move/", f.repo_id),
+            Some(&key),
+            &json!({"repo_id": other, "p": "/keepdir", "new_parent_dir": "/moved"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "dir move path/body mismatch");
+
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/repos/{}/dir/rename/", f.repo_id),
+            Some(&key),
+            &json!({"repo_id": other, "p": "/keepdir", "new_name": "renameddir"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "dir rename path/body mismatch");
+
+    let listing = f
+        .client
+        .list_dir(&f.api_token, &other, "/")
+        .await
+        .json::<Value>()
+        .await
+        .unwrap()
+        .to_string();
+    assert!(
+        listing.contains("keep.txt"),
+        "B file disappeared: {listing}"
+    );
+    assert!(
+        listing.contains("keepdir"),
+        "B directory disappeared: {listing}"
+    );
+    assert!(
+        !listing.contains("renamed.txt") && !listing.contains("renameddir"),
+        "a move/rename escaped its scope: {listing}"
+    );
+    let content = f
+        .client
+        .download_file(&f.api_token, &other, "/keep.txt")
+        .await
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(content.as_ref(), b"original");
+
+    // Creation endpoints take the repo id from the body only.
+    for path in [
+        "/api/v2.1/share-links/",
+        "/api/v2.1/multi-share-links/",
+        "/api2/shared-links",
+    ] {
+        let resp = f
+            .client
+            .post_json(path, Some(&key), &json!({"repo_id": other, "path": "/"}))
+            .await;
+        assert_eq!(resp.status(), 403, "{path} created a link for B");
+    }
+    for path in ["/api/v2.1/upload-links/", "/api2/upload-links"] {
+        let resp = f
+            .client
+            .post_json(path, Some(&key), &json!({"repo_id": other, "path": "/"}))
+            .await;
+        assert_eq!(resp.status(), 403, "{path} created a link for B");
+    }
+
+    let shares: Value = f
+        .client
+        .get("/api/v2.1/share-links/", Some(&f.api_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        !shares.to_string().contains(&other),
+        "a share link for B was persisted: {shares}"
+    );
+    let uploads: Value = f
+        .client
+        .get("/api/v2.1/upload-links/", Some(&f.api_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        !uploads.to_string().contains(&other),
+        "an upload link for B was persisted: {uploads}"
+    );
+
+    // The two account-wide trash surfaces used to list/purge every library the
+    // user owned, regardless of the key's scope.
+    let deleted = f.client.delete_repo(&f.api_token, &other).await;
+    assert!(deleted.status().is_success(), "delete B into trash");
+
+    let trashed: Value = f
+        .client
+        .get("/api/v2.1/deleted-repos/", Some(&key))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        !trashed.to_string().contains(&other),
+        "the key listed B's trash entry: {trashed}"
+    );
+
+    let resp = f
+        .client
+        .post_form(
+            "/api/v2.1/deleted-repos/",
+            Some(&key),
+            &[("repo_id", other.as_str())],
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "restore B outside the key scope");
+
+    let resp = f
+        .client
+        .delete("/api/v2.1/deleted-repos/", Some(&key))
+        .await;
+    assert_eq!(resp.status(), 200, "empty-trash request itself is allowed");
+    let still_trashed: Value = f
+        .client
+        .get("/api/v2.1/deleted-repos/", Some(&f.api_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        still_trashed.to_string().contains(&other),
+        "the key permanently deleted B: {still_trashed}"
+    );
+
+    let restored = f
+        .client
+        .post_form(
+            "/api/v2.1/deleted-repos/",
+            Some(&f.api_token),
+            &[("repo_id", other.as_str())],
+        )
+        .await;
+    assert_eq!(restored.status(), 200, "restore B as its owner");
+
+    // Body/query index and metadata operations.
+    let resp = f
+        .client
+        .post_json("/api2/reindex/", Some(&key), &json!({"repo_id": other}))
+        .await;
+    assert_eq!(resp.status(), 403, "reindex B outside the key scope");
+
+    let resp = f
+        .client
+        .post_json(
+            "/api2/index-file-text/",
+            Some(&key),
+            &json!({"repo_id": other, "path": "/keep.txt", "text": "escaped"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "index text for B");
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/starred-items/",
+            Some(&key),
+            &json!({"repo_id": other, "path": "/keep.txt"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "star B");
+
+    let resp = f
+        .client
+        .delete(
+            &format!("/api/v2.1/starred-items/?repo_id={other}&path=/keep.txt"),
+            Some(&key),
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "unstar B");
+
+    let starred: Value = f
+        .client
+        .get("/api/v2.1/starred-items/", Some(&f.api_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        !starred.to_string().contains(&other),
+        "B was starred through a bound key: {starred}"
+    );
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/smart-link/?repo_id={other}&path=/keep.txt"),
+            Some(&key),
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "smart link for B");
+}
+
+/// A share/upload token is a capability URL. A key bound to A must not be able
+/// to read, update or delete a token that belongs to B, even though both links
+/// have the same owner.
+#[tokio::test]
+async fn link_tokens_are_scoped_to_the_key_library() {
+    let f = TestFixture::new().await;
+    let other = second_repo(&f).await;
+    let key = create_key(
+        &f,
+        &key_body(
+            &[
+                "share_link.read",
+                "share_link.write",
+                "upload_link.read",
+                "upload_link.write",
+            ],
+            false,
+            &[(&f.repo_id, "rw")],
+        ),
+    )
+    .await;
+
+    let share: Value = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &json!({"repo_id": other, "path": "/"}),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    let share_token = share["token"].as_str().unwrap().to_string();
+
+    let upload: Value = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &json!({"repo_id": other, "path": "/"}),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    let upload_token = upload["token"].as_str().unwrap().to_string();
+
+    let share_path = format!("/api/v2.1/share-links/{share_token}/");
+    let resp = f.client.get(&share_path, Some(&key)).await;
+    assert_eq!(resp.status(), 404, "read B share link");
+    let resp = f
+        .client
+        .put_json(&share_path, Some(&key), &json!({"description": "x"}))
+        .await;
+    assert_eq!(resp.status(), 404, "update B share link");
+
+    let upload_path = format!("/api/v2.1/upload-links/{upload_token}/");
+    let resp = f.client.get(&upload_path, Some(&key)).await;
+    assert_eq!(resp.status(), 404, "read B upload link");
+    let resp = f
+        .client
+        .put_json(&upload_path, Some(&key), &json!({"description": "x"}))
+        .await;
+    assert_eq!(resp.status(), 404, "update B upload link");
+
+    let resp = f.client.get(&share_path, Some(&f.api_token)).await;
+    assert_eq!(resp.status(), 200, "owner can still read the share link");
+    let resp = f.client.get(&upload_path, Some(&f.api_token)).await;
+    assert_eq!(resp.status(), 200, "owner can still read the upload link");
+
+    let resp = f.client.delete(&share_path, Some(&key)).await;
+    assert_eq!(resp.status(), 404, "delete B share link");
+    let resp = f.client.delete(&upload_path, Some(&key)).await;
+    assert_eq!(resp.status(), 404, "delete B upload link");
+
+    let resp = f.client.get(&share_path, Some(&f.api_token)).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "failed delete must not remove the share link"
+    );
+    let resp = f.client.get(&upload_path, Some(&f.api_token)).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "failed delete must not remove the upload link"
+    );
+
+    // The v1 delete routes carry the same tokens and need the same guard.
+    let resp = f
+        .client
+        .delete(&format!("/api2/shared-links/{share_token}"), Some(&key))
+        .await;
+    assert_eq!(resp.status(), 404, "v1 delete B share link");
+    let resp = f
+        .client
+        .delete(&format!("/api2/upload-links/{upload_token}"), Some(&key))
+        .await;
+    assert_eq!(resp.status(), 404, "v1 delete B upload link");
+}
+
+/// Sync-token inventory is account-wide by default; a bound key must see only
+/// its own libraries and must not revoke another library's token by id.
+#[tokio::test]
+async fn credential_inventory_and_sync_token_revoke_are_scoped() {
+    let f = TestFixture::new().await;
+    let other = second_repo(&f).await;
+    let key = create_key(
+        &f,
+        &key_body(
+            &["device.read", "device.write"],
+            false,
+            &[(&f.repo_id, "rw")],
+        ),
+    )
+    .await;
+
+    let info = f.client.download_info(&f.api_token, &other).await;
+    assert_eq!(info.status(), 200, "mint a sync token for B");
+    let info: Value = info.json().await.unwrap();
+    assert_eq!(info["repo_id"].as_str(), Some(other.as_str()));
+
+    let inventory: Value = f
+        .client
+        .get("/api2/credentials/", Some(&key))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        !inventory.to_string().contains(&other),
+        "the key saw B's sync-token metadata: {inventory}"
+    );
+
+    let devices: Value = f
+        .client
+        .get("/api2/devices/", Some(&key))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        !devices.to_string().contains(&other),
+        "the key saw B in the device inventory: {devices}"
+    );
+
+    let owner_inventory: Value = f
+        .client
+        .get("/api2/credentials/", Some(&f.api_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let token_id = owner_inventory["sync_tokens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["repo_id"] == other.as_str())
+        .expect("the owner sees B's sync token")["id"]
+        .as_i64()
+        .unwrap();
+
+    let resp = f
+        .client
+        .delete(
+            &format!("/api2/credentials/sync_token/{token_id}/"),
+            Some(&key),
+        )
+        .await;
+    assert_eq!(resp.status(), 404, "revoke B's sync token by id");
+
+    let owner_after: Value = f
+        .client
+        .get("/api2/credentials/", Some(&f.api_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        owner_after["sync_tokens"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["id"].as_i64() == Some(token_id)),
+        "the failed revoke removed B's sync token: {owner_after}"
+    );
+}
+
 #[tokio::test]
 async fn an_all_repos_key_reaches_every_library() {
     let f = TestFixture::new().await;
@@ -409,4 +865,38 @@ async fn a_session_satisfies_every_capability_but_is_still_classified() {
         )
         .await;
     assert_eq!(resp.status(), 200, "session access to a library route");
+}
+
+/// A read-only ceiling is not only about file writes: an upload link delegates
+/// anonymous write access, and emptying the trash permanently deletes content.
+/// Both must respect the per-library `r` binding.
+#[tokio::test]
+async fn a_read_ceiling_cannot_mint_upload_links() {
+    let f = TestFixture::new().await;
+    let key = create_key(
+        &f,
+        &key_body(
+            &[
+                "library.read",
+                "library.delete",
+                "trash.read",
+                "upload_link.write",
+            ],
+            false,
+            &[(&f.repo_id, "r")],
+        ),
+    )
+    .await;
+
+    for path in ["/api/v2.1/upload-links/", "/api2/upload-links"] {
+        let resp = f
+            .client
+            .post_json(
+                path,
+                Some(&key),
+                &json!({"repo_id": f.repo_id, "path": "/"}),
+            )
+            .await;
+        assert_eq!(resp.status(), 403, "{path} must honour the read ceiling");
+    }
 }

@@ -21,10 +21,20 @@ pub struct SmartLinkQuery {
 /// Returns a smart link URL that redirects to the file's download URL.
 /// The smart link is designed to always point to the latest version of a file.
 pub async fn get_smart_link(
-    _auth: AuthUser,
+    auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Query(query): Query<SmartLinkQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // The library id is a query parameter, so neither the route-table scope
+    // check nor membership is implicit here.
+    auth.ensure_repo_allowed(&query.repo_id, false)?;
+    crate::domain::permission::check_repo_read_permission(
+        state.repos.member.as_ref(),
+        &query.repo_id,
+        auth.user_id,
+    )
+    .await?;
+
     let base_url = state.config().server.site_url_origin();
     let url = link::get_smart_link(&base_url, &query.repo_id, &query.path);
 

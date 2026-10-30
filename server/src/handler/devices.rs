@@ -50,7 +50,9 @@ pub async fn list_devices(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let service = CredentialService::new(state.repos.clone());
-    let inventory = service.inventory(auth.user_id, None).await?;
+    let inventory = service
+        .inventory(auth.user_id, None, &auth.repo_scope())
+        .await?;
 
     let mut entries: Vec<serde_json::Value> = Vec::new();
 
@@ -131,7 +133,9 @@ pub async fn unlink_device(
             .id
             .ok_or_else(|| AppError::BadRequest("id is required with kind".into()))?;
         let service = CredentialService::new(state.repos.clone());
-        service.revoke(auth.user_id, kind, id).await?;
+        service
+            .revoke(auth.user_id, kind, id, &auth.repo_scope())
+            .await?;
         return Ok((
             StatusCode::OK,
             Json(serde_json::json!({"success": true, "revoked": kind.id(), "id": id})),
@@ -148,6 +152,8 @@ pub async fn unlink_device(
     };
 
     let svc = DeviceService::new(state.repos.clone());
-    let result = svc.unlink_device(auth.user_id, platform, device_id).await?;
+    let result = svc
+        .unlink_device(auth.user_id, platform, device_id, &auth.repo_scope())
+        .await?;
     Ok((StatusCode::OK, Json(result)))
 }

@@ -36,7 +36,9 @@ pub async fn list_credentials(
     let service = CredentialService::new(state.repos.clone());
     // No "current session" marker: this surface has no browser, and an API key is not a
     // session.
-    let inventory = service.inventory(auth.user_id, None).await?;
+    let inventory = service
+        .inventory(auth.user_id, None, &auth.repo_scope())
+        .await?;
 
     Ok(Json(json!({
         "client_sessions": inventory
@@ -105,7 +107,9 @@ pub async fn revoke_credential(
     let kind = CredentialKind::from_id(&kind)
         .ok_or_else(|| AppError::BadRequest("unknown credential kind".into()))?;
     let service = CredentialService::new(state.repos.clone());
-    service.revoke(auth.user_id, kind, id).await?;
+    service
+        .revoke(auth.user_id, kind, id, &auth.repo_scope())
+        .await?;
     Ok((
         StatusCode::OK,
         Json(json!({"revoked": kind.id(), "id": id})),

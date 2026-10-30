@@ -2,6 +2,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use crate::Config;
+use crate::domain::permission::RepoScope;
 use crate::fs::core::tree::{read_fs_dir_data, resolve_fs_id};
 use crate::repository::Repositories;
 use crate::service::auth::password::hash_password_async;
@@ -149,7 +150,12 @@ pub(crate) async fn create_share_link_impl(
     expires_at: Option<i64>,
     description: Option<String>,
     creator_id: i32,
+    scope: &RepoScope,
 ) -> Result<ShareLinkInfo, AppError> {
+    if !scope.allows(repo_id) {
+        return Err(AppError::Forbidden);
+    }
+
     let repo_model = repos
         .repo
         .find_by_id(repo_id)
@@ -219,9 +225,10 @@ pub async fn create_share_link(
     password: Option<&str>,
     expires_at: Option<i64>,
     creator_id: i32,
+    scope: &RepoScope,
 ) -> Result<ShareLinkInfo, AppError> {
     create_share_link_impl(
-        repos, config, repo_id, path, password, expires_at, None, creator_id,
+        repos, config, repo_id, path, password, expires_at, None, creator_id, scope,
     )
     .await
 }
@@ -230,7 +237,13 @@ pub async fn delete_share_link(
     repos: &Repositories,
     token: &str,
     user_id: i32,
+    scope: &RepoScope,
 ) -> Result<(), AppError> {
+    if let Some(link) = repos.share_link.find_by_token(token).await?
+        && (link.creator_id != user_id || !scope.allows(&link.repo_id))
+    {
+        return Err(AppError::NotFound("share link not found".into()));
+    }
     repos
         .share_link
         .delete_by_token_and_user(token, user_id)
@@ -247,6 +260,7 @@ pub async fn create_share_link_v21(
     expire_days: Option<i64>,
     description: Option<&str>,
     creator_id: i32,
+    scope: &RepoScope,
 ) -> Result<ShareLinkInfo, AppError> {
     let now = chrono::Utc::now().timestamp();
     let expires_at = expire_days.map(|d| now + d * 86400);
@@ -259,6 +273,7 @@ pub async fn create_share_link_v21(
         expires_at,
         description.map(|s| s.to_string()),
         creator_id,
+        scope,
     )
     .await
 }
@@ -269,13 +284,14 @@ pub async fn get_share_link_v21(
     base_url: &str,
     token: &str,
     user_id: i32,
+    scope: &RepoScope,
 ) -> Result<ShareLinkInfo, AppError> {
     let link = repos
         .share_link
         .find_by_token(token)
         .await?
         .ok_or_else(|| AppError::NotFound("Share link not found".into()))?;
-    if link.creator_id != user_id {
+    if link.creator_id != user_id || !scope.allows(&link.repo_id) {
         return Err(AppError::NotFound("Share link not found".into()));
     }
 
@@ -286,7 +302,14 @@ pub async fn delete_share_link_v21(
     repos: &Repositories,
     token: &str,
     user_id: i32,
+    scope: &RepoScope,
 ) -> Result<bool, AppError> {
+    let Some(link) = repos.share_link.find_by_token(token).await? else {
+        return Ok(false);
+    };
+    if link.creator_id != user_id || !scope.allows(&link.repo_id) {
+        return Err(AppError::NotFound("Share link not found".into()));
+    }
     let result = repos
         .share_link
         .delete_by_token_and_user(token, user_id)
@@ -302,6 +325,7 @@ pub async fn update_share_link_v21(
     password: Option<Option<String>>,
     expire_days: Option<Option<i64>>,
     description: Option<Option<String>>,
+    scope: &RepoScope,
 ) -> Result<ShareLinkInfo, AppError> {
     let now = chrono::Utc::now().timestamp();
 
@@ -310,7 +334,7 @@ pub async fn update_share_link_v21(
         .find_by_token(token)
         .await?
         .ok_or_else(|| AppError::NotFound("Share link not found".into()))?;
-    if link.creator_id != user_id {
+    if link.creator_id != user_id || !scope.allows(&link.repo_id) {
         return Err(AppError::NotFound("Share link not found".into()));
     }
 

@@ -437,10 +437,11 @@ fn route_decision(
     let Some(access) = required_access(method, route) else {
         // Fail closed and leave a trace: a gap in the table is a bug, so it must
         // be observable. `record` answers true only for a route's first hit.
-        if super::route_audit::record(method.as_str(), uri_path) {
+        let safe_path = crate::app::redact_request_path(uri_path);
+        if super::route_audit::record(method.as_str(), &safe_path) {
             tracing::warn!(
                 %method,
-                path = uri_path,
+                path = %safe_path,
                 credential = credential.kind_id(),
                 "credential used on a route with no classification"
             );

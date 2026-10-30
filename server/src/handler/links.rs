@@ -211,6 +211,7 @@ pub async fn create_share_link_v21(
         expire_days,
         req.description.as_deref(),
         auth.user_id,
+        &auth.repo_scope(),
     )
     .await?;
 
@@ -252,6 +253,7 @@ pub async fn get_share_link_v21(
         &state.config().server.site_url,
         &token,
         auth.user_id,
+        &auth.repo_scope(),
     )
     .await?;
 
@@ -301,6 +303,7 @@ pub async fn create_multi_share_link_v21(
         expire_days,
         req.description.as_deref(),
         auth.user_id,
+        &auth.repo_scope(),
     )
     .await?;
 
@@ -337,7 +340,9 @@ pub async fn delete_share_link_v21(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let found = share::delete_share_link_v21(&state.repos, &token, auth.user_id).await?;
+    let found =
+        share::delete_share_link_v21(&state.repos, &token, auth.user_id, &auth.repo_scope())
+            .await?;
     if !found {
         return Err(AppError::NotFound("share link not found".into()));
     }
@@ -359,6 +364,7 @@ pub async fn update_share_link_v21(
         req.password,
         req.expire_days,
         req.description,
+        &auth.repo_scope(),
     )
     .await?;
 
@@ -421,6 +427,9 @@ pub async fn create_upload_link_v21(
     let expire_days = resolve_expire_days(&req)?;
     let has_password = req.password.is_some();
     let path = req.path.clone();
+    // An upload link is anonymous write access: a read-ceiling key must not
+    // mint one even though it is bound to the library.
+    auth.ensure_repo_allowed(&req.repo_id, true)?;
 
     let info = link::create_upload_link_v21(
         &state.repos,
@@ -431,6 +440,7 @@ pub async fn create_upload_link_v21(
         expire_days,
         req.description,
         auth.user_id,
+        &auth.repo_scope(),
     )
     .await?;
 
@@ -462,7 +472,9 @@ pub async fn clean_invalid_upload_links_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let count = link::clean_invalid_upload_links_v21(&state.repos, auth.user_id).await?;
+    let count =
+        link::clean_invalid_upload_links_v21(&state.repos, auth.user_id, &auth.repo_scope())
+            .await?;
     Ok(Json(serde_json::json!({"success": true, "deleted": count})))
 }
 
@@ -477,6 +489,7 @@ pub async fn get_upload_link_v21(
         &state.config().server.site_url,
         &token,
         auth.user_id,
+        &auth.repo_scope(),
     )
     .await?;
     Ok(Json(info))
@@ -497,6 +510,7 @@ pub async fn update_upload_link_v21(
         req.expire_days,
         req.password,
         req.description,
+        &auth.repo_scope(),
     )
     .await?;
 
@@ -519,6 +533,7 @@ pub async fn delete_upload_link_v21(
         &token,
         auth.user_id,
         Some(&state.token_manager),
+        &auth.repo_scope(),
     )
     .await?;
     if !found {

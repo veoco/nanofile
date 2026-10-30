@@ -227,7 +227,7 @@ pub async fn list_deleted_repos(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let repos = trash::list_deleted_repos(&state.repos, auth.user_id).await?;
+    let repos = trash::list_deleted_repos(&state.repos, auth.user_id, &auth.repo_scope()).await?;
 
     let owner_name = state
         .repos
@@ -268,6 +268,10 @@ pub async fn restore_deleted_repo(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let repo_id = parse_repo_id_body(req).await?;
 
+    // The repo id is in the request body, not the URI, so the route-table
+    // library ceiling did not see it.
+    auth.ensure_repo_allowed(&repo_id, true)?;
+
     trash::restore_deleted_repo(state.db.as_ref(), &state.repos, &repo_id, auth.user_id).await?;
 
     Ok(ok_json())
@@ -297,11 +301,23 @@ pub async fn purge_deleted_repos(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // The service can only see the library ids; resolve which of them this
+    // credential may write to before handing over the set.
+    let writable: std::collections::HashSet<String> =
+        trash::list_deleted_repos(&state.repos, auth.user_id, &auth.repo_scope())
+            .await?
+            .into_iter()
+            .filter(|row| auth.ensure_repo_allowed(&row.repo_id, true).is_ok())
+            .map(|row| row.repo_id)
+            .collect();
+
     let purged = trash::purge_deleted_repos_of_owner(
         state.db.as_ref(),
         &state.repos,
         &state.block_store,
         auth.user_id,
+        &auth.repo_scope(),
+        &writable,
     )
     .await?;
 

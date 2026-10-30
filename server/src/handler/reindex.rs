@@ -55,6 +55,10 @@ pub async fn index_file_text(
 
     let svc = state.admin_service();
 
+    // The repo id arrives in the JSON body, so the path-based key guard never
+    // sees it: enforce the key's library scope before touching the index.
+    auth.ensure_repo_allowed(&req.repo_id, true)?;
+
     // Only repo owner or admin may modify the index.
     svc.check_repo_admin(&req.repo_id, auth.user_id).await?;
 
@@ -82,6 +86,9 @@ pub async fn reindex(
     Json(req): Json<ReindexRequest>,
 ) -> Result<Json<ReindexResponse>, AppError> {
     let svc = state.admin_service();
+
+    // The repo id arrives in the JSON body; see `index_file_text`.
+    auth.ensure_repo_allowed(&req.repo_id, true)?;
 
     svc.check_repo_admin(&req.repo_id, auth.user_id).await?;
 

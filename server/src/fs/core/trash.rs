@@ -5,6 +5,7 @@ use sea_orm::{
 use serde::Serialize;
 use std::collections::HashMap;
 
+use crate::domain::permission::RepoScope;
 use crate::fs::core::file_ops::FileOps;
 use crate::repository::Repositories;
 use base::common::DirEntryData;
@@ -869,8 +870,11 @@ pub async fn add_deleted_repo(
 pub async fn list_deleted_repos(
     repos: &Repositories,
     user_id: i32,
+    scope: &RepoScope,
 ) -> Result<Vec<deleted_repo::Model>, AppError> {
-    repos.deleted_repo.find_by_owner(user_id).await
+    let mut rows = repos.deleted_repo.find_by_owner(user_id).await?;
+    rows.retain(|row| scope.allows(&row.repo_id));
+    Ok(rows)
 }
 
 /// Restore a repo from trash: re-insert it, copy the archived content (commit
@@ -1046,10 +1050,17 @@ pub async fn purge_deleted_repos_of_owner(
     repos: &Repositories,
     block_store: &DynBlockStorage,
     user_id: i32,
+    scope: &RepoScope,
+    writable: &std::collections::HashSet<String>,
 ) -> Result<u64, AppError> {
     let trashed = repos.deleted_repo.find_by_owner(user_id).await?;
     let mut purged = 0u64;
     for row in &trashed {
+        // A key bound to one library must not empty another library's trash,
+        // and a read-ceiling key must not permanently delete anything.
+        if !scope.allows(&row.repo_id) || !writable.contains(&row.repo_id) {
+            continue;
+        }
         purge_deleted_repo(db, repos, block_store, &row.repo_id, user_id).await?;
         purged += 1;
     }

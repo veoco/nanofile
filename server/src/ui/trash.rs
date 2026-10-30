@@ -132,16 +132,20 @@ pub async fn trash_list_page(
 
     // Deleted libraries live in their own tab; the list is per owner and short
     // (one row per deleted library), so it is always loaded for the tab count.
-    let deleted_repos: Vec<DeletedRepoView> = trash::list_deleted_repos(&state.repos, user.user_id)
-        .await?
-        .into_iter()
-        .map(|r| DeletedRepoView {
-            repo_id: r.repo_id,
-            repo_name: r.repo_name,
-            size_display: format_size(r.size),
-            deleted_time_ts: r.del_time,
-        })
-        .collect();
+    let deleted_repos: Vec<DeletedRepoView> = trash::list_deleted_repos(
+        &state.repos,
+        user.user_id,
+        &crate::domain::permission::RepoScope::all(),
+    )
+    .await?
+    .into_iter()
+    .map(|r| DeletedRepoView {
+        repo_id: r.repo_id,
+        repo_name: r.repo_name,
+        size_display: format_size(r.size),
+        deleted_time_ts: r.del_time,
+    })
+    .collect();
 
     let active_tab = query
         .tab

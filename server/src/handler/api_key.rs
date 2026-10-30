@@ -112,7 +112,7 @@ pub async fn create_api_key(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateApiKeyRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<(axum::http::HeaderMap, Json<serde_json::Value>), AppError> {
     let expires = expiry_of(body.never, body.expires_in_days, body.expires_at)?;
     let created = ApiKeyService::create(
         &state.repos,
@@ -137,7 +137,18 @@ pub async fn create_api_key(
 
     let mut response = view_json(&created.view);
     response["key"] = json!(created.secret);
-    Ok(Json(response))
+    // The plaintext secret appears exactly once in this response; never let a
+    // browser or intermediary keep it in a cache.
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    headers.insert(
+        axum::http::header::PRAGMA,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    Ok((headers, Json(response)))
 }
 
 pub async fn get_api_key(

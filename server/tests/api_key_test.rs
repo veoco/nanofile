@@ -29,6 +29,11 @@ async fn create_list_get_and_revoke() {
 
     let resp = create(&f, &bound_body(&f)).await;
     assert_eq!(resp.status(), 200, "create failed");
+    assert_eq!(
+        resp.headers().get("cache-control").unwrap(),
+        "no-store",
+        "the one-time plaintext key must not be cached"
+    );
     let created: Value = resp.json().await.unwrap();
     let secret = created["key"].as_str().expect("plaintext key").to_string();
     assert_eq!(secret.len(), 40, "keys are 40 hex characters");

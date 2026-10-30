@@ -352,5 +352,14 @@ pub async fn qr_code_image(
         .light_color(qrcode::render::svg::Color("#ffffff"))
         .build();
 
-    Ok(([("Content-Type", "image/svg+xml; charset=utf-8")], svg))
+    Ok((
+        [
+            ("Content-Type", "image/svg+xml; charset=utf-8"),
+            // The QR encodes the current user's TOTP seed at a shared URL; a
+            // shared cache keyed on that URL must not hand it to anyone else.
+            ("Cache-Control", "private, no-store"),
+            ("Pragma", "no-cache"),
+        ],
+        svg,
+    ))
 }

@@ -74,6 +74,10 @@ pub async fn star_item(
         }
     };
 
+    // A key's library scope is a ceiling, and the repo arrives in the body
+    // rather than the URI, so the route-table guard never sees it.
+    auth.ensure_repo_allowed(&req.repo_id, false)?;
+
     // Permission check
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
@@ -96,6 +100,7 @@ pub async fn unstar_item(
     Query(query): Query<UnstarQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Permission check (matches star_item)
+    auth.ensure_repo_allowed(&query.repo_id, false)?;
     crate::domain::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         &query.repo_id,

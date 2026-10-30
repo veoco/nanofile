@@ -949,3 +949,89 @@ async fn test_upload_link_clean_invalid_removes_expired() {
         .await;
     assert_eq!(gone.status(), 404);
 }
+
+/// An upload link is an add-only capability: the public page never sends
+/// `replace=1`, and a hand-crafted request must not turn it into an overwrite
+/// primitive for files the link creator already had in the directory.
+#[tokio::test]
+async fn upload_link_replace_does_not_overwrite_existing_file() {
+    let f = TestFixture::new().await;
+
+    let seed = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "link.txt", b"original")
+        .await;
+    assert!(seed.status().is_success(), "seed the original file");
+
+    let created = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "path": "/",
+            }),
+        )
+        .await;
+    assert_eq!(created.status(), 200, "create upload link");
+    let token = created.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let url_resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/upload-links/{token}/upload/"),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(url_resp.status(), 200, "mint an anonymous upload URL");
+    let upload_url = url_resp.json::<serde_json::Value>().await.unwrap()["upload_link"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let file_part = reqwest::multipart::Part::bytes(b"replaced".to_vec())
+        .file_name("link.txt".to_string())
+        .mime_str("text/plain")
+        .unwrap();
+    let form = reqwest::multipart::Form::new()
+        .part("file", file_part)
+        .text("parent_dir", "/");
+    let anonymous = reqwest::Client::builder().no_proxy().build().unwrap();
+    let resp = anonymous
+        .post(format!("{}{}?replace=1", f.server.base_url, upload_url))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "anonymous upload should still succeed");
+
+    let content = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/link.txt")
+        .await
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(
+        content.as_ref(),
+        b"original",
+        "an upload link must not overwrite an existing file"
+    );
+
+    let listing = f
+        .client
+        .list_dir(&f.api_token, &f.repo_id, "/")
+        .await
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()
+        .to_string();
+    assert!(
+        listing.contains("link (1).txt"),
+        "the new upload should get a unique name: {listing}"
+    );
+}

@@ -60,6 +60,14 @@ fn compute_scoped_target_dir(
     }
 }
 
+/// Upload links are add-only: the public page never sends `replace=1`, and an
+/// anonymous holder must not be able to overwrite files the link creator already
+/// had in the target directory. Session/token uploads that are not links keep
+/// the normal replace semantics.
+fn scoped_replace(requested: bool, upload_link_id: Option<i32>) -> bool {
+    requested && upload_link_id.is_none()
+}
+
 /// Parse seafile's `replace` argument from the URL query (the `upload-link`
 /// endpoint appends `?replace=1`) or a multipart form field, as upstream's
 /// `r.FormValue("replace")` does. Absent, `0` or `false` keeps both (the new
@@ -1276,10 +1284,13 @@ pub async fn upload_aj_token(
         .unwrap_or("");
     let target_dir = compute_scoped_target_dir(&info, parent_dir, relative_path)?;
     let query = query_params(&uri);
-    let replace = parse_replace_arg(
-        query.get("replace").map(String::as_str),
-        fields.get("replace").map(String::as_str),
-    )?;
+    let replace = scoped_replace(
+        parse_replace_arg(
+            query.get("replace").map(String::as_str),
+            fields.get("replace").map(String::as_str),
+        )?,
+        info.upload_link_id,
+    );
 
     if is_chunked {
         let file_data = bytes::Bytes::from(chunked_file_data.unwrap_or_default());
@@ -1460,10 +1471,13 @@ pub async fn upload_api(
         .unwrap_or_else(|| info.parent_dir.clone());
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
     let target_dir = compute_scoped_target_dir(&info, &parent_dir, &relative_path)?;
-    let replace = parse_replace_arg(
-        query.get("replace").map(String::as_str),
-        fields.get("replace").map(String::as_str),
-    )?;
+    let replace = scoped_replace(
+        parse_replace_arg(
+            query.get("replace").map(String::as_str),
+            fields.get("replace").map(String::as_str),
+        )?,
+        info.upload_link_id,
+    );
     // Only `/upload-api` honours `ret-json`; official Android/desktop clients
     // read the plain-text body as the file id, so the default stays plain text.
     let ret_json = wants_ret_json(&query, &fields);
@@ -1925,7 +1939,12 @@ pub async fn upload_blks_api(
             .get("file_size")
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| AppError::BadRequest("file_size required for commit".into()))?;
-        let replace = fields.get("replace").map(|s| s.as_str()) == Some("1");
+        // Link tokens cannot reach this operation today, but keep the add-only
+        // rule here too so a future token type cannot inherit overwrite.
+        let replace = scoped_replace(
+            fields.get("replace").map(|s| s.as_str()) == Some("1"),
+            info.upload_link_id,
+        );
 
         let block_ids: Vec<String> = serde_json::from_str(blockids_str)
             .map_err(|_| AppError::BadRequest("invalid blockids JSON array".into()))?;

@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::domain::permission::RepoScope;
 use crate::domain::session_source::SessionSource;
 use crate::repository::Repositories;
 use crate::ui::user_agent;
@@ -252,9 +253,19 @@ impl CredentialService {
         &self,
         user_id: i32,
         current_session_id: Option<i32>,
+        scope: &RepoScope,
     ) -> Result<CredentialInventory, AppError> {
         let sessions = self.repos.api_token.list_sessions(user_id).await?;
-        let tokens = self.repos.sync_token.list_for_user(user_id).await?;
+        // A key bound to one library must not learn the metadata of sync tokens
+        // for the account's other libraries.
+        let tokens: Vec<_> = self
+            .repos
+            .sync_token
+            .list_for_user(user_id)
+            .await?
+            .into_iter()
+            .filter(|token| scope.allows(&token.repo_id))
+            .collect();
         let trusts = self.repos.s2fa_token.list_for_user(user_id).await?;
         let key_count = self.repos.api_key.find_by_user(user_id).await?.len();
 
@@ -362,6 +373,7 @@ impl CredentialService {
         user_id: i32,
         kind: CredentialKind,
         id: i32,
+        scope: &RepoScope,
     ) -> Result<(), AppError> {
         let removed = match kind {
             CredentialKind::BrowserSession => {
@@ -371,6 +383,17 @@ impl CredentialService {
                     .await?
             }
             CredentialKind::SyncToken => {
+                let token = self
+                    .repos
+                    .sync_token
+                    .list_for_user(user_id)
+                    .await?
+                    .into_iter()
+                    .find(|token| token.id == id)
+                    .ok_or_else(|| AppError::NotFound("no such credential".into()))?;
+                if !scope.allows(&token.repo_id) {
+                    return Err(AppError::NotFound("no such credential".into()));
+                }
                 self.repos
                     .sync_token
                     .delete_by_id_and_user(id, user_id)

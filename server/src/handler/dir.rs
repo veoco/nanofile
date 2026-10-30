@@ -2,7 +2,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::Request,
     response::{IntoResponse, Response},
 };
@@ -315,8 +315,15 @@ pub struct MoveDirRequest {
 pub async fn move_dir(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
+    Path(path_repo_id): Path<String>,
     Json(req): Json<MoveDirRequest>,
 ) -> Result<(), AppError> {
+    if path_repo_id != req.repo_id {
+        return Err(AppError::BadRequest(
+            "repo_id does not match the path".into(),
+        ));
+    }
+    auth.ensure_repo_allowed(&req.repo_id, true)?;
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
         &req.repo_id,
@@ -348,8 +355,15 @@ pub struct RenameDirRequest {
 pub async fn rename_dir(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
+    Path(path_repo_id): Path<String>,
     Json(req): Json<RenameDirRequest>,
 ) -> Result<(), AppError> {
+    if path_repo_id != req.repo_id {
+        return Err(AppError::BadRequest(
+            "repo_id does not match the path".into(),
+        ));
+    }
+    auth.ensure_repo_allowed(&req.repo_id, true)?;
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
         &req.repo_id,

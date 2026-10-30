@@ -240,6 +240,7 @@ pub async fn create_share(
         None,
         None,
         user.user_id,
+        &crate::domain::permission::RepoScope::all(),
     )
     .await?;
 

@@ -48,6 +48,9 @@ pub async fn create_upload_link(
     Json(req): Json<CreateUploadLinkRequest>,
 ) -> Result<Json<link::UploadLinkInfo>, AppError> {
     crate::middleware::ensure_share_upload_enabled(&state)?;
+    // Issuing an upload link delegates anonymous write access, so the key's
+    // per-library ceiling must be checked at write level, not just for scope.
+    auth.ensure_repo_allowed(&req.repo_id, true)?;
     let info = link::create_upload_link(
         &state.repos,
         &state.config(),
@@ -56,6 +59,7 @@ pub async fn create_upload_link(
         req.password.as_deref(),
         req.expires_at,
         auth.user_id,
+        &auth.repo_scope(),
     )
     .await?;
     Ok(Json(info))
@@ -71,6 +75,7 @@ pub async fn delete_upload_link(
         &token,
         auth.user_id,
         Some(&state.token_manager),
+        &auth.repo_scope(),
     )
     .await?;
     Ok(ok_json())

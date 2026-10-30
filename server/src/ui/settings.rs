@@ -47,7 +47,11 @@ pub async fn build_nav(
 ) -> Result<SettingsNav, AppError> {
     let service = CredentialService::new(state.repos.clone());
     let inventory = service
-        .inventory(user.user_id, Some(user.session_id))
+        .inventory(
+            user.user_id,
+            Some(user.session_id),
+            &crate::domain::permission::RepoScope::all(),
+        )
         .await?;
     let two_fa = state.repos.user_2fa.find_by_user_id(user.user_id).await?;
     Ok(SettingsNav {
@@ -101,7 +105,11 @@ pub async fn settings_page(
 
     let service = CredentialService::new(state.repos.clone());
     let inventory = service
-        .inventory(user.user_id, Some(user.session_id))
+        .inventory(
+            user.user_id,
+            Some(user.session_id),
+            &crate::domain::permission::RepoScope::all(),
+        )
         .await?;
     let mut summary = inventory.summary.clone();
     summary.two_fa_enabled = two_fa_enabled;
@@ -551,7 +559,11 @@ async fn render_credentials(
 ) -> Result<Html<String>, AppError> {
     let service = CredentialService::new(state.repos.clone());
     let inventory = service
-        .inventory(user.user_id, Some(user.session_id))
+        .inventory(
+            user.user_id,
+            Some(user.session_id),
+            &crate::domain::permission::RepoScope::all(),
+        )
         .await?;
     let mut summary = inventory.summary.clone();
     summary.two_fa_enabled = two_fa_enabled;
@@ -734,7 +746,15 @@ pub async fn revoke_credential(
     let signing_out_self = kind == CredentialKind::BrowserSession && form.id == user.session_id;
 
     let service = CredentialService::new(state.repos.clone());
-    if let Err(err) = service.revoke(user.user_id, kind, form.id).await {
+    if let Err(err) = service
+        .revoke(
+            user.user_id,
+            kind,
+            form.id,
+            &crate::domain::permission::RepoScope::all(),
+        )
+        .await
+    {
         return render_credentials_error(&state, &user, err).await;
     }
 

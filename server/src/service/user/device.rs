@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::domain::permission::RepoScope;
 use crate::repository::Repositories;
 use base::error::AppError;
 
@@ -24,6 +25,7 @@ impl DeviceService {
         user_id: i32,
         platform: &str,
         device_id: &str,
+        scope: &RepoScope,
     ) -> Result<serde_json::Value, AppError> {
         let deleted_api = self
             .repos
@@ -37,11 +39,19 @@ impl DeviceService {
             .delete_by_user_and_device(user_id, device_id)
             .await?;
 
-        let deleted_sync = self
-            .repos
-            .sync_token
-            .delete_by_user_and_peer(user_id, device_id)
-            .await?;
+        // A key bound to one library must not revoke sync tokens for another.
+        // Delete the device's allowed tokens one by one; a restricted key leaves
+        // the out-of-scope rows in place for their owner to manage.
+        let mut deleted_sync = 0u64;
+        for token in self.repos.sync_token.list_for_user(user_id).await? {
+            if token.peer_id.as_deref() == Some(device_id) && scope.allows(&token.repo_id) {
+                deleted_sync += self
+                    .repos
+                    .sync_token
+                    .delete_by_id_and_user(token.id, user_id)
+                    .await?;
+            }
+        }
 
         Ok(serde_json::json!({
             "success": true,

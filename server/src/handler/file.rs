@@ -375,8 +375,17 @@ pub struct MoveRequest {
 pub async fn move_file(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
+    Path(path_repo_id): Path<String>,
     Json(req): Json<MoveRequest>,
 ) -> Result<(), AppError> {
+    // The route guard only sees the repo id in the URI; a key must also cover
+    // the repo the body actually names. The two are the same repo by protocol.
+    if path_repo_id != req.repo_id {
+        return Err(AppError::BadRequest(
+            "repo_id does not match the path".into(),
+        ));
+    }
+    auth.ensure_repo_allowed(&req.repo_id, true)?;
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
         &req.repo_id,
@@ -410,8 +419,15 @@ pub struct RenameRequest {
 pub async fn rename_file(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
+    Path(path_repo_id): Path<String>,
     Json(req): Json<RenameRequest>,
 ) -> Result<(), AppError> {
+    if path_repo_id != req.repo_id {
+        return Err(AppError::BadRequest(
+            "repo_id does not match the path".into(),
+        ));
+    }
+    auth.ensure_repo_allowed(&req.repo_id, true)?;
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
         &req.repo_id,

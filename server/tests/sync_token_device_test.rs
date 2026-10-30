@@ -159,7 +159,12 @@ async fn two_devices_hold_their_own_token_and_unlinking_one_keeps_the_other() {
     );
 
     DeviceService::new(f.server.repos.clone())
-        .unlink_device(f.user_id, "linux", "dev-a")
+        .unlink_device(
+            f.user_id,
+            "linux",
+            "dev-a",
+            &server::domain::permission::RepoScope::all(),
+        )
         .await
         .expect("unlink dev-a");
 
