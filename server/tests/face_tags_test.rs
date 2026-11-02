@@ -187,7 +187,10 @@ async fn an_avif_portrait_is_decoded_and_scanned() {
         common::sandbox::without_ffmpeg();
         return;
     }
-    let f = common::TestFixture::new_with_face_tags().await;
+    // The absolute helper, not a bare name: the grant names one file, and a
+    // package manager's shim or a PATH entry must not stand in for it.
+    let f =
+        common::TestFixture::new_with_face_tags_and_media_helper(common::sandbox::helper()).await;
     let bytes = include_bytes!("fixtures/face_tags/portrait.avif");
     let resp = f
         .client

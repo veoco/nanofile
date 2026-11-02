@@ -541,6 +541,32 @@ impl TestServer {
         .await
     }
 
+    /// Start a server with automatic people tags enabled, no backfill, and the
+    /// media helper set to the absolute path a HEIC/AVIF scan needs.
+    pub async fn start_with_face_tags_and_media_helper(path: &str) -> Self {
+        let path = path.to_string();
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            move |config| {
+                config.face_tags.enabled = true;
+                config.face_tags.backfill_enabled = false;
+                config.storage.ffmpeg_path = path;
+            },
+        )
+        .await
+    }
+
     /// Start a server with automatic people tags enabled and no backfill.
     pub async fn start_with_face_tags() -> Self {
         Self::start_full_tweaked(
@@ -1463,7 +1489,17 @@ impl TestFixture {
 
     /// Create a test environment with automatic people tags enabled.
     pub async fn new_with_face_tags() -> Self {
-        let server = TestServer::start_with_face_tags().await;
+        Self::face_tags_fixture(TestServer::start_with_face_tags().await).await
+    }
+
+    /// The same, with the media helper an absolute path: a HEIC/HEIF/AVIF scan
+    /// decodes the still through it before the detector sees the bytes.
+    pub async fn new_with_face_tags_and_media_helper(path: &str) -> Self {
+        Self::face_tags_fixture(TestServer::start_with_face_tags_and_media_helper(path).await).await
+    }
+
+    /// The fixture body the two people-tag constructors share.
+    async fn face_tags_fixture(server: TestServer) -> Self {
         let client = server.client();
         let db = &*server.db;
 
