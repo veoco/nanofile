@@ -178,3 +178,55 @@ fn record_id_for(path: &str) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+
+/// HEIC/HEIF/AVIF are decoded by the media profile first, then scanned; the
+/// `image` crate cannot read them, so this is the path that used to be skipped.
+#[tokio::test]
+async fn an_avif_portrait_is_decoded_and_scanned() {
+    if !common::sandbox::helper_runs() {
+        common::sandbox::without_ffmpeg();
+        return;
+    }
+    let f = common::TestFixture::new_with_face_tags().await;
+    let bytes = include_bytes!("fixtures/face_tags/portrait.avif");
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "portrait.avif", bytes)
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed");
+
+    let db = &*f.server.db;
+    let finished = wait_for(Duration::from_secs(60), || async {
+        let scan = infra::entity::face_tag_scan::Entity::find()
+            .filter(infra::entity::face_tag_scan::Column::RepoId.eq(&f.repo_id))
+            .filter(infra::entity::face_tag_scan::Column::FilePath.eq("/portrait.avif"))
+            .one(db)
+            .await
+            .ok()
+            .flatten();
+        scan.is_some_and(|row| row.status != "failed" && row.face_count >= 1)
+    })
+    .await;
+    if !finished {
+        let scans = infra::entity::face_tag_scan::Entity::find()
+            .all(db)
+            .await
+            .expect("scans");
+        eprintln!("face scans: {scans:?}");
+    }
+    assert!(
+        finished,
+        "a HEIC/HEIF/AVIF portrait must be decoded and scanned"
+    );
+
+    let tags = infra::entity::repo_tag::Entity::find()
+        .filter(infra::entity::repo_tag::Column::RepoId.eq(&f.repo_id))
+        .all(db)
+        .await
+        .expect("tags");
+    assert!(
+        tags.iter()
+            .any(|tag| tag.label_key.as_deref() == Some("person_single")),
+        "one face is the single-person tag"
+    );
+}

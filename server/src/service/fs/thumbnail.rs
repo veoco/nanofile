@@ -1,10 +1,8 @@
-use futures::StreamExt;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::process::Command;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 
 use crate::fs::core::download::Downloader;
 use crate::fs::core::tree::resolve_file_entry;
@@ -311,19 +309,12 @@ impl ThumbnailService {
             .write_media_scratch(repo_id, normalized_path, &file_data.block_ids, head_cap)
             .await?
         {
-            match Self::run_media_thumbnail(kind, &source, size, &ffmpeg).await {
-                Ok(ok) => {
-                    let _ = tokio::fs::remove_file(&source).await;
-                    return Ok(ok);
-                }
+            match Self::run_media_thumbnail(kind, source.path(), size, &ffmpeg).await {
+                Ok(ok) => return Ok(ok),
                 // A panic is a worker failure, not an unthumbnailable file: propagate it.
-                Err(AppError::Internal(e)) => {
-                    let _ = tokio::fs::remove_file(&source).await;
-                    return Err(AppError::Internal(e));
-                }
-                Err(_) => {
-                    let _ = tokio::fs::remove_file(&source).await;
-                }
+                Err(AppError::Internal(e)) => return Err(AppError::Internal(e)),
+                // The scratch file is removed with its guard.
+                Err(_) => {}
             }
         }
 
@@ -344,18 +335,10 @@ impl ThumbnailService {
             None
         };
         if let Some(source) = fallback {
-            match Self::run_media_thumbnail(kind, &source, size, &ffmpeg).await {
-                Ok(ok) => {
-                    let _ = tokio::fs::remove_file(&source).await;
-                    return Ok(ok);
-                }
-                Err(AppError::Internal(e)) => {
-                    let _ = tokio::fs::remove_file(&source).await;
-                    return Err(AppError::Internal(e));
-                }
-                Err(_) => {
-                    let _ = tokio::fs::remove_file(&source).await;
-                }
+            match Self::run_media_thumbnail(kind, source.path(), size, &ffmpeg).await {
+                Ok(ok) => return Ok(ok),
+                Err(AppError::Internal(e)) => return Err(AppError::Internal(e)),
+                Err(_) => {}
             }
         }
 
@@ -365,63 +348,33 @@ impl ThumbnailService {
     /// Stream at most `cap` bytes of a file into a fresh, unique scratch file.
     ///
     /// Returns `Ok(None)` on a write or stream error (nothing usable was written), which the
-    /// caller treats as an unthumbnailable file.
+    /// caller treats as an unthumbnailable file. The file is removed with the guard.
     async fn write_media_scratch(
         &self,
         repo_id: &str,
         normalized_path: &str,
         block_ids: &[String],
         cap: u64,
-    ) -> Result<Option<PathBuf>, AppError> {
-        let scratch_dir = self.temp_dir.join("media_thumbs");
-        tokio::fs::create_dir_all(&scratch_dir)
-            .await
-            .map_err(|e| AppError::Internal(format!("create scratch dir failed: {e}")))?;
-        // Unique per request, so concurrent misses for one path cannot truncate each other's stream.
-        let scratch = scratch_dir.join(format!(
-            "{}_{}_{}.bin",
+    ) -> Result<Option<crate::service::fs::scratch::ScratchFile>, AppError> {
+        let stem = format!(
+            "{}_{}",
             thumbnail_dir_name(repo_id),
-            thumbnail_key(repo_id, normalized_path),
-            uuid::Uuid::new_v4()
-        ));
-
-        let written: Result<(), std::io::Error> = async {
-            let mut out = tokio::fs::File::create(&scratch).await?;
-            let mut stream = crate::fs::core::download::stream_blocks(
-                repo_id.to_string(),
-                block_ids.to_vec(),
-                self.block_store.clone(),
-                None,
-            );
-            let mut total: u64 = 0;
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                let remaining = cap.saturating_sub(total);
-                if remaining == 0 {
-                    break;
-                }
-                let take = remaining.min(chunk.len() as u64) as usize;
-                out.write_all(&chunk[..take]).await?;
-                total += take as u64;
-                if take < chunk.len() {
-                    break;
-                }
-            }
-            out.flush().await
-        }
-        .await;
-
-        match written {
-            Ok(()) => Ok(Some(scratch)),
-            Err(_) => {
-                let _ = tokio::fs::remove_file(&scratch).await;
-                Ok(None)
-            }
-        }
+            thumbnail_key(repo_id, normalized_path)
+        );
+        crate::service::fs::scratch::write_blocks(
+            &self.temp_dir.join("media_thumbs"),
+            &stem,
+            "bin",
+            repo_id,
+            block_ids,
+            &self.block_store,
+            cap,
+        )
+        .await
     }
 
     /// Hand a scratch file to the confined media worker and map its answer onto the service's
-    /// result type. The caller removes the scratch on either outcome, including a worker panic.
+    /// result type. The scratch file is owned by its guard, so a worker panic cannot leak it.
     async fn run_media_thumbnail(
         kind: MediaKind,
         source: &Path,
@@ -628,7 +581,9 @@ fn cache_file_size(name: &str) -> Option<u32> {
 fn max_ffmpeg_source(kind: MediaKind) -> i64 {
     match kind {
         MediaKind::Image => 256 * 1024 * 1024,
-        MediaKind::Video | MediaKind::Audio => 512 * 1024 * 1024,
+        // The face scan hands the parent's own capped bytes to the media worker, so
+        // no source this path writes is that large; the arm keeps the match whole.
+        MediaKind::Video | MediaKind::Audio | MediaKind::Still => 512 * 1024 * 1024,
     }
 }
 
@@ -640,7 +595,7 @@ const MEDIA_HEAD_BYTES: u64 = 32 * 1024 * 1024;
 
 fn media_head_cap(kind: MediaKind) -> u64 {
     match kind {
-        MediaKind::Image => max_ffmpeg_source(kind) as u64,
+        MediaKind::Image | MediaKind::Still => max_ffmpeg_source(kind) as u64,
         MediaKind::Video | MediaKind::Audio => MEDIA_HEAD_BYTES,
     }
 }

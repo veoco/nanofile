@@ -5,6 +5,7 @@ pub mod fileops;
 pub(crate) mod index_sync;
 pub mod metadata;
 pub mod quota;
+pub(crate) mod scratch;
 pub mod search;
 pub mod starred;
 pub mod thumbnail;

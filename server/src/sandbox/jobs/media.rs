@@ -6,10 +6,13 @@
 //! substitute another.
 //!
 //! The parent writes the media to a scratch file — ffmpeg has to seek a container — and hands
-//! over that path; the child decodes a frame and answers with the encoded thumbnail.
+//! over that path; the child decodes a frame and answers with the encoded thumbnail. The
+//! `Still` kind is the same run without the resize: the people-tag scan asks for one decodable
+//! frame of a HEIC/HEIF/AVIF image and hands it to the detector's own worker.
 //!
 //! Request: `NFX1`, one kind byte, a little-endian `u32` target size, a little-endian `u16`
-//! path length and that many path bytes. Reply: the common frame, `P`/`J` or `U`.
+//! path length and that many path bytes. Reply: the common frame, `P`/`J` for an image, `E`
+//! when the environment refused and `U` when the file did.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -25,8 +28,12 @@ pub enum Kind {
     Video,
     /// The embedded cover art (attached picture) of an audio file.
     Audio,
-    /// A still image (HEIC/HEIF/AVIF) decoded by ffmpeg's image demuxer.
+    /// A still image (HEIC/HEIF/AVIF) decoded by ffmpeg's image demuxer, for a
+    /// thumbnail.
     Image,
+    /// A still image decoded for the face detector: no thumbnail resize, and its
+    /// own, larger size ceiling.
+    Still,
 }
 
 impl Kind {
@@ -35,6 +42,7 @@ impl Kind {
             Kind::Video => b'V',
             Kind::Audio => b'A',
             Kind::Image => b'I',
+            Kind::Still => b'S',
         }
     }
 
@@ -43,6 +51,7 @@ impl Kind {
             b'V' => Kind::Video,
             b'A' => Kind::Audio,
             b'I' => Kind::Image,
+            b'S' => Kind::Still,
             _ => return None,
         })
     }
@@ -51,6 +60,17 @@ impl Kind {
 /// Most bytes of a frame the child will hold. A single frame of a video is at
 /// most a few megabytes even before the resize; this bounds the pipe read.
 const MAX_FRAME_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Most bytes of a still decoded for the detector: the parent's reply cap is 9 MiB,
+/// and a JPEG at 4096 px stays far below this.
+const MAX_STILL_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The long edge a still is decoded to.
+///
+/// It matches what the detector's own source cap accepts (8192 is the image crate's
+/// bound; 4096 keeps a phone photo at its true pixels and still bounds the JPEG) and
+/// keeps the parent's reply under its cap.
+const STILL_MAX_EDGE: u32 = 4096;
 
 const MAX_PATH_BYTES: usize = 4096;
 
@@ -101,13 +121,57 @@ pub fn thumbnail(
         RunOutcome::Reply { tag, body } => match tag {
             b'P' => Ok((body, ThumbFormat::Png)),
             b'J' => Ok((body, ThumbFormat::Jpeg)),
-            b'U' => Err(String::from_utf8_lossy(&body).into_owned()),
+            // `E` is the environment and `U` the file; a thumbnail treats both as
+            // "no thumbnail", the caller that cares uses `still`.
+            b'U' | b'E' => Err(String::from_utf8_lossy(&body).into_owned()),
             _ => Err(format!(
                 "the media worker answered with an unknown tag {tag:?}"
             )),
         },
         RunOutcome::Unavailable(why) => Err(why),
         RunOutcome::Failed(why) => Err(why.to_string()),
+    }
+}
+
+/// Why a still decode produced no frame, kept apart because the caller records them
+/// differently: an environment problem is retried, a verdict on the bytes is not.
+#[derive(Debug)]
+pub(crate) enum StillError {
+    /// The media profile or its helper could not run: retry later.
+    Unavailable(String),
+    /// The child refused the file itself: too large, or not something its ffmpeg can
+    /// decode. A verdict on the bytes, not retried.
+    Refused(String),
+    /// The child died, timed out, or answered with something else.
+    Failed(String),
+}
+
+/// Decode one still image through the media profile, for the detector.
+///
+/// The answer is JPEG at up to [`STILL_MAX_EDGE`] on its long edge — the source the
+/// face worker decodes. HEIC/HEIF/AVIF are the formats the `image` crate cannot read.
+pub(crate) fn still(source: &Path, ffmpeg: &Path) -> Result<Vec<u8>, StillError> {
+    let source = granted_source(source);
+    let request = request(Kind::Still, 0, &source).map_err(StillError::Failed)?;
+    let grants = Grants {
+        helper: Some(ffmpeg),
+        source: Some(&source),
+    };
+    match worker::run_request(Profile::Media, worker::MEDIA_TIMEOUT, request, grants) {
+        RunOutcome::Reply { tag, body } => match tag {
+            b'J' => Ok(body),
+            b'E' => Err(StillError::Unavailable(
+                String::from_utf8_lossy(&body).into_owned(),
+            )),
+            b'U' => Err(StillError::Refused(
+                String::from_utf8_lossy(&body).into_owned(),
+            )),
+            _ => Err(StillError::Failed(format!(
+                "the media worker answered with an unknown tag {tag:?}"
+            ))),
+        },
+        RunOutcome::Unavailable(why) => Err(StillError::Unavailable(why)),
+        RunOutcome::Failed(why) => Err(StillError::Failed(why.to_string())),
     }
 }
 
@@ -166,10 +230,17 @@ pub fn serve(grants: Grants<'_>) -> anyhow::Result<()> {
         return worker::write_frame(b'U', b"the media profile has no helper grant");
     };
 
-    let (tag, body) = match encoded_thumbnail(helper, kind, &source, size) {
-        Ok((bytes, ThumbFormat::Png)) => (b'P', bytes),
-        Ok((bytes, ThumbFormat::Jpeg)) => (b'J', bytes),
-        Err(why) => (b'U', why.message().as_bytes().to_vec()),
+    let (tag, body) = match kind {
+        Kind::Still => match still_frame(helper, &source) {
+            Ok(bytes) => (b'J', bytes),
+            Err(FrameError::Unavailable(why)) => (b'E', why.into_bytes()),
+            Err(FrameError::Failed(why)) => (b'U', why.into_bytes()),
+        },
+        _ => match encoded_thumbnail(helper, kind, &source, size) {
+            Ok((bytes, ThumbFormat::Png)) => (b'P', bytes),
+            Ok((bytes, ThumbFormat::Jpeg)) => (b'J', bytes),
+            Err(why) => (b'U', why.message().as_bytes().to_vec()),
+        },
     };
     worker::write_frame(tag, &body)
 }
@@ -211,7 +282,7 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
     // second to seek to, and that attempt failing is not a refusal.
     let attempts: Vec<Option<&str>> = match kind {
         Kind::Video => vec![Some("1"), None],
-        Kind::Audio | Kind::Image => vec![None],
+        Kind::Audio | Kind::Image | Kind::Still => vec![None],
     };
 
     let mut last = String::from("ffmpeg produced no frame");
@@ -243,44 +314,87 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
             .arg("image2")
             .arg("-c:v")
             .arg("png")
-            .arg("pipe:1")
-            // The helper's stdin is a pipe this side closes at once, not the null device: a
-            // confinement layer decides whether that device may open, and both Seatbelt and the
-            // Windows container have refused it.
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-
-        match run_helper(&mut command) {
-            Ok(output) if output.status.success() && !output.stdout.is_empty() => {
-                if output.stdout.len() as u64 > MAX_FRAME_BYTES {
-                    last = "the frame ffmpeg produced is over the size cap".to_string();
-                    continue;
-                }
-                return Ok(output.stdout);
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                last = if stderr.trim().is_empty() {
-                    "ffmpeg produced no frame".to_string()
-                } else {
-                    stderr.trim().to_string()
-                };
-            }
-            Err(error) => {
-                return Err(FrameError::Unavailable(format!(
-                    "cannot run the media helper: {error}"
-                )));
-            }
+            .arg("pipe:1");
+        match run_capped(&mut command, MAX_FRAME_BYTES) {
+            Ok(bytes) => return Ok(bytes),
+            // The environment is the same answer for the next attempt.
+            Err(FrameError::Unavailable(why)) => return Err(FrameError::Unavailable(why)),
+            Err(FrameError::Failed(why)) => last = why,
         }
     }
     Err(FrameError::Failed(last))
+}
+
+/// Decode one still for the detector: no thumbnail resize, a JPEG, and a ceiling the
+/// parent's reply pipe can carry.
+///
+/// The scale filter keeps a very large photo inside [`STILL_MAX_EDGE`]; the detector
+/// sees the decoded image as its source, so that bound is part of the tag's meaning.
+fn still_frame(helper: &Path, source: &Path) -> Result<Vec<u8>, FrameError> {
+    let mut command = helper_command(helper);
+    command
+        .arg("-y")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-hide_banner")
+        .arg("-i")
+        .arg(source)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-threads")
+        .arg("1")
+        .arg("-filter_threads")
+        .arg("1")
+        .arg("-vf")
+        .arg(format!("scale=min({STILL_MAX_EDGE}\\,iw):-2"))
+        .arg("-f")
+        .arg("image2pipe")
+        .arg("-c:v")
+        .arg("mjpeg")
+        .arg("-q:v")
+        .arg("3")
+        .arg("pipe:1");
+    run_capped(&mut command, MAX_STILL_BYTES)
+}
+
+/// Start the helper with the standard stream setup and collect a bounded stdout.
+///
+/// The helper's stdin is a pipe this side closes at once, not the null device: a
+/// confinement layer decides whether that device may open, and both Seatbelt and the
+/// Windows container have refused it.
+fn run_capped(command: &mut Command, cap: u64) -> Result<Vec<u8>, FrameError> {
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    match run_helper(command) {
+        Ok(output) if output.status.success() && !output.stdout.is_empty() => {
+            if output.stdout.len() as u64 > cap {
+                return Err(FrameError::Failed(
+                    "the frame ffmpeg produced is over the size cap".to_string(),
+                ));
+            }
+            Ok(output.stdout)
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(FrameError::Failed(if stderr.trim().is_empty() {
+                "ffmpeg produced no frame".to_string()
+            } else {
+                stderr.trim().to_string()
+            }))
+        }
+        Err(error) => Err(FrameError::Unavailable(format!(
+            "cannot run the media helper: {error}"
+        ))),
+    }
 }
 
 /// The command that starts the helper.
@@ -417,10 +531,42 @@ mod tests {
 
     #[test]
     fn a_kind_round_trips() {
-        for kind in [Kind::Video, Kind::Audio, Kind::Image] {
+        for kind in [Kind::Video, Kind::Audio, Kind::Image, Kind::Still] {
             assert_eq!(Kind::from_byte(kind.as_byte()), Some(kind));
         }
         assert_eq!(Kind::from_byte(b'?'), None);
+    }
+
+    /// The detector's source: a JPEG, at the still's own edge, decoded by the helper
+    /// under the media profile rather than by the server.
+    #[test]
+    fn a_still_decodes_to_a_jpeg() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("source.png");
+        // A generated image, so the test needs no fixture; ffmpeg is on every CI
+        // runner and its PNG decoder is part of the build.
+        let mut image = image::RgbImage::new(64, 32);
+        for pixel in image.pixels_mut() {
+            *pixel = image::Rgb([30, 60, 90]);
+        }
+        image.save(&source).expect("write the source");
+        let helper = Path::new("ffmpeg");
+        if std::process::Command::new(helper)
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| !status.success())
+            .unwrap_or(true)
+        {
+            // A host with no helper: the integration tests skip the same way.
+            return;
+        }
+
+        let frame = still_frame(helper, &source).expect("a still frame");
+        assert_eq!(&frame[..2], &[0xFF, 0xD8], "a still is a JPEG");
+        let decoded = image::load_from_memory(&frame).expect("the still decodes");
+        assert_eq!((decoded.width(), decoded.height()), (64, 32));
     }
 
     #[test]

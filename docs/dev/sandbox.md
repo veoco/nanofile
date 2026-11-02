@@ -88,7 +88,9 @@ The sandbox is tested where it is used, not only where it is described.
   its product: the probe parses every structured format it carries and compares
   the whole text each parser returns; the images child's reply is checked against
   the pixels it was given; the media child reads a file the parent wrote, decodes a
-  frame and hands back an encoded thumbnail.
+  frame and hands back an encoded thumbnail; the faces child loads the model and
+  runs one detection, reporting `faces-ok(0)` (that it finds a real face is the
+  model test's subject).
 - A document whose text is near the size cap is extracted whole in the confined
   child, so the resource limits are measured as sufficient rather than merely
   installed.

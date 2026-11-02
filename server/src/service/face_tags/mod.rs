@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 
+use crate::face_tags::DetectOptions;
 use crate::face_tags::MODEL_VERSION;
 use crate::face_tags::labels::{self, LabelDef};
 use crate::fs::core::download::Downloader;
@@ -22,7 +23,9 @@ use crate::repository::Repositories;
 use crate::repository::face_tags::ScanRecord;
 use crate::repository::repo_tag::TagInput;
 use crate::sandbox::jobs::faces;
+use crate::sandbox::jobs::media::{self, StillError};
 use crate::tasks::context::JobContext;
+use base::common::FsFileData;
 use base::error::AppError;
 use infra::storage::DynBlockStorage;
 
@@ -30,6 +33,86 @@ const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 const BACKFILL_BUDGET: Duration = Duration::from_secs(20);
 const FAILED_RETRY_AFTER_SECS: i64 = 3600;
 const CONCURRENCY: usize = 2;
+
+/// Reason a HEIC/HEIF/AVIF scan was skipped for want of a decoder.
+const SKIP_NO_FFMPEG: &str = "HEIC/AVIF face scan needs ffmpeg";
+
+/// Skip reasons that are about this build's capability, not the bytes.
+///
+/// The first is what the release before HEIC/AVIF support wrote; the second is this
+/// build's "no ffmpeg yet". A row with either is worth another attempt once the decode
+/// path exists; any other reason is a verdict on the file.
+const RETRY_WHEN_DECODABLE: [&str; 2] = ["HEIC/AVIF face scan not supported", SKIP_NO_FFMPEG];
+
+/// What this file's bytes need before the detector can see them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ImageSource {
+    /// The `image` crate decodes it: the bytes go straight to the face worker.
+    InProcess,
+    /// The `image` crate cannot, ffmpeg can: decode a still through the media profile
+    /// first.
+    Media,
+    /// Neither: not an image this feature scans.
+    NotAnImage,
+}
+
+fn source_for(ext: &str) -> ImageSource {
+    if crate::thumbnail_util::is_supported_image_ext(ext) {
+        ImageSource::InProcess
+    } else if crate::thumbnail_util::is_ffmpeg_image_ext(ext) {
+        ImageSource::Media
+    } else {
+        ImageSource::NotAnImage
+    }
+}
+
+/// The lowercase extension of a path, or an empty string.
+fn extension_of(path: &str) -> String {
+    let filename = path.rsplit_once('/').map(|(_, name)| name).unwrap_or(path);
+    std::path::Path::new(filename)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default()
+}
+
+/// What one file's scan produced, before the tags are materialised.
+enum ScanOutcome {
+    Count(crate::face_tags::engine::DetectionSummary),
+    /// This build will never scan these bytes: a skip, not retried.
+    Skip(String),
+    /// The environment or a timeout: a retryable failure.
+    Retry(String),
+}
+
+/// Whether a stored scan row is worth another attempt for this content.
+///
+/// `wait_for_failed` is the caller's cadence: a scan job retries a failed row after the
+/// hour, while the backfill pass is already rate-limited by its own idle window and
+/// retries one it meets. A row skipped for want of a decoder is retried once one is
+/// configured (`decodable`); any other skip is a verdict on the bytes.
+fn needs_scan(
+    previous: &infra::entity::face_tag_scan::Model,
+    fs_id: &str,
+    ext: &str,
+    wait_for_failed: bool,
+    decodable: bool,
+) -> bool {
+    if previous.fs_id != fs_id || previous.model_version != MODEL_VERSION as i32 {
+        return true;
+    }
+    if previous.status == "failed" {
+        return !wait_for_failed
+            || chrono::Utc::now().timestamp() - previous.attempted_at >= FAILED_RETRY_AFTER_SECS;
+    }
+    source_for(ext) == ImageSource::Media
+        && decodable
+        && previous.status == "skipped"
+        && previous
+            .reason
+            .as_deref()
+            .is_some_and(|reason| RETRY_WHEN_DECODABLE.contains(&reason))
+}
 
 #[derive(Clone, Debug)]
 pub struct ScanTarget {
@@ -169,14 +252,19 @@ impl FaceTagService {
             fs_id
         };
 
+        let filename = path.rsplit_once('/').map(|(_, name)| name).unwrap_or(path);
+        let ext = extension_of(filename);
+        let source = source_for(&ext);
+
         let previous = self.repos.face_tags.find_scan(repo_id, path).await?;
         if let Some(previous) = &previous {
-            let same_content = previous.fs_id == fs_id;
-            let current_model = previous.model_version == MODEL_VERSION as i32;
-            let retry_ready = previous.status != "failed"
-                || chrono::Utc::now().timestamp() - previous.attempted_at
-                    >= FAILED_RETRY_AFTER_SECS;
-            if same_content && current_model && (!retry_ready || previous.status != "failed") {
+            if !needs_scan(
+                previous,
+                fs_id,
+                &ext,
+                true,
+                crate::sandbox::worker::helper().is_some(),
+            ) {
                 return Ok(ScanCounts {
                     skipped: 1,
                     ..Default::default()
@@ -192,62 +280,8 @@ impl FaceTagService {
             }
         }
 
-        let filename = path.rsplit_once('/').map(|(_, name)| name).unwrap_or(path);
-        let ext = std::path::Path::new(filename)
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(str::to_ascii_lowercase)
-            .unwrap_or_default();
-        // The image crate does not decode HEIC/HEIF/AVIF; those need the media
-        // worker and are deliberately skipped for now rather than retried as
-        // failures every hour.
-        if matches!(ext.as_str(), "heic" | "heif" | "avif") {
-            self.record_skip(repo_id, path, fs_id, "HEIC/AVIF face scan not supported")
-                .await?;
-            if let Err(error) = self.apply_tags(repo_id, path, 0).await {
-                tracing::warn!("face-tags {path}: cannot materialise tags: {error}");
-                self.record_failure(repo_id, path, fs_id, "cannot materialise tags")
-                    .await?;
-                return Ok(ScanCounts {
-                    failed: 1,
-                    ..Default::default()
-                });
-            }
-            return Ok(ScanCounts {
-                skipped: 1,
-                ..Default::default()
-            });
-        }
-        if !crate::thumbnail_util::is_thumbnail_image_ext(&ext) {
-            self.repos
-                .face_tags
-                .upsert_scan(
-                    repo_id,
-                    &ScanRecord {
-                        file_path: path.to_string(),
-                        fs_id: fs_id.to_string(),
-                        model_version: MODEL_VERSION as i32,
-                        status: "skipped".to_string(),
-                        reason: Some("not an image".to_string()),
-                        face_count: 0,
-                        max_score: None,
-                        attempted_at: chrono::Utc::now().timestamp(),
-                    },
-                )
-                .await?;
-            if let Err(error) = self.apply_tags(repo_id, path, 0).await {
-                tracing::warn!("face-tags {path}: cannot materialise tags: {error}");
-                self.record_failure(repo_id, path, fs_id, "cannot materialise tags")
-                    .await?;
-                return Ok(ScanCounts {
-                    failed: 1,
-                    ..Default::default()
-                });
-            }
-            return Ok(ScanCounts {
-                skipped: 1,
-                ..Default::default()
-            });
+        if source == ImageSource::NotAnImage {
+            return self.finish_skip(repo_id, path, fs_id, "not an image").await;
         }
 
         let file_data = match read_fs_file_data(&self.repos, repo_id, fs_id).await {
@@ -262,60 +296,36 @@ impl FaceTagService {
         };
         let size = file_data.size.max(0) as u64;
         if size == 0 || size > MAX_IMAGE_BYTES as u64 {
-            self.record_skip(repo_id, path, fs_id, "image over the size cap")
-                .await?;
-            if let Err(error) = self.apply_tags(repo_id, path, 0).await {
-                tracing::warn!("face-tags {path}: cannot materialise tags: {error}");
-                self.record_failure(repo_id, path, fs_id, "cannot materialise tags")
-                    .await?;
-                return Ok(ScanCounts {
-                    failed: 1,
-                    ..Default::default()
-                });
-            }
-            return Ok(ScanCounts {
-                skipped: 1,
-                ..Default::default()
-            });
+            return self
+                .finish_skip(repo_id, path, fs_id, "image over the size cap")
+                .await;
         }
 
-        let data = match Downloader::read_file_limited_from_blocks(
-            repo_id,
-            &self.block_store,
-            &file_data.block_ids,
-            file_data.size,
-            None,
-            MAX_IMAGE_BYTES,
-        )
-        .await
-        {
-            Ok(data) => data,
-            Err(error) => {
-                tracing::warn!("face-tags {path}: cannot read content: {error}");
-                self.record_failure(repo_id, path, fs_id, "cannot read content")
-                    .await?;
-                return Ok(ScanCounts {
-                    failed: 1,
-                    ..Default::default()
-                });
-            }
-        };
-
-        let options = crate::face_tags::DetectOptions {
+        let options = DetectOptions {
             min_score: config.face_tags.min_score,
             min_face_size: config.face_tags.min_size as f32,
         };
         // The detector's own gate, not the image worker's: a thumbnail burst must
-        // not starve scans, and a scan must not hold an image permit.
+        // not starve scans, and a scan must not hold an image permit. It is held
+        // across the decode too, so one HEIC/AVIF scan costs one slot end to end.
         let _permit = faces::acquire_face_permit()
             .await
             .map_err(AppError::internal)?;
-        let result = tokio::task::spawn_blocking(move || faces::detect(&data, options))
-            .await
-            .map_err(|e| AppError::internal(format!("face-tag worker task failed: {e}")))?;
 
-        match result {
-            Ok(summary) => {
+        let outcome = match source {
+            ImageSource::InProcess => {
+                self.scan_in_process(repo_id, path, &file_data, options)
+                    .await
+            }
+            ImageSource::Media => {
+                self.scan_decoded_still(repo_id, &ext, &file_data, options)
+                    .await
+            }
+            ImageSource::NotAnImage => unreachable!("the not-an-image case returned above"),
+        };
+
+        match outcome {
+            ScanOutcome::Count(summary) => {
                 let count = summary.face_count;
                 // Tags first, then the "indexed" row: a wait on the row must not
                 // observe a completed scan whose tags are still being written.
@@ -352,15 +362,133 @@ impl FaceTagService {
                     ..Default::default()
                 })
             }
-            Err(error) => {
-                tracing::warn!("face-tags {path}: worker refused: {error}");
-                self.record_failure(repo_id, path, fs_id, &error).await?;
+            ScanOutcome::Skip(reason) => self.finish_skip(repo_id, path, fs_id, &reason).await,
+            ScanOutcome::Retry(reason) => {
+                tracing::warn!("face-tags {path}: worker refused: {reason}");
+                self.record_failure(repo_id, path, fs_id, &reason).await?;
                 Ok(ScanCounts {
                     failed: 1,
                     ..Default::default()
                 })
             }
         }
+    }
+
+    /// Materialise "no tags" and record why this file is skipped.
+    ///
+    /// Tags first, then the row, for the same reason the indexed path does it: the
+    /// row is what a reader waits on.
+    async fn finish_skip(
+        &self,
+        repo_id: &str,
+        path: &str,
+        fs_id: &str,
+        reason: &str,
+    ) -> Result<ScanCounts, AppError> {
+        if let Err(error) = self.apply_tags(repo_id, path, 0).await {
+            tracing::warn!("face-tags {path}: cannot materialise tags: {error}");
+            self.record_failure(repo_id, path, fs_id, "cannot materialise tags")
+                .await?;
+            return Ok(ScanCounts {
+                failed: 1,
+                ..Default::default()
+            });
+        }
+        self.record_skip(repo_id, path, fs_id, reason).await?;
+        Ok(ScanCounts {
+            skipped: 1,
+            ..Default::default()
+        })
+    }
+
+    /// Scan bytes the `image` crate decodes, straight from the block store.
+    async fn scan_in_process(
+        &self,
+        repo_id: &str,
+        path: &str,
+        file_data: &FsFileData,
+        options: DetectOptions,
+    ) -> ScanOutcome {
+        let data = match Downloader::read_file_limited_from_blocks(
+            repo_id,
+            &self.block_store,
+            &file_data.block_ids,
+            file_data.size,
+            None,
+            MAX_IMAGE_BYTES,
+        )
+        .await
+        {
+            Ok(data) => data,
+            Err(error) => {
+                tracing::warn!("face-tags {path}: cannot read content: {error}");
+                return ScanOutcome::Retry("cannot read content".to_string());
+            }
+        };
+        match tokio::task::spawn_blocking(move || faces::detect(&data, options)).await {
+            Ok(Ok(summary)) => ScanOutcome::Count(summary),
+            Ok(Err(why)) => ScanOutcome::Retry(why),
+            Err(join) => ScanOutcome::Retry(format!("face-tag worker task failed: {join}")),
+        }
+    }
+
+    /// Scan a HEIC/HEIF/AVIF file: decode one still through the media profile, then
+    /// run the detector on it.
+    ///
+    /// The still is the only thing either child sees of the file: ffmpeg reads the
+    /// scratch file the media grant names, and the face worker reads the JPEG over its
+    /// stdin. Nothing decodes user bytes in this process.
+    async fn scan_decoded_still(
+        &self,
+        repo_id: &str,
+        ext: &str,
+        file_data: &FsFileData,
+        options: DetectOptions,
+    ) -> ScanOutcome {
+        let Some(ffmpeg) = crate::sandbox::worker::helper() else {
+            return ScanOutcome::Skip(SKIP_NO_FFMPEG.to_string());
+        };
+        let scratch = match crate::service::fs::scratch::write_blocks(
+            &self.config.get().storage.temp_dir.join("face_scans"),
+            "face-scan",
+            ext,
+            repo_id,
+            &file_data.block_ids,
+            &self.block_store,
+            MAX_IMAGE_BYTES as u64,
+        )
+        .await
+        {
+            Ok(Some(scratch)) => scratch,
+            Ok(None) => return ScanOutcome::Retry("cannot write the decode source".to_string()),
+            Err(error) => {
+                return ScanOutcome::Retry(format!("cannot write the decode source: {error}"));
+            }
+        };
+        let source = scratch.granted_path();
+        let ffmpeg = ffmpeg.to_path_buf();
+        let decoded = tokio::task::spawn_blocking(move || {
+            let frame = match media::still(&source, &ffmpeg) {
+                Ok(frame) => frame,
+                Err(StillError::Unavailable(why)) | Err(StillError::Failed(why)) => {
+                    return ScanOutcome::Retry(format!("HEIC/AVIF decode unavailable: {why}"));
+                }
+                Err(StillError::Refused(why)) => {
+                    return ScanOutcome::Skip(format!("HEIC/AVIF decode refused: {why}"));
+                }
+            };
+            match faces::detect(&frame, options) {
+                Ok(summary) => ScanOutcome::Count(summary),
+                Err(why) => ScanOutcome::Retry(why),
+            }
+        })
+        .await;
+        // Dropping the guard removes the file; it has to outlive the child, which the
+        // await above guarantees.
+        drop(scratch);
+        decoded.unwrap_or_else(|join| {
+            ScanOutcome::Retry(format!("face-tag worker task failed: {join}"))
+        })
     }
 
     async fn record_skip(
@@ -571,9 +699,13 @@ impl FaceTagService {
                     .face_tags
                     .find_scan(&repo.id, &entry.path)
                     .await?
-                    && scan.fs_id == entry.fs_id
-                    && scan.model_version == MODEL_VERSION as i32
-                    && scan.status != "failed"
+                    && !needs_scan(
+                        &scan,
+                        &entry.fs_id,
+                        &ext,
+                        false,
+                        crate::sandbox::worker::helper().is_some(),
+                    )
                 {
                     continue;
                 }
@@ -584,5 +716,124 @@ impl FaceTagService {
             }
         }
         Ok(report)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use infra::entity::face_tag_scan::Model;
+
+    fn row(
+        status: &str,
+        reason: Option<&str>,
+        fs_id: &str,
+        model_version: i32,
+        attempted_at: i64,
+    ) -> Model {
+        Model {
+            id: 1,
+            repo_id: "repo".to_string(),
+            file_path: "/a.jpg".to_string(),
+            fs_id: fs_id.to_string(),
+            model_version,
+            status: status.to_string(),
+            reason: reason.map(str::to_string),
+            face_count: 0,
+            max_score: None,
+            attempted_at,
+        }
+    }
+
+    /// The extension decides which decoder the bytes need; the two lists are the
+    /// thumbnail service's, so a format it can show is a format the scan can read.
+    #[test]
+    fn a_format_names_the_decoder_it_needs() {
+        for ext in [
+            "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "tif",
+        ] {
+            assert_eq!(source_for(ext), ImageSource::InProcess, "{ext}");
+        }
+        for ext in ["heic", "heif", "avif"] {
+            assert_eq!(source_for(ext), ImageSource::Media, "{ext}");
+        }
+        for ext in ["", "mp4", "pdf", "txt"] {
+            assert_eq!(source_for(ext), ImageSource::NotAnImage, "{ext}");
+        }
+        assert_eq!(extension_of("/a/B/Photo.HEIC"), "heic");
+        assert_eq!(extension_of("/a/noext"), "");
+    }
+
+    /// A row is re-scanned when its content or the model moved, and only then.
+    #[test]
+    fn a_row_is_rescanned_when_its_content_or_model_moved() {
+        let indexed = row("indexed", None, "abc", MODEL_VERSION as i32, 0);
+        assert!(!needs_scan(&indexed, "abc", "jpg", true, false));
+        assert!(
+            needs_scan(&indexed, "def", "jpg", true, false),
+            "new content is a new scan"
+        );
+        assert!(
+            needs_scan(
+                &row("indexed", None, "abc", 0, 0),
+                "abc",
+                "jpg",
+                true,
+                false
+            ),
+            "an older model version is a new scan"
+        );
+    }
+
+    /// A failure waits for the retry window in a scan job; the backfill pass is
+    /// already rate-limited by its own idle window and retries one it meets.
+    #[test]
+    fn a_failed_row_waits_for_the_hour_in_a_scan_job_only() {
+        let now = chrono::Utc::now().timestamp();
+        let stale = row(
+            "failed",
+            Some("worker refused"),
+            "abc",
+            MODEL_VERSION as i32,
+            now - FAILED_RETRY_AFTER_SECS - 1,
+        );
+        let fresh = row(
+            "failed",
+            Some("worker refused"),
+            "abc",
+            MODEL_VERSION as i32,
+            now,
+        );
+        assert!(needs_scan(&stale, "abc", "jpg", true, false));
+        assert!(!needs_scan(&fresh, "abc", "jpg", true, false));
+        assert!(needs_scan(&fresh, "abc", "jpg", false, false));
+    }
+
+    /// A HEIC/AVIF row skipped for want of a decoder is picked up once one exists;
+    /// any other skip is a verdict on the bytes and is left alone.
+    #[test]
+    fn a_heic_skip_is_retried_once_a_decoder_exists() {
+        for reason in RETRY_WHEN_DECODABLE {
+            let previous = row("skipped", Some(reason), "abc", MODEL_VERSION as i32, 0);
+            assert!(
+                needs_scan(&previous, "abc", "heic", true, true),
+                "{reason} is a capability skip"
+            );
+            assert!(
+                !needs_scan(&previous, "abc", "heic", true, false),
+                "a host with no decoder must not churn on the row"
+            );
+            // The same reason on a format the image crate already decoded is not
+            // the capability case.
+            assert!(!needs_scan(&previous, "abc", "png", true, true));
+        }
+        let refused = row(
+            "skipped",
+            Some("HEIC/AVIF decode refused: no frame"),
+            "abc",
+            MODEL_VERSION as i32,
+            0,
+        );
+        assert!(!needs_scan(&refused, "abc", "heic", true, true));
     }
 }

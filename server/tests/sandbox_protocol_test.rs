@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 /// The magic that opens every request and the self-test report.
 const MAGIC: &[u8] = b"NFX1";
 
-/// Deadline for one child run. The worker's own request timeout is fifteen
-/// seconds at its longest, so a run that reaches this is a hang.
+/// Deadline for one child run. The heaviest request in this file is one detector
+/// pass, so a run that reaches this is a hang rather than a slow profile.
 const DEADLINE: Duration = Duration::from_secs(30);
 
 /// What one run of the worker produced.

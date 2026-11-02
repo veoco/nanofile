@@ -195,6 +195,10 @@ jobs:
           grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' probe.txt
           "$BIN" extract-worker --probe --profile images | tee images.txt
           grep -q 'parse=image-ok(' images.txt
+          # The detector has its own profile and its own probe: this is the only
+          # place a release build runs the model.
+          "$BIN" extract-worker --probe --profile faces | tee faces.txt
+          grep -q 'parse=faces-ok(0)' faces.txt
 
   # ── Dev Docker image (multi-arch from pre-built binaries) ─────────
   docker-dev:
@@ -282,3 +286,7 @@ jobs:
           # `d1ec10d`, so a grep for it only ever waits for a failure.
           grep -q 'limits=on' /tmp/probe.txt
           grep -q 'parse=pdf-ok,docx-ok,xlsx-ok,pptx-ok' /tmp/probe.txt
+          # The detector is the only profile that runs a model, and this image is
+          # the only musl/release environment the sandbox is measured in.
+          docker run --rm "$IMAGE" extract-worker --probe --profile faces | tee /tmp/faces.txt
+          grep -q 'parse=faces-ok(0)' /tmp/faces.txt

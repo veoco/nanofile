@@ -52,6 +52,11 @@ After the restart, new uploads and syncs are scanned in the background. The
 low-load backfill scans images that existed before the feature was enabled,
 within a 20-second budget per pass.
 
+HEIC, HEIF and AVIF photos are scanned too: the `image` crate cannot decode
+them, so the still is decoded through `storage.ffmpeg_path` first and only the
+decoded frame reaches the detector. Without a configured `ffmpeg` those files
+are skipped with a reason; configure one and the backfill picks them up.
+
 ## Corrections
 
 Removing an automatic tag from a file is remembered: the next scan will not
@@ -66,8 +71,9 @@ described the old image.
 - Large photos are split into overlapping tiles, but a very large crowd photo
   can still miss small faces.
 - Side profiles, masks, heavy occlusion and poor light reduce recall.
-- HEIC/HEIF/AVIF images are not face-scanned yet; they are skipped rather than
-  retried.
+- HEIC/HEIF/AVIF frames are decoded at up to 4096 px on the long edge, so a
+  photo wider than that is measured against the decoded image. Other formats
+  keep their original pixels up to the image crate's 8192-px bound.
 - The model was trained on WIDER Face and its accuracy is not uniform across
   demographics. It is used for a coarse "there is a face" tag, not for a
   decision about a person.
