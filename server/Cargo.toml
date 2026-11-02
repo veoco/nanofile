@@ -35,6 +35,16 @@ tray = [
     "dep:sys-locale",
 ]
 
+# Automatic "people" tags: YuNet face detection in the confined image worker.
+# Not a default feature: the shipped release binaries enable it (see
+# release.yml), while a plain `cargo build` does not compile Candle. The model
+# weights are embedded with include_bytes!, so a binary built without this
+# feature simply has no face-tag pipeline.
+face-tags = [
+    "dep:candle-core",
+    "dep:candle-nn",
+]
+
 # `kamadak-exif`'s library is named `exif`, which a static scan cannot see
 # through: `server/src/service/fs/exif.rs` uses `exif::Reader` and `exif::Tag`.
 [package.metadata.cargo-machete]
@@ -121,6 +131,12 @@ anyhow = { workspace = true }
 totp-rs = { version = "6", features = ["gen_secret", "otpauth"] }
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
+# Face-tag inference (`face-tags` feature). Pure CPU Candle: no accelerator
+# feature is enabled, so no framework/system library is linked. `candle-core`'s
+# `tokenizers`/`zip` dependencies are pure Rust with their default features off;
+# `gemm` falls back to a scalar kernel on targets without SIMD support.
+candle-core = { version = "0.11.1", optional = true, default-features = false }
+candle-nn = { version = "0.11.1", optional = true, default-features = false }
 kamadak-exif = "0.6"
 percent-encoding = "2.3"
 clap = { version = "4", features = ["derive"] }
@@ -262,6 +278,10 @@ flate2 = { workspace = true }
 # dev-dependency on purpose: `full` does not include it, and the production
 # build must not pay for it.
 tokio = { workspace = true, features = ["test-util"] }
+# The model-compliance test reads the embedded tensor names and dtypes directly;
+# Candle's `VarBuilder` already parses the same file at runtime, so this is test
+# only and carries no default features (no serde/alloc surprises).
+safetensors = { version = "0.8", default-features = false }
 
 [[bin]]
 name = "nanofile"

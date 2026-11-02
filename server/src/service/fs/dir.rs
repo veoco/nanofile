@@ -537,6 +537,15 @@ impl DirService {
             tracing::warn!("Failed to delete file tags for {path}: {e}");
         }
 
+        if let Err(e) = self
+            .repos
+            .face_tags
+            .delete_by_path_prefix(repo_id, path)
+            .await
+        {
+            tracing::warn!("Failed to delete face-tag rows for {path}: {e}");
+        }
+
         Ok(())
     }
 

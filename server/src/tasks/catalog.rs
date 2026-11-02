@@ -145,6 +145,69 @@ pub fn policy(key: JobKey) -> JobSpec {
             }),
             idempotent: true,
         },
+        // Images an upload or a sync just added/changed. Kept separate from
+        // IndexFiles so a deployment can enable people tags without a full-text
+        // index (and vice versa).
+        JobKey::FaceTagScan => JobSpec {
+            key,
+            name: "face-tag scan",
+            trigger: Trigger::OnDemand,
+            priority: Priority::Normal,
+            resource: Resource::Cpu,
+            max_concurrent: 2,
+            queue_depth: 0,
+            timeout: TimeoutPolicy {
+                no_progress_for_secs: Some(300),
+                max_total_secs: None,
+            },
+            retry: RetryPolicy::Never,
+            dedup: Dedup::None,
+            visibility: Visibility::OwnerOrAdmin,
+            durability: Durability::Memory,
+            history: History::EveryRun,
+            resumable: false,
+            // Each file is independent; stopping between them loses nothing the
+            // backfill will not rediscover.
+            cancellable: true,
+            chunkable: Some(ChunkPolicy {
+                max_chunk_ms: 500,
+                unit: "file",
+            }),
+            force_safe: false,
+            quiet: None,
+            idempotent: true,
+        },
+        JobKey::FaceTagBackfill => JobSpec {
+            key,
+            name: "face-tag backfill",
+            trigger: fixed_timer(300),
+            priority: Priority::Background,
+            resource: Resource::Cpu,
+            max_concurrent: 1,
+            queue_depth: 0,
+            timeout: TimeoutPolicy {
+                no_progress_for_secs: Some(1800),
+                max_total_secs: None,
+            },
+            retry: RetryPolicy::Never,
+            dedup: Dedup::None,
+            visibility: Visibility::OwnerOrAdmin,
+            durability: Durability::Audit,
+            history: History::Notable,
+            resumable: true,
+            cancellable: false,
+            chunkable: Some(ChunkPolicy {
+                max_chunk_ms: 500,
+                unit: "file",
+            }),
+            force_safe: false,
+            quiet: Some(QuietPolicy {
+                min_idle_for_secs: 30,
+                max_deferral_hours: 0,
+                on_spike: SpikePolicy::Yield,
+            }),
+            idempotent: true,
+        },
         JobKey::ZipTaskCleanup => notable(housekeeping(key, "zip task cleanup", fixed_timer(600))),
 
         JobKey::GarbageCollection => JobSpec {
@@ -428,6 +491,7 @@ mod tests {
                 JobKey::ExpiredDataCleanup,
                 JobKey::IndexCommit,
                 JobKey::IndexBackfill,
+                JobKey::FaceTagBackfill,
                 JobKey::ZipTaskCleanup,
             ]
         );

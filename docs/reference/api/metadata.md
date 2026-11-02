@@ -58,6 +58,8 @@ offset capped at 10,000,000. `limit=0` returns no rows.
       "_id": "1",
       "_tag_name": "Important",
       "_tag_color": "#ff0000",
+      "_tag_source": "manual",
+      "_tag_key": null,
       "_tag_file_links": [],
       "_creator": "",
       "_last_modifier": "",
@@ -68,6 +70,10 @@ offset capped at 10,000,000. `limit=0` returns no rows.
   "metadata": []
 }
 ```
+
+`_tag_source` is `manual` for a tag a user created and `vision` for an
+automatic people tag; `_tag_key` is its stable key (`person_any`,
+`person_single`, `person_group`) and is `null` for a manual tag.
 
 Requires `tag.read`.
 
@@ -155,6 +161,10 @@ The offset and limit follow the tag list's caps. Requires `tag.read`.
 The record id is the one returned by the record endpoint.
 
 **Response `200`** — `{"success": true}`. Requires `tag.write`.
+
+Removing an automatic (`vision`) tag records a per-file correction, so a later
+scan does not add it back; adding it back clears the correction. This is what
+makes the tag editor usable for automatic tags.
 
 ## Get a file's metadata record {#get-api-v2-1-repos-repo-id-metadata-record}
 

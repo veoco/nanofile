@@ -15,6 +15,8 @@ pub struct TagOnPath {
     pub tag_id: i32,
     pub tag_name: String,
     pub tag_color: String,
+    pub tag_source: String,
+    pub tag_label_key: Option<String>,
 }
 
 #[async_trait]
@@ -256,6 +258,8 @@ impl FileTagRepository for DbFileTagRepository {
                         tag_id: tag.id,
                         tag_name: tag.name,
                         tag_color: tag.color,
+                        tag_source: tag.source,
+                        tag_label_key: tag.label_key,
                     });
                 }
             }

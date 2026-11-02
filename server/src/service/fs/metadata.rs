@@ -208,10 +208,7 @@ impl MetadataService {
                         continue;
                     }
                     let color = sanitize_tag_color(item.get("_tag_color").and_then(|v| v.as_str()));
-                    inputs.push(TagInput {
-                        name: name.to_string(),
-                        color,
-                    });
+                    inputs.push(TagInput::manual(name.to_string(), color));
                 }
             }
         }
@@ -369,6 +366,42 @@ impl MetadataService {
             }
             entries.push((file_path, tag_ids));
         }
+
+        // Removing an automatic tag is a correction, not a one-time edit: remember
+        // it so the next scan does not put the tag back. Re-adding one clears the
+        // correction. Manual tags are unaffected.
+        for (file_path, new_ids) in &entries {
+            let old_links = self
+                .repos
+                .file_tag
+                .find_by_repo_and_path(repo_id, file_path)
+                .await?;
+            let old_ids: Vec<i32> = old_links.iter().map(|link| link.repo_tag_id).collect();
+            let old_tags = self.repos.repo_tag.find_by_ids(&old_ids).await?;
+            for tag in &old_tags {
+                let Some(label_key) = tag.label_key.as_deref() else {
+                    continue;
+                };
+                if !new_ids.contains(&tag.id) {
+                    self.repos
+                        .face_tags
+                        .exclude(repo_id, file_path, label_key)
+                        .await?;
+                }
+            }
+            if !new_ids.is_empty() {
+                let new_tags = self.repos.repo_tag.find_by_ids(new_ids).await?;
+                for tag in new_tags {
+                    if let Some(label_key) = tag.label_key.as_deref() {
+                        self.repos
+                            .face_tags
+                            .include(repo_id, file_path, label_key)
+                            .await?;
+                    }
+                }
+            }
+        }
+
         self.repos.file_tag.set_for_paths(repo_id, &entries).await?;
         Ok(())
     }
@@ -674,6 +707,8 @@ fn tag_to_json(tag: &repo_tag::Model) -> serde_json::Value {
         "_id": tag.id.to_string(),
         "_tag_name": tag.name,
         "_tag_color": tag.color,
+        "_tag_source": tag.source,
+        "_tag_key": tag.label_key,
         "_tag_file_links": [],
         "_creator": "",
         "_last_modifier": "",

@@ -131,6 +131,14 @@ pub(crate) async fn rename_entry(
         tracing::warn!("Failed to update file tag paths for {path}: {e}");
     }
 
+    if let Err(e) = repos
+        .face_tags
+        .update_paths_for_rename(path, &new_path, repo_id)
+        .await
+    {
+        tracing::warn!("Failed to update face-tag paths for {path}: {e}");
+    }
+
     Ok(())
 }
 
@@ -362,6 +370,13 @@ pub(crate) async fn move_entry(
         .await
     {
         tracing::warn!("Failed to update file tag paths for {path}: {e}");
+    }
+    if let Err(e) = repos
+        .face_tags
+        .update_paths_for_rename(path, &new_path, repo_id)
+        .await
+    {
+        tracing::warn!("Failed to update face-tag paths for {path}: {e}");
     }
 
     Ok(new_path)
@@ -808,6 +823,15 @@ impl FileService {
             .await
         {
             tracing::warn!("Failed to delete file tags for {path}: {e}");
+        }
+
+        if let Err(e) = self
+            .repos
+            .face_tags
+            .delete_by_path_prefix(repo_id, path)
+            .await
+        {
+            tracing::warn!("Failed to delete face-tag rows for {path}: {e}");
         }
 
         Ok(())

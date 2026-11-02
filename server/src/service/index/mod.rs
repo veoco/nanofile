@@ -570,18 +570,23 @@ where
 #[derive(Clone)]
 pub struct IndexScheduler {
     tasks: Arc<TaskSystem>,
-    enabled: bool,
+    index_enabled: bool,
+    face_tags_enabled: bool,
 }
 
 impl IndexScheduler {
-    pub fn new(tasks: Arc<TaskSystem>, enabled: bool) -> Self {
-        Self { tasks, enabled }
+    pub fn new(tasks: Arc<TaskSystem>, index_enabled: bool, face_tags_enabled: bool) -> Self {
+        Self {
+            tasks,
+            index_enabled,
+            face_tags_enabled,
+        }
     }
 
     /// Whether scheduling can do anything; callers skip building the file list
     /// when it cannot.
     pub fn is_enabled(&self) -> bool {
-        self.enabled
+        self.index_enabled || self.face_tags_enabled
     }
 
     /// Submit index work for `targets`, split into bounded runs.
@@ -594,29 +599,63 @@ impl IndexScheduler {
         targets: Vec<IndexTarget>,
         reason: &'static str,
     ) -> usize {
-        if !self.enabled || targets.is_empty() {
+        if targets.is_empty() {
             return 0;
         }
         let mut submitted = 0;
         for chunk in targets.chunks(BATCH_FILES) {
             let files: Vec<&IndexTarget> = chunk.iter().collect();
-            let params = serde_json::json!({
-                "repo_id": repo_id,
-                "files": files,
-                "reason": reason,
-            });
-            let summary = format!("Index {} file(s)", chunk.len());
-            match self
-                .tasks
-                .submit_system(Origin::Schedule, JobKey::IndexFiles, params, summary)
-                .await
-            {
-                Ok(_) => submitted += chunk.len(),
-                Err(e) => {
-                    tracing::debug!("could not schedule indexing for {repo_id}: {e}");
+            if self.index_enabled {
+                let params = serde_json::json!({
+                    "repo_id": repo_id,
+                    "files": files,
+                    "reason": reason,
+                });
+                let summary = format!("Index {} file(s)", chunk.len());
+                match self
+                    .tasks
+                    .submit_system(Origin::Schedule, JobKey::IndexFiles, params, summary)
+                    .await
+                {
+                    Ok(_) => submitted += chunk.len(),
+                    Err(e) => {
+                        tracing::debug!("could not schedule indexing for {repo_id}: {e}");
+                    }
+                }
+            }
+            if self.face_tags_enabled {
+                let images: Vec<&IndexTarget> = chunk
+                    .iter()
+                    .filter(|target| is_image_path(&target.path))
+                    .collect();
+                if images.is_empty() {
+                    continue;
+                }
+                let params = serde_json::json!({
+                    "repo_id": repo_id,
+                    "files": images,
+                    "reason": reason,
+                });
+                let summary = format!("Face-tag {} image(s)", images.len());
+                if let Err(e) = self
+                    .tasks
+                    .submit_system(Origin::Schedule, JobKey::FaceTagScan, params, summary)
+                    .await
+                {
+                    tracing::debug!("could not schedule face tags for {repo_id}: {e}");
                 }
             }
         }
         submitted
     }
+}
+
+/// Whether the path has an extension the image worker can decode.
+fn is_image_path(path: &str) -> bool {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    crate::thumbnail_util::is_thumbnail_image_ext(&ext)
 }

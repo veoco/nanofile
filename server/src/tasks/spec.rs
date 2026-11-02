@@ -31,6 +31,10 @@ pub enum JobKey {
     /// The low-load pass that finds files the index has never seen, or whose
     /// document was written by an older extractor, and indexes them.
     IndexBackfill,
+    /// Scan a batch of images for faces and materialise people tags.
+    FaceTagScan,
+    /// The low-load pass over existing images that have not been face-tagged.
+    FaceTagBackfill,
     ZipTaskCleanup,
 }
 
@@ -47,6 +51,8 @@ impl JobKey {
         Self::BlockEncryptionConvert,
         Self::IndexCommit,
         Self::IndexBackfill,
+        Self::FaceTagScan,
+        Self::FaceTagBackfill,
         Self::ZipTaskCleanup,
     ];
 
@@ -81,6 +87,8 @@ impl JobKey {
             Self::BlockEncryptionConvert => "block-encryption-convert",
             Self::IndexCommit => "index-commit",
             Self::IndexBackfill => "index-backfill",
+            Self::FaceTagScan => "face-tag-scan",
+            Self::FaceTagBackfill => "face-tag-backfill",
             Self::ZipTaskCleanup => "zip-task-cleanup",
         }
     }
@@ -156,6 +164,8 @@ pub enum SkipReason {
     EncryptionNotLazy,
     /// No full-text indexer, so there is no index to commit.
     IndexOff,
+    /// The binary was built without the `face-tags` feature.
+    FaceTagsOff,
     /// `index.backfill_enabled = false`.
     IndexBackfillOff,
     /// No mailer, so there is no outbox to drain.
@@ -169,6 +179,7 @@ impl SkipReason {
         Self::GcDisabled,
         Self::EncryptionNotLazy,
         Self::IndexOff,
+        Self::FaceTagsOff,
         Self::IndexBackfillOff,
         Self::MailOff,
     ];

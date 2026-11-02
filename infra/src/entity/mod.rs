@@ -8,6 +8,8 @@ pub mod commit;
 pub mod deleted_repo;
 pub mod email_message;
 pub mod email_verification_token;
+pub mod face_tag_exclusion;
+pub mod face_tag_scan;
 pub mod file_lock_timestamp;
 pub mod file_tag;
 pub mod file_trash;

@@ -61,6 +61,8 @@ pub struct Config {
     #[serde(default)]
     pub index: IndexConfig,
     #[serde(default)]
+    pub face_tags: FaceTagsConfig,
+    #[serde(default)]
     pub sandbox: SandboxConfig,
     #[serde(default)]
     pub notification: NotificationConfig,
@@ -1507,6 +1509,43 @@ impl Default for IndexConfig {
             enabled: true,
             index_dir: PathBuf::from("data/index"),
             backfill_enabled: true,
+        }
+    }
+}
+
+/// Automatic "people" tags (YuNet). Off by default: it scans every image and
+/// costs CPU, and a library owner should opt in explicitly.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct FaceTagsConfig {
+    /// Master switch. Env: NANOFILE_FACE_TAGS_ENABLED
+    #[serde(default)]
+    pub enabled: bool,
+    /// Let the low-load pass scan existing images. Env: NANOFILE_FACE_TAGS_BACKFILL_ENABLED
+    #[serde(default = "default_true")]
+    pub backfill_enabled: bool,
+    /// Minimum YuNet score for a face to count. Env: NANOFILE_FACE_TAGS_MIN_SCORE
+    #[serde(default = "default_face_min_score")]
+    pub min_score: f32,
+    /// Minimum short edge (original pixels) for a face to count. Env: NANOFILE_FACE_TAGS_MIN_SIZE
+    #[serde(default = "default_face_min_size")]
+    pub min_size: u32,
+}
+
+fn default_face_min_score() -> f32 {
+    0.7
+}
+
+fn default_face_min_size() -> u32 {
+    32
+}
+
+impl Default for FaceTagsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backfill_enabled: true,
+            min_score: default_face_min_score(),
+            min_size: default_face_min_size(),
         }
     }
 }

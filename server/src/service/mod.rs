@@ -7,6 +7,8 @@ pub mod admin;
 pub mod api_key;
 pub mod auth;
 pub mod credential;
+#[cfg(feature = "face-tags")]
+pub mod face_tags;
 pub mod fs;
 pub mod index;
 pub mod mail;

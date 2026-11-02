@@ -185,6 +185,9 @@ pub struct FileEntry {
     pub is_audio: bool,
     pub modifier_email: String,
     pub tags: Vec<TagChip>,
+    /// At most two tags shown by the grid/gallery views; `more_tags` is the rest.
+    pub preview_tags: Vec<TagChip>,
+    pub more_tags: usize,
     /// Metadata record id (hex-encoded path) used by the tag editor APIs.
     pub record_id: String,
 }
@@ -194,6 +197,8 @@ pub struct FileEntry {
 pub struct TagChip {
     pub name: String,
     pub color: String,
+    /// `vision` marks an automatic people tag.
+    pub source: String,
 }
 
 /// A group of file entries belonging to the same calendar month, used by gallery view.
@@ -369,6 +374,9 @@ fn build_file_entry(
     } else {
         "doc"
     };
+    let tags = tags_by_path.get(&full_path).cloned().unwrap_or_default();
+    let preview_tags = tags.iter().take(2).cloned().collect();
+    let more_tags = tags.len().saturating_sub(2);
     FileEntry {
         name: e.name.clone(),
         entry_type: e.entry_type.clone(),
@@ -388,7 +396,9 @@ fn build_file_entry(
         is_video: entry_is_video,
         is_audio: entry_is_audio,
         modifier_email: e.modifier.clone(),
-        tags: tags_by_path.get(&full_path).cloned().unwrap_or_default(),
+        tags,
+        preview_tags,
+        more_tags,
         record_id: crate::service::fs::metadata::MetadataService::record_id_from_path(&full_path),
     }
 }
@@ -402,6 +412,7 @@ fn build_tags_map(
         let chip = TagChip {
             name: d.tag_name.clone(),
             color: d.tag_color.clone(),
+            source: d.tag_source.clone(),
         };
         tags_by_path
             .entry(d.file_path.clone())
@@ -411,6 +422,7 @@ fn build_tags_map(
             folder_tags.push(TagChip {
                 name: d.tag_name,
                 color: d.tag_color,
+                source: d.tag_source,
             });
         }
     }
@@ -1302,6 +1314,8 @@ mod tests {
             is_audio: false,
             modifier_email: String::new(),
             tags: Vec::new(),
+            preview_tags: Vec::new(),
+            more_tags: 0,
             record_id: String::new(),
         }
     }

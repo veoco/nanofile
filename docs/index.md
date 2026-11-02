@@ -32,6 +32,9 @@ features:
   - icon: 🧱
     title: Confined parsing
     details: Every parser that reads user content runs in a separate process with memory, CPU and time bounds.
+  - icon: 👤
+    title: Automatic people tags
+    details: Optional local face detection tags photos as 人物, 单人 or 合影. Only a count is stored — no identity or biometric template.
 ---
 
 ## Start here

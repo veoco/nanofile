@@ -908,7 +908,7 @@ fn build_row(
         unit: def.unit_key().map(|key| t.tr(&key).to_string()),
         control: match def.kind {
             Kind::Bool => "bool",
-            Kind::U16 | Kind::U32 | Kind::U64 | Kind::I32 | Kind::Usize => "number",
+            Kind::U16 | Kind::U32 | Kind::U64 | Kind::I32 | Kind::Usize | Kind::Float => "number",
             Kind::Enum(_) => "enum",
             Kind::TextList | Kind::NumList => "list",
             Kind::Secret => "secret",

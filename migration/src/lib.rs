@@ -106,6 +106,7 @@ migrations!(
     m20261019_000003_split_share_link_switch,
     m20261019_000004_rename_default_quota_setting,
     m20261023_000001_backfill_repo_updated_at,
+    m20261102_000001_create_face_tags,
 );
 
 #[cfg(test)]

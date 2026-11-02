@@ -378,6 +378,20 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
   .badge-red   { @apply bg-err/10 text-err-text ring-err/20; }
   .badge-gray  { @apply bg-raised text-ink-2 ring-line-strong; }
 
+  /* Source marker on a tag chip: a short trailing word, consistent in the
+     file list and the details drawer. No icon, so it cannot read as a
+     separate tag or a click target. */
+  .nf-tag-auto {
+    @apply ml-1 inline-flex h-3.5 items-center justify-center rounded-[3px]
+           px-1 text-[8px] font-semibold leading-none tracking-[0.08em];
+    /* A deep tone of the tag's own colour: the badge belongs to the tag
+       instead of introducing a fourth palette colour, and reads as a label
+       rather than a disabled grey control. */
+    background-color: var(--tag-color, #3b82f6);
+    background-color: color-mix(in srgb, var(--tag-color, #3b82f6) 68%, #000);
+    color: #fff;
+  }
+
   /* Dense hairline tables */
   .table     { @apply w-full border-collapse text-[13px]; }
   .thead     { @apply bg-raised; }
@@ -553,6 +567,20 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
   .nf-tile-name:hover .base { @apply underline; }
   .nf-tile-name .ext { color: var(--color-ink-3); }
   .nf-tile-meta { @apply mt-px text-[11px] text-ink-3 tabular-nums truncate; }
+  /* Grid/gallery: two tags at most; the rest are a count, so a heavily tagged
+     file cannot turn a tile into a wall of chips. */
+  .nf-tile-tags, .nf-gal-tags {
+    @apply mt-1 flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap;
+  }
+  .nf-mini-tag {
+    @apply inline-flex h-[15px] min-w-0 items-center gap-1 rounded-[3px] px-1.5
+           text-[9px] font-medium leading-none text-ink;
+    flex: 0 1 auto;
+  }
+  .nf-mini-tag .nf-tag-auto {
+    @apply ml-0.5 h-[11px] px-0.5 text-[7px];
+  }
+  .nf-tag-more { @apply text-[9px] text-ink-3; flex-shrink: 0; }
   /* The separator rides with the date text rather than the hairline colour: as a
      glyph it has to meet the text floor, and 1.6:1 (#c8c8c8 on #fcfcfc) does not. */
   .nf-tile-date:not(:empty)::before { content: "\00b7"; margin: 0 5px; }

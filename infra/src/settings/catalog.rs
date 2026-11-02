@@ -958,6 +958,62 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Automatic people tags
+    setting!(
+        "face_tags.enabled",
+        Maintenance,
+        "NANOFILE_FACE_TAGS_ENABLED",
+        Kind::Bool,
+        Apply::Restart,
+        |c| fmt_bool(c.face_tags.enabled),
+        |c, v| {
+            c.face_tags.enabled = parse_bool(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "face_tags.backfill_enabled",
+        Maintenance,
+        "NANOFILE_FACE_TAGS_BACKFILL_ENABLED",
+        Kind::Bool,
+        Apply::Restart,
+        |c| fmt_bool(c.face_tags.backfill_enabled),
+        |c, v| {
+            c.face_tags.backfill_enabled = parse_bool(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "face_tags.min_score",
+        Maintenance,
+        "NANOFILE_FACE_TAGS_MIN_SCORE",
+        Kind::Float,
+        Apply::Live,
+        |c| c.face_tags.min_score.to_string(),
+        |c, v| {
+            let score: f32 = v
+                .trim()
+                .parse()
+                .map_err(|_| format!("not a number: {:?}", v.trim()))?;
+            if !(0.0..=1.0).contains(&score) {
+                return Err("face_tags.min_score must be between 0 and 1".to_string());
+            }
+            c.face_tags.min_score = score;
+            Ok(())
+        }
+    ),
+    setting!(
+        "face_tags.min_size",
+        Maintenance,
+        "NANOFILE_FACE_TAGS_MIN_SIZE",
+        Kind::U32,
+        Apply::Live,
+        |c| c.face_tags.min_size.to_string(),
+        |c, v| {
+            c.face_tags.min_size = parse_u32(v)?;
+            Ok(())
+        }
+    ),
     // · Sandbox
     setting!(
         "sandbox.enabled",
@@ -1740,6 +1796,17 @@ pub static GROUPS: &[GroupDef] = &[
         id: "maintenance_index",
         title_key: "setting.group_maintenance_index",
         keys: &["index.enabled", "index.index_dir", "index.backfill_enabled"],
+    },
+    GroupDef {
+        section: Section::Maintenance,
+        id: "maintenance_face_tags",
+        title_key: "setting.group_maintenance_face_tags",
+        keys: &[
+            "face_tags.enabled",
+            "face_tags.backfill_enabled",
+            "face_tags.min_score",
+            "face_tags.min_size",
+        ],
     },
     GroupDef {
         section: Section::Sandbox,

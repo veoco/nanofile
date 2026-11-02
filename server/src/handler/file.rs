@@ -235,6 +235,7 @@ pub async fn file_post_handler(
             let scheduler = crate::service::index::IndexScheduler::new(
                 state.tasks.clone(),
                 state.indexer.is_some(),
+                cfg!(feature = "face-tags") && state.config().face_tags.enabled,
             );
             rename_entry(
                 state.db.as_ref(),
@@ -609,6 +610,7 @@ pub async fn create_file_v21(
         let scheduler = crate::service::index::IndexScheduler::new(
             state.tasks.clone(),
             state.indexer.is_some(),
+            cfg!(feature = "face-tags") && state.config().face_tags.enabled,
         );
         self::rename_entry(
             state.db.as_ref(),

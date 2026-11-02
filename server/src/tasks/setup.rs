@@ -43,6 +43,7 @@ pub fn install_default_jobs(
     block_store: &DynBlockStorage,
     indexer: Option<&TextIndexer>,
     index_backfill_enabled: bool,
+    face_tags: &crate::settings::RuntimeConfig,
     temp_file_manager: &TempFileManager,
     temp_upload_ttl_hours: u64,
     enc_mode: BlockEncryptionMode,
@@ -72,7 +73,9 @@ pub fn install_default_jobs(
 
     // The handle the file services submit index work through; disabled when
     // there is no indexer to write to, so a call site never has to ask.
-    let scheduler = IndexScheduler::new(tasks.clone(), indexer.is_some());
+    let face_tags_config = face_tags.get();
+    let face_tags_enabled = cfg!(feature = "face-tags") && face_tags_config.face_tags.enabled;
+    let scheduler = IndexScheduler::new(tasks.clone(), indexer.is_some(), face_tags_enabled);
 
     // Copy and move are reference operations: no blocks are copied, just one
     // tree update plus a commit. They are jobs because the desktop client polls.
@@ -463,6 +466,135 @@ pub fn install_default_jobs(
                 }
             }
         }));
+    }
+
+    // Automatic people tags. The scan job is the upload/sync path; the
+    // backfill pass catches images that predate the feature.
+    #[cfg(feature = "face-tags")]
+    if face_tags_enabled {
+        jobs.push(job(JobKey::FaceTagScan, {
+            let repos = repos.clone();
+            let block_store = block_store.clone();
+            let face_tags = face_tags.clone();
+            move |ctx, params| {
+                let repos = repos.clone();
+                let block_store = block_store.clone();
+                let face_tags = face_tags.clone();
+                async move {
+                    let p: IndexFilesParams = parse_params(params)?;
+                    let targets: Vec<crate::service::face_tags::ScanTarget> = p
+                        .files
+                        .into_iter()
+                        .map(|file| crate::service::face_tags::ScanTarget {
+                            path: file.path,
+                            fs_id: file.fs_id.unwrap_or_default(),
+                        })
+                        .collect();
+                    let svc = crate::service::face_tags::FaceTagService::new(
+                        repos,
+                        block_store,
+                        face_tags,
+                    );
+                    let counts = svc
+                        .scan_paths(Some(&ctx), &p.repo_id, &targets)
+                        .await
+                        .map_err(|e| map_abort(&ctx, e))?;
+                    ctx.set_detail("indexed", serde_json::json!(counts.indexed));
+                    ctx.set_detail("skipped", serde_json::json!(counts.skipped));
+                    ctx.set_detail("failed", serde_json::json!(counts.failed));
+                    if counts.indexed == 0 && counts.failed == 0 {
+                        return Ok(Outcome::idle(format!(
+                            "checked {} image(s), no new faces",
+                            counts.total()
+                        )));
+                    }
+                    Ok(Outcome::success(
+                        format!(
+                            "Scanned {} image(s): tagged {}, skipped {}, failed {}",
+                            counts.total(),
+                            counts.indexed,
+                            counts.skipped,
+                            counts.failed
+                        ),
+                        Some(counts.total()),
+                    ))
+                }
+            }
+        }));
+
+        if face_tags_config.face_tags.backfill_enabled {
+            let cursor = Arc::new(std::sync::Mutex::new(0usize));
+            jobs.push(job(JobKey::FaceTagBackfill, {
+                let repos = repos.clone();
+                let block_store = block_store.clone();
+                let face_tags = face_tags.clone();
+                let cursor = cursor.clone();
+                move |ctx, _params| {
+                    let repos = repos.clone();
+                    let block_store = block_store.clone();
+                    let face_tags = face_tags.clone();
+                    let cursor = cursor.clone();
+                    async move {
+                        let svc = crate::service::face_tags::FaceTagService::new(
+                            repos,
+                            block_store,
+                            face_tags,
+                        );
+                        let report = svc
+                            .backfill_pass(Some(&ctx), &cursor)
+                            .await
+                            .map_err(|e| map_abort(&ctx, e))?;
+                        ctx.set_detail("checked", serde_json::json!(report.files_checked));
+                        ctx.set_detail("repos", serde_json::json!(report.repos_scanned));
+                        ctx.set_detail("indexed", serde_json::json!(report.counts.indexed));
+                        if report.counts.indexed == 0 && report.counts.failed == 0 {
+                            return Ok(Outcome::idle(format!(
+                                "checked {} image(s) in {} librar(ies), nothing to tag",
+                                report.files_checked, report.repos_scanned
+                            )));
+                        }
+                        Ok(Outcome::success(
+                            format!(
+                                "Checked {} image(s) in {} librar(ies): tagged {}, skipped {}, failed {}",
+                                report.files_checked,
+                                report.repos_scanned,
+                                report.counts.indexed,
+                                report.counts.skipped,
+                                report.counts.failed
+                            ),
+                            Some(report.counts.total()),
+                        ))
+                    }
+                }
+            }));
+        } else {
+            skipped.push(SkippedTask::job(
+                JobKey::FaceTagBackfill,
+                SkipReason::FaceTagsOff,
+            ));
+        }
+    }
+    #[cfg(not(feature = "face-tags"))]
+    {
+        skipped.push(SkippedTask::job(
+            JobKey::FaceTagScan,
+            SkipReason::FaceTagsOff,
+        ));
+        skipped.push(SkippedTask::job(
+            JobKey::FaceTagBackfill,
+            SkipReason::FaceTagsOff,
+        ));
+    }
+    #[cfg(feature = "face-tags")]
+    if !face_tags_enabled {
+        skipped.push(SkippedTask::job(
+            JobKey::FaceTagScan,
+            SkipReason::FaceTagsOff,
+        ));
+        skipped.push(SkippedTask::job(
+            JobKey::FaceTagBackfill,
+            SkipReason::FaceTagsOff,
+        ));
     }
 
     // The low-load pass over files the index has never seen or whose document an

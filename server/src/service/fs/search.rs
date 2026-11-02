@@ -132,6 +132,88 @@ impl SearchService {
         let mut seen = std::collections::HashSet::new();
         let mut all_results: Vec<FileSearchResult> = Vec::new();
 
+        // Phase 0: tag names and the people-tag aliases. This runs before full
+        // text so an exact tag hit is not pushed out by content matches.
+        if has_accessible_repos && !req.filename_only && all_results.len() < MAX_SEARCH_RESULTS {
+            let alias_keys = tag_keys_for_query(q);
+            let q_lower = q.to_lowercase();
+            for found_repo_id in &repo_ids {
+                if all_results.len() >= MAX_SEARCH_RESULTS {
+                    break;
+                }
+                let tags = match self.repos.repo_tag.find_by_repo_id(found_repo_id).await {
+                    Ok(tags) => tags,
+                    Err(_) => continue,
+                };
+                let matching: Vec<_> = tags
+                    .into_iter()
+                    .filter(|tag| {
+                        tag.name.to_lowercase() == q_lower
+                            || tag
+                                .label_key
+                                .as_deref()
+                                .is_some_and(|key| alias_keys.contains(&key))
+                    })
+                    .collect();
+                if matching.is_empty() {
+                    continue;
+                }
+                let repo_record = match self.repos.repo.find_by_id(found_repo_id).await {
+                    Ok(Some(repo)) => repo,
+                    _ => continue,
+                };
+                let head = match repo_record.head_commit_id.as_deref() {
+                    Some(head_id) => self
+                        .repos
+                        .commit
+                        .find_by_repo_and_commit_id(found_repo_id, head_id)
+                        .await
+                        .ok()
+                        .flatten(),
+                    None => None,
+                };
+                let Some(head) = head else { continue };
+                if head.root_id == EMPTY_SHA1 {
+                    continue;
+                }
+                for tag in matching {
+                    if all_results.len() >= MAX_SEARCH_RESULTS {
+                        break;
+                    }
+                    let links = match self
+                        .repos
+                        .file_tag
+                        .find_by_repo_and_tag_id(found_repo_id, tag.id, None, None)
+                        .await
+                    {
+                        Ok(links) => links,
+                        Err(_) => continue,
+                    };
+                    let remaining = MAX_SEARCH_RESULTS - all_results.len();
+                    let paths: Vec<String> = links
+                        .into_iter()
+                        .take(remaining)
+                        .map(|link| link.file_path)
+                        .filter(|path| seen.insert((found_repo_id.clone(), path.clone())))
+                        .collect();
+                    if paths.is_empty() {
+                        continue;
+                    }
+                    let highlights = vec![String::new(); paths.len()];
+                    let metas = self
+                        .resolve_file_metadata_batch(
+                            found_repo_id,
+                            &repo_record.name,
+                            &head.root_id,
+                            &paths,
+                            &highlights,
+                        )
+                        .await;
+                    all_results.extend(metas.into_iter().flatten());
+                }
+            }
+        }
+
         // Phase 1: full-text (content) search via Tantivy, in full-text mode only. Filename-only
         // mode skips it because the FS tree walk below is the authoritative filename matcher and
         // covers binary files the index never sees.
@@ -510,5 +592,19 @@ async fn search_fs_tree(
         }
 
         frontier = next;
+    }
+}
+
+/// People-tag aliases only exist when the feature is compiled in; tag names are
+/// still searched without it.
+fn tag_keys_for_query(query: &str) -> Vec<&'static str> {
+    #[cfg(feature = "face-tags")]
+    {
+        crate::face_tags::labels::keys_for_query(query)
+    }
+    #[cfg(not(feature = "face-tags"))]
+    {
+        let _ = query;
+        Vec::new()
     }
 }

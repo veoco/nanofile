@@ -14,6 +14,11 @@ pub struct Model {
     pub name: String,
     #[sea_orm(not_null)]
     pub color: String,
+    /// `manual` for a user-created tag, `vision` for the automatic people tags.
+    #[sea_orm(not_null, default = "manual")]
+    pub source: String,
+    /// Stable key of an automatic tag (`person_any`, `person_single`, ...).
+    pub label_key: Option<String>,
     #[sea_orm(not_null)]
     pub created_at: i64,
 }

@@ -68,6 +68,24 @@ cargo build --release -p server --features tray
 
 GTK 无法交叉编译，因此发布产物里只有三个原生 runner 平台带 tray 变体（Linux amd64、macOS arm64、Windows amd64）。托盘本身的行为在[桌面托盘与 Windows 服务](/zh/guide/deploy/desktop-and-service)。
 
+## 可选 feature：`face-tags`
+
+`--features face-tags` 编译 YuNet 检测器和自动人物标签流水线。它**不在**默认
+feature 里：会引入 Candle、Rayon 和 217 KB 的嵌入模型，而且扫描本身仍要等
+`[face_tags] enabled` 打开后才运行。
+
+```bash
+cargo build --release -p server --features face-tags
+```
+
+模型是 MIT 许可，已签入 `server/models/`，同目录有模型卡、许可证和 SHA-256。
+`tools/face_tags/convert_yunet.py` 只用 Python 标准库，把上游 ONNX 转成
+safetensors。CI 会用该 feature 跑 `cargo clippy`/`cargo test`，release 和
+nightly 构建也编进去。
+
+`face-tags` 与 `tray` 互相独立；发布版托盘变体使用
+`--features tray,face-tags`。
+
 ## 交叉编译
 
 Linux 目标用 `cargo-zigbuild` 链接：

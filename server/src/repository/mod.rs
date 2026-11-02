@@ -13,6 +13,7 @@ pub mod commit;
 pub mod deleted_repo;
 pub mod email_message;
 pub mod email_verification_token;
+pub mod face_tags;
 pub mod file_lock_timestamp;
 pub mod file_tag;
 pub mod file_trash;
@@ -53,6 +54,7 @@ use crate::repository::commit::*;
 use crate::repository::deleted_repo::*;
 use crate::repository::email_message::*;
 use crate::repository::email_verification_token::*;
+use crate::repository::face_tags::*;
 use crate::repository::file_lock_timestamp::*;
 use crate::repository::file_tag::*;
 use crate::repository::file_trash::*;
@@ -105,6 +107,7 @@ pub struct Repositories {
     pub metadata_record: Arc<dyn MetadataRecordRepository>,
     pub repo_tag: Arc<dyn RepoTagRepository>,
     pub file_tag: Arc<dyn FileTagRepository>,
+    pub face_tags: Arc<dyn FaceTagRepository>,
     pub file_trash: Arc<dyn FileTrashRepository>,
     pub deleted_repo: Arc<dyn DeletedRepoRepository>,
     pub settings: Arc<dyn SettingsRepository>,
@@ -171,6 +174,7 @@ impl Repositories {
             metadata_record: Arc::new(DbMetadataRecordRepository::new(db.clone())),
             repo_tag: Arc::new(DbRepoTagRepository::new(db.clone())),
             file_tag: Arc::new(DbFileTagRepository::new(db.clone())),
+            face_tags: Arc::new(DbFaceTagRepository::new(db.clone())),
             file_trash: Arc::new(DbFileTrashRepository::new(db.clone())),
             deleted_repo: Arc::new(DbDeletedRepoRepository::new(db.clone())),
             settings: Arc::new(DbSettingsRepository::new(db.clone())),

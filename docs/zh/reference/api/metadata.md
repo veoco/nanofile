@@ -49,6 +49,8 @@ Nanofile 实现的 Seafile 元数据服务、标签接口，以及两套搜索 A
       "_id": "1",
       "_tag_name": "Important",
       "_tag_color": "#ff0000",
+      "_tag_source": "manual",
+      "_tag_key": null,
       "_tag_file_links": [],
       "_creator": "",
       "_last_modifier": "",
@@ -59,6 +61,10 @@ Nanofile 实现的 Seafile 元数据服务、标签接口，以及两套搜索 A
   "metadata": []
 }
 ```
+
+`_tag_source` 为 `manual` 表示用户创建的标签，`vision` 表示自动人物标签；
+`_tag_key` 是稳定键（`person_any`、`person_single`、`person_group`），手动
+标签为 `null`。
 
 需要 `tag.read`。
 

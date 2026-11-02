@@ -308,6 +308,7 @@ export function openRightPanel(d) {
         chip.innerHTML =
           '<span class="inline-block h-1.5 w-1.5 rounded-full" style="background-color:' + escapeAttr(tagColor) + ';"></span>' +
           escapeHtml(tag.name) +
+          (tag.source === "vision" ? '<span class="nf-tag-auto" style="--tag-color:' + escapeAttr(tagColor) + ';" title="' + escapeAttr(__t('fb.auto_tag')) + '">' + escapeHtml(__t('fb.auto_tag_short')) + '</span>' : "") +
           '<button type="button" class="js-rp-tag-remove hover:text-err" data-tag-id="' + encodeURIComponent(tag.id) + '" title="' + escapeAttr(__t('fb.remove_tag')) + '">' +
           '  <svg class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>' +
           "</button>";
@@ -343,7 +344,7 @@ export function openRightPanel(d) {
       var tagData = results[0] || {};
       var recData = results[1] || {};
       allTags = (tagData.results || []).map(function (t) {
-        return { id: t._id, name: t._tag_name, color: t._tag_color };
+        return { id: t._id, name: t._tag_name, color: t._tag_color, source: t._tag_source || "manual" };
       });
       if (tagDatalist) {
         tagDatalist.innerHTML = "";

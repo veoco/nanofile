@@ -16,6 +16,9 @@ feature explicitly:
 
 ```bash
 cargo test -p server --features tray --bin nanofile
+# Automatic people tags and the embedded YuNet model:
+cargo test -p server --features face-tags --lib face_tags
+cargo test -p server --features face-tags --test face_tags_model_test
 ```
 
 ## Frontend

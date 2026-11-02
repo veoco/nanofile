@@ -9,6 +9,8 @@ pub mod app;
 pub mod body_limit;
 pub mod desktop;
 pub mod domain;
+#[cfg(feature = "face-tags")]
+pub mod face_tags;
 pub mod filters;
 pub mod fs;
 pub mod handler;
@@ -374,6 +376,7 @@ impl AppState {
             &block_store,
             indexer.as_ref(),
             config.index.backfill_enabled,
+            &runtime,
             &temp_file_manager,
             config.storage.temp_upload_ttl_hours,
             enc_mode,
@@ -538,7 +541,11 @@ impl AppState {
     /// Where a file mutation submits the index work it implies. Disabled when there is no
     /// indexer, so a call site never has to ask.
     pub fn index_scheduler(&self) -> crate::service::index::IndexScheduler {
-        crate::service::index::IndexScheduler::new(self.tasks.clone(), self.indexer.is_some())
+        crate::service::index::IndexScheduler::new(
+            self.tasks.clone(),
+            self.indexer.is_some(),
+            cfg!(feature = "face-tags") && self.config().face_tags.enabled,
+        )
     }
 
     pub fn file_service(&self) -> crate::service::fs::file::FileService {

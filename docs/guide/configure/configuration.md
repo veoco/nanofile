@@ -127,7 +127,8 @@ setting means. It is not editable from the interface.
 `[server]` networking and feature switches; `[database]` connection;
 `[storage]` directories and quotas; `[auth]` login, password and rate limits;
 `[ui]` language; `[email]` mail; `[admin_init]` first-start admin;
-`[logging]` logs; `[gc]` garbage collection; `[index]` search;
+`[logging]` logs; `[gc]` garbage collection; `[index]` search; `[face_tags]`
+automatic people tags;
 `[sandbox]` the confinement over untrusted parsing; `[notification]`
 notifications; `[tasks]` background tasks; `[settings]` how the file and the
 saved settings layer.

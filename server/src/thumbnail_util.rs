@@ -198,7 +198,7 @@ pub fn is_thumbnail_image_ext(ext: &str) -> bool {
 }
 
 /// Decode raw image bytes and apply any EXIF orientation tag.
-fn load_image_with_orientation(bytes: &[u8]) -> Result<DynamicImage, AppError> {
+pub(crate) fn load_image_with_orientation(bytes: &[u8]) -> Result<DynamicImage, AppError> {
     // Cap the decoded source dimensions so a small file that declares a huge
     // size (a decompression bomb) fails before the decoder allocates
     // width×height×bytes. `max_alloc` keeps the 512 MiB crate default.

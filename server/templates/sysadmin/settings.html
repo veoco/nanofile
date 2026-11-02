@@ -418,7 +418,7 @@
                     {# The unit is rendered here rather than written into the
                        label, so the label reads on its own. #}
                     <div class="flex w-full items-center gap-2">
-                        <input class="input mono w-full" type="number" min="0" step="1"
+                        <input class="input mono w-full" type="number" min="0" step="any"
                                name="{{ row.key }}" id="field-{{ row.key }}" value="{{ row.value }}">
                         {% if let Some(unit) = row.unit %}
                         <span class="text-[12px] text-ink-3 whitespace-nowrap">{{ unit }}</span>

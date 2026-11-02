@@ -233,6 +233,14 @@ fn main() -> anyhow::Result<()> {
         probe_path,
     } = &command
     {
+        // Candle runs its convolutions on a Rayon pool. With many worker threads,
+        // glibc creates one 64 MiB malloc arena per thread; on a 32-core host that
+        // is gigabytes of address space for a 53K-parameter model. One arena keeps
+        // the memory bound meaningful without changing the result.
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        unsafe {
+            libc::mallopt(libc::M_ARENA_MAX, 1);
+        }
         let profile =
             server::sandbox::Profile::parse(profile).unwrap_or(server::sandbox::Profile::Documents);
         // The requirement the child judges itself by: the master switch, and nothing

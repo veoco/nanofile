@@ -469,6 +469,30 @@ impl TestServer {
         .await
     }
 
+    /// Start a server with automatic people tags enabled and no backfill.
+    #[cfg(feature = "face-tags")]
+    pub async fn start_with_face_tags() -> Self {
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            |config| {
+                config.face_tags.enabled = true;
+                config.face_tags.backfill_enabled = false;
+            },
+        )
+        .await
+    }
+
     /// Start a server, applying `tweak` to the server config before the app is
     /// built (for server-info optional-field / feature-gate tests).
     #[allow(clippy::too_many_arguments)]
@@ -627,6 +651,7 @@ impl TestServer {
                 index_dir: index_dir.clone(),
                 ..Default::default()
             },
+            face_tags: infra::config::FaceTagsConfig::default(),
             sandbox: infra::config::SandboxConfig::default(),
             tasks: infra::config::TaskConfig {
                 max_active_tasks: task_limits.unwrap_or_default().max_active_tasks,
@@ -1353,6 +1378,32 @@ impl TestFixture {
         let repo_id = create_test_repo(&client, &api_token, "test-repo").await;
         let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
 
+        Self {
+            server,
+            client,
+            email: "test@example.com".to_string(),
+            password: "password".to_string(),
+            api_token,
+            repo_id,
+            sync_token,
+            user_id,
+        }
+    }
+
+    /// Create a test environment with automatic people tags enabled.
+    #[cfg(feature = "face-tags")]
+    pub async fn new_with_face_tags() -> Self {
+        let server = TestServer::start_with_face_tags().await;
+        let client = server.client();
+        let db = &*server.db;
+
+        let user_id = create_test_user(db, "test@example.com", "password").await;
+        let resp = client.login("test@example.com", "password").await;
+        assert_eq!(resp.status(), 200, "login failed");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let api_token = body["token"].as_str().unwrap().to_string();
+        let repo_id = create_test_repo(&client, &api_token, "test-repo").await;
+        let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
         Self {
             server,
             client,

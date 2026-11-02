@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "models": {
+    "yunet": {
+      "file": "yunet.safetensors",
+      "version": 1,
+      "bytes": 221608,
+      "sha256": "c6379b3fef1d75acb4d7469527e97ce340779a15d9ae902233572132490d36ef",
+      "license": "MIT",
+      "license_file": "LICENSES/YuNet-LICENSE",
+      "source": "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet",
+      "source_commit": "f12e12798e8314f7c074a6656816c048dcc95b7a"
+    }
+  }
+}

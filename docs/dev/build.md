@@ -94,6 +94,26 @@ GTK cannot be cross-compiled, so only the three native runner platforms ship a
 tray variant (Linux amd64, macOS arm64, Windows amd64). What the tray itself does
 is in [Desktop tray and Windows service](/guide/deploy/desktop-and-service).
 
+## Optional feature: `face-tags`
+
+`--features face-tags` compiles the YuNet detector and the automatic people-tag
+pipeline. It is **not** in the default feature set: it adds Candle, Rayon and a
+217 KB embedded model, and the scanner is still off until `[face_tags] enabled`
+is set.
+
+```bash
+cargo build --release -p server --features face-tags
+```
+
+The model is MIT-licensed and checked into `server/models/`; the card, licence
+and SHA-256 live beside it. `tools/face_tags/convert_yunet.py` regenerates the
+safetensors file from the published ONNX with the Python standard library only.
+CI runs `cargo clippy`/`cargo test` with this feature, and release/nightly builds
+compile it in.
+
+`face-tags` is independent of `tray`; the release tray variant uses
+`--features tray,face-tags`.
+
 ## Cross-compilation
 
 Linux targets are linked with `cargo-zigbuild`:

@@ -738,6 +738,7 @@ fn skip_reason_key(reason: SkipReason) -> &'static str {
         SkipReason::IndexOff => "admin.skip_index_off",
         SkipReason::IndexBackfillOff => "admin.skip_index_backfill_off",
         SkipReason::MailOff => "admin.skip_mail_off",
+        SkipReason::FaceTagsOff => "admin.skip_face_tags_off",
     }
 }
 
