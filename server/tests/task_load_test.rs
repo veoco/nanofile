@@ -10,7 +10,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use common::TestFixture;
+use common::{TestFixture, TestServer};
 use server::tasks::admission::LoadThresholds;
 use server::tasks::registry::RegisteredJob;
 use server::tasks::run::{JobState, Outcome, Params, Viewer};
@@ -242,5 +242,21 @@ async fn interactive_requests_stay_responsive_while_a_heavy_job_runs() {
     assert_eq!(
         tasks.store().get(&run_id).unwrap().state,
         JobState::Cancelled
+    );
+}
+
+/// A value from the config file, the environment or a saved row reaches the
+/// process-lifetime task system when it is built, before any settings save.
+#[tokio::test]
+async fn a_configured_load_aware_switch_is_on_before_any_save() {
+    let server = TestServer::start_with_task_config(|config| {
+        config.load_aware = true;
+        config.load_sample_interval_secs = 1;
+    })
+    .await;
+
+    assert!(
+        server.state.tasks.load_aware(),
+        "the configured load-aware switch must be applied when the server is built"
     );
 }

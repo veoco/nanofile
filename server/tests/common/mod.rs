@@ -170,6 +170,29 @@ impl TestServer {
         .await
     }
 
+    /// Start a server with arbitrary `tasks.*` tweaks, applied before the app is
+    /// built so startup-time captures see them.
+    pub async fn start_with_task_config(
+        tweak: impl FnOnce(&mut infra::config::TaskConfig) + Send + 'static,
+    ) -> Self {
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            move |config| tweak(&mut config.tasks),
+        )
+        .await
+    }
+
     /// Start a server with a custom background copy/move task limit. Useful
     /// for testing the async copy DoS defenses.
     pub async fn start_with_task_limits(limits: TaskLimits) -> Self {

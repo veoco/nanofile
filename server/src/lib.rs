@@ -79,6 +79,24 @@ fn configured_helper(ffmpeg_path: &str) -> std::path::PathBuf {
     }
 }
 
+/// Push the task limits and load-aware settings of `config` into the task system.
+///
+/// This runs once when a generation is built, before the sampler starts, and
+/// again when either setting is saved: the startup path and the live path share
+/// one implementation, so a value from the config file or the environment is
+/// applied exactly like a saved one.
+fn apply_task_settings(tasks: &TaskSystem, config: &infra::config::TaskConfig) {
+    tasks.set_limits(crate::tasks::TaskLimits {
+        max_active_total: config.max_active_tasks as usize,
+        max_active_per_user: config.max_active_per_user as usize,
+        runs: crate::tasks::store::RunLimits {
+            max_retained_bytes: config.max_retained_bytes as usize,
+            ..Default::default()
+        },
+    });
+    tasks.configure_load(config.load_aware, config.load_sample_interval_secs);
+}
+
 /// Unified application state injected into all axum handlers.
 #[derive(Clone)]
 pub struct AppState {
@@ -264,6 +282,10 @@ impl AppState {
                 shutdown_token.child_token(),
             )
         });
+        // A value from the config file, the environment or a saved row has to reach
+        // this process-lifetime object before the schedules start: the sampler reads
+        // its interval once, and the admin page reads the switch from here.
+        apply_task_settings(&tasks, &config.tasks);
 
         let notification_manager =
             if config.notification.enabled && !config.notification.private_key.is_empty() {
@@ -444,19 +466,8 @@ impl AppState {
         for hook in hooks {
             match hook {
                 Hook::RateLimits => self.auth_limiters.apply(&config.auth),
-                Hook::TaskSystem => self.tasks.set_limits(crate::tasks::TaskLimits {
-                    max_active_total: config.tasks.max_active_tasks as usize,
-                    max_active_per_user: config.tasks.max_active_per_user as usize,
-                    runs: crate::tasks::store::RunLimits {
-                        max_retained_bytes: config.tasks.max_retained_bytes as usize,
-                        ..Default::default()
-                    },
-                }),
-                Hook::TaskLoad => {
-                    self.tasks.configure_load(
-                        config.tasks.load_aware,
-                        config.tasks.load_sample_interval_secs,
-                    );
+                Hook::TaskSystem | Hook::TaskLoad => {
+                    apply_task_settings(&self.tasks, &config.tasks);
                 }
                 Hook::NotificationManager => {
                     if let Some(manager) = &self.notification_manager {
