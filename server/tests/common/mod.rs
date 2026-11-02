@@ -143,6 +143,55 @@ impl TestServer {
         Self::start_with_config(false, true, 30, 90).await
     }
 
+    /// Start a server whose index is on but whose background backfill is off.
+    pub async fn start_with_index_no_backfill() -> Self {
+        Self::start_full_tweaked(
+            false,
+            true,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            |config| {
+                config.index.backfill_enabled = false;
+            },
+        )
+        .await
+    }
+
+    /// Start a server with the index switch on but no usable index directory, so
+    /// the writer fails to open like it does after a lock conflict.
+    pub async fn start_with_broken_index() -> Self {
+        Self::start_full_tweaked(
+            false,
+            false,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            |config| {
+                config.index.enabled = true;
+                std::fs::create_dir_all(&config.storage.block_dir).unwrap();
+                let path = config.storage.block_dir.join("index-is-a-file");
+                std::fs::write(&path, b"not a directory").unwrap();
+                config.index.index_dir = path;
+            },
+        )
+        .await
+    }
+
     /// Start a server with notification and custom keepalive intervals.
     /// Useful for testing keepalive/ping-pong behavior with short timeouts.
     pub async fn start_with_custom_keepalive(ping_interval: u64, client_timeout: u64) -> Self {
@@ -493,7 +542,6 @@ impl TestServer {
     }
 
     /// Start a server with automatic people tags enabled and no backfill.
-    #[cfg(feature = "face-tags")]
     pub async fn start_with_face_tags() -> Self {
         Self::start_full_tweaked(
             false,
@@ -1414,7 +1462,6 @@ impl TestFixture {
     }
 
     /// Create a test environment with automatic people tags enabled.
-    #[cfg(feature = "face-tags")]
     pub async fn new_with_face_tags() -> Self {
         let server = TestServer::start_with_face_tags().await;
         let client = server.client();

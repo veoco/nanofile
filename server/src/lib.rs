@@ -9,7 +9,6 @@ pub mod app;
 pub mod body_limit;
 pub mod desktop;
 pub mod domain;
-#[cfg(feature = "face-tags")]
 pub mod face_tags;
 pub mod filters;
 pub mod fs;
@@ -48,6 +47,7 @@ use crate::service::auth::pow::PowStore;
 use crate::service::auth::rate_limit::AuthRateLimiters;
 use crate::settings::{RuntimeConfig, SettingsLayers, SettingsService};
 use crate::tasks::TaskSystem;
+use base::error::AppError;
 use infra::config::Config;
 use infra::crypto::password_manager::PasswordManager;
 use infra::storage::DynBlockStorage;
@@ -111,7 +111,8 @@ pub struct AppState {
     pub token_manager: Arc<AccessTokenManager>,
     /// WebSocket notification manager. `None` if the notification feature is disabled.
     pub notification_manager: Option<NotificationManager>,
-    /// Full-text search indexer. `None` when indexing is disabled in config.
+    /// Full-text search indexer. `None` when indexing is disabled in config or
+    /// the index directory could not be opened for writing.
     pub indexer: Option<TextIndexer>,
     pub repos: Arc<crate::repository::Repositories>,
     /// Aggregated authentication rate limiters: login, reset, registration, TOTP, 2FA-disable.
@@ -167,6 +168,15 @@ pub struct ReindexProgress {
     pub creator_id: i32,
 }
 
+/// Where this generation's full-text indexer comes from.
+enum IndexerSlot {
+    /// Build one from the generation's config: tests and callers with no loop.
+    Create,
+    /// The process-lifetime writer selected for this generation, which may be
+    /// absent because indexing is off or the index could not be opened.
+    Provided(Option<TextIndexer>),
+}
+
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppState")
@@ -186,7 +196,7 @@ impl AppState {
     /// settings table have.
     pub fn new(db: DatabaseConnection, config: Config, temp_file_manager: TempFileManager) -> Self {
         let layers = SettingsLayers::plain(&config);
-        Self::build(db, layers, temp_file_manager, None)
+        Self::build(db, layers, temp_file_manager, None, IndexerSlot::Create)
     }
 
     /// Build with the real layers: the config file plus the saved settings.
@@ -197,7 +207,7 @@ impl AppState {
         layers: SettingsLayers,
         temp_file_manager: TempFileManager,
     ) -> Self {
-        Self::build(db, layers, temp_file_manager, None)
+        Self::build(db, layers, temp_file_manager, None, IndexerSlot::Create)
     }
 
     /// Build with a task system that outlives this generation: the binary passes the
@@ -209,7 +219,32 @@ impl AppState {
         temp_file_manager: TempFileManager,
         tasks: Arc<TaskSystem>,
     ) -> Self {
-        Self::build(db, layers, temp_file_manager, Some(tasks))
+        Self::build(
+            db,
+            layers,
+            temp_file_manager,
+            Some(tasks),
+            IndexerSlot::Create,
+        )
+    }
+
+    /// Build with the process-lifetime task system *and* the index writer selected
+    /// for this generation. The binary uses this so a restart reuses the writer
+    /// instead of trying to lock the index directory a second time.
+    pub fn new_with_layers_tasks_and_indexer(
+        db: DatabaseConnection,
+        layers: SettingsLayers,
+        temp_file_manager: TempFileManager,
+        tasks: Arc<TaskSystem>,
+        indexer: Option<TextIndexer>,
+    ) -> Self {
+        Self::build(
+            db,
+            layers,
+            temp_file_manager,
+            Some(tasks),
+            IndexerSlot::Provided(indexer),
+        )
     }
 
     fn build(
@@ -217,6 +252,7 @@ impl AppState {
         layers: SettingsLayers,
         temp_file_manager: TempFileManager,
         tasks: Option<Arc<TaskSystem>>,
+        indexer_slot: IndexerSlot,
     ) -> Self {
         let db = Arc::new(db);
         // The ciphers are derived from `secret_key`, a read-only setting: it can only come
@@ -352,24 +388,19 @@ impl AppState {
         crate::sandbox::worker::configure_helper(configured_helper(&config.storage.ffmpeg_path));
 
         // Full-text indexer (its commit task is registered below with the other jobs).
-        let indexer = if config.index.enabled {
-            match TextIndexer::new(&config.index.index_dir) {
-                Ok(idx) => {
-                    tracing::info!(
-                        "Full-text indexer initialized at {:?}",
-                        config.index.index_dir
-                    );
-                    Some(idx)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to initialize full-text indexer: {e}. Search will use filename-only mode."
-                    );
-                    None
-                }
+        // The process-lifetime path reuses the writer a previous generation opened;
+        // rebuilding it while old job bodies still hold the lock would fall back to
+        // filename-only search.
+        let indexer = match indexer_slot {
+            IndexerSlot::Create => {
+                let mut slot = None;
+                crate::indexer::for_generation(
+                    &mut slot,
+                    config.index.enabled,
+                    &config.index.index_dir,
+                )
             }
-        } else {
-            None
+            IndexerSlot::Provided(indexer) => indexer,
         };
 
         // Outbound mail: settings, outbox and SMTP transport. The mailer keeps the *handle*,
@@ -397,6 +428,7 @@ impl AppState {
             &config.gc,
             &block_store,
             indexer.as_ref(),
+            config.index.enabled,
             config.index.backfill_enabled,
             &runtime,
             &temp_file_manager,
@@ -549,13 +581,39 @@ impl AppState {
         self.config.get()
     }
 
+    /// The full-text indexer, or the reason there is none for the *running*
+    /// server. A saved switch waiting for a restart is not the same as a switch
+    /// that is off, and an index that could not be opened must not read as one.
+    pub fn text_indexer(&self) -> Result<&TextIndexer, AppError> {
+        self.indexer.as_ref().ok_or_else(|| {
+            let pending_enable = self.settings.pending_restart().contains("index.enabled")
+                && self
+                    .settings
+                    .resolved_one("index.enabled")
+                    .is_some_and(|entry| entry.value == "true");
+            if pending_enable {
+                AppError::BadRequest(
+                    "full-text indexing will be enabled after the server restarts".into(),
+                )
+            } else if self.config().index.enabled {
+                AppError::BadRequest(
+                    "full-text indexing is enabled, but the index could not be opened; \
+                     see the server log"
+                        .into(),
+                )
+            } else {
+                AppError::BadRequest("full-text indexing is not enabled".into())
+            }
+        })
+    }
+
     /// Where a file mutation submits the index work it implies. Disabled when there is no
     /// indexer, so a call site never has to ask.
     pub fn index_scheduler(&self) -> crate::service::index::IndexScheduler {
         crate::service::index::IndexScheduler::new(
             self.tasks.clone(),
             self.indexer.is_some(),
-            cfg!(feature = "face-tags") && self.config().face_tags.enabled,
+            self.config().face_tags.enabled,
         )
     }
 

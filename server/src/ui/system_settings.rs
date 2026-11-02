@@ -132,6 +132,9 @@ pub struct SystemSettingsTemplate {
     pub pending_restart: Vec<String>,
     /// Keys only a full process restart applies, shown apart from the rest.
     pub pending_process_restart: Vec<String>,
+    /// The running configuration has the index on, but this server could not open
+    /// it; search is filename-only until the cause is fixed.
+    pub index_unavailable: bool,
     pub policy: PolicyView,
     pub error: Option<String>,
     pub success: Option<String>,
@@ -320,6 +323,8 @@ async fn render(
         by_key.insert(def.key, row);
     }
     let groups = build_groups(section, by_key);
+    let index_unavailable =
+        section == Section::Maintenance && state.config().index.enabled && state.indexer.is_none();
 
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
     let tpl = SystemSettingsTemplate {
@@ -349,6 +354,7 @@ async fn render(
         drift_keys,
         pending_restart: pending.iter().cloned().collect(),
         pending_process_restart: service.pending_process_restart().iter().cloned().collect(),
+        index_unavailable,
         policy: PolicyView {
             config_policy: match policy.config_policy {
                 infra::settings::ConfigPolicy::Bootstrap => "bootstrap",

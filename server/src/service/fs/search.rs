@@ -595,16 +595,8 @@ async fn search_fs_tree(
     }
 }
 
-/// People-tag aliases only exist when the feature is compiled in; tag names are
-/// still searched without it.
+/// People-tag aliases, so a search for a translated label still finds the files
+/// the automatic tag was attached to.
 fn tag_keys_for_query(query: &str) -> Vec<&'static str> {
-    #[cfg(feature = "face-tags")]
-    {
-        crate::face_tags::labels::keys_for_query(query)
-    }
-    #[cfg(not(feature = "face-tags"))]
-    {
-        let _ = query;
-        Vec::new()
-    }
+    crate::face_tags::labels::keys_for_query(query)
 }

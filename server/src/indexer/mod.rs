@@ -14,7 +14,7 @@
 pub mod extract;
 mod tokenizer;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -258,6 +258,59 @@ pub struct TextIndexer {
     pending: Arc<AtomicUsize>,
     /// Whether a debounced commit task is already scheduled, so concurrent writes coalesce.
     commit_scheduled: Arc<AtomicBool>,
+    /// Canonical directory this writer owns. A restart compares it so the same
+    /// directory reuses the live writer instead of opening a second one.
+    index_dir: PathBuf,
+}
+
+/// Pick the full-text writer for one server generation.
+///
+/// The writer owns an exclusive OS lock on `index_dir`, and the previous
+/// generation's job bodies can still hold a clone when the next generation is
+/// built. Reusing the live writer when the switch and directory are unchanged is
+/// what makes an in-place restart keep the index instead of falling back to
+/// filename-only search.
+pub fn for_generation(
+    shared: &mut Option<TextIndexer>,
+    enabled: bool,
+    index_dir: &Path,
+) -> Option<TextIndexer> {
+    if !enabled {
+        *shared = None;
+        return None;
+    }
+    if let Err(e) = std::fs::create_dir_all(index_dir) {
+        tracing::warn!(
+            "Failed to prepare full-text index directory {:?}: {e}. Search will use filename-only mode.",
+            index_dir
+        );
+        *shared = None;
+        return None;
+    }
+    let canonical = std::fs::canonicalize(index_dir).unwrap_or_else(|_| index_dir.to_path_buf());
+    if let Some(existing) = shared.as_ref()
+        && existing.index_dir() == canonical
+    {
+        tracing::debug!("Reusing full-text indexer at {:?}", canonical);
+        return Some(existing.clone());
+    }
+
+    // A different directory has a different lock, so dropping the previous
+    // writer here is safe even while old job bodies still hold their clones.
+    *shared = None;
+    match TextIndexer::new(index_dir) {
+        Ok(indexer) => {
+            tracing::info!("Full-text indexer initialized at {:?}", index_dir);
+            *shared = Some(indexer.clone());
+            Some(indexer)
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Failed to initialize full-text indexer: {e}. Search will use filename-only mode."
+            );
+            None
+        }
+    }
 }
 
 impl TextIndexer {
@@ -267,6 +320,8 @@ impl TextIndexer {
     pub fn new(index_dir: &Path) -> Result<Self, AppError> {
         std::fs::create_dir_all(index_dir)
             .map_err(|e| AppError::internal(format!("create index dir: {e}")))?;
+        let index_dir =
+            std::fs::canonicalize(index_dir).unwrap_or_else(|_| index_dir.to_path_buf());
 
         let mut schema_builder = Schema::builder();
         schema_builder.add_text_field(FIELD_REPO_ID, STRING | STORED);
@@ -305,7 +360,7 @@ impl TextIndexer {
                 .all(|name| index.schema().get_field(name).is_ok())
         };
 
-        let index = match Index::open_in_dir(index_dir) {
+        let index = match Index::open_in_dir(&index_dir) {
             Ok(index) => {
                 let stale_marker = on_disk.is_some_and(|v| v != SCHEMA_VERSION);
                 if stale_marker || !schema_is_compatible(&index) {
@@ -315,11 +370,11 @@ impl TextIndexer {
                         on_disk,
                         schema_is_compatible(&index)
                     );
-                    std::fs::remove_dir_all(index_dir)
+                    std::fs::remove_dir_all(&index_dir)
                         .map_err(|e| AppError::internal(format!("remove stale index dir: {e}")))?;
-                    std::fs::create_dir_all(index_dir)
+                    std::fs::create_dir_all(&index_dir)
                         .map_err(|e| AppError::internal(format!("create index dir: {e}")))?;
-                    Index::create_in_dir(index_dir, schema.clone())
+                    Index::create_in_dir(&index_dir, schema.clone())
                         .map_err(|e| AppError::internal(format!("create tantivy index: {e}")))?
                 } else {
                     tracing::info!("Opened existing full-text index at {:?}", index_dir);
@@ -332,15 +387,15 @@ impl TextIndexer {
                         "Full-text index meta.json found but corrupt, rebuilding at {:?}",
                         index_dir
                     );
-                    std::fs::remove_dir_all(index_dir).map_err(|e| {
+                    std::fs::remove_dir_all(&index_dir).map_err(|e| {
                         AppError::internal(format!("remove corrupt index dir: {e}"))
                     })?;
-                    std::fs::create_dir_all(index_dir)
+                    std::fs::create_dir_all(&index_dir)
                         .map_err(|e| AppError::internal(format!("create index dir: {e}")))?;
                 } else {
                     tracing::info!("Creating new full-text index at {:?}", index_dir);
                 }
-                Index::create_in_dir(index_dir, schema.clone())
+                Index::create_in_dir(&index_dir, schema.clone())
                     .map_err(|e| AppError::internal(format!("create tantivy index: {e}")))?
             }
         };
@@ -386,7 +441,13 @@ impl TextIndexer {
             reader,
             pending: Arc::new(AtomicUsize::new(0)),
             commit_scheduled: Arc::new(AtomicBool::new(false)),
+            index_dir,
         })
+    }
+
+    /// The canonical directory this writer owns.
+    fn index_dir(&self) -> &Path {
+        &self.index_dir
     }
 
     /// Index a file's text content.
@@ -1309,6 +1370,73 @@ pub(crate) async fn collect_file_entries_under(
         frontier = next;
     }
     Ok(results)
+}
+
+#[cfg(test)]
+mod generation_tests {
+    use super::*;
+
+    #[test]
+    fn the_same_directory_reuses_the_live_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shared = None;
+        let first = for_generation(&mut shared, true, dir.path()).expect("first writer");
+        let second = for_generation(&mut shared, true, dir.path()).expect("reused writer");
+        assert!(
+            Arc::ptr_eq(&first.writer, &second.writer),
+            "a restart with the same switch and directory must reuse the writer"
+        );
+    }
+
+    #[test]
+    fn switching_the_index_off_drops_the_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shared = None;
+        let first = for_generation(&mut shared, true, dir.path()).expect("first writer");
+        drop(first);
+
+        assert!(for_generation(&mut shared, false, dir.path()).is_none());
+        assert!(shared.is_none(), "the shared slot must be released");
+        assert!(
+            for_generation(&mut shared, true, dir.path()).is_some(),
+            "switching it back on opens a new writer"
+        );
+    }
+
+    #[test]
+    fn a_changed_directory_opens_another_writer() {
+        let first_dir = tempfile::tempdir().unwrap();
+        let second_dir = tempfile::tempdir().unwrap();
+        let mut shared = None;
+        let first = for_generation(&mut shared, true, first_dir.path()).expect("first writer");
+        let second = for_generation(&mut shared, true, second_dir.path()).expect("second writer");
+
+        assert!(!Arc::ptr_eq(&first.writer, &second.writer));
+        assert_eq!(
+            second.index_dir(),
+            std::fs::canonicalize(second_dir.path()).unwrap()
+        );
+    }
+
+    #[test]
+    fn canonical_paths_are_the_same_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut shared = None;
+        let first = for_generation(&mut shared, true, dir.path()).expect("first writer");
+        let second = for_generation(&mut shared, true, &dir.path().join(".")).expect("reused");
+        assert!(Arc::ptr_eq(&first.writer, &second.writer));
+    }
+
+    #[test]
+    fn an_unusable_directory_is_reported_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("not-a-directory");
+        std::fs::write(&file, b"file").unwrap();
+        let mut shared = None;
+
+        assert!(for_generation(&mut shared, true, &file).is_none());
+        assert!(shared.is_none());
+    }
 }
 
 #[cfg(test)]

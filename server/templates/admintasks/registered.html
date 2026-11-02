@@ -30,6 +30,15 @@
 <div class="mt-5">{% include "includes/alert_success.html" %}</div>
 {% endif %}
 
+{% if has_pending_restart %}
+<div class="nf-banner is-warn mt-5">
+    <p>
+        {{ t.tr("admin.tasks_pending_restart") }}
+        <a class="underline underline-offset-2" href="/sysadmin/settings/">{{ t.tr("admin.tasks_pending_restart_link") }}</a>
+    </p>
+</div>
+{% endif %}
+
 {% if groups.is_empty() %}
 <div class="nf-list mt-5">
     <div class="nf-empty">
@@ -179,6 +188,9 @@
         <div class="nf-prow-main">
             <div class="nf-prow-name">
                 <span class="base">{{ row.name }}</span>
+                {% if row.waiting_for_restart %}
+                <span class="badge badge-red shrink-0">{{ t.tr("setting.pending_restart") }}</span>
+                {% endif %}
             </div>
             <p class="nf-prow-hi text-ink-3">{{ row.reason }}</p>
         </div>

@@ -8,9 +8,11 @@
 mod common;
 
 use common::TestServer;
+use infra::settings::Section;
 use server::i18n::I18n;
 use server::repository::job_run::NewJobRun;
-use server::tasks::spec::JobKey;
+use server::settings::SettingsForm;
+use server::tasks::spec::{JobKey, SkipReason};
 
 const RUNS: &str = "/sysadmin/tasks/";
 const REGISTRY: &str = "/sysadmin/tasks/registered/";
@@ -86,7 +88,11 @@ fn job_name_key(slug: &str) -> String {
 }
 
 async fn admin_server() -> (TestServer, reqwest::Client) {
-    let server = TestServer::start().await;
+    signed_in_admin(TestServer::start().await).await
+}
+
+/// Create the admin account on an already-built server and sign it in.
+async fn signed_in_admin(server: TestServer) -> (TestServer, reqwest::Client) {
     common::create_test_admin(&server.db, "root@example.com", "password123").await;
     let admin = ui_login(&server, "root@example.com", "password123").await;
     (server, admin)
@@ -227,6 +233,129 @@ async fn the_registry_names_the_jobs_it_did_not_register() {
         );
     }
     assert!(body.contains("Not registered on this server"));
+}
+
+/// A switch saved for the next generation is not the same as a switch that is
+/// off: the row and the page say a restart is pending.
+#[tokio::test]
+async fn a_saved_switch_waiting_for_a_restart_is_marked_on_its_job() {
+    let (server, admin) = admin_server().await;
+    let form = SettingsForm {
+        values: [("index.enabled".to_string(), "true".to_string())]
+            .into_iter()
+            .collect(),
+        secrets: Default::default(),
+    };
+    server
+        .state
+        .settings
+        .save(Section::Maintenance, &form, None)
+        .await
+        .expect("saving the index switch");
+    assert!(
+        server
+            .state
+            .settings
+            .pending_restart()
+            .contains("index.enabled")
+    );
+    assert!(
+        server
+            .state
+            .text_indexer()
+            .err()
+            .expect("the running server still has no indexer")
+            .to_string()
+            .contains("after the server restarts")
+    );
+
+    let (_, html) = page(&server, &admin, REGISTRY).await;
+    let body = page_content(&html);
+    let t = I18n::get(None);
+    assert!(body.contains(t.tr("admin.tasks_pending_restart")));
+    let row = row_of(
+        body,
+        r#"data-task-skipped="index-commit""#,
+        r#"data-task-skipped=""#,
+    );
+    assert!(row.contains(t.tr("setting.pending_restart")), "{row}");
+}
+
+/// An index that is enabled but cannot be opened must not read as "off".
+#[tokio::test]
+async fn an_index_that_cannot_open_is_not_reported_as_switched_off() {
+    let (server, admin) = signed_in_admin(TestServer::start_with_broken_index().await).await;
+    assert!(server.state.indexer.is_none());
+    assert!(server.state.tasks.skipped().iter().any(|task| {
+        task.slug == JobKey::IndexCommit.as_str() && task.reason == SkipReason::IndexUnavailable
+    }));
+
+    let (_, html) = page(&server, &admin, REGISTRY).await;
+    let body = page_content(&html);
+    let t = I18n::get(None);
+    let row = row_of(
+        body,
+        r#"data-task-skipped="index-commit""#,
+        r#"data-task-skipped=""#,
+    );
+    assert!(row.contains(t.tr("admin.skip_index_unavailable")), "{row}");
+    assert!(!row.contains(t.tr("admin.skip_index_off")), "{row}");
+    assert!(
+        server
+            .state
+            .text_indexer()
+            .err()
+            .expect("broken index has no writer")
+            .to_string()
+            .contains("could not be opened")
+    );
+}
+
+/// Turning the backfill off is not turning full-text search off.
+#[tokio::test]
+async fn index_backfill_off_is_not_the_master_switch() {
+    let (server, admin) = signed_in_admin(TestServer::start_with_index_no_backfill().await).await;
+    assert!(server.state.tasks.job(JobKey::IndexCommit).is_some());
+    assert!(server.state.tasks.skipped().iter().any(|task| {
+        task.slug == JobKey::IndexBackfill.as_str() && task.reason == SkipReason::IndexBackfillOff
+    }));
+
+    let (_, html) = page(&server, &admin, REGISTRY).await;
+    let body = page_content(&html);
+    let t = I18n::get(None);
+    assert!(body.contains(&format!(r#"data-task="{}""#, JobKey::IndexCommit.as_str())));
+    let row = row_of(
+        body,
+        r#"data-task-skipped="index-backfill""#,
+        r#"data-task-skipped=""#,
+    );
+    assert!(row.contains(t.tr("admin.skip_index_backfill_off")), "{row}");
+    assert!(!row.contains(t.tr("admin.skip_index_off")), "{row}");
+}
+
+/// Turning the face-tag backfill off is not turning the master switch off.
+#[tokio::test]
+async fn a_face_tag_backfill_switch_is_not_the_master_switch() {
+    let (server, admin) = signed_in_admin(TestServer::start_with_face_tags().await).await;
+    assert!(server.state.tasks.job(JobKey::FaceTagScan).is_some());
+    assert!(server.state.tasks.skipped().iter().any(|task| {
+        task.slug == JobKey::FaceTagBackfill.as_str()
+            && task.reason == SkipReason::FaceTagsBackfillOff
+    }));
+
+    let (_, html) = page(&server, &admin, REGISTRY).await;
+    let body = page_content(&html);
+    let t = I18n::get(None);
+    let row = row_of(
+        body,
+        r#"data-task-skipped="face-tag-backfill""#,
+        r#"data-task-skipped=""#,
+    );
+    assert!(
+        row.contains(t.tr("admin.skip_face_tags_backfill_off")),
+        "{row}"
+    );
+    assert!(!row.contains(t.tr("admin.skip_face_tags_off")), "{row}");
 }
 
 async fn seed_run(

@@ -42,6 +42,7 @@ pub fn install_default_jobs(
     gc_config: &GcConfig,
     block_store: &DynBlockStorage,
     indexer: Option<&TextIndexer>,
+    index_enabled: bool,
     index_backfill_enabled: bool,
     face_tags: &crate::settings::RuntimeConfig,
     temp_file_manager: &TempFileManager,
@@ -74,7 +75,7 @@ pub fn install_default_jobs(
     // The handle the file services submit index work through; disabled when
     // there is no indexer to write to, so a call site never has to ask.
     let face_tags_config = face_tags.get();
-    let face_tags_enabled = cfg!(feature = "face-tags") && face_tags_config.face_tags.enabled;
+    let face_tags_enabled = face_tags_config.face_tags.enabled;
     let scheduler = IndexScheduler::new(tasks.clone(), indexer.is_some(), face_tags_enabled);
 
     // Copy and move are reference operations: no blocks are copied, just one
@@ -470,7 +471,6 @@ pub fn install_default_jobs(
 
     // Automatic people tags. The scan job is the upload/sync path; the
     // backfill pass catches images that predate the feature.
-    #[cfg(feature = "face-tags")]
     if face_tags_enabled {
         jobs.push(job(JobKey::FaceTagScan, {
             let repos = repos.clone();
@@ -570,22 +570,10 @@ pub fn install_default_jobs(
         } else {
             skipped.push(SkippedTask::job(
                 JobKey::FaceTagBackfill,
-                SkipReason::FaceTagsOff,
+                SkipReason::FaceTagsBackfillOff,
             ));
         }
     }
-    #[cfg(not(feature = "face-tags"))]
-    {
-        skipped.push(SkippedTask::job(
-            JobKey::FaceTagScan,
-            SkipReason::FaceTagsOff,
-        ));
-        skipped.push(SkippedTask::job(
-            JobKey::FaceTagBackfill,
-            SkipReason::FaceTagsOff,
-        ));
-    }
-    #[cfg(feature = "face-tags")]
     if !face_tags_enabled {
         skipped.push(SkippedTask::job(
             JobKey::FaceTagScan,
@@ -676,11 +664,15 @@ pub fn install_default_jobs(
         ));
     }
     if indexer.is_none() {
-        skipped.push(SkippedTask::job(JobKey::IndexCommit, SkipReason::IndexOff));
-        skipped.push(SkippedTask::job(
-            JobKey::IndexBackfill,
-            SkipReason::IndexOff,
-        ));
+        // An enabled index that could not be opened is not the same thing as an
+        // index the operator switched off; the page must not conflate them.
+        let reason = if index_enabled {
+            SkipReason::IndexUnavailable
+        } else {
+            SkipReason::IndexOff
+        };
+        skipped.push(SkippedTask::job(JobKey::IndexCommit, reason));
+        skipped.push(SkippedTask::job(JobKey::IndexBackfill, reason));
     } else if !index_backfill_enabled {
         skipped.push(SkippedTask::job(
             JobKey::IndexBackfill,

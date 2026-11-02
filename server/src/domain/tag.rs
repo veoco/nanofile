@@ -1,9 +1,9 @@
 //! Stable keys for the automatic (people) tag labels.
 //!
-//! These live outside the `face-tags` feature on purpose: the file browser must
-//! translate automatic tags that a face-tag build already stored, even when this
-//! binary has no detector. The locale key naming (`fb.tag_<label key>`) is
-//! mirrored by `server/frontend/core/tag-label.js`.
+//! These are always compiled in: the file browser must translate automatic tags
+//! that a scan already stored, even while `[face_tags] enabled` is off. The
+//! locale key naming (`fb.tag_<label key>`) is mirrored by
+//! `server/frontend/core/tag-label.js`.
 
 pub const PERSON_ANY: &str = "person_any";
 pub const PERSON_SINGLE: &str = "person_single";

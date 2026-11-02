@@ -1,8 +1,6 @@
 //! End-to-end people tags: upload a portrait, let the scheduled scan run, and
 //! verify the tags, the scan row and the correction path.
 
-#![cfg(feature = "face-tags")]
-
 use std::time::Duration;
 
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};

@@ -26,8 +26,8 @@ MIT-licensed; see `server/models/MODEL_CARD.md` in the repository.
 
 ## Turning it on
 
-The feature is compiled into the release and nightly builds. It is off by
-default because scanning a library costs CPU:
+The detector is compiled into every build. Scanning is off by default because it
+costs CPU:
 
 ```toml
 [face_tags]

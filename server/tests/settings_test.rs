@@ -9,6 +9,7 @@ mod common;
 
 use common::TestServer;
 use infra::settings::{ConfigPolicy, Section, SettingRow, SettingsPolicy};
+use server::i18n::I18n;
 use server::settings::{SecretState, SettingsForm, SettingsLayers, SettingsService};
 
 /// A form that submits non-secret values.
@@ -938,6 +939,22 @@ async fn saving_from_the_page_applies_and_reports_the_source() {
         .unwrap();
     assert_eq!(resp.status(), 302);
     assert!(server.state.config().server.share_download_enabled);
+}
+
+/// The maintenance page must not keep claiming the index is on when the running
+/// server could not open it.
+#[tokio::test]
+async fn the_maintenance_page_reports_an_index_that_could_not_open() {
+    let server = TestServer::start_with_broken_index().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    let (status, html) = page(&server, &admin, "/sysadmin/settings/maintenance/").await;
+    assert_eq!(status, 200);
+    assert!(
+        page_content(&html).contains(I18n::get(None).tr("setting.index_unavailable")),
+        "the page must report the broken index"
+    );
 }
 
 #[tokio::test]

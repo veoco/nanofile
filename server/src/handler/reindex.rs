@@ -62,10 +62,7 @@ pub async fn index_file_text(
     // Only repo owner or admin may modify the index.
     svc.check_repo_admin(&req.repo_id, auth.user_id).await?;
 
-    let indexer = state
-        .indexer
-        .as_ref()
-        .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
+    let indexer = state.text_indexer()?;
 
     svc.index_file_text(indexer, &req.repo_id, &req.path, &req.text)
         .await?;
@@ -92,11 +89,7 @@ pub async fn reindex(
 
     svc.check_repo_admin(&req.repo_id, auth.user_id).await?;
 
-    if state.indexer.is_none() {
-        return Err(AppError::BadRequest(
-            "full-text indexing is not enabled".into(),
-        ));
-    }
+    let _ = state.text_indexer()?;
 
     let rl_key = format!("reindex:{}", auth.user_id);
     if state.auth_limiters.reindex.is_limited(&rl_key) {

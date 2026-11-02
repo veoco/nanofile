@@ -235,7 +235,7 @@ pub async fn file_post_handler(
             let scheduler = crate::service::index::IndexScheduler::new(
                 state.tasks.clone(),
                 state.indexer.is_some(),
-                cfg!(feature = "face-tags") && state.config().face_tags.enabled,
+                state.config().face_tags.enabled,
             );
             rename_entry(
                 state.db.as_ref(),
@@ -491,10 +491,7 @@ pub async fn file_index_text(
     )
     .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let indexer = state
-        .indexer
-        .as_ref()
-        .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
+    let indexer = state.text_indexer()?;
 
     let content = indexer.get_indexed_content(repo_id, &path).await?;
 
@@ -521,10 +518,7 @@ pub async fn reindex_file_handler(
     )
     .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    let indexer = state
-        .indexer
-        .as_ref()
-        .ok_or_else(|| AppError::BadRequest("full-text indexing is not enabled".into()))?;
+    let indexer = state.text_indexer()?;
 
     // One explicit file, one synchronous answer: the UI needs a boolean, not a task id.
     let svc = crate::service::index::IndexService::new(
@@ -610,7 +604,7 @@ pub async fn create_file_v21(
         let scheduler = crate::service::index::IndexScheduler::new(
             state.tasks.clone(),
             state.indexer.is_some(),
-            cfg!(feature = "face-tags") && state.config().face_tags.enabled,
+            state.config().face_tags.enabled,
         );
         self::rename_entry(
             state.db.as_ref(),

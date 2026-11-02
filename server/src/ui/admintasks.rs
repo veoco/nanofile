@@ -70,6 +70,9 @@ pub struct RegisteredTasksTemplate {
     /// Jobs the catalog declares that this server did not register, with the
     /// reason, so a missing job reads as switched off rather than forgotten.
     pub skipped: Vec<SkippedRow>,
+    /// A saved switch is waiting for the next server generation: the rows below
+    /// describe the running server, not the saved configuration.
+    pub has_pending_restart: bool,
     pub error: Option<String>,
     pub success: Option<String>,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
@@ -227,6 +230,9 @@ pub struct SkippedRow {
     pub slug: &'static str,
     pub name: String,
     pub reason: String,
+    /// The switch that would bring it back is saved but waits for a restart;
+    /// that is not the same thing as the switch being off.
+    pub waiting_for_restart: bool,
 }
 
 /// A page of the registry: the heading, and the rows under it.
@@ -736,9 +742,26 @@ fn skip_reason_key(reason: SkipReason) -> &'static str {
         SkipReason::GcDisabled => "admin.skip_gc_disabled",
         SkipReason::EncryptionNotLazy => "admin.skip_encryption_not_lazy",
         SkipReason::IndexOff => "admin.skip_index_off",
+        SkipReason::IndexUnavailable => "admin.skip_index_unavailable",
         SkipReason::IndexBackfillOff => "admin.skip_index_backfill_off",
         SkipReason::MailOff => "admin.skip_mail_off",
         SkipReason::FaceTagsOff => "admin.skip_face_tags_off",
+        SkipReason::FaceTagsBackfillOff => "admin.skip_face_tags_backfill_off",
+    }
+}
+
+/// The saved switch a skipped job's reason belongs to, when restarting would
+/// change the answer. `None` for reasons a restart cannot fix (a read-only mode,
+/// or a missing mailer).
+fn skip_pending_key(reason: SkipReason) -> Option<&'static str> {
+    match reason {
+        SkipReason::NotificationsOff => Some("notification.enabled"),
+        SkipReason::GcDisabled => Some("gc.enabled"),
+        SkipReason::EncryptionNotLazy | SkipReason::MailOff => None,
+        SkipReason::IndexOff | SkipReason::IndexUnavailable => Some("index.enabled"),
+        SkipReason::IndexBackfillOff => Some("index.backfill_enabled"),
+        SkipReason::FaceTagsOff => Some("face_tags.enabled"),
+        SkipReason::FaceTagsBackfillOff => Some("face_tags.backfill_enabled"),
     }
 }
 
@@ -1021,7 +1044,10 @@ async fn render_registered(
     let groups = build_groups(rows);
 
     // Say which declared jobs and services this server does not run, and why,
-    // rather than leaving them out silently.
+    // rather than leaving them out silently. A reason whose switch is saved but
+    // waiting for the next generation is marked, so the page cannot read as a
+    // permanent "off" while the settings page says "on".
+    let pending_restart = state.settings.pending_restart();
     let skipped = state
         .tasks
         .skipped()
@@ -1030,8 +1056,11 @@ async fn render_registered(
             slug: task.slug,
             name: t.tr(&task.name_key).to_string(),
             reason: t.tr(skip_reason_key(task.reason)).to_string(),
+            waiting_for_restart: skip_pending_key(task.reason)
+                .is_some_and(|key| pending_restart.contains(key)),
         })
         .collect();
+    let has_pending_restart = !pending_restart.is_empty();
 
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
 
@@ -1044,6 +1073,7 @@ async fn render_registered(
         active_page: "admintasks",
         groups,
         skipped,
+        has_pending_restart,
         error,
         success,
         left_panel_repos: ctx.left_panel_repos,
@@ -1539,6 +1569,23 @@ mod tests {
             for t in languages() {
                 assert_ne!(t.tr(key), key, "{key} is missing for {}", t.lang);
             }
+        }
+    }
+
+    /// A reason only earns a "waiting for a restart" badge when restarting can
+    /// actually change it, which means the key it names must be restart-only.
+    #[test]
+    fn every_pending_skip_key_is_restart_only() {
+        for reason in SkipReason::ALL {
+            let Some(key) = skip_pending_key(*reason) else {
+                continue;
+            };
+            let def = infra::settings::find(key)
+                .unwrap_or_else(|| panic!("{reason:?} names unknown setting {key}"));
+            assert!(
+                def.apply.is_restart_only(),
+                "{reason:?} names {key}, which a restart cannot apply"
+            );
         }
     }
 

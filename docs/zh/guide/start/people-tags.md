@@ -24,7 +24,7 @@ MIT 许可；仓库里的 `server/models/MODEL_CARD.md` 有完整说明。
 
 ## 开启
 
-该功能已编译进 release 和 nightly 构建，但默认关闭，因为扫描图库会占用 CPU：
+所有构建都包含检测器，但扫描默认关闭，因为扫描图库会占用 CPU：
 
 ```toml
 [face_tags]

@@ -12,9 +12,12 @@ cargo test --workspace
 
 ```bash
 cargo test -p server --features tray --bin nanofile
-# 自动人物标签与内嵌 YuNet 模型：
-cargo test -p server --features face-tags --lib face_tags
-cargo test -p server --features face-tags --test face_tags_model_test
+```
+
+自动人物标签与内嵌 YuNet 模型默认就在测试集里；单独跑它们：
+
+```bash
+cargo test -p server --test face_tags_model_test --test face_tags_test
 ```
 
 ## 前端

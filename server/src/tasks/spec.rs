@@ -162,12 +162,16 @@ pub enum SkipReason {
     GcDisabled,
     /// Block encryption is not in lazy mode, so no plaintext blocks can exist.
     EncryptionNotLazy,
-    /// No full-text indexer, so there is no index to commit.
+    /// `index.enabled = false`, so there is no index to commit.
     IndexOff,
-    /// The binary was built without the `face-tags` feature.
+    /// `index.enabled = true`, but the indexer could not be opened.
+    IndexUnavailable,
+    /// `face_tags.enabled = false`.
     FaceTagsOff,
-    /// `index.backfill_enabled = false`.
+    /// `index.backfill_enabled = false` while the index itself is on.
     IndexBackfillOff,
+    /// `face_tags.backfill_enabled = false` while the master switch is on.
+    FaceTagsBackfillOff,
     /// No mailer, so there is no outbox to drain.
     MailOff,
 }
@@ -179,8 +183,10 @@ impl SkipReason {
         Self::GcDisabled,
         Self::EncryptionNotLazy,
         Self::IndexOff,
+        Self::IndexUnavailable,
         Self::FaceTagsOff,
         Self::IndexBackfillOff,
+        Self::FaceTagsBackfillOff,
         Self::MailOff,
     ];
 }

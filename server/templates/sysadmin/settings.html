@@ -114,6 +114,11 @@
         </p>
     </div>
     {% endif %}
+    {% if index_unavailable %}
+    <div class="nf-banner is-warn mt-5">
+        <p>{{ t.tr("setting.index_unavailable") }}</p>
+    </div>
+    {% endif %}
 
     {# The measured sandbox, on its own page, above the one setting it belongs to:
        one panel, one band per profile, each with its own state and its own four

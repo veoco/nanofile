@@ -718,6 +718,10 @@ async fn run_server_flow(
         server::tasks::TaskLimits::default(),
         tokio_util::sync::CancellationToken::new(),
     );
+    // The full-text writer is process state too: it owns an exclusive lock on
+    // the index directory, and the previous generation's job bodies can still
+    // hold a clone while this generation starts.
+    let mut indexer: Option<server::indexer::TextIndexer> = None;
     let mut first = true;
     loop {
         // Every generation gets a new number, which `/health` reports and the
@@ -734,6 +738,7 @@ async fn run_server_flow(
             &mut listener,
             first,
             &tasks,
+            &mut indexer,
         )
         .await?;
         if !reason.should_restart() {
@@ -753,6 +758,7 @@ async fn run_server(
     listener: &mut Option<server::restart::BoundListener>,
     first: bool,
     tasks: &Arc<server::tasks::TaskSystem>,
+    indexer: &mut Option<server::indexer::TextIndexer>,
 ) -> anyhow::Result<server::restart::StopReason> {
     // Read the saved settings before anything is built: a value an administrator saved must
     // decide the bind address, the data directories, the caches and other startup captures.
@@ -929,11 +935,17 @@ async fn run_server(
     )
     .await;
 
-    let state = Arc::new(AppState::new_with_layers_and_tasks(
+    // Reuse the live writer when this restart did not change the switch or the
+    // directory; opening a second writer would fail its exclusive lock.
+    let generation_indexer =
+        server::indexer::for_generation(indexer, config.index.enabled, &config.index.index_dir);
+
+    let state = Arc::new(AppState::new_with_layers_tasks_and_indexer(
         db,
         layers,
         temp_file_manager,
         tasks.clone(),
+        generation_indexer,
     ));
     // Say what the layering decided: superseded values, pending restarts, unknown
     // rows, unreadable secrets.

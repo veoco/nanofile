@@ -2,8 +2,6 @@
 //! they make a missing/renamed model, an unreviewed licence or a changed hash a
 //! test failure rather than a runtime surprise.
 
-#![cfg(feature = "face-tags")]
-
 use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};

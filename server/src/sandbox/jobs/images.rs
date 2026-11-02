@@ -56,7 +56,6 @@ pub(crate) fn exif(content: &[u8]) -> Result<String, String> {
 
 /// Ask the worker for the face count. The reply is deliberately tiny: no boxes,
 /// crops or embeddings leave the child.
-#[cfg(feature = "face-tags")]
 pub(crate) fn face_tags(
     content: &[u8],
     options: crate::face_tags::DetectOptions,
@@ -173,7 +172,6 @@ fn answer(op: u8, size: u32, data: &[u8]) -> (u8, Vec<u8>) {
             ),
             Err(error) => (b'U', error.to_string().into_bytes()),
         },
-        #[cfg(feature = "face-tags")]
         OP_FACE_TAGS => match face_tags_answer(data, decode_options(size)) {
             Ok(reply) => (
                 b'J',
@@ -185,14 +183,12 @@ fn answer(op: u8, size: u32, data: &[u8]) -> (u8, Vec<u8>) {
     }
 }
 
-#[cfg(feature = "face-tags")]
 fn encode_options(options: crate::face_tags::DetectOptions) -> u32 {
     let score = (options.min_score.clamp(0.0, 1.0) * 1000.0).round() as u32;
     let size = options.min_face_size.clamp(0.0, 65535.0) as u32;
     (score << 16) | size
 }
 
-#[cfg(feature = "face-tags")]
 fn decode_options(raw: u32) -> crate::face_tags::DetectOptions {
     if raw == 0 {
         return crate::face_tags::DetectOptions::default();
@@ -208,7 +204,6 @@ fn decode_options(raw: u32) -> crate::face_tags::DetectOptions {
     options
 }
 
-#[cfg(feature = "face-tags")]
 fn face_tags_answer(
     data: &[u8],
     options: crate::face_tags::DetectOptions,
@@ -222,20 +217,16 @@ fn face_tags_answer(
 /// cannot do the work says so here rather than on a user's first thumbnail.
 pub fn probe() -> (String, JobVerdict) {
     let png = tiny_png();
-    #[allow(unused_mut)] // only the face-tags build appends the second probe
     let (mut token, verdict) = match thumbnail_util::generate_thumbnail_encoded(&png, 16) {
         Ok((bytes, _)) => (format!("image-ok({})", bytes.len()), JobVerdict::Ok),
         Err(error) => (format!("image-failed({error})"), JobVerdict::Failed),
     };
-    #[cfg(feature = "face-tags")]
-    {
-        // A 2x2 image has no faces; this only proves the model loads and runs.
-        // A failure is reported in the detail but does not make the whole image
-        // profile unavailable: thumbnails must keep working.
-        match face_tags_answer(&png, crate::face_tags::DetectOptions::default()) {
-            Ok(summary) => token.push_str(&format!(",face-tags-ok(count={})", summary.face_count)),
-            Err(error) => token.push_str(&format!(",face-tags-failed({error})")),
-        }
+    // A 2x2 image has no faces; this only proves the model loads and runs.
+    // A failure is reported in the detail but does not make the whole image
+    // profile unavailable: thumbnails must keep working.
+    match face_tags_answer(&png, crate::face_tags::DetectOptions::default()) {
+        Ok(summary) => token.push_str(&format!(",face-tags-ok(count={})", summary.face_count)),
+        Err(error) => token.push_str(&format!(",face-tags-failed({error})")),
     }
     (token, verdict)
 }
@@ -291,12 +282,10 @@ mod tests {
     fn the_probe_decodes_and_re_encodes() {
         let (token, job) = probe();
         assert!(token.starts_with("image-ok("), "{token}");
-        #[cfg(feature = "face-tags")]
         assert!(token.contains("face-tags-ok(count=0)"), "{token}");
         assert_eq!(job, JobVerdict::Ok);
     }
 
-    #[cfg(feature = "face-tags")]
     #[test]
     fn the_face_operation_returns_a_count_not_pixels() {
         let (tag, body) = answer(

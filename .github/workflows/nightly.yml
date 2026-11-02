@@ -110,21 +110,21 @@ jobs:
             asset_suffix: linux-amd64-tray
             tw_name: linux-x64
             cross: false
-            features: tray,face-tags
+            features: tray
           - os: macos-latest
             target: aarch64-apple-darwin
             ext: ""
             asset_suffix: macos-arm64-tray
             tw_name: macos-arm64
             cross: false
-            features: tray,face-tags
+            features: tray
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: ".exe"
             asset_suffix: windows-amd64-tray
             tw_name: windows-x64.exe
             cross: false
-            features: tray,face-tags
+            features: tray
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -170,7 +170,7 @@ jobs:
           ${{ matrix.cross && 'cargo zigbuild' || 'cargo build' }}
           --release
           ${{ matrix.cross && format('--target {0}', matrix.target) || '' }}
-          ${{ matrix.features && format('--features {0}', matrix.features) || '--features face-tags' }}
+          ${{ matrix.features && format('--features {0}', matrix.features) || '' }}
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
