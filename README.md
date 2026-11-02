@@ -16,8 +16,8 @@ seahub stack.
 - **Sharing** — share links with a password, an expiry and a view count; anonymous upload links.
 - **Sign-in security** — TOTP two-factor authentication, trusted devices, login lockout and API keys.
 - **Admin console** — users, quotas, email delivery, system settings and background tasks.
-- **Confined parsing** — document, image, EXIF and media parsing runs in bounded child processes.
-- **Automatic people tags** — optional local face detection tags photos as 人物 / 单人 / 合影; no identity or biometric template is stored.
+- **Confined parsing** — document, image, EXIF, media and face detection parsing runs in bounded child processes.
+- **Automatic people tags** — optional local face detection tags photos as People / Single person / Group photo; no identity or biometric template is stored.
 
 ## Quick start
 
