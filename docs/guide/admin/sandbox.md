@@ -6,7 +6,8 @@ memory bound, a CPU bound and a wall-clock timeout, never inside the server:
 - document text extraction for the search index,
 - image thumbnails,
 - media thumbnails (through `ffmpeg`),
-- EXIF and avatar processing.
+- EXIF and avatar processing,
+- face detection for the automatic people tags.
 
 The child bounds and confines itself before it reads a request and prints what it
 established. The server decides from that report, not from what it asked for.
@@ -31,13 +32,16 @@ system decides what can be established.
 
 - **Media thumbnails need `ffmpeg`.** Its path is `storage.ffmpeg_path`; saving it
   re-resolves that grant at once, so the next media request runs the binary you
-  just configured.
+  just configured. People tags on HEIC/HEIF/AVIF photos use the same helper to
+  decode the image first.
 - **With the sandbox off, these features do not run**, and they do not fall back to
   parsing inside the server process. Documents skipped while it was off are
   recorded as retryable and re-indexed once it is back on — so an outage leaves no
   permanently unsearchable file behind.
 - **To see what this host actually gives, read the admin "Sandbox" page**: one
-  band per measured profile, one row per protection, and a state badge per band.
+  band per profile, one row per protection, and a state badge per band. The people
+  tag band is measured only while the feature is on; with it off the band says so
+  and points at its switch, because the detector's probe runs a forward pass.
   Each row says what the item is, whether it is in place, how much it matters and
   what its absence opens; the **resource bound** is marked required. Nothing is
   summarised above them, and there is no grade — the rows are the whole verdict.

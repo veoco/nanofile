@@ -64,6 +64,11 @@ pub const IMAGE_TIMEOUT: Duration =
 pub const MEDIA_TIMEOUT: Duration =
     Duration::from_secs(crate::sandbox::profile_wall_seconds(Profile::Media));
 
+/// Wall-clock ceiling for one face request: load the detector, letterbox the
+/// image and run one forward pass per tile.
+pub const FACE_TIMEOUT: Duration =
+    Duration::from_secs(crate::sandbox::profile_wall_seconds(Profile::Faces));
+
 /// Most bytes of a reply the parent will read.
 const MAX_REPLY_BYTES: u64 = (MAX_INDEXED_CONTENT_BYTES + (1 << 20)) as u64;
 
@@ -290,6 +295,7 @@ pub fn run(
         }
         Profile::Images => crate::sandbox::jobs::images::serve(),
         Profile::Media => crate::sandbox::jobs::media::serve(grants),
+        Profile::Faces => crate::sandbox::jobs::faces::serve(),
     }
 }
 
@@ -337,6 +343,20 @@ fn probe_parse(profile: Profile, grants: crate::sandbox::Grants<'_>) -> (String,
         Profile::Documents => document_verdicts(),
         Profile::Images => crate::sandbox::jobs::images::probe(),
         Profile::Media => crate::sandbox::jobs::media::probe(grants),
+        Profile::Faces => crate::sandbox::jobs::faces::probe(),
+    }
+}
+
+/// Wall-clock ceiling for one profile's startup self-test.
+///
+/// The parser and media self-tests are shaped like a syscall or one helper start; the
+/// faces one runs the detector's forward pass, which is seconds on a slow host. Giving
+/// it the parser ceiling would mark the profile unavailable on exactly the hosts that
+/// need the wider request budget.
+fn probe_timeout(profile: Profile) -> Duration {
+    match profile {
+        Profile::Faces => Duration::from_secs(30),
+        _ => PROBE_TIMEOUT,
     }
 }
 
@@ -735,13 +755,24 @@ fn host_verdict(report: &Report) -> Result<(), String> {
 /// Why a profile that passed every item may still not serve requests.
 ///
 /// The items cannot say whether the program the profile exists to run still works.
-/// Media's whole job is one program: a profile that installed everything and failed
-/// its frame decode would start a doomed helper on every request and 404. No helper
-/// configured is `Nothing`, a state an admin chose. Documents and images are not
-/// gated on their verdict, and their outcome is recorded per file.
+/// Media's whole job is one program and faces' is one detector: a profile that
+/// installed everything and could not decode a frame or run a detection would start
+/// a doomed child on every request. No helper configured is `Nothing`, a state an
+/// admin chose. Documents and images are not gated on their verdict, and their
+/// outcome is recorded per file.
 fn job_refusal(report: &Report) -> Option<String> {
-    (report.profile.runs_helper() && report.job == Some(JobVerdict::Failed))
-        .then(|| format!("the media profile cannot decode a frame: {}", report.detail))
+    let failed = report.job == Some(JobVerdict::Failed);
+    match report.profile {
+        Profile::Media if failed => Some(format!(
+            "the media profile cannot decode a frame: {}",
+            report.detail
+        )),
+        Profile::Faces if failed => Some(format!(
+            "the faces profile cannot run the detector: {}",
+            report.detail
+        )),
+        _ => None,
+    }
 }
 
 /// The report this host gives one profile, with no judgement of it.
@@ -1417,15 +1448,20 @@ fn probe_once(
     grants: crate::sandbox::Grants<'_>,
     start: Start,
 ) -> Result<Report, NoReport> {
-    let run =
-        run_child(invocation, None, PROBE_TIMEOUT, start, profile, grants).map_err(|error| {
-            NoReport {
-                why: format!("cannot start the sandbox worker: {error}"),
-                // Nothing was created at all, which is as close to "the container
-                // refused it" as a creation can get.
-                opt_out_suspect: true,
-            }
-        })?;
+    let run = run_child(
+        invocation,
+        None,
+        probe_timeout(profile),
+        start,
+        profile,
+        grants,
+    )
+    .map_err(|error| NoReport {
+        why: format!("cannot start the sandbox worker: {error}"),
+        // Nothing was created at all, which is as close to "the container
+        // refused it" as a creation can get.
+        opt_out_suspect: true,
+    })?;
     if let Verdict::Unavailable(why) = verdict(run.exit_code, &run.stdout, &run.stderr) {
         // The summary rides along: a child dead in its loader writes nothing, and its
         // exit code is then the only thing that tells the failures apart.

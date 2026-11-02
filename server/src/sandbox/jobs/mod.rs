@@ -5,5 +5,6 @@
 //! every pipeline and no job can read another's reply. All of them turn user bytes
 //! into server state on the far side of the process boundary.
 
+pub mod faces;
 pub mod images;
 pub mod media;

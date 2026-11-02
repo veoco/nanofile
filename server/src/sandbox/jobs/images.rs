@@ -4,9 +4,13 @@
 //! all happen on the far side of the process boundary, because a hostile image is
 //! exactly what an image decoder must not meet inside the server.
 //!
+//! Face detection is not here: it runs in its own profile
+//! ([`super::faces`]), so a detector that fails cannot take thumbnails down with
+//! it.
+//!
 //! Request: `NFX1`, one operation byte, a little-endian `u32` target size, then
 //! the bytes. Reply: the common frame, `P`/`J` for an image, `X` for EXIF JSON,
-//! `J` for the face-count JSON (`OP_FACE_TAGS`), `U` for a refusal.
+//! `U` for a refusal.
 
 use std::io::Read;
 
@@ -17,7 +21,6 @@ use crate::thumbnail_util::{self, ThumbFormat};
 pub const OP_THUMBNAIL: u8 = b'T';
 pub const OP_SQUARE: u8 = b'S';
 pub const OP_EXIF: u8 = b'X';
-pub const OP_FACE_TAGS: u8 = b'F';
 
 /// Most image bytes the child will accept: the parent already caps what it reads
 /// (32 MiB for a thumbnail source, 8 MiB for EXIF), and this is the second half of
@@ -49,32 +52,6 @@ pub(crate) fn exif(content: &[u8]) -> Result<String, String> {
     match tag {
         b'X' => String::from_utf8(body)
             .map_err(|_| "the EXIF worker answered with non-UTF-8".to_string()),
-        b'U' => Err(refusal(body)),
-        _ => Err(unknown_tag(tag)),
-    }
-}
-
-/// Ask the worker for the face count. The reply is deliberately tiny: no boxes,
-/// crops or embeddings leave the child.
-pub(crate) fn face_tags(
-    content: &[u8],
-    options: crate::face_tags::DetectOptions,
-) -> Result<crate::face_tags::engine::DetectionSummary, String> {
-    #[derive(serde::Deserialize)]
-    struct Reply {
-        face_count: usize,
-        max_score: f32,
-    }
-    let (tag, body) = run(OP_FACE_TAGS, encode_options(options), content)?;
-    match tag {
-        b'J' => {
-            let reply: Reply = serde_json::from_slice(&body)
-                .map_err(|e| format!("the face worker answered invalid JSON: {e}"))?;
-            Ok(crate::face_tags::engine::DetectionSummary {
-                face_count: reply.face_count,
-                max_score: reply.max_score,
-            })
-        }
         b'U' => Err(refusal(body)),
         _ => Err(unknown_tag(tag)),
     }
@@ -172,55 +149,17 @@ fn answer(op: u8, size: u32, data: &[u8]) -> (u8, Vec<u8>) {
             ),
             Err(error) => (b'U', error.to_string().into_bytes()),
         },
-        OP_FACE_TAGS => match face_tags_answer(data, decode_options(size)) {
-            Ok(reply) => (
-                b'J',
-                serde_json::to_vec(&reply).unwrap_or_else(|_| b"null".to_vec()),
-            ),
-            Err(error) => (b'U', error.into_bytes()),
-        },
         _ => (b'U', b"unknown image operation".to_vec()),
     }
-}
-
-fn encode_options(options: crate::face_tags::DetectOptions) -> u32 {
-    let score = (options.min_score.clamp(0.0, 1.0) * 1000.0).round() as u32;
-    let size = options.min_face_size.clamp(0.0, 65535.0) as u32;
-    (score << 16) | size
-}
-
-fn decode_options(raw: u32) -> crate::face_tags::DetectOptions {
-    if raw == 0 {
-        return crate::face_tags::DetectOptions::default();
-    }
-    let mut options = crate::face_tags::DetectOptions {
-        min_score: ((raw >> 16) as f32 / 1000.0).clamp(0.0, 1.0),
-        ..Default::default()
-    };
-    let size = raw & 0xffff;
-    if size > 0 {
-        options.min_face_size = size as f32;
-    }
-    options
-}
-
-fn face_tags_answer(
-    data: &[u8],
-    options: crate::face_tags::DetectOptions,
-) -> Result<crate::face_tags::engine::DetectionSummary, String> {
-    let image =
-        thumbnail_util::load_image_with_orientation(data).map_err(|error| error.to_string())?;
-    crate::face_tags::engine::detect(&image, options)
 }
 
 /// The self-test: decode a generated image and encode it again, so a profile that
 /// cannot do the work says so here rather than on a user's first thumbnail.
 ///
-/// Face-tag inference is deliberately not part of it. Running YuNet on the fixed
-/// 640×640 input costs seconds on a slow host, and the probe has a short wall-clock
-/// ceiling: a heavy check would time out and mark the whole image profile
-/// unavailable, taking thumbnails down with a feature that is off by default. The
-/// scan job reports its own failures, and they must never gate image work.
+/// Face detection is deliberately not part of it: the detector has its own
+/// profile ([`super::faces`]) and its own, much wider probe budget. A heavy check
+/// here would time out and mark the whole image profile unavailable, taking
+/// thumbnails down with a feature that is off by default.
 pub fn probe() -> (String, JobVerdict) {
     let png = tiny_png();
     let (token, verdict) = match thumbnail_util::generate_thumbnail_encoded(&png, 16) {
@@ -281,20 +220,10 @@ mod tests {
     fn the_probe_decodes_and_re_encodes() {
         let (token, job) = probe();
         assert!(token.starts_with("image-ok("), "{token}");
-        assert!(!token.contains("face-tags"), "{token}");
+        // No inference here: a detector check belongs to the faces profile's own
+        // probe, and one that slipped back in would be the old outage again.
+        assert!(!token.contains("face"), "{token}");
         assert_eq!(job, JobVerdict::Ok);
-    }
-
-    #[test]
-    fn the_face_operation_returns_a_count_not_pixels() {
-        let (tag, body) = answer(
-            OP_FACE_TAGS,
-            encode_options(crate::face_tags::DetectOptions::default()),
-            &tiny_png(),
-        );
-        assert_eq!(tag, b'J');
-        let value: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
-        assert_eq!(value["face_count"], 0);
     }
 
     #[test]

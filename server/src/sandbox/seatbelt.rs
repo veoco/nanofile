@@ -329,6 +329,21 @@ mod tests {
         assert!(profile.starts_with("(version 1) (deny default)"));
         // A parser may not copy the process; media is the profile that keeps the fork.
         assert!(!profile.contains("(allow process-fork)"));
+        // The detector is the widest parser budget but not a wider shape: its profile
+        // still denies the fork and grants `exec` only for this binary.
+        let faces = profile_text(
+            Path::new("/opt/nanofile/nanofile"),
+            Profile::Faces,
+            Grants::default(),
+        );
+        assert!(
+            !faces.contains("(allow process-fork)"),
+            "the faces profile starts no program: {faces}"
+        );
+        assert!(
+            !faces.contains("(allow process-exec)"),
+            "a bare exec grant would let the detector start anything: {faces}"
+        );
         let media = profile_text(
             Path::new("/opt/nanofile/nanofile"),
             Profile::Media,

@@ -83,9 +83,10 @@ async fn a_helper_that_cannot_run_keeps_the_media_band_and_its_items() {
 
     let html = sandbox_page(&server, &admin).await;
 
-    // Both bands were measured, so both carry the whole set of four items: the
-    // documents band never needed the helper, and the media child reports even
-    // when the program it was told to start cannot be run.
+    // The two bands that exist without the feature are measured, and each carries
+    // the whole set of four items: the documents band never needed the helper, and
+    // the media child reports even when the program it was told to start cannot be
+    // run. The faces band is a state only — people tags are off in this fixture.
     let measured = count(&html, "data-sandbox-measured=\"true\"");
     assert_eq!(measured, 2, "bands measured: {measured}");
     let media = band(&html, "media");
@@ -109,7 +110,7 @@ async fn a_helper_that_cannot_run_keeps_the_media_band_and_its_items() {
     assert!(
         media.contains(&format!(
             "data-sandbox-state>{}</span>",
-            t.tr("sandbox.state_media_failed")
+            t.tr("sandbox.state_job_failed")
         )),
         "the media band does not read as failed: {media}"
     );

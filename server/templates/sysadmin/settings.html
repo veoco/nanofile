@@ -157,6 +157,7 @@
             <div class="nf-prow">
                 <span class="nf-prow-ic">
                     {% if profile.icon == "camera" %}{{ icons::icon_camera("w-[15px] h-[15px]") }}
+                    {% else if profile.icon == "user" %}{{ icons::icon_user("w-[15px] h-[15px]") }}
                     {% else %}{{ icons::icon_file_text("w-[15px] h-[15px]") }}{% endif %}
                 </span>
                 <div class="nf-prow-main">

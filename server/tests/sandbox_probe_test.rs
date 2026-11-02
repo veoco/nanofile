@@ -109,6 +109,38 @@ fn the_images_report_shows_a_worker_that_still_decodes() {
     the_platform_answer(Profile::Images, &report);
 }
 
+/// The faces profile runs the detector, and it is the one profile whose self-test
+/// costs a forward pass: its own probe budget is what makes that measurable on a
+/// slow host instead of a timeout that would take the feature down.
+#[test]
+fn the_faces_report_shows_a_worker_that_still_detects() {
+    let (report, line) = with_requirement(configure_probe_requirement(), || {
+        probe(Profile::Faces, None)
+    });
+
+    the_common_answer(Profile::Faces, &report, &line);
+    assert_eq!(
+        report.job,
+        Some(JobVerdict::Ok),
+        "the bounded worker must still run the detector: {line}"
+    );
+    assert!(
+        has(&report, "parse=faces-ok(0)"),
+        "the probe has to name the detector's own work: {}",
+        report.detail
+    );
+    the_items_answer(&report);
+    #[cfg(unix)]
+    {
+        assert!(report.protections.network, "{line}");
+        assert!(
+            report.protections.process,
+            "the faces profile denies the fork: {line}"
+        );
+    }
+    the_platform_answer(Profile::Faces, &report);
+}
+
 #[test]
 fn the_media_report_shows_a_helper_that_still_decodes() {
     if !helper_runs() {
@@ -266,7 +298,7 @@ fn the_platform_answer(profile: Profile, report: &Report) {
         );
     }
     match profile {
-        Profile::Documents | Profile::Images => {
+        Profile::Documents | Profile::Images | Profile::Faces => {
             assert!(has(report, "fork=denied"), "{}", report.detail);
             // The exec probe needs a fork to try `execve` in, and the fork is
             // refused, so the item stands unmeasured rather than unclaimed.
@@ -320,7 +352,7 @@ fn the_platform_answer(profile: Profile, report: &Report) {
                 report.detail
             );
         }
-        Profile::Images => {}
+        Profile::Images | Profile::Faces => {}
         Profile::Media => {
             assert!(has(report, "fork=open"), "{}", report.detail);
             assert!(has(report, "exec=denied"), "{}", report.detail);

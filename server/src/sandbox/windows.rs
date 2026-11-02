@@ -216,13 +216,10 @@ static LPAC_APPLIED: AtomicBool = AtomicBool::new(false);
 /// run under it.
 ///
 /// One per profile, and only the media profile ever sets one: `ALL APPLICATION
-/// PACKAGES` is the principal a helper's ACL is granted through, and the other two
+/// PACKAGES` is the principal a helper's ACL is granted through, and the parser
 /// profiles run no second program.
-static PLAIN_CONTAINER: [AtomicBool; 3] = [
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-];
+static PLAIN_CONTAINER: [AtomicBool; Profile::ALL.len()] =
+    [const { AtomicBool::new(false) }; Profile::ALL.len()];
 
 /// Whether the child runs in a less privileged AppContainer.
 ///
@@ -277,6 +274,7 @@ fn slot(profile: Profile) -> usize {
         Profile::Documents => 0,
         Profile::Images => 1,
         Profile::Media => 2,
+        Profile::Faces => 3,
     }
 }
 
@@ -291,10 +289,17 @@ fn want_lpac(profile: Profile) -> bool {
 /// at most 256 MiB decompressed and yields at most 8 MiB of text.
 const MEMORY_LIMIT: u64 = 1 << 30;
 
-/// CPU seconds before the job terminates the process.
+/// CPU seconds before the job terminates the process, per profile.
 ///
-/// A Job Object measures this in 100-nanosecond units.
-const CPU_LIMIT_SECONDS: i64 = 15;
+/// A Job Object measures this in 100-nanosecond units and counts one process's own
+/// user time, so it follows the same per-profile budget the Unix `RLIMIT_CPU` uses
+/// (see [`super::cpu_limit_seconds`]). One fixed cap for every profile was too low
+/// for the media helper and far too low for the detector, which runs a model and up
+/// to nine tiled forward passes.
+fn cpu_limit_seconds(profile: Profile) -> i64 {
+    super::cpu_limit_seconds(profile).1 as i64
+}
+
 const HUNDRED_NANOSECONDS: i64 = 10_000_000;
 
 /// Flags that strip a token down to what a parser needs and nothing more.
@@ -332,9 +337,9 @@ pub(super) fn confine(profile: Profile) -> (Protections, Vec<String>) {
 
     // The job is the parent's, so this process can only read it back: what the
     // limits *are* is a fact about the job, and a job nobody set limits on is not a
-    // layer. The process count it must show is the profile's own.
-    let expected_processes = if profile.runs_helper() { 2 } else { 1 };
-    match job_limits(expected_processes) {
+    // layer. The process count and the CPU budget it must show are the profile's own.
+    let expected_processes = process_slots(profile);
+    match job_limits(profile) {
         Ok((memory, cpu)) => {
             layers.limits = true;
             layers.process = true;
@@ -382,7 +387,7 @@ pub(super) fn confine(profile: Profile) -> (Protections, Vec<String>) {
 /// `QueryInformationJobObject` with a null job asks about the job this process
 /// belongs to. A host that runs this under a job of its own (a CI runner does) nests
 /// rather than replaces it, so the immediate job is still the right one to ask.
-fn job_limits(expected_processes: u32) -> Result<(u64, i64), &'static str> {
+fn job_limits(profile: Profile) -> Result<(u64, i64), &'static str> {
     let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
     let sized = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
     let read = unsafe {
@@ -411,10 +416,10 @@ fn job_limits(expected_processes: u32) -> Result<(u64, i64), &'static str> {
         // code the parent reads meaningful. Read back like the rest, because a job
         // somebody else nested would not have it.
         && limits & JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION != 0
-        && info.BasicLimitInformation.ActiveProcessLimit == expected_processes
+        && info.BasicLimitInformation.ActiveProcessLimit == process_slots(profile)
         && info.ProcessMemoryLimit as u64 == MEMORY_LIMIT
         && info.BasicLimitInformation.PerProcessUserTimeLimit
-            == CPU_LIMIT_SECONDS * HUNDRED_NANOSECONDS;
+            == cpu_limit_seconds(profile) * HUNDRED_NANOSECONDS;
     if !ours {
         return Err("limits-missing");
     }
@@ -687,7 +692,7 @@ impl Drop for Child {
 /// Named as a creation attribute so there is no window in which the child runs
 /// without it. `None` when this host will not make one: the limits layer is then
 /// absent, which the policy decides about rather than papering over.
-fn parent_job(active_process_limit: u32) -> Option<HANDLE> {
+fn parent_job(profile: Profile) -> Option<HANDLE> {
     let job = unsafe { CreateJobObjectW(null(), null()) };
     if job.is_null() {
         return None;
@@ -699,10 +704,11 @@ fn parent_job(active_process_limit: u32) -> Option<HANDLE> {
         | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
         | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
-    limits.BasicLimitInformation.PerProcessUserTimeLimit = CPU_LIMIT_SECONDS * HUNDRED_NANOSECONDS;
+    limits.BasicLimitInformation.PerProcessUserTimeLimit =
+        cpu_limit_seconds(profile) * HUNDRED_NANOSECONDS;
     // The worker, and for the media profile the helper: one slot, or exactly two.
     // A fork bomb has nowhere to go either way.
-    limits.BasicLimitInformation.ActiveProcessLimit = active_process_limit;
+    limits.BasicLimitInformation.ActiveProcessLimit = process_slots(profile);
     limits.ProcessMemoryLimit = MEMORY_LIMIT as usize;
 
     let sized = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
@@ -744,9 +750,6 @@ pub(crate) fn spawn(
     // image it cannot read.
     let mut opt_out = want_lpac(profile);
     let container = app_container(program, &mut opt_out);
-    // A worker that starts a helper gets two job slots and a container that can read
-    // the helper and the source; one that starts nothing keeps a single slot.
-    let active_process_limit = process_slots(profile);
     if profile.runs_helper() {
         grant_helper_access(grants, &mut opt_out);
     }
@@ -762,14 +765,7 @@ pub(crate) fn spawn(
     // privileged container was measured refusing the helper's `CreateProcess`
     // (`Access is denied`), and the principal it reads the helper through is the one
     // the opt-out ignores. `lpac=` says which container the launch got.
-    start(
-        program,
-        args,
-        token,
-        container.as_ref(),
-        active_process_limit,
-        opt_out,
-    )
+    start(program, args, token, container.as_ref(), profile, opt_out)
 }
 
 /// Start the child with the restricted token, a job and no container.
@@ -795,7 +791,7 @@ pub(crate) fn spawn_token_only(
     if token.is_none() {
         note_shortfall("token-refused", None);
     }
-    start(program, args, token, None, process_slots(profile), false)
+    start(program, args, token, None, profile, false)
 }
 
 /// Start the child with this process's own token, a job and no container.
@@ -819,7 +815,7 @@ pub(crate) fn spawn_unrestricted(
     if profile.runs_helper() {
         grant_helper_access(grants, &mut opt_out);
     }
-    start(program, args, None, None, process_slots(profile), false)
+    start(program, args, None, None, profile, false)
 }
 
 /// The worker, plus the helper the media profile starts.
@@ -837,17 +833,10 @@ fn start(
     args: &[OsString],
     token: Option<HANDLE>,
     container: Option<&AppContainer>,
-    active_process_limit: u32,
+    profile: Profile,
     want_lpac: bool,
 ) -> std::io::Result<Child> {
-    let started = start_with(
-        program,
-        args,
-        token,
-        container,
-        active_process_limit,
-        want_lpac,
-    );
+    let started = start_with(program, args, token, container, profile, want_lpac);
     if let Some(token) = token {
         unsafe { CloseHandle(token) };
     }
@@ -859,7 +848,7 @@ fn start_with(
     args: &[OsString],
     token: Option<HANDLE>,
     container: Option<&AppContainer>,
-    active_process_limit: u32,
+    profile: Profile,
     want_lpac: bool,
 ) -> std::io::Result<Child> {
     let [
@@ -877,7 +866,7 @@ fn start_with(
     startup.StartupInfo.hStdError = child_stderr;
     // The job is named at creation rather than assigned afterwards: between the two
     // the child runs with nothing bounding it.
-    let job = parent_job(active_process_limit);
+    let job = parent_job(profile);
     // Only these three handles are inherited; the container and the job travel in
     // the same list. Without it, `bInheritHandles` would hand the child everything
     // inheritable this process holds — the server's own standard streams among it.
@@ -2238,7 +2227,22 @@ mod tests {
     fn only_the_media_profile_needs_a_second_process_slot() {
         assert_eq!(process_slots(Profile::Documents), 1);
         assert_eq!(process_slots(Profile::Images), 1);
+        assert_eq!(process_slots(Profile::Faces), 1);
         assert_eq!(process_slots(Profile::Media), 2);
+    }
+
+    /// The CPU cap is the profile's own, and the detector is why a fixed cap for
+    /// every profile had to go: nine tiled forward passes do not fit in the media
+    /// profile's budget, let alone the old fifteen seconds.
+    #[test]
+    fn the_job_cpu_cap_follows_the_profile_budget() {
+        assert_eq!(cpu_limit_seconds(Profile::Images), 20);
+        assert_eq!(cpu_limit_seconds(Profile::Media), 40);
+        assert_eq!(cpu_limit_seconds(Profile::Faces), 185);
+        assert!(
+            cpu_limit_seconds(Profile::Faces) > cpu_limit_seconds(Profile::Media),
+            "the detector is the widest budget"
+        );
     }
 
     /// The store is decided by the path, not by the write having succeeded.
@@ -2291,9 +2295,9 @@ mod tests {
 
         // No job named for this process, so no limits may be claimed: either there
         // is none, or it is the host's and its values are not these.
-        for slots in [1, 2] {
+        for profile in [Profile::Documents, Profile::Faces, Profile::Media] {
             assert!(
-                job_limits(slots).is_err(),
+                job_limits(profile).is_err(),
                 "a process the parent did not confine has no limits to report"
             );
         }

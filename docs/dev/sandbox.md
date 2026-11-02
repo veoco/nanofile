@@ -15,6 +15,9 @@ A profile names what the child is allowed to establish:
 - `documents` — text extraction for the search index.
 - `images` — image decode and EXIF/avatar processing.
 - `media` — `ffmpeg` thumbnails, the one profile that starts an external program.
+- `faces` — face detection for the automatic people tags. The same shape as
+  `images`, with a much wider budget: the detector is the heaviest thing a parser
+  profile runs.
 
 ## Worker protocol
 
@@ -46,6 +49,12 @@ supply one, the feature runs on `limits` alone and the report says so.
 The media profile cannot have the process item: it exists to start a program, and
 every platform starts one by copying the process first. What bounds the helper is
 the files layer and the parent's timeout.
+
+The faces profile is one parser that runs a model. Its wall clock is 90 s, and its
+CPU budget is twice that because the engine runs the detector on a thread pool and
+can split a large photo into nine forward passes; the wall timeout is still the
+real bound. It starts no program and reads no file: HEIC/HEIF/AVIF frames are
+decoded by the media profile first, and only the decoded still is handed to it.
 
 ## Platform notes
 

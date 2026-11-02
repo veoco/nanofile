@@ -1,14 +1,18 @@
-//! The face-tag scan pipeline: read an image, ask the confined worker for a
+//! The face-tag scan pipeline: read an image, ask the confined face worker for a
 //! face count, and materialise the `人物`/`单人`/`合影` tags.
 //!
 //! The only thing persisted about a face is its count and the best score. There
 //! is no embedding, face crop or identity in this module.
+//!
+//! The detector has its own sandbox profile ([`crate::sandbox::Profile::Faces`]),
+//! so a scan that fails or hangs cannot take thumbnails, avatars or EXIF down
+//! with it. Where the image crate cannot decode the bytes — HEIC, HEIF, AVIF — a
+//! still frame is decoded through the media profile first.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use tokio::sync::Semaphore;
 
 use crate::face_tags::MODEL_VERSION;
 use crate::face_tags::labels::{self, LabelDef};
@@ -17,7 +21,7 @@ use crate::fs::core::tree::read_fs_file_data;
 use crate::repository::Repositories;
 use crate::repository::face_tags::ScanRecord;
 use crate::repository::repo_tag::TagInput;
-use crate::sandbox::jobs::images;
+use crate::sandbox::jobs::faces;
 use crate::tasks::context::JobContext;
 use base::error::AppError;
 use infra::storage::DynBlockStorage;
@@ -26,12 +30,6 @@ const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 const BACKFILL_BUDGET: Duration = Duration::from_secs(20);
 const FAILED_RETRY_AFTER_SECS: i64 = 3600;
 const CONCURRENCY: usize = 2;
-
-static GATE: std::sync::OnceLock<Arc<Semaphore>> = std::sync::OnceLock::new();
-
-fn gate() -> &'static Arc<Semaphore> {
-    GATE.get_or_init(|| Arc::new(Semaphore::new(CONCURRENCY)))
-}
 
 #[derive(Clone, Debug)]
 pub struct ScanTarget {
@@ -307,12 +305,12 @@ impl FaceTagService {
             min_score: config.face_tags.min_score,
             min_face_size: config.face_tags.min_size as f32,
         };
-        let _permit = gate()
-            .clone()
-            .acquire_owned()
+        // The detector's own gate, not the image worker's: a thumbnail burst must
+        // not starve scans, and a scan must not hold an image permit.
+        let _permit = faces::acquire_face_permit()
             .await
-            .map_err(|e| AppError::internal(format!("face-tag gate closed: {e}")))?;
-        let result = tokio::task::spawn_blocking(move || images::face_tags(&data, options))
+            .map_err(AppError::internal)?;
+        let result = tokio::task::spawn_blocking(move || faces::detect(&data, options))
             .await
             .map_err(|e| AppError::internal(format!("face-tag worker task failed: {e}")))?;
 

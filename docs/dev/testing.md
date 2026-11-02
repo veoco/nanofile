@@ -63,8 +63,9 @@ the media assertions are measured there rather than silently skipped.
 ## Sandbox probe
 
 `server/tests/sandbox_probe_test.rs` asserts each sandbox profile's typed report,
-the platform's mechanism tokens, the parsers' products and the media pipeline end
-to end. See [Sandbox internals](/dev/sandbox) for what it checks.
+the platform's mechanism tokens, the parsers' products, the media pipeline and the
+detector's forward pass end to end. See [Sandbox internals](/dev/sandbox) for what
+it checks.
 
 ## Performance probe
 

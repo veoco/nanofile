@@ -308,6 +308,39 @@ fn an_image_request_is_parsed_or_refused() {
     assert_eq!(answer.refusal(), "image over the size cap");
 }
 
+/// The faces child runs the detector on what it was given and answers with a count.
+#[test]
+fn a_face_request_answers_a_count_or_is_refused() {
+    let args = ["--profile", "faces"];
+
+    // The positive control: a real PNG is decoded and run through the detector,
+    // and the reply is the summary — a count, never pixels.
+    let answer = run_worker(&args, &image_request(b'D', 0, &a_png_of(32, 16)));
+    answer.finished("a face request");
+    let (tag, body) = answer.frame();
+    assert_eq!(tag, b'J', "a detection answers with the summary tag");
+    let value: serde_json::Value = serde_json::from_slice(body).expect("the reply is JSON");
+    assert_eq!(value["face_count"], 0);
+    assert!(value["max_score"].is_number(), "{value}");
+
+    // Undecodable bytes are a refusal the parent records, not a crash.
+    let answer = run_worker(&args, &image_request(b'D', 0, b"not an image"));
+    answer.finished("undecodable bytes");
+    assert!(!answer.refusal().is_empty(), "a refusal says why");
+
+    let answer = run_worker(&args, &image_request(b'?', 0, b""));
+    answer.finished("an unknown operation");
+    assert_eq!(answer.refusal(), "unknown face operation");
+
+    // The second half of the source bound the parent applies before it sends
+    // anything: the literal is `jobs/faces::MAX_IMAGE_BYTES`, spelled out because a
+    // wire bound is what this pins.
+    let oversized = image_request(b'D', 0, &vec![0u8; 32 * 1024 * 1024 + 1]);
+    let answer = run_worker(&args, &oversized);
+    answer.finished("an oversized image");
+    assert_eq!(answer.refusal(), "image over the size cap");
+}
+
 /// The media child reads the one file it was granted, whatever the request
 /// says.
 #[test]

@@ -52,7 +52,7 @@ NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo test --workspace --no-fai
 
 ## 沙盒 probe
 
-`server/tests/sandbox_probe_test.rs` 断言每个沙盒 profile 的类型化报告、平台机制 token、解析器的产物与整条媒体流水线。它检查什么见[沙盒内部](/zh/dev/sandbox)。
+`server/tests/sandbox_probe_test.rs` 断言每个沙盒 profile 的类型化报告、平台机制 token、解析器的产物、整条媒体流水线，以及检测器的一次前向。它检查什么见[沙盒内部](/zh/dev/sandbox)。
 
 ## 性能探针
 

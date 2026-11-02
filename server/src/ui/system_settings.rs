@@ -165,7 +165,7 @@ pub struct SandboxView {
 
 /// One profile's own band: what it is for, whether it runs, and its protections.
 pub struct SandboxProfileView {
-    /// Stable identifier: `documents` or `media`.
+    /// Stable identifier: `documents`, `media` or `faces`.
     pub id: &'static str,
     pub title_key: &'static str,
     /// One line naming what the profile serves, already translated.
@@ -383,6 +383,7 @@ async fn render(
                 let inputs = SandboxInputs {
                     enabled: resolved("sandbox.enabled"),
                     index_enabled: resolved("index.enabled"),
+                    face_tags_enabled: resolved("face_tags.enabled"),
                 };
                 // The probe spawns a child per profile, so it belongs on a blocking
                 // thread: the page must not wait on it, and an executor thread must
@@ -420,6 +421,8 @@ pub struct SandboxInputs {
     pub enabled: bool,
     /// The effective value of `index.enabled`, which owns document extraction.
     pub index_enabled: bool,
+    /// The effective value of `face_tags.enabled`, which owns the detector.
+    pub face_tags_enabled: bool,
 }
 
 /// What this host actually gives, for the Sandbox page.
@@ -428,13 +431,23 @@ pub struct SandboxInputs {
 /// what took: the items say which protection is in place, the notes what the
 /// platform still leaves open. It spawns children, so the caller hands it to
 /// `spawn_blocking`; the answers are cached per profile.
+///
+/// The faces band is the one band a feature switch decides whether to *measure*
+/// at all: the detector's probe runs a forward pass, and a host that never turns
+/// people tags on should not pay seconds of startup on every settings visit.
 fn sandbox_view(t: &'static I18n, inputs: SandboxInputs) -> SandboxView {
     let documents = worker::page_answer(Profile::Documents);
     let media = worker::page_answer(Profile::Media);
+    // Measured only while the feature is on: its state below says why a missing
+    // measurement is not a host verdict.
+    let faces = inputs
+        .face_tags_enabled
+        .then(|| worker::page_answer(Profile::Faces));
 
     let profiles = vec![
         documents_profile(t, &documents, &inputs),
         media_profile(t, &media, inputs.enabled),
+        faces_profile(t, faces.as_ref(), &inputs),
     ];
     let raw = vec![
         SandboxRawView {
@@ -446,6 +459,14 @@ fn sandbox_view(t: &'static I18n, inputs: SandboxInputs) -> SandboxView {
             id: "media",
             title_key: "sandbox.profile_media",
             detail: report_detail(&media),
+        },
+        SandboxRawView {
+            id: "faces",
+            title_key: "sandbox.profile_faces",
+            detail: faces
+                .as_ref()
+                .map(report_detail)
+                .unwrap_or_else(|| "not measured: face_tags.enabled is off".to_string()),
         },
     ];
 
@@ -566,7 +587,7 @@ fn media_profile(t: &I18n, answer: &worker::PageAnswer, enabled: bool) -> Sandbo
             } => {
                 if report.job == Some(JobVerdict::Failed) {
                     SandboxStateView {
-                        label: t.tr("sandbox.state_media_failed").to_string(),
+                        label: t.tr("sandbox.state_job_failed").to_string(),
                         class: "badge-red",
                         reason: Some(host_reason.clone().unwrap_or_else(|| report.detail.clone())),
                         action: None,
@@ -594,6 +615,74 @@ fn media_profile(t: &I18n, answer: &worker::PageAnswer, enabled: bool) -> Sandbo
     };
 
     profile_view(t, Profile::Media, answer, state)
+}
+
+/// The faces profile's band: the detector, and the feature switch that decides whether
+/// it is measured at all.
+///
+/// Its state is its own question: a host can confine it perfectly and the detector
+/// still not run. When people tags are off the band is a state with no rows, because
+/// the probe costs a forward pass and a feature nobody enabled should not pay it.
+fn faces_profile(
+    t: &I18n,
+    answer: Option<&worker::PageAnswer>,
+    inputs: &SandboxInputs,
+) -> SandboxProfileView {
+    let state = if !inputs.enabled {
+        disabled_state(t)
+    } else if !inputs.face_tags_enabled {
+        SandboxStateView {
+            label: t.tr("sandbox.state_face_tags_off").to_string(),
+            class: "badge-gray",
+            reason: None,
+            action: Some(SandboxActionView {
+                href: "/sysadmin/settings/maintenance/",
+                label_key: "sandbox.action_face_tags",
+            }),
+        }
+    } else {
+        match answer {
+            Some(worker::PageAnswer::Measured {
+                report,
+                host_runs,
+                host_reason,
+            }) => {
+                if report.job == Some(JobVerdict::Failed) {
+                    SandboxStateView {
+                        label: t.tr("sandbox.state_job_failed").to_string(),
+                        class: "badge-red",
+                        reason: Some(host_reason.clone().unwrap_or_else(|| report.detail.clone())),
+                        action: None,
+                    }
+                } else if !host_runs {
+                    unavailable_state(t, host_reason.clone().unwrap_or_default())
+                } else {
+                    running_state(t)
+                }
+            }
+            Some(worker::PageAnswer::Unavailable(why)) => unavailable_state(t, why.clone()),
+            // The feature switch said on but the caller did not measure: the probe
+            // was never asked, and the page must not read as a host verdict.
+            None => unavailable_state(
+                t,
+                "not measured: automatic people tags were not probed".to_string(),
+            ),
+        }
+    };
+
+    // A feature that is off was not measured, so the band carries no rows; the state
+    // above says which switch did that.
+    let unmeasured;
+    let answer = match answer {
+        Some(answer) => answer,
+        None => {
+            unmeasured = worker::PageAnswer::Unavailable(
+                "not measured: face_tags.enabled is off".to_string(),
+            );
+            &unmeasured
+        }
+    };
+    profile_view(t, Profile::Faces, answer, state)
 }
 
 fn running_state(t: &I18n) -> SandboxStateView {
@@ -654,6 +743,7 @@ fn item_applicable(profile: Profile, item: &str) -> bool {
 fn profile_title(profile: Profile) -> &'static str {
     match profile {
         Profile::Media => "sandbox.profile_media",
+        Profile::Faces => "sandbox.profile_faces",
         _ => "sandbox.profile_documents",
     }
 }
@@ -661,6 +751,7 @@ fn profile_title(profile: Profile) -> &'static str {
 fn profile_uses(profile: Profile) -> &'static str {
     match profile {
         Profile::Media => "sandbox.uses_media",
+        Profile::Faces => "sandbox.uses_faces",
         _ => "sandbox.uses_documents",
     }
 }
@@ -668,6 +759,7 @@ fn profile_uses(profile: Profile) -> &'static str {
 fn profile_icon(profile: Profile) -> &'static str {
     match profile {
         Profile::Media => "camera",
+        Profile::Faces => "user",
         _ => "file_text",
     }
 }
@@ -1260,31 +1352,41 @@ mod tests {
             network: true,
             process: true,
         };
-        let inputs = |enabled: bool, index_enabled: bool| SandboxInputs {
+        let inputs = |enabled: bool, index_enabled: bool, face_tags_enabled: bool| SandboxInputs {
             enabled,
             index_enabled,
+            face_tags_enabled,
         };
         let documents = |answer: &worker::PageAnswer, inputs: &SandboxInputs| {
             documents_profile(t, answer, inputs).state
         };
         let media =
             |answer: &worker::PageAnswer, enabled: bool| media_profile(t, answer, enabled).state;
+        let faces = |answer: Option<&worker::PageAnswer>, inputs: &SandboxInputs| {
+            faces_profile(t, answer, inputs).state
+        };
 
-        let running = documents(&measured(every_item, true, None), &inputs(true, true));
+        let running = documents(&measured(every_item, true, None), &inputs(true, true, true));
         assert_eq!(running.label, t.tr("sandbox.state_running"));
         assert_eq!(running.class, "badge-green");
         assert!(running.reason.is_none() && running.action.is_none());
 
         // The switch is its own reason, not repeated under the band: the switch's
         // own row carries the cost.
-        let off = documents(&measured(every_item, true, None), &inputs(false, true));
+        let off = documents(
+            &measured(every_item, true, None),
+            &inputs(false, true, true),
+        );
         assert_eq!(off.label, t.tr("sandbox.state_disabled"));
         assert_eq!(off.class, "badge-gray");
         assert!(off.reason.is_none());
 
         // The feature this profile serves has a switch of its own, on another
         // page: the band says so and points at it.
-        let no_index = documents(&measured(every_item, true, None), &inputs(true, false));
+        let no_index = documents(
+            &measured(every_item, true, None),
+            &inputs(true, false, true),
+        );
         assert_eq!(no_index.label, t.tr("sandbox.state_index_off"));
         assert_eq!(
             no_index.action.as_ref().map(|action| action.href),
@@ -1299,7 +1401,7 @@ mod tests {
                 false,
                 Some("this host could not bound the worker's memory and CPU"),
             ),
-            &inputs(true, true),
+            &inputs(true, true, true),
         );
         assert_eq!(unbounded.label, t.tr("sandbox.state_unavailable"));
         assert_eq!(unbounded.class, "badge-red");
@@ -1311,7 +1413,7 @@ mod tests {
         // A probe that could not run at all says so rather than blaming an item.
         let unavailable = documents(
             &worker::PageAnswer::Unavailable("no worker binary".to_string()),
-            &inputs(true, true),
+            &inputs(true, true, true),
         );
         assert_eq!(unavailable.label, t.tr("sandbox.state_unavailable"));
         assert_eq!(unavailable.reason.as_deref(), Some("no worker binary"));
@@ -1327,7 +1429,7 @@ mod tests {
             ),
             true,
         );
-        assert_eq!(failed.label, t.tr("sandbox.state_media_failed"));
+        assert_eq!(failed.label, t.tr("sandbox.state_job_failed"));
         assert_eq!(failed.class, "badge-red");
         assert_eq!(
             failed.reason.as_deref(),
@@ -1352,6 +1454,62 @@ mod tests {
 
         let media_off = media(&media_report(every_item, None, true, None), false);
         assert_eq!(media_off.label, t.tr("sandbox.state_disabled"));
+
+        // The faces band has a feature switch of its own, and while it is off the
+        // band is a state with no measurement behind it: the detector's probe costs
+        // a forward pass, so it is not paid for a feature nobody enabled.
+        let face_tags_off = faces(
+            None,
+            &SandboxInputs {
+                enabled: true,
+                index_enabled: true,
+                face_tags_enabled: false,
+            },
+        );
+        assert_eq!(face_tags_off.label, t.tr("sandbox.state_face_tags_off"));
+        assert_eq!(face_tags_off.class, "badge-gray");
+        assert_eq!(
+            face_tags_off.action.as_ref().map(|action| action.href),
+            Some("/sysadmin/settings/maintenance/")
+        );
+
+        let faces_running = faces(
+            Some(&faces_report(every_item, None, true, None)),
+            &SandboxInputs {
+                enabled: true,
+                index_enabled: true,
+                face_tags_enabled: true,
+            },
+        );
+        assert_eq!(faces_running.label, t.tr("sandbox.state_running"));
+
+        // A detector that cannot run is the profile's own job failing, not a host
+        // that cannot confine it.
+        let detector_failed = faces(
+            Some(&faces_report(
+                every_item,
+                Some(crate::sandbox::JobVerdict::Failed),
+                false,
+                Some("the faces profile cannot run the detector"),
+            )),
+            &SandboxInputs {
+                enabled: true,
+                index_enabled: true,
+                face_tags_enabled: true,
+            },
+        );
+        assert_eq!(detector_failed.label, t.tr("sandbox.state_job_failed"));
+        assert_eq!(detector_failed.class, "badge-red");
+
+        let faces_switch_off = faces(
+            None,
+            &SandboxInputs {
+                enabled: false,
+                index_enabled: true,
+                face_tags_enabled: true,
+            },
+        );
+        assert_eq!(faces_switch_off.label, t.tr("sandbox.state_disabled"));
     }
 
     /// A report whose items are `protections`, for the state and item tests.
@@ -1366,6 +1524,25 @@ mod tests {
                 protections,
                 job: None,
                 detail: "landlock_abi=6".to_string(),
+            },
+            host_runs,
+            host_reason: host_reason.map(|why| why.to_string()),
+        }
+    }
+
+    /// The same, for the faces profile, whose job verdict is the detector's.
+    fn faces_report(
+        protections: Protections,
+        job: Option<crate::sandbox::JobVerdict>,
+        host_runs: bool,
+        host_reason: Option<&str>,
+    ) -> worker::PageAnswer {
+        worker::PageAnswer::Measured {
+            report: crate::sandbox::Report {
+                profile: Profile::Faces,
+                protections,
+                job,
+                detail: "parse=faces-ok(0)".to_string(),
             },
             host_runs,
             host_reason: host_reason.map(|why| why.to_string()),
@@ -1411,6 +1588,7 @@ mod tests {
         // is not a gap.
         assert!(item_applicable(Profile::Documents, "process"));
         assert!(item_applicable(Profile::Images, "process"));
+        assert!(item_applicable(Profile::Faces, "process"));
         assert!(!item_applicable(Profile::Media, "process"));
         assert!(item_applicable(Profile::Media, "files"));
         assert_eq!(item_class("process", false, false), "badge-gray");
@@ -1457,6 +1635,7 @@ mod tests {
             &SandboxInputs {
                 enabled: true,
                 index_enabled: true,
+                face_tags_enabled: true,
             },
         );
         assert!(!unmeasured.measured);
@@ -1470,6 +1649,7 @@ mod tests {
             &SandboxInputs {
                 enabled: false,
                 index_enabled: true,
+                face_tags_enabled: true,
             },
         );
         assert!(off.measured);

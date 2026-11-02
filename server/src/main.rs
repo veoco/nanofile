@@ -145,7 +145,7 @@ enum Command {
         /// Which pipeline this child confines itself for.
         #[arg(
             long,
-            value_name = "documents|images|media",
+            value_name = "documents|images|media|faces",
             default_value = "documents"
         )]
         profile: String,

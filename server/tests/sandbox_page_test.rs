@@ -102,18 +102,25 @@ async fn the_sandbox_page_shows_the_measured_items_per_profile() {
     let (status, html) = page(&server, &admin, "/sysadmin/settings/sandbox/").await;
     assert_eq!(status, 200);
 
-    // One band per measured profile, each with its own state. Documents and
-    // images are reported together — they install the same protections — so two
-    // bands and two states are the whole panel.
+    // One band per profile, each with its own state. Documents and images are
+    // reported together — they install the same protections — and the faces band
+    // is a state only while people tags are off, which is this fixture's default.
+    // Three bands and three states are the whole panel.
     assert_eq!(
         count(&html, "data-sandbox-profile=\""),
-        2,
+        3,
         "no profile bands"
     );
     assert_eq!(
         count(&html, "data-sandbox-state>"),
-        2,
+        3,
         "a band without a state"
+    );
+    // The faces band says why it was not measured rather than reading as a host
+    // that cannot run it.
+    assert!(
+        html.contains("data-sandbox-profile=\"faces\" data-sandbox-measured=\"false\""),
+        "the faces band must not claim a measurement with the feature off"
     );
     // The parser band needs no helper, so it is the one band every host that can
     // run the worker at all measures. A host that cannot start one is the probe
@@ -214,7 +221,7 @@ async fn the_sandbox_page_shows_the_measured_items_per_profile() {
 
     // The raw reports are one disclosure away, and each line names its profile:
     // two unlabelled lines were the one thing a bug report had to guess at.
-    for profile in ["documents", "media"] {
+    for profile in ["documents", "media", "faces"] {
         assert!(
             html.contains(&format!("data-sandbox-detail=\"{profile}\"")),
             "the {profile} raw report is unlabelled"
@@ -236,12 +243,12 @@ async fn the_switch_off_disables_the_workers_and_the_page_says_so() {
 
     let (status, html) = page(&server, &admin, "/sysadmin/settings/sandbox/").await;
     assert_eq!(status, 200);
-    // Both bands read the switch rather than the host: a green item under a
+    // Every band reads the switch rather than the host: a green item under a
     // switched-off state is not a contradiction as long as the state itself says
     // which decision stopped it.
     assert_eq!(
         count(&html, "data-sandbox-state>Off</span>"),
-        2,
+        3,
         "a switched-off profile does not read as off"
     );
     // The cost of switching off is the switch's own sentence, in the form's help
@@ -271,4 +278,59 @@ async fn the_switch_off_disables_the_workers_and_the_page_says_so() {
     // this test is about, and an off switch would follow the rest of this
     // binary's tests around.
     save_switch(&server, true).await;
+}
+
+/// People tags, once enabled, are measured like every other profile: the detector is
+/// one more confined child, and an admin has to be able to see whether this host can
+/// run it before turning the feature on.
+#[tokio::test]
+async fn the_faces_band_is_measured_once_people_tags_are_on() {
+    common::sandbox::enable_real_worker();
+    let server = TestServer::start_with_face_tags().await;
+    common::create_test_admin(&server.db, "root@example.com", "password123").await;
+    let admin = ui_login(&server, "root@example.com", "password123").await;
+
+    let (status, html) = page(&server, &admin, "/sysadmin/settings/sandbox/").await;
+    assert_eq!(status, 200);
+
+    // The band advertises its measurement, not merely its presence.
+    let marker = "data-sandbox-profile=\"faces\" data-sandbox-measured=\"true\"";
+    let start = html
+        .find(marker)
+        .unwrap_or_else(|| panic!("the faces band was not measured: {html}"));
+    let rest = &html[start + marker.len()..];
+    let end = rest
+        .find("data-sandbox-profile=\"")
+        .or_else(|| rest.find("data-sandbox-detail="))
+        .unwrap_or(rest.len());
+    let band = &rest[..end];
+    assert_eq!(
+        count(band, "data-sandbox-item=\""),
+        4,
+        "a measured faces band carries the whole set: {band}"
+    );
+    for item in ["limits", "files", "network", "process"] {
+        assert!(
+            band.contains(&format!("data-sandbox-item=\"{item}\"")),
+            "the faces band is missing the {item} item: {band}"
+        );
+    }
+
+    let t = server::i18n::I18n::get(Some("en"));
+    assert!(
+        band.contains(&format!(
+            "data-sandbox-state>{}</span>",
+            t.tr("sandbox.state_running")
+        )),
+        "the faces band does not read as running: {band}"
+    );
+    // The raw report is the detector's own line, not the documents profile's.
+    assert!(
+        html.contains("data-sandbox-detail=\"faces\""),
+        "the faces raw report is unlabelled"
+    );
+    assert!(
+        html.contains("parse=faces-ok(0)"),
+        "the faces raw report does not come from the detector"
+    );
 }

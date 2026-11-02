@@ -160,25 +160,36 @@ const ADDRESS_SPACE_LIMIT: u64 = 1 << 30;
 
 /// Wall-clock seconds a profile's child gets. The parent's timers use the same numbers, so the
 /// CPU limit can be derived from them instead of being one fixed cap for every profile.
+///
+/// The faces profile is the widest: the detector loads a model and, on a large photo, runs up to
+/// nine forward passes (the engine tiles above 1600 px). A slow host spends seconds per pass, so
+/// a budget sized for one image-crate decode would time out the scan it exists for.
 pub(crate) const fn profile_wall_seconds(profile: Profile) -> u64 {
     match profile {
         Profile::Documents => 20,
         Profile::Images => 15,
         Profile::Media => 35,
+        Profile::Faces => 90,
     }
 }
 
-/// CPU seconds before the soft (`SIGXCPU`) and hard (`SIGKILL`) limits.
+/// CPU seconds before the child is stopped: the soft (`SIGXCPU`) and hard (`SIGKILL`) limits on
+/// unix, and the Windows job's per-process user-time cap.
 ///
 /// The parent's wall-clock timeout bounds a hang; this holds even when the parent is not
-/// scheduled. `RLIMIT_CPU` counts total CPU time across the process's threads, so a multi-threaded
-/// helper reaches it much sooner than the wall clock: a 15 s cap killed ffmpeg about four seconds
-/// into a 35 s media budget. The cap therefore follows the profile's own budget, with a little
-/// slack for the hard limit.
-#[cfg(unix)]
+/// scheduled. The value is process-wide CPU, summed across the child's threads, so a
+/// multi-threaded profile reaches it much sooner than the wall clock: a 15 s cap killed ffmpeg
+/// about four seconds into a 35 s media budget. It therefore follows the profile's own budget,
+/// with a little slack for the hard limit. The faces profile runs the detector on a thread pool
+/// and may split a photo into nine passes, so its budget is twice its wall clock; the wall
+/// timeout is still the real bound, and this is the backstop for a parent that is not scheduled.
 const fn cpu_limit_seconds(profile: Profile) -> (u64, u64) {
     let wall = profile_wall_seconds(profile);
-    (wall, wall + 5)
+    let budget = match profile {
+        Profile::Faces => wall.saturating_mul(2),
+        _ => wall,
+    };
+    (budget, budget + 5)
 }
 
 /// Open descriptors: the three standard streams and slack for the runtime.
@@ -277,6 +288,10 @@ pub enum Profile {
     /// Media (ffmpeg) frame extraction: the one profile that may execute the
     /// configured helper, and read the one scratch file it is handed.
     Media,
+    /// Face detection for the automatic people tags: the same shape as images —
+    /// no file, no socket, no program — with a wider budget because the detector
+    /// is the heaviest thing a parser profile runs.
+    Faces,
 }
 
 impl Profile {
@@ -285,6 +300,7 @@ impl Profile {
             Profile::Documents => "documents",
             Profile::Images => "images",
             Profile::Media => "media",
+            Profile::Faces => "faces",
         }
     }
 
@@ -293,6 +309,7 @@ impl Profile {
             "documents" => Some(Profile::Documents),
             "images" => Some(Profile::Images),
             "media" => Some(Profile::Media),
+            "faces" => Some(Profile::Faces),
             _ => None,
         }
     }
@@ -305,7 +322,12 @@ impl Profile {
         matches!(self, Profile::Media)
     }
 
-    pub const ALL: [Profile; 3] = [Profile::Documents, Profile::Images, Profile::Media];
+    pub const ALL: [Profile; 4] = [
+        Profile::Documents,
+        Profile::Images,
+        Profile::Media,
+        Profile::Faces,
+    ];
 }
 
 /// What the profile's own work produced, when the self-test measured it: the items
@@ -1413,6 +1435,51 @@ fn platform_confine(profile: Profile, grants: Grants) -> (Protections, Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every profile names its own pipeline, and the parser shapes are the ones
+    /// that may not start a program.
+    #[test]
+    fn a_profile_names_the_pipeline_it_runs() {
+        for profile in Profile::ALL {
+            assert_eq!(Profile::parse(profile.as_str()), Some(profile));
+        }
+        assert_eq!(Profile::parse(" FACES "), Some(Profile::Faces));
+        assert_eq!(Profile::parse("people"), None);
+        assert!(
+            Profile::Media.runs_helper(),
+            "the media profile runs ffmpeg"
+        );
+        for profile in [Profile::Documents, Profile::Images, Profile::Faces] {
+            assert!(
+                !profile.runs_helper(),
+                "{} starts nothing",
+                profile.as_str()
+            );
+        }
+    }
+
+    /// The faces budget is the widest, and its CPU budget follows the wall clock
+    /// with room for a thread pool and the detector's tiled passes.
+    #[test]
+    fn the_faces_profile_budget_covers_the_detector() {
+        assert_eq!(profile_wall_seconds(Profile::Faces), 90);
+        assert_eq!(cpu_limit_seconds(Profile::Faces), (180, 185));
+        assert_eq!(cpu_limit_seconds(Profile::Images), (15, 20));
+        for profile in Profile::ALL {
+            let (soft, hard) = cpu_limit_seconds(profile);
+            assert!(
+                soft >= profile_wall_seconds(profile),
+                "{} gets less CPU than wall clock",
+                profile.as_str()
+            );
+            assert_eq!(
+                hard,
+                soft + 5,
+                "{} has no hard-limit slack",
+                profile.as_str()
+            );
+        }
+    }
 
     /// Every limit is required, and memory may be the address-space limit or the
     /// bound that stands in for it where the kernel does not take one.
