@@ -1618,6 +1618,9 @@ admin.skip_face_tags_off = "自动人物标签未开启"
 
 fb.auto_tag_short = "AI"
 fb.auto_tag = "自动生成"
+fb.tag_person_any = "人物"
+fb.tag_person_single = "单人"
+fb.tag_person_group = "合影"
 
 admin.job_face_tag_scan = "人物标签扫描"
 admin.job_face_tag_scan_desc = "扫描上传或同步的图片中的人脸，并打上人物标签。"

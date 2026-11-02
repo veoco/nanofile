@@ -3,6 +3,7 @@
 // file-manager column, so opening it reflows nothing: the list keeps its height and scroll
 // offset, and only `.nf-scroll`'s bottom padding grows to keep the final row clear of it.
 import { __t } from "../core/i18n.js";
+import { tagLabel } from "../core/tag-label.js";
 import { escapeHtml, escapeAttr, encodeFilePath, safeColor, parentDirOf } from "../core/utils.js";
 import { apiFetch } from "../core/api.js";
 import { humanType, isQuickPreviewImage, getExifFields } from "../core/file-meta.js";
@@ -282,7 +283,7 @@ export function openRightPanel(d) {
 
     var repoId = d.repoId;
     var recordId = d.recordId;
-    var allTags = [];   // [{id, name, color}]
+    var allTags = [];   // [{id, name, labelKey, color}]
     var fileTagIds = []; // tag ids currently attached
 // Set when the user saves; the initial load (reflecting pre-save state) must not roll it back.
     var userMutated = false;
@@ -307,7 +308,7 @@ export function openRightPanel(d) {
         chip.style.backgroundColor = tagColor + "33";
         chip.innerHTML =
           '<span class="inline-block h-1.5 w-1.5 rounded-full" style="background-color:' + escapeAttr(tagColor) + ';"></span>' +
-          escapeHtml(tag.name) +
+          escapeHtml(tagLabel(tag)) +
           (tag.source === "vision" ? '<span class="nf-tag-auto" style="--tag-color:' + escapeAttr(tagColor) + ';" title="' + escapeAttr(__t('fb.auto_tag')) + '">' + escapeHtml(__t('fb.auto_tag_short')) + '</span>' : "") +
           '<button type="button" class="js-rp-tag-remove hover:text-err" data-tag-id="' + encodeURIComponent(tag.id) + '" title="' + escapeAttr(__t('fb.remove_tag')) + '">' +
           '  <svg class="h-2.5 w-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>' +
@@ -344,13 +345,13 @@ export function openRightPanel(d) {
       var tagData = results[0] || {};
       var recData = results[1] || {};
       allTags = (tagData.results || []).map(function (t) {
-        return { id: t._id, name: t._tag_name, color: t._tag_color, source: t._tag_source || "manual" };
+        return { id: t._id, name: t._tag_name, labelKey: t._tag_key || "", color: t._tag_color, source: t._tag_source || "manual" };
       });
       if (tagDatalist) {
         tagDatalist.innerHTML = "";
         allTags.forEach(function (t) {
           var opt = document.createElement("option");
-          opt.value = t.name;
+          opt.value = tagLabel(t);
           tagDatalist.appendChild(opt);
         });
       }
@@ -366,7 +367,10 @@ export function openRightPanel(d) {
       addTagBtn.onclick = function () {
         var name = (tagInput.value || "").trim();
         if (!name) return;
-        var existing = allTags.find(function (t) { return t.name === name; });
+        // Match the stored name first, then the localized label: a viewer types
+        // the label they see, but the tag's identity is still its stored name.
+        var existing = allTags.find(function (t) { return t.name === name; }) ||
+          allTags.find(function (t) { return tagLabel(t) === name; });
         var p;
         if (existing) {
           p = Promise.resolve(existing.id);
@@ -381,10 +385,11 @@ export function openRightPanel(d) {
 // Mark the panel user-mutated so an in-flight initial load is discarded, not overwriting the
 // tag just created.
             userMutated = true;
-            allTags.push({ id: created._id, name: created._tag_name, color: created._tag_color });
+            var createdTag = { id: created._id, name: created._tag_name, labelKey: created._tag_key || "", color: created._tag_color };
+            allTags.push(createdTag);
             if (tagDatalist) {
               var opt = document.createElement("option");
-              opt.value = created._tag_name;
+              opt.value = tagLabel(createdTag);
               tagDatalist.appendChild(opt);
             }
             return created._id;

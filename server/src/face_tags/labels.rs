@@ -1,34 +1,30 @@
-//! The three automatic tags and their stable keys.
+//! The three automatic tags: their stable keys, colors and search aliases.
+//!
+//! The display text lives in the UI catalog (`server/locales/`), keyed by
+//! `domain::tag::locale_key`, so the scanner and the file browser cannot drift
+//! apart on a tag's name.
+
+use crate::i18n::I18n;
+
+pub use crate::domain::tag::{PERSON_ANY, PERSON_GROUP, PERSON_SINGLE};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LabelDef {
     pub key: &'static str,
-    pub zh: &'static str,
-    pub en: &'static str,
     pub color: &'static str,
 }
-
-pub const PERSON_ANY: &str = "person_any";
-pub const PERSON_SINGLE: &str = "person_single";
-pub const PERSON_GROUP: &str = "person_group";
 
 pub const ALL: &[LabelDef] = &[
     LabelDef {
         key: PERSON_ANY,
-        zh: "人物",
-        en: "People",
         color: "#3b82f6",
     },
     LabelDef {
         key: PERSON_SINGLE,
-        zh: "单人",
-        en: "Single person",
         color: "#06b6d4",
     },
     LabelDef {
         key: PERSON_GROUP,
-        zh: "合影",
-        en: "Group photo",
         color: "#8b5cf6",
     },
 ];
@@ -51,14 +47,13 @@ pub fn by_key(key: &str) -> Option<&'static LabelDef> {
     ALL.iter().find(|label| label.key == key)
 }
 
-/// Display name in the configured UI language. Tag names are data, so a shared
-/// repository keeps whatever was created; search aliases cover both languages.
+/// The scanner's stored tag name in the given language. Display re-translates
+/// by `label_key`, so this is only the name a shared repository stores; search
+/// aliases cover both languages.
 pub fn display_name(label: &LabelDef, language: &str) -> &'static str {
-    if language.to_ascii_lowercase().starts_with("zh") {
-        label.zh
-    } else {
-        label.en
-    }
+    let key =
+        crate::domain::tag::locale_key(label.key).expect("every automatic label has a catalog key");
+    I18n::get(Some(language)).tr(key)
 }
 
 /// Query aliases used by the search phase. Matching is case-insensitive and
@@ -120,5 +115,15 @@ mod tests {
         assert_eq!(keys_for_query("people"), vec![PERSON_ANY]);
         assert_eq!(keys_for_query("合影"), vec![PERSON_GROUP]);
         assert_eq!(keys_for_query("group photo"), vec![PERSON_GROUP]);
+    }
+
+    #[test]
+    fn display_names_follow_the_ui_catalog() {
+        assert_eq!(display_name(&ALL[0], "zh"), "人物");
+        assert_eq!(display_name(&ALL[0], "zh-CN"), "人物");
+        assert_eq!(display_name(&ALL[0], "en"), "People");
+        assert_eq!(display_name(&ALL[0], "de"), "People");
+        assert_eq!(display_name(&ALL[1], "zh"), "单人");
+        assert_eq!(display_name(&ALL[2], "en"), "Group photo");
     }
 }

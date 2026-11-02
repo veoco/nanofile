@@ -8,6 +8,9 @@ Nanofile can add three tags to photos without recognising anyone:
 | 单人 / Single person | Exactly one face |
 | 合影 / Group photo | Two or more faces |
 
+Tag labels follow the interface language. A tag you created yourself keeps the
+name you typed.
+
 The tags are searchable: searching for `人物`, `有人`, `people`, `face`, `单人`,
 `solo`, `合影`, `合照` or `group` returns the matching files. They work exactly
 like other tags — you can filter by them, add more tags, or remove one.

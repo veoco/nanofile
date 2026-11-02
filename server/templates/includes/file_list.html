@@ -70,9 +70,9 @@
                 class="js-tag-filter-btn inline-flex items-center gap-1 h-6 px-2 rounded-ctl text-[12px] font-medium transition-colors
                 {% if current_tag.as_deref() == Some(tag.name.as_str()) %}text-ink bg-raised{% else %}text-ink-3 hover:text-ink hover:bg-raised{% endif %}"
                 data-tag="{{ tag.name }}"
-                title="{{ t.trf("fb.filter_by_tag", [("name", &tag.name)]) }}">
+                title="{{ t.trf("fb.filter_by_tag", [("name", &tag.label)]) }}">
             <span class="inline-block h-2 w-2 rounded-full flex-shrink-0" style="background-color: {{ tag.color }};"></span>
-            {{ tag.name }}
+            {{ tag.label }}
             {% if current_tag.as_deref() == Some(tag.name.as_str()) %}
             {{ icons::icon_close("h-2.5 w-2.5") }}
             {% endif %}
@@ -170,9 +170,9 @@
                 <button type="button" class="js-entry-tag inline-flex items-center gap-1 shrink-0 rounded-[4px] px-1.5 py-0.5 text-[10px] leading-none font-medium text-ink hover:opacity-80 transition-opacity"
                         style="background-color: {{ tag.color }}33;"
                         data-tag="{{ tag.name }}"
-                        title="{{ t.trf("fb.filter_by_tag", [("name", &tag.name)]) }}">
+                        title="{{ t.trf("fb.filter_by_tag", [("name", &tag.label)]) }}">
                     <span class="inline-block h-1.5 w-1.5 rounded-full" style="background-color: {{ tag.color }};"></span>
-                    {{ tag.name }}
+                    {{ tag.label }}
                     {% if tag.source == "vision" %}
                     <span class="nf-tag-auto" style="--tag-color: {{ tag.color }};" title="{{ t.tr("fb.auto_tag") }}">{{ t.tr("fb.auto_tag_short") }}</span>
                     {% endif %}
@@ -256,9 +256,9 @@
             <button type="button" class="js-entry-tag nf-mini-tag"
                     style="background-color: {{ tag.color }}33;"
                     data-tag="{{ tag.name }}"
-                    title="{{ t.trf("fb.filter_by_tag", [("name", &tag.name)]) }}">
+                    title="{{ t.trf("fb.filter_by_tag", [("name", &tag.label)]) }}">
                 <span class="inline-block h-1.5 w-1.5 rounded-full flex-shrink-0" style="background-color: {{ tag.color }};"></span>
-                <span class="truncate">{{ tag.name }}</span>
+                <span class="truncate">{{ tag.label }}</span>
                 {% if tag.source == "vision" %}
                 <span class="nf-tag-auto" style="--tag-color: {{ tag.color }};" title="{{ t.tr("fb.auto_tag") }}">{{ t.tr("fb.auto_tag_short") }}</span>
                 {% endif %}
@@ -341,9 +341,9 @@
                     <button type="button" class="js-entry-tag nf-mini-tag"
                             style="background-color: {{ tag.color }}33;"
                             data-tag="{{ tag.name }}"
-                            title="{{ t.trf("fb.filter_by_tag", [("name", &tag.name)]) }}">
+                            title="{{ t.trf("fb.filter_by_tag", [("name", &tag.label)]) }}">
                         <span class="inline-block h-1.5 w-1.5 rounded-full flex-shrink-0" style="background-color: {{ tag.color }};"></span>
-                        <span class="truncate">{{ tag.name }}</span>
+                        <span class="truncate">{{ tag.label }}</span>
                         {% if tag.source == "vision" %}
                         <span class="nf-tag-auto" style="--tag-color: {{ tag.color }};" title="{{ t.tr("fb.auto_tag") }}">{{ t.tr("fb.auto_tag_short") }}</span>
                         {% endif %}

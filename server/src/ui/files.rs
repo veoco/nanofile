@@ -195,7 +195,11 @@ pub struct FileEntry {
 /// A display tag attached to a file entry.
 #[derive(Clone)]
 pub struct TagChip {
+    /// Stored tag name: the filter token and the API value.
     pub name: String,
+    /// What this viewer sees: a translated label for an automatic tag, the
+    /// stored name for a hand-made one.
+    pub label: String,
     pub color: String,
     /// `vision` marks an automatic people tag.
     pub source: String,
@@ -403,14 +407,33 @@ fn build_file_entry(
     }
 }
 
+/// The chip text for one tag. Automatic tags are translated from their stable
+/// label key; a hand-made tag keeps the name its owner gave it. An unknown key
+/// or a missing translation falls back to the stored name, so a raw locale key
+/// never reaches the page.
+fn tag_display_name(t: &I18n, label_key: Option<&str>, name: &str) -> String {
+    let Some(locale_key) = label_key.and_then(crate::domain::tag::locale_key) else {
+        return name.to_string();
+    };
+    let translated = t.tr(locale_key);
+    if translated == locale_key {
+        name.to_string()
+    } else {
+        translated.to_string()
+    }
+}
+
 fn build_tags_map(
     details: Vec<crate::repository::file_tag::TagOnPath>,
+    t: &I18n,
 ) -> (HashMap<String, Vec<TagChip>>, Vec<TagChip>) {
     let mut tags_by_path: HashMap<String, Vec<TagChip>> = HashMap::new();
     let mut folder_tags: Vec<TagChip> = Vec::new();
     for d in details {
+        let label = tag_display_name(t, d.tag_label_key.as_deref(), &d.tag_name);
         let chip = TagChip {
             name: d.tag_name.clone(),
+            label: label.clone(),
             color: d.tag_color.clone(),
             source: d.tag_source.clone(),
         };
@@ -421,6 +444,7 @@ fn build_tags_map(
         if !folder_tags.iter().any(|t| t.name == d.tag_name) {
             folder_tags.push(TagChip {
                 name: d.tag_name,
+                label,
                 color: d.tag_color,
                 source: d.tag_source,
             });
@@ -796,7 +820,7 @@ async fn file_browser_inner(
             .file_tag
             .find_tag_details_by_paths(&repo_id, &folder_paths)
             .await?;
-        (tags_by_path, folder_tags) = build_tags_map(tag_details);
+        (tags_by_path, folder_tags) = build_tags_map(tag_details, t);
     }
 
     // Apply the tag filter (current folder only, non-recursive).
@@ -875,7 +899,7 @@ async fn file_browser_inner(
             .file_tag
             .find_tag_details_by_paths(&repo_id, &page_paths)
             .await?;
-        (tags_by_path, folder_tags) = build_tags_map(tag_details);
+        (tags_by_path, folder_tags) = build_tags_map(tag_details, t);
     }
 
     let starred_set: HashSet<String> = repos
@@ -1516,5 +1540,49 @@ mod tests {
         assert_eq!(dirents[0].name, "a");
         assert_eq!(dirents[1].name, "B");
         assert_eq!(dirents[2].name, "c");
+    }
+
+    #[test]
+    fn automatic_tag_labels_follow_the_viewer_language() {
+        let zh = I18n::get(Some("zh"));
+        let en = I18n::get(Some("en"));
+        assert_eq!(tag_display_name(zh, Some("person_any"), "People"), "人物");
+        assert_eq!(
+            tag_display_name(en, Some("person_single"), "单人"),
+            "Single person"
+        );
+        assert_eq!(
+            tag_display_name(en, Some("person_group"), "合影"),
+            "Group photo"
+        );
+        // A hand-made tag is data: no label key means no translation.
+        assert_eq!(tag_display_name(zh, None, "work"), "work");
+        assert_eq!(
+            tag_display_name(en, Some("not_a_label"), "custom"),
+            "custom"
+        );
+    }
+
+    #[test]
+    fn a_tag_chip_keeps_its_stored_name_for_filtering() {
+        let zh = I18n::get(Some("zh"));
+        let details = vec![crate::repository::file_tag::TagOnPath {
+            file_path: "/photo.jpg".to_string(),
+            tag_id: 1,
+            tag_name: "People".to_string(),
+            tag_color: "#3b82f6".to_string(),
+            tag_source: "vision".to_string(),
+            tag_label_key: Some("person_any".to_string()),
+        }];
+        let (by_path, folder) = build_tags_map(details, zh);
+        let chip = &by_path.get("/photo.jpg").expect("the path has a chip")[0];
+        assert_eq!(
+            chip.name, "People",
+            "the filter token stays the stored name"
+        );
+        assert_eq!(chip.label, "人物", "the viewer sees the translated label");
+        assert_eq!(folder.len(), 1);
+        assert_eq!(folder[0].name, "People");
+        assert_eq!(folder[0].label, "人物");
     }
 }

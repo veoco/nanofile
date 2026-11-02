@@ -26,6 +26,25 @@ fn record_url(repo_id: &str, parent_dir: &str, file_name: &str) -> String {
     )
 }
 
+/// Log in through the Web UI. The file browser reads the language from the user
+/// profile, so the UI client has to carry the session cookie, not the API token.
+async fn login_ui(server: &common::TestServer) -> reqwest::Client {
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()
+        .unwrap();
+    let resp = client
+        .post(format!("{}/accounts/login/", server.base_url))
+        .form(&[("email", "test@example.com"), ("password", "password")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "web login should redirect on success");
+    client
+}
+
 /// Create a tag and return its `_id` string.
 async fn create_tag(f: &TestFixture, name: &str, color: &str) -> String {
     let resp = f
@@ -478,4 +497,133 @@ async fn test_folder_tag_filter_in_browser() {
         !html.contains("b.jpg"),
         "tag filter must hide the untagged file"
     );
+}
+
+/// Automatic tags store the language of the scanner's default, but the browser
+/// must render them in the viewer's language and keep filtering by the stored
+/// name (the token that page state and old links use).
+#[tokio::test]
+async fn test_automatic_tag_labels_follow_the_user_language() {
+    use server::repository::repo_tag::TagInput;
+
+    let f = TestFixture::new().await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "photo.jpg", b"jpeg")
+        .await;
+    f.client
+        .upload_file(&f.api_token, &f.repo_id, "/", "other.txt", b"text")
+        .await;
+
+    let tags = f
+        .server
+        .repos
+        .repo_tag
+        .create_many(
+            &f.repo_id,
+            &[
+                TagInput::automatic(
+                    "People".to_string(),
+                    "#3b82f6".to_string(),
+                    "person_any".to_string(),
+                ),
+                TagInput::automatic(
+                    "合影".to_string(),
+                    "#8b5cf6".to_string(),
+                    "person_group".to_string(),
+                ),
+            ],
+        )
+        .await
+        .expect("create automatic tags");
+    let ids: Vec<i32> = tags.iter().map(|tag| tag.id).collect();
+    f.server
+        .repos
+        .file_tag
+        .set_for_path(&f.repo_id, "/photo.jpg", &ids)
+        .await
+        .expect("attach automatic tags");
+
+    // The details drawer translates from this field, not from the stored name.
+    let resp = f
+        .client
+        .get(&tags_url(&f.repo_id), Some(&f.api_token))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tag| tag["_tag_key"] == "person_any"),
+        "the tag list must expose the stable label key"
+    );
+
+    f.server
+        .repos
+        .user
+        .update_language(f.user_id, Some("zh".to_string()))
+        .await
+        .expect("set the UI language");
+
+    let ui = login_ui(&f.server).await;
+    let base = format!("{}/libraries/{}/files", f.server.base_url, f.repo_id);
+    let list_url =
+        reqwest::Url::parse_with_params(&base, &[("partial", "1"), ("view", "all")]).unwrap();
+    let html = ui.get(list_url).send().await.unwrap().text().await.unwrap();
+    // One filter pill plus the list, grid and gallery chips.
+    assert_eq!(
+        html.matches("按标签 人物 筛选").count(),
+        4,
+        "the automatic tag must be translated in every browser surface"
+    );
+    assert_eq!(html.matches("按标签 合影 筛选").count(), 4);
+    assert_eq!(
+        html.matches("data-tag=\"People\"").count(),
+        4,
+        "the filter token must stay the stored tag name"
+    );
+    assert_eq!(html.matches("data-tag=\"合影\"").count(), 4);
+
+    for stored in ["People", "合影"] {
+        let filter_url = reqwest::Url::parse_with_params(
+            &base,
+            &[("partial", "1"), ("view", "all"), ("tag", stored)],
+        )
+        .unwrap();
+        let html = ui
+            .get(filter_url)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(
+            html.contains("photo.jpg"),
+            "the stored name {stored} must still select the tagged file"
+        );
+        assert!(
+            !html.contains("other.txt"),
+            "the stored name {stored} must still hide the untagged file"
+        );
+    }
+
+    f.server
+        .repos
+        .user
+        .update_language(f.user_id, Some("en".to_string()))
+        .await
+        .unwrap();
+    let html = ui
+        .get(reqwest::Url::parse_with_params(&base, &[("partial", "1"), ("view", "all")]).unwrap())
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(html.matches("Filter by tag People").count(), 4);
+    assert_eq!(html.matches("Filter by tag Group photo").count(), 4);
+    assert!(!html.contains("按标签 人物 筛选"));
 }
