@@ -167,21 +167,12 @@ export async function loadMoreEntries() {
         if (count) count.textContent = String(grid.querySelectorAll(".js-entry-row").length);
       });
     } else {
+      // Keep every loaded page: dropping the oldest one made the rows above the
+      // retained window unreachable, so scrolling back stopped partway through
+      // the folder. List rows already skip off-screen rendering, and the gallery
+      // never discarded pages either.
       var rows = newContainer.querySelectorAll(".js-entry-row");
       rows.forEach(function (row) { container.appendChild(row); });
-
-      var allRows = container.querySelectorAll(".js-entry-row");
-      if (allRows.length > 600) {
-        var oldestPage = Infinity;
-        allRows.forEach(function (r) {
-          var p = parseInt(r.dataset.page, 10);
-          if (p < oldestPage) oldestPage = p;
-        });
-        if (oldestPage < nextPage) {
-          var toRemove = container.querySelectorAll('.js-entry-row[data-page="' + oldestPage + '"]');
-          toRemove.forEach(function (r) { r.remove(); });
-        }
-      }
     }
 
     container.dataset.page = newContainer.dataset.page || String(nextPage);

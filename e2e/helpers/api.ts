@@ -115,6 +115,30 @@ export async function uploadFile(
   if (!res.ok) throw new Error(`upload ${filename} failed: ${res.status} ${await res.text()}`);
 }
 
+/// Upload a batch of files with bounded concurrency. A paging test needs more
+/// entries than one page, and a serial loop would spend most of its setup time
+/// waiting on round trips.
+export async function uploadFiles(
+  baseURL: string,
+  token: string,
+  repoId: string,
+  parentDir: string,
+  filenames: string[],
+  content: string | Uint8Array,
+  concurrency = 16,
+): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < filenames.length) {
+      const filename = filenames[next++];
+      await uploadFile(baseURL, token, repoId, parentDir, filename, content);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, filenames.length) }, () => worker()),
+  );
+}
+
 export async function createDir(
   baseURL: string,
   token: string,
