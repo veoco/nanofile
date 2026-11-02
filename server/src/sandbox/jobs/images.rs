@@ -215,19 +215,18 @@ fn face_tags_answer(
 
 /// The self-test: decode a generated image and encode it again, so a profile that
 /// cannot do the work says so here rather than on a user's first thumbnail.
+///
+/// Face-tag inference is deliberately not part of it. Running YuNet on the fixed
+/// 640×640 input costs seconds on a slow host, and the probe has a short wall-clock
+/// ceiling: a heavy check would time out and mark the whole image profile
+/// unavailable, taking thumbnails down with a feature that is off by default. The
+/// scan job reports its own failures, and they must never gate image work.
 pub fn probe() -> (String, JobVerdict) {
     let png = tiny_png();
-    let (mut token, verdict) = match thumbnail_util::generate_thumbnail_encoded(&png, 16) {
+    let (token, verdict) = match thumbnail_util::generate_thumbnail_encoded(&png, 16) {
         Ok((bytes, _)) => (format!("image-ok({})", bytes.len()), JobVerdict::Ok),
         Err(error) => (format!("image-failed({error})"), JobVerdict::Failed),
     };
-    // A 2x2 image has no faces; this only proves the model loads and runs.
-    // A failure is reported in the detail but does not make the whole image
-    // profile unavailable: thumbnails must keep working.
-    match face_tags_answer(&png, crate::face_tags::DetectOptions::default()) {
-        Ok(summary) => token.push_str(&format!(",face-tags-ok(count={})", summary.face_count)),
-        Err(error) => token.push_str(&format!(",face-tags-failed({error})")),
-    }
     (token, verdict)
 }
 
@@ -282,7 +281,7 @@ mod tests {
     fn the_probe_decodes_and_re_encodes() {
         let (token, job) = probe();
         assert!(token.starts_with("image-ok("), "{token}");
-        assert!(token.contains("face-tags-ok(count=0)"), "{token}");
+        assert!(!token.contains("face-tags"), "{token}");
         assert_eq!(job, JobVerdict::Ok);
     }
 
