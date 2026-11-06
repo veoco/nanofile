@@ -1,7 +1,7 @@
 //! DB text detection: geometry, normalisation and box extraction.
 //!
 //! The graph is PP-OCRv6 tiny's DB detector. Its output is a probability map
-//! the size of the input; [`postprocess`] turns that map into text boxes with
+//! the size of the input; `postprocess` turns that map into text boxes with
 //! the same steps as PaddleOCR's `DBPostProcess`:
 //!
 //! 1. threshold the map and label its 8-connected components;

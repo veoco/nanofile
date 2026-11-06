@@ -2,7 +2,7 @@
 //!
 //! The model plans are prepared per concrete input size: detection varies with
 //! the picture and each text line has its own width. The recognition widths are
-//! bucketed by [`rec::BUCKETS`], so one child prepares at most five rec plans.
+//! bucketed by `rec::BUCKETS`, so one child prepares at most five rec plans.
 
 use std::collections::HashMap;
 

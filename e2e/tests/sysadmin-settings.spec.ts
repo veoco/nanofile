@@ -137,11 +137,11 @@ test("the sandbox page shows one band per profile and one row per protection", a
   await page.goto("/sysadmin/settings/sandbox/");
 
 // One band per profile, each with its own state, and no verdict above them: a summary would
-// repeat what the badges and item rows already say. The faces band is a state only while
-// automatic people tags are off, which is the default this fixture runs with.
+// repeat what the badges and item rows already say. The faces and OCR bands are a state only
+// while their settings are off, which is the default this fixture runs with.
   await expect(page.locator("[data-sandbox-verdict]")).toHaveCount(0);
-  await expect(page.locator("[data-sandbox-profile]")).toHaveCount(3);
-  await expect(page.locator("[data-sandbox-state]")).toHaveCount(3);
+  await expect(page.locator("[data-sandbox-profile]")).toHaveCount(4);
+  await expect(page.locator("[data-sandbox-state]")).toHaveCount(4);
   await expect(page.locator("[data-sandbox-grade]")).toHaveCount(0);
   await expect(page.locator("[data-sandbox-status]")).toHaveCount(0);
 
