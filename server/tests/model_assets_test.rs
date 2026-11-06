@@ -30,7 +30,7 @@ fn every_embedded_model_matches_the_manifest() {
     let dir = models_dir();
     let manifest = manifest();
     let models = manifest["models"].as_object().expect("models object");
-    assert_eq!(models.len(), 5, "manifest must name every embedded asset");
+    assert_eq!(models.len(), 6, "manifest must name every embedded asset");
     for (name, entry) in models {
         let bytes = std::fs::read(dir.join(entry["file"].as_str().expect("file")))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -147,6 +147,19 @@ fn the_ocr_orientation_graph_loads_and_returns_four_classes() {
         outputs[0].shape().expect("shape").to_vec(),
         vec![1, 4],
         "the orientation head has one score per quarter turn"
+    );
+}
+
+#[test]
+fn the_ocr_textline_orientation_graph_loads_and_returns_two_classes() {
+    let (_, bytes) = model("pp_lcnet_x0_25_textline_ori");
+    let plan = load_plan(&bytes, "1,3,80,160,f32");
+    let outputs = run_zeros(&plan, &[1, 3, 80, 160]);
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(
+        outputs[0].shape().expect("shape").to_vec(),
+        vec![1, 2],
+        "the text line head has upright and upside-down scores"
     );
 }
 

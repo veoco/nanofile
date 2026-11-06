@@ -161,9 +161,10 @@ const ADDRESS_SPACE_LIMIT: u64 = 1 << 30;
 /// Wall-clock seconds a profile's child gets. The parent's timers use the same numbers, so the
 /// CPU limit can be derived from them instead of being one fixed cap for every profile.
 ///
-/// The OCR profile is the widest: it loads three ONNX graphs, prepares a fixed
-/// orientation plan, plans for the picture's detection size and several
-/// recognition widths, and runs one pass per text line. The faces profile
+/// The OCR profile is the widest: it loads four ONNX graphs, prepares fixed
+/// 224×224 page and 160×80 line orientation plans, plans for the picture's
+/// detection size and several recognition widths, and runs one pass per text
+/// line. The faces profile
 /// follows: on a large photo it runs up to nine forward passes (the engine tiles
 /// above 1600 px), so a budget sized for one image-crate decode would time out
 /// the scan it exists for.
@@ -1470,7 +1471,7 @@ mod tests {
         }
     }
 
-    /// OCR is the widest budget: three models and one recognition pass per line.
+    /// OCR is the widest budget: four models and one recognition pass per line.
     #[test]
     fn the_model_profiles_have_their_own_budgets() {
         assert_eq!(profile_wall_seconds(Profile::Faces), 90);

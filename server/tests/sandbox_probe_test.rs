@@ -141,8 +141,8 @@ fn the_faces_report_shows_a_worker_that_still_detects() {
     the_platform_answer(Profile::Faces, &report);
 }
 
-/// The OCR profile loads three models, so its probe is the only place the
-/// confined child proves the larger graphs run too.
+/// The OCR profile loads four models, so its probe is the only place the
+/// confined child proves all of the graphs run too.
 #[test]
 fn the_ocr_report_shows_models_that_still_run() {
     let (report, line) =

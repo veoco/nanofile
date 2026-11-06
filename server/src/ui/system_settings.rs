@@ -701,7 +701,7 @@ fn faces_profile(
     profile_view(t, Profile::Faces, answer, state)
 }
 
-/// The OCR profile's band: three models, and the feature switch that decides
+/// The OCR profile's band: four models, and the feature switch that decides
 /// whether it is measured at all.
 ///
 /// OCR exists to feed the full-text index, so the index switch comes first: a

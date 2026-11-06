@@ -70,10 +70,10 @@ GTK 无法交叉编译，因此发布产物里只有三个原生 runner 平台�
 
 ## 嵌入推理（人物标签与 OCR）
 
-所有构建都会编译 YuNet 检测器、PP-OCRv6 tiny 的 OCR 图、PP-LCNet 页面方向分类器和
-自动人物标签流水线，没有需要开启的 Cargo feature。纯 Rust 的 `tract` CPU runtime
-与 ONNX 模型（合计约 13.3 MB）始终在二进制里，而两个扫描器仍要等
-`[face_tags] enabled` 或 `[ocr] enabled` 打开后才运行。正常构建即可：
+所有构建都会编译 YuNet 检测器、PP-OCRv6 tiny 的 OCR 图、PP-LCNet 页面与文本行
+方向分类器和自动人物标签流水线，没有需要开启的 Cargo feature。纯 Rust 的
+`tract` CPU runtime 与 ONNX 模型（合计约 14.3 MB）始终在二进制里，而两个
+扫描器仍要等 `[face_tags] enabled` 或 `[ocr] enabled` 打开后才运行。正常构建即可：
 
 ```bash
 cargo build --release -p server

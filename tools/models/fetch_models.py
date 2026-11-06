@@ -13,6 +13,8 @@ The upstream models are:
   * PP-OCRv6 tiny detection and recognition (PaddlePaddle, Apache-2.0)
   * PP-LCNet_x1_0 document orientation classification (PaddlePaddle,
     Apache-2.0)
+  * PP-LCNet_x0_25 text line orientation classification (PaddlePaddle,
+    Apache-2.0)
   * the recognition character dictionary, extracted from the recognition
     model's inference.yml
 
@@ -70,6 +72,17 @@ DOC_ORI = {
     ),
     "bytes": 6788069,
     "sha256": "af9a0a4f317ff0709ce752067807f819cb15d883f8ecad89f28df1c6ee2d9c92",
+}
+
+LINE_ORI = {
+    "name": "pp_lcnet_x0_25_textline_ori",
+    "file": "pp_lcnet_x0_25_textline_ori.onnx",
+    "url": (
+        "https://huggingface.co/PaddlePaddle/PP-LCNet_x0_25_textline_ori_onnx/resolve/"
+        "aea1f18d97338aaf84b463f90192f2820524a00a/inference.onnx"
+    ),
+    "bytes": 1019454,
+    "sha256": "94a6a0a0425f2b5f08b5df72086f2d72abe40f1d22f6d12d2cd83674f11f2ff3",
 }
 
 KEYS = {
@@ -169,6 +182,10 @@ def main() -> int:
     _verify(DOC_ORI, doc_ori)
     _write(args.output / DOC_ORI["file"], doc_ori)
 
+    line_ori = _fetch(LINE_ORI["url"])
+    _verify(LINE_ORI, line_ori)
+    _write(args.output / LINE_ORI["file"], line_ori)
+
     inference_yml = _fetch(KEYS["url"])
     keys = _dictionary(inference_yml)
     _verify(KEYS, keys)
@@ -180,6 +197,7 @@ def main() -> int:
         (DET, DET["url"]),
         (REC, REC["url"]),
         (DOC_ORI, DOC_ORI["url"]),
+        (LINE_ORI, LINE_ORI["url"]),
         (KEYS, KEYS["url"]),
     ]:
         manifest["models"][spec["name"]] = {

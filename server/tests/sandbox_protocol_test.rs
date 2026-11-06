@@ -308,7 +308,7 @@ fn an_image_request_is_parsed_or_refused() {
     assert_eq!(answer.refusal(), "image over the size cap");
 }
 
-/// The OCR child loads three models and answers with text or a reason, never
+/// The OCR child loads four models and answers with text or a reason, never
 /// with pixels. A blank image is a `U` (no indexable text); undecodable bytes
 /// are the same verdict; an unknown operation and an oversized request are
 /// refusals.

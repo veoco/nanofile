@@ -97,11 +97,11 @@ is in [Desktop tray and Windows service](/guide/deploy/desktop-and-service).
 ## Embedded inference (people tags and OCR)
 
 Every build compiles the YuNet detector, the PP-OCRv6 tiny OCR graphs, the
-PP-LCNet page-orientation classifier and the automatic people-tag pipeline:
-there is no Cargo feature to enable. The pure-Rust `tract` CPU runtime and the
-ONNX files (about 13.3 MB in total) are always in the binary, while both
-scanners stay off until `[face_tags] enabled` or `[ocr] enabled` is set. Build
-with the normal command:
+PP-LCNet page and text-line orientation classifiers and the automatic
+people-tag pipeline: there is no Cargo feature to enable. The pure-Rust `tract`
+CPU runtime and the ONNX files (about 14.3 MB in total) are always in the
+binary, while both scanners stay off until `[face_tags] enabled` or
+`[ocr] enabled` is set. Build with the normal command:
 
 ```bash
 cargo build --release -p server

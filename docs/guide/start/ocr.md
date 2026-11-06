@@ -28,8 +28,10 @@ accepts `[ocr]` as its startup value, but the settings page is the reference.
   CPU.
 
 Before detection, a small four-class model turns a page that was scanned or
-photographed a quarter turn off upright (90°, 180° or 270°). This is part of OCR
-and has no separate switch.
+photographed a quarter turn off upright (90°, 180° or 270°). After detection, a
+two-class model flips any individual line that is still upside down — for
+example a rotated margin note or stamp. Both are part of OCR and have no
+separate switch.
 
 New uploads and syncs are read in the background. Existing images are picked up
 by the low-load backfill pass; enabling OCR later does not need a full index
@@ -39,8 +41,8 @@ re-read on every pass.
 ## What is stored
 
 Only the recognised **text**, as the file's content in the full-text index. No
-image crop, text box, confidence value, page angle or model state is stored per
-file.
+image crop, text box, confidence value, orientation decision or model state is
+stored per file.
 
 The index directory is **not encrypted**, and the text can contain names,
 addresses or document numbers. It is searchable by anyone who can already read
@@ -55,9 +57,9 @@ the repository, or use `POST /api2/reindex/`).
   `storage.ffmpeg_path` first; without `ffmpeg` those files are not OCR'd.
 - One image may be at most 32 MiB, and at most 300 text lines are recognised.
   The text is capped at the same 8 MiB as document extraction.
-- Pages turned by 90°, 180° or 270° are corrected before detection. Other
-  angles, handwriting, very small print, low-contrast photos and decorative
-  fonts reduce accuracy.
+- Pages turned by 90°, 180° or 270°, and individual upside-down text lines, are
+  corrected before recognition. Other angles, handwriting, very small print,
+  low-contrast photos and decorative fonts reduce accuracy.
 - Multi-column pages are read in a simple top-to-bottom order. Search is not
   affected, but the order in a highlight may differ from the page.
 - Scanned PDFs and videos are **not** OCR'd. PDF text still comes from the PDF
@@ -72,11 +74,11 @@ names and permissions are unchanged.
 
 ## Models and licence
 
-PP-OCRv6 tiny (detection and recognition) and the PP-LCNet_x1_0 page
-orientation classifier run through the pure-Rust `tract` runtime in the confined
-OCR worker. The models are compiled into the binary and never downloaded at
-runtime. They are Apache-2.0; see `server/models/MODEL_CARD.md` in the
-repository for sources, revisions and limits.
+PP-OCRv6 tiny (detection and recognition) and the PP-LCNet page and text-line
+orientation classifiers run through the pure-Rust `tract` runtime in the
+confined OCR worker. The models are compiled into the binary and never
+downloaded at runtime. They are Apache-2.0; see `server/models/MODEL_CARD.md`
+in the repository for sources, revisions and limits.
 
 ## Not the Seafile OCR endpoints
 

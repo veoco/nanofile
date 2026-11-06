@@ -1,7 +1,7 @@
 //! OCR for the full-text index, in its own confined child.
 //!
-//! The child loads the orientation, detection and recognition graphs from the
-//! binary and answers with text, never with pixels: the parent only sees the
+//! The child loads the page and line orientation, detection and recognition
+//! graphs from the binary and answers with text, never with pixels: the parent only sees the
 //! recognised lines. It is a profile of its own so an OCR model that fails, or a
 //! picture that takes too long, cannot take document parsing or face detection
 //! down with it.
@@ -155,8 +155,8 @@ fn decode_options(raw: u32) -> OcrOptions {
     }
 }
 
-/// The self-test: load all models and run one blank orientation classification,
-/// detection and recognition.
+/// The self-test: load all models and run one blank page and line orientation
+/// classification, one detection and one recognition pass.
 pub fn probe() -> (String, JobVerdict) {
     match ocr::engine::probe() {
         Ok(lines) => (format!("ocr-ok({lines})"), JobVerdict::Ok),

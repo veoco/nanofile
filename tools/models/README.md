@@ -15,6 +15,8 @@ The script:
   from pinned Hugging Face revisions;
 - downloads PaddlePaddle's PP-LCNet_x1_0 document orientation classifier from a
   pinned Hugging Face revision;
+- downloads PaddlePaddle's PP-LCNet_x0_25 text line orientation classifier from
+  a pinned Hugging Face revision;
 - extracts the 6,904-character recognition dictionary from the recognition
   model's `inference.yml`;
 - verifies every SHA-256 and byte count before writing a file;

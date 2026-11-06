@@ -69,7 +69,7 @@ pub const MEDIA_TIMEOUT: Duration =
 pub const FACE_TIMEOUT: Duration =
     Duration::from_secs(crate::sandbox::profile_wall_seconds(Profile::Faces));
 
-/// Wall-clock ceiling for one OCR request: load three models, prepare the plans
+/// Wall-clock ceiling for one OCR request: load four models, prepare the plans
 /// and run one recognition pass per text line.
 pub const OCR_TIMEOUT: Duration =
     Duration::from_secs(crate::sandbox::profile_wall_seconds(Profile::Ocr));

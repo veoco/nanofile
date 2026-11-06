@@ -104,21 +104,45 @@ first. It runs in the same OCR child as the PP-OCRv6 graphs.
 
 The file is the upstream ONNX graph unchanged; there is no conversion step.
 
+## PP-LCNet_x0_25_textline_ori (text line orientation)
+
+`pp_lcnet_x0_25_textline_ori.onnx` classifies each detected text line as upright
+or upside down before recognition. It runs after detection and after the page
+orientation classifier, so a line that is inverted inside an otherwise upright
+page is still read.
+
+- **Task:** binary text line orientation (`0_degree` / `180_degree`).
+- **Architecture:** PP-LCNet_x0_25 with a two-way classification head.
+- **Input:** fixed `[1, 3, 80, 160]` BGR. The engine resizes the whole line crop
+  to 160×80 and normalises with ImageNet mean/std.
+- **Output:** `[1, 2]`, already softmaxed. A `180_degree` result flips the crop
+  before recognition; `0_degree` leaves it unchanged. No score threshold is
+  applied.
+- **Accuracy (upstream, internal multi-scene set):** Top-1 98.85%.
+- **File size:** 1,019,454 bytes.
+- **Licence:** **Apache-2.0**. Full text in
+  [`LICENSES/PaddleOCR-LICENSE`](LICENSES/PaddleOCR-LICENSE).
+- Upstream: <https://huggingface.co/PaddlePaddle/PP-LCNet_x0_25_textline_ori_onnx>,
+  revision `aea1f18d97338aaf84b463f90192f2820524a00a`.
+- SHA-256: `94a6a0a0425f2b5f08b5df72086f2d72abe40f1d22f6d12d2cd83674f11f2ff3`
+
+The file is the upstream ONNX graph unchanged; there is no conversion step.
+
 ### What it stores
 
 The recognised text is written into the Tantivy full-text index as the file's
 content. It can be searched by anyone who can already read the repository. The
 index directory is not encrypted; OCR text may contain names, addresses or
 document numbers. Disabling `[ocr]` stops new OCR but leaves existing text in
-the index until it is rebuilt. No image crops, boxes, confidence values or page
-angle are persisted.
+the index until it is rebuilt. No image crops, boxes, confidence values,
+orientation decisions or page angle are persisted.
 
 ### Limitations
 
-- Pages turned by 90°, 180° or 270° are detected and corrected before
-  detection. Arbitrary angles other than quarter turns, curved pages,
-  handwriting, very small print, low-contrast photos and artistic fonts reduce
-  accuracy.
+- Pages turned by 90°, 180° or 270°, and individual text lines turned upside
+  down inside an upright page, are corrected before recognition. Arbitrary
+  angles other than quarter turns, curved pages, handwriting, very small print,
+  low-contrast photos and artistic fonts reduce accuracy.
 - Multi-column pages are read in a simple top-to-bottom order; search results are
   unaffected, but the highlight order may differ from the page.
 - A picture can produce at most 300 text boxes; the text is capped at the same

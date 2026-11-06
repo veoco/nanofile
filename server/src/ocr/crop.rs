@@ -72,6 +72,18 @@ pub(crate) fn warp(rgb: &[u8], width: usize, height: usize, quad: Quad) -> Optio
     })
 }
 
+/// Reverse the crop's pixels for an upside-down text line.
+pub(crate) fn flip_180(mut crop: Crop) -> Crop {
+    let pixels = crop.rgb.len() / 3;
+    for index in 0..pixels / 2 {
+        let other = pixels - 1 - index;
+        for channel in 0..3 {
+            crop.rgb.swap(index * 3 + channel, other * 3 + channel);
+        }
+    }
+    crop
+}
+
 fn roll_vertical(quad: Quad) -> Quad {
     let width = ((quad.points[1].x - quad.points[0].x).powi(2)
         + (quad.points[1].y - quad.points[0].y).powi(2))
@@ -197,16 +209,14 @@ mod tests {
     }
 
     #[test]
-    fn vertical_text_is_rotated_before_cropping() {
-        let quad = Quad {
-            points: [
-                point(0.0, 0.0),
-                point(4.0, 0.0),
-                point(4.0, 20.0),
-                point(0.0, 20.0),
-            ],
+    fn a_half_turn_reverses_every_pixel() {
+        let crop = Crop {
+            rgb: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+            width: 2,
+            height: 2,
         };
-        let upright = roll_vertical(quad);
-        assert_eq!(upright.points[0], point(4.0, 0.0));
+        let flipped = flip_180(crop);
+        assert_eq!((flipped.width, flipped.height), (2, 2));
+        assert_eq!(flipped.rgb, vec![10, 11, 12, 7, 8, 9, 4, 5, 6, 1, 2, 3]);
     }
 }

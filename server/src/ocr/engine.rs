@@ -1,9 +1,9 @@
 //! The OCR pipeline for one image.
 //!
-//! The orientation graph has a fixed 224×224 input, so its plan is prepared
-//! once. Detection varies with the picture and each text line has its own
-//! width. The recognition widths are bucketed by `rec::BUCKETS`, so one child
-//! prepares at most five rec plans.
+//! The orientation graphs have fixed inputs (224×224 for the page, 160×80 for a
+//! line), so their plans are prepared once. Detection varies with the picture
+//! and each text line has its own width. The recognition widths are bucketed by
+//! `rec::BUCKETS`, so one child prepares at most five rec plans.
 
 use std::collections::HashMap;
 
@@ -15,6 +15,7 @@ use super::crop::{self, Crop};
 use super::det::{self, Geometry, Postprocess, TextBox};
 use super::keys;
 use super::layout;
+use super::line_orientation;
 use super::orientation;
 use super::rec;
 
@@ -32,6 +33,7 @@ const MAX_TEXT_BYTES: usize = crate::indexer::extract::MAX_INDEXED_CONTENT_BYTES
 const DETECTION: &[u8] = include_bytes!("../../models/ppocr_v6_tiny_det.onnx");
 const RECOGNITION: &[u8] = include_bytes!("../../models/ppocr_v6_tiny_rec.onnx");
 const ORIENTATION: &[u8] = include_bytes!("../../models/pp_lcnet_x1_0_doc_ori.onnx");
+const LINE_ORIENTATION: &[u8] = include_bytes!("../../models/pp_lcnet_x0_25_textline_ori.onnx");
 
 /// Where the bytes of an image can be decoded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +94,7 @@ struct Engine {
     detection: inference::OnnxModel,
     recognition: inference::OnnxModel,
     orientation_plan: tract::Runnable,
+    line_orientation_plan: tract::Runnable,
     detection_plans: HashMap<(usize, usize), tract::Runnable>,
     recognition_plans: HashMap<usize, tract::Runnable>,
 }
@@ -99,10 +102,12 @@ struct Engine {
 impl Engine {
     fn new() -> Result<Self, String> {
         let orientation = inference::OnnxModel::load(ORIENTATION)?;
+        let line_orientation = inference::OnnxModel::load(LINE_ORIENTATION)?;
         Ok(Self {
             detection: inference::OnnxModel::load(DETECTION)?,
             recognition: inference::OnnxModel::load(RECOGNITION)?,
             orientation_plan: orientation.plan("1,3,224,224,f32")?,
+            line_orientation_plan: line_orientation.plan("1,3,80,160,f32")?,
             detection_plans: HashMap::new(),
             recognition_plans: HashMap::new(),
         })
@@ -130,6 +135,34 @@ impl Engine {
         let probabilities = inference::values(&outputs[0])?;
         orientation::decode(probabilities)
             .ok_or_else(|| "the OCR orientation graph returned four unreadable scores".to_string())
+    }
+
+    fn classify_line_orientation(
+        &self,
+        tensor: &[f32],
+    ) -> Result<(line_orientation::Turn, f32), String> {
+        let outputs = inference::run(
+            &self.line_orientation_plan,
+            &[1, 3, line_orientation::HEIGHT, line_orientation::WIDTH],
+            tensor,
+        )?;
+        if outputs.len() != 1 {
+            return Err(format!(
+                "the OCR line orientation graph returned {} outputs, expected 1",
+                outputs.len()
+            ));
+        }
+        let shape = inference::shape(&outputs[0])?;
+        if shape != vec![1, line_orientation::CLASSES] {
+            return Err(format!(
+                "the OCR line orientation output has shape {shape:?}, expected [1, {}]",
+                line_orientation::CLASSES
+            ));
+        }
+        let probabilities = inference::values(&outputs[0])?;
+        line_orientation::decode(probabilities).ok_or_else(|| {
+            "the OCR line orientation graph returned two unreadable scores".to_string()
+        })
     }
 
     fn detect(&mut self, tensor: &[f32], geometry: Geometry) -> Result<Vec<TextBox>, String> {
@@ -227,6 +260,9 @@ pub fn recognize(image: &DynamicImage, options: OcrOptions) -> Result<String, St
         let Some(crop) = crop::warp(rgb.as_raw(), width, height, text_box.quad) else {
             continue;
         };
+        let tensor = line_orientation::tensor(crop.rgb.as_slice(), crop.width, crop.height);
+        let (turn, _score) = engine.classify_line_orientation(&tensor)?;
+        let crop = turn.upright(crop);
         if let Some(decoded) = engine.recognize(&crop, options.min_score)? {
             lines.push(layout::Line {
                 text: decoded.text,
@@ -243,8 +279,8 @@ pub fn recognize(image: &DynamicImage, options: OcrOptions) -> Result<String, St
     Ok(text)
 }
 
-/// Load all three graphs and run one blank orientation classification,
-/// detection and recognition.
+/// Load all four graphs and run one blank page and line orientation
+/// classification, detection and recognition.
 ///
 /// This is the startup probe of the OCR profile: it proves the confined child
 /// can prepare and run every model it needs, without depending on a fixture.
@@ -252,6 +288,8 @@ pub fn probe() -> Result<usize, String> {
     let mut engine = Engine::new()?;
     let orientation = vec![0f32; 3 * orientation::SIZE * orientation::SIZE];
     engine.classify_orientation(&orientation)?;
+    let line_orientation = vec![0f32; 3 * line_orientation::HEIGHT * line_orientation::WIDTH];
+    engine.classify_line_orientation(&line_orientation)?;
     let geometry = Geometry {
         width: 64,
         height: 64,
@@ -321,6 +359,11 @@ mod tests {
             "the sample page produced {} lines",
             text.lines().count()
         );
+        assert!(
+            text.contains("cond-mat.stat-mech"),
+            "the upside-down margin stamp was not turned upright: {}",
+            text.chars().take(500).collect::<String>()
+        );
     }
 
     #[test]
@@ -363,6 +406,48 @@ mod tests {
                 "the correction did not make the page upright"
             );
         }
+    }
+
+    #[test]
+    fn the_line_orientation_model_reads_both_directions() {
+        let mut engine = Engine::new().expect("engine");
+        let page = sample_page();
+        let rgb = page.to_rgb8();
+        let width = rgb.width() as usize;
+        let height = rgb.height() as usize;
+        let geometry = Geometry::new(width, height, DEFAULT_MAX_SIDE);
+        let tensor = det::tensor(rgb.as_raw(), width, height, geometry);
+        let boxes = engine.detect(&tensor, geometry).expect("detect");
+        let crop = boxes
+            .iter()
+            .filter_map(|text_box| crop::warp(rgb.as_raw(), width, height, text_box.quad))
+            .filter(|crop| crop.width >= 100 && crop.height >= 8 && crop.width > 2 * crop.height)
+            .max_by_key(|crop| crop.width)
+            .expect("a text line");
+
+        let tensor = line_orientation::tensor(crop.rgb.as_slice(), crop.width, crop.height);
+        let (turn, score) = engine.classify_line_orientation(&tensor).expect("classify");
+        assert_eq!(turn, line_orientation::Turn::Upright);
+        assert!(score > 0.5, "the classifier was unsure: {score}");
+        let text = engine
+            .recognize(&crop, 0.0)
+            .expect("recognize")
+            .expect("the line has text")
+            .text;
+
+        let flipped = crop::flip_180(crop);
+        let tensor =
+            line_orientation::tensor(flipped.rgb.as_slice(), flipped.width, flipped.height);
+        let (turn, score) = engine.classify_line_orientation(&tensor).expect("classify");
+        assert_eq!(turn, line_orientation::Turn::UpsideDown);
+        assert!(score > 0.5, "the classifier was unsure: {score}");
+
+        let restored = turn.upright(flipped);
+        let decoded = engine
+            .recognize(&restored, 0.0)
+            .expect("recognize")
+            .expect("the corrected line has text");
+        assert_eq!(decoded.text, text, "the half turn did not restore the line");
     }
 
     #[test]
