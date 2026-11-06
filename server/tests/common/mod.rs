@@ -143,6 +143,29 @@ impl TestServer {
         Self::start_with_config(false, true, 30, 90).await
     }
 
+    /// Start a server whose full-text index is on and whose OCR switch is on, so
+    /// uploaded images are read and their text searchable.
+    pub async fn start_with_index_and_ocr() -> Self {
+        Self::start_full_tweaked(
+            false,
+            true,
+            30,
+            90,
+            true,
+            false,
+            true,
+            None,
+            None,
+            None,
+            None,
+            None,
+            |config| {
+                config.ocr.enabled = true;
+            },
+        )
+        .await
+    }
+
     /// Start a server whose index is on but whose background backfill is off.
     pub async fn start_with_index_no_backfill() -> Self {
         Self::start_full_tweaked(
@@ -749,6 +772,7 @@ impl TestServer {
                 ..Default::default()
             },
             face_tags: infra::config::FaceTagsConfig::default(),
+            ocr: infra::config::OcrConfig::default(),
             sandbox: infra::config::SandboxConfig::default(),
             tasks: infra::config::TaskConfig {
                 max_active_tasks: task_limits.unwrap_or_default().max_active_tasks,
@@ -1452,6 +1476,34 @@ impl TestFixture {
             client,
             email: email.to_string(),
             password: password.to_string(),
+            api_token,
+            repo_id,
+            sync_token,
+            user_id,
+        }
+    }
+
+    /// Create a test environment with the indexer and image OCR enabled.
+    pub async fn new_with_index_and_ocr() -> Self {
+        let server = TestServer::start_with_index_and_ocr().await;
+        let client = server.client();
+        let db = &*server.db;
+
+        let user_id = create_test_user(db, "test@example.com", "password").await;
+
+        let resp = client.login("test@example.com", "password").await;
+        assert_eq!(resp.status(), 200, "login failed");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let api_token = body["token"].as_str().unwrap().to_string();
+
+        let repo_id = create_test_repo(&client, &api_token, "test-repo").await;
+        let sync_token = get_sync_token(&client, &api_token, &repo_id).await;
+
+        Self {
+            server,
+            client,
+            email: "test@example.com".to_string(),
+            password: "password".to_string(),
             api_token,
             repo_id,
             sync_token,

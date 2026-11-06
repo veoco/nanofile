@@ -77,3 +77,6 @@ described the old image.
 - The model was trained on WIDER Face and its accuracy is not uniform across
   demographics. It is used for a coarse "there is a face" tag, not for a
   decision about a person.
+
+Looking for the text in a picture rather than the people in it? See
+[Text in images](/guide/start/ocr).

@@ -23,6 +23,7 @@ Nanofile is a Cargo workspace of four crates. Dependencies flow one way:
 | `middleware` | Authentication and capabilities, CSP, CSRF, request limits. |
 | `webdav` | WebDAV surface over the same library and file services. |
 | `indexer` | Full-text index (Tantivy) and the sandboxed extractors that feed it. |
+| `ocr` | PP-OCRv6 tiny inference and the DB/CTC post-processing for the full-text index. |
 | `sandbox` | The confined worker processes that parse user content. |
 | `tasks` | Job registry, queue, executor and run history for background work. |
 | `settings` | Runtime configuration, settings layering and the admin settings service. |

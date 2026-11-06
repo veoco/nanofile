@@ -9,7 +9,9 @@
 //!
 //! Every document records the `fs_id`, [`extract::EXTRACTOR_VERSION`] and
 //! `status` that let the backfill tell "already processed as unsupported" from
-//! "never seen". A tokio task commits the writer every 30 seconds.
+//! "never seen". A tokio task commits the writer every 30 seconds. OCR records
+//! [`DocStatus::NoText`] for an image it examined and found nothing searchable in,
+//! which is current at this extractor version but excluded from search.
 
 pub mod extract;
 mod tokenizer;
@@ -83,6 +85,11 @@ pub enum DocStatus {
     /// Examined and deliberately not indexed (binary, or a format no extractor
     /// claims); recorded so the backfill does not re-read it.
     Skipped,
+    /// OCR examined the image and found nothing searchable: no text, an image the
+    /// decoder refused, a file over the OCR cap, or a terminal worker failure.
+    /// It is current at this extractor version (so OCR does not run again on
+    /// every pass) and, like `Skipped`, cannot be returned by a content search.
+    NoText,
     /// Extraction or the block read failed. Retried after a cooldown.
     Failed,
 }
@@ -92,6 +99,7 @@ impl DocStatus {
         match self {
             Self::Indexed => "indexed",
             Self::Skipped => "skipped",
+            Self::NoText => "no_text",
             Self::Failed => "failed",
         }
     }
@@ -99,6 +107,7 @@ impl DocStatus {
     fn from_str(s: &str) -> Self {
         match s {
             "skipped" => Self::Skipped,
+            "no_text" => Self::NoText,
             "failed" => Self::Failed,
             _ => Self::Indexed,
         }
@@ -142,6 +151,15 @@ impl DocMeta {
         }
     }
 
+    pub fn no_text(fs_id: impl Into<String>) -> Self {
+        Self {
+            fs_id: fs_id.into(),
+            extractor_version: extract::EXTRACTOR_VERSION,
+            status: DocStatus::NoText,
+            attempted_at: chrono::Utc::now().timestamp(),
+        }
+    }
+
     pub fn failed(fs_id: impl Into<String>) -> Self {
         Self {
             fs_id: fs_id.into(),
@@ -165,7 +183,7 @@ impl DocMeta {
             return false;
         }
         match self.status {
-            DocStatus::Indexed | DocStatus::Skipped => true,
+            DocStatus::Indexed | DocStatus::Skipped | DocStatus::NoText => true,
             // A failure is retried, but not on every pass.
             DocStatus::Failed => now.saturating_sub(self.attempted_at) >= FAILED_RETRY_AFTER_SECS,
         }
@@ -1902,6 +1920,37 @@ mod document_state_tests {
         let dir = tempfile::tempdir().unwrap();
         let indexer = TextIndexer::new(dir.path()).unwrap();
         (dir, indexer)
+    }
+
+    /// OCR records `NoText` for an image it examined and found nothing in. It is
+    /// current at this extractor version (so every pass does not re-read it) and
+    /// is not a search hit.
+    #[tokio::test]
+    async fn a_no_text_document_is_current_but_not_searchable() {
+        let (_dir, indexer) = temp_index();
+        indexer
+            .mark_file(
+                "repo-1",
+                "/scan.png",
+                "scan.png",
+                &DocMeta::no_text("fsid-1"),
+            )
+            .unwrap();
+        indexer.commit().unwrap();
+
+        let states = indexer
+            .doc_states("repo-1", &["/scan.png".to_string()])
+            .unwrap();
+        let state = states.get("/scan.png").expect("state recorded");
+        assert_eq!(state.status, DocStatus::NoText);
+        assert!(state.is_current("fsid-1", 0));
+        assert!(!state.is_current("fsid-2", 0));
+
+        let hits = indexer
+            .search("anything", &["repo-1".to_string()], 10, 0, false)
+            .await
+            .unwrap();
+        assert!(hits.is_empty(), "a no-text document is not a hit: {hits:?}");
     }
 
     /// A file the pipeline chose not to index still leaves a document, so the

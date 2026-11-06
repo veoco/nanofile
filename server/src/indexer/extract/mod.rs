@@ -10,6 +10,12 @@
 //! oversized one is skipped unread. Only the confined `worker` process parses;
 //! `extract` returns [`Extracted::Unsupported`] instead of failing, which marks
 //! the file skipped rather than retried.
+//!
+//! OCR is the one exception to the version rule below: enabling `[ocr]` does not
+//! bump [`EXTRACTOR_VERSION`]. Images that were skipped as binary are re-examined
+//! once while OCR is on and recorded as [`DocStatus::NoText`](crate::indexer::DocStatus::NoText)
+//! when there is nothing to index, so existing libraries converge without
+//! re-running the document parsers.
 
 mod office;
 mod pdf;

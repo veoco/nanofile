@@ -141,6 +141,36 @@ fn the_faces_report_shows_a_worker_that_still_detects() {
     the_platform_answer(Profile::Faces, &report);
 }
 
+/// The OCR profile loads both models, so its probe is the only place the
+/// confined child proves the second and larger graph runs too.
+#[test]
+fn the_ocr_report_shows_models_that_still_run() {
+    let (report, line) =
+        with_requirement(configure_probe_requirement(), || probe(Profile::Ocr, None));
+
+    the_common_answer(Profile::Ocr, &report, &line);
+    assert_eq!(
+        report.job,
+        Some(JobVerdict::Ok),
+        "the bounded worker must still run the OCR models: {line}"
+    );
+    assert!(
+        has(&report, "parse=ocr-ok(0)"),
+        "the probe has to name the OCR work: {}",
+        report.detail
+    );
+    the_items_answer(&report);
+    #[cfg(unix)]
+    {
+        assert!(report.protections.network, "{line}");
+        assert!(
+            report.protections.process,
+            "the OCR profile denies the fork: {line}"
+        );
+    }
+    the_platform_answer(Profile::Ocr, &report);
+}
+
 #[test]
 fn the_media_report_shows_a_helper_that_still_decodes() {
     if !helper_runs() {
@@ -298,7 +328,7 @@ fn the_platform_answer(profile: Profile, report: &Report) {
         );
     }
     match profile {
-        Profile::Documents | Profile::Images | Profile::Faces => {
+        Profile::Documents | Profile::Images | Profile::Faces | Profile::Ocr => {
             assert!(has(report, "fork=denied"), "{}", report.detail);
             // The exec probe needs a fork to try `execve` in, and the fork is
             // refused, so the item stands unmeasured rather than unclaimed.
@@ -352,7 +382,7 @@ fn the_platform_answer(profile: Profile, report: &Report) {
                 report.detail
             );
         }
-        Profile::Images | Profile::Faces => {}
+        Profile::Images | Profile::Faces | Profile::Ocr => {}
         Profile::Media => {
             assert!(has(report, "fork=open"), "{}", report.detail);
             assert!(has(report, "exec=denied"), "{}", report.detail);

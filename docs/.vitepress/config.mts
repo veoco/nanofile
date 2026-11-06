@@ -9,6 +9,7 @@ const enSidebar = {
         { text: 'Installing and first run', link: '/guide/start/getting-started' },
         { text: 'Web interface', link: '/guide/start/web-interface' },
         { text: 'Automatic people tags', link: '/guide/start/people-tags' },
+        { text: 'Text in images (OCR)', link: '/guide/start/ocr' },
         { text: 'Connecting clients', link: '/guide/start/clients' }
       ]
     },
@@ -102,6 +103,7 @@ const zhSidebar = {
         { text: '安装与首次运行', link: '/zh/guide/start/getting-started' },
         { text: '网页界面', link: '/zh/guide/start/web-interface' },
         { text: '自动人物标签', link: '/zh/guide/start/people-tags' },
+        { text: '图片文字识别（OCR）', link: '/zh/guide/start/ocr' },
         { text: '客户端接入', link: '/zh/guide/start/clients' }
       ]
     },

@@ -2,14 +2,44 @@
   "schema": 1,
   "models": {
     "yunet": {
-      "file": "yunet.safetensors",
+      "file": "yunet.onnx",
       "version": 1,
-      "bytes": 221608,
-      "sha256": "c6379b3fef1d75acb4d7469527e97ce340779a15d9ae902233572132490d36ef",
+      "bytes": 232589,
+      "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
       "license": "MIT",
       "license_file": "LICENSES/YuNet-LICENSE",
       "source": "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet",
       "source_commit": "f12e12798e8314f7c074a6656816c048dcc95b7a"
+    },
+    "ppocr_v6_tiny_det": {
+      "file": "ppocr_v6_tiny_det.onnx",
+      "version": 1,
+      "bytes": 1780590,
+      "sha256": "193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8",
+      "license": "Apache-2.0",
+      "license_file": "LICENSES/PaddleOCR-LICENSE",
+      "source": "https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_det_onnx",
+      "source_revision": "2ba1506c0380b8f0b03dd142459aac66d4421f6c"
+    },
+    "ppocr_v6_tiny_rec": {
+      "file": "ppocr_v6_tiny_rec.onnx",
+      "version": 1,
+      "bytes": 4462639,
+      "sha256": "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6",
+      "license": "Apache-2.0",
+      "license_file": "LICENSES/PaddleOCR-LICENSE",
+      "source": "https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_rec_onnx",
+      "source_revision": "2612ab37152ae0a677521bae4e1e3d4fb4cf7c30"
+    },
+    "ppocr_v6_tiny_keys": {
+      "file": "ppocr_keys_v6.txt",
+      "version": 1,
+      "bytes": 27156,
+      "sha256": "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd",
+      "license": "Apache-2.0",
+      "license_file": "LICENSES/PaddleOCR-LICENSE",
+      "source": "https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_rec_onnx/blob/2612ab37152ae0a677521bae4e1e3d4fb4cf7c30/inference.yml",
+      "source_revision": "2612ab37152ae0a677521bae4e1e3d4fb4cf7c30"
     }
   }
 }

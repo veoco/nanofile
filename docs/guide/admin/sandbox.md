@@ -7,7 +7,8 @@ memory bound, a CPU bound and a wall-clock timeout, never inside the server:
 - image thumbnails,
 - media thumbnails (through `ffmpeg`),
 - EXIF and avatar processing,
-- face detection for the automatic people tags.
+- face detection for the automatic people tags,
+- text recognition for the full-text index (`[ocr]`).
 
 The child bounds and confines itself before it reads a request and prints what it
 established. The server decides from that report, not from what it asked for.
@@ -32,8 +33,8 @@ system decides what can be established.
 
 - **Media thumbnails need `ffmpeg`.** Its path is `storage.ffmpeg_path`; saving it
   re-resolves that grant at once, so the next media request runs the binary you
-  just configured. People tags on HEIC/HEIF/AVIF photos use the same helper to
-  decode the image first.
+  just configured. People tags and OCR on HEIC/HEIF/AVIF photos use the same
+  helper to decode the image first.
 - **With the sandbox off, these features do not run**, and they do not fall back to
   parsing inside the server process. Documents skipped while it was off are
   recorded as retryable and re-indexed once it is back on — so an outage leaves no
@@ -42,6 +43,8 @@ system decides what can be established.
   band per profile, one row per protection, and a state badge per band. The people
   tag band is measured only while the feature is on; with it off the band says so
   and points at its switch, because the detector's probe runs a forward pass.
+  The OCR band is measured only while both the index and `[ocr] enabled` are on;
+  it loads two models, so a feature nobody enabled does not pay for its probe.
   Each row says what the item is, whether it is in place, how much it matters and
   what its absence opens; the **resource bound** is marked required. Nothing is
   summarised above them, and there is no grade — the rows are the whole verdict.

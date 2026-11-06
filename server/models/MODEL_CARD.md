@@ -1,51 +1,102 @@
-# YuNet face detector
+# Embedded inference models
 
-`yunet.safetensors` is a converted copy of OpenCV Zoo's
-`face_detection_yunet_2023mar.onnx`, used only to count faces in images.
+`server/models/` holds the two model families the server runs in confined child
+processes. Every file is checked in, hash-pinned in `manifest.json` and embedded
+into the binary with `include_bytes!`/`include_str!`; nothing is downloaded at
+runtime and no inference framework other than the pure-Rust `tract` CPU runtime
+is used. `tools/models/fetch_models.py` reproduces the files from their pinned
+upstream revisions.
 
-## What it is
+## YuNet face detector
 
-- **Task:** face detection (boxes and five landmarks); this project uses only
-  the box count.
+`yunet.onnx` is OpenCV Zoo's `face_detection_yunet_2023mar.onnx`, used only to
+count faces in images.
+
+- **Task:** face detection (boxes and five landmarks); the automatic people tags
+  use only the box count and best score.
 - **Architecture:** YuNet, a 53K-parameter CNN with a three-level FPN and
   cls/obj/bbox/kps heads.
 - **Input:** fixed 640×640 BGR, 0–255, letterboxed with black padding.
-- **Output:** 6,400 + 1,600 + 400 anchor predictions, decoded with the same
-  rules as OpenCV's `FaceDetectorYN`, then NMS (IoU 0.3, top 100).
-- **Parameters:** 53,104; **file size:** 217 KB.
+- **Output:** the ONNX graph returns 12 tensors: cls/obj (`[1, N, 1]`, already
+  sigmoid), bbox (`[1, N, 4]`, raw centre offsets and log-size) and kps
+  (`[1, N, 10]`) for strides 8, 16 and 32. The Rust decoder applies NMS (IoU 0.3,
+  top 100).
+- **Parameters:** 53,104; **file size:** 232,589 bytes.
 - **Accuracy (upstream WIDER Face val):** AP 0.884 / 0.866 / 0.750
   (easy / medium / hard).
 
-## What it is not
+### What it is not
 
 The scan stores a **count** and the best detection score. It does not create
 face crops, embeddings, landmarks, identities or templates, and it cannot
 recognise a person across photos. No biometric data is persisted.
 
-## Source and licence
+### Source and licence
 
 - Upstream: <https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet>
-- Model file: `face_detection_yunet_2023mar.onnx`
-- Upstream commit for that file: `f12e12798e8314f7c074a6656816c048dcc95b7a`
-  (2023-06-06)
+- File: `face_detection_yunet_2023mar.onnx`, upstream commit
+  `f12e12798e8314f7c074a6656816c048dcc95b7a`.
 - Licence: **MIT**, copyright (c) 2020 Shiqi Yu. Full text in
   [`LICENSES/YuNet-LICENSE`](LICENSES/YuNet-LICENSE).
 - Paper: <https://doi.org/10.1007/s11633-023-1423-y>
+- SHA-256: `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`
 
-## Conversion
+The file is the upstream ONNX graph unchanged; there is no conversion step.
 
-`tools/face_tags/convert_yunet.py` reads the ONNX initializers with the Python
-standard library only and writes F32 safetensors under canonical Candle names.
-`yunet.safetensors` SHA-256:
-`c6379b3fef1d75acb4d7469527e97ce340779a15d9ae902233572132490d36ef`.
+## PP-OCRv6 tiny (image text for the full-text index)
 
-## Limitations
+`ppocr_v6_tiny_det.onnx` and `ppocr_v6_tiny_rec.onnx` read text from images for
+the optional `[ocr]` full-text indexing feature. `ppocr_keys_v6.txt` is the
+recognition alphabet extracted from the recognition model's `inference.yml`.
 
-- Small faces (short edge under 32 px in the original image) are filtered out
-  by default; large group photos are tiled, but a 20 MP photo of a crowd will
-  still miss faces.
-- Side profiles, heavy occlusion, extreme blur and very low light reduce recall.
-- Cartoons, masks and statues are not guaranteed to be rejected.
-- The model was trained on WIDER Face; demographic performance is not uniform.
-  It is used only for a coarse "there is a face" tag, not for a decision about
-  a person.
+- **Task:** text detection (DB) and text-line recognition (CTC), 49 languages in
+  the tiny tier.
+- **Architecture:** PPLCNetV4 + RepLKFPN detection; PPLCNetV4 + LightSVTR
+  recognition with a CTC head.
+- **Detection input:** dynamic `[1, 3, H, W]`, H/W multiples of 32, BGR with
+  ImageNet mean/std. The engine resizes the long edge to 960 by default.
+- **Detection output:** one probability map `[1, 1, H, W]`; the Rust
+  post-processor thresholds it (`0.2`), labels 8-connected components, takes
+  each component's minimum-area rectangle, scores it (`≥ 0.4`) and expands it by
+  the DB unclip distance (`1.4`).
+- **Recognition input:** `[1, 3, 48, W]`, W bucketed at 160/320/640/960/1280,
+  BGR normalised by `(x/255 - 0.5) / 0.5` and padded on the right.
+- **Recognition output:** `[1, T, 6906]`, already softmaxed. Index 0 is the CTC
+  blank, 1–6904 are the dictionary characters and 6905 is a space; the decoder
+  collapses repeats and drops low-confidence lines.
+- **File sizes:** detection 1,780,590 bytes; recognition 4,462,639 bytes;
+  dictionary 27,156 bytes (6,904 characters).
+- **Accuracy (upstream, internal multi-scene set):** detection Hmean 80.6,
+  recognition average 73.5.
+- **Licence:** **Apache-2.0**. Full text in
+  [`LICENSES/PaddleOCR-LICENSE`](LICENSES/PaddleOCR-LICENSE).
+
+### Sources
+
+| File | Repository | Revision | SHA-256 |
+| --- | --- | --- | --- |
+| `ppocr_v6_tiny_det.onnx` | `PaddlePaddle/PP-OCRv6_tiny_det_onnx` | `2ba1506c0380b8f0b03dd142459aac66d4421f6c` | `193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8` |
+| `ppocr_v6_tiny_rec.onnx` | `PaddlePaddle/PP-OCRv6_tiny_rec_onnx` | `2612ab37152ae0a677521bae4e1e3d4fb4cf7c30` | `9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6` |
+| `ppocr_keys_v6.txt` | the recognition model's `inference.yml` | same as above | `c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd` |
+
+### What it stores
+
+The recognised text is written into the Tantivy full-text index as the file's
+content. It can be searched by anyone who can already read the repository. The
+index directory is not encrypted; OCR text may contain names, addresses or
+document numbers. Disabling `[ocr]` stops new OCR but leaves existing text in
+the index until it is rebuilt. No image crops, boxes or confidence values are
+persisted.
+
+### Limitations
+
+- Handwriting, heavy rotation, very small print, low-contrast photos and artistic
+  fonts reduce accuracy.
+- Multi-column pages are read in a simple top-to-bottom order; search results are
+  unaffected, but the highlight order may differ from the page.
+- A picture can produce at most 300 text boxes; the text is capped at the same
+  8 MiB limit as document extraction.
+- HEIC/HEIF/AVIF are decoded through the optional `ffmpeg` helper first; without
+  one those files are not OCR'd.
+- Scanned PDFs and videos are not OCR'd. PDF text still comes from the PDF text
+  layer, not from OCR.

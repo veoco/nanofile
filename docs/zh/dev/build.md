@@ -68,22 +68,25 @@ cargo build --release -p server --features tray
 
 GTK 无法交叉编译，因此发布产物里只有三个原生 runner 平台带 tray 变体（Linux amd64、macOS arm64、Windows amd64）。托盘本身的行为在[桌面托盘与 Windows 服务](/zh/guide/deploy/desktop-and-service)。
 
-## 自动人物标签
+## 嵌入推理（人物标签与 OCR）
 
-所有构建都会编译 YuNet 检测器和自动人物标签流水线，没有需要开启的 Cargo
-feature。Candle、Rayon 和 217 KB 的嵌入模型始终在二进制里，而扫描本身仍要等
-`[face_tags] enabled` 打开后才运行。正常构建即可：
+所有构建都会编译 YuNet 检测器、PP-OCRv6 tiny 的 OCR 图和自动人物标签流水线，
+没有需要开启的 Cargo feature。纯 Rust 的 `tract` CPU runtime 与 ONNX 模型
+（合计约 6.4 MB）始终在二进制里，而两个扫描器仍要等 `[face_tags] enabled`
+或 `[ocr] enabled` 打开后才运行。正常构建即可：
 
 ```bash
 cargo build --release -p server
 ```
 
-模型是 MIT 许可，已签入 `server/models/`，同目录有模型卡、许可证和 SHA-256。
-`tools/face_tags/convert_yunet.py` 只用 Python 标准库，把上游 ONNX 转成
-safetensors。CI 默认的 `cargo clippy`/`cargo test` 以及 release/nightly 构建
-都会包含它。
+模型就是上游 ONNX 原件：YuNet 为 MIT，PP-OCRv6 tiny 为 Apache-2.0，已签入
+`server/models/`，同目录有模型卡、许可证和 SHA-256。`tools/models/fetch_models.py`
+下载固定 revision、校验哈希并抽取识别字典。构建期和运行期都没有权重转换、
+ONNX Runtime、Python 或 BLAS。CI 默认的 `cargo clippy`/`cargo test` 与
+release/nightly 构建都会包含它；发布探针会跑
+`extract-worker --probe --profile faces` 和 `--profile ocr`。
 
-人物标签与 `tray` 互相独立；发布版托盘变体使用 `--features tray`。
+两个功能都与 `tray` 互相独立；发布版托盘变体使用 `--features tray`。
 
 ## 交叉编译
 

@@ -8,3 +8,4 @@
 pub mod faces;
 pub mod images;
 pub mod media;
+pub mod ocr;

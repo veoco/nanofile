@@ -103,17 +103,17 @@ async fn the_sandbox_page_shows_the_measured_items_per_profile() {
     assert_eq!(status, 200);
 
     // One band per profile, each with its own state. Documents and images are
-    // reported together — they install the same protections — and the faces band
-    // is a state only while people tags are off, which is this fixture's default.
-    // Three bands and three states are the whole panel.
+    // reported together — they install the same protections — and the faces and
+    // OCR bands are states only while their features are off, which is this
+    // fixture's default. Four bands and four states are the whole panel.
     assert_eq!(
         count(&html, "data-sandbox-profile=\""),
-        3,
+        4,
         "no profile bands"
     );
     assert_eq!(
         count(&html, "data-sandbox-state>"),
-        3,
+        4,
         "a band without a state"
     );
     // The faces band says why it was not measured rather than reading as a host
@@ -121,6 +121,10 @@ async fn the_sandbox_page_shows_the_measured_items_per_profile() {
     assert!(
         html.contains("data-sandbox-profile=\"faces\" data-sandbox-measured=\"false\""),
         "the faces band must not claim a measurement with the feature off"
+    );
+    assert!(
+        html.contains("data-sandbox-profile=\"ocr\" data-sandbox-measured=\"false\""),
+        "the OCR band must not claim a measurement with the feature off"
     );
     // The parser band needs no helper, so it is the one band every host that can
     // run the worker at all measures. A host that cannot start one is the probe
@@ -221,7 +225,7 @@ async fn the_sandbox_page_shows_the_measured_items_per_profile() {
 
     // The raw reports are one disclosure away, and each line names its profile:
     // two unlabelled lines were the one thing a bug report had to guess at.
-    for profile in ["documents", "media", "faces"] {
+    for profile in ["documents", "media", "faces", "ocr"] {
         assert!(
             html.contains(&format!("data-sandbox-detail=\"{profile}\"")),
             "the {profile} raw report is unlabelled"
@@ -248,11 +252,11 @@ async fn the_switch_off_disables_the_workers_and_the_page_says_so() {
     // which decision stopped it.
     assert_eq!(
         count(&html, "data-sandbox-state>Off</span>"),
-        3,
+        4,
         "a switched-off profile does not read as off"
     );
     // The cost of switching off is the switch's own sentence, in the form's help
-    // text: repeating it under both bands would be the same paragraph three times
+    // text: repeating it under every band would be the same paragraph four times
     // on one page.
     assert_eq!(
         count(&html, "data-sandbox-state-reason"),

@@ -121,13 +121,12 @@ anyhow = { workspace = true }
 totp-rs = { version = "6", features = ["gen_secret", "otpauth"] }
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
-# Face-tag inference, compiled into every build. Pure CPU Candle: no
-# accelerator feature is enabled, so no framework/system library is linked.
-# `candle-core`'s `tokenizers`/`zip` dependencies are pure Rust with their
-# default features off; `gemm` falls back to a scalar kernel on targets without
-# SIMD support.
-candle-core = { version = "0.11.1", default-features = false }
-candle-nn = { version = "0.11.1", default-features = false }
+# Face-tag and OCR inference, compiled into every build. `tract` loads the
+# embedded ONNX graphs and runs them on its CPU runtime: pure Rust, no ONNX
+# Runtime, no Python, no BLAS and no system library. Default features are off
+# so the CUDA/Metal/wgpu backends, the transformers operators and NNEF archive
+# compression are not linked; the graphs only use primitive operators.
+tract = { version = "0.23.10", default-features = false, features = ["onnx"] }
 kamadak-exif = "0.6"
 percent-encoding = "2.3"
 clap = { version = "4", features = ["derive"] }
@@ -269,10 +268,6 @@ flate2 = { workspace = true }
 # dev-dependency on purpose: `full` does not include it, and the production
 # build must not pay for it.
 tokio = { workspace = true, features = ["test-util"] }
-# The model-compliance test reads the embedded tensor names and dtypes directly;
-# Candle's `VarBuilder` already parses the same file at runtime, so this is test
-# only and carries no default features (no serde/alloc surprises).
-safetensors = { version = "0.8", default-features = false }
 
 [[bin]]
 name = "nanofile"

@@ -384,6 +384,7 @@ async fn render(
                     enabled: resolved("sandbox.enabled"),
                     index_enabled: resolved("index.enabled"),
                     face_tags_enabled: resolved("face_tags.enabled"),
+                    ocr_enabled: resolved("ocr.enabled"),
                 };
                 // The probe spawns a child per profile, so it belongs on a blocking
                 // thread: the page must not wait on it, and an executor thread must
@@ -423,6 +424,8 @@ pub struct SandboxInputs {
     pub index_enabled: bool,
     /// The effective value of `face_tags.enabled`, which owns the detector.
     pub face_tags_enabled: bool,
+    /// The effective value of `ocr.enabled`, which owns the OCR pipeline.
+    pub ocr_enabled: bool,
 }
 
 /// What this host actually gives, for the Sandbox page.
@@ -443,11 +446,16 @@ fn sandbox_view(t: &'static I18n, inputs: SandboxInputs) -> SandboxView {
     let faces = inputs
         .face_tags_enabled
         .then(|| worker::page_answer(Profile::Faces));
+    // OCR needs both switches: the index it feeds and its own opt-in. Measuring it
+    // costs a model load, so neither "off" pays for it.
+    let ocr = (inputs.enabled && inputs.index_enabled && inputs.ocr_enabled)
+        .then(|| worker::page_answer(Profile::Ocr));
 
     let profiles = vec![
         documents_profile(t, &documents, &inputs),
         media_profile(t, &media, inputs.enabled),
         faces_profile(t, faces.as_ref(), &inputs),
+        ocr_profile(t, ocr.as_ref(), &inputs),
     ];
     let raw = vec![
         SandboxRawView {
@@ -467,6 +475,14 @@ fn sandbox_view(t: &'static I18n, inputs: SandboxInputs) -> SandboxView {
                 .as_ref()
                 .map(report_detail)
                 .unwrap_or_else(|| "not measured: face_tags.enabled is off".to_string()),
+        },
+        SandboxRawView {
+            id: "ocr",
+            title_key: "sandbox.profile_ocr",
+            detail: ocr
+                .as_ref()
+                .map(report_detail)
+                .unwrap_or_else(|| "not measured: ocr.enabled is off".to_string()),
         },
     ];
 
@@ -685,6 +701,76 @@ fn faces_profile(
     profile_view(t, Profile::Faces, answer, state)
 }
 
+/// The OCR profile's band: two models, and the feature switch that decides
+/// whether it is measured at all.
+///
+/// OCR exists to feed the full-text index, so the index switch comes first: a
+/// host that never indexes should not pay for a model probe, and enabling OCR
+/// without the index does nothing.
+fn ocr_profile(
+    t: &I18n,
+    answer: Option<&worker::PageAnswer>,
+    inputs: &SandboxInputs,
+) -> SandboxProfileView {
+    let state = if !inputs.enabled {
+        disabled_state(t)
+    } else if !inputs.index_enabled {
+        SandboxStateView {
+            label: t.tr("sandbox.state_index_off").to_string(),
+            class: "badge-gray",
+            reason: None,
+            action: Some(SandboxActionView {
+                href: "/sysadmin/settings/maintenance/",
+                label_key: "sandbox.action_index",
+            }),
+        }
+    } else if !inputs.ocr_enabled {
+        SandboxStateView {
+            label: t.tr("sandbox.state_ocr_off").to_string(),
+            class: "badge-gray",
+            reason: None,
+            action: Some(SandboxActionView {
+                href: "/sysadmin/settings/maintenance/",
+                label_key: "sandbox.action_ocr",
+            }),
+        }
+    } else {
+        match answer {
+            Some(worker::PageAnswer::Measured {
+                report,
+                host_runs,
+                host_reason,
+            }) => {
+                if report.job == Some(JobVerdict::Failed) {
+                    SandboxStateView {
+                        label: t.tr("sandbox.state_job_failed").to_string(),
+                        class: "badge-red",
+                        reason: Some(host_reason.clone().unwrap_or_else(|| report.detail.clone())),
+                        action: None,
+                    }
+                } else if !host_runs {
+                    unavailable_state(t, host_reason.clone().unwrap_or_default())
+                } else {
+                    running_state(t)
+                }
+            }
+            Some(worker::PageAnswer::Unavailable(why)) => unavailable_state(t, why.clone()),
+            None => unavailable_state(t, "not measured: image text OCR was not probed".to_string()),
+        }
+    };
+
+    let unmeasured;
+    let answer = match answer {
+        Some(answer) => answer,
+        None => {
+            unmeasured =
+                worker::PageAnswer::Unavailable("not measured: ocr.enabled is off".to_string());
+            &unmeasured
+        }
+    };
+    profile_view(t, Profile::Ocr, answer, state)
+}
+
 fn running_state(t: &I18n) -> SandboxStateView {
     SandboxStateView {
         label: t.tr("sandbox.state_running").to_string(),
@@ -744,6 +830,7 @@ fn profile_title(profile: Profile) -> &'static str {
     match profile {
         Profile::Media => "sandbox.profile_media",
         Profile::Faces => "sandbox.profile_faces",
+        Profile::Ocr => "sandbox.profile_ocr",
         _ => "sandbox.profile_documents",
     }
 }
@@ -752,6 +839,7 @@ fn profile_uses(profile: Profile) -> &'static str {
     match profile {
         Profile::Media => "sandbox.uses_media",
         Profile::Faces => "sandbox.uses_faces",
+        Profile::Ocr => "sandbox.uses_ocr",
         _ => "sandbox.uses_documents",
     }
 }
@@ -760,6 +848,7 @@ fn profile_icon(profile: Profile) -> &'static str {
     match profile {
         Profile::Media => "camera",
         Profile::Faces => "user",
+        Profile::Ocr => "file_text",
         _ => "file_text",
     }
 }
@@ -1356,6 +1445,7 @@ mod tests {
             enabled,
             index_enabled,
             face_tags_enabled,
+            ocr_enabled: false,
         };
         let documents = |answer: &worker::PageAnswer, inputs: &SandboxInputs| {
             documents_profile(t, answer, inputs).state
@@ -1464,6 +1554,7 @@ mod tests {
                 enabled: true,
                 index_enabled: true,
                 face_tags_enabled: false,
+                ocr_enabled: true,
             },
         );
         assert_eq!(face_tags_off.label, t.tr("sandbox.state_face_tags_off"));
@@ -1479,6 +1570,7 @@ mod tests {
                 enabled: true,
                 index_enabled: true,
                 face_tags_enabled: true,
+                ocr_enabled: true,
             },
         );
         assert_eq!(faces_running.label, t.tr("sandbox.state_running"));
@@ -1496,6 +1588,7 @@ mod tests {
                 enabled: true,
                 index_enabled: true,
                 face_tags_enabled: true,
+                ocr_enabled: true,
             },
         );
         assert_eq!(detector_failed.label, t.tr("sandbox.state_job_failed"));
@@ -1507,9 +1600,74 @@ mod tests {
                 enabled: false,
                 index_enabled: true,
                 face_tags_enabled: true,
+                ocr_enabled: true,
             },
         );
         assert_eq!(faces_switch_off.label, t.tr("sandbox.state_disabled"));
+
+        // OCR has two switches in front of it: the index it feeds and its own
+        // opt-in. Only both on pays for the model probe.
+        let ocr = |answer: Option<&worker::PageAnswer>, inputs: &SandboxInputs| {
+            ocr_profile(t, answer, inputs).state
+        };
+        let ocr_off = ocr(
+            None,
+            &SandboxInputs {
+                enabled: true,
+                index_enabled: true,
+                face_tags_enabled: true,
+                ocr_enabled: false,
+            },
+        );
+        assert_eq!(ocr_off.label, t.tr("sandbox.state_ocr_off"));
+        assert_eq!(ocr_off.class, "badge-gray");
+        assert_eq!(
+            ocr_off.action.as_ref().map(|action| action.href),
+            Some("/sysadmin/settings/maintenance/")
+        );
+
+        let ocr_no_index = ocr(
+            None,
+            &SandboxInputs {
+                enabled: true,
+                index_enabled: false,
+                face_tags_enabled: true,
+                ocr_enabled: true,
+            },
+        );
+        assert_eq!(ocr_no_index.label, t.tr("sandbox.state_index_off"));
+        assert_eq!(
+            ocr_no_index.action.as_ref().map(|action| action.href),
+            Some("/sysadmin/settings/maintenance/")
+        );
+
+        let ocr_running = ocr(
+            Some(&ocr_report(every_item, None, true, None)),
+            &SandboxInputs {
+                enabled: true,
+                index_enabled: true,
+                face_tags_enabled: true,
+                ocr_enabled: true,
+            },
+        );
+        assert_eq!(ocr_running.label, t.tr("sandbox.state_running"));
+
+        let ocr_failed = ocr(
+            Some(&ocr_report(
+                every_item,
+                Some(crate::sandbox::JobVerdict::Failed),
+                false,
+                Some("the OCR profile cannot run its models"),
+            )),
+            &SandboxInputs {
+                enabled: true,
+                index_enabled: true,
+                face_tags_enabled: true,
+                ocr_enabled: true,
+            },
+        );
+        assert_eq!(ocr_failed.label, t.tr("sandbox.state_job_failed"));
+        assert_eq!(ocr_failed.class, "badge-red");
     }
 
     /// A report whose items are `protections`, for the state and item tests.
@@ -1543,6 +1701,25 @@ mod tests {
                 protections,
                 job,
                 detail: "parse=faces-ok(0)".to_string(),
+            },
+            host_runs,
+            host_reason: host_reason.map(|why| why.to_string()),
+        }
+    }
+
+    /// The same, for the OCR profile, whose job verdict is the models' probe.
+    fn ocr_report(
+        protections: Protections,
+        job: Option<crate::sandbox::JobVerdict>,
+        host_runs: bool,
+        host_reason: Option<&str>,
+    ) -> worker::PageAnswer {
+        worker::PageAnswer::Measured {
+            report: crate::sandbox::Report {
+                profile: Profile::Ocr,
+                protections,
+                job,
+                detail: "parse=ocr-ok(0)".to_string(),
             },
             host_runs,
             host_reason: host_reason.map(|why| why.to_string()),
@@ -1636,6 +1813,7 @@ mod tests {
                 enabled: true,
                 index_enabled: true,
                 face_tags_enabled: true,
+                ocr_enabled: true,
             },
         );
         assert!(!unmeasured.measured);
@@ -1650,6 +1828,7 @@ mod tests {
                 enabled: false,
                 index_enabled: true,
                 face_tags_enabled: true,
+                ocr_enabled: true,
             },
         );
         assert!(off.measured);

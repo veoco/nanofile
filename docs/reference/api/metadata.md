@@ -355,6 +355,7 @@ administrator can read it; others get `404`. Requires `search.reindex`.
 
 **Seafile** — metadata config, tags, tag files, file tags, records and
 related-users are the documented upstream routes. The metadata *views*, columns,
-tag links, tag merge, OCR and face-recognition endpoints are not implemented. The
-search endpoints match the reference; the indexing controls are seahub
+tag links, tag merge, the Seafile OCR endpoints and face-recognition endpoints
+are not implemented. Nanofile's optional `[ocr]` feature feeds its own full-text
+index and is not this API. The search endpoints match the reference; the indexing controls are seahub
 endpoints the reference does not document.

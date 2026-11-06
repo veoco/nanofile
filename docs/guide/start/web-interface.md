@@ -125,7 +125,9 @@ moved, deleted — newest first. An entry links back to its library and director
 
 - By default it searches **names and content** — the content comes from the text
   the indexer extracted, so PDFs and Office documents are findable too, and a
-  result shows the matching snippet.
+  result shows the matching snippet. With `[ocr] enabled`, text recognised in
+  images is part of that content as well; see
+  [Text in images](/guide/start/ocr).
 - Tick **filename only** to match names alone.
 
 Results keep loading as you scroll. When nothing is found, check that indexing is

@@ -69,6 +69,11 @@ pub const MEDIA_TIMEOUT: Duration =
 pub const FACE_TIMEOUT: Duration =
     Duration::from_secs(crate::sandbox::profile_wall_seconds(Profile::Faces));
 
+/// Wall-clock ceiling for one OCR request: load two models, prepare the plans
+/// and run one recognition pass per text line.
+pub const OCR_TIMEOUT: Duration =
+    Duration::from_secs(crate::sandbox::profile_wall_seconds(Profile::Ocr));
+
 /// Most bytes of a reply the parent will read.
 const MAX_REPLY_BYTES: u64 = (MAX_INDEXED_CONTENT_BYTES + (1 << 20)) as u64;
 
@@ -296,6 +301,7 @@ pub fn run(
         Profile::Images => crate::sandbox::jobs::images::serve(),
         Profile::Media => crate::sandbox::jobs::media::serve(grants),
         Profile::Faces => crate::sandbox::jobs::faces::serve(),
+        Profile::Ocr => crate::sandbox::jobs::ocr::serve(),
     }
 }
 
@@ -344,6 +350,7 @@ fn probe_parse(profile: Profile, grants: crate::sandbox::Grants<'_>) -> (String,
         Profile::Images => crate::sandbox::jobs::images::probe(),
         Profile::Media => crate::sandbox::jobs::media::probe(grants),
         Profile::Faces => crate::sandbox::jobs::faces::probe(),
+        Profile::Ocr => crate::sandbox::jobs::ocr::probe(),
     }
 }
 
@@ -356,6 +363,7 @@ fn probe_parse(profile: Profile, grants: crate::sandbox::Grants<'_>) -> (String,
 fn probe_timeout(profile: Profile) -> Duration {
     match profile {
         Profile::Faces => Duration::from_secs(30),
+        Profile::Ocr => Duration::from_secs(90),
         _ => PROBE_TIMEOUT,
     }
 }
@@ -769,6 +777,10 @@ fn job_refusal(report: &Report) -> Option<String> {
         )),
         Profile::Faces if failed => Some(format!(
             "the faces profile cannot run the detector: {}",
+            report.detail
+        )),
+        Profile::Ocr if failed => Some(format!(
+            "the OCR profile cannot run its models: {}",
             report.detail
         )),
         _ => None,

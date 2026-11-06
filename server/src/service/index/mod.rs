@@ -127,6 +127,9 @@ pub struct IndexService {
     repos: Arc<Repositories>,
     block_store: DynBlockStorage,
     indexer: TextIndexer,
+    /// The live snapshot: `[ocr]` can be switched on without a restart, and the
+    /// next backfill pass picks existing images up.
+    config: crate::settings::RuntimeConfig,
 }
 
 impl IndexService {
@@ -134,11 +137,13 @@ impl IndexService {
         repos: Arc<Repositories>,
         block_store: DynBlockStorage,
         indexer: TextIndexer,
+        config: crate::settings::RuntimeConfig,
     ) -> Self {
         Self {
             repos,
             block_store,
             indexer,
+            config,
         }
     }
 
@@ -184,6 +189,17 @@ impl IndexService {
         let paths: Vec<String> = targets.iter().map(|t| t.path.clone()).collect();
         let states = self.indexer.doc_states(repo_id, &paths)?;
         let now = chrono::Utc::now().timestamp();
+        let ocr_enabled = self.config.get().ocr.enabled;
+        // An image that was skipped before OCR was enabled has a `Skipped` state
+        // that is current at this extractor version. When OCR is on, re-examine
+        // those images once; OCR then records `Indexed` or `NoText`, and the pass
+        // converges instead of re-reading them forever.
+        let ocr_worth_retry = |target: &IndexTarget, state: &crate::indexer::DocState| {
+            ocr_enabled
+                && crate::ocr::is_image(&target.path)
+                && state.status == crate::indexer::DocStatus::Skipped
+                && !state.is_manual()
+        };
         let work: Vec<IndexTarget> = targets
             .iter()
             .filter(|target| {
@@ -198,9 +214,11 @@ impl IndexService {
                     // An explicit request refreshes even a hand-pinned document; a
                     // backfill leaves those alone.
                     Some(state) if mode == IndexMode::Explicit => {
-                        state.is_manual() || !state.is_current(fs_id, now)
+                        state.is_manual()
+                            || !state.is_current(fs_id, now)
+                            || ocr_worth_retry(target, state)
                     }
-                    Some(state) => !state.is_current(fs_id, now),
+                    Some(state) => !state.is_current(fs_id, now) || ocr_worth_retry(target, state),
                     None => true,
                 }
             })
@@ -388,18 +406,41 @@ impl IndexService {
             }
         };
 
-        // A document above the cap is skipped unread: a container cannot be indexed
-        // from a prefix.
+        let config = self.config.get();
         let size = file_data.size.max(0) as u64;
+
+        // What this file is, and whether OCR owns it. The plan is still computed
+        // for the non-OCR path; an image extension only ever reaches `Sniff`.
         let plan = extract::plan(filename);
-        let budget = match extract::budget(plan, size) {
-            Ok(budget) => budget,
-            Err(reason) => {
-                tracing::debug!("indexing {path}: not indexable: {reason}");
-                self.indexer
-                    .mark_file_async(repo_id, path, filename, DocMeta::skipped(fs_id.as_str()))
-                    .await?;
-                return Ok(OneOutcome::Skipped);
+        let ocr_source = crate::ocr::source_for(filename);
+        let ocr_enabled = config.ocr.enabled && ocr_source.is_some();
+        let ocr_options = crate::ocr::OcrOptions {
+            min_score: config.ocr.min_score,
+            max_side: config.ocr.max_side,
+        };
+
+        if ocr_enabled && (size == 0 || size > crate::ocr::MAX_IMAGE_BYTES as u64) {
+            tracing::debug!("indexing {path}: image is {size} bytes, outside the OCR cap");
+            self.indexer
+                .mark_file_async(repo_id, path, filename, DocMeta::no_text(fs_id.as_str()))
+                .await?;
+            return Ok(OneOutcome::Skipped);
+        }
+
+        // A document above the cap is skipped unread: a container cannot be indexed
+        // from a prefix. An image is OCR'd whole, up to the OCR cap.
+        let budget = if ocr_enabled {
+            crate::ocr::MAX_IMAGE_BYTES
+        } else {
+            match extract::budget(plan, size) {
+                Ok(budget) => budget,
+                Err(reason) => {
+                    tracing::debug!("indexing {path}: not indexable: {reason}");
+                    self.indexer
+                        .mark_file_async(repo_id, path, filename, DocMeta::skipped(fs_id.as_str()))
+                        .await?;
+                    return Ok(OneOutcome::Skipped);
+                }
             }
         };
 
@@ -425,8 +466,9 @@ impl IndexService {
             }
         };
 
-        // A document is read whole, so a short read is a transient failure.
-        if matches!(plan, Plan::Document(_)) && (data.len() as u64) < size {
+        // A document or an image is read whole, so a short read is a transient
+        // failure.
+        if (matches!(plan, Plan::Document(_)) || ocr_enabled) && (data.len() as u64) < size {
             tracing::warn!("indexing {path}: read {} of {size} bytes", data.len());
             self.indexer
                 .mark_file_async(repo_id, path, filename, DocMeta::failed(fs_id.as_str()))
@@ -434,7 +476,36 @@ impl IndexService {
             return Ok(OneOutcome::Failed);
         }
 
-        let extracted = if matches!(plan, extract::Plan::Document(_)) {
+        let extracted = if ocr_enabled {
+            let source = ocr_source.expect("ocr_enabled implies a source");
+            let extension = extension_of(filename);
+            match self
+                .ocr_extract(
+                    ctx,
+                    repo_id,
+                    &extension,
+                    &file_data,
+                    data,
+                    source,
+                    ocr_options,
+                )
+                .await?
+            {
+                worker::Outcome::Extracted(extracted) => extracted,
+                // The sandbox, the helper or a model is unavailable: an
+                // environment problem, retried once the host can do the work.
+                worker::Outcome::Unavailable(reason) => {
+                    tracing::warn!("indexing {path}: OCR is unavailable: {reason}");
+                    self.indexer
+                        .mark_file_async(repo_id, path, filename, DocMeta::failed(fs_id.as_str()))
+                        .await?;
+                    return Ok(OneOutcome::Failed);
+                }
+                // The child ran and did not answer: a property of the image, so it
+                // is terminal for this content rather than retried every pass.
+                worker::Outcome::Failed(reason) => extract::Extracted::Unsupported(reason),
+            }
+        } else if matches!(plan, extract::Plan::Document(_)) {
             // A document is parsed by a confined child process, never here: see
             // `sandbox::worker`. Spawning and waiting is synchronous and can take
             // seconds, so it runs on the blocking pool under a gate permit that bounds
@@ -479,12 +550,18 @@ impl IndexService {
             }
             extract::Extracted::Unsupported(reason) => {
                 tracing::debug!("indexing {path}: not indexable: {reason}");
-                // The sandbox being off is the admin's choice, not a verdict on the
-                // file: a `Skipped` state is "current" for this extractor version, so
-                // the document would never be re-extracted when the switch is turned
-                // back on. It is recorded as a retryable failure instead, which costs
-                // nothing because `extract` returns before spawning a child.
-                if reason == extract::reason::SANDBOX_OFF {
+                if ocr_enabled {
+                    // OCR examined the image and found nothing searchable. `NoText`
+                    // is current at this extractor version, so the image is not
+                    // re-read by every backfill pass.
+                    self.indexer
+                        .mark_file_async(repo_id, path, filename, DocMeta::no_text(fs_id.as_str()))
+                        .await?;
+                    Ok(OneOutcome::Skipped)
+                } else if reason == extract::reason::SANDBOX_OFF {
+                    // The sandbox being off is the admin's choice, not a verdict on
+                    // the file: a `Skipped` state would never be re-examined when
+                    // the switch is turned back on. Record it as retryable.
                     self.indexer
                         .mark_file_async(repo_id, path, filename, DocMeta::failed(fs_id.as_str()))
                         .await?;
@@ -495,6 +572,95 @@ impl IndexService {
                         .await?;
                     Ok(OneOutcome::Skipped)
                 }
+            }
+        }
+    }
+
+    /// OCR one image in its confined child.
+    ///
+    /// In-process formats hand the bytes straight to the OCR profile. HEIC/HEIF/
+    /// AVIF are decoded to a still through the media profile first, exactly as
+    /// the face-tag scan does; only the JPEG frame reaches OCR.
+    #[allow(clippy::too_many_arguments)]
+    async fn ocr_extract(
+        &self,
+        ctx: Option<&JobContext>,
+        repo_id: &str,
+        extension: &str,
+        file_data: &base::common::FsFileData,
+        data: Vec<u8>,
+        source: crate::ocr::Source,
+        options: crate::ocr::OcrOptions,
+    ) -> Result<worker::Outcome, AppError> {
+        match source {
+            crate::ocr::Source::InProcess => {
+                let _permit = crate::sandbox::jobs::ocr::acquire_ocr_permit()
+                    .await
+                    .map_err(AppError::internal)?;
+                offload_extract(ctx, move || {
+                    crate::sandbox::jobs::ocr::extract(&data, options)
+                })
+                .await
+            }
+            crate::ocr::Source::Media => {
+                let Some(ffmpeg) = worker::helper() else {
+                    return Ok(worker::Outcome::Unavailable(
+                        "OCR needs ffmpeg for HEIC/HEIF/AVIF".to_string(),
+                    ));
+                };
+                let scratch = match crate::service::fs::scratch::write_blocks(
+                    &self.config.get().storage.temp_dir.join("ocr"),
+                    "ocr",
+                    extension,
+                    repo_id,
+                    &file_data.block_ids,
+                    &self.block_store,
+                    crate::ocr::MAX_IMAGE_BYTES as u64,
+                )
+                .await
+                {
+                    Ok(Some(scratch)) => scratch,
+                    Ok(None) => return Ok(worker::Outcome::Failed(extract::reason::FAILED)),
+                    Err(error) => return Err(error),
+                };
+                let source = scratch.granted_path();
+                let ffmpeg = ffmpeg.to_path_buf();
+                let decoded = tokio::task::spawn_blocking(move || {
+                    match crate::sandbox::jobs::media::still(&source, &ffmpeg) {
+                        Ok(frame) => Ok(frame),
+                        Err(crate::sandbox::jobs::media::StillError::Unavailable(why))
+                        | Err(crate::sandbox::jobs::media::StillError::Failed(why)) => {
+                            Err(worker::Outcome::Unavailable(format!(
+                                "HEIC/AVIF decode unavailable: {why}"
+                            )))
+                        }
+                        Err(crate::sandbox::jobs::media::StillError::Refused(why)) => {
+                            tracing::debug!("OCR still refused: {why}");
+                            Err(worker::Outcome::Extracted(extract::Extracted::Unsupported(
+                                extract::reason::NOT_TEXT,
+                            )))
+                        }
+                    }
+                })
+                .await;
+                // Dropping the guard removes the file; the media child is gone.
+                drop(scratch);
+                let frame = match decoded {
+                    Ok(Ok(frame)) => frame,
+                    Ok(Err(outcome)) => return Ok(outcome),
+                    Err(join) => {
+                        return Err(AppError::internal(format!(
+                            "OCR media decode task failed: {join}"
+                        )));
+                    }
+                };
+                let _permit = crate::sandbox::jobs::ocr::acquire_ocr_permit()
+                    .await
+                    .map_err(AppError::internal)?;
+                offload_extract(ctx, move || {
+                    crate::sandbox::jobs::ocr::extract(&frame, options)
+                })
+                .await
             }
         }
     }
@@ -517,6 +683,13 @@ impl IndexService {
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
         Ok(commit.root_id)
     }
+}
+
+/// The lowercased extension of a path, without the dot.
+fn extension_of(path: &str) -> String {
+    path.rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 /// Ask the run to stop, if there is a run to ask. Every pipeline entry point uses

@@ -63,6 +63,8 @@ pub struct Config {
     #[serde(default)]
     pub face_tags: FaceTagsConfig,
     #[serde(default)]
+    pub ocr: OcrConfig,
+    #[serde(default)]
     pub sandbox: SandboxConfig,
     #[serde(default)]
     pub notification: NotificationConfig,
@@ -1546,6 +1548,42 @@ impl Default for FaceTagsConfig {
             backfill_enabled: true,
             min_score: default_face_min_score(),
             min_size: default_face_min_size(),
+        }
+    }
+}
+
+/// Automatic OCR of images into the full-text index (PP-OCRv6 tiny). Off by
+/// default: it loads two models and costs CPU, and the text it stores may be
+/// sensitive, so a library owner opts in explicitly.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct OcrConfig {
+    /// Master switch. Env: NANOFILE_OCR_ENABLED
+    #[serde(default)]
+    pub enabled: bool,
+    /// Minimum recognition confidence for a text line to be indexed.
+    /// Env: NANOFILE_OCR_MIN_SCORE
+    #[serde(default = "default_ocr_min_score")]
+    pub min_score: f32,
+    /// Longest edge of the detection input, rounded to a multiple of 32.
+    /// Env: NANOFILE_OCR_MAX_SIDE
+    #[serde(default = "default_ocr_max_side")]
+    pub max_side: u32,
+}
+
+fn default_ocr_min_score() -> f32 {
+    0.55
+}
+
+fn default_ocr_max_side() -> u32 {
+    960
+}
+
+impl Default for OcrConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_score: default_ocr_min_score(),
+            max_side: default_ocr_max_side(),
         }
     }
 }

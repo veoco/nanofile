@@ -77,6 +77,9 @@ pub fn install_default_jobs(
     let face_tags_config = face_tags.get();
     let face_tags_enabled = face_tags_config.face_tags.enabled;
     let scheduler = IndexScheduler::new(tasks.clone(), indexer.is_some(), face_tags_enabled);
+    // The index jobs read `[ocr]` from the live snapshot, so a saved switch reaches
+    // the next upload or backfill pass without a restart.
+    let index_config = face_tags.clone();
 
     // Copy and move are reference operations: no blocks are copied, just one
     // tree update plus a commit. They are jobs because the desktop client polls.
@@ -150,10 +153,12 @@ pub fn install_default_jobs(
         let repos = repos.clone();
         let block_store = block_store.clone();
         let indexer = indexer.cloned();
+        let index_config = index_config.clone();
         move |ctx, params| {
             let repos = repos.clone();
             let block_store = block_store.clone();
             let indexer = indexer.clone();
+            let index_config = index_config.clone();
             async move {
                 let repo_id = params
                     .get("repo_id")
@@ -169,7 +174,7 @@ pub fn install_default_jobs(
                         "full-text indexing is not enabled".into(),
                     ))
                 })?;
-                let svc = IndexService::new(repos, block_store, indexer);
+                let svc = IndexService::new(repos, block_store, indexer, index_config);
                 // The pass checks in before every file, so it parks while the
                 // server is busy.
                 let counts = svc
@@ -194,10 +199,12 @@ pub fn install_default_jobs(
         let repos = repos.clone();
         let block_store = block_store.clone();
         let indexer = indexer.cloned();
+        let index_config = index_config.clone();
         move |ctx, params| {
             let repos = repos.clone();
             let block_store = block_store.clone();
             let indexer = indexer.clone();
+            let index_config = index_config.clone();
             async move {
                 let p: IndexFilesParams = parse_params(params)?;
                 let indexer = indexer.ok_or_else(|| {
@@ -205,7 +212,7 @@ pub fn install_default_jobs(
                         "full-text indexing is not enabled".into(),
                     ))
                 })?;
-                let svc = IndexService::new(repos, block_store, indexer);
+                let svc = IndexService::new(repos, block_store, indexer, index_config);
                 // Explicit work: the caller says these paths changed, so a
                 // hand-pinned document is refreshed rather than left alone.
                 let counts = svc
@@ -594,13 +601,15 @@ pub fn install_default_jobs(
             let block_store = block_store.clone();
             let idx = idx.clone();
             let cursor = cursor.clone();
+            let index_config = index_config.clone();
             move |ctx, _params| {
                 let repos = repos.clone();
                 let block_store = block_store.clone();
                 let idx = idx.clone();
                 let cursor = cursor.clone();
+                let index_config = index_config.clone();
                 async move {
-                    let svc = IndexService::new(repos, block_store, idx);
+                    let svc = IndexService::new(repos, block_store, idx, index_config);
                     let report = svc
                         .backfill_pass(Some(&ctx), &cursor)
                         .await

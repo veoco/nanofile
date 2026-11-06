@@ -1303,6 +1303,7 @@ async fn a_backfill_pass_indexes_a_file_the_index_never_saw() {
         f.server.state.repos.clone(),
         f.server.state.block_store.clone(),
         indexer.clone(),
+        f.server.state.config.clone(),
     );
     let cursor = std::sync::Arc::new(std::sync::Mutex::new(0usize));
     let report = svc.backfill_pass(None, &cursor).await.expect("pass runs");
@@ -1581,6 +1582,7 @@ async fn a_backfill_pass_picks_up_what_an_older_extractor_skipped() {
         f.server.state.repos.clone(),
         f.server.state.block_store.clone(),
         indexer.clone(),
+        f.server.state.config.clone(),
     );
     let cursor = Arc::new(Mutex::new(0));
     let report = svc.backfill_pass(None, &cursor).await.expect("pass runs");
@@ -1602,5 +1604,133 @@ async fn a_backfill_pass_picks_up_what_an_older_extractor_skipped() {
     assert_eq!(
         report.counts.indexed, 0,
         "the file is current again: {report:?}"
+    );
+}
+
+/// OCR turns a picture's text into searchable content under the existing
+/// repository ACL. The fixture is the sample page from the PP-OCRv6 example.
+#[tokio::test]
+async fn test_ocr_makes_image_text_searchable() {
+    let f = common::TestFixture::new_with_index_and_ocr().await;
+    let token = &f.api_token;
+    let bytes = include_bytes!("fixtures/ocr/sample.png");
+
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "sample.png", bytes)
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed");
+
+    assert!(
+        wait_for(std::time::Duration::from_secs(120), || async {
+            let results = search_results(&f, token, "Markov").await;
+            results
+                .iter()
+                .any(|result| result["fullpath"] == "/sample.png")
+        })
+        .await,
+        "the OCR text should make the picture searchable"
+    );
+
+    let results = search_results(&f, token, "Markov").await;
+    let hit = results
+        .iter()
+        .find(|result| result["fullpath"] == "/sample.png")
+        .expect("the picture is a hit");
+    assert_eq!(hit["name"], "sample.png");
+    assert!(
+        hit["content_highlight"]
+            .as_str()
+            .is_some_and(|highlight| highlight.to_lowercase().contains("markov")),
+        "the hit should carry the OCR text: {hit}"
+    );
+}
+
+/// With OCR off, the same picture is still a filename hit but contributes no
+/// content, so a word that only appears in the image finds nothing.
+#[tokio::test]
+async fn test_ocr_off_leaves_image_text_unindexed() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+    let bytes = include_bytes!("fixtures/ocr/sample.png");
+
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "sample.png", bytes)
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed");
+
+    // Let the upload's index job observe and record the image as skipped.
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let results = search_results(&f, token, "Markov").await;
+    assert!(
+        results
+            .iter()
+            .all(|result| result["fullpath"] != "/sample.png"),
+        "an image with OCR off must not contribute content: {results:?}"
+    );
+}
+
+/// Enabling OCR after a library already skipped its images re-examines those
+/// images on the next pass, without bumping the extractor version or rebuilding
+/// the whole index.
+#[tokio::test]
+async fn test_enabling_ocr_later_rechecks_skipped_images() {
+    use server::service::index::IndexService;
+
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+    let bytes = include_bytes!("fixtures/ocr/sample.png");
+
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "sample.png", bytes)
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed");
+
+    // Wait until the automatic pass has recorded the image as skipped (OCR off).
+    let indexer = f.server.state.text_indexer().expect("indexer").clone();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let states = indexer
+            .doc_states(&f.repo_id, &["/sample.png".to_string()])
+            .expect("states");
+        if states
+            .get("/sample.png")
+            .is_some_and(|state| state.status == server::indexer::DocStatus::Skipped)
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the upload was not indexed as skipped"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    // Turn OCR on in the live snapshot, the way a saved setting does.
+    let mut config = (*f.server.state.config.get()).clone();
+    config.ocr.enabled = true;
+    f.server.state.config.replace(config);
+
+    let svc = IndexService::new(
+        f.server.state.repos.clone(),
+        f.server.state.block_store.clone(),
+        indexer,
+        f.server.state.config.clone(),
+    );
+    let cursor = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    let report = svc.backfill_pass(None, &cursor).await.expect("backfill");
+    assert!(report.counts.indexed >= 1, "{report:?}");
+
+    assert!(
+        wait_for(std::time::Duration::from_secs(120), || async {
+            search_results(&f, token, "Markov")
+                .await
+                .iter()
+                .any(|result| result["fullpath"] == "/sample.png")
+        })
+        .await,
+        "the re-examined image should be searchable"
     );
 }

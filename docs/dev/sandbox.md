@@ -16,15 +16,20 @@ A profile names what the child is allowed to establish:
 - `images` — image decode and EXIF/avatar processing.
 - `media` — `ffmpeg` thumbnails, the one profile that starts an external program.
 - `faces` — face detection for the automatic people tags. The same shape as
-  `images`, with a much wider budget: the detector is the heaviest thing a parser
-  profile runs.
+  `images`, with a much wider budget: the detector is a model profile.
+- `ocr` — PP-OCRv6 tiny text detection and recognition for the full-text index.
+  The same shape as `faces`, with the widest budget: two models, one detection
+  pass and one recognition pass per text line.
 
 ## Worker protocol
 
 - **Request** on stdin: `NFX1`, one byte naming the plan, then the file's bytes to
-  end of file.
+  end of file. The model jobs frame their own requests: faces sends an operation
+  byte and a little-endian `u32` options word before the image; OCR does the same.
 - **Reply** on stdout: `T` or `U`, a little-endian `u32` length, then that many bytes
-  of UTF-8 — the text, or the reason the document is not indexable.
+  of UTF-8 — the text, or the reason the document is not indexable. OCR adds `E`
+  for an environment/model failure, which the parent records as retryable rather
+  than as a verdict on the image.
 - `--selftest` replaces the request with a report line and no reply.
 - `--probe` runs the probe a serving process runs at startup and exits non-zero
   when the worker is unavailable.
@@ -50,11 +55,14 @@ The media profile cannot have the process item: it exists to start a program, an
 every platform starts one by copying the process first. What bounds the helper is
 the files layer and the parent's timeout.
 
-The faces profile is one parser that runs a model. Its wall clock is 90 s, and its
-CPU budget is twice that because the engine runs the detector on a thread pool and
-can split a large photo into nine forward passes; the wall timeout is still the
-real bound. It starts no program and reads no file: HEIC/HEIF/AVIF frames are
-decoded by the media profile first, and only the decoded still is handed to it.
+`faces` and `ocr` are the profiles that run models. Faces has a 90 s wall clock and
+can split a large photo into nine forward passes; OCR has 180 s, loads two graphs,
+prepares a detection plan for the picture's size and recognition plans for the
+widths it meets, then runs one recognition per text line. tract's CPU runtime does
+not enable its multithreaded matrix multiply by default, so CPU tracks wall clock
+(with 5 s of hard-limit slack); the wall timeout is still the real bound. Neither
+starts a program or reads a file: HEIC/HEIF/AVIF frames are decoded by the media
+profile first, and only the decoded still is handed to them.
 
 ## Platform notes
 
@@ -89,8 +97,10 @@ The sandbox is tested where it is used, not only where it is described.
   the whole text each parser returns; the images child's reply is checked against
   the pixels it was given; the media child reads a file the parent wrote, decodes a
   frame and hands back an encoded thumbnail; the faces child loads the model and
-  runs one detection, reporting `faces-ok(0)` (that it finds a real face is the
-  model test's subject).
+  runs one detection, reporting `faces-ok(0)`; the OCR child loads both models,
+  runs a blank detection and a blank recognition, and reports `ocr-ok(0)` (that
+  it reads real text is the OCR engine's unit test and the index integration
+  test's subject).
 - A document whose text is near the size cap is extracted whole in the confined
   child, so the resource limits are measured as sufficient rather than merely
   installed.

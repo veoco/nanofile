@@ -1014,6 +1014,52 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
+    // · Image text (OCR)
+    setting!(
+        "ocr.enabled",
+        Maintenance,
+        "NANOFILE_OCR_ENABLED",
+        Kind::Bool,
+        Apply::Live,
+        |c| fmt_bool(c.ocr.enabled),
+        |c, v| {
+            c.ocr.enabled = parse_bool(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "ocr.min_score",
+        Maintenance,
+        "NANOFILE_OCR_MIN_SCORE",
+        Kind::Float,
+        Apply::Live,
+        |c| c.ocr.min_score.to_string(),
+        |c, v| {
+            let score: f32 = v
+                .trim()
+                .parse()
+                .map_err(|_| format!("not a number: {:?}", v.trim()))?;
+            if !(0.0..=1.0).contains(&score) {
+                return Err("ocr.min_score must be between 0 and 1".to_string());
+            }
+            c.ocr.min_score = score;
+            Ok(())
+        }
+    ),
+    setting!(
+        "ocr.max_side",
+        Maintenance,
+        "NANOFILE_OCR_MAX_SIDE",
+        Kind::U32,
+        Apply::Live,
+        |c| c.ocr.max_side.to_string(),
+        |c, v| {
+            // Clamp rather than reject: the setting is live and the OCR engine
+            // clamps too, and a value below the useful range still means "small".
+            c.ocr.max_side = parse_u32(v)?.clamp(320, 1600);
+            Ok(())
+        }
+    ),
     // · Sandbox
     setting!(
         "sandbox.enabled",
@@ -1807,6 +1853,12 @@ pub static GROUPS: &[GroupDef] = &[
             "face_tags.min_score",
             "face_tags.min_size",
         ],
+    },
+    GroupDef {
+        section: Section::Maintenance,
+        id: "maintenance_ocr",
+        title_key: "setting.group_maintenance_ocr",
+        keys: &["ocr.enabled", "ocr.min_score", "ocr.max_side"],
     },
     GroupDef {
         section: Section::Sandbox,

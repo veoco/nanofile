@@ -4,7 +4,6 @@
 //! 20 MP group photo is not lost when the whole image is scaled down to YuNet's
 //! 640 px input.
 
-use candle_core::Device;
 use image::DynamicImage;
 
 use super::DetectOptions;
@@ -29,8 +28,7 @@ pub struct DetectionSummary {
 /// The count is what becomes the `人物`/`单人`/`合影` tags. Nothing from this
 /// function is persisted except the count and the best score.
 pub fn detect(image: &DynamicImage, options: DetectOptions) -> Result<DetectionSummary, String> {
-    let device = Device::Cpu;
-    let model = YuNet::load(&device)?;
+    let model = YuNet::load()?;
     let (width, height) = (image.width(), image.height());
     if width == 0 || height == 0 {
         return Ok(DetectionSummary::default());
@@ -43,8 +41,8 @@ pub fn detect(image: &DynamicImage, options: DetectOptions) -> Result<DetectionS
     let mut faces = Vec::new();
 
     if grid == 1 {
-        let prepared = prepare(image, &device)?;
-        let detected = model.forward(&prepared.tensor)?;
+        let prepared = prepare(image)?;
+        let detected = model.forward(&prepared)?;
         for face in detected {
             faces.push(map_face(face, &prepared, 0, 0));
         }
@@ -63,8 +61,8 @@ pub fn detect(image: &DynamicImage, options: DetectOptions) -> Result<DetectionS
                     continue;
                 }
                 let tile = image.crop_imm(x0, y0, x1 - x0, y1 - y0);
-                let prepared = prepare(&tile, &device)?;
-                let detected = model.forward(&prepared.tensor)?;
+                let prepared = prepare(&tile)?;
+                let detected = model.forward(&prepared)?;
                 for face in detected {
                     faces.push(map_face(face, &prepared, x0, y0));
                 }

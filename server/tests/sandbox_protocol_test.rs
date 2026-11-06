@@ -308,6 +308,41 @@ fn an_image_request_is_parsed_or_refused() {
     assert_eq!(answer.refusal(), "image over the size cap");
 }
 
+/// The OCR child loads both models and answers with text or a reason, never with
+/// pixels. A blank image is a `U` (no indexable text); undecodable bytes are the
+/// same verdict; an unknown operation and an oversized request are refusals.
+#[test]
+fn an_ocr_request_answers_text_or_is_refused() {
+    let args = ["--profile", "ocr"];
+
+    let answer = run_worker(&args, &image_request(b'O', 0, &a_png_of(32, 16)));
+    answer.finished("an OCR request");
+    let (tag, body) = answer.frame();
+    assert_eq!(tag, b'U', "a blank image has no text: {body:?}");
+    assert_eq!(
+        std::str::from_utf8(body).expect("a refusal is text"),
+        "no extractable text"
+    );
+
+    let answer = run_worker(&args, &image_request(b'O', 0, b"not an image"));
+    answer.finished("undecodable bytes");
+    assert_eq!(
+        std::str::from_utf8(answer.frame().1).expect("a refusal is text"),
+        "no extractable text"
+    );
+
+    let answer = run_worker(&args, &image_request(b'?', 0, b""));
+    answer.finished("an unknown operation");
+    assert_eq!(answer.refusal(), "unknown OCR operation");
+
+    // The second half of the source bound the parent applies before it sends
+    // anything: the literal is `jobs/ocr::MAX_IMAGE_BYTES`.
+    let oversized = image_request(b'O', 0, &vec![0u8; 32 * 1024 * 1024 + 1]);
+    let answer = run_worker(&args, &oversized);
+    answer.finished("an oversized image");
+    assert_eq!(answer.refusal(), "image over the size cap");
+}
+
 /// The faces child runs the detector on what it was given and answers with a count.
 #[test]
 fn a_face_request_answers_a_count_or_is_refused() {

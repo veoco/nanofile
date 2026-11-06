@@ -1,4 +1,4 @@
-//! Automatic "people" tags from YuNet face detection.
+//! Automatic "people" tags from YuNet face detection, via tract.
 //!
 //! This module is deliberately small: it detects faces and counts them. It does
 //! not produce embeddings, face crops or identities, so no biometric template is
@@ -15,7 +15,7 @@ pub mod yunet;
 
 /// Bump when the model, preprocessing or the counting rules change. Backfill
 /// compares this against `face_tag_scans.model_version`.
-pub const MODEL_VERSION: u32 = 1;
+pub const MODEL_VERSION: u32 = 2;
 
 /// Detection knobs shared by the worker and tests.
 #[derive(Clone, Copy, Debug)]

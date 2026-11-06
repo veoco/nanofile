@@ -315,4 +315,4 @@ Nanofile 实现的 Seafile 元数据服务、标签接口，以及两套搜索 A
 
 `state` 是 `running`、`completed` 或 `failed`。只有任务创建者或管理员能读；其他人返回 `404`。需要 `search.reindex`。
 
-**Seafile** —— 元数据配置、标签、标签文件、文件标签、记录与 related-users 都是官方记录的上游路由。元数据的视图、列、标签链接、标签合并、OCR 与人脸识别接口没有实现。搜索接口与参考一致；索引控制是 seahub 有、参考没写的接口。
+**Seafile** —— 元数据配置、标签、标签文件、文件标签、记录与 related-users 都是官方记录的上游路由。元数据的视图、列、标签链接、标签合并、Seafile 的 OCR 接口与人脸识别接口没有实现。Nanofile 可选的 `[ocr]` 服务于自己的全文索引，不是这套 API。搜索接口与参考一致；索引控制是 seahub 有、参考没写的接口。

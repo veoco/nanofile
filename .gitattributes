@@ -6,4 +6,4 @@
 # text and a Windows checkout would rewrite a PDF's xref offsets.
 server/tests/fixtures/** binary
 server/tests/fixtures/face_tags/README.md text diff
-*.safetensors binary
+server/tests/fixtures/ocr/README.md text diff

@@ -74,7 +74,7 @@ jobs:
               # change even when no `.rs` file moved with it.
               - 'server/tests/fixtures/**'
               - 'server/models/**'
-              - 'tools/face_tags/**'
+              - 'tools/models/**'
               # build.rs shells out to the pinned esbuild/tailwind versions, so
               # a dependency bump is a build change.
               - 'package.json'
@@ -151,7 +151,7 @@ jobs:
           # `cargo tree` failing must fail the step too, so its output is taken
           # with an assignment rather than piped straight into `grep`.
           tree="$(cargo tree --workspace --prefix none)"
-          if printf '%s\n' "$tree" | grep -E '^(aws-lc-rs|aws-lc-sys|rav1e|ravif|zstd-sys|jieba-rs) v'; then
+          if printf '%s\n' "$tree" | grep -E '^(aws-lc-rs|aws-lc-sys|rav1e|ravif|zstd-sys|jieba-rs|tract-cuda|tract-metal|tract-wgpu|ort|ort-sys|onnxruntime|onnxruntime-sys|openblas-src|accelerate-src) v'; then
             echo "::error::A default feature pulled back in a dependency this project avoids; see the notes in server/Cargo.toml."
             exit 1
           fi

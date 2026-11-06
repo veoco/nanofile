@@ -275,6 +275,7 @@ fn slot(profile: Profile) -> usize {
         Profile::Images => 1,
         Profile::Media => 2,
         Profile::Faces => 3,
+        Profile::Ocr => 4,
     }
 }
 
@@ -2228,6 +2229,7 @@ mod tests {
         assert_eq!(process_slots(Profile::Documents), 1);
         assert_eq!(process_slots(Profile::Images), 1);
         assert_eq!(process_slots(Profile::Faces), 1);
+        assert_eq!(process_slots(Profile::Ocr), 1);
         assert_eq!(process_slots(Profile::Media), 2);
     }
 
@@ -2238,10 +2240,11 @@ mod tests {
     fn the_job_cpu_cap_follows_the_profile_budget() {
         assert_eq!(cpu_limit_seconds(Profile::Images), 20);
         assert_eq!(cpu_limit_seconds(Profile::Media), 40);
-        assert_eq!(cpu_limit_seconds(Profile::Faces), 185);
+        assert_eq!(cpu_limit_seconds(Profile::Faces), 95);
+        assert_eq!(cpu_limit_seconds(Profile::Ocr), 185);
         assert!(
-            cpu_limit_seconds(Profile::Faces) > cpu_limit_seconds(Profile::Media),
-            "the detector is the widest budget"
+            cpu_limit_seconds(Profile::Ocr) > cpu_limit_seconds(Profile::Faces),
+            "OCR is the widest budget"
         );
     }
 

@@ -525,6 +525,7 @@ pub async fn reindex_file_handler(
         state.repos.clone(),
         state.block_store.clone(),
         indexer.clone(),
+        state.config.clone(),
     );
     let outcome = svc.index_path(repo_id, &path).await?;
     let indexed = outcome == crate::service::index::OneOutcome::Indexed;
