@@ -16,12 +16,7 @@
 
 use std::collections::HashMap;
 
-use super::resample::resize_rgb;
-
-/// ImageNet mean/std, applied to the BGR channels Paddle's `DecodeImage`
-/// produces. Channel 0 is blue, as in the model's published pipeline.
-const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
-const STD: [f32; 3] = [0.229, 0.224, 0.225];
+use super::resample::{IMAGENET_MEAN, IMAGENET_STD, resize_rgb};
 
 /// How the source image is resized before detection.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -117,7 +112,7 @@ pub(crate) fn tensor(rgb: &[u8], width: usize, height: usize, geometry: Geometry
     for i in 0..plane {
         for channel in 0..3 {
             let value = resized[i * 3 + (2 - channel)] as f32 / 255.0;
-            data[channel * plane + i] = (value - MEAN[channel]) / STD[channel];
+            data[channel * plane + i] = (value - IMAGENET_MEAN[channel]) / IMAGENET_STD[channel];
         }
     }
     data

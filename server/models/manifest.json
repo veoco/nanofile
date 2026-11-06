@@ -31,6 +31,16 @@
       "source": "https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_rec_onnx",
       "source_revision": "2612ab37152ae0a677521bae4e1e3d4fb4cf7c30"
     },
+    "pp_lcnet_x1_0_doc_ori": {
+      "file": "pp_lcnet_x1_0_doc_ori.onnx",
+      "version": 1,
+      "bytes": 6788069,
+      "sha256": "af9a0a4f317ff0709ce752067807f819cb15d883f8ecad89f28df1c6ee2d9c92",
+      "license": "Apache-2.0",
+      "license_file": "LICENSES/PaddleOCR-LICENSE",
+      "source": "https://huggingface.co/PaddlePaddle/PP-LCNet_x1_0_doc_ori_onnx",
+      "source_revision": "7330ab7039123e46af2dc03154b9969aa412c61d"
+    },
     "ppocr_v6_tiny_keys": {
       "file": "ppocr_keys_v6.txt",
       "version": 1,

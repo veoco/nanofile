@@ -13,6 +13,8 @@ The script:
 - downloads OpenCV Zoo's YuNet `face_detection_yunet_2023mar.onnx`;
 - downloads PaddlePaddle's PP-OCRv6 tiny detection and recognition ONNX files
   from pinned Hugging Face revisions;
+- downloads PaddlePaddle's PP-LCNet_x1_0 document orientation classifier from a
+  pinned Hugging Face revision;
 - extracts the 6,904-character recognition dictionary from the recognition
   model's `inference.yml`;
 - verifies every SHA-256 and byte count before writing a file;
@@ -22,7 +24,7 @@ The files are the upstream ONNX graphs unchanged: tract loads them directly, so
 there is no weight conversion step. `server/models/MODEL_CARD.md` records the
 sources, revisions, sizes, licences and limitations; `manifest.json` is what the
 compliance test reads. `LICENSES/` holds the MIT text for YuNet and the
-Apache-2.0 text for PP-OCRv6.
+Apache-2.0 text for the PaddleOCR models.
 
 If an upstream file changes, update the URL, revision, byte count and hash in
 `fetch_models.py`, run it, and update `manifest.json` and the model card in the

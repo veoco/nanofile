@@ -1,9 +1,10 @@
 //! OCR for the full-text index, in its own confined child.
 //!
-//! The child loads both PP-OCRv6 graphs from the binary and answers with text,
-//! never with pixels: the parent only sees the recognised lines. It is a profile
-//! of its own so an OCR model that fails, or a picture that takes too long,
-//! cannot take document parsing or face detection down with it.
+//! The child loads the orientation, detection and recognition graphs from the
+//! binary and answers with text, never with pixels: the parent only sees the
+//! recognised lines. It is a profile of its own so an OCR model that fails, or a
+//! picture that takes too long, cannot take document parsing or face detection
+//! down with it.
 //!
 //! Request: `NFX1`, the operation byte, a little-endian `u32` option word, then
 //! the image's bytes. Reply: the common frame, `T` for UTF-8 text, `U` for
@@ -154,7 +155,8 @@ fn decode_options(raw: u32) -> OcrOptions {
     }
 }
 
-/// The self-test: load both models and run one blank detection and recognition.
+/// The self-test: load all models and run one blank orientation classification,
+/// detection and recognition.
 pub fn probe() -> (String, JobVerdict) {
     match ocr::engine::probe() {
         Ok(lines) => (format!("ocr-ok({lines})"), JobVerdict::Ok),

@@ -1,8 +1,9 @@
 //! The OCR pipeline for one image.
 //!
-//! The model plans are prepared per concrete input size: detection varies with
-//! the picture and each text line has its own width. The recognition widths are
-//! bucketed by `rec::BUCKETS`, so one child prepares at most five rec plans.
+//! The orientation graph has a fixed 224×224 input, so its plan is prepared
+//! once. Detection varies with the picture and each text line has its own
+//! width. The recognition widths are bucketed by `rec::BUCKETS`, so one child
+//! prepares at most five rec plans.
 
 use std::collections::HashMap;
 
@@ -14,6 +15,7 @@ use super::crop::{self, Crop};
 use super::det::{self, Geometry, Postprocess, TextBox};
 use super::keys;
 use super::layout;
+use super::orientation;
 use super::rec;
 
 /// Default recognition confidence a line must reach to be indexed.
@@ -29,6 +31,7 @@ const MAX_TEXT_BYTES: usize = crate::indexer::extract::MAX_INDEXED_CONTENT_BYTES
 
 const DETECTION: &[u8] = include_bytes!("../../models/ppocr_v6_tiny_det.onnx");
 const RECOGNITION: &[u8] = include_bytes!("../../models/ppocr_v6_tiny_rec.onnx");
+const ORIENTATION: &[u8] = include_bytes!("../../models/pp_lcnet_x1_0_doc_ori.onnx");
 
 /// Where the bytes of an image can be decoded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,18 +91,45 @@ pub fn is_image(path: &str) -> bool {
 struct Engine {
     detection: inference::OnnxModel,
     recognition: inference::OnnxModel,
+    orientation_plan: tract::Runnable,
     detection_plans: HashMap<(usize, usize), tract::Runnable>,
     recognition_plans: HashMap<usize, tract::Runnable>,
 }
 
 impl Engine {
     fn new() -> Result<Self, String> {
+        let orientation = inference::OnnxModel::load(ORIENTATION)?;
         Ok(Self {
             detection: inference::OnnxModel::load(DETECTION)?,
             recognition: inference::OnnxModel::load(RECOGNITION)?,
+            orientation_plan: orientation.plan("1,3,224,224,f32")?,
             detection_plans: HashMap::new(),
             recognition_plans: HashMap::new(),
         })
+    }
+
+    fn classify_orientation(&self, tensor: &[f32]) -> Result<(orientation::Rotation, f32), String> {
+        let outputs = inference::run(
+            &self.orientation_plan,
+            &[1, 3, orientation::SIZE, orientation::SIZE],
+            tensor,
+        )?;
+        if outputs.len() != 1 {
+            return Err(format!(
+                "the OCR orientation graph returned {} outputs, expected 1",
+                outputs.len()
+            ));
+        }
+        let shape = inference::shape(&outputs[0])?;
+        if shape != vec![1, orientation::CLASSES] {
+            return Err(format!(
+                "the OCR orientation output has shape {shape:?}, expected [1, {}]",
+                orientation::CLASSES
+            ));
+        }
+        let probabilities = inference::values(&outputs[0])?;
+        orientation::decode(probabilities)
+            .ok_or_else(|| "the OCR orientation graph returned four unreadable scores".to_string())
     }
 
     fn detect(&mut self, tensor: &[f32], geometry: Geometry) -> Result<Vec<TextBox>, String> {
@@ -180,9 +210,15 @@ pub fn recognize(image: &DynamicImage, options: OcrOptions) -> Result<String, St
         return Ok(String::new());
     }
     let options = options.normalized();
+    let mut engine = Engine::new()?;
+
+    let orientation_tensor = orientation::tensor(rgb.as_raw(), width, height);
+    let (rotation, _score) = engine.classify_orientation(&orientation_tensor)?;
+    let rgb = rotation.upright(rgb);
+    let width = rgb.width() as usize;
+    let height = rgb.height() as usize;
     let geometry = Geometry::new(width, height, options.max_side);
 
-    let mut engine = Engine::new()?;
     let tensor = det::tensor(rgb.as_raw(), width, height, geometry);
     let boxes = engine.detect(&tensor, geometry)?;
 
@@ -207,12 +243,15 @@ pub fn recognize(image: &DynamicImage, options: OcrOptions) -> Result<String, St
     Ok(text)
 }
 
-/// Load both graphs and run one blank detection and recognition.
+/// Load all three graphs and run one blank orientation classification,
+/// detection and recognition.
 ///
 /// This is the startup probe of the OCR profile: it proves the confined child
 /// can prepare and run every model it needs, without depending on a fixture.
 pub fn probe() -> Result<usize, String> {
     let mut engine = Engine::new()?;
+    let orientation = vec![0f32; 3 * orientation::SIZE * orientation::SIZE];
+    engine.classify_orientation(&orientation)?;
     let geometry = Geometry {
         width: 64,
         height: 64,
@@ -271,9 +310,7 @@ mod tests {
 
     #[test]
     fn the_sample_page_is_read() {
-        let bytes = include_bytes!("../../tests/fixtures/ocr/sample.png");
-        let image = image::load_from_memory(bytes).expect("fixture");
-        let text = recognize(&image, OcrOptions::default()).expect("recognize");
+        let text = recognize(&sample_page(), OcrOptions::default()).expect("recognize");
         assert!(
             text.contains("Markov Entropy Decomposition"),
             "the sample page was not read: {}",
@@ -284,5 +321,69 @@ mod tests {
             "the sample page produced {} lines",
             text.lines().count()
         );
+    }
+
+    #[test]
+    fn the_orientation_model_classifies_every_quarter_turn() {
+        let engine = Engine::new().expect("engine");
+        let page = sample_page().to_rgb8();
+        for (quarter_turns, expected) in [
+            (0, orientation::Rotation::Upright),
+            (1, orientation::Rotation::Ccw90),
+            (2, orientation::Rotation::Ccw180),
+            (3, orientation::Rotation::Ccw270),
+        ] {
+            let turned = match quarter_turns {
+                0 => page.clone(),
+                1 => image::imageops::rotate90(&page),
+                2 => image::imageops::rotate180(&page),
+                _ => image::imageops::rotate270(&page),
+            };
+            let tensor = orientation::tensor(
+                turned.as_raw(),
+                turned.width() as usize,
+                turned.height() as usize,
+            );
+            let (rotation, score) = engine.classify_orientation(&tensor).expect("classify");
+            assert_eq!(
+                rotation, expected,
+                "{quarter_turns} clockwise quarter turns"
+            );
+            assert!(score > 0.5, "the classifier was unsure: {score}");
+
+            let upright = rotation.upright(turned);
+            let tensor = orientation::tensor(
+                upright.as_raw(),
+                upright.width() as usize,
+                upright.height() as usize,
+            );
+            assert_eq!(
+                engine.classify_orientation(&tensor).expect("classify").0,
+                orientation::Rotation::Upright,
+                "the correction did not make the page upright"
+            );
+        }
+    }
+
+    #[test]
+    fn a_quarter_turned_page_is_read() {
+        let page = sample_page();
+        let turned = DynamicImage::ImageRgb8(image::imageops::rotate90(&page.to_rgb8()));
+        let text = recognize(&turned, OcrOptions::default()).expect("recognize");
+        assert!(
+            text.contains("Markov Entropy Decomposition"),
+            "the sideways page was not read: {}",
+            text.chars().take(500).collect::<String>()
+        );
+        assert!(
+            text.lines().count() >= 20,
+            "the sideways page produced {} lines",
+            text.lines().count()
+        );
+    }
+
+    fn sample_page() -> DynamicImage {
+        let bytes = include_bytes!("../../tests/fixtures/ocr/sample.png");
+        image::load_from_memory(bytes).expect("fixture")
     }
 }

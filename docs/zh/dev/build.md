@@ -70,16 +70,16 @@ GTK 无法交叉编译，因此发布产物里只有三个原生 runner 平台�
 
 ## 嵌入推理（人物标签与 OCR）
 
-所有构建都会编译 YuNet 检测器、PP-OCRv6 tiny 的 OCR 图和自动人物标签流水线，
-没有需要开启的 Cargo feature。纯 Rust 的 `tract` CPU runtime 与 ONNX 模型
-（合计约 6.4 MB）始终在二进制里，而两个扫描器仍要等 `[face_tags] enabled`
-或 `[ocr] enabled` 打开后才运行。正常构建即可：
+所有构建都会编译 YuNet 检测器、PP-OCRv6 tiny 的 OCR 图、PP-LCNet 页面方向分类器和
+自动人物标签流水线，没有需要开启的 Cargo feature。纯 Rust 的 `tract` CPU runtime
+与 ONNX 模型（合计约 13.3 MB）始终在二进制里，而两个扫描器仍要等
+`[face_tags] enabled` 或 `[ocr] enabled` 打开后才运行。正常构建即可：
 
 ```bash
 cargo build --release -p server
 ```
 
-模型就是上游 ONNX 原件：YuNet 为 MIT，PP-OCRv6 tiny 为 Apache-2.0，已签入
+模型就是上游 ONNX 原件：YuNet 为 MIT，PaddleOCR 的模型为 Apache-2.0，已签入
 `server/models/`，同目录有模型卡、许可证和 SHA-256。`tools/models/fetch_models.py`
 下载固定 revision、校验哈希并抽取识别字典。构建期和运行期都没有权重转换、
 ONNX Runtime、Python 或 BLAS。CI 默认的 `cargo clippy`/`cargo test` 与

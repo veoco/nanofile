@@ -96,20 +96,21 @@ is in [Desktop tray and Windows service](/guide/deploy/desktop-and-service).
 
 ## Embedded inference (people tags and OCR)
 
-Every build compiles the YuNet detector, the PP-OCRv6 tiny OCR graphs and the
-automatic people-tag pipeline: there is no Cargo feature to enable. The pure-Rust
-`tract` CPU runtime and the ONNX files (about 6.4 MB in total) are always in the
-binary, while both scanners stay off until `[face_tags] enabled` or
-`[ocr] enabled` is set. Build with the normal command:
+Every build compiles the YuNet detector, the PP-OCRv6 tiny OCR graphs, the
+PP-LCNet page-orientation classifier and the automatic people-tag pipeline:
+there is no Cargo feature to enable. The pure-Rust `tract` CPU runtime and the
+ONNX files (about 13.3 MB in total) are always in the binary, while both
+scanners stay off until `[face_tags] enabled` or `[ocr] enabled` is set. Build
+with the normal command:
 
 ```bash
 cargo build --release -p server
 ```
 
 The models are the upstream ONNX graphs unchanged: YuNet is MIT-licensed and
-PP-OCRv6 tiny is Apache-2.0. They are checked into `server/models/`; the card,
-licences and SHA-256 live beside them. `tools/models/fetch_models.py` downloads
-the pinned revisions, verifies every hash and extracts the recognition
+the PaddleOCR models are Apache-2.0. They are checked into `server/models/`; the
+card, licences and SHA-256 live beside them. `tools/models/fetch_models.py`
+downloads the pinned revisions, verifies every hash and extracts the recognition
 dictionary. There is no weight conversion step and no ONNX Runtime, Python or
 BLAS at build or run time. CI's default `cargo clippy`/`cargo test` and
 release/nightly builds all include it; the release probes run

@@ -1,11 +1,14 @@
 //! Optical character recognition for the full-text index.
 //!
-//! PP-OCRv6 tiny runs in the confined `Profile::Ocr` child through tract. The
+//! PP-OCRv6 tiny detection and recognition, and the PP-LCNet page orientation
+//! classifier, run in the confined `Profile::Ocr` child through tract. The
 //! parent only ever receives the recognised text; images, pixel buffers and
 //! model plans stay on the far side of the process boundary.
 //!
 //! This module owns the whole pipeline in Rust:
 //!
+//! * [`orientation`] classifies the page as 0/90/180/270 degrees and turns it
+//!   upright before detection, so a sideways scan is still read;
 //! * [`det`] resizes/normalises the image, runs the DB detection graph and turns
 //!   its probability map into text boxes (connected components, convex hull,
 //!   minimum-area rectangle and the DB unclip expansion);
@@ -22,6 +25,7 @@ pub mod det;
 pub mod engine;
 pub mod keys;
 pub mod layout;
+pub mod orientation;
 pub mod rec;
 pub mod resample;
 

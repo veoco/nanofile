@@ -1,6 +1,6 @@
 # Embedded inference models
 
-`server/models/` holds the two model families the server runs in confined child
+`server/models/` holds the models the server runs in confined child
 processes. Every file is checked in, hash-pinned in `manifest.json` and embedded
 into the binary with `include_bytes!`/`include_str!`; nothing is downloaded at
 runtime and no inference framework other than the pure-Rust `tract` CPU runtime
@@ -79,19 +79,46 @@ recognition alphabet extracted from the recognition model's `inference.yml`.
 | `ppocr_v6_tiny_rec.onnx` | `PaddlePaddle/PP-OCRv6_tiny_rec_onnx` | `2612ab37152ae0a677521bae4e1e3d4fb4cf7c30` | `9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6` |
 | `ppocr_keys_v6.txt` | the recognition model's `inference.yml` | same as above | `c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd` |
 
+## PP-LCNet_x1_0_doc_ori (page orientation)
+
+`pp_lcnet_x1_0_doc_ori.onnx` classifies a whole picture as 0°, 90°, 180° or
+270° before text detection, so a sideways or upside-down page is turned upright
+first. It runs in the same OCR child as the PP-OCRv6 graphs.
+
+- **Task:** four-class document image orientation.
+- **Architecture:** PP-LCNet_x1_0 with a four-way classification head.
+- **Input:** fixed `[1, 3, 224, 224]` BGR. The engine scales the shorter edge to
+  256, centre-crops 224×224 and normalises with ImageNet mean/std. The crop is
+  sampled directly from the source, so a very wide or tall picture allocates no
+  intermediate resize buffer.
+- **Output:** `[1, 4]`, already softmaxed. Labels 0/90/180/270 name the
+  counter-clockwise turn that makes the page upright; label 0 leaves the
+  picture unchanged. No score threshold is applied.
+- **Accuracy (upstream, internal multi-scene set):** Top-1 99.06%.
+- **File size:** 6,788,069 bytes.
+- **Licence:** **Apache-2.0**. Full text in
+  [`LICENSES/PaddleOCR-LICENSE`](LICENSES/PaddleOCR-LICENSE).
+- Upstream: <https://huggingface.co/PaddlePaddle/PP-LCNet_x1_0_doc_ori_onnx>,
+  revision `7330ab7039123e46af2dc03154b9969aa412c61d`.
+- SHA-256: `af9a0a4f317ff0709ce752067807f819cb15d883f8ecad89f28df1c6ee2d9c92`
+
+The file is the upstream ONNX graph unchanged; there is no conversion step.
+
 ### What it stores
 
 The recognised text is written into the Tantivy full-text index as the file's
 content. It can be searched by anyone who can already read the repository. The
 index directory is not encrypted; OCR text may contain names, addresses or
 document numbers. Disabling `[ocr]` stops new OCR but leaves existing text in
-the index until it is rebuilt. No image crops, boxes or confidence values are
-persisted.
+the index until it is rebuilt. No image crops, boxes, confidence values or page
+angle are persisted.
 
 ### Limitations
 
-- Handwriting, heavy rotation, very small print, low-contrast photos and artistic
-  fonts reduce accuracy.
+- Pages turned by 90°, 180° or 270° are detected and corrected before
+  detection. Arbitrary angles other than quarter turns, curved pages,
+  handwriting, very small print, low-contrast photos and artistic fonts reduce
+  accuracy.
 - Multi-column pages are read in a simple top-to-bottom order; search results are
   unaffected, but the highlight order may differ from the page.
 - A picture can produce at most 300 text boxes; the text is capped at the same

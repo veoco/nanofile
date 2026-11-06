@@ -30,7 +30,7 @@ fn every_embedded_model_matches_the_manifest() {
     let dir = models_dir();
     let manifest = manifest();
     let models = manifest["models"].as_object().expect("models object");
-    assert_eq!(models.len(), 4, "manifest must name every embedded asset");
+    assert_eq!(models.len(), 5, "manifest must name every embedded asset");
     for (name, entry) in models {
         let bytes = std::fs::read(dir.join(entry["file"].as_str().expect("file")))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -134,6 +134,19 @@ fn the_ocr_detection_graph_loads_and_returns_a_probability_map() {
         outputs[0].shape().expect("shape").to_vec(),
         vec![1, 1, 64, 64],
         "DB output is one probability map"
+    );
+}
+
+#[test]
+fn the_ocr_orientation_graph_loads_and_returns_four_classes() {
+    let (_, bytes) = model("pp_lcnet_x1_0_doc_ori");
+    let plan = load_plan(&bytes, "1,3,224,224,f32");
+    let outputs = run_zeros(&plan, &[1, 3, 224, 224]);
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(
+        outputs[0].shape().expect("shape").to_vec(),
+        vec![1, 4],
+        "the orientation head has one score per quarter turn"
     );
 }
 

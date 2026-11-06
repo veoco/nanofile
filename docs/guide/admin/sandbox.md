@@ -44,7 +44,7 @@ system decides what can be established.
   tag band is measured only while the feature is on; with it off the band says so
   and points at its switch, because the detector's probe runs a forward pass.
   The OCR band is measured only while both the index and `[ocr] enabled` are on;
-  it loads two models, so a feature nobody enabled does not pay for its probe.
+  it loads three models, so a feature nobody enabled does not pay for its probe.
   Each row says what the item is, whether it is in place, how much it matters and
   what its absence opens; the **resource bound** is marked required. Nothing is
   summarised above them, and there is no grade — the rows are the whole verdict.

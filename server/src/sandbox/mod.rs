@@ -161,11 +161,12 @@ const ADDRESS_SPACE_LIMIT: u64 = 1 << 30;
 /// Wall-clock seconds a profile's child gets. The parent's timers use the same numbers, so the
 /// CPU limit can be derived from them instead of being one fixed cap for every profile.
 ///
-/// The OCR profile is the widest: it loads two ONNX graphs, prepares plans for the
-/// picture's detection size and several recognition widths, and runs one pass per
-/// text line. The faces profile follows: on a large photo it runs up to nine
-/// forward passes (the engine tiles above 1600 px), so a budget sized for one
-/// image-crate decode would time out the scan it exists for.
+/// The OCR profile is the widest: it loads three ONNX graphs, prepares a fixed
+/// orientation plan, plans for the picture's detection size and several
+/// recognition widths, and runs one pass per text line. The faces profile
+/// follows: on a large photo it runs up to nine forward passes (the engine tiles
+/// above 1600 px), so a budget sized for one image-crate decode would time out
+/// the scan it exists for.
 pub(crate) const fn profile_wall_seconds(profile: Profile) -> u64 {
     match profile {
         Profile::Documents => 20,
@@ -290,8 +291,9 @@ pub enum Profile {
     /// no file, no socket, no program — with a wider budget because the detector
     /// is the heaviest thing a parser profile runs.
     Faces,
-    /// PP-OCRv6 tiny for the full-text index: two models, a detection pass and one
-    /// recognition pass per text line. Same shape as faces, with the widest budget.
+    /// PP-OCRv6 tiny for the full-text index: orientation, detection and
+    /// recognition models, one detection pass and one recognition pass per text
+    /// line. Same shape as faces, with the widest budget.
     Ocr,
 }
 
@@ -1468,7 +1470,7 @@ mod tests {
         }
     }
 
-    /// OCR is the widest budget: two models and one recognition pass per line.
+    /// OCR is the widest budget: three models and one recognition pass per line.
     #[test]
     fn the_model_profiles_have_their_own_budgets() {
         assert_eq!(profile_wall_seconds(Profile::Faces), 90);

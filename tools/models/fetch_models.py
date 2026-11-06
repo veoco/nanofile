@@ -11,6 +11,8 @@ Usage:
 The upstream models are:
   * YuNet (OpenCV Zoo, MIT)
   * PP-OCRv6 tiny detection and recognition (PaddlePaddle, Apache-2.0)
+  * PP-LCNet_x1_0 document orientation classification (PaddlePaddle,
+    Apache-2.0)
   * the recognition character dictionary, extracted from the recognition
     model's inference.yml
 
@@ -57,6 +59,17 @@ REC = {
     ),
     "bytes": 4462639,
     "sha256": "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6",
+}
+
+DOC_ORI = {
+    "name": "pp_lcnet_x1_0_doc_ori",
+    "file": "pp_lcnet_x1_0_doc_ori.onnx",
+    "url": (
+        "https://huggingface.co/PaddlePaddle/PP-LCNet_x1_0_doc_ori_onnx/resolve/"
+        "7330ab7039123e46af2dc03154b9969aa412c61d/inference.onnx"
+    ),
+    "bytes": 6788069,
+    "sha256": "af9a0a4f317ff0709ce752067807f819cb15d883f8ecad89f28df1c6ee2d9c92",
 }
 
 KEYS = {
@@ -152,6 +165,10 @@ def main() -> int:
     _verify(REC, rec)
     _write(args.output / REC["file"], rec)
 
+    doc_ori = _fetch(DOC_ORI["url"])
+    _verify(DOC_ORI, doc_ori)
+    _write(args.output / DOC_ORI["file"], doc_ori)
+
     inference_yml = _fetch(KEYS["url"])
     keys = _dictionary(inference_yml)
     _verify(KEYS, keys)
@@ -162,6 +179,7 @@ def main() -> int:
         (YUNET, YUNET["url"]),
         (DET, DET["url"]),
         (REC, REC["url"]),
+        (DOC_ORI, DOC_ORI["url"]),
         (KEYS, KEYS["url"]),
     ]:
         manifest["models"][spec["name"]] = {

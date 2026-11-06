@@ -1,8 +1,14 @@
-//! Bilinear RGB sampling shared by detection, recognition and the crop warp.
+//! Bilinear RGB sampling shared by detection, recognition, orientation
+//! classification and the crop warp.
 //!
 //! The pixel-centre convention matches OpenCV's `INTER_LINEAR` and the Paddle
 //! pipeline: the source coordinate of destination pixel `x` is
 //! `(x + 0.5) * scale - 0.5`.
+
+/// ImageNet mean/std, applied to the BGR channels Paddle's `DecodeImage`
+/// produces. Channel 0 is blue, as in the model's published pipeline.
+pub(crate) const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+pub(crate) const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 
 /// Bilinear sample at `(x, y)` in source pixel coordinates. Edges clamp.
 pub(crate) fn sample_rgb(rgb: &[u8], width: usize, height: usize, x: f32, y: f32) -> [f32; 3] {

@@ -22,7 +22,7 @@ Nanofile 是一个包含四个 crate 的 Cargo workspace。依赖方向是单向
 | `middleware` | 认证与能力、CSP、CSRF、请求上限。 |
 | `webdav` | 建立在同一套资料库与文件服务之上的 WebDAV 接口。 |
 | `indexer` | 全文索引（Tantivy）与喂给它的沙盒提取器。 |
-| `ocr` | 全文索引所用的 PP-OCRv6 tiny 推理与 DB/CTC 后处理。 |
+| `ocr` | 全文索引所用的 PP-OCRv6 tiny 推理、页面方向分类器与 DB/CTC 后处理。 |
 | `sandbox` | 解析用户内容的受限子进程。 |
 | `tasks` | 后台作业的注册表、队列、执行器与运行历史。 |
 | `settings` | 运行时配置、设置分层与管理端设置服务。 |
