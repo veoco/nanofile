@@ -166,7 +166,7 @@ tantivy = { version = "0.27", default-features = false, features = [
 # decodes. `default-features = false` keeps its optional date and rayon
 # features out of the binary. See `indexer::extract` for the format table and
 # the limits that keep these crates safe on untrusted content.
-lopdf = { version = "0.45", default-features = false }
+lopdf = { version = "0.47", default-features = false }
 # Rasterizes the pages OCR has to read. It is not a second text extractor:
 # `lopdf` keeps owning the text layer and page classification, and hayro is
 # only asked for pages that have no text. Pure Rust, no pdfium or C. Default
