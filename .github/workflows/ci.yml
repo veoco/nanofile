@@ -202,8 +202,9 @@ jobs:
   # ── Optional tray feature (compiled out by default; keep it healthy) ──
   # One definition and three runners: the tray unit tests sit behind a feature
   # the default suite never enables, so a Linux-only row left the macOS and
-  # Windows halves of that code to a release build. The GTK packages are the one
-  # per-OS step — macOS and Windows link their own toolkits.
+  # Windows halves of that code to a release build. No per-OS package step is
+  # needed: the Linux tray is served over the session bus, and macOS and Windows
+  # link their own toolkits.
   tray-check:
     name: Tray feature (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
@@ -234,9 +235,6 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "nanofile-build"
-      - name: Install tray system dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev
       - name: Install Tailwind CSS
         run: npm ci
       - name: Lint with the tray feature
