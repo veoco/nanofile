@@ -1,12 +1,23 @@
+---
+description: 连接官方 Seafile 客户端、WebDAV 与 API 密钥。
+---
 # 客户端接入
 
+**适合谁：** 要连接 Seafile 客户端、WebDAV 挂载或脚本的人。**前置条件：** 服务器地址，以及已安装的客户端或工具。
+
 除了网页界面，还有三种方式把数据接进来：官方 Seafile 客户端做同步、WebDAV 挂载成网盘、API 密钥给脚本与第三方工具。
+
+| 方式 | 什么时候用 | 凭据 |
+|---|---|---|
+| Seafile 客户端 | 想在本地保留一份同步副本 | 账号邮箱与密码；开启两步验证时再加动态口令 |
+| WebDAV | 想把资料库挂成网盘 | 该资料库的 WebDAV 密钥 |
+| API 密钥 | 脚本或第三方工具调用 API | 带所需能力的 API 密钥 |
 
 ## 官方 Seafile 客户端
 
 桌面端与移动端直接连 Nanofile，不需要另装 seaf-server + seahub。
 
-**服务器地址**填客户端真正能访问到的那个地址，也就是 `server.site_url` 的值（见[安全](/zh/guide/admin/security)）。它不能只是"服务器上能打开的地址"：客户端会用同一份地址去取块、上传、生成链接，写错会表现为能登录但同步不动。
+**服务器地址**填客户端真正能访问到的那个地址，也就是 `server.site_url` 的值（见[HTTPS 与反向代理](/zh/guide/deploy/https-and-reverse-proxy)）。它不能只是「服务器上能打开的地址」：客户端会用同一份地址去取块、上传、生成链接，写错会表现为能登录但同步不动。
 
 ### 登录
 
@@ -49,7 +60,13 @@ API 密钥给脚本与第三方工具用，避免把账号密码交给它们。�
 
 调用时把密钥放进 `Authorization` 头：`Authorization: Bearer <密钥>`（`Token <密钥>` 也可以）。
 
-密钥管理界面只接受浏览器会话，因此**密钥不能再签发密钥**；改密码会吊销该账号的全部密钥。见[账号安全](/zh/guide/admin/account-security)。
+密钥管理界面只接受浏览器会话，因此**密钥不能再签发密钥**；改密码会吊销该账号的全部密钥。见[账号安全](/zh/guide/use/account-security)。
+
+## 验证
+
+- 客户端显示资料库已同步。
+- 网页界面新增的文件出现在客户端，反向也一样。
+- 在**设置 → 会话与凭据**里吊销该设备后，它不再同步。
 
 ## 连不上时
 
@@ -57,15 +74,15 @@ API 密钥给脚本与第三方工具用，避免把账号密码交给它们。�
 
 1. **地址** —— 客户端填的地址是否就是 `server.site_url`，并且客户端真能访问到它。
 2. **TLS** —— 走 HTTPS 时用的是可信证书吗（自签名证书客户端会拒绝）。
-3. **反向代理** —— 反代后面要设 `trusted_proxies`，否则所有客户端都会塌缩成代理地址，按 IP 的限流把它们塞进同一个桶。见[安全](/zh/guide/admin/security)。
+3. **反向代理** —— 反代后面要设 `trusted_proxies`，否则所有客户端都会塌缩成代理地址，按 IP 的限流把它们塞进同一个桶。见[HTTPS 与反向代理](/zh/guide/deploy/https-and-reverse-proxy)。
 4. **两步验证** —— 客户端是否提示要动态口令；先确认它提示的是口令，不是密码错误。
-5. **日志** —— 服务端日志里的登录失败原因，见[维护与故障排查](/zh/guide/operate/maintenance)。
+5. **日志** —— 服务端日志里的登录失败原因，见[维护](/zh/guide/operate/maintenance)。
 
 工作量证明（PoW）挑战只保护网页表单，客户端不会遇到它——它们不在浏览器里，无法求解。
 
 ## 相关
 
 - [API 参考](/zh/reference/api/) — 这些客户端背后的 HTTP 接口。
-- [网页界面](/zh/guide/start/web-interface) — 浏览器里能做的部分。
-- [账号安全](/zh/guide/admin/account-security) — 两步验证、受信设备与凭据吊销。
-- [安全](/zh/guide/admin/security) — `site_url`、TLS 与反向代理。
+- [网页界面](/zh/guide/use/web-interface) — 浏览器里能做的部分。
+- [账号安全](/zh/guide/use/account-security) — 两步验证、受信设备与凭据吊销。
+- [HTTPS 与反向代理](/zh/guide/deploy/https-and-reverse-proxy) — `site_url`、TLS 与反向代理。

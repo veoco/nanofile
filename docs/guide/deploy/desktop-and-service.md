@@ -1,4 +1,9 @@
-# Desktop tray and Windows service
+---
+description: The Windows service and the desktop tray menu.
+---
+# Windows service and desktop tray
+
+**Who this is for:** Windows users who want a tray menu or an unattended service. **Before you start:** Windows, and administrator rights for the boot service.
 
 This page is the Windows tray and its boot service; starting with the system on
 Linux and macOS is in [Running in the background](/guide/deploy/running-in-background).
@@ -90,6 +95,13 @@ to the executable.
 The service start logs its account, executable, config path, working directory and
 the result of every directory check. It refuses to start (exit code 2) rather than
 failing later with an unnamed error.
+
+## Verify
+
+- The tray icon is present and its menu opens the web interface and the config file.
+- `nanofile service status` reports the registration and its account.
+- After the next boot, the service runs with no login; the log names the account and
+  config path.
 
 ## Commands
 

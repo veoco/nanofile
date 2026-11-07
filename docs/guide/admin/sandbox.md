@@ -1,4 +1,9 @@
+---
+description: What the sandbox means for thumbnails, search, people tags and OCR.
+---
 # Sandbox
+
+**Who this is for:** operators who need to know what the sandbox does to search, thumbnails and the optional media features. **Before you start:** an administrator account.
 
 Everything that parses content a user supplied runs in a separate process with a
 memory bound, a CPU bound and a wall-clock timeout, never inside the server:
@@ -15,19 +20,10 @@ established. The server decides from that report, not from what it asked for.
 
 ## What it protects
 
-- **The resource bound is the one mandatory item.** A child that cannot establish
-  it is refused by both sides — a parser bomb or an unbounded loop is the failure
-  this exists to prevent. A host that cannot establish the bound at all runs none
-  of these features.
-- **The file, network and process layers are defense in depth** against a bug in a
-  parser: everything these features parse is pure Rust (`lopdf`, `office_oxide`,
-  `zip`, `image`, `kamadak-exif`), and the only external program any profile starts
-  is the media helper.
-- **What it does not protect** is never asserted to hold: kernel bugs, and other
-  processes running as the same user.
-
-Those mechanisms are built per platform, not chosen by a setting — the operating
-system decides what can be established.
+The resource bound is the one mandatory item. The file, network and process layers are
+defense in depth against a parser bug. What it does not protect is never asserted to
+hold: kernel bugs, and other processes running as the same user. The per-platform
+mechanisms and the probe are in [Sandbox internals](/dev/sandbox).
 
 ## What it means for you
 
@@ -63,9 +59,17 @@ system decides what can be established.
 - documents skipped during that time are recorded as retryable rather than as a
   verdict on their bytes, so they are re-indexed once it is on again.
 
+## Verify
+
+- Open **System Settings → Sandbox**; the resource bound row is marked required and
+  in place.
+- Each enabled profile shows a state badge; a disabled feature points at its switch.
+- Upload a document and a thumbnail; both work, or the page names the missing
+  mechanism.
+
 ## Related
 
-- [Maintenance and troubleshooting](/guide/operate/maintenance) — where to look when
+- [Maintenance](/guide/operate/maintenance) — where to look when
   thumbnails or search do not work.
 - [Sandbox internals](/dev/sandbox) — what each profile establishes, the per-
   platform residue, and the probe.

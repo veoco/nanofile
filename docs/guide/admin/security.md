@@ -1,16 +1,19 @@
+---
+description: The master secret, bind address, proof-of-work challenges and credential rules.
+---
 # Security
+
+**Who this is for:** administrators exposing Nanofile outside a trusted LAN.
 
 ## HTTPS and reverse proxies
 
-When the server runs behind an HTTPS reverse proxy, set `server.site_url` to the
-HTTPS address clients actually use. That setting controls:
+A reverse proxy terminates TLS and forwards the request. Set `server.site_url` to the
+external HTTPS URL, bind the server to `127.0.0.1` when the proxy runs on the same
+host, and list the proxy in `server.trusted_proxies`.
 
-- the `Secure` cookie attribute,
-- HSTS,
-- the URL used to build share links.
-
-Sessions, share passwords and API tokens are bearer credentials. Serving them over
-plain HTTP exposes them.
+The nginx and Caddy recipes, the Cloudflare Tunnel setup, the trusted-proxy keywords
+and the verification steps are in
+[HTTPS and reverse proxy](/guide/deploy/https-and-reverse-proxy).
 
 ## Bind address
 
@@ -19,88 +22,11 @@ server, bind `127.0.0.1` and close the port in the firewall.
 
 ## Trusted proxies
 
-Behind a reverse proxy, `trusted_proxies` decides which peer addresses may supply
-`CF-Connecting-IP` / `X-Forwarded-For` for the client IP. Without it those headers
-are ignored, so every client collapses to the proxy address and per-IP rate limits
-become one shared bucket.
-
-Entries may be an exact IP, a CIDR range, or a keyword: `loopback`, `private`,
-`link-local`, `unique-local`.
-
-### Cloudflare Tunnel
-
-Behind a Cloudflare Tunnel (`cloudflared`), the origin sees a loopback or private
-peer. Set `trusted_proxies = ["private"]` and bind the origin to `127.0.0.1` (or
-isolate it on the Docker network). Cloudflare then supplies the visitor in
-`CF-Connecting-IP`, which is preferred over `X-Forwarded-For`.
-
-Only trust `private` when nothing else can reach the origin, or a LAN peer could
-forge the header.
-
-### Reverse proxy examples
-
-Two configurations you can use as they are, assuming Nanofile listens on
-`127.0.0.1:8082` and the public name is `files.example.com`.
-
-nginx:
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name files.example.com;
-
-    ssl_certificate     /etc/letsencrypt/live/files.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/files.example.com/privkey.pem;
-
-    # Let the server apply its own upload limits; nginx's 1m default blocks
-    # large files.
-    client_max_body_size 0;
-
-    location / {
-        proxy_pass http://127.0.0.1:8082;
-        proxy_http_version 1.1;
-
-        proxy_set_header Host              $host;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # In-app notifications are a WebSocket; the handshake has to pass through.
-        proxy_set_header Upgrade           $http_upgrade;
-        proxy_set_header Connection        $connection_upgrade;
-
-        # A large download or a long sync must not be cut off midway.
-        proxy_read_timeout 3600s;
-        proxy_buffering off;
-    }
-}
-```
-
-`$connection_upgrade` needs one definition in the `http` block:
-
-```nginx
-map $http_upgrade $connection_upgrade {
-    default upgrade;
-    ''      close;
-}
-```
-
-Caddy brings its own TLS and forwarding headers, so the equivalent is one line:
-
-```txt
-files.example.com {
-	reverse_proxy 127.0.0.1:8082
-}
-```
-
-With a proxy in front, set `server.site_url` to `https://files.example.com` and
-`server.trusted_proxies` to the proxy's address — `["loopback"]` when they share
-the host:
-
-```toml
-[server]
-site_url = "https://files.example.com"
-trusted_proxies = ["loopback"]
-```
+`trusted_proxies` decides which peer addresses may supply `CF-Connecting-IP` or
+`X-Forwarded-For`. Without it those headers are ignored, every client collapses into
+the proxy address, and per-IP rate limits become one shared bucket. The entry forms
+and examples are in
+[HTTPS and reverse proxy](/guide/deploy/https-and-reverse-proxy#trusted-proxies).
 
 ## Proof-of-work challenges
 
@@ -157,7 +83,7 @@ created for or used against the library.
 
 A password change, deactivation or device wipe revokes every credential the
 account holds: other devices, sync clients and API keys, plus unused reset links.
-See [Account security](/guide/admin/account-security).
+See [Account security](/guide/use/account-security).
 
 ## The master secret
 
@@ -176,5 +102,9 @@ out of the repository; see [Docker](/guide/deploy/docker) for generating and mou
 
 ## Related
 
+- [HTTPS and reverse proxy](/guide/deploy/https-and-reverse-proxy) — TLS, nginx/Caddy
+  and trusted proxies.
 - [Configuration](/guide/configure/configuration) — precedence and the settings pages.
 - [Sandbox](/guide/admin/sandbox) — confinement over untrusted parsing.
+- [Account security](/guide/use/account-security) — two-factor, sessions and
+  revocation from the user's side.

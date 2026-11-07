@@ -39,14 +39,12 @@ features:
 
 ## Start here
 
-- [Installing and first run](/guide/start/getting-started) — download an archive or pull the image, then run the first-run setup.
-- [Web interface](/guide/start/web-interface) — what you can do once you are signed in.
-- [Connecting clients](/guide/start/clients) — the official Seafile clients and WebDAV.
-- [Configuration](/guide/configure/configuration) — config file, `NANOFILE_*` variables and the settings pages.
-- [Docker](/guide/deploy/docker) — run the published image.
-- [Running in the background](/guide/deploy/running-in-background) — keep it up on a server.
-- [Backup, restore and upgrade](/guide/operate/backup-and-upgrade) — your data and your version.
-- [Maintenance and troubleshooting](/guide/operate/maintenance) — logs and common problems.
+- [What is Nanofile?](/guide/start/what-is-nanofile) — features, Seafile compatibility, limitations.
+- [Choose a deployment](/guide/start/choose-deployment) — desktop tray, headless server or Docker.
+- [Installing and first run](/guide/start/getting-started) — install, create the first administrator, upload and share a file, connect a client.
+
+Then read [Using Nanofile](/guide/use/web-interface) for the web interface and clients, [Deployment](/guide/deploy/docker) for production, or [Operations](/guide/operate/backup-and-upgrade) for backup and upgrades. The full map is the [guide](/guide/).
+
 - [API reference](/reference/api/) — every HTTP endpoint, and how it compares with Seafile's.
 - [CLI reference](/reference/cli) — every operator command.
 - [Development](/dev/architecture) — crate layout, testing and CI.

@@ -1,4 +1,9 @@
+---
+description: 运行已发布镜像、挂载数据目录并使用 compose。
+---
 # Docker 部署
+
+**适合谁：** 运行已发布镜像的运维人员。**前置条件：** 有 Docker，以及 uid/gid 1000 可写的数据卷。
 
 镜像是一个 `scratch` 容器，仅含 `nanofile` 一个二进制，没有配置文件、数据目录，也没有 `HOME`。它以 uid/gid `1000:1000` 运行，挂载的数据卷需对该用户可写。
 
@@ -9,6 +14,14 @@
 - 初始化页面的地址会打印到容器 stdout，用 `docker logs <名称>` 即可取到。
 - 该地址是 `127.0.0.1`，且页面本身不带 TLS。远程主机请做端口转发（最简单的是 SSH 隧道），不要把它直接暴露出去。
 - 镜像里没有 `HOME`，初始化无处写 `~/.nanofile/config.toml`。这种场景请自己传 `--config` 并设置 `HOME`。
+
+变量跳过设置页时，在容器里创建第一个管理员：
+
+```bash
+docker exec nanofile /nanofile adduser --email admin@example.com
+```
+
+或者挂载带 `[admin_init]` 的配置文件。生产环境把 `latest` 换成版本 tag；`latest` 会随每次发布移动。
 
 ## 主密钥
 
@@ -75,6 +88,12 @@ services:
 ```
 
 `${NANOFILE_SECRET:?…}` 会在变量缺失时拒绝启动，而不是带着空主密钥起来。
+
+## 验证
+
+- `docker logs nanofile` 显示监听已启动，且没有启动错误。
+- `curl -fsS http://127.0.0.1:8082/health` 返回 200。
+- 登录、上传一个文件，用同一个数据卷重启容器，再下载它。
 
 ## 升级与权限
 

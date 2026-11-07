@@ -9,7 +9,10 @@ cargo test --workspace
 This runs the unit tests, the integration tests under `server/tests/` and the
 documentation tests. The workspace suite is the main gate. `server/tests/docs_api_reference_test.rs`
 keeps the API reference tied to the route table and the explicit anchors it links
-to; see [API reference](/reference/api/).
+to; see [API reference](/reference/api/). The docs workflow also runs
+`npm run --prefix docs check`, which compares the English and Chinese page sets, the
+guide heading levels, internal links and anchors, and the sidebar coverage; see
+[Documentation](/dev/documentation).
 
 The optional tray feature is compiled out by default, so its unit tests need the
 feature explicitly:

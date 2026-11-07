@@ -75,7 +75,9 @@ The release archive includes the README.
 
 Builds this VitePress site on every change under `docs/` and deploys it to GitHub
 Pages on `main`. Pull requests build but do not deploy, so a dead link fails the
-PR. See [Contributing](/dev/contributing) for the local commands.
+PR. The `check` job runs the guide checker and the Rust API reference test on the
+same change, so a docs-only PR cannot skip them. See
+[Contributing](/dev/contributing) for the local commands.
 
 ## Related
 

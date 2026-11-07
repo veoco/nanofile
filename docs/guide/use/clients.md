@@ -1,8 +1,19 @@
+---
+description: Connect the official Seafile clients, WebDAV and API keys.
+---
 # Connecting clients
+
+**Who this is for:** anyone connecting a Seafile client, a WebDAV mount or a script. **Before you start:** the server address, and the client or tool installed.
 
 Besides the web interface there are three ways in: the official Seafile clients
 for syncing, WebDAV for mounting a library as a network drive, and API keys for
 scripts and third-party tools.
+
+| Method | Use it when | Credential |
+|---|---|---|
+| Seafile client | You want a synced local copy | Account email and password, plus a 2FA code if enabled |
+| WebDAV | You want to mount a library as a network drive | A WebDAV key for that library |
+| API key | A script or third-party tool calls the API | An API key with the needed capabilities |
 
 ## The official Seafile clients
 
@@ -10,7 +21,7 @@ The desktop and mobile clients connect to Nanofile directly; there is no separat
 seaf-server + seahub stack to install.
 
 **Server address** is the address the client can actually reach — the value of
-`server.site_url` (see [Security](/guide/admin/security)). It cannot just be "whatever
+`server.site_url` (see [HTTPS and reverse proxy](/guide/deploy/https-and-reverse-proxy)). It cannot just be "whatever
 opens on the server": the client reuses that address to fetch blocks, upload and
 build links, so a wrong one signs in and then does not sync.
 
@@ -26,13 +37,13 @@ that page on purpose, so you can recognise a login you did not start.
 
 With two-factor authentication on, a client login asks for one 6-digit code;
 tick "trust this device" and that device does not ask again for **90 days**. Each
-trusted device is listed separately under **Settings → Sessions & credentials**
+trusted device is listed separately under **Settings → Sessions & Credentials**
 and can be revoked at any time.
 
 ### Sync tokens
 
 Every client login leaves a sync token behind. They are listed one by one under
-**Settings → Sessions & credentials** and revoked individually. Changing your
+**Settings → Sessions & Credentials** and revoked individually. Changing your
 password revokes all of them.
 
 ### Encrypted libraries
@@ -83,7 +94,14 @@ To call in with one, put it in the `Authorization` header:
 
 The key management surface accepts a browser session only, so **a key cannot
 issue another key**; changing your password revokes every key on the account. See
-[Account security](/guide/admin/account-security).
+[Account security](/guide/use/account-security).
+
+## Verify
+
+- The client shows the library as synced.
+- A file added in the web interface appears in the client, and the reverse.
+- Revoking the device under **Settings → Sessions & Credentials** stops it from
+  syncing.
 
 ## When it does not connect
 
@@ -95,11 +113,11 @@ Check in this order:
    self-signed ones)?
 3. **Reverse proxy** — behind one, set `trusted_proxies`, or every client
    collapses into the proxy's address and IP rate limits put them all in one
-   bucket. See [Security](/guide/admin/security).
+   bucket. See [HTTPS and reverse proxy](/guide/deploy/https-and-reverse-proxy).
 4. **Two-factor authentication** — is the client asking for a code, and is it
    asking for a code rather than rejecting the password?
 5. **Logs** — the server log says why a login failed, see
-   [Maintenance and troubleshooting](/guide/operate/maintenance).
+   [Maintenance](/guide/operate/maintenance).
 
 The proof-of-work challenge protects web forms only; clients never meet it,
 because they are not a browser and cannot solve it.
@@ -107,7 +125,7 @@ because they are not a browser and cannot solve it.
 ## Related
 
 - [API reference](/reference/api/) — the HTTP interface behind these clients.
-- [Web interface](/guide/start/web-interface) — what the browser can do.
-- [Account security](/guide/admin/account-security) — two-factor, trusted devices and
+- [Web interface](/guide/use/web-interface) — what the browser can do.
+- [Account security](/guide/use/account-security) — two-factor, trusted devices and
   credential revocation.
-- [Security](/guide/admin/security) — `site_url`, TLS and reverse proxies.
+- [HTTPS and reverse proxy](/guide/deploy/https-and-reverse-proxy) — `site_url`, TLS and reverse proxies.

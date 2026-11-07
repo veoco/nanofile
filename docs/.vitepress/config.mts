@@ -3,14 +3,23 @@ import { defineConfig } from 'vitepress'
 const enSidebar = {
   '/guide/': [
     {
-      text: 'Getting started',
+      text: 'Start here',
       items: [
-        { text: 'Overview', link: '/guide/' },
-        { text: 'Installing and first run', link: '/guide/start/getting-started' },
-        { text: 'Web interface', link: '/guide/start/web-interface' },
-        { text: 'Automatic people tags', link: '/guide/start/people-tags' },
-        { text: 'Text in images and PDFs (OCR)', link: '/guide/start/ocr' },
-        { text: 'Connecting clients', link: '/guide/start/clients' }
+        { text: 'Nanofile guide', link: '/guide/' },
+        { text: 'What is Nanofile?', link: '/guide/start/what-is-nanofile' },
+        { text: 'Choose a deployment', link: '/guide/start/choose-deployment' },
+        { text: 'Installing and first run', link: '/guide/start/getting-started' }
+      ]
+    },
+    {
+      text: 'Using Nanofile',
+      items: [
+        { text: 'Web interface', link: '/guide/use/web-interface' },
+        { text: 'Files and sharing', link: '/guide/use/files-and-sharing' },
+        { text: 'Connecting clients', link: '/guide/use/clients' },
+        { text: 'Account security', link: '/guide/use/account-security' },
+        { text: 'Automatic people tags', link: '/guide/use/people-tags' },
+        { text: 'Text in images and PDFs (OCR)', link: '/guide/use/ocr' }
       ]
     },
     {
@@ -18,7 +27,8 @@ const enSidebar = {
       items: [
         { text: 'Docker', link: '/guide/deploy/docker' },
         { text: 'Running in the background', link: '/guide/deploy/running-in-background' },
-        { text: 'Desktop tray and service', link: '/guide/deploy/desktop-and-service' }
+        { text: 'Windows service and desktop tray', link: '/guide/deploy/desktop-and-service' },
+        { text: 'HTTPS and reverse proxy', link: '/guide/deploy/https-and-reverse-proxy' }
       ]
     },
     {
@@ -33,7 +43,6 @@ const enSidebar = {
       text: 'Administration and security',
       items: [
         { text: 'Users and sharing', link: '/guide/admin/users-and-sharing' },
-        { text: 'Account security', link: '/guide/admin/account-security' },
         { text: 'Security', link: '/guide/admin/security' },
         { text: 'Sandbox', link: '/guide/admin/sandbox' }
       ]
@@ -42,7 +51,9 @@ const enSidebar = {
       text: 'Operations',
       items: [
         { text: 'Backup, restore and upgrade', link: '/guide/operate/backup-and-upgrade' },
-        { text: 'Maintenance and troubleshooting', link: '/guide/operate/maintenance' }
+        { text: 'Maintenance', link: '/guide/operate/maintenance' },
+        { text: 'Monitoring', link: '/guide/operate/monitoring' },
+        { text: 'Troubleshooting', link: '/guide/operate/troubleshooting' }
       ]
     }
   ],
@@ -85,10 +96,12 @@ const enSidebar = {
         { text: 'Building', link: '/dev/build' },
         { text: 'Seafile compatibility', link: '/dev/protocol' },
         { text: 'Sandbox internals', link: '/dev/sandbox' },
+        { text: 'OCR internals', link: '/dev/ocr' },
         { text: 'Frontend', link: '/dev/frontend' },
         { text: 'Testing', link: '/dev/testing' },
         { text: 'CI and releases', link: '/dev/ci-releases' },
-        { text: 'Contributing', link: '/dev/contributing' }
+        { text: 'Contributing', link: '/dev/contributing' },
+        { text: 'Documentation', link: '/dev/documentation' }
       ]
     }
   ]
@@ -99,12 +112,21 @@ const zhSidebar = {
     {
       text: '上手',
       items: [
-        { text: '概述', link: '/zh/guide/' },
-        { text: '安装与首次运行', link: '/zh/guide/start/getting-started' },
-        { text: '网页界面', link: '/zh/guide/start/web-interface' },
-        { text: '自动人物标签', link: '/zh/guide/start/people-tags' },
-        { text: '图片与 PDF 文字识别（OCR）', link: '/zh/guide/start/ocr' },
-        { text: '客户端接入', link: '/zh/guide/start/clients' }
+        { text: 'Nanofile 指南', link: '/zh/guide/' },
+        { text: '什么是 Nanofile？', link: '/zh/guide/start/what-is-nanofile' },
+        { text: '选择部署方式', link: '/zh/guide/start/choose-deployment' },
+        { text: '安装与首次运行', link: '/zh/guide/start/getting-started' }
+      ]
+    },
+    {
+      text: '使用 Nanofile',
+      items: [
+        { text: '网页界面', link: '/zh/guide/use/web-interface' },
+        { text: '文件与分享', link: '/zh/guide/use/files-and-sharing' },
+        { text: '客户端接入', link: '/zh/guide/use/clients' },
+        { text: '账号安全', link: '/zh/guide/use/account-security' },
+        { text: '自动人物标签', link: '/zh/guide/use/people-tags' },
+        { text: '图片与 PDF 文字识别（OCR）', link: '/zh/guide/use/ocr' }
       ]
     },
     {
@@ -112,7 +134,8 @@ const zhSidebar = {
       items: [
         { text: 'Docker 部署', link: '/zh/guide/deploy/docker' },
         { text: '后台运行与自启动', link: '/zh/guide/deploy/running-in-background' },
-        { text: '桌面托盘与服务', link: '/zh/guide/deploy/desktop-and-service' }
+        { text: 'Windows 服务与桌面托盘', link: '/zh/guide/deploy/desktop-and-service' },
+        { text: 'HTTPS 与反向代理', link: '/zh/guide/deploy/https-and-reverse-proxy' }
       ]
     },
     {
@@ -127,7 +150,6 @@ const zhSidebar = {
       text: '管理与安全',
       items: [
         { text: '用户与分享', link: '/zh/guide/admin/users-and-sharing' },
-        { text: '账号安全', link: '/zh/guide/admin/account-security' },
         { text: '安全', link: '/zh/guide/admin/security' },
         { text: '沙盒', link: '/zh/guide/admin/sandbox' }
       ]
@@ -136,7 +158,9 @@ const zhSidebar = {
       text: '运维',
       items: [
         { text: '备份、恢复与升级', link: '/zh/guide/operate/backup-and-upgrade' },
-        { text: '维护与故障排查', link: '/zh/guide/operate/maintenance' }
+        { text: '维护', link: '/zh/guide/operate/maintenance' },
+        { text: '监控', link: '/zh/guide/operate/monitoring' },
+        { text: '故障排查', link: '/zh/guide/operate/troubleshooting' }
       ]
     }
   ],
@@ -179,14 +203,18 @@ const zhSidebar = {
         { text: '构建', link: '/zh/dev/build' },
         { text: 'Seafile 兼容性', link: '/zh/dev/protocol' },
         { text: '沙盒内部', link: '/zh/dev/sandbox' },
+        { text: 'OCR 内部', link: '/zh/dev/ocr' },
         { text: '前端', link: '/zh/dev/frontend' },
         { text: '测试', link: '/zh/dev/testing' },
         { text: 'CI 与发布', link: '/zh/dev/ci-releases' },
-        { text: '贡献指南', link: '/zh/dev/contributing' }
+        { text: '贡献指南', link: '/zh/dev/contributing' },
+        { text: '文档', link: '/zh/dev/documentation' }
       ]
     }
   ]
 }
+
+const editPattern = 'https://github.com/veoco/nanofile/edit/main/docs/:path'
 
 export default defineConfig({
   title: 'Nanofile',
@@ -216,9 +244,64 @@ export default defineConfig({
     socialLinks: [
       { icon: 'github', link: 'https://github.com/veoco/nanofile' }
     ],
-    search: { provider: 'local' },
+    outline: { level: [2, 3], label: 'On this page' },
+    docFooter: { prev: 'Previous page', next: 'Next page' },
+    lastUpdated: { text: 'Last updated' },
+    darkModeSwitchLabel: 'Appearance',
+    lightModeSwitchTitle: 'Switch to light theme',
+    darkModeSwitchTitle: 'Switch to dark theme',
+    sidebarMenuLabel: 'Menu',
+    returnToTopLabel: 'Return to top',
+    langMenuLabel: 'Change language',
+    skipToContentLabel: 'Skip to content',
+    search: {
+      provider: 'local',
+      options: {
+        translations: {
+          button: { buttonText: 'Search', buttonAriaLabel: 'Search' },
+          modal: {
+            displayDetails: 'Display detailed list',
+            resetButtonTitle: 'Reset search',
+            backButtonTitle: 'Close search',
+            noResultsText: 'No results for',
+            footer: {
+              selectText: 'to select',
+              selectKeyAriaLabel: 'enter',
+              navigateText: 'to navigate',
+              navigateUpKeyAriaLabel: 'up arrow',
+              navigateDownKeyAriaLabel: 'down arrow',
+              closeText: 'to close',
+              closeKeyAriaLabel: 'escape'
+            }
+          }
+        },
+        locales: {
+          zh: {
+            translations: {
+              button: { buttonText: '搜索', buttonAriaLabel: '搜索' },
+              modal: {
+                displayDetails: '显示详细列表',
+                resetButtonTitle: '清除搜索',
+                backButtonTitle: '关闭搜索',
+                noResultsText: '未找到结果',
+                footer: {
+                  selectText: '选择',
+                  selectKeyAriaLabel: '回车',
+                  navigateText: '切换',
+                  navigateUpKeyAriaLabel: '上箭头',
+                  navigateDownKeyAriaLabel: '下箭头',
+                  closeText: '关闭',
+                  closeKeyAriaLabel: 'Esc'
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     editLink: {
-      pattern: 'https://github.com/veoco/nanofile/edit/main/docs/:path'
+      pattern: editPattern,
+      text: 'Edit this page'
     },
     footer: {
       message: 'Released under the MIT License.',
@@ -248,7 +331,25 @@ export default defineConfig({
           { text: '参考', link: '/zh/reference/api/' },
           { text: '开发', link: '/zh/dev/architecture' }
         ],
-        sidebar: zhSidebar
+        sidebar: zhSidebar,
+        outline: { level: [2, 3], label: '本页目录' },
+        docFooter: { prev: '上一页', next: '下一页' },
+        lastUpdated: { text: '最后更新' },
+        darkModeSwitchLabel: '外观',
+        lightModeSwitchTitle: '切换到浅色主题',
+        darkModeSwitchTitle: '切换到深色主题',
+        sidebarMenuLabel: '菜单',
+        returnToTopLabel: '回到顶部',
+        langMenuLabel: '切换语言',
+        skipToContentLabel: '跳到内容',
+        editLink: {
+          pattern: editPattern,
+          text: '在 GitHub 上编辑此页'
+        },
+        footer: {
+          message: '基于 MIT 许可证发布。',
+          copyright: '版权所有 © 2026 veoco'
+        }
       }
     }
   }

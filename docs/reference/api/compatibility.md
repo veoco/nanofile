@@ -628,7 +628,7 @@ Seafile's per-repository OCR metadata endpoints are not implemented; the
 official feature flag reports off. Nanofile has an optional `[ocr]` feature that reads text from images and from
 PDF pages without a text layer for its **own** full-text index; it is not this
 metadata API and does not change the Seafile feature flag. See
-[Text in images and PDFs](/guide/start/ocr).
+[Text in images and PDFs](/guide/use/ocr).
 
 | Official operation | Status | Nanofile | Notes |
 | --- | --- | --- | --- |

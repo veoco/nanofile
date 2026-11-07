@@ -1,4 +1,9 @@
+---
+description: How the configuration file, environment variables and settings pages layer.
+---
 # Configuration
+
+**Who this is for:** administrators changing settings by file or environment variable.
 
 Every setting has a built-in default. There are two places to change one:
 
@@ -99,28 +104,11 @@ setting means. It is not editable from the interface.
 - `refresh_interval_secs` re-reads the saved settings so a change made elsewhere
   (or restored from a backup) is picked up without a restart. `0` disables it.
 
-## The task pages
+## Task Management
 
-"System Settings → Task Management" is two pages.
-
-- **Task list** puts the server's load measurements first (requests in flight,
-  jobs running, queued tasks, database connections, workers busy, live tasks),
-  then the runs themselves: what is running now and what the server actually did.
-  The finished list holds runs with something to report — a failure, or work that
-  was done — so a cleanup pass that found nothing to do does not bury them. It can
-  be narrowed to one job and to what succeeded or failed. Each row names the job
-  and its verdict, the account that submitted it, when it finished and how long it
-  took. A failed run carries the job's own error; the run id, summary and full
-  error are one disclosure away.
-- **Registered tasks** lists every job and long-lived service this server has
-  registered, grouped by how it runs. Each row says when it runs and what it does,
-  and carries the same right-aligned columns for the job's last run, read back
-  from the history. Opening a row shows lifetime counters and the policies the job
-  runs under: priority, concurrency cap, timeout, retry, whether it waits for a
-  quiet server, how finely it can be interrupted, and what a crash leaves behind.
-  A job or service whose subsystem is switched off is named with the switch that
-  would bring it back, and a run can be triggered by hand where that means
-  something.
+**System Settings → Task Management** shows the server's load measurements, the
+background runs and the registered jobs. See [Monitoring](/guide/operate/monitoring)
+for what each page shows and what to watch.
 
 ## Sections
 
@@ -140,8 +128,9 @@ there so every later run uses the same file.
 
 ## Related
 
-- [Web interface](/guide/start/web-interface) — where the settings and task pages sit.
-- [Maintenance and troubleshooting](/guide/operate/maintenance) — when the logging,
+- [Web interface](/guide/use/web-interface) — where the settings pages sit.
+- [Monitoring](/guide/operate/monitoring) — Task Management, load and disk.
+- [Maintenance](/guide/operate/maintenance) — when the logging,
   garbage-collection and index settings matter.
 - [Running in the background](/guide/deploy/running-in-background) — how a service gets
   its configuration.

@@ -1,4 +1,9 @@
-# Maintenance and troubleshooting
+---
+description: Logs, garbage collection, the search index and block verification.
+---
+# Maintenance
+
+**Who this is for:** operators doing routine maintenance.
 
 The part you reach for in day-to-day running: reading the log, making disk space
 actually come back, rebuilding the index, verifying blocks, and where to look
@@ -22,7 +27,7 @@ runs log to stdout. A desktop run also records the resolved path back into
 no desktop, and logs next to the binary in `nanofile.log`.
 
 **Level and file caps are "needs a full process restart"**: they are decided
-before the process starts, and the in-place "Restart service" button in the admin
+before the process starts, and the in-place "Restart server" button in the admin
 console does not redo that step. Only stopping and starting the process applies
 them.
 
@@ -73,7 +78,7 @@ scan page. Enabling OCR later re-examines images and PDFs that were previously
 skipped, without rebuilding the document part of the index; a mixed PDF already
 indexed through its text layer needs a re-index to add its scan pages. Disabling
 it stops new OCR but leaves existing text until the repository is re-indexed.
-See [Text in images and PDFs](/guide/start/ocr).
+See [Text in images and PDFs](/guide/use/ocr).
 
 ## Block and directory verification
 
@@ -89,69 +94,24 @@ All three commands are **read-only by default**; they only write with `--repair`
 `{block_dir}/.quarantine/` — the bytes are kept, and clients holding a good copy
 re-upload it. Full options are in [Command line](/reference/cli).
 
-## The tasks page
+## Task Management
 
-**System Settings → Tasks** is where you watch background jobs: what is running,
-what has run, why a run failed, and when each registered job runs next. After an
-upgrade, this is where you confirm the migration jobs finished. See
-[Configuration](/guide/configure/configuration).
+Background jobs and load measurements are on **System Settings → Task Management**;
+see [Monitoring](/guide/operate/monitoring) for what each page shows and what to
+watch.
 
 ## Common problems
 
-**It opens the setup page instead of serving.**
-There is no configuration file and no `NANOFILE_*` variable, which is what "not
-set up yet" means — not a fault. Either walk through the one-time page or supply a
-configuration file. See [Installing and first run](/guide/start/getting-started).
-
-**A release build refuses to start.**
-`server.secret_key` is missing. Generate one and put it in the configuration file
-(or in `NANOFILE_SERVER_SECRET_KEY`): `openssl rand -hex 32`. See
-[Security](/guide/admin/security).
-
-**The port will not bind.**
-If something else holds it, change `server.port`. On Windows, connections that
-were just closed sit in `TIME_WAIT` for minutes and a new process binding the same
-port fails — which is why the Windows service takes over on the next boot.
-
-**You forgot the administrator password.**
-Create another administrator from the command line and fix things from inside:
-`./nanofile adduser --email <new address>` (`--password-stdin` for
-non-interactive). See [Command line](/reference/cli).
-
-**A client cannot connect, or signs in but does not sync.**
-Work through the checklist at the end of [Connecting clients](/guide/start/clients);
-the usual cause is a server address that differs from `server.site_url`.
-
-**Search does not find something just uploaded.**
-Check that `index.enabled` is on, then re-index that file once. Indexing is
-asynchronous, so large files appear a little later.
-
-**Thumbnails or previews do not work.**
-With `[sandbox] enabled` off, those features do not run at all (and do not fall
-back to parsing inside the server process); media thumbnails also need `ffmpeg`,
-whose path is `storage.ffmpeg_path`. See [Sandbox](/guide/admin/sandbox).
-
-**Mail is not going out.**
-See [Email notifications](/guide/configure/email): check that `enabled` is on and the SMTP
-fields are right, then read the failure reason on the tasks page.
-
-**Uploads fail.**
-In order: the account quota
-([Users and sharing](/guide/admin/users-and-sharing)), a request-body limit in a proxy
-or client, and the storage caps (in-flight resumable uploads and a single zip both
-have default caps; set them to `0` to remove them, see
-[Configuration](/guide/configure/configuration)).
-
-**Everybody looks like one IP behind a proxy.**
-Set `trusted_proxies`, or `X-Forwarded-For` / `CF-Connecting-IP` are ignored
-outright and IP rate limits collapse into a single bucket. See
-[Security](/guide/admin/security).
+Start with the symptom list in [Troubleshooting](/guide/operate/troubleshooting). It
+covers startup, clients and sync, search, thumbnails and media, email, uploads and the
+reverse proxy.
 
 ## Related
 
 - [Backup, restore and upgrade](/guide/operate/backup-and-upgrade) — offline backup and
   changing versions.
-- [Configuration](/guide/configure/configuration) — when each setting takes effect, and the
-  tasks page.
+- [Configuration](/guide/configure/configuration) — when each setting takes effect.
+- [Monitoring](/guide/operate/monitoring) — health, tasks and load.
+- [Troubleshooting](/guide/operate/troubleshooting) — when something breaks.
 - [Command line](/reference/cli) — every operator command.
 - [Sandbox](/guide/admin/sandbox) — what the parsing child processes are confined to.

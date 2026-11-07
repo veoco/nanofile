@@ -1,4 +1,9 @@
+---
+description: Configure SMTP, watch the queue and troubleshoot delivery.
+---
 # Email notifications
+
+**Who this is for:** administrators configuring password reset, verification or notifications.
 
 Mail is unavailable until SMTP is configured and switched on.
 
@@ -45,7 +50,7 @@ it.
 
 ## The queue, and where to look when mail does not go out
 
-**System Settings → Email** (`/sysadmin/email/`) is where delivery is watched:
+**System Settings → Email Management** (`/sysadmin/email/`) is where delivery is watched:
 
 - **Status** — whether the switch is on, whether delivery is ready (naming
   whatever is missing), and whether it is paused.
@@ -57,12 +62,21 @@ it.
   one can be retried or deleted.
 
 A message that will not go out is retried up to `email.max_attempts` and then
-stays failed until you deal with it in the queue. Failures also land on the tasks
-page, see [Maintenance and troubleshooting](/guide/operate/maintenance).
+stays failed until you deal with it in the queue. Failures also appear on
+**System Settings → Task Management**; see [Monitoring](/guide/operate/monitoring).
+
+## Verify
+
+1. Send a test message from **System Settings → Email Management** to an address you
+   control; check the inbox and the queue.
+2. Request a password reset for a test account; confirm the message arrives and the
+   link works.
+3. If open registration is on, register a test account and open the verification
+   link.
 
 ## Related
 
 - [Configuration](/guide/configure/configuration) — precedence and the settings pages.
-- [Account security](/guide/admin/account-security) — what a sign-in notice covers.
+- [Account security](/guide/use/account-security) — what a sign-in notice covers.
 - [Users and sharing](/guide/admin/users-and-sharing) — open registration needs working
   mail.

@@ -1,4 +1,9 @@
+---
+description: Where the database, blocks, index and caches live, and how to move them.
+---
 # Data directory
+
+**Who this is for:** operators planning storage, backups or a move.
 
 State lives under the binary's directory in `data/` by default, since relative
 paths resolve against that directory. The `[storage]`, `[index]` and `[database]`
@@ -69,7 +74,7 @@ chown -R 1000:1000 data
 ```
 
 On Windows, installing the service grants the service account what it needs, see
-[Desktop tray and Windows service](/guide/deploy/desktop-and-service).
+[Windows service and desktop tray](/guide/deploy/desktop-and-service).
 
 ## Related
 

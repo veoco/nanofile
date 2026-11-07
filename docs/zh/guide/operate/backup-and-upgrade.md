@@ -1,4 +1,9 @@
+---
+description: 备份数据库与块、恢复，并安全升级。
+---
 # 备份、恢复与升级
+
+**适合谁：** 对数据与版本负责的运维人员。**前置条件：** 一个备份目标，以及停服务的权限。
 
 ## 要备份什么
 
@@ -43,7 +48,7 @@ sudo systemctl start nanofile
 3. **放回数据库**（用备份出来的那个文件即可，启动时它会自己处理日志）。
 4. **放回 `blocks/`**。
 5. **检查权限**：运行服务的用户要对这些文件可读写；容器里是 uid/gid `1000:1000`（`chown -R 1000:1000 data`）。
-6. **启动并看日志**：日志在哪见[维护与故障排查](/zh/guide/operate/maintenance)。
+6. **启动并看日志**：日志在哪见[维护](/zh/guide/operate/maintenance)。
 7. **可选校验**：`nanofile verify-blocks` 会逐块核对内容与其 SHA-1，见[命令行](/zh/reference/cli)。
 
 `index/` 不必强求一致：索引与另一套块目录混在一起时，把索引目录清空让它重建最简单。
@@ -56,14 +61,20 @@ sudo systemctl start nanofile
 2. **停服务。**
 3. **换二进制**：解开新归档，替换旧的那个文件；容器则是改镜像 tag 后重建容器。
 4. **启动**，确认版本号（网页左下角）与日志都没有异常。
-5. **观察任务页**：**系统设置 → 任务管理**会列出升级后自动跑的迁移类作业。
+5. **观察任务管理**：**系统设置 → 任务管理**会列出升级后自动跑的迁移类作业。见[监控](/zh/guide/operate/monitoring)。
 
 几点值得一提：
 
 - **别指望降级。** 数据库迁移只向前走，用旧版本打开新库可能直接起不来——所以第 1 步的备份不是可选项。
 - **改名的设置会自动迁移。** 旧键名仍会被读取，已保存的值在升级时迁到新键，不需要手工改配置文件。
-- **后台运行的部署**：换完二进制 `systemctl restart`（见[后台运行与自启动](/zh/guide/deploy/running-in-background)）；Windows 服务同样要先停再换，见[桌面托盘与 Windows 服务](/zh/guide/deploy/desktop-and-service)。
+- **后台运行的部署**：换完二进制 `systemctl restart`（见[后台运行与自启动](/zh/guide/deploy/running-in-background)）；Windows 服务同样要先停再换，见[Windows 服务与桌面托盘](/zh/guide/deploy/desktop-and-service)。
 - **容器**：`docker compose pull && docker compose up -d`，数据卷保持不变；升级后若权限不对，先 `chown -R 1000:1000 data`（见[Docker 部署](/zh/guide/deploy/docker)）。
+
+## 验证
+
+- 对恢复出的块目录跑 `nanofile verify-blocks`，通过。
+- 恢复出的实例版本一致，测试下载正常。
+- 升级日志与任务管理显示迁移类作业已完成。
 
 ## 版本渠道
 
@@ -78,6 +89,6 @@ sudo systemctl start nanofile
 ## 相关
 
 - [数据目录](/zh/guide/configure/data-directory) — 各个目录里有什么。
-- [维护与故障排查](/zh/guide/operate/maintenance) — 日志、垃圾回收与校验命令。
+- [维护](/zh/guide/operate/maintenance) — 日志、垃圾回收与校验命令。
 - [安全](/zh/guide/admin/security) — 主密钥与静态加密。
 - [命令行](/zh/reference/cli) — `verify-blocks`、`verify-dir-order`、`migrate-blocks`。

@@ -1,4 +1,9 @@
+---
+description: 数据库、块、索引与缓存放在哪里，以及如何搬移。
+---
 # 数据目录
+
+**适合谁：** 规划存储、备份或迁移的运维人员。
 
 默认数据位于二进制所在目录的 `data/`，相对路径均相对该目录解析。配置文件的 `[storage]`、`[index]` 与 `[database]` 段可以指定绝对路径，把各部分放到别处。
 
@@ -56,7 +61,7 @@ data/
 chown -R 1000:1000 data
 ```
 
-Windows 服务会由安装过程为服务账号授予所需权限，见[桌面托盘与 Windows 服务](/zh/guide/deploy/desktop-and-service)。
+Windows 服务会由安装过程为服务账号授予所需权限，见[Windows 服务与桌面托盘](/zh/guide/deploy/desktop-and-service)。
 
 ## 相关
 

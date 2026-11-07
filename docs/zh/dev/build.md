@@ -7,7 +7,7 @@
 - **稳定的 Rust 工具链。** workspace 使用 edition 2024。
 - **Node.js 与 npm。** 只为提供 `esbuild` 与 Tailwind，见下节。CI 使用 Node 24。
 - **可选：`ffmpeg`。** 只影响媒体缩略图；缺少它时媒体缩略图不可用，媒体测试会被跳过。
-- **仅 `tray` 构建：** Linux 需要 GTK 开发库，Windows 需要资源编译器。见下面「可选 feature：`tray`」一节。
+- **仅 `tray` 构建：** Windows 需要资源编译器；Linux 不需要额外系统包。见下面「可选 feature：`tray`」一节。
 
 ## 前端资源怎么进二进制
 
@@ -66,7 +66,7 @@ cargo build --release -p server --features tray
 - **Windows** 用 `winresource` 嵌入图标与版本资源，需要 `rc.exe` 或 `llvm-rc`。
 - **macOS** 无额外系统依赖；托盘图标用模板图，由菜单栏自行反色。
 
-发布产物里只有三个原生 runner 平台带 tray 变体（Linux amd64、macOS arm64、Windows amd64），交叉编译的行只构建无头二进制。托盘本身的行为在[桌面托盘与 Windows 服务](/zh/guide/deploy/desktop-and-service)。
+发布产物里只有三个原生 runner 平台带 tray 变体（Linux amd64、macOS arm64、Windows amd64），交叉编译的行只构建无头二进制。托盘本身的行为在[Windows 服务与桌面托盘](/zh/guide/deploy/desktop-and-service)。
 
 ## 嵌入推理（人物标签与 OCR）
 

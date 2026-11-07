@@ -1,4 +1,9 @@
+---
+description: Run the published image, mount the data directory and use compose.
+---
 # Docker
+
+**Who this is for:** operators running the published image. **Before you start:** Docker, and a data volume writable by uid/gid 1000.
 
 The image is a `scratch` container holding only the `nanofile` binary. It has no
 config file, no data directory and no `HOME`. It runs as uid/gid `1000:1000`, so
@@ -17,6 +22,15 @@ the first-run setup instead:
 - The image has no `HOME`, so the setup has nowhere to write
   `~/.nanofile/config.toml`. On that path, pass `--config` and set `HOME`
   yourself.
+
+When the variables skip the setup, create the first administrator in the container:
+
+```bash
+docker exec nanofile /nanofile adduser --email admin@example.com
+```
+
+Or mount a configuration file with `[admin_init]`. For production, replace `latest`
+with a version tag; the `latest` tag moves to every new release.
 
 ## The master secret
 
@@ -87,6 +101,13 @@ services:
 
 `${NANOFILE_SECRET:?…}` refuses to start when the variable is missing, rather
 than coming up with an empty master secret.
+
+## Verify
+
+- `docker logs nanofile` shows the listener and no startup error.
+- `curl -fsS http://127.0.0.1:8082/health` returns 200.
+- Sign in, upload a file, restart the container with the same volume, and download it
+  again.
 
 ## Upgrades and permissions
 

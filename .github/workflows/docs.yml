@@ -20,6 +20,32 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Docs-only changes do not run the main Rust suite (`ci.yml` filters on
+  # Rust-owned paths), so the API reference test that guards marker, anchor and
+  # bilingual parity would otherwise be skipped. Run it beside the site build,
+  # together with the guide checker.
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - run: npm ci --prefix docs
+      - run: npm run --prefix docs check
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: "docs"
+      - name: Install Tailwind CSS and esbuild
+        run: npm ci
+      - name: Test the API reference
+        run: cargo test -p server --test docs_api_reference_test
+
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -46,7 +72,7 @@ jobs:
   deploy:
     name: Deploy
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    needs: build
+    needs: [build, check]
     runs-on: ubuntu-latest
     permissions:
       pages: write

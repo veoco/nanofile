@@ -87,14 +87,18 @@ variant, the first-run caveat and upgrade permissions.
 
 | | |
 |---|---|
+| [What is Nanofile?](https://veoco.github.io/nanofile/guide/start/what-is-nanofile) | Features, Seafile compatibility, limitations |
 | [Installing and first run](https://veoco.github.io/nanofile/guide/start/getting-started) | Download an archive or the image, first run, administrator |
-| [Web interface](https://veoco.github.io/nanofile/guide/start/web-interface) | Libraries, upload and download, search, trash |
-| [Connecting clients](https://veoco.github.io/nanofile/guide/start/clients) | Seafile clients, WebDAV, API keys |
+| [Web interface](https://veoco.github.io/nanofile/guide/use/web-interface) | Libraries, the file browser, search and trash |
+| [Files and sharing](https://veoco.github.io/nanofile/guide/use/files-and-sharing) | Upload, download, versions, share and upload links |
+| [Connecting clients](https://veoco.github.io/nanofile/guide/use/clients) | Seafile clients, WebDAV, API keys |
 | [Configuration](https://veoco.github.io/nanofile/guide/configure/configuration) | Config file, `NANOFILE_*`, settings pages |
+| [HTTPS and reverse proxy](https://veoco.github.io/nanofile/guide/deploy/https-and-reverse-proxy) | nginx/Caddy, TLS, trusted proxies |
 | [Running in the background](https://veoco.github.io/nanofile/guide/deploy/running-in-background) | systemd, launchd, container restart policy |
 | [Backup, restore and upgrade](https://veoco.github.io/nanofile/guide/operate/backup-and-upgrade) | Backing up data, restoring, changing versions |
-| [Maintenance and troubleshooting](https://veoco.github.io/nanofile/guide/operate/maintenance) | Logs, garbage collection, common problems |
-| [Security](https://veoco.github.io/nanofile/guide/admin/security) | Reverse proxy, TLS, secret key |
+| [Maintenance](https://veoco.github.io/nanofile/guide/operate/maintenance) | Logs, garbage collection, verification |
+| [Troubleshooting](https://veoco.github.io/nanofile/guide/operate/troubleshooting) | Common problems by symptom |
+| [Security](https://veoco.github.io/nanofile/guide/admin/security) | Master secret, bind address, PoW |
 | [API reference](https://veoco.github.io/nanofile/reference/api/) | Every HTTP endpoint, plus the Seafile comparison |
 | [CLI reference](https://veoco.github.io/nanofile/reference/cli) | Every operator command |
 | [Development](https://veoco.github.io/nanofile/dev/architecture) | Architecture, testing, CI |

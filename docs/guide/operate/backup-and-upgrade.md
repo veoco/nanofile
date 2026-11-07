@@ -1,4 +1,9 @@
+---
+description: Back up the database and blocks, restore them, and upgrade safely.
+---
 # Backup, restore and upgrade
+
+**Who this is for:** operators responsible for the data and the version. **Before you start:** a backup destination, and permission to stop the service.
 
 ## What to back up
 
@@ -56,7 +61,7 @@ Backing up while the server runs, two things matter:
    these files; in a container that is uid/gid `1000:1000`
    (`chown -R 1000:1000 data`).
 6. **Start it and read the log** — where the log is, is in
-   [Maintenance and troubleshooting](/guide/operate/maintenance).
+   [Maintenance](/guide/operate/maintenance).
 7. **Optionally verify**: `nanofile verify-blocks` checks every block against its
    SHA-1, see [Command line](/reference/cli).
 
@@ -75,8 +80,9 @@ restored together. See [Security](/guide/admin/security).
    container, change the image tag and recreate the container.
 4. **Start it** and confirm the version (bottom of the left rail) and that the
    log is clean.
-5. **Watch the tasks page**: **System Settings → Tasks** lists the migration
-   jobs an upgrade runs by itself.
+5. **Watch Task Management**: **System Settings → Task Management** lists the
+   migration jobs an upgrade runs by itself. See
+   [Monitoring](/guide/operate/monitoring).
 
 Worth knowing:
 
@@ -89,10 +95,16 @@ Worth knowing:
 - **For a service**: `systemctl restart` after replacing the binary, see
   [Running in the background](/guide/deploy/running-in-background); a Windows service is
   stopped and replaced the same way, see
-  [Desktop tray and Windows service](/guide/deploy/desktop-and-service).
+  [Windows service and desktop tray](/guide/deploy/desktop-and-service).
 - **For a container**: `docker compose pull && docker compose up -d`, leaving the
   volume alone; if permissions are wrong afterwards, run
   `chown -R 1000:1000 data` first, see [Docker](/guide/deploy/docker).
+
+## Verify
+
+- `nanofile verify-blocks` passes on the restored block store.
+- The restored instance serves the same version and a test download.
+- The upgrade log and Task Management show the migration tasks finished.
 
 ## Release channels
 
@@ -108,7 +120,7 @@ equivalent.
 ## Related
 
 - [Data directory](/guide/configure/data-directory) — what lives in each directory.
-- [Maintenance and troubleshooting](/guide/operate/maintenance) — logs, garbage
+- [Maintenance](/guide/operate/maintenance) — logs, garbage
   collection, verification commands.
 - [Security](/guide/admin/security) — the master secret and at-rest encryption.
 - [Command line](/reference/cli) — `verify-blocks`, `verify-dir-order`,

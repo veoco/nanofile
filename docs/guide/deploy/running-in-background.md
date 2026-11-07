@@ -1,10 +1,21 @@
+---
+description: Run Nanofile under systemd, launchd or a container restart policy.
+---
 # Running in the background
+
+**Who this is for:** operators keeping Nanofile up on Linux, macOS or a container host. **Before you start:** root or sudo on the host, and a dedicated service user.
 
 Starting the tray build by hand is enough on a desktop; on a server or an
 unattended machine the service has to come up with the system and come back after
 a crash. Windows has its own service and tray, covered in
-[Desktop tray and Windows service](/guide/deploy/desktop-and-service); this page covers
+[Windows service and desktop tray](/guide/deploy/desktop-and-service); this page covers
 Linux, macOS and containers.
+
+| Host | Method | Section |
+|---|---|---|
+| Linux | systemd unit | [Linux: systemd](#linux-systemd) |
+| macOS | LaunchDaemon or LaunchAgent | [macOS: launchd](#macos-launchd) |
+| Container | Docker restart policy | [Containers: a restart policy](#containers-a-restart-policy) |
 
 ## What every method needs
 
@@ -131,9 +142,15 @@ The image has no `HOME` and no shell, so **everything a background run needs has
 to arrive as `NANOFILE_*` variables or a mounted configuration file**; the
 first-run setup has nowhere to write `~/.nanofile/config.toml` inside it.
 
+## Verify
+
+- `systemctl status nanofile` or `launchctl print` shows the service running.
+- `curl -fsS http://127.0.0.1:8082/health` returns 200 after a reboot.
+- The log names the configuration path and data directory you expected.
+
 ## Related
 
-- [Desktop tray and Windows service](/guide/deploy/desktop-and-service) — the Windows
+- [Windows service and desktop tray](/guide/deploy/desktop-and-service) — the Windows
   tray and SCM service.
 - [Backup, restore and upgrade](/guide/operate/backup-and-upgrade) — stopping, replacing
   the binary, changing the image tag.

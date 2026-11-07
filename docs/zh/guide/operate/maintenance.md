@@ -1,4 +1,9 @@
-# 维护与故障排查
+---
+description: 日志、垃圾回收、搜索索引与块校验。
+---
+# 维护
+
+**适合谁：** 做日常维护的运维人员。
 
 日常要动手的部分：看日志、让空间真正释放、重建索引、校验块，以及出问题时先查哪里。
 
@@ -46,7 +51,7 @@
 
 索引依赖沙盒里的文档提取（PDF、Office、图片等）。沙盒关着的时候文档不会被索引，而是记为"可重试"，重新打开后会被重新处理——见[沙盒](/zh/guide/admin/sandbox)。
 
-图片与扫描版 PDF 文字是另一个可选项（`[ocr] enabled`）：识别出的文字并入同一批文档，按内容搜索即可命中图中的词。之后才开启 OCR 会重新检查此前跳过的图片和 PDF，不需要重建索引里已有的文档部分；已经按文本层索引过的混合 PDF 需要重建该资料库索引才能补上扫描页。关闭它只停止新的 OCR，旧文字保留到重新索引资料库为止。见[图片与 PDF 文字识别](/zh/guide/start/ocr)。
+图片与扫描版 PDF 文字是另一个可选项（`[ocr] enabled`）：识别出的文字并入同一批文档，按内容搜索即可命中图中的词。之后才开启 OCR 会重新检查此前跳过的图片和 PDF，不需要重建索引里已有的文档部分；已经按文本层索引过的混合 PDF 需要重建该资料库索引才能补上扫描页。关闭它只停止新的 OCR，旧文字保留到重新索引资料库为止。见[图片与 PDF 文字识别](/zh/guide/use/ocr)。
 
 ## 块与目录校验
 
@@ -60,45 +65,19 @@
 
 `verify-blocks --repair` 不会删除坏块，而是把它隔离到 `{block_dir}/.quarantine/`——字节还在，持有正确副本的客户端会重新上传。完整参数见[命令行](/zh/reference/cli)。
 
-## 任务页
+## 任务管理
 
-**系统设置 → 任务管理**是观察后台作业的地方：正在跑什么、跑过什么、失败原因，以及每个已注册作业下次什么时候跑。升级后想确认迁移类作业有没有跑完，看这里。见[配置](/zh/guide/configure/configuration)。
+后台作业与负载读数在**系统设置 → 任务管理**；每页显示什么、该关注什么，见[监控](/zh/guide/operate/monitoring)。
 
 ## 常见问题
 
-**启动后进了初始化页面，而不是直接服务。**
-说明既没有配置文件、也没有任何 `NANOFILE_*` 变量。这是"尚未初始化"的状态，不是故障：走完一次性页面即可，或自己放一个配置文件。见[安装与首次运行](/zh/guide/start/getting-started)。
-
-**release 构建拒绝启动。**
-缺 `server.secret_key`。生成一个并放进配置文件（或 `NANOFILE_SERVER_SECRET_KEY`）：`openssl rand -hex 32`。见[安全](/zh/guide/admin/security)。
-
-**端口起不来。**
-被别的服务占了就换 `server.port`。Windows 下刚关掉的连接会停留在 `TIME_WAIT` 几分钟，新进程绑同一端口会失败——这也是 Windows 服务要等下次开机才接管的原因。
-
-**忘了管理员密码。**
-用命令行新建一个管理员再进去改：`./nanofile adduser --email <新地址>`（加 `--password-stdin` 可免交互）。见[命令行](/zh/reference/cli)。
-
-**客户端连不上 / 能登录但不同步。**
-按[客户端接入](/zh/guide/start/clients)末尾的清单逐项查，最常见的是服务器地址与 `server.site_url` 不一致。
-
-**搜索搜不到刚上传的东西。**
-先确认 `index.enabled` 是开的，再给那个文件点一次重新索引。索引是异步的，大文件会晚一点出现。
-
-**缩略图或预览不工作。**
-`[sandbox] enabled` 关着时这些功能一律不运行（且不会退回服务器进程内解析）；媒体缩略图还需要 `ffmpeg`，路径由 `storage.ffmpeg_path` 指定。见[沙盒](/zh/guide/admin/sandbox)。
-
-**邮件发不出。**
-见[邮件通知](/zh/guide/configure/email)：先确认 `enabled` 已开、SMTP 各项填对，再看任务页里的失败原因。
-
-**上传失败。**
-依次看：账号配额（[用户与分享](/zh/guide/admin/users-and-sharing)）、反代或客户端的请求体上限、以及存储上限（进行中的断点续传与单个压缩包都有默认上限，设为 `0` 取消，见[配置](/zh/guide/configure/configuration)）。
-
-**反代之后所有人都是一个 IP。**
-设 `trusted_proxies`，否则 `X-Forwarded-For` / `CF-Connecting-IP` 一律被忽略，按 IP 的限流退化成一个桶。见[安全](/zh/guide/admin/security)。
+从[故障排查](/zh/guide/operate/troubleshooting)的症状清单开始。它覆盖启动、客户端与同步、搜索、缩略图与媒体、邮件、上传和反向代理。
 
 ## 相关
 
 - [备份、恢复与升级](/zh/guide/operate/backup-and-upgrade) — 停机备份与换版本。
-- [配置](/zh/guide/configure/configuration) — 每个设置何时生效，以及任务页。
+- [配置](/zh/guide/configure/configuration) — 每个设置何时生效。
+- [监控](/zh/guide/operate/monitoring) — 健康、任务与负载。
+- [故障排查](/zh/guide/operate/troubleshooting) — 出问题时。
 - [命令行](/zh/reference/cli) — 全部运维命令。
 - [沙盒](/zh/guide/admin/sandbox) — 解析子进程约束了什么。

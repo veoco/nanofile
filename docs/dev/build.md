@@ -10,8 +10,8 @@ not require a build: see [Installing and first run](/guide/start/getting-started
   Node 24.
 - **Optional: `ffmpeg`.** It only affects media thumbnails; without it, media
   thumbnails are unavailable and the media tests are skipped.
-- **Only for a `tray` build:** GTK development libraries on Linux, a resource
-  compiler on Windows. See [Optional feature: `tray`](#optional-feature-tray).
+- **Only for a `tray` build:** a resource compiler on Windows; Linux needs no
+  extra system package. See [Optional feature: `tray`](#optional-feature-tray).
 
 ## How the frontend reaches the binary
 
@@ -94,7 +94,7 @@ cargo build --release -p server --features tray
 
 The tray variants are built on the three native runner platforms (Linux amd64,
 macOS arm64, Windows amd64); the cross rows build the headless binary. What the
-tray itself does is in [Desktop tray and Windows service](/guide/deploy/desktop-and-service).
+tray itself does is in [Windows service and desktop tray](/guide/deploy/desktop-and-service).
 
 ## Embedded inference (people tags and OCR)
 

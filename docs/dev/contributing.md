@@ -62,6 +62,7 @@ commit.
 ```bash
 npm ci --prefix docs
 npm run --prefix docs dev       # http://localhost:5173/nanofile/
+npm run --prefix docs check     # page, heading, link, anchor and sidebar guard
 npm run --prefix docs build     # fails on a dead link
 npm run --prefix docs preview   # http://localhost:4173/nanofile/
 ```
@@ -70,12 +71,17 @@ npm run --prefix docs preview   # http://localhost:4173/nanofile/
   `docs/.vitepress/config.mts`.
 - Site-internal links are `/guide/<chapter>/<page>` (English) or
   `/zh/guide/<chapter>/<page>` (Chinese). The guide is split into chapter
-  directories — `start`, `deploy`, `configure`, `admin`, `operate` — so a new
-  guide page goes in the matching chapter.
-  Link to files outside `docs/` with their GitHub URL, not a relative path.
+  directories — `start`, `use`, `deploy`, `configure`, `admin`, `operate` — so a new
+  guide page goes in the matching chapter. Link to files outside `docs/` with their
+  GitHub URL, not a relative path.
+- Moving a page needs a static redirect under `docs/public/` and updates to the
+  sidebar, guide index and READMEs.
 - Put angle-bracket placeholders such as `<owner>` in backticks; outside code
   fences they are parsed as HTML.
 - `docs/public/favicon.svg` is a copy of `server/static/img/favicon.svg`.
+- See [Documentation](/dev/documentation) for page types, templates, terminology and
+  the review checklist. The checker runs in the docs workflow; the API reference test
+  runs there too.
 
 ## Commit messages
 

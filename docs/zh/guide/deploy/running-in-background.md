@@ -1,6 +1,17 @@
+---
+description: 用 systemd、launchd 或容器重启策略运行 Nanofile。
+---
 # 后台运行与自启动
 
-托盘版在桌面上手动启动就够了；放到服务器或无人值守的机器上，就要让它跟系统一起起来、崩了能自己回来。Windows 的服务与托盘见[桌面托盘与 Windows 服务](/zh/guide/deploy/desktop-and-service)，本页覆盖 Linux、macOS 与容器。
+**适合谁：** 要在 Linux、macOS 或容器主机上长期运行 Nanofile 的运维人员。**前置条件：** 主机上的 root 或 sudo，以及一个专用服务用户。
+
+托盘版在桌面上手动启动就够了；放到服务器或无人值守的机器上，就要让它跟系统一起起来、崩了能自己回来。Windows 的服务与托盘见[Windows 服务与桌面托盘](/zh/guide/deploy/desktop-and-service)，本页覆盖 Linux、macOS 与容器。
+
+| 主机 | 方式 |
+|---|---|
+| Linux | systemd unit |
+| macOS | LaunchDaemon 或 LaunchAgent |
+| 容器 | Docker 重启策略 |
 
 ## 共用前提
 
@@ -102,9 +113,15 @@ docker run -d --name nanofile --restart=unless-stopped \
 
 镜像里没有 `HOME`、也没有 shell，因此**后台运行所需的一切都要通过 `NANOFILE_*` 变量或挂载的配置文件给出**；首次初始化在容器里也无处写 `~/.nanofile/config.toml`。
 
+## 验证
+
+- `systemctl status nanofile` 或 `launchctl print` 显示服务在运行。
+- 重启主机后，`curl -fsS http://127.0.0.1:8082/health` 返回 200。
+- 日志里的配置文件路径与数据目录符合预期。
+
 ## 相关
 
-- [桌面托盘与 Windows 服务](/zh/guide/deploy/desktop-and-service) — Windows 的托盘与 SCM 服务。
+- [Windows 服务与桌面托盘](/zh/guide/deploy/desktop-and-service) — Windows 的托盘与 SCM 服务。
 - [备份、恢复与升级](/zh/guide/operate/backup-and-upgrade) — 停服务、换二进制、换镜像。
 - [数据目录](/zh/guide/configure/data-directory) — 这些东西放在哪。
 - [配置](/zh/guide/configure/configuration) — 配置文件查找顺序与 `NANOFILE_*`。

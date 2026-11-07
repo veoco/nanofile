@@ -1,4 +1,9 @@
+---
+description: Accounts, registration, invitations, quotas and sharing policy.
+---
 # Users and sharing
+
+**Who this is for:** administrators managing accounts, quotas and sharing policy. **Before you start:** an administrator account.
 
 ## Users
 
@@ -86,17 +91,12 @@ aliases; the name was wrong, not the value — this is the quota of one account,
 a cap on every account together, and a saved setting row is moved to the new key on
 upgrade.
 
-## Share links
+## Sharing policy {#sharing-policy}
 
-Select a file or folder in the web file browser and choose **Share**. The
-resulting link supports: (an administrator can also see everybody's links under
-**System Settings → Share Management** and delete the dead ones.)
-
-- a password,
-- an expiry time,
-- a view count.
-
-Anonymous **upload links** accept uploads into a library without an account.
+Users create share and upload links from the file browser; see
+[Files and sharing](/guide/use/files-and-sharing#share-links). Administrators can see
+every user's links under **System Settings → Share Management** and delete the dead
+ones.
 
 Sharing has two switches, on **System Settings → Security → Sharing**:
 
@@ -123,6 +123,15 @@ The single switch from older releases, `share_link_enabled` /
 `NANOFILE_SERVER_SHARE_LINK_ENABLED`, is still read and closes both directions;
 a saved value is moved to the two keys on upgrade.
 
+## Verify
+
+- Create a test user or invitation; the account can sign in under the intended
+  registration mode.
+- Set a per-user quota; an upload that exceeds it is refused, and an unlimited
+  account still uploads.
+- Toggle one sharing direction; the corresponding controls disappear and the other
+  direction still works.
+
 ## Encrypted libraries
 
 An encrypted library requires its password for uploads as well as reads. Without
@@ -132,4 +141,4 @@ it:
 - anonymous upload links cannot be created for, or used against, the library.
 
 See [Security](/guide/admin/security) for the server-side settings and
-[Account security](/guide/admin/account-security) for credentials and API keys.
+[Account security](/guide/use/account-security) for credentials and API keys.

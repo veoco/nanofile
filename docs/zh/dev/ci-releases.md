@@ -49,7 +49,7 @@ Rust 构建通过 `Swatinem/rust-cache` 共享，分成两个 `shared-key` 家�
 
 ## `docs.yml`
 
-每次 `docs/` 变更时构建本站，并在 `main` 上部署到 GitHub Pages。PR 只构建不部署，因此死链会让 PR 失败。本地命令见[贡献指南](/zh/dev/contributing)。
+每次 `docs/` 变更时构建本站，并在 `main` 上部署到 GitHub Pages。PR 只构建不部署，因此死链会让 PR 失败。`check` job 会在同一次变更里跑指南 checker 与 Rust API 参考测试，因此只改文档的 PR 也不会跳过它们。本地命令见[贡献指南](/zh/dev/contributing)。
 
 ## 相关
 

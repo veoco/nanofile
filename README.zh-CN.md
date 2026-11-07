@@ -71,14 +71,18 @@ docker run -d --name nanofile \
 
 | | |
 |---|---|
+| [什么是 Nanofile？](https://veoco.github.io/nanofile/zh/guide/start/what-is-nanofile) | 特性、Seafile 兼容范围与限制 |
 | [安装与首次运行](https://veoco.github.io/nanofile/zh/guide/start/getting-started) | 下载归档或镜像、首次初始化、管理员 |
-| [网页界面](https://veoco.github.io/nanofile/zh/guide/start/web-interface) | 资料库、上传下载、搜索与回收站 |
-| [客户端接入](https://veoco.github.io/nanofile/zh/guide/start/clients) | Seafile 客户端、WebDAV、API 密钥 |
+| [网页界面](https://veoco.github.io/nanofile/zh/guide/use/web-interface) | 资料库、文件浏览、搜索与回收站 |
+| [文件与分享](https://veoco.github.io/nanofile/zh/guide/use/files-and-sharing) | 上传下载、版本、分享与上传链接 |
+| [客户端接入](https://veoco.github.io/nanofile/zh/guide/use/clients) | Seafile 客户端、WebDAV、API 密钥 |
 | [配置](https://veoco.github.io/nanofile/zh/guide/configure/configuration) | 配置文件、`NANOFILE_*`、设置页 |
+| [HTTPS 与反向代理](https://veoco.github.io/nanofile/zh/guide/deploy/https-and-reverse-proxy) | nginx/Caddy、TLS、受信代理 |
 | [后台运行与自启动](https://veoco.github.io/nanofile/zh/guide/deploy/running-in-background) | systemd、launchd、容器重启策略 |
 | [备份、恢复与升级](https://veoco.github.io/nanofile/zh/guide/operate/backup-and-upgrade) | 备份数据、恢复、换版本 |
-| [维护与故障排查](https://veoco.github.io/nanofile/zh/guide/operate/maintenance) | 日志、垃圾回收、常见问题 |
-| [安全](https://veoco.github.io/nanofile/zh/guide/admin/security) | 反向代理、TLS、主密钥 |
+| [维护](https://veoco.github.io/nanofile/zh/guide/operate/maintenance) | 日志、垃圾回收、校验 |
+| [故障排查](https://veoco.github.io/nanofile/zh/guide/operate/troubleshooting) | 按症状排查常见问题 |
+| [安全](https://veoco.github.io/nanofile/zh/guide/admin/security) | 主密钥、绑定地址、PoW |
 | [API 参考](https://veoco.github.io/nanofile/zh/reference/api/) | 全部 HTTP 接口，以及与 Seafile 官方 API 的对比 |
 | [命令行](https://veoco.github.io/nanofile/zh/reference/cli) | 全部运维命令 |
 | [开发](https://veoco.github.io/nanofile/zh/dev/architecture) | 架构、测试、CI |

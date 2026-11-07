@@ -1,4 +1,9 @@
+---
+description: Read text in images and scanned PDF pages into the search index.
+---
 # Text in images and PDFs (OCR)
+
+**Who this is for:** users enabling OCR for the search index. **Before you start:** the full-text index enabled, and the sandbox on.
 
 Nanofile can read the text in images and in the scanned pages of a PDF and add
 it to the full-text index. A screenshot, a photographed sign or a scanned page
@@ -44,25 +49,12 @@ one with no text is not re-read on every pass.
 ## How a PDF is handled
 
 There is no reliable document-level "scanned PDF" flag. Nanofile decides **per
-page**:
+page**: a page with at least 32 non-whitespace characters keeps its text layer; a
+page below that threshold is rendered and read by OCR. The two kinds are merged back
+in page order, and a short text layer is used as a fallback when OCR finds nothing.
 
-- `lopdf` extracts the page's text layer. A page with at least 32
-  non-whitespace characters is treated as a text page and keeps that text.
-- A page below that threshold is treated as scan-like. The confined OCR worker
-  renders that page with the pure-Rust `hayro` rasterizer and reads it with
-  PP-OCRv6.
-- Both kinds are merged back in page order. Text pages keep their text layer;
-  scan pages use the OCR text, falling back to the short text layer when OCR
-  finds nothing.
-
-A PDF whose text layer was produced by an earlier OCR pass is therefore trusted
-as text — provided each page reaches the threshold — and is not OCR'd again. A text-heavy page with an illustration is also kept
-as text: words inside the illustration are not read. This is a deliberate
-trade-off; there is no separate flag, producer check or image-count heuristic.
-
-Pages that contain only vector lettering and no text layer are not guaranteed:
-the renderer is built without embedded fonts, so such a page may render without
-readable glyphs. The target is raster scan pages.
+The full classification rules, the renderer limits and the model details are in
+[OCR internals](/dev/ocr).
 
 ## What is stored
 
@@ -105,17 +97,19 @@ content search matches it and the result carries a highlighted snippet. The
 "full-text index" section of a file's details shows the same text. Tags, file
 names and permissions are unchanged.
 
+## Verify
+
+- Upload an image with text or a scanned PDF; wait for the index task.
+- Search for a word that appears only in the image or scan; the result shows the
+  snippet.
+- Open the file's details; the full-text index section shows the recognised text.
+
 ## Models and licence
 
-PP-OCRv6 tiny (detection and recognition) and the PP-LCNet page and text-line
-orientation classifiers run through the pure-Rust `tract` runtime in the
-confined OCR worker. The models are compiled into the binary and never
-downloaded at runtime. They are Apache-2.0; see `server/models/MODEL_CARD.md`
-in the repository for sources, revisions and limits.
-
-PDF scan pages are rasterized by `hayro`, a pure-Rust renderer (Apache-2.0 OR
-MIT); the PDF text layer is still read by `lopdf`. `hayro` is asked only for
-pages that need pixels, never for text extraction.
+PP-OCRv6 tiny and the PP-LCNet orientation classifiers run through the pure-Rust
+`tract` runtime in the confined OCR worker. They are compiled into the binary and
+never downloaded at runtime. The models are Apache-2.0; sources, revisions and limits
+are in [OCR internals](/dev/ocr).
 
 ## Not the Seafile OCR endpoints
 

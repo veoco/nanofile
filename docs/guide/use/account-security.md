@@ -1,4 +1,9 @@
+---
+description: Two-factor authentication, sessions, passwords and credential revocation.
+---
 # Account security
+
+**Who this is for:** any account holder managing two-factor, sessions or a password. **Before you start:** you are signed in to the account.
 
 An account's own settings live on two pages, **Settings → Security** and
 **Settings → Sessions & Credentials**. The server-side credential rules are in
@@ -18,7 +23,7 @@ Turning two-factor off asks for your current password.
 
 Signing in means password first, then the 6-digit code. Tick "trust this device"
 and that device stops asking for **90 days** — sync clients use the same
-mechanism, see [Connecting clients](/guide/start/clients). Codes have their own attempt
+mechanism, see [Connecting clients](/guide/use/clients). Codes have their own attempt
 limit (`auth.totp_max_attempts`).
 
 ## Sessions and credentials
@@ -67,7 +72,7 @@ without sharing the account password. A key carries only the capabilities grante
 to it and can be narrowed to specific libraries; the key management surface
 accepts a browser session only, so a key cannot issue another key.
 
-Creating and using them is in [Connecting clients](/guide/start/clients).
+Creating and using them is in [Connecting clients](/guide/use/clients).
 
 ## Sign-in notices
 
@@ -75,9 +80,15 @@ With mail configured, the server sends a notice for a sign-in from a new device
 or browser, and when an API key is created. See
 [Email notifications](/guide/configure/email).
 
+## Verify
+
+- Sign out and back in; with two-factor on, the code is required.
+- Revoke another browser session; that browser is signed out on its next request.
+- Change the password; other devices and sync tokens stop working.
+
 ## Related
 
 - [Users and sharing](/guide/admin/users-and-sharing) — creating accounts and links.
 - [Email notifications](/guide/configure/email) — SMTP and the events that send mail.
 - [Security](/guide/admin/security) — the server-side credential rules.
-- [Connecting clients](/guide/start/clients) — how two-factor behaves in a client.
+- [Connecting clients](/guide/use/clients) — how two-factor behaves in a client.

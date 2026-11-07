@@ -48,14 +48,17 @@ CI 会跑带 `-D warnings` 的 `cargo doc`，因此失效的文档内链接或 M
 ```bash
 npm ci --prefix docs
 npm run --prefix docs dev       # http://localhost:5173/nanofile/
+npm run --prefix docs check     # 页面、标题、链接、锚点与 sidebar 守卫
 npm run --prefix docs build     # 死链会失败
 npm run --prefix docs preview   # http://localhost:4173/nanofile/
 ```
 
 - `base` 是 `/nanofile/`；fork 需要改 `docs/.vitepress/config.mts`。
-- 站内链接写 `/guide/<章节>/<页面>`（英文）或 `/zh/guide/<章节>/<页面>`（中文）。指南按章节目录组织——`start`、`deploy`、`configure`、`admin`、`operate`——新页面放进对应章节目录。指向 `docs/` 之外的文件时用 GitHub URL，不要用相对路径。
+- 站内链接写 `/guide/<章节>/<页面>`（英文）或 `/zh/guide/<章节>/<页面>`（中文）。指南按章节目录组织——`start`、`use`、`deploy`、`configure`、`admin`、`operate`——新页面放进对应章节目录。指向 `docs/` 之外的文件时用 GitHub URL，不要用相对路径。
+- 移动页面时，在 `docs/public/` 下加静态重定向，并更新 sidebar、指南索引与 README。
 - 正文里的 `<owner>` 这类尖括号占位符要放进反引号；代码块之外会被当成 HTML。
 - `docs/public/favicon.svg` 是 `server/static/img/favicon.svg` 的副本。
+- 页面类型、模板、术语与审校清单见[文档](/zh/dev/documentation)。checker 在 docs workflow 里运行，API 参考测试也在那里运行。
 
 ## 提交信息
 

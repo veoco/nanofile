@@ -36,14 +36,12 @@ features:
 
 ## 从这里开始
 
-- [安装与首次运行](/zh/guide/start/getting-started) — 下载归档或拉镜像，完成首次初始化。
-- [网页界面](/zh/guide/start/web-interface) — 登录后能做什么。
-- [客户端接入](/zh/guide/start/clients) — 官方 Seafile 客户端与 WebDAV。
-- [配置](/zh/guide/configure/configuration) — 配置文件、`NANOFILE_*` 变量与设置页。
-- [Docker 部署](/zh/guide/deploy/docker) — 运行已发布的镜像。
-- [后台运行与自启动](/zh/guide/deploy/running-in-background) — 放到服务器上长期跑。
-- [备份、恢复与升级](/zh/guide/operate/backup-and-upgrade) — 数据与版本。
-- [维护与故障排查](/zh/guide/operate/maintenance) — 日志与常见问题。
-- [API 参考](/zh/reference/api/) — 全部 HTTP 接口，以及与 Seafile 官方 API 的对比。
-- [命令行](/zh/reference/cli) — 全部运维命令。
-- [开发](/zh/dev/architecture) — crate 布局、测试与 CI。
+- [什么是 Nanofile？](/zh/guide/start/what-is-nanofile) —— 特性、Seafile 兼容范围与限制。
+- [选择部署方式](/zh/guide/start/choose-deployment) —— 桌面托盘、无头服务器或 Docker。
+- [安装与首次运行](/zh/guide/start/getting-started) —— 安装、创建第一个管理员、上传并分享文件、连接客户端。
+
+之后可以读[使用 Nanofile](/zh/guide/use/web-interface)了解网页界面与客户端，读[部署](/zh/guide/deploy/docker)准备生产环境，或读[运维](/zh/guide/operate/backup-and-upgrade)处理备份与升级。完整目录见[指南](/zh/guide/)。
+
+- [API 参考](/zh/reference/api/) —— 全部 HTTP 接口，以及与 Seafile 官方 API 的对比。
+- [命令行](/zh/reference/cli) —— 全部运维命令。
+- [开发](/zh/dev/architecture) —— crate 布局、测试与 CI。

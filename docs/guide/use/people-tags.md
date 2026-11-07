@@ -1,4 +1,9 @@
+---
+description: Tag photos with People, Single person and Group photo using local face detection.
+---
 # Automatic people tags
+
+**Who this is for:** users enabling automatic people tags. **Before you start:** the feature enabled, and the sandbox on.
 
 Nanofile can add three tags to photos without recognising anyone:
 
@@ -64,6 +69,12 @@ add that tag back. Adding it back clears the correction. If the file's content
 changes (a new upload, a sync edit), the correction is cleared too, because it
 described the old image.
 
+## Verify
+
+- Enable the feature and restart; upload a photo with a face.
+- Search `人物` or `people`; the photo appears.
+- Remove the tag and let the scan run again; the tag is not added back.
+
 ## Limits
 
 - YuNet detects faces from roughly 10 px, but the default `min_size` is 32 px;
@@ -79,4 +90,4 @@ described the old image.
   decision about a person.
 
 Looking for the text in a picture rather than the people in it? See
-[Text in images and PDFs](/guide/start/ocr).
+[Text in images and PDFs](/guide/use/ocr).
