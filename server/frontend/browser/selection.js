@@ -9,6 +9,32 @@ import { openRightPanel, resetRightPanel, openMultiSelectPanel, openQuickPreview
 var selState = createSelectionState();
 var suppressClick = false;   // Suppress synthetic click after long-press
 
+// A dblclick arrives as click(1), click(2), dblclick. Acting on the second click toggles the
+// sole selected row off and closes the drawer, only for the dblclick to select it again — a
+// visible open→closed→open flash under the preview dialog. A toggle-off that could be half of
+// a dblclick is therefore held for one double-click window; a real second click cancels it.
+var DOUBLE_CLICK_GUARD_MS = 300;
+var pendingDeselect = null;
+
+function cancelPendingDeselect() {
+  if (pendingDeselect === null) return;
+  clearTimeout(pendingDeselect);
+  pendingDeselect = null;
+}
+
+// The exact predicate the dblclick handler uses to decide this row can open the quick preview.
+function isPreviewableRow(row) {
+  return !!row && (row.dataset.isPreviewable === "true" ||
+    row.dataset.isVideo === "true" ||
+    row.dataset.isAudio === "true");
+}
+
+function applySelectionChange() {
+  applySelectionToDom();
+  updateSelectionBar();
+  updateSelectionPanel();
+}
+
 export function getCurrentDir() {
   var input = document.querySelector('[name="current_dir"]');
   if (input && input.value) return input.value;
@@ -103,6 +129,7 @@ function updateSelectionBar() {
 }
 
 export function clearSelection() {
+  cancelPendingDeselect();
   selState = reduceSelection(selState, { type: "clear" });
   applySelectionToDom();
   updateSelectionBar();
@@ -110,6 +137,8 @@ export function clearSelection() {
 }
 
 document.addEventListener("click", function (e) {
+  // Any new click supersedes a held toggle-off.
+  cancelPendingDeselect();
   var row = e.target.closest(".js-entry-row");
 
   // Suppress synthetic click after long-press on touch devices
@@ -132,6 +161,31 @@ document.addEventListener("click", function (e) {
   var name = row.dataset.name;
   if (!name) return;
 
+  var plainClick = !e.shiftKey && !(e.ctrlKey || e.metaKey) && !selState.touchMode;
+
+  // The second click of a dblclick: the first already selected this row, so toggling it off
+  // here would close the drawer right before the dblclick reopens it.
+  if (plainClick && e.detail > 1 && isPreviewableRow(row)) return;
+
+  // A click on the only selected previewable row may be the first half of a dblclick that
+  // opens the preview. Hold the toggle-off; a second click or dblclick cancels it.
+  if (plainClick && isPreviewableRow(row) &&
+      selState.selected.size === 1 && selState.selected.has(name)) {
+    pendingDeselect = setTimeout(function () {
+      pendingDeselect = null;
+      if (selState.selected.size !== 1 || !selState.selected.has(name)) return;
+      selState = reduceSelection(selState, {
+        type: "click",
+        name: name,
+        shift: false,
+        ctrl: false,
+        orderedNames: [],
+      });
+      applySelectionChange();
+    }, DOUBLE_CLICK_GUARD_MS);
+    return;
+  }
+
   // Shift range selection needs the ordered names of the visible view.
   var orderedNames = [];
   if (e.shiftKey) {
@@ -152,9 +206,7 @@ document.addEventListener("click", function (e) {
     ctrl: e.ctrlKey || e.metaKey,
     orderedNames: orderedNames,
   });
-  applySelectionToDom();
-  updateSelectionBar();
-  updateSelectionPanel();
+  applySelectionChange();
 });
 
 document.addEventListener("dblclick", function (e) {
@@ -165,16 +217,17 @@ document.addEventListener("dblclick", function (e) {
   var name = row.dataset.name;
   if (!name) return;
   if (row.dataset.type === "dir") return;
-  if (row.dataset.isPreviewable !== "true" &&
-      row.dataset.isVideo !== "true" &&
-      row.dataset.isAudio !== "true") return;
-  // A dblclick fires two single clicks first; the second one toggles this
-  // single-selected row off. Re-select it so it stays selected.
-  selState = reduceSelection(selState, { type: "selectOne", name: name });
-  applySelectionToDom();
-  updateSelectionBar();
-  updateSelectionPanel();
-  openQuickPreview(row);
+  if (!isPreviewableRow(row)) return;
+  // The click handler above leaves the row selected and the drawer already rendered. Re-running
+  // the selection panel here would reset its thumbnail, EXIF request and inline player for no
+  // reason; only repair the selection if another path (e.g. a ctrl-click inside the same
+  // double-click window) left it stale.
+  cancelPendingDeselect();
+  if (!(selState.selected.size === 1 && selState.selected.has(name))) {
+    selState = reduceSelection(selState, { type: "selectOne", name: name });
+    applySelectionChange();
+  }
+  openQuickPreview(row.dataset);
 });
 
 function updateSelectionPanel() {

@@ -76,6 +76,35 @@ const dblclickRow = (page: import("@playwright/test").Page, name: string) =>
     .locator(`.js-file-list-view:not(.hidden) .js-entry-row[data-name="${name}"] > div:first-child`)
     .dblclick();
 
+const clickRow = (page: import("@playwright/test").Page, name: string) =>
+  page
+    .locator(`.js-file-list-view:not(.hidden) .js-entry-row[data-name="${name}"] > div:first-child`)
+    .click();
+
+/**
+ * Record every `open` class transition on the details drawer. A dblclick arrives as two clicks,
+ * so a regression that closed the drawer between them shows up as an `open: true → false` entry.
+ * `oldValue` is read per record and the next record's `oldValue` (or the current class for the
+ * last one) gives the value after it, so even coalesced mutations keep both sides of a change.
+ */
+async function watchDrawer(page: import("@playwright/test").Page): Promise<void> {
+  await page.evaluate(() => {
+    const drawer = document.getElementById("nf-details")!;
+    const log: { before: boolean; after: boolean }[] = [];
+    (window as any).__drawerLog = log;
+    new MutationObserver((records) => {
+      records.forEach((record, i) => {
+        const before = record.oldValue || "";
+        const after = i + 1 < records.length ? records[i + 1].oldValue || "" : drawer.className;
+        log.push({ before: /\bopen\b/.test(before), after: /\bopen\b/.test(after) });
+      });
+    }).observe(drawer, { attributes: true, attributeFilter: ["class"], attributeOldValue: true });
+  });
+}
+
+const drawerLog = (page: import("@playwright/test").Page) =>
+  page.evaluate(() => (window as any).__drawerLog as { before: boolean; after: boolean }[]);
+
 test("image preview shows the image", async ({ page }) => {
   await dblclickRow(page, "photo.png");
   await expect(page.locator("#quick-preview-overlay")).toBeVisible();
@@ -100,6 +129,72 @@ test("video preview opens the video player", async ({ page }) => {
   await expect
     .poll(() => page.locator(".js-qp-video").evaluate((v) => (v as HTMLVideoElement).videoWidth))
     .toBeGreaterThan(0);
+});
+
+// The drawer's summary tile is only 54px; clicking it opens the same dialog a row dblclick does,
+// so an image or a video frame can be inspected at full size.
+test("the drawer tile opens the image preview", async ({ page }) => {
+  await clickRow(page, "photo.png");
+  const tile = page.locator(".js-rp-preview-open");
+  await expect(tile).toBeEnabled();
+  await tile.click();
+
+  await expect(page.locator("#quick-preview-overlay")).toBeVisible();
+  await expect(page.locator(".js-qp-img")).toBeVisible();
+  await expect(page.locator(".js-qp-title")).toHaveText("photo.png");
+  // Opening the dialog is not a click on the list, so the selection and its drawer stay put.
+  await expect(page.locator("#nf-details")).toHaveClass(/\bopen\b/);
+});
+
+test("the drawer tile opens the video preview", async ({ page }) => {
+  await clickRow(page, "plays.mp4");
+  await page.locator(".js-rp-preview-open").click();
+  await expect(page.locator(".js-qp-video")).toBeVisible();
+  await expect
+    .poll(() => page.locator(".js-qp-video").evaluate((v) => (v as HTMLVideoElement).videoWidth))
+    .toBeGreaterThan(0);
+});
+
+// The tile predicate is the same one the row dblclick uses, so a text file's type badge opens
+// the text preview too.
+test("the drawer tile opens the text preview", async ({ page }) => {
+  await clickRow(page, "alpha.txt");
+  const tile = page.locator(".js-rp-preview-open");
+  await expect(tile).toBeEnabled();
+  await tile.click();
+  await expect(page.locator(".js-qp-text")).toContainText("content of alpha.txt");
+});
+
+test("the drawer tile is inert for a file with no quick preview", async ({ page }) => {
+  await clickRow(page, "note.xyz");
+  await expect(page.locator(".js-rp-preview-open")).toBeDisabled();
+  await expect(page.locator("#quick-preview-overlay")).toBeHidden();
+});
+
+// A dblclick is click(1), click(2), dblclick. The old second click toggled the row off and the
+// dblclick selected it again, which flashed the drawer closed and open beneath the dialog.
+test("double-clicking a row never closes the drawer on its way to the preview", async ({ page }) => {
+  await watchDrawer(page);
+  await dblclickRow(page, "photo.png");
+  await expect(page.locator("#quick-preview-overlay")).toBeVisible();
+
+  const log = await drawerLog(page);
+  expect(log.some((t) => !t.before && t.after)).toBe(true);
+  expect(log.some((t) => t.before && !t.after)).toBe(false);
+  await expect(page.locator("#nf-details")).toHaveClass(/\bopen\b/);
+});
+
+test("double-clicking the already-selected row does not flash the drawer", async ({ page }) => {
+  await clickRow(page, "photo.png");
+  await expect(page.locator("#nf-details")).toHaveClass(/\bopen\b/);
+
+  await watchDrawer(page);
+  await dblclickRow(page, "photo.png");
+  await expect(page.locator("#quick-preview-overlay")).toBeVisible();
+
+  const log = await drawerLog(page);
+  expect(log.some((t) => t.before && !t.after)).toBe(false);
+  await expect(page.locator("#nf-details")).toHaveClass(/\bopen\b/);
 });
 
 // A media element that cannot decode fires `error` and otherwise just sits there, so the dialog

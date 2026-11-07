@@ -23,13 +23,19 @@
     <!-- ── Single selection ───────────────────────────────────────────────── -->
     <div class="js-rp-content hidden">
         <div class="d-row">
-            <div class="d-thumb">
+            {# The summary tile is the drawer's way into the same quick preview a row
+               dblclick opens: 54px is too small to judge a picture or a video frame. JS
+               enables it only for files the dialog can actually preview. #}
+            <button type="button" class="d-thumb js-rp-preview-open"
+                    title="{{ t.tr("fb.open_preview") }}"
+                    aria-label="{{ t.tr("fb.open_preview") }}"
+                    disabled>
                 <img class="js-rp-thumb-img hidden" src="" alt="" data-thumb>
                 <span class="js-rp-ext-badge hidden mono !text-[11px] font-bold"></span>
                 {{ icons::icon_folder("js-rp-folder-icon hidden w-6 h-6") }}
                 <svg class="js-rp-video-icon hidden w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
                 <svg class="js-rp-audio-icon hidden w-6 h-6" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l12-2v13a3 3 0 01-3 3 3 3 0 01-3-3 3 3 0 013-3V6.5l-8 1.3V18a3 3 0 01-3 3 3 3 0 01-3-3 3 3 0 013-3z"/></svg>
-            </div>
+            </button>
 
             <div class="d-main">
                 <div class="d-name js-rp-name"></div>

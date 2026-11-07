@@ -16,6 +16,16 @@ import { refreshFileList } from "./list.js";
 // the detail requests (links, index text, EXIF, tags) resolve.
 var rpReqId = 0;
 
+// The selection the drawer currently renders, kept so its summary tile can reopen the same
+// quick preview. Cleared whenever the drawer leaves the single-selection state.
+var currentPanelData = null;
+
+// Two call sites feed `openQuickPreview` plain objects: a row's `dataset` (strings) and
+// `openRightPanel`'s argument (booleans). Normalise either spelling.
+function flagTrue(value) {
+  return value === true || value === "true";
+}
+
 var detailsEl = document.getElementById("nf-details");
 var contentEl = document.getElementById("nf-content");
 var detailsExpandEl = document.getElementById("nf-details-expand");
@@ -152,6 +162,21 @@ export function openRightPanel(d) {
   } else if (extBadge) {
     extBadge.textContent = "?";
     extBadge.classList.remove("hidden");
+  }
+
+// The summary tile is the drawer's entry into the same quick preview a row dblclick opens.
+// Its enabled state mirrors that handler's predicate exactly, so a file the dialog cannot
+// render (PDF, Office, unknown) keeps an inert badge, and text/SVG open the preview too.
+  var canQuickPreview = d.type === "file" &&
+    (flagTrue(d.isPreviewable) || flagTrue(d.isVideo) || flagTrue(d.isAudio));
+  currentPanelData = canQuickPreview ? d : null;
+  var previewOpenBtn = ct.querySelector(".js-rp-preview-open");
+  if (previewOpenBtn) {
+    previewOpenBtn.disabled = !canQuickPreview;
+    previewOpenBtn.title = canQuickPreview ? __t('fb.open_preview') : "";
+    previewOpenBtn.setAttribute("aria-label", canQuickPreview
+      ? __t('fb.open_preview_for', { name: d.name || "" })
+      : __t('fb.open_preview'));
   }
 
   if (mediaSection) mediaSection.classList.toggle("hidden", !isMedia);
@@ -539,6 +564,7 @@ export function openMultiSelectPanel(selectedItems) {
 // The drawer is no longer replaced here, so in-flight single-selection responses must be
 // invalidated too.
   rpReqId++;
+  currentPanelData = null;
 
   ph.classList.add("hidden");
   ct.classList.add("hidden");
@@ -578,6 +604,15 @@ function stopRightPanelMedia() {
   }
 }
 
+// Opening the dialog for a file whose small inline player is running would play the same audio
+// twice; pause it, but keep its `src` so the drawer is still usable after the dialog closes.
+function pauseRightPanelMedia() {
+  var v = document.querySelector(".js-rp-video");
+  if (v) v.pause();
+  var a = document.querySelector(".js-rp-audio");
+  if (a) a.pause();
+}
+
 // A thumbnail that fails to load (audio without cover art, ffmpeg unavailable) falls back to
 // the extension badge.
 export function thumbFailed(img) {
@@ -610,10 +645,15 @@ export function resetRightPanel() {
   var uploadLinkBtn = document.getElementById("rp-upload-link-btn");
   if (uploadLinkBtn) uploadLinkBtn.classList.add("hidden");
   rpReqId++;
+  currentPanelData = null;
   closeDrawer();
 }
 
 var QUICK_PREVIEW_TEXT_LIMIT = 1024 * 1024; // 1MB
+// Opening the dialog from the drawer puts the backdrop under the pointer. A double-click on the
+// opener would let its second click land on that backdrop and dismiss the dialog immediately.
+var QUICK_PREVIEW_OPEN_GUARD_MS = 300;
+var quickPreviewOpenedAt = 0;
 
 // The dialog and full-page viewer render the same node: one sentence naming the reason, and
 // the `?dl=1` escape beside it.
@@ -651,18 +691,23 @@ export function hideQuickPreview() {
   overlay.classList.add("hidden");
 }
 
-export function openQuickPreview(row) {
+// `file` is the shape both call sites already have: a row's `dataset` (strings) or the plain
+// object assembled by `openRightPanel` (booleans). `size` is optional and only drives the
+// truncation note in the text branch.
+export function openQuickPreview(file) {
   var overlay = document.getElementById("quick-preview-overlay");
   if (!overlay) return;
-  resetQuickPreview();
-
-  var repoId = row.dataset.repoId;
-  var path = row.dataset.path;
-  var name = row.dataset.name || "";
-  var isVideo = row.dataset.isVideo === "true";
-  var isAudio = row.dataset.isAudio === "true";
-  var isPreviewable = row.dataset.isPreviewable === "true";
+  var data = file || {};
+  var repoId = data.repoId;
+  var path = data.path;
+  var name = data.name || "";
+  var isVideo = flagTrue(data.isVideo);
+  var isAudio = flagTrue(data.isAudio);
+  var isPreviewable = flagTrue(data.isPreviewable);
   if (!repoId || !path) return;
+
+  pauseRightPanelMedia();
+  resetQuickPreview();
 
   var encPath = encodeFilePath(path);
 // One content URL per open plus its `?dl=1` alias, which every failure hands the reader.
@@ -701,7 +746,7 @@ export function openQuickPreview(row) {
     };
     img.classList.remove("hidden");
   } else if (isPreviewable) {
-    var fileSize = parseInt(row.dataset.size, 10);
+    var fileSize = parseInt(data.size, 10);
     fetch(contentUrl, { headers: { Range: "bytes=0-" + (QUICK_PREVIEW_TEXT_LIMIT - 1) } })
       .then(function (res) {
         if (!res.ok) { showQuickPreviewUnsupported("text", downloadUrl); return null; }
@@ -721,7 +766,16 @@ export function openQuickPreview(row) {
   }
 
   overlay.classList.remove("hidden");
+  quickPreviewOpenedAt = Date.now();
 }
+
+// The drawer's summary tile opens the same dialog as a row dblclick. `currentPanelData` is the
+// selection that tile was rendered from, so a later selection can never leak into it.
+document.addEventListener("click", function (e) {
+  var btn = e.target.closest(".js-rp-preview-open");
+  if (!btn || btn.disabled || !currentPanelData) return;
+  openQuickPreview(currentPanelData);
+});
 
 (function () {
   var overlay = document.getElementById("quick-preview-overlay");
@@ -729,7 +783,9 @@ export function openQuickPreview(row) {
   var close = overlay.querySelector(".js-qp-close");
   if (close) close.addEventListener("click", function () { hideQuickPreview(); });
   overlay.addEventListener("click", function (e) {
-    if (e.target === overlay) hideQuickPreview();
+    if (e.target !== overlay) return;
+    if (Date.now() - quickPreviewOpenedAt < QUICK_PREVIEW_OPEN_GUARD_MS) return;
+    hideQuickPreview();
   });
 })();
 

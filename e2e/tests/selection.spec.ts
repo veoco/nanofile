@@ -38,6 +38,9 @@ test("clicking the only selected row deselects it", async ({ page }) => {
   await page.locator(icon("alpha.txt")).click();
   await page.locator(icon("alpha.txt")).click();
   await expect(page.locator(row("alpha.txt"))).not.toHaveClass(/selected/);
+  // The toggle-off is held for the dblclick window so a dblclick can cancel it; once it lands,
+  // the drawer has to close with it.
+  await expect(page.locator("#nf-details")).not.toHaveClass(/\bopen\b/);
 });
 
 test("ctrl-click toggles multiple rows", async ({ page }) => {

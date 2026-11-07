@@ -838,8 +838,11 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
   .d-row[hidden] { display: none; }
   .d-thumb {
     @apply grid place-items-center w-[54px] h-[54px] shrink-0 rounded-box
-           border border-line bg-raised text-ink-3 overflow-hidden;
+           border border-line bg-raised text-ink-3 overflow-hidden p-0 cursor-pointer;
+    transition: border-color 0.12s ease;
   }
+  .d-thumb:disabled { @apply cursor-default; }
+  .d-thumb:not(:disabled):hover { border-color: var(--color-line-strong); }
   .d-thumb .js-rp-thumb-img { @apply w-full h-full object-contain; }
   .d-main { @apply min-w-0 flex flex-col gap-[3px] basis-[240px] max-w-[340px]; }
   .d-name { @apply text-[13.5px] font-semibold tracking-[-0.005em] truncate; }
