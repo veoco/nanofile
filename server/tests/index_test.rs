@@ -39,6 +39,33 @@ where
     }
 }
 
+/// Serialise the OCR cases that share this test binary, two at a time.
+///
+/// The server admits two OCR children per process. This binary has more OCR
+/// cases than that; without a matching gate they start at once, and the later
+/// ones spend their search deadline queueing behind the earlier documents
+/// instead of waiting for their own OCR. Holding one of two permits for the
+/// whole test makes the deadline cover the document, not the queue, while still
+/// exercising the production concurrency.
+static OCR_TEST_GATE: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::OnceLock::new();
+
+async fn ocr_test_permit() -> tokio::sync::OwnedSemaphorePermit {
+    OCR_TEST_GATE
+        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(2)))
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("the OCR test gate is never closed")
+}
+
+/// How long a document that needs OCR may take to become searchable.
+///
+/// One worker's hard wall is 180 s; the margin covers a second document on the
+/// other OCR permit and the index commit after the reply.
+const OCR_SETTLE: std::time::Duration =
+    server::sandbox::worker::OCR_TIMEOUT.saturating_add(std::time::Duration::from_secs(60));
+
 /// Upload a text file, then search for content → should find it.
 #[tokio::test]
 async fn test_upload_and_search_content() {
@@ -1611,6 +1638,7 @@ async fn a_backfill_pass_picks_up_what_an_older_extractor_skipped() {
 /// repository ACL. The fixture is the sample page from the PP-OCRv6 example.
 #[tokio::test]
 async fn test_ocr_makes_image_text_searchable() {
+    let _permit = ocr_test_permit().await;
     let f = common::TestFixture::new_with_index_and_ocr().await;
     let token = &f.api_token;
     let bytes = include_bytes!("fixtures/ocr/sample.png");
@@ -1622,7 +1650,7 @@ async fn test_ocr_makes_image_text_searchable() {
     assert_eq!(resp.status(), 200, "upload should succeed");
 
     assert!(
-        wait_for(std::time::Duration::from_secs(120), || async {
+        wait_for(OCR_SETTLE, || async {
             let results = search_results(&f, token, "Markov").await;
             results
                 .iter()
@@ -1678,6 +1706,7 @@ async fn test_ocr_off_leaves_image_text_unindexed() {
 async fn test_enabling_ocr_later_rechecks_skipped_images() {
     use server::service::index::IndexService;
 
+    let _permit = ocr_test_permit().await;
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
     let bytes = include_bytes!("fixtures/ocr/sample.png");
@@ -1724,7 +1753,7 @@ async fn test_enabling_ocr_later_rechecks_skipped_images() {
     assert!(report.counts.indexed >= 1, "{report:?}");
 
     assert!(
-        wait_for(std::time::Duration::from_secs(120), || async {
+        wait_for(OCR_SETTLE, || async {
             search_results(&f, token, "Markov")
                 .await
                 .iter()
@@ -1739,6 +1768,7 @@ async fn test_enabling_ocr_later_rechecks_skipped_images() {
 /// the words in the scan.
 #[tokio::test]
 async fn test_ocr_makes_scanned_pdf_searchable() {
+    let _permit = ocr_test_permit().await;
     let f = common::TestFixture::new_with_index_and_ocr().await;
     let token = &f.api_token;
     let bytes = common::scanned_pdf();
@@ -1750,7 +1780,7 @@ async fn test_ocr_makes_scanned_pdf_searchable() {
     assert_eq!(resp.status(), 200, "upload should succeed: {resp:?}");
 
     assert!(
-        wait_for(std::time::Duration::from_secs(120), || async {
+        wait_for(OCR_SETTLE, || async {
             search_results(&f, token, "Markov")
                 .await
                 .iter()
@@ -1776,6 +1806,7 @@ async fn test_ocr_makes_scanned_pdf_searchable() {
 /// A mixed PDF keeps the text page's layer and OCRs only the scan page.
 #[tokio::test]
 async fn test_ocr_reads_text_and_scan_pages_of_a_mixed_pdf() {
+    let _permit = ocr_test_permit().await;
     let f = common::TestFixture::new_with_index_and_ocr().await;
     let token = &f.api_token;
     let bytes = common::mixed_pdf("zebraquartz");
@@ -1787,7 +1818,7 @@ async fn test_ocr_reads_text_and_scan_pages_of_a_mixed_pdf() {
     assert_eq!(resp.status(), 200, "upload should succeed: {resp:?}");
 
     assert!(
-        wait_for(std::time::Duration::from_secs(120), || async {
+        wait_for(OCR_SETTLE, || async {
             let markov = search_results(&f, token, "Markov").await;
             let zebra = search_results(&f, token, "zebraquartz").await;
             markov
@@ -1830,6 +1861,7 @@ async fn test_ocr_off_leaves_scanned_pdf_unindexed() {
 async fn test_enabling_ocr_later_rechecks_skipped_scanned_pdf() {
     use server::service::index::IndexService;
 
+    let _permit = ocr_test_permit().await;
     let f = common::TestFixture::new_with_index().await;
     let token = &f.api_token;
     let bytes = common::scanned_pdf();
@@ -1874,7 +1906,7 @@ async fn test_enabling_ocr_later_rechecks_skipped_scanned_pdf() {
     assert!(report.counts.indexed >= 1, "{report:?}");
 
     assert!(
-        wait_for(std::time::Duration::from_secs(120), || async {
+        wait_for(OCR_SETTLE, || async {
             search_results(&f, token, "Markov")
                 .await
                 .iter()
