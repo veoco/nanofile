@@ -43,11 +43,12 @@ recognise a person across photos. No biometric data is persisted.
 
 The file is the upstream ONNX graph unchanged; there is no conversion step.
 
-## PP-OCRv6 tiny (image text for the full-text index)
+## PP-OCRv6 tiny (image and PDF text for the full-text index)
 
-`ppocr_v6_tiny_det.onnx` and `ppocr_v6_tiny_rec.onnx` read text from images for
-the optional `[ocr]` full-text indexing feature. `ppocr_keys_v6.txt` is the
-recognition alphabet extracted from the recognition model's `inference.yml`.
+`ppocr_v6_tiny_det.onnx` and `ppocr_v6_tiny_rec.onnx` read text from images and
+from rendered PDF scan pages for the optional `[ocr]` full-text indexing feature.
+`ppocr_keys_v6.txt` is the recognition alphabet extracted from the recognition
+model's `inference.yml`.
 
 - **Task:** text detection (DB) and text-line recognition (CTC), 49 languages in
   the tiny tier.
@@ -145,9 +146,14 @@ orientation decisions or page angle are persisted.
   low-contrast photos and artistic fonts reduce accuracy.
 - Multi-column pages are read in a simple top-to-bottom order; search results are
   unaffected, but the highlight order may differ from the page.
-- A picture can produce at most 300 text boxes; the text is capped at the same
-  8 MiB limit as document extraction.
+- A picture or PDF page can produce at most 300 text boxes; the text is capped
+  at the same 8 MiB limit as document extraction.
+- A PDF's text layer is read by `lopdf`; only pages below 32 non-whitespace
+  characters are rendered by `hayro` and passed to these models. PDF requests
+  stop at the 150-second soft deadline (under the profile's 180-second hard
+  timeout) or the 8 MiB text cap.
 - HEIC/HEIF/AVIF are decoded through the optional `ffmpeg` helper first; without
   one those files are not OCR'd.
-- Scanned PDFs and videos are not OCR'd. PDF text still comes from the PDF text
-  layer, not from OCR.
+- Pages of a PDF that have a text layer are read by `lopdf`, not OCR'd again.
+  Pages below the text threshold are rendered by `hayro` and OCR'd; videos are
+  not OCR'd.

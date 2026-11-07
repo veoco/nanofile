@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use tokio::sync::Semaphore;
 
-use crate::indexer::extract::{self, Plan};
+use crate::indexer::extract;
 use crate::indexer::{DocMeta, TextIndexer, collect_file_entries_under};
 use crate::repository::Repositories;
 use crate::sandbox::worker;
@@ -189,14 +189,14 @@ impl IndexService {
         let paths: Vec<String> = targets.iter().map(|t| t.path.clone()).collect();
         let states = self.indexer.doc_states(repo_id, &paths)?;
         let now = chrono::Utc::now().timestamp();
-        let ocr_enabled = self.config.get().ocr.enabled;
-        // An image that was skipped before OCR was enabled has a `Skipped` state
-        // that is current at this extractor version. When OCR is on, re-examine
-        // those images once; OCR then records `Indexed` or `NoText`, and the pass
-        // converges instead of re-reading them forever.
+        let ocr_on = self.config.get().ocr.enabled;
+        // An image or scanned PDF that was skipped before OCR was enabled has a
+        // `Skipped` state that is current at this extractor version. When OCR is
+        // on, re-examine those files once; OCR then records `Indexed` or
+        // `NoText`, and the pass converges instead of re-reading them forever.
         let ocr_worth_retry = |target: &IndexTarget, state: &crate::indexer::DocState| {
-            ocr_enabled
-                && crate::ocr::is_image(&target.path)
+            ocr_on
+                && (crate::ocr::is_image(&target.path) || crate::ocr::is_pdf(&target.path))
                 && state.status == crate::indexer::DocStatus::Skipped
                 && !state.is_manual()
         };
@@ -409,17 +409,24 @@ impl IndexService {
         let config = self.config.get();
         let size = file_data.size.max(0) as u64;
 
-        // What this file is, and whether OCR owns it. The plan is still computed
-        // for the non-OCR path; an image extension only ever reaches `Sniff`.
+        // What this file is, and whether an OCR path owns it. The plan is still
+        // computed for the non-OCR path; an image extension only ever reaches
+        // `Sniff`.
         let plan = extract::plan(filename);
-        let ocr_source = crate::ocr::source_for(filename);
-        let ocr_enabled = config.ocr.enabled && ocr_source.is_some();
+        let ocr_image = if config.ocr.enabled {
+            crate::ocr::source_for(filename)
+        } else {
+            None
+        };
+        let ocr_pdf =
+            config.ocr.enabled && matches!(plan, extract::Plan::Document(extract::Document::Pdf));
+        let ocr_enabled = ocr_image.is_some() || ocr_pdf;
         let ocr_options = crate::ocr::OcrOptions {
             min_score: config.ocr.min_score,
             max_side: config.ocr.max_side,
         };
 
-        if ocr_enabled && (size == 0 || size > crate::ocr::MAX_IMAGE_BYTES as u64) {
+        if ocr_image.is_some() && (size == 0 || size > crate::ocr::MAX_IMAGE_BYTES as u64) {
             tracing::debug!("indexing {path}: image is {size} bytes, outside the OCR cap");
             self.indexer
                 .mark_file_async(repo_id, path, filename, DocMeta::no_text(fs_id.as_str()))
@@ -429,15 +436,22 @@ impl IndexService {
 
         // A document above the cap is skipped unread: a container cannot be indexed
         // from a prefix. An image is OCR'd whole, up to the OCR cap.
-        let budget = if ocr_enabled {
+        let budget = if ocr_image.is_some() {
             crate::ocr::MAX_IMAGE_BYTES
         } else {
             match extract::budget(plan, size) {
                 Ok(budget) => budget,
                 Err(reason) => {
                     tracing::debug!("indexing {path}: not indexable: {reason}");
+                    // A PDF that is too large cannot be OCR'd either; with OCR on
+                    // this is terminal, so the backfill does not re-read it forever.
+                    let meta = if ocr_enabled {
+                        DocMeta::no_text(fs_id.as_str())
+                    } else {
+                        DocMeta::skipped(fs_id.as_str())
+                    };
                     self.indexer
-                        .mark_file_async(repo_id, path, filename, DocMeta::skipped(fs_id.as_str()))
+                        .mark_file_async(repo_id, path, filename, meta)
                         .await?;
                     return Ok(OneOutcome::Skipped);
                 }
@@ -468,7 +482,9 @@ impl IndexService {
 
         // A document or an image is read whole, so a short read is a transient
         // failure.
-        if (matches!(plan, Plan::Document(_)) || ocr_enabled) && (data.len() as u64) < size {
+        if (matches!(plan, extract::Plan::Document(_)) || ocr_image.is_some())
+            && (data.len() as u64) < size
+        {
             tracing::warn!("indexing {path}: read {} of {size} bytes", data.len());
             self.indexer
                 .mark_file_async(repo_id, path, filename, DocMeta::failed(fs_id.as_str()))
@@ -476,8 +492,9 @@ impl IndexService {
             return Ok(OneOutcome::Failed);
         }
 
-        let extracted = if ocr_enabled {
-            let source = ocr_source.expect("ocr_enabled implies a source");
+        let data = Arc::new(data);
+
+        let extracted = if let Some(source) = ocr_image {
             let extension = extension_of(filename);
             match self
                 .ocr_extract(
@@ -485,7 +502,7 @@ impl IndexService {
                     repo_id,
                     &extension,
                     &file_data,
-                    data,
+                    Arc::clone(&data),
                     source,
                     ocr_options,
                 )
@@ -505,17 +522,87 @@ impl IndexService {
                 // is terminal for this content rather than retried every pass.
                 worker::Outcome::Failed(reason) => extract::Extracted::Unsupported(reason),
             }
+        } else if ocr_pdf {
+            // The text layer is extracted page by page so the indexer can ask
+            // OCR only for pages that have little or no text. The document gate is
+            // released before the OCR gate is taken.
+            let page_data = Arc::clone(&data);
+            let pages = {
+                let _permit = structured_gate()
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|e| AppError::internal(format!("document gate closed: {e}")))?;
+                offload_extract(ctx, move || {
+                    worker::extract(extract::Plan::PdfPageText, &page_data)
+                })
+                .await?
+            };
+            match pages {
+                worker::Outcome::Extracted(extract::Extracted::Text(joined)) => {
+                    let page_texts: Vec<String> =
+                        joined.split('\u{1e}').map(ToString::to_string).collect();
+                    let candidates: Vec<u32> = page_texts
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, text)| pdf_page_is_scan_like(text))
+                        .map(|(index, _)| index as u32 + 1)
+                        .collect();
+                    if candidates.is_empty() {
+                        extract::finish(page_texts.join("\n"))
+                    } else {
+                        match self
+                            .ocr_extract_pdf(ctx, Arc::clone(&data), &candidates, ocr_options)
+                            .await?
+                        {
+                            worker::Outcome::Extracted(extract::Extracted::Text(ocr_text)) => {
+                                merge_pdf_pages(page_texts, &candidates, &ocr_text)
+                            }
+                            // The child ran and could not render/read the pages:
+                            // keep whatever text layer the document had.
+                            worker::Outcome::Extracted(extract::Extracted::Unsupported(reason))
+                            | worker::Outcome::Failed(reason) => {
+                                keep_pdf_text_or(page_texts, reason)
+                            }
+                            worker::Outcome::Unavailable(reason) => {
+                                tracing::warn!("indexing {path}: PDF OCR is unavailable: {reason}");
+                                self.indexer
+                                    .mark_file_async(
+                                        repo_id,
+                                        path,
+                                        filename,
+                                        DocMeta::failed(fs_id.as_str()),
+                                    )
+                                    .await?;
+                                return Ok(OneOutcome::Failed);
+                            }
+                        }
+                    }
+                }
+                worker::Outcome::Extracted(extract::Extracted::Unsupported(reason)) => {
+                    extract::Extracted::Unsupported(reason)
+                }
+                worker::Outcome::Unavailable(reason) => {
+                    tracing::warn!("indexing {path}: {reason}");
+                    self.indexer
+                        .mark_file_async(repo_id, path, filename, DocMeta::failed(fs_id.as_str()))
+                        .await?;
+                    return Ok(OneOutcome::Failed);
+                }
+                worker::Outcome::Failed(reason) => extract::Extracted::Unsupported(reason),
+            }
         } else if matches!(plan, extract::Plan::Document(_)) {
             // A document is parsed by a confined child process, never here: see
             // `sandbox::worker`. Spawning and waiting is synchronous and can take
             // seconds, so it runs on the blocking pool under a gate permit that bounds
             // how many children are alive; the permit is released when this branch ends.
+            let doc_data = Arc::clone(&data);
             let _permit = structured_gate()
                 .clone()
                 .acquire_owned()
                 .await
                 .map_err(|e| AppError::internal(format!("document gate closed: {e}")))?;
-            match offload_extract(ctx, move || worker::extract(plan, data)).await? {
+            match offload_extract(ctx, move || worker::extract(plan, &doc_data)).await? {
                 worker::Outcome::Extracted(extracted) => extracted,
                 // The sandbox or the child is unavailable: an environment problem, so
                 // the file is failed and the backfill retries it once the host can
@@ -532,7 +619,8 @@ impl IndexService {
                 worker::Outcome::Failed(reason) => extract::Extracted::Unsupported(reason),
             }
         } else {
-            extract::extract(plan, data)
+            let owned = Arc::try_unwrap(data).unwrap_or_else(|shared| (*shared).clone());
+            extract::extract(plan, owned)
         };
 
         match extracted {
@@ -550,26 +638,27 @@ impl IndexService {
             }
             extract::Extracted::Unsupported(reason) => {
                 tracing::debug!("indexing {path}: not indexable: {reason}");
-                if ocr_enabled {
-                    // OCR examined the image and found nothing searchable. `NoText`
-                    // is current at this extractor version, so the image is not
+                let status = unsupported_status(reason, ocr_enabled);
+                let meta = match status {
+                    // The sandbox being off is the admin's choice, not a verdict
+                    // on the file: a `Skipped` (or `NoText`) state would never be
+                    // re-examined when the switch is turned back on. This also
+                    // covers a PDF whose page-text extraction could not start
+                    // because OCR is on but the sandbox is off.
+                    crate::indexer::DocStatus::Failed => DocMeta::failed(fs_id.as_str()),
+                    // OCR examined the image, or every page of the PDF it was
+                    // asked to read, and found nothing searchable. `NoText` is
+                    // current at this extractor version, so the file is not
                     // re-read by every backfill pass.
-                    self.indexer
-                        .mark_file_async(repo_id, path, filename, DocMeta::no_text(fs_id.as_str()))
-                        .await?;
-                    Ok(OneOutcome::Skipped)
-                } else if reason == extract::reason::SANDBOX_OFF {
-                    // The sandbox being off is the admin's choice, not a verdict on
-                    // the file: a `Skipped` state would never be re-examined when
-                    // the switch is turned back on. Record it as retryable.
-                    self.indexer
-                        .mark_file_async(repo_id, path, filename, DocMeta::failed(fs_id.as_str()))
-                        .await?;
+                    crate::indexer::DocStatus::NoText => DocMeta::no_text(fs_id.as_str()),
+                    _ => DocMeta::skipped(fs_id.as_str()),
+                };
+                self.indexer
+                    .mark_file_async(repo_id, path, filename, meta)
+                    .await?;
+                if status == crate::indexer::DocStatus::Failed {
                     Ok(OneOutcome::Failed)
                 } else {
-                    self.indexer
-                        .mark_file_async(repo_id, path, filename, DocMeta::skipped(fs_id.as_str()))
-                        .await?;
                     Ok(OneOutcome::Skipped)
                 }
             }
@@ -588,7 +677,7 @@ impl IndexService {
         repo_id: &str,
         extension: &str,
         file_data: &base::common::FsFileData,
-        data: Vec<u8>,
+        data: Arc<Vec<u8>>,
         source: crate::ocr::Source,
         options: crate::ocr::OcrOptions,
     ) -> Result<worker::Outcome, AppError> {
@@ -665,6 +754,27 @@ impl IndexService {
         }
     }
 
+    /// Ask the confined OCR child to render and read selected PDF pages.
+    ///
+    /// The returned `Text` separates page texts with `\u{1e}`, in the order of
+    /// `pages`; the indexer merges them back by page number.
+    async fn ocr_extract_pdf(
+        &self,
+        ctx: Option<&JobContext>,
+        data: Arc<Vec<u8>>,
+        pages: &[u32],
+        options: crate::ocr::OcrOptions,
+    ) -> Result<worker::Outcome, AppError> {
+        let _permit = crate::sandbox::jobs::ocr::acquire_ocr_permit()
+            .await
+            .map_err(AppError::internal)?;
+        let pages = pages.to_vec();
+        offload_extract(ctx, move || {
+            crate::sandbox::jobs::ocr::extract_pdf(data.as_slice(), &pages, options)
+        })
+        .await
+    }
+
     async fn head_root(&self, repo_id: &str) -> Result<String, AppError> {
         let repo = self
             .repos
@@ -682,6 +792,74 @@ impl IndexService {
             .await?
             .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
         Ok(commit.root_id)
+    }
+}
+
+/// A page with fewer non-whitespace characters than this is treated as a scan.
+///
+/// There is no reliable PDF-level "scanned" flag: an image-only scan has no text
+/// operators, while a digital document has many. A page below this threshold is
+/// rendered and read by OCR; a page at or above it keeps its text layer.
+const PDF_PAGE_TEXT_MIN_CHARS: usize = 32;
+
+/// Whether a page's text layer is small enough that the page is probably a scan.
+fn pdf_page_is_scan_like(text: &str) -> bool {
+    text.chars()
+        .filter(|character| !character.is_whitespace())
+        .count()
+        < PDF_PAGE_TEXT_MIN_CHARS
+}
+
+/// Merge OCR text back into the page texts, then apply the document text rules.
+///
+/// `ocr` has one `\u{1e}`-separated field per candidate page, in the same order.
+/// An empty OCR field keeps that page's text layer; a page outside the text
+/// layer is ignored.
+fn merge_pdf_pages(mut pages: Vec<String>, candidates: &[u32], ocr: &str) -> extract::Extracted {
+    let ocr_pages: Vec<&str> = ocr.split('\u{1e}').collect();
+    for (slot, &page_number) in candidates.iter().enumerate() {
+        let Some(text) = ocr_pages.get(slot) else {
+            continue;
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+        let Some(page) = page_number
+            .checked_sub(1)
+            .map(|number| number as usize)
+            .and_then(|index| pages.get_mut(index))
+        else {
+            continue;
+        };
+        *page = (*text).to_string();
+    }
+    extract::finish(pages.join("\n"))
+}
+
+/// The state an unsupported extraction records.
+///
+/// The sandbox being off is an environment choice, not a verdict on the bytes,
+/// so it outranks the OCR-on rule: turning the sandbox back on must re-examine
+/// the file, including a PDF whose page text could not be read because the
+/// document worker never started.
+fn unsupported_status(reason: &'static str, ocr_enabled: bool) -> crate::indexer::DocStatus {
+    if reason == extract::reason::SANDBOX_OFF {
+        crate::indexer::DocStatus::Failed
+    } else if ocr_enabled {
+        crate::indexer::DocStatus::NoText
+    } else {
+        crate::indexer::DocStatus::Skipped
+    }
+}
+
+/// Keep the text layer when OCR could not run on the candidate pages.
+///
+/// The fallback reason is used only when the text layer has nothing either; the
+/// caller's OCR-on rule then records `NoText`.
+fn keep_pdf_text_or(pages: Vec<String>, reason: &'static str) -> extract::Extracted {
+    match extract::finish(pages.join("\n")) {
+        extract::Extracted::Text(text) => extract::Extracted::Text(text),
+        extract::Extracted::Unsupported(_) => extract::Extracted::Unsupported(reason),
     }
 }
 
@@ -831,4 +1009,66 @@ fn is_image_path(path: &str) -> bool {
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
     crate::thumbnail_util::is_thumbnail_image_ext(&ext)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_page_below_the_threshold_is_scan_like() {
+        assert!(pdf_page_is_scan_like(""));
+        assert!(pdf_page_is_scan_like(" \n\t "));
+        assert!(pdf_page_is_scan_like("page 1"));
+    }
+
+    #[test]
+    fn a_text_page_is_not_scan_like() {
+        assert!(!pdf_page_is_scan_like(&"word ".repeat(10)));
+    }
+
+    #[test]
+    fn ocr_pages_replace_candidates_and_keep_empty_fallbacks() {
+        let pages = vec!["typed".to_string(), "".to_string(), "caption".to_string()];
+        let merged = merge_pdf_pages(pages, &[2, 3], "scanned\u{1e}");
+        let extract::Extracted::Text(text) = merged else {
+            panic!("the text layer still has a word");
+        };
+        let typed = text.find("typed").expect("the text page survives");
+        let scanned = text.find("scanned").expect("the OCR page is merged");
+        let caption = text
+            .find("caption")
+            .expect("the empty OCR field falls back");
+        assert!(typed < scanned && scanned < caption, "{text:?}");
+    }
+
+    #[test]
+    fn sandbox_off_stays_retryable_even_when_ocr_is_on() {
+        assert_eq!(
+            unsupported_status(extract::reason::SANDBOX_OFF, true),
+            crate::indexer::DocStatus::Failed
+        );
+    }
+
+    #[test]
+    fn an_unsupported_ocr_input_is_terminal_no_text() {
+        assert_eq!(
+            unsupported_status(extract::reason::NO_TEXT, true),
+            crate::indexer::DocStatus::NoText
+        );
+    }
+
+    #[test]
+    fn an_unsupported_input_without_ocr_is_skipped() {
+        assert_eq!(
+            unsupported_status(extract::reason::NO_TEXT, false),
+            crate::indexer::DocStatus::Skipped
+        );
+    }
+
+    #[test]
+    fn an_empty_text_layer_with_no_ocr_text_is_unsupported() {
+        let merged = merge_pdf_pages(vec![String::new()], &[1], "");
+        assert!(matches!(merged, extract::Extracted::Unsupported(_)));
+    }
 }

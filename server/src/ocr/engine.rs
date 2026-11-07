@@ -23,7 +23,8 @@ use super::rec;
 pub const DEFAULT_MIN_SCORE: f32 = 0.55;
 /// Default longest edge of the detection input.
 pub const DEFAULT_MAX_SIDE: u32 = 960;
-/// Most image bytes the worker accepts; the parent reads at most this much.
+/// Most input bytes the OCR worker accepts: one image, or one PDF whose scan
+/// pages are rendered. The parent reads at most this much.
 pub const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 /// Most text lines recognised per image.
 const MAX_LINES: usize = 300;
@@ -231,52 +232,80 @@ impl Engine {
     }
 }
 
-/// Run OCR over a decoded image and return the text the index stores.
+/// The loaded models and their cached plans, reusable across images.
 ///
-/// An image with no text is an empty string, not an error: the caller records
-/// that as "OCR ran and found nothing".
-pub fn recognize(image: &DynamicImage, options: OcrOptions) -> Result<String, String> {
-    let rgb = image.to_rgb8();
-    let width = rgb.width() as usize;
-    let height = rgb.height() as usize;
-    if width == 0 || height == 0 {
-        return Ok(String::new());
+/// A multi-page PDF must create this once and call [`Self::recognize`] per page:
+/// `Engine::new` loads four graphs and prepares their plans, which dominates the
+/// cost of a small page. The image path can keep using [`recognize`] below.
+pub struct Recognizer {
+    engine: Engine,
+}
+
+impl Recognizer {
+    pub fn new() -> Result<Self, String> {
+        Ok(Self {
+            engine: Engine::new()?,
+        })
     }
-    let options = options.normalized();
-    let mut engine = Engine::new()?;
 
-    let orientation_tensor = orientation::tensor(rgb.as_raw(), width, height);
-    let (rotation, _score) = engine.classify_orientation(&orientation_tensor)?;
-    let rgb = rotation.upright(rgb);
-    let width = rgb.width() as usize;
-    let height = rgb.height() as usize;
-    let geometry = Geometry::new(width, height, options.max_side);
-
-    let tensor = det::tensor(rgb.as_raw(), width, height, geometry);
-    let boxes = engine.detect(&tensor, geometry)?;
-
-    let mut lines = Vec::new();
-    for text_box in boxes.into_iter().take(MAX_LINES) {
-        let Some(crop) = crop::warp(rgb.as_raw(), width, height, text_box.quad) else {
-            continue;
-        };
-        let tensor = line_orientation::tensor(crop.rgb.as_slice(), crop.width, crop.height);
-        let (turn, _score) = engine.classify_line_orientation(&tensor)?;
-        let crop = turn.upright(crop);
-        if let Some(decoded) = engine.recognize(&crop, options.min_score)? {
-            lines.push(layout::Line {
-                text: decoded.text,
-                quad: text_box.quad,
-            });
+    /// Run OCR over a decoded image and return the text the index stores.
+    ///
+    /// An image with no text is an empty string, not an error: the caller records
+    /// that as "OCR ran and found nothing".
+    pub fn recognize(
+        &mut self,
+        image: &DynamicImage,
+        options: OcrOptions,
+    ) -> Result<String, String> {
+        let rgb = image.to_rgb8();
+        let width = rgb.width() as usize;
+        let height = rgb.height() as usize;
+        if width == 0 || height == 0 {
+            return Ok(String::new());
         }
-    }
+        let options = options.normalized();
 
-    let mut text = layout::join(lines);
-    if text.len() > MAX_TEXT_BYTES {
-        let cut = floor_char_boundary(&text, MAX_TEXT_BYTES);
-        text.truncate(cut);
+        let orientation_tensor = orientation::tensor(rgb.as_raw(), width, height);
+        let (rotation, _score) = self.engine.classify_orientation(&orientation_tensor)?;
+        let rgb = rotation.upright(rgb);
+        let width = rgb.width() as usize;
+        let height = rgb.height() as usize;
+        let geometry = Geometry::new(width, height, options.max_side);
+
+        let tensor = det::tensor(rgb.as_raw(), width, height, geometry);
+        let boxes = self.engine.detect(&tensor, geometry)?;
+
+        let mut lines = Vec::new();
+        for text_box in boxes.into_iter().take(MAX_LINES) {
+            let Some(crop) = crop::warp(rgb.as_raw(), width, height, text_box.quad) else {
+                continue;
+            };
+            let tensor = line_orientation::tensor(crop.rgb.as_slice(), crop.width, crop.height);
+            let (turn, _score) = self.engine.classify_line_orientation(&tensor)?;
+            let crop = turn.upright(crop);
+            if let Some(decoded) = self.engine.recognize(&crop, options.min_score)? {
+                lines.push(layout::Line {
+                    text: decoded.text,
+                    quad: text_box.quad,
+                });
+            }
+        }
+
+        let mut text = layout::join(lines);
+        if text.len() > MAX_TEXT_BYTES {
+            let cut = floor_char_boundary(&text, MAX_TEXT_BYTES);
+            text.truncate(cut);
+        }
+        Ok(text)
     }
-    Ok(text)
+}
+
+/// Run OCR over one decoded image with a fresh [`Recognizer`].
+///
+/// Use [`Recognizer`] directly when several images are read in one request (a
+/// scanned PDF), so the models are loaded once.
+pub fn recognize(image: &DynamicImage, options: OcrOptions) -> Result<String, String> {
+    Recognizer::new()?.recognize(image, options)
 }
 
 /// Load all four graphs and run one blank page and line orientation

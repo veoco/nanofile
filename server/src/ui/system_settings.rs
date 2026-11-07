@@ -755,7 +755,7 @@ fn ocr_profile(
                 }
             }
             Some(worker::PageAnswer::Unavailable(why)) => unavailable_state(t, why.clone()),
-            None => unavailable_state(t, "not measured: image text OCR was not probed".to_string()),
+            None => unavailable_state(t, "not measured: text OCR was not probed".to_string()),
         }
     };
 

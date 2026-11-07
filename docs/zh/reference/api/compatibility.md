@@ -624,7 +624,7 @@ Nanofile 没有 Wiki。
 
 ### OCR
 
-Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告为关闭。Nanofile 有一个可选的 `[ocr]` 功能，为**自己的**全文索引读取图片中的文字；它不是这套 metadata API，也不会改变 Seafile 的功能标志。见[图片文字识别](/zh/guide/start/ocr)。
+Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告为关闭。Nanofile 有一个可选的 `[ocr]` 功能，为**自己的**全文索引读取图片和没有文本层的 PDF 页中的文字；它不是这套 metadata API，也不会改变 Seafile 的功能标志。见[图片与 PDF 文字识别](/zh/guide/start/ocr)。
 
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |

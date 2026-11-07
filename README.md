@@ -18,7 +18,7 @@ seahub stack.
 - **Admin console** — users, quotas, email delivery, system settings and background tasks.
 - **Confined parsing** — document, image, EXIF, media, face detection and OCR parsing runs in bounded child processes.
 - **Automatic people tags** — optional local face detection tags photos as People / Single person / Group photo; no identity or biometric template is stored.
-- **Text in images** — optional local OCR adds the text in images to the full-text index, so pictures are found by their words.
+- **Text in images and scanned PDFs** — optional local OCR adds the text in images and in PDF pages without a text layer to the full-text index, so they are found by their words.
 
 ## Quick start
 

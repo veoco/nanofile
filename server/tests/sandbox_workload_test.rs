@@ -48,7 +48,7 @@ fn pdf_with_text(text: &str) -> Vec<u8> {
 }
 
 fn extracted(pdf: Vec<u8>) -> String {
-    match worker::extract(Plan::Document(Document::Pdf), pdf) {
+    match worker::extract(Plan::Document(Document::Pdf), &pdf) {
         Outcome::Extracted(Extracted::Text(text)) => text,
         Outcome::Extracted(Extracted::Unsupported(reason)) => {
             panic!("the confined child refused the document: {reason}")

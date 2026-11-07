@@ -46,7 +46,7 @@ fn a_process_left_holding_the_pipes_does_not_hold_the_caller() {
     worker::configure_requirement(Requirement::new(true));
 
     let started = Instant::now();
-    let outcome = worker::extract(Plan::Text, b"irrelevant".to_vec());
+    let outcome = worker::extract(Plan::Text, b"irrelevant");
     let elapsed = started.elapsed();
 
     assert!(

@@ -79,4 +79,4 @@ described the old image.
   decision about a person.
 
 Looking for the text in a picture rather than the people in it? See
-[Text in images](/guide/start/ocr).
+[Text in images and PDFs](/guide/start/ocr).

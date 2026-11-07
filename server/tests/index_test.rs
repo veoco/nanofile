@@ -1734,3 +1734,202 @@ async fn test_enabling_ocr_later_rechecks_skipped_images() {
         "the re-examined image should be searchable"
     );
 }
+
+/// A PDF with no text layer is rendered page by page and becomes searchable by
+/// the words in the scan.
+#[tokio::test]
+async fn test_ocr_makes_scanned_pdf_searchable() {
+    let f = common::TestFixture::new_with_index_and_ocr().await;
+    let token = &f.api_token;
+    let bytes = common::scanned_pdf();
+
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "scan.pdf", &bytes)
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed: {resp:?}");
+
+    assert!(
+        wait_for(std::time::Duration::from_secs(120), || async {
+            search_results(&f, token, "Markov")
+                .await
+                .iter()
+                .any(|result| result["fullpath"] == "/scan.pdf")
+        })
+        .await,
+        "the OCR text of the scanned PDF should be searchable"
+    );
+
+    let results = search_results(&f, token, "Markov").await;
+    let hit = results
+        .iter()
+        .find(|result| result["fullpath"] == "/scan.pdf")
+        .expect("the PDF is a hit");
+    assert!(
+        hit["content_highlight"]
+            .as_str()
+            .is_some_and(|highlight| highlight.to_lowercase().contains("markov")),
+        "the hit should carry the OCR text: {hit}"
+    );
+}
+
+/// A mixed PDF keeps the text page's layer and OCRs only the scan page.
+#[tokio::test]
+async fn test_ocr_reads_text_and_scan_pages_of_a_mixed_pdf() {
+    let f = common::TestFixture::new_with_index_and_ocr().await;
+    let token = &f.api_token;
+    let bytes = common::mixed_pdf("zebraquartz");
+
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "mixed.pdf", &bytes)
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed: {resp:?}");
+
+    assert!(
+        wait_for(std::time::Duration::from_secs(120), || async {
+            let markov = search_results(&f, token, "Markov").await;
+            let zebra = search_results(&f, token, "zebraquartz").await;
+            markov
+                .iter()
+                .any(|result| result["fullpath"] == "/mixed.pdf")
+                && zebra
+                    .iter()
+                    .any(|result| result["fullpath"] == "/mixed.pdf")
+        })
+        .await,
+        "both the typed page and the scanned page should be searchable"
+    );
+}
+
+/// With OCR off, a scanned PDF contributes no content.
+#[tokio::test]
+async fn test_ocr_off_leaves_scanned_pdf_unindexed() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+    let bytes = common::scanned_pdf();
+
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "scan.pdf", &bytes)
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed: {resp:?}");
+
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let results = search_results(&f, token, "Markov").await;
+    assert!(
+        results
+            .iter()
+            .all(|result| result["fullpath"] != "/scan.pdf"),
+        "a scanned PDF with OCR off must not contribute content: {results:?}"
+    );
+}
+
+/// Enabling OCR later re-examines a scanned PDF the index skipped earlier.
+#[tokio::test]
+async fn test_enabling_ocr_later_rechecks_skipped_scanned_pdf() {
+    use server::service::index::IndexService;
+
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+    let bytes = common::scanned_pdf();
+
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "scan.pdf", &bytes)
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed: {resp:?}");
+
+    let indexer = f.server.state.text_indexer().expect("indexer").clone();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let states = indexer
+            .doc_states(&f.repo_id, &["/scan.pdf".to_string()])
+            .expect("states");
+        if states
+            .get("/scan.pdf")
+            .is_some_and(|state| state.status == server::indexer::DocStatus::Skipped)
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the scanned PDF was not indexed as skipped"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    let mut config = (*f.server.state.config.get()).clone();
+    config.ocr.enabled = true;
+    f.server.state.config.replace(config);
+
+    let svc = IndexService::new(
+        f.server.state.repos.clone(),
+        f.server.state.block_store.clone(),
+        indexer,
+        f.server.state.config.clone(),
+    );
+    let cursor = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    let report = svc.backfill_pass(None, &cursor).await.expect("backfill");
+    assert!(report.counts.indexed >= 1, "{report:?}");
+
+    assert!(
+        wait_for(std::time::Duration::from_secs(120), || async {
+            search_results(&f, token, "Markov")
+                .await
+                .iter()
+                .any(|result| result["fullpath"] == "/scan.pdf")
+        })
+        .await,
+        "the re-examined scanned PDF should be searchable"
+    );
+}
+
+/// A corrupt PDF is a terminal `NoText` verdict when OCR is on: it is not
+/// re-read by every backfill pass.
+#[tokio::test]
+async fn test_corrupt_pdf_is_terminal_no_text_with_ocr() {
+    use server::service::index::IndexService;
+
+    let f = common::TestFixture::new_with_index_and_ocr().await;
+    let token = &f.api_token;
+    let bytes = include_bytes!("fixtures/corrupt.pdf");
+
+    let resp = f
+        .client
+        .upload_file(token, &f.repo_id, "/", "corrupt.pdf", bytes)
+        .await;
+    assert_eq!(resp.status(), 200, "upload should succeed: {resp:?}");
+
+    let indexer = f.server.state.text_indexer().expect("indexer").clone();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let states = indexer
+            .doc_states(&f.repo_id, &["/corrupt.pdf".to_string()])
+            .expect("states");
+        if states
+            .get("/corrupt.pdf")
+            .is_some_and(|state| state.status == server::indexer::DocStatus::NoText)
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the corrupt PDF was not recorded as no text"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    let svc = IndexService::new(
+        f.server.state.repos.clone(),
+        f.server.state.block_store.clone(),
+        indexer,
+        f.server.state.config.clone(),
+    );
+    let cursor = std::sync::Arc::new(std::sync::Mutex::new(0usize));
+    let report = svc.backfill_pass(None, &cursor).await.expect("backfill");
+    assert_eq!(
+        report.counts.indexed, 0,
+        "a terminal no-text PDF must not be re-read: {report:?}"
+    );
+}

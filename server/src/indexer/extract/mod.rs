@@ -12,13 +12,14 @@
 //! the file skipped rather than retried.
 //!
 //! OCR is the one exception to the version rule below: enabling `[ocr]` does not
-//! bump [`EXTRACTOR_VERSION`]. Images that were skipped as binary are re-examined
-//! once while OCR is on and recorded as [`DocStatus::NoText`](crate::indexer::DocStatus::NoText)
-//! when there is nothing to index, so existing libraries converge without
-//! re-running the document parsers.
+//! bump [`EXTRACTOR_VERSION`]. Images and scanned PDFs that were skipped are
+//! re-examined once while OCR is on and recorded as
+//! [`DocStatus::NoText`](crate::indexer::DocStatus::NoText) when there is nothing
+//! to index, so existing libraries converge without re-running the parsers for
+//! formats OCR cannot help with.
 
 mod office;
-mod pdf;
+pub(crate) mod pdf;
 
 /// Version of the extraction pipeline as a whole.
 ///
@@ -66,7 +67,7 @@ pub enum Document {
     Office(office_oxide::DocumentFormat),
 }
 
-/// What the pipeline must read for one file, decided from its name alone.
+/// What the pipeline must read for one file, usually decided from its name alone.
 ///
 /// Deciding before the read keeps a container format from being fed a truncated
 /// prefix, and lets an oversized document be skipped without a block read.
@@ -78,6 +79,11 @@ pub enum Plan {
     Sniff,
     /// Read the whole file and parse it.
     Document(Document),
+    /// Parse a PDF and return one page per `\u{1e}`-separated field.
+    ///
+    /// Internal: only the indexer asks for it, when OCR is on and it needs the
+    /// page texts to decide which pages are scans. [`plan`] never returns it.
+    PdfPageText,
 }
 
 /// Why the extractor did not index a file.
@@ -138,6 +144,7 @@ impl Plan {
             Plan::Document(Document::Office(DocumentFormat::Doc)) => 6,
             Plan::Document(Document::Office(DocumentFormat::Xls)) => 7,
             Plan::Document(Document::Office(DocumentFormat::Ppt)) => 8,
+            Plan::PdfPageText => 9,
         }
     }
 
@@ -155,6 +162,7 @@ impl Plan {
             6 => Plan::Document(Document::Office(DocumentFormat::Doc)),
             7 => Plan::Document(Document::Office(DocumentFormat::Xls)),
             8 => Plan::Document(Document::Office(DocumentFormat::Ppt)),
+            9 => Plan::PdfPageText,
             _ => return None,
         })
     }
@@ -229,7 +237,7 @@ pub(crate) const PROBE_DOCUMENTS: &[ProbeDocument] = &[
 pub fn budget(plan: Plan, size: u64) -> Result<usize, &'static str> {
     match plan {
         Plan::Text | Plan::Sniff => Ok(MAX_INDEXED_BYTES),
-        Plan::Document(_) => {
+        Plan::Document(_) | Plan::PdfPageText => {
             if size > MAX_STRUCTURED_BYTES as u64 {
                 Err("file too large to index")
             } else {
@@ -254,6 +262,7 @@ pub(crate) fn extract(plan: Plan, data: Vec<u8>) -> Extracted {
         }
         Plan::Document(Document::Pdf) => pdf::extract_text(data),
         Plan::Document(Document::Office(format)) => office::extract_text(data, format),
+        Plan::PdfPageText => pdf::extract_page_text(data),
     }
 }
 
@@ -274,7 +283,7 @@ pub fn is_indexable_text(filename: &str, data: &[u8]) -> bool {
     match plan(filename) {
         Plan::Text => true,
         Plan::Sniff => text_content_sniff(data),
-        Plan::Document(_) => false,
+        Plan::Document(_) | Plan::PdfPageText => false,
     }
 }
 
@@ -378,7 +387,7 @@ fn extract_text(data: &[u8]) -> Extracted {
 /// Normalises the parsers' separators, caps the length, and treats "parsed but
 /// produced nothing" as not indexable — that keeps a scanned PDF from being
 /// recorded as an indexed document with empty content.
-pub(super) fn finish(text: String) -> Extracted {
+pub(crate) fn finish(text: String) -> Extracted {
     let mut text = text;
     normalize(&mut text);
     cap_text(&mut text);
@@ -679,16 +688,17 @@ mod tests {
             Plan::Document(Document::Office(office_oxide::DocumentFormat::Doc)),
             Plan::Document(Document::Office(office_oxide::DocumentFormat::Xls)),
             Plan::Document(Document::Office(office_oxide::DocumentFormat::Ppt)),
+            Plan::PdfPageText,
         ];
         let mut tags: Vec<u8> = plans.iter().map(|plan| plan.tag()).collect();
-        assert_eq!(tags.len(), 9);
+        assert_eq!(tags.len(), 10);
         for plan in plans {
             assert_eq!(Plan::from_tag(plan.tag()), Some(plan), "{plan:?}");
         }
         // The tags are unique, so a wire byte names exactly one plan.
         tags.sort_unstable();
         tags.dedup();
-        assert_eq!(tags.len(), 9);
+        assert_eq!(tags.len(), 10);
     }
 
     /// A reason that crossed the process boundary has to come back as one of

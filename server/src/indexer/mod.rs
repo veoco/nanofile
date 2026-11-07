@@ -10,8 +10,9 @@
 //! Every document records the `fs_id`, [`extract::EXTRACTOR_VERSION`] and
 //! `status` that let the backfill tell "already processed as unsupported" from
 //! "never seen". A tokio task commits the writer every 30 seconds. OCR records
-//! [`DocStatus::NoText`] for an image it examined and found nothing searchable in,
-//! which is current at this extractor version but excluded from search.
+//! [`DocStatus::NoText`] for an image, or the scan pages of a PDF, it examined and
+//! found nothing searchable in; that is current at this extractor version but
+//! excluded from search.
 
 pub mod extract;
 mod tokenizer;
@@ -85,10 +86,11 @@ pub enum DocStatus {
     /// Examined and deliberately not indexed (binary, or a format no extractor
     /// claims); recorded so the backfill does not re-read it.
     Skipped,
-    /// OCR examined the image and found nothing searchable: no text, an image the
-    /// decoder refused, a file over the OCR cap, or a terminal worker failure.
-    /// It is current at this extractor version (so OCR does not run again on
-    /// every pass) and, like `Skipped`, cannot be returned by a content search.
+    /// OCR examined the image, or every page of the PDF it was asked to read, and
+    /// found nothing searchable: no text, a decoder/renderer refusal, a file over
+    /// the OCR cap, or a terminal worker failure. It is current at this extractor
+    /// version (so OCR does not run again on every pass) and, like `Skipped`,
+    /// cannot be returned by a content search.
     NoText,
     /// Extraction or the block read failed. Retried after a cooldown.
     Failed,

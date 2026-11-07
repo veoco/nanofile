@@ -18,19 +18,23 @@ A profile names what the child is allowed to establish:
 - `faces` — face detection for the automatic people tags. The same shape as
   `images`, with a much wider budget: the detector is a model profile.
 - `ocr` — PP-OCRv6 tiny text detection and recognition plus the PP-LCNet page
-  and text-line orientation classifiers, for the full-text index. The same
-  shape as `faces`, with the widest budget: four models, one detection pass and
-  one recognition pass per text line.
+  and text-line orientation classifiers, for images and PDF pages in the
+  full-text index. The same shape as `faces`, with the widest budget: four
+  models, one detection pass and one recognition pass per text line. A PDF
+  request also carries the page numbers to render with `hayro`.
 
 ## Worker protocol
 
 - **Request** on stdin: `NFX1`, one byte naming the plan, then the file's bytes to
   end of file. The model jobs frame their own requests: faces sends an operation
-  byte and a little-endian `u32` options word before the image; OCR does the same.
+  byte and a little-endian `u32` options word before the image; OCR does the same
+  for an image. A PDF OCR request adds a `u32` page count and that many `u32`
+  page numbers before the PDF bytes.
 - **Reply** on stdout: `T` or `U`, a little-endian `u32` length, then that many bytes
-  of UTF-8 — the text, or the reason the document is not indexable. OCR adds `E`
-  for an environment/model failure, which the parent records as retryable rather
-  than as a verdict on the image.
+  of UTF-8 — the text, or the reason the document is not indexable. A PDF OCR
+  reply separates one field per requested page with `\u{1e}`. OCR adds `E` for an
+  environment/model failure, which the parent records as retryable rather than as
+  a verdict on the input.
 - `--selftest` replaces the request with a report line and no reply.
 - `--probe` runs the probe a serving process runs at startup and exits non-zero
   when the worker is unavailable.

@@ -144,6 +144,19 @@ fn image_request(op: u8, size: u32, data: &[u8]) -> Vec<u8> {
     request
 }
 
+/// A PDF OCR request: magic, op, option word, page count, page numbers, PDF.
+fn ocr_pdf_request(options: u32, pages: &[u32], pdf: &[u8]) -> Vec<u8> {
+    let mut request = Vec::from(MAGIC);
+    request.push(b'P');
+    request.extend_from_slice(&options.to_le_bytes());
+    request.extend_from_slice(&(pages.len() as u32).to_le_bytes());
+    for page in pages {
+        request.extend_from_slice(&page.to_le_bytes());
+    }
+    request.extend_from_slice(pdf);
+    request
+}
+
 /// A media request head: the magic, the kind, a little-endian size, a
 /// little-endian path length, then the path.
 fn media_request(kind: u8, size: u32, path: &[u8]) -> Vec<u8> {
@@ -174,7 +187,8 @@ fn a_document_request_is_parsed_or_refused() {
     assert_eq!(body, b"zebraquartz");
 
     // An unknown plan tag is refused rather than mapped onto the nearest plan.
-    let answer = run_worker(&args, &document_request(9, b"zebraquartz"));
+    // 9 is the internal page-separated PDF plan, so an unknown tag is 10.
+    let answer = run_worker(&args, &document_request(10, b"zebraquartz"));
     answer.finished("an unknown plan tag");
     assert!(
         !answer.status.success(),
@@ -340,8 +354,19 @@ fn an_ocr_request_answers_text_or_is_refused() {
     // anything: the literal is `jobs/ocr::MAX_IMAGE_BYTES`.
     let oversized = image_request(b'O', 0, &vec![0u8; 32 * 1024 * 1024 + 1]);
     let answer = run_worker(&args, &oversized);
-    answer.finished("an oversized image");
-    assert_eq!(answer.refusal(), "image over the size cap");
+    answer.finished("an oversized input");
+    assert_eq!(answer.refusal(), "input over the size cap");
+
+    // A PDF request with a page list that is not a PDF: the child parses first,
+    // so it refuses without loading the models.
+    let answer = run_worker(&args, &ocr_pdf_request(0, &[1], b"not a pdf"));
+    answer.finished("a PDF OCR request");
+    assert_eq!(answer.refusal(), "could not parse document");
+
+    // Zero pages is a malformed page list, refused before the PDF is read.
+    let answer = run_worker(&args, &ocr_pdf_request(0, &[], b"not a pdf"));
+    answer.finished("an empty page list");
+    assert_eq!(answer.refusal(), "bad PDF page list");
 }
 
 /// The faces child runs the detector on what it was given and answers with a count.

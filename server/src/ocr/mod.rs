@@ -29,10 +29,33 @@ pub mod keys;
 pub mod layout;
 pub mod line_orientation;
 pub mod orientation;
+pub mod pdf;
 pub mod rec;
 pub mod resample;
 
 pub use engine::{
-    DEFAULT_MAX_SIDE, DEFAULT_MIN_SCORE, MAX_IMAGE_BYTES, OcrOptions, Source, is_image, recognize,
-    source_for,
+    DEFAULT_MAX_SIDE, DEFAULT_MIN_SCORE, MAX_IMAGE_BYTES, OcrOptions, Recognizer, Source, is_image,
+    recognize, source_for,
 };
+
+/// Whether the path names a PDF, the other format OCR can read page by page.
+///
+/// The check matches [`crate::indexer::extract::plan`]: extension only, ASCII
+/// case-insensitive.
+pub fn is_pdf(path: &str) -> bool {
+    path.rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("pdf"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_pdf;
+
+    #[test]
+    fn pdf_extensions_are_case_insensitive() {
+        assert!(is_pdf("scan.pdf"));
+        assert!(is_pdf("SCAN.PDF"));
+        assert!(!is_pdf("scan.txt"));
+        assert!(!is_pdf("pdf"));
+    }
+}

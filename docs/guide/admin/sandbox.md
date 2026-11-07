@@ -8,7 +8,7 @@ memory bound, a CPU bound and a wall-clock timeout, never inside the server:
 - media thumbnails (through `ffmpeg`),
 - EXIF and avatar processing,
 - face detection for the automatic people tags,
-- text recognition for the full-text index (`[ocr]`).
+- text recognition for the full-text index, for images and scanned PDF pages (`[ocr]`).
 
 The child bounds and confines itself before it reads a request and prints what it
 established. The server decides from that report, not from what it asked for.

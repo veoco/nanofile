@@ -1752,6 +1752,116 @@ pub fn minimal_pdf_with_stream(stream: &str) -> Vec<u8> {
     out.into_bytes()
 }
 
+/// A one-page PDF whose only content is the OCR sample image.
+///
+/// The page has no text operators, so `lopdf` sees no text layer and the indexer
+/// asks OCR to render it. The JPEG is generated from the same fixture the image
+/// OCR test uses, so both paths pin the same words.
+pub fn scanned_pdf() -> Vec<u8> {
+    let (jpeg, width, height) = sample_image_jpeg();
+    let content = format!("q {width} 0 0 {height} 0 0 cm /Im0 Do Q");
+    let image = image_object(&jpeg, width, height);
+    assemble_objects(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] \
+             /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .into_bytes(),
+        stream_object_bytes(content.as_bytes()),
+        image,
+    ])
+}
+
+/// A two-page PDF: page 1 is a normal text page, page 2 is the scanned image.
+///
+/// The text and the image carry different words, so an integration test can
+/// assert that both the text layer and the OCR page reached the index and that
+/// the page numbers were mapped correctly.
+pub fn mixed_pdf(text: &str) -> Vec<u8> {
+    let (jpeg, width, height) = sample_image_jpeg();
+    let text_stream = format!("BT /F1 24 Tf 72 700 Td ({text}) Tj ET");
+    let image_stream = format!("q {width} 0 0 {height} 0 0 cm /Im0 Do Q");
+    assemble_objects(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+          /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+            .to_vec(),
+        stream_object_bytes(text_stream.as_bytes()),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] \
+             /Resources << /XObject << /Im0 8 0 R >> >> /Contents 7 0 R >>"
+        )
+        .into_bytes(),
+        stream_object_bytes(image_stream.as_bytes()),
+        image_object(&jpeg, width, height),
+    ])
+}
+
+/// Decode the OCR sample page and encode it as a JPEG for a PDF image XObject.
+fn sample_image_jpeg() -> (Vec<u8>, u32, u32) {
+    let png = include_bytes!("../fixtures/ocr/sample.png");
+    let image = image::load_from_memory(png).expect("the OCR sample decodes");
+    let rgb = image.to_rgb8();
+    let (width, height) = rgb.dimensions();
+    let mut jpeg = Vec::new();
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90);
+    encoder
+        .encode(rgb.as_raw(), width, height, image::ExtendedColorType::Rgb8)
+        .expect("the sample encodes as JPEG");
+    (jpeg, width, height)
+}
+
+/// A `/DCTDecode` image XObject, stream bytes included.
+fn image_object(jpeg: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let mut out = format!(
+        "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} \
+         /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
+        jpeg.len()
+    )
+    .into_bytes();
+    out.extend_from_slice(jpeg);
+    out.extend_from_slice(b"\nendstream");
+    out
+}
+
+fn stream_object_bytes(content: &[u8]) -> Vec<u8> {
+    let mut out = format!("<< /Length {} >>\nstream\n", content.len()).into_bytes();
+    out.extend_from_slice(content);
+    out.extend_from_slice(b"\nendstream");
+    out
+}
+
+/// Byte-oriented PDF assembler: the image stream makes a `String` unfit.
+fn assemble_objects(objects: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (index, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+    out.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in &offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
+
 /// Build a `.docx` holding `text` as a single paragraph.
 pub fn minimal_docx(text: &str) -> Vec<u8> {
     const CONTENT_TYPE: &str =

@@ -501,7 +501,7 @@ pub fn run_request(
 ///
 /// The caller decides what a failure means: [`Outcome::Unavailable`] is the
 /// environment, [`Outcome::Failed`] the document.
-pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
+pub fn extract(plan: Plan, data: &[u8]) -> Outcome {
     // The switch is the admin's own choice, not an environment problem: the
     // document is skipped (and not retried forever) rather than failed.
     if !configured_requirement().enabled {
@@ -511,7 +511,7 @@ pub fn extract(plan: Plan, data: Vec<u8>) -> Outcome {
     let mut request = Vec::with_capacity(MAGIC.len() + 1 + data.len());
     request.extend_from_slice(MAGIC);
     request.push(plan.tag());
-    request.extend_from_slice(&data);
+    request.extend_from_slice(data);
 
     match run_request(
         Profile::Documents,

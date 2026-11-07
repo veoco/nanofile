@@ -167,6 +167,12 @@ tantivy = { version = "0.26.1", default-features = false, features = [
 # features out of the binary. See `indexer::extract` for the format table and
 # the limits that keep these crates safe on untrusted content.
 lopdf = { version = "0.45", default-features = false }
+# Rasterizes the pages OCR has to read. It is not a second text extractor:
+# `lopdf` keeps owning the text layer and page classification, and hayro is
+# only asked for pages that have no text. Pure Rust, no pdfium or C. Default
+# features are off so no font/CMap tables are embedded: scans are pixels, and
+# text pages never reach the renderer. See `ocr::pdf` for the bounds.
+hayro = { version = "0.9", default-features = false }
 office_oxide = "0.1.15"
 # Counting what an Office package decompresses to before it is parsed, which
 # `office_oxide` itself does not bound across parts. Same crate, same version

@@ -94,7 +94,7 @@ fn the_resource_bound_is_an_invariant() {
     // protocol, so the outcome is a failure about the *bytes*; had the
     // requirement refused this host, there would have been no child at all.
     let before = fs::metadata(&marker).is_ok();
-    let outcome = worker::extract(Plan::Text, b"irrelevant".to_vec());
+    let outcome = worker::extract(Plan::Text, b"irrelevant");
     assert!(
         !matches!(outcome, Outcome::Unavailable(_)),
         "a bounded host must not be refused: {outcome:?}"
@@ -141,7 +141,7 @@ fn the_resource_bound_is_an_invariant() {
     );
 
     let started = Instant::now();
-    let outcome = worker::extract(Plan::Text, b"irrelevant".to_vec());
+    let outcome = worker::extract(Plan::Text, b"irrelevant");
     assert!(
         matches!(outcome, Outcome::Unavailable(_)),
         "an unbounded host is an environment problem, not a verdict: {outcome:?}"

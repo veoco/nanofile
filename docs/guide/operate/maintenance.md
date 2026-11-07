@@ -67,11 +67,13 @@ Indexing depends on document extraction inside the sandbox (PDF, Office, images,
 …). While the sandbox is off, documents are not indexed — they are recorded as
 retryable and picked up once it is back on. See [Sandbox](/guide/admin/sandbox).
 
-Image text is a separate opt-in (`[ocr] enabled`): its text joins the same
-documents, so a content search finds the words in a picture. Enabling OCR later
-re-examines images that were previously skipped, without rebuilding the document
-part of the index. Disabling it stops new OCR but leaves existing text until the
-repository is re-indexed. See [Text in images](/guide/start/ocr).
+Image and scanned-PDF text is a separate opt-in (`[ocr] enabled`): its text
+joins the same documents, so a content search finds the words in a picture or a
+scan page. Enabling OCR later re-examines images and PDFs that were previously
+skipped, without rebuilding the document part of the index; a mixed PDF already
+indexed through its text layer needs a re-index to add its scan pages. Disabling
+it stops new OCR but leaves existing text until the repository is re-indexed.
+See [Text in images and PDFs](/guide/start/ocr).
 
 ## Block and directory verification
 

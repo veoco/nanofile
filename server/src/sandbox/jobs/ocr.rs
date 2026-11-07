@@ -7,8 +7,10 @@
 //! down with it.
 //!
 //! Request: `NFX1`, the operation byte, a little-endian `u32` option word, then
-//! the image's bytes. Reply: the common frame, `T` for UTF-8 text, `U` for
-//! "examined, no indexable text", `E` for "the environment or a model failed".
+//! the image's bytes. The PDF operation inserts a `u32` page count and that many
+//! `u32` page numbers before the PDF bytes. Reply: the common frame, `T` for
+//! UTF-8 text (page texts separated by `\u{1e}` for a PDF), `U` for "examined,
+//! no indexable text", `E` for "the environment or a model failed".
 
 use std::io::Read;
 
@@ -16,11 +18,14 @@ use crate::ocr::{self, OcrOptions};
 use crate::sandbox::worker::{self, RunOutcome};
 use crate::sandbox::{Grants, JobVerdict, Profile};
 
-/// Recognise text, which is this profile's only operation.
+/// Recognise text in one image.
 pub const OP_OCR: u8 = b'O';
+/// Render and recognise selected pages of a PDF.
+pub const OP_OCR_PDF: u8 = b'P';
 
-/// Most image bytes the child will accept: the parent already caps what it reads
-/// (32 MiB), and this is the second half of the same bound.
+/// Most input bytes the child will accept: one image or one PDF. The parent
+/// already caps what it reads (32 MiB), and this is the second half of the same
+/// bound.
 pub(crate) const MAX_IMAGE_BYTES: usize = crate::ocr::MAX_IMAGE_BYTES;
 
 /// The gate that bounds how many OCR children are alive at once.
@@ -78,12 +83,61 @@ pub(crate) fn extract(content: &[u8], options: OcrOptions) -> worker::Outcome {
     }
 }
 
+/// Ask the confined child to render and read selected PDF pages.
+///
+/// `pages` are 1-based and must fit the PDF text extractor's page cap; the
+/// indexer builds the list from that extractor's own page texts.
+pub(crate) fn extract_pdf(pdf: &[u8], pages: &[u32], options: OcrOptions) -> worker::Outcome {
+    if pages.is_empty() || pages.len() > crate::indexer::extract::pdf::MAX_PAGES {
+        return worker::Outcome::Failed(crate::indexer::extract::reason::FAILED);
+    }
+    let request = pdf_request(encode_options(options), pages, pdf);
+    match worker::run_request(
+        Profile::Ocr,
+        worker::OCR_TIMEOUT,
+        request,
+        Grants::default(),
+    ) {
+        RunOutcome::Reply { tag: b'T', body } => match String::from_utf8(body) {
+            Ok(text) => worker::Outcome::Extracted(crate::indexer::extract::Extracted::Text(text)),
+            Err(_) => worker::Outcome::Failed(crate::indexer::extract::reason::FAILED),
+        },
+        RunOutcome::Reply { tag: b'U', body } => {
+            let reason = String::from_utf8_lossy(&body);
+            worker::Outcome::Extracted(crate::indexer::extract::Extracted::Unsupported(
+                crate::indexer::extract::reason::intern(&reason),
+            ))
+        }
+        RunOutcome::Reply { tag: b'E', body } => {
+            worker::Outcome::Unavailable(String::from_utf8_lossy(&body).into_owned())
+        }
+        RunOutcome::Reply { .. } => {
+            worker::Outcome::Failed(crate::indexer::extract::reason::FAILED)
+        }
+        RunOutcome::Unavailable(why) => worker::Outcome::Unavailable(why),
+        RunOutcome::Failed(why) => worker::Outcome::Failed(why),
+    }
+}
+
 fn request(op: u8, options: u32, content: &[u8]) -> Vec<u8> {
     let mut request = Vec::with_capacity(worker::MAGIC.len() + 5 + content.len());
     request.extend_from_slice(worker::MAGIC);
     request.push(op);
     request.extend_from_slice(&options.to_le_bytes());
     request.extend_from_slice(content);
+    request
+}
+
+fn pdf_request(options: u32, pages: &[u32], pdf: &[u8]) -> Vec<u8> {
+    let mut request = Vec::with_capacity(worker::MAGIC.len() + 9 + pages.len() * 4 + pdf.len());
+    request.extend_from_slice(worker::MAGIC);
+    request.push(OP_OCR_PDF);
+    request.extend_from_slice(&options.to_le_bytes());
+    request.extend_from_slice(&(pages.len() as u32).to_le_bytes());
+    for page in pages {
+        request.extend_from_slice(&page.to_le_bytes());
+    }
+    request.extend_from_slice(pdf);
     request
 }
 
@@ -97,13 +151,37 @@ pub fn serve() -> anyhow::Result<()> {
     let op = head[4];
     let options = u32::from_le_bytes(head[5..9].try_into().expect("four bytes"));
 
+    let pages = if op == OP_OCR_PDF {
+        let mut count = [0u8; 4];
+        stdin.read_exact(&mut count)?;
+        let count = u32::from_le_bytes(count) as usize;
+        if count == 0 || count > crate::indexer::extract::pdf::MAX_PAGES {
+            return worker::write_frame(b'U', b"bad PDF page list");
+        }
+        let mut bytes = vec![0u8; count * 4];
+        stdin.read_exact(&mut bytes)?;
+        Some(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| u32::from_le_bytes(*chunk))
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        None
+    };
+
     let mut data = Vec::new();
     stdin.read_to_end(&mut data)?;
     if data.len() > MAX_IMAGE_BYTES {
-        return worker::write_frame(b'U', b"image over the size cap");
+        return worker::write_frame(b'U', b"input over the size cap");
     }
 
-    let (tag, body) = answer(op, decode_options(options), &data);
+    let (tag, body) = match pages {
+        Some(pages) => answer_pdf(decode_options(options), &pages, data),
+        None => answer(op, decode_options(options), &data),
+    };
     worker::write_frame(tag, &body)
 }
 
@@ -116,6 +194,15 @@ fn answer(op: u8, options: OcrOptions, data: &[u8]) -> (u8, Vec<u8>) {
             Err(Refusal::Unavailable(reason)) => (b'E', reason.into_bytes()),
         },
         _ => (b'U', b"unknown OCR operation".to_vec()),
+    }
+}
+
+/// Render and recognise the requested pages, joined with the page separator.
+fn answer_pdf(options: OcrOptions, pages: &[u32], data: Vec<u8>) -> (u8, Vec<u8>) {
+    match ocr::pdf::recognize(data, pages, options) {
+        Ok(texts) => (b'T', texts.join("\u{1e}").into_bytes()),
+        Err(ocr::pdf::PdfRefusal::NoText(reason)) => (b'U', reason.as_bytes().to_vec()),
+        Err(ocr::pdf::PdfRefusal::Unavailable(reason)) => (b'E', reason.into_bytes()),
     }
 }
 
@@ -192,6 +279,21 @@ mod tests {
             encode_options(OcrOptions::default())
         );
         assert_eq!(&request[9..], b"payload");
+    }
+
+    #[test]
+    fn the_pdf_request_carries_its_page_list() {
+        let request = pdf_request(encode_options(OcrOptions::default()), &[2, 5], b"%PDF");
+        assert_eq!(&request[..4], worker::MAGIC);
+        assert_eq!(request[4], OP_OCR_PDF);
+        assert_eq!(
+            u32::from_le_bytes(request[5..9].try_into().unwrap()),
+            encode_options(OcrOptions::default())
+        );
+        assert_eq!(u32::from_le_bytes(request[9..13].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(request[13..17].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(request[17..21].try_into().unwrap()), 5);
+        assert_eq!(&request[21..], b"%PDF");
     }
 
     #[test]

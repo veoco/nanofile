@@ -7,6 +7,9 @@
 //! depth limit refuses a deeply nested document instead of overflowing the stack
 //! (an `abort`, not an unwind, so [`super::guard`] cannot contain it). The worker's
 //! address-space limit backstops what the format leaves: one page, one string.
+//! [`extract_text`] joins the pages with a newline. [`extract_page_text`] keeps
+//! one `\u{1e}`-separated field per page instead, so the indexer can decide which
+//! pages have no text layer and ask OCR only for those.
 //! # Form XObjects
 //! `lopdf` reads a page's own content streams only; [`Forms`] also renders each
 //! `/Subtype /Form` XObject a page references.
@@ -15,13 +18,16 @@ use std::collections::HashSet;
 
 use lopdf::{Document, LoadOptions, Object, ObjectId};
 
-use super::{Extracted, MAX_INDEXED_CONTENT_BYTES, MAX_STRUCTURED_BYTES, finish, guard, reason};
+use super::{
+    Extracted, MAX_INDEXED_CONTENT_BYTES, MAX_STRUCTURED_BYTES, cap_text, finish, guard, normalize,
+    reason,
+};
 
 /// How many pages of one document are read.
 ///
 /// A stop, not a failure: the text of the first pages is still worth indexing,
 /// and the file is stored whole in the block store.
-const MAX_PAGES: usize = 2000;
+pub(crate) const MAX_PAGES: usize = 2000;
 
 /// Most bytes a single stream may decode to.
 ///
@@ -52,22 +58,50 @@ fn load_options() -> LoadOptions {
 
 /// Extract the text of a PDF, or why it cannot be read.
 pub(super) fn extract_text(data: Vec<u8>) -> Extracted {
+    match extract_pages_inner(data) {
+        Ok(pages) => finish(pages.join("\n")),
+        Err(reason) => Extracted::Unsupported(reason),
+    }
+}
+
+/// Extract the text of a PDF with a `\u{1e}` between pages.
+///
+/// Unlike [`extract_text`], an all-empty page list is still [`Extracted::Text`]:
+/// the indexer needs the page count to decide which pages OCR should read. The
+/// separator is stripped from each page before the join, so it cannot collide
+/// with page text.
+pub(crate) fn extract_page_text(data: Vec<u8>) -> Extracted {
+    match extract_pages_inner(data) {
+        Ok(pages) => {
+            if pages.is_empty() {
+                return Extracted::Unsupported(reason::NO_TEXT);
+            }
+            let mut text = pages.join("\u{1e}");
+            cap_text(&mut text);
+            Extracted::Text(text)
+        }
+        Err(reason) => Extracted::Unsupported(reason),
+    }
+}
+
+/// Parse a PDF and return one normalized string per page, in page order.
+fn extract_pages_inner(data: Vec<u8>) -> Result<Vec<String>, &'static str> {
     guard(
         "pdf",
-        |_| Extracted::Unsupported(reason::PANIC),
+        |_| Err(reason::PANIC),
         move || {
             let mut doc = match Document::load_mem_with_options(&data, load_options()) {
                 Ok(doc) => doc,
                 Err(e) => {
                     tracing::debug!("pdf: cannot parse: {e}");
-                    return Extracted::Unsupported(reason::PARSE);
+                    return Err(reason::PARSE);
                 }
             };
 
             // Open with an empty user password so the caller records "encrypted"
             // rather than "unparseable"; the content is unreachable either way.
             if doc.is_encrypted() && doc.decrypt("").is_err() {
-                return Extracted::Unsupported(reason::ENCRYPTED);
+                return Err(reason::ENCRYPTED);
             }
 
             // `get_pages` returns an owned map keyed by 1-based page number.
@@ -79,19 +113,25 @@ pub(super) fn extract_text(data: Vec<u8>) -> Extracted {
                 );
             }
 
-            let mut text = String::new();
+            let mut extracted = Vec::new();
+            let mut total = 0usize;
             for page_num in pages.keys().copied().take(MAX_PAGES) {
                 let Some(&page_id) = pages.get(&page_num) else {
                     continue;
                 };
+                let mut text = String::new();
                 append_page(&mut text, &mut doc, page_id, page_num);
-                if text.len() >= MAX_INDEXED_CONTENT_BYTES {
+                normalize(&mut text);
+                // The page separator is the indexer's wire format, not content.
+                text.retain(|character| character != '\u{1e}');
+                total += text.len();
+                extracted.push(text);
+                if total >= MAX_INDEXED_CONTENT_BYTES {
                     break;
                 }
             }
 
-            // No text layer at all (a scan) means skipped, not indexed as empty.
-            finish(text)
+            Ok(extracted)
         },
     )
 }
@@ -382,6 +422,22 @@ mod tests {
             extract_text(Vec::new()),
             Extracted::Unsupported(_)
         ));
+    }
+
+    /// The page-separated reply keeps one entry per page even when every page is
+    /// empty: the indexer needs the count to ask OCR for the scan pages.
+    #[test]
+    fn page_text_keeps_empty_pages_and_the_page_count() {
+        let Extracted::Text(text) = extract_page_text(minimal_pdf_without_text()) else {
+            panic!("an empty page must still be reported as a page");
+        };
+        assert!(text.is_empty(), "one empty page has no separator: {text:?}");
+
+        let Extracted::Text(text) = extract_page_text(pdf_with_text("zebraquartz")) else {
+            panic!("text expected");
+        };
+        assert!(text.contains("zebraquartz"));
+        assert_eq!(text.split('\u{1e}').count(), 1);
     }
 
     #[test]

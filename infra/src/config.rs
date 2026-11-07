@@ -1552,10 +1552,10 @@ impl Default for FaceTagsConfig {
     }
 }
 
-/// Automatic OCR of images into the full-text index (PP-OCRv6 tiny and the
-/// page and text-line orientation classifiers). Off by default: it loads four
-/// models and costs CPU, and the text it stores may be sensitive, so a library
-/// owner opts in explicitly.
+/// Automatic OCR of images and scanned PDF pages into the full-text index
+/// (PP-OCRv6 tiny plus the PP-LCNet page and text-line orientation classifiers).
+/// Off by default: it loads four models and costs CPU, and the text it stores
+/// may be sensitive, so a library owner opts in explicitly.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct OcrConfig {
     /// Master switch. Env: NANOFILE_OCR_ENABLED

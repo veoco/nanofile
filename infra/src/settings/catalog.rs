@@ -1014,7 +1014,7 @@ pub static CATALOG: &[SettingDef] = &[
             Ok(())
         }
     ),
-    // · Image text (OCR)
+    // · Image and scanned-PDF text (OCR)
     setting!(
         "ocr.enabled",
         Maintenance,
