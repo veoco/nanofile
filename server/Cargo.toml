@@ -246,6 +246,11 @@ objc2-app-kit = { version = "0.3", optional = true, features = [
     "NSRunningApplication",
 ] }
 [target.'cfg(target_os = "linux")'.dependencies]
+# Pinned to the GTK 3 line: tray-icon's libappindicator backend (0.9, the
+# latest) still asks for gtk ^0.18, and gtk-sys 0.18/0.19 both declare
+# `links = "gtk-3"`, so a 0.19 entry here fails version selection instead of
+# compiling a second copy. This crate's own gtk::init/main/Settings calls must
+# stay on the backend's gtk. Revisit when libappindicator moves to gtk 0.19.
 gtk = { version = "0.18", optional = true }
 # The extraction worker's confinement: Landlock, seccomp, capabilities and the
 # resource limits, all as raw syscalls through `libc::syscall`.
