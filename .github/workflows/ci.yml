@@ -109,7 +109,7 @@ jobs:
       # writes. A check-only entry under a build job's key makes that job
       # recompile the whole dependency graph on every run: that is ~380 crates,
       # 4-6 minutes on macOS and Windows.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "nanofile"
       - name: Install Tailwind CSS
@@ -142,7 +142,7 @@ jobs:
       # default features. The content analyzer is dictionary-free and embedded
       # assets are DEFLATE-only now; these two checks keep both properties.
       - name: Install cargo-machete
-        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
         with:
           tool: cargo-machete
       - name: Reject unused and deliberately avoided dependencies
@@ -187,7 +187,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "nanofile"
       - name: Install Tailwind CSS
@@ -231,7 +231,7 @@ jobs:
           # `cargo clippy` below needs it, and asking for it is what makes the
           # step independent of whatever the runner image happens to preinstall.
           components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "nanofile-build"
       - name: Install tray system dependencies
@@ -270,7 +270,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
@@ -301,7 +301,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # Prebuilt binary: compiling cargo-audit on every run would cost minutes.
-      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
         with:
           tool: cargo-audit
       # Fails on vulnerabilities only; unmaintained/unsound crates are reported
@@ -337,7 +337,7 @@ jobs:
           targets: ${{ matrix.target }}
           # The wrapped build below runs clippy's lints.
           components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "nanofile"
       - name: Install Tailwind CSS
@@ -356,7 +356,7 @@ jobs:
           echo "/tmp/zig-x86_64-linux-0.16.0" >> $GITHUB_PATH
       # Prebuilt from GitHub Releases instead of `cargo install`: same version
       # pin (0.23.4), without compiling the installer on every row.
-      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
         with:
           tool: cargo-zigbuild@0.23.4
       # clippy-driver as the workspace wrapper runs clippy's lints inside the same
@@ -413,7 +413,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "nanofile-build"
       - name: Install Tailwind CSS
