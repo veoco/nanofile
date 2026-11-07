@@ -1,11 +1,16 @@
 //! Everything the tray menu *does*.
 //!
-//! Shape forced by muda: the menu handler runs synchronously inside its
-//! `WM_COMMAND` dispatch, which still holds a borrow of the clicked item — so it
-//! may not touch that item and may not block on anything that pumps messages (the
-//! dialogs do). It only queues a [`TrayAction`]; the Windows message loop drains
-//! the queue after the dispatch returns, and every item update and dialog happens
-//! there, while other backends run the action directly from their own event loop.
+//! Shape forced by muda: while a menu item is activated it is still borrowed, and
+//! on Windows the handler runs inside its `WM_COMMAND` dispatch — so it may not
+//! touch that item and may not block on anything that pumps messages (the dialogs
+//! do). It only queues a [`TrayAction`]; the item updates and dialogs happen when
+//! the owning thread drains the queue:
+//!
+//! - Windows: the message loop drains it after the dispatch returns.
+//! - Linux: tray-icon's D-Bus thread invokes the handler, so the action travels
+//!   over the backend's wake channel to the main thread, which owns the menu.
+//! - macOS: the `NSApplication` main loop runs the action directly.
+//!
 //! Queuing is also why the service toggle needs no in-flight flag: a second click
 //! is prevented by disabling the item while the helper runs.
 
@@ -14,6 +19,7 @@
 #![cfg_attr(target_os = "windows", allow(unsafe_code))]
 
 use std::cell::RefCell;
+#[cfg(target_os = "windows")]
 use std::collections::VecDeque;
 #[cfg(target_os = "windows")]
 use std::path::{Path, PathBuf};
@@ -26,9 +32,11 @@ use crate::startup::login::{LoginEntry as _, PlatformLogin};
 #[cfg(target_os = "windows")]
 use crate::startup::policy;
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use super::backend;
 use super::{ID_AUTOSTART, ID_OPEN_CONFIG, ID_OPEN_WEB, ID_QUIT, TrayContext, open_config_file};
 #[cfg(target_os = "windows")]
-use super::{ID_SERVICE, backend, lang};
+use super::{ID_SERVICE, lang};
 #[cfg(target_os = "windows")]
 use crate::startup::service::{ServiceProbe, probe_service};
 #[cfg(target_os = "windows")]
@@ -66,6 +74,7 @@ pub(super) struct MenuState {
 
 thread_local! {
     static MENU_STATE: RefCell<Option<MenuState>> = const { RefCell::new(None) };
+    #[cfg(target_os = "windows")]
     static PENDING: RefCell<VecDeque<TrayAction>> = const { RefCell::new(VecDeque::new()) };
 }
 
@@ -80,8 +89,8 @@ fn with_state<T>(f: impl FnOnce(&MenuState) -> T) -> Option<T> {
 
 /// What a menu click asks for: no payloads, since the action reads what it needs
 /// from [`MENU_STATE`] when it runs, outside muda's borrow.
-#[derive(Debug, Clone, Copy)]
-enum TrayAction {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum TrayAction {
     OpenWeb,
     ToggleLogin,
     #[cfg(target_os = "windows")]
@@ -91,14 +100,22 @@ enum TrayAction {
 }
 
 fn on_menu_event(event: MenuEvent) {
-    match event.id.as_ref() {
-        ID_OPEN_WEB => defer(TrayAction::OpenWeb),
-        ID_AUTOSTART => defer(TrayAction::ToggleLogin),
+    if let Some(action) = action_for(event.id.as_ref()) {
+        defer(action);
+    }
+}
+
+/// The id-to-action table, kept separate so the mapping can be tested without a
+/// menu or an event handler.
+fn action_for(id: &str) -> Option<TrayAction> {
+    match id {
+        ID_OPEN_WEB => Some(TrayAction::OpenWeb),
+        ID_AUTOSTART => Some(TrayAction::ToggleLogin),
         #[cfg(target_os = "windows")]
-        ID_SERVICE => defer(TrayAction::ToggleService),
-        ID_OPEN_CONFIG => defer(TrayAction::OpenConfig),
-        ID_QUIT => defer(TrayAction::Quit),
-        _ => {}
+        ID_SERVICE => Some(TrayAction::ToggleService),
+        ID_OPEN_CONFIG => Some(TrayAction::OpenConfig),
+        ID_QUIT => Some(TrayAction::Quit),
+        _ => None,
     }
 }
 
@@ -112,9 +129,20 @@ fn defer(action: TrayAction) {
             drain();
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        // The handler runs on tray-icon's D-Bus thread; the menu is owned by the
+        // main thread, which drains the action there.
+        backend::defer(action);
+    }
+    #[cfg(target_os = "macos")]
     {
         action.run();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        // No tray is ever started on these platforms (`run_mode` reports headless).
+        let _ = action;
     }
 }
 
@@ -127,7 +155,7 @@ pub(super) fn drain() {
 }
 
 impl TrayAction {
-    fn run(self) {
+    pub(super) fn run(self) {
         match self {
             TrayAction::OpenWeb => {
                 let Some(web_url) = with_state(|state| state.ctx.web_url.clone()) else {
@@ -647,5 +675,21 @@ fn show_message(title: &str, text: &str, flags: u32) -> i32 {
             title.as_ptr(),
             flags | MB_TOPMOST,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_menu_id_is_translated_and_unknown_ids_are_ignored() {
+        assert_eq!(action_for(ID_OPEN_WEB), Some(TrayAction::OpenWeb));
+        assert_eq!(action_for(ID_AUTOSTART), Some(TrayAction::ToggleLogin));
+        #[cfg(target_os = "windows")]
+        assert_eq!(action_for(ID_SERVICE), Some(TrayAction::ToggleService));
+        assert_eq!(action_for(ID_OPEN_CONFIG), Some(TrayAction::OpenConfig));
+        assert_eq!(action_for(ID_QUIT), Some(TrayAction::Quit));
+        assert_eq!(action_for("nanofile.unknown"), None);
     }
 }

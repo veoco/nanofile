@@ -1,9 +1,11 @@
 //! Optional system tray integration, compiled in with `--features tray`.
 //!
-//! Tray APIs need an event loop, and on macOS the tray must be created on the
-//! main thread — so in tray mode the platform event loop owns the main thread
-//! while the tokio runtime runs on background workers (see `main.rs`). Quit is
-//! forwarded to the async server task, which shuts down gracefully.
+//! Each platform brings its own loop: Windows runs a Win32 message loop and macOS
+//! hands the main thread to `NSApplication` (the tray must be created there), while
+//! Linux' tray-icon backend serves the icon from a D-Bus thread and the main thread
+//! only owns the menu and runs the actions queued for it. In every case the tokio
+//! runtime runs on background workers (see `main.rs`), and Quit is forwarded to the
+//! async server task, which shuts down gracefully.
 //!
 //! If something already answers on the configured address, typically the Windows
 //! service, the menu comes up in client mode without a server: a second server
@@ -346,6 +348,8 @@ fn create_tray(
     let builder = TrayIconBuilder::new()
         .with_id("nanofile")
         .with_menu(Box::new(menu))
+        // Windows and macOS only; on Linux the panel decides which button opens
+        // the menu, and the SNI host does not forward that choice to the item.
         .with_menu_on_left_click(false)
         .with_tooltip(if client_mode {
             // "Nanofile is running" would be a lie about *this* process: it
