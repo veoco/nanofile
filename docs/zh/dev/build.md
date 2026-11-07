@@ -62,11 +62,11 @@ PERF_FILES=500 cargo test -p server --release --test perf_probe -- --ignored --n
 cargo build --release -p server --features tray
 ```
 
-- **Linux** 需要 `libgtk-3-dev` 与 `libayatana-appindicator3-dev`。
+- **Linux** 不需要额外系统包：托盘图标是会话总线上的 StatusNotifierItem 服务，需要桌面提供宿主（KDE 原生支持，GNOME 需装 AppIndicator 扩展）。
 - **Windows** 用 `winresource` 嵌入图标与版本资源，需要 `rc.exe` 或 `llvm-rc`。
 - **macOS** 无额外系统依赖；托盘图标用模板图，由菜单栏自行反色。
 
-GTK 无法交叉编译，因此发布产物里只有三个原生 runner 平台带 tray 变体（Linux amd64、macOS arm64、Windows amd64）。托盘本身的行为在[桌面托盘与 Windows 服务](/zh/guide/deploy/desktop-and-service)。
+发布产物里只有三个原生 runner 平台带 tray 变体（Linux amd64、macOS arm64、Windows amd64），交叉编译的行只构建无头二进制。托盘本身的行为在[桌面托盘与 Windows 服务](/zh/guide/deploy/desktop-and-service)。
 
 ## 嵌入推理（人物标签与 OCR）
 

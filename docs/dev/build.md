@@ -84,15 +84,17 @@ PERF_FILES=500 cargo test -p server --release --test perf_probe -- --ignored --n
 cargo build --release -p server --features tray
 ```
 
-- **Linux** needs `libgtk-3-dev` and `libayatana-appindicator3-dev`.
+- **Linux** needs no extra system package: the tray icon is a
+  StatusNotifierItem service on the session bus, so the desktop has to host one
+  (KDE natively, GNOME with the AppIndicator extension).
 - **Windows** embeds the icon and version resources with `winresource`, which
   needs `rc.exe` or `llvm-rc`.
 - **macOS** needs no extra system dependency; the tray icon is a template image
   the menu bar inverts itself.
 
-GTK cannot be cross-compiled, so only the three native runner platforms ship a
-tray variant (Linux amd64, macOS arm64, Windows amd64). What the tray itself does
-is in [Desktop tray and Windows service](/guide/deploy/desktop-and-service).
+The tray variants are built on the three native runner platforms (Linux amd64,
+macOS arm64, Windows amd64); the cross rows build the headless binary. What the
+tray itself does is in [Desktop tray and Windows service](/guide/deploy/desktop-and-service).
 
 ## Embedded inference (people tags and OCR)
 
