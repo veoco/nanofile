@@ -219,7 +219,7 @@ document.addEventListener("dblclick", function (e) {
   if (row.dataset.type === "dir") return;
   if (!isPreviewableRow(row)) return;
   // The click handler above leaves the row selected and the drawer already rendered. Re-running
-  // the selection panel here would reset its thumbnail, EXIF request and inline player for no
+  // the selection panel here would reset its thumbnail and EXIF request for no
   // reason; only repair the selection if another path (e.g. a ctrl-click inside the same
   // double-click window) left it stale.
   cancelPendingDeselect();

@@ -8,8 +8,11 @@
 
    Layout: a compact summary row (thumbnail | name+path | fields | actions) plus
    an optional rich tier that expands upward for the things that need room —
-   inline media playback, tags, EXIF, indexed text, share and upload links. The
-   expanded state is remembered per browser.
+   tags, EXIF, indexed text, share and upload links. The expanded state is
+   remembered per browser.
+
+   Media is not played here: the summary thumbnail is the still frame, and the
+   quick-preview dialog is the player for both video and audio.
 
    Every `.js-rp-*` hook is preserved verbatim: `browser/right-panel.js` looks
    them all up with `querySelector` inside `.js-rp-content`, and the e2e specs
@@ -91,14 +94,6 @@
         <!-- ── Rich tier: expanded on demand ──────────────────────────────── -->
         <div class="d-expand" id="nf-details-expand" hidden>
             <div class="d-expand-grid">
-
-                <!-- Inline media playback -->
-                <section class="d-ex-preview js-rp-media hidden">
-                    <video class="js-rp-video hidden max-w-[280px] max-h-[260px] rounded-ctl bg-black" controls preload="metadata" playsinline></video>
-                    <div class="js-rp-audio-row hidden w-[240px]">
-                        <audio class="js-rp-audio w-full" controls preload="metadata"></audio>
-                    </div>
-                </section>
 
                 <!-- Tags -->
                 <section class="d-ex js-rp-tags-section hidden">

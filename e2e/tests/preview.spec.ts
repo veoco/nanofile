@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo, uploadFile } from "../helpers/api";
+import { expandDetails } from "../helpers/details";
 import { bmpFixture, pngFixture } from "../helpers/image";
 import { tinyMp4 } from "../helpers/video";
 
@@ -153,6 +154,34 @@ test("the drawer tile opens the video preview", async ({ page }) => {
   await expect
     .poll(() => page.locator(".js-qp-video").evaluate((v) => (v as HTMLVideoElement).videoWidth))
     .toBeGreaterThan(0);
+});
+
+// The drawer is a details panel, not a player: the summary tile keeps the still frame and
+// the dialog plays both video and audio. Selecting either must not fetch its bytes.
+test("the drawer hosts no inline player", async ({ page }) => {
+  const contentRequests: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).pathname.startsWith("/repos/")) contentRequests.push(r.url());
+  });
+
+  for (const name of ["plays.mp4", "song.wav"]) {
+    await clickRow(page, name);
+    await expandDetails(page);
+
+    await expect(page.locator(".js-rp-media")).toHaveCount(0);
+    await expect(page.locator(".js-rp-content video, .js-rp-content audio")).toHaveCount(0);
+  }
+
+  // Only the /api2 thumbnails are requested; the Range-capable content stream is not.
+  expect(contentRequests.filter((u) => /plays\.mp4|song\.wav/.test(u))).toHaveLength(0);
+});
+
+// Removing the drawer player must not cut audio off from playback: the summary tile opens
+// the same dialog the row dblclick does.
+test("the drawer tile opens the audio preview", async ({ page }) => {
+  await clickRow(page, "song.wav");
+  await page.locator(".js-rp-preview-open").click();
+  await expect(page.locator(".js-qp-audio")).toBeVisible();
 });
 
 // The tile predicate is the same one the row dblclick uses, so a text file's type badge opens

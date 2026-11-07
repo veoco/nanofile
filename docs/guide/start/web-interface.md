@@ -84,6 +84,9 @@ modified time it holds:
   "re-index" button; when a file is not indexed, this section says why.
 - **Share links / upload links** — the links already issued for this file.
 
+The drawer has no inline player: its summary thumbnail is the still frame, and
+the quick preview plays videos and audio.
+
 ### Preview
 
 Double-clicking a row (or previewing from the drawer) opens a quick preview:

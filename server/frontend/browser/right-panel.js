@@ -108,47 +108,25 @@ export function openRightPanel(d) {
   var extBadge = ct.querySelector(".js-rp-ext-badge");
   var folderIcon = ct.querySelector(".js-rp-folder-icon");
   var videoIcon = ct.querySelector(".js-rp-video-icon");
-  var videoEl = ct.querySelector(".js-rp-video");
   var audioIcon = ct.querySelector(".js-rp-audio-icon");
-  var audioRow = ct.querySelector(".js-rp-audio-row");
-  var audioEl = ct.querySelector(".js-rp-audio");
-  var mediaSection = ct.querySelector(".js-rp-media");
-
-  stopRightPanelMedia();
 
   if (thumbImg) { thumbImg.classList.add("hidden"); thumbImg.style.display = ""; thumbImg.removeAttribute("src"); }
   if (extBadge) extBadge.classList.add("hidden");
   if (folderIcon) folderIcon.classList.add("hidden");
   if (videoIcon) videoIcon.classList.add("hidden");
-  if (videoEl) videoEl.classList.add("hidden");
   if (audioIcon) audioIcon.classList.add("hidden");
-  if (audioRow) audioRow.classList.add("hidden");
 
-// The summary has room for a 54px poster only, so playback lives in the expandable tier.
-  var isMedia = false;
-
+// The drawer is a details panel, not a player: media playback is the dialog's job.
   if (d.type === "dir") {
     if (folderIcon) folderIcon.classList.remove("hidden");
   } else if (d.isVideo) {
-    isMedia = true;
-// Inline playback uses the Range-capable stream; the frame thumbnail doubles as poster.
-    if (videoEl && d.repoId && d.path) {
-      videoEl.src = "/repos/" + encodeURIComponent(d.repoId) + "/files/" + encodeFilePath(d.path);
-      videoEl.poster = d.thumbnailUrlLarge || d.thumbnailUrl || "";
-      videoEl.classList.remove("hidden");
-    }
+// No inline player: a 280px window added nothing the dialog does not do better.
     if (d.thumbnailUrlLarge || d.thumbnailUrl) {
       if (thumbImg) { thumbImg.dataset.extension = d.extension || ""; thumbImg.src = d.thumbnailUrlLarge || d.thumbnailUrl; thumbImg.classList.remove("hidden"); }
     } else if (videoIcon) {
       videoIcon.classList.remove("hidden");
     }
   } else if (d.isAudio) {
-    isMedia = true;
-    if (audioRow && d.repoId && d.path) {
-      audioEl.src = "/repos/" + encodeURIComponent(d.repoId) + "/files/" +
-        encodeFilePath(d.path);
-      audioRow.classList.remove("hidden");
-    }
     if (d.thumbnailUrlLarge || d.thumbnailUrl) {
       if (thumbImg) { thumbImg.dataset.extension = d.extension || ""; thumbImg.src = d.thumbnailUrlLarge || d.thumbnailUrl; thumbImg.classList.remove("hidden"); }
     } else if (audioIcon) {
@@ -178,8 +156,6 @@ export function openRightPanel(d) {
       ? __t('fb.open_preview_for', { name: d.name || "" })
       : __t('fb.open_preview'));
   }
-
-  if (mediaSection) mediaSection.classList.toggle("hidden", !isMedia);
 
   setText(ct, ".js-rp-name", d.name || "");
   setText(ct, ".js-rp-type", humanType(d.type, d.extension));
@@ -588,31 +564,6 @@ export function openMultiSelectPanel(selectedItems) {
   openDrawer();
 }
 
-function stopRightPanelMedia() {
-  var v = document.querySelector(".js-rp-video");
-  if (v) {
-    v.pause();
-    v.removeAttribute("src");
-    v.load();
-    v.poster = "";
-  }
-  var a = document.querySelector(".js-rp-audio");
-  if (a) {
-    a.pause();
-    a.removeAttribute("src");
-    a.load();
-  }
-}
-
-// Opening the dialog for a file whose small inline player is running would play the same audio
-// twice; pause it, but keep its `src` so the drawer is still usable after the dialog closes.
-function pauseRightPanelMedia() {
-  var v = document.querySelector(".js-rp-video");
-  if (v) v.pause();
-  var a = document.querySelector(".js-rp-audio");
-  if (a) a.pause();
-}
-
 // A thumbnail that fails to load (audio without cover art, ffmpeg unavailable) falls back to
 // the extension badge.
 export function thumbFailed(img) {
@@ -638,7 +589,6 @@ export function resetRightPanel() {
   var ph = document.querySelector(".js-rp-placeholder");
   var ct = document.querySelector(".js-rp-content");
   var mc = document.querySelector(".js-rp-multi-content");
-  stopRightPanelMedia();
   if (ph) ph.classList.remove("hidden");
   if (ct) ct.classList.add("hidden");
   if (mc) mc.classList.add("hidden");
@@ -706,7 +656,6 @@ export function openQuickPreview(file) {
   var isPreviewable = flagTrue(data.isPreviewable);
   if (!repoId || !path) return;
 
-  pauseRightPanelMedia();
   resetQuickPreview();
 
   var encPath = encodeFilePath(path);
