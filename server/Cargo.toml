@@ -146,7 +146,7 @@ multer = "3.1"
 # default compressor. `stemmer`/`stopwords` are off (the only analyzer is the
 # in-tree CJK bigram tokenizer + LowerCaser), and `columnar-zstd-compression` is
 # off because the schema declares no fast fields. Nothing links zstd any more.
-tantivy = { version = "0.26.1", default-features = false, features = [
+tantivy = { version = "0.27", default-features = false, features = [
     "mmap",
     "lz4-compression",
 ] }
