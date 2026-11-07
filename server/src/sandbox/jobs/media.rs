@@ -14,6 +14,10 @@
 //! path length and that many path bytes. Reply: the common frame, `P`/`J` for an image, `E`
 //! when the environment refused and `U` when the file did.
 
+// `unsafe` is the macOS `pre_exec` hook and the fork-based test helper; the module
+// doc explains why the helper must fork rather than `posix_spawn`.
+#![cfg_attr(target_os = "macos", allow(unsafe_code))]
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -403,7 +407,8 @@ fn run_capped(command: &mut Command, cap: u64) -> Result<Vec<u8>, FrameError> {
 /// does not allow, so an empty `pre_exec` hook makes the library fork and exec instead — the
 /// operation the grant is written for, and async-signal-safe because it does nothing.
 fn helper_command(helper: &Path) -> Command {
-    #[allow(unused_mut)]
+    // `mut` is only used by the macOS `pre_exec` hook below.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut command = Command::new(helper);
     #[cfg(target_os = "macos")]
     unsafe {

@@ -4,6 +4,7 @@
 //! sandbox test binary configures them before its first fixture; the shared helper,
 //! probe calls and fake-worker script live here.
 
+// Each sandbox test binary uses a subset of these helpers.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};

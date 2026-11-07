@@ -414,7 +414,6 @@ impl RepoService {
     /// `passwd` is the bare-password flow (`seafile_api.create_repo`): the server
     /// generates the encryption material at `policy.enc_version`. `pwd_hash` is a
     /// client-computed verifier triple; `policy` drives server-side generation.
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_repo(
         db: &DatabaseConnection,
         repos: &Repositories,

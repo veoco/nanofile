@@ -147,6 +147,11 @@
 //! * Chromium's `sandbox/win/src/`: the same launch, the same one-active-process
 //!   job, and the note that the creation-time child-process policy exists
 //!   *because* a job can be escaped.
+
+// `unsafe` is the whole point of this module: Win32 process creation, job, token
+// and ACL calls. The invariants are in the module doc above.
+#![allow(unsafe_code)]
+
 use std::ffi::{OsStr, OsString, c_void};
 use std::fs::File;
 use std::mem::{offset_of, size_of, size_of_val};

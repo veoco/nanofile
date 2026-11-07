@@ -22,6 +22,10 @@
 //! `crate::indexer::extract::guard` covers panics only; this covers everything a
 //! panic cannot.
 
+// `unsafe` is the child-process lifecycle: `killpg` on unix and the Win32 program
+// lookup. The process contract is in the module doc above.
+#![allow(unsafe_code)]
+
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{Read, Write};

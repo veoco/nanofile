@@ -1,6 +1,9 @@
 //! Small Win32 helpers the auto-start code shares: the process-level questions
 //! ("am I elevated?", "which account?") and UTF-16 conversion for `…W` calls.
 
+// `unsafe` is the Win32 token/SID lookups; this module is compiled only on Windows.
+#![allow(unsafe_code)]
+
 pub(crate) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }

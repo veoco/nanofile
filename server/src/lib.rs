@@ -3,6 +3,9 @@
 //! Application layer for nanofile: handlers, services, routes, AppState.
 //! Re-exports `base` and `infra` so `crate::module` paths keep resolving.
 
+// The service and filesystem layers mirror SeaORM and Seafile call shapes; a params
+// struct per call site would add a one-off type without making the call clearer, so
+// the exception is crate-wide instead of one attribute per function.
 #![allow(clippy::too_many_arguments)]
 
 pub mod app;

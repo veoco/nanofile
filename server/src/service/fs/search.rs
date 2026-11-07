@@ -491,7 +491,6 @@ impl SearchService {
 ///
 /// Stops early once `results.len()` reaches `max_results`, so a huge repo doesn't force a full
 /// traversal when the budget is already filled.
-#[allow(clippy::too_many_arguments)]
 async fn search_fs_tree(
     repos: &Repositories,
     repo_id: &str,

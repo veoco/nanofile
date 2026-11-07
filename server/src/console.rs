@@ -1,5 +1,9 @@
 //! Console handling for Windows GUI-subsystem builds.
 
+// `unsafe` is the Win32 console reattachment (AttachConsole/SetStdHandle); the
+// function doc explains the best-effort contract.
+#![cfg_attr(all(target_os = "windows", feature = "tray"), allow(unsafe_code))]
+
 /// Best-effort reattachment to the console of the launching terminal, so
 /// interactive subcommands (`adduser`) can show prompts. A GUI-subsystem build
 /// may own no console even when started from a terminal; with no parent console

@@ -45,7 +45,14 @@ async fn test_groups_v21_unauthorized() {
 #[tokio::test]
 async fn test_groups_v21_is_an_empty_array() {
     let f = TestFixture::new().await;
-    for query in ["", "?with_repos=0", "?with_repos=1"] {
+    // `avatar_size` is part of the v2.1 query surface but carries no meaning for a
+    // stub; serde ignores it, so the parameter must stay accepted.
+    for query in [
+        "",
+        "?with_repos=0",
+        "?with_repos=1",
+        "?with_repos=1&avatar_size=64",
+    ] {
         let resp = f
             .client
             .get(&format!("/api/v2.1/groups/{query}"), Some(&f.api_token))

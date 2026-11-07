@@ -6,6 +6,9 @@
 //! messages; it only queues an action ([`super::actions`]), drained by this
 //! loop after the dispatch returned — where dialogs and `set_checked` run.
 
+// `unsafe` is the Win32 message loop; the re-entrancy contract is in the module doc.
+#![allow(unsafe_code)]
+
 use std::sync::OnceLock;
 use tokio::sync::mpsc::UnboundedSender;
 

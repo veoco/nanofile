@@ -1,3 +1,8 @@
+// sea-orm `Iden` definitions for the pre-migration schema: each step names only
+// the columns and tables it touches, so the rest are intentionally unused. This
+// file records history and does not track the later schema.
+#![allow(dead_code)]
+
 use sea_orm_migration::prelude::*;
 
 /// Phase 1 schema changes for full Seafile API compatibility: fields on
@@ -591,7 +596,6 @@ struct UsersRef;
 
 #[derive(Iden)]
 #[iden = "users"]
-#[allow(dead_code)]
 enum UsersRefCol {
     Table,
     Id,
@@ -604,12 +608,10 @@ enum UsersRefCol {
 
 #[derive(Iden)]
 #[iden = "api_tokens"]
-#[allow(dead_code)]
 struct OldApiTokens;
 
 #[derive(Iden)]
 #[iden = "api_tokens"]
-#[allow(dead_code)]
 enum OldApiTokensCol {
     Table,
     DeviceId,
@@ -620,12 +622,10 @@ enum OldApiTokensCol {
 
 #[derive(Iden)]
 #[iden = "repos"]
-#[allow(dead_code)]
 struct OldRepos;
 
 #[derive(Iden)]
 #[iden = "repos"]
-#[allow(dead_code)]
 enum OldReposCol {
     Table,
     Id,
@@ -636,12 +636,10 @@ enum OldReposCol {
 
 #[derive(Iden)]
 #[iden = "commits"]
-#[allow(dead_code)]
 struct OldCommits;
 
 #[derive(Iden)]
 #[iden = "commits"]
-#[allow(dead_code)]
 enum OldCommitsCol {
     Table,
     Encrypted,
@@ -650,12 +648,10 @@ enum OldCommitsCol {
 
 #[derive(Iden)]
 #[iden = "fs_objects"]
-#[allow(dead_code)]
 struct OldFsObjects;
 
 #[derive(Iden)]
 #[iden = "fs_objects"]
-#[allow(dead_code)]
 enum OldFsObjectsCol {
     Table,
     RepoId,
@@ -664,12 +660,10 @@ enum OldFsObjectsCol {
 
 #[derive(Iden)]
 #[iden = "share_links"]
-#[allow(dead_code)]
 struct OldShareLinks;
 
 #[derive(Iden)]
 #[iden = "share_links"]
-#[allow(dead_code)]
 enum OldShareLinksCol {
     Table,
     RepoId,
@@ -677,12 +671,10 @@ enum OldShareLinksCol {
 
 #[derive(Iden)]
 #[iden = "upload_links"]
-#[allow(dead_code)]
 struct OldUploadLinks;
 
 #[derive(Iden)]
 #[iden = "upload_links"]
-#[allow(dead_code)]
 enum OldUploadLinksCol {
     Table,
     RepoId,
@@ -690,12 +682,10 @@ enum OldUploadLinksCol {
 
 #[derive(Iden)]
 #[iden = "sync_tokens"]
-#[allow(dead_code)]
 struct OldSyncTokens;
 
 #[derive(Iden)]
 #[iden = "sync_tokens"]
-#[allow(dead_code)]
 enum OldSyncTokensCol {
     Table,
     RepoId,

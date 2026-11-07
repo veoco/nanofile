@@ -125,7 +125,6 @@ pub async fn ensure_sync_tokens_for_repos(
 
 /// The token for one repository given the already loaded rows; see
 /// [`ensure_sync_tokens_for_repos`] for the rules.
-#[allow(clippy::too_many_arguments)]
 async fn resolve_repo_token(
     repos: &Repositories,
     repo_id: &str,

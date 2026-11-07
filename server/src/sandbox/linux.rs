@@ -15,6 +15,10 @@
 //! 5. Landlock, with no grants — the document arrives on stdin;
 //! 6. seccomp last, because Landlock's own syscalls must happen first.
 
+// `unsafe` is the raw kernel interface: prctl, Landlock, seccomp and rlimit. The
+// ordering contract is in the module doc above.
+#![allow(unsafe_code)]
+
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 

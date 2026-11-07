@@ -22,8 +22,6 @@ use base::error::AppError;
 #[derive(Deserialize)]
 pub struct GroupsV21Query {
     pub with_repos: Option<i64>,
-    #[allow(dead_code)]
-    pub avatar_size: Option<i64>,
 }
 
 pub async fn list_groups_v21(

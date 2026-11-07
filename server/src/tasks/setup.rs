@@ -31,7 +31,6 @@ const MAIL_RETRY_TICK: Duration = Duration::from_secs(30);
 /// Build and install every job this server generation runs. A job whose
 /// subsystem is off is not registered; the rest always is, so a runtime switch
 /// needs no restart.
-#[allow(clippy::too_many_arguments)]
 pub fn install_default_jobs(
     tasks: &Arc<TaskSystem>,
     shutdown: tokio_util::sync::CancellationToken,

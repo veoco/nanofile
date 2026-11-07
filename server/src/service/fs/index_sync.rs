@@ -20,7 +20,6 @@ use crate::service::index::{IndexScheduler, IndexTarget};
 /// `old_path: None` means it did not exist before (index the new subtree);
 /// `new_path: None` means it was deleted (drop the old subtree). `old_root` is
 /// only read when `old_path` is set.
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn reindex_dir_change(
     repos: &Repositories,
     indexer: Option<&TextIndexer>,

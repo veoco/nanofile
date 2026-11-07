@@ -1,3 +1,5 @@
+// Shared by every integration-test binary; each uses a subset, so unused helpers and
+// imports are expected here rather than in the tests themselves.
 #![allow(dead_code, unused_imports)]
 
 pub mod client;

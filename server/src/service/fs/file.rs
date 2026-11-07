@@ -146,7 +146,6 @@ pub(crate) async fn rename_entry(
 ///
 /// A file needs its old document dropped and a new one at the new path; a directory stands for
 /// every file underneath it, so it needs a subtree walk. No-op when indexing is disabled.
-#[allow(clippy::too_many_arguments)]
 async fn update_index_on_path_change(
     repos: &Repositories,
     indexer: Option<&crate::indexer::TextIndexer>,
@@ -394,7 +393,6 @@ pub struct FileService {
 }
 
 impl FileService {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         repos: Arc<Repositories>,
         db: Arc<DatabaseConnection>,
@@ -533,7 +531,6 @@ impl FileService {
     /// `new_block_ids` is the subset newly written by this upload (not deduped); on quota failure
     /// they are removed so they don't linger as orphan blocks — safe because no other file
     /// references them yet. Deduped blocks are never deleted.
-    #[allow(clippy::too_many_arguments)]
     pub async fn upload_file_committed_stream(
         &self,
         repo_id: &str,

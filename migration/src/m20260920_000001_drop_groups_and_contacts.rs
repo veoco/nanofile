@@ -165,7 +165,7 @@ struct UsersRef;
 
 #[derive(Iden)]
 #[iden = "users"]
-#[allow(dead_code)]
+#[allow(dead_code)] // only `Id` is referenced; the enum mirrors the table.
 enum UsersRefCol {
     Table,
     Id,

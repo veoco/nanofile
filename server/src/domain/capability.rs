@@ -509,8 +509,9 @@ pub enum RouteAccess {
 /// `{name}` matches exactly one non-empty segment; the table covers every `/api2`
 /// and `/api/v2.1` route (see `server/tests/capability_coverage_test.rs`). A
 /// route missing here is denied to every credential, the intended failure.
-#[allow(clippy::type_complexity)]
-const ROUTES: &[(&str, &str, RouteAccess)] = &[
+type RouteEntry = (&'static str, &'static str, RouteAccess);
+
+const ROUTES: &[RouteEntry] = &[
     ("POST", "/api2/auth-token/", RouteAccess::Public),
     ("GET", "/api2/auth/ping/", RouteAccess::AnyAuthenticated),
     ("POST", "/api2/logout-device/", RouteAccess::SessionOnly),

@@ -251,7 +251,6 @@ pub type Params = serde_json::Value;
 
 impl JobRun {
     /// Build a run in `Queued`.
-    #[allow(clippy::too_many_arguments)]
     pub fn queued(
         key: JobKey,
         origin: Origin,

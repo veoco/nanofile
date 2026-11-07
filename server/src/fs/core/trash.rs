@@ -78,7 +78,6 @@ pub struct CursorTrashResult {
 /// Insert a single deleted file/dir into `file_trash`. `path` is the full path
 /// (`/dir/file.txt`); `parent_commit_id` is the commit **before** deletion (the
 /// parent still contains the entry). Best-effort: logs and swallows errors.
-#[allow(clippy::too_many_arguments)]
 pub async fn add_to_trash(
     repos: &Repositories,
     repo_id: &str,
@@ -316,7 +315,6 @@ pub async fn list_trash2(
 }
 
 /// Search trash by keyword and filters.
-#[allow(clippy::too_many_arguments)]
 pub async fn search_trash(
     db: &DatabaseConnection,
     repo_id: &str,
@@ -779,7 +777,6 @@ pub async fn list_trash_for_user(
 
 /// Search trash across all repos the user can access, with the same filters as
 /// `search_trash` but scoped to `repo_members`.
-#[allow(clippy::too_many_arguments)]
 pub async fn search_trash_for_user(
     db: &DatabaseConnection,
     repos: &Repositories,

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 mod common;
 
 use common::{TestFixture, TestServer, create_test_user};

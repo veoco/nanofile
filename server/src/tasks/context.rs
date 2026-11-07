@@ -164,7 +164,6 @@ pub struct JobContext {
 }
 
 impl JobContext {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         id: RunId,
         key: JobKey,

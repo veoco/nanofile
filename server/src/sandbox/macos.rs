@@ -10,6 +10,9 @@
 //!
 //! [`mapped_address_space`]: https://developer.apple.com/documentation/kernel/1502863-proc_pid_rusage
 
+// `unsafe` is the one Mach query this module exists for; see the doc above.
+#![allow(unsafe_code)]
+
 /// The address space this process has already mapped, in bytes.
 ///
 /// `MACH_TASK_BASIC_INFO`'s `virtual_size` is what `vm_map_set_size_limit` compares an

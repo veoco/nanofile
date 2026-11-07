@@ -16,6 +16,10 @@
 //! another process running as the same user. The operator-facing description is
 //! `docs/guide/admin/sandbox.md`; the mechanisms and probe are in `docs/dev/sandbox.md`.
 
+// `unsafe` is the fork/execve/waitpid probe; the `#[cfg(unix)]` scoping keeps the
+// lint active on the platforms that do not build it.
+#![cfg_attr(unix, allow(unsafe_code))]
+
 use std::path::Path;
 
 pub mod jobs;

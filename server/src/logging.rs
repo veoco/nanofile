@@ -4,6 +4,10 @@
 //! whose resolved path is persisted back into config.toml. Rotation is a custom
 //! [`MakeWriter`], since `tracing-appender` only rotates by time.
 
+// `unsafe` is the Windows `MessageBoxW` fatal-error dialog; see
+// `startup_message_box`.
+#![cfg_attr(target_os = "windows", allow(unsafe_code))]
+
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};

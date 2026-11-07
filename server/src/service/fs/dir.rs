@@ -394,7 +394,6 @@ pub struct DirService {
 }
 
 impl DirService {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         repos: Arc<Repositories>,
         db: Arc<DatabaseConnection>,

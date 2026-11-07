@@ -131,6 +131,8 @@ pub async fn activities_page(
 
     let mut repo_cache: HashMap<String, Option<String>> = HashMap::new();
     for e in &events {
+        // The miss is filled by an async lookup, which `or_insert_with` cannot
+        // express; keep the check and the await separate.
         #[allow(clippy::map_entry)]
         if !repo_cache.contains_key(&e.repo_id) {
             let r = state.repos.repo.find_by_id(&e.repo_id).await?;
@@ -140,6 +142,7 @@ pub async fn activities_page(
 
     let mut user_cache: HashMap<i32, Option<(String, String)>> = HashMap::new();
     for e in &events {
+        // Same async lookup as `repo_cache` above.
         #[allow(clippy::map_entry)]
         if !user_cache.contains_key(&e.user_id) {
             let u = state.repos.user.find_by_id(e.user_id).await?;

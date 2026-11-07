@@ -57,6 +57,10 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # this is what reaches the targets with no runner and the release builds.
 [workspace.lints.rust]
 unused = "deny"
+# `unsafe` lives only in the platform/FFI modules whose file header carries
+# `#![allow(unsafe_code)]`. A handler, service or repository that grows one
+# stops compiling everywhere, including the targets with no clippy runner.
+unsafe_code = "deny"
 
 # Clippy's lints are denied the same way. The level reaches every build of a
 # workspace member, and the four Linux cross builds are where it matters: clippy

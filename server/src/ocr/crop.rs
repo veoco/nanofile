@@ -5,7 +5,7 @@
 //! maps a destination rectangle onto the quad and samples the source through it.
 //! A tall, narrow quad (vertical text) is rotated a quarter turn first.
 
-use super::det::{Point, Quad};
+use super::det::Quad;
 use super::resample::sample_rgb;
 
 /// An RGB crop and its size.
@@ -107,6 +107,8 @@ fn roll_vertical(quad: Quad) -> Quad {
 
 /// Solve the 8x8 linear system. Degenerate rows leave their unknown at zero,
 /// which produces a black crop rather than a panic.
+// The pivot search compares two rows of the same matrix; indices are clearer than
+// the iterator rewrite clippy suggests.
 #[allow(clippy::needless_range_loop)]
 fn solve(rows: Vec<Vec<f32>>) -> [f32; 8] {
     const SIZE: usize = 8;
@@ -143,14 +145,15 @@ fn solve(rows: Vec<Vec<f32>>) -> [f32; 8] {
     homography
 }
 
-#[allow(dead_code)]
-fn point(x: f32, y: f32) -> Point {
-    Point { x, y }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ocr::det::Point;
+
+    /// A quad corner for the tests below.
+    fn point(x: f32, y: f32) -> Point {
+        Point { x, y }
+    }
 
     #[test]
     fn an_axis_aligned_quad_crops_the_same_pixels() {

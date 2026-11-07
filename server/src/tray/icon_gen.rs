@@ -3,11 +3,15 @@
 //! Included twice — by `build.rs` via `#[path]`, which renders the SVG into
 //! `OUT_DIR`, and by `src/tray` for the size constant and the tests. Pure `std`.
 
+// This file is compiled twice — by `build.rs` (which uses the renderers) and by
+// the tray binary (which uses `TRAY_ICON_SIZE` and the tests) — so each build
+// leaves the other side's helpers unused.
+#![allow(dead_code)]
+
 /// Edge length of the tray icon rasterized into `$OUT_DIR/tray_icon_*.rgba`.
 pub const TRAY_ICON_SIZE: u32 = 32;
 
 /// One fill pair of the brand mark: the tile and the glyph.
-#[allow(dead_code)]
 #[derive(Clone, Copy)]
 pub struct MarkColors {
     pub tile: &'static str,
@@ -16,20 +20,16 @@ pub struct MarkColors {
 
 /// The two literals `static/img/favicon.svg` carries for its light theme
 /// (`--color-accent` / `--color-accent-ink`); [`recolor`] replaces both.
-#[allow(dead_code)]
 pub const FAVICON_TILE: &str = "#202020";
-#[allow(dead_code)]
 pub const FAVICON_GLYPH: &str = "#ffffff";
 
 /// Tray icon for a light desktop: the plain brand mark.
-#[allow(dead_code)]
 pub const MARK_ON_LIGHT: MarkColors = MarkColors {
     tile: "#202020",
     glyph: "#ffffff",
 };
 
 /// Tray icon for a dark desktop: the inverse, i.e. the favicon's own dark pair.
-#[allow(dead_code)]
 pub const MARK_ON_DARK: MarkColors = MarkColors {
     tile: "#eeeeee",
     glyph: "#111111",
@@ -37,27 +37,22 @@ pub const MARK_ON_DARK: MarkColors = MarkColors {
 
 /// macOS menu-bar template image: the glyph alone, in black. The system inverts
 /// a template itself, highlighted state included, so the tile must stay empty.
-#[allow(dead_code)]
 pub const MARK_TEMPLATE: MarkColors = MarkColors {
     tile: "none",
     glyph: "#000000",
 };
 
 /// The rim rect as the favicon carries it — the 32-unit geometry [`exe_mark`] rewrites.
-#[allow(dead_code)]
 pub const RIM_GEOMETRY: &str = r#"x="0.5" y="0.5" width="31" height="31" rx="5.5""#;
 
 /// The favicon's rim stroke width, in viewBox units — the 32px value [`exe_mark`] rewrites.
-#[allow(dead_code)]
 pub const RIM_WIDTH: &str = r#"stroke-width="1""#;
 
 /// The favicon paints the rim out with this literal — see [`exe_mark`] for why.
-#[allow(dead_code)]
 pub const RIM_OFF: &str = r#"stroke-opacity="0""#;
 
 /// Opacity [`exe_mark`] substitutes in. 0.6 over the graphite tile is a mid
 /// grey — silhouette on a dark shell, no bright ring on a light one.
-#[allow(dead_code)]
 pub const RIM_ON: &str = r#"stroke-opacity="0.6""#;
 
 /// The Windows exe icon variant of the favicon: the plain brand mark plus the
@@ -69,7 +64,6 @@ pub const RIM_ON: &str = r#"stroke-opacity="0.6""#;
 /// dark one. `size` matters because the rim must be one *device pixel* wide at
 /// every size — usvg has no `vector-effect`, so `32 / size` units is one pixel,
 /// and the rim is inset by half a stroke to stay inside the tile.
-#[allow(dead_code)]
 pub fn exe_mark(src: &str, size: u32) -> String {
     for literal in [RIM_GEOMETRY, RIM_WIDTH, RIM_OFF] {
         assert!(
@@ -94,7 +88,6 @@ pub fn exe_mark(src: &str, size: u32) -> String {
 
 /// Rewrites the mark's two fills in `src`; panics on a missing literal, so
 /// recolouring the favicon breaks the build instead of shipping a wrong icon.
-#[allow(dead_code)]
 pub fn recolor(src: &str, colors: MarkColors) -> String {
     assert!(
         src.contains(FAVICON_TILE),
@@ -112,13 +105,11 @@ pub fn recolor(src: &str, colors: MarkColors) -> String {
 /// for at 100–250% scaling (16/20/24/32/40/48), 96 and 256 for the large-icon
 /// views, plus 64 for the taskbar and Alt-Tab. A missing size is not an error:
 /// the shell scales the nearest entry, which looks soft.
-#[allow(dead_code)]
 pub const EXE_ICON_SIZES: [u32; 10] = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256];
 
 /// The one entry stored as a PNG frame rather than a DIB: Vista and later read a
 /// 256×256 entry as PNG, while the uncompressed form would be a 256 KiB DIB.
 /// Smaller sizes stay DIBs for the older consumers that still look at them.
-#[allow(dead_code)]
 pub const EXE_ICON_PNG_SIZE: u32 = 256;
 
 /// Packs straight-alpha RGBA pixels into a 32bpp Windows DIB — the classic ICO
@@ -128,7 +119,6 @@ pub const EXE_ICON_PNG_SIZE: u32 = 256;
 /// is fully transparent) rather than zeroed, because Windows renders the wrong
 /// thing when the mask calls a partly or fully opaque pixel transparent —
 /// Chromium's `optimize-ico-files.py` recomputes it for that reason.
-#[allow(dead_code)]
 pub fn dib_from_rgba(size: u32, rgba: &[u8]) -> Vec<u8> {
     assert_eq!(
         rgba.len(),
@@ -174,7 +164,6 @@ pub fn dib_from_rgba(size: u32, rgba: &[u8]) -> Vec<u8> {
 }
 
 /// Total byte length of a `dib_from_rgba` payload for the given edge length.
-#[allow(dead_code)]
 pub fn dib_len(size: u32) -> u32 {
     let mask_row = size.div_ceil(32) * 4;
     40 + size * size * 4 + mask_row * size
@@ -182,7 +171,6 @@ pub fn dib_len(size: u32) -> u32 {
 
 /// Assembles an ICO file from `(edge length, frame payload)` images: a payload
 /// is a `dib_from_rgba` DIB or, for [`EXE_ICON_PNG_SIZE`], an encoded PNG.
-#[allow(dead_code)]
 pub fn build_ico(images: &[(u32, Vec<u8>)]) -> Vec<u8> {
     let mut ico = Vec::new();
     ico.extend_from_slice(&0u16.to_le_bytes()); // reserved

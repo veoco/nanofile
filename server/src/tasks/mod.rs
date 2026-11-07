@@ -318,7 +318,6 @@ impl TaskSystem {
     }
 
     /// Submit with small job-specific facts that must outlive the params.
-    #[allow(clippy::too_many_arguments)]
     pub async fn submit_with_details(
         &self,
         key: JobKey,
@@ -356,7 +355,6 @@ impl TaskSystem {
     }
 
     /// The one submission path.
-    #[allow(clippy::too_many_arguments)]
     async fn submit_as(
         &self,
         origin: Origin,

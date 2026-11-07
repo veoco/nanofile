@@ -11,6 +11,9 @@
 //! *configuration file*, so a directory changed at `/sysadmin/settings/` is only
 //! known once that server starts.
 
+// `unsafe` is the one Win32 drive-type query; the preflight rules are in `checks`.
+#![allow(unsafe_code)]
+
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 

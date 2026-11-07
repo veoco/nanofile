@@ -670,7 +670,6 @@ impl IndexService {
     /// In-process formats hand the bytes straight to the OCR profile. HEIC/HEIF/
     /// AVIF are decoded to a still through the media profile first, exactly as
     /// the face-tag scan does; only the JPEG frame reaches OCR.
-    #[allow(clippy::too_many_arguments)]
     async fn ocr_extract(
         &self,
         ctx: Option<&JobContext>,

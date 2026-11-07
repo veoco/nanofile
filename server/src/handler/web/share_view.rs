@@ -58,13 +58,11 @@ struct ShareViewTemplate {
 }
 
 /// The link password gate, shared by the file, folder and upload-link handlers.
-#[allow(dead_code)]
 #[derive(Template)]
 #[template(path = "web/share_access_validation.html")]
 pub struct ShareAccessValidationTemplate {
     pub t: &'static I18n,
     pub urls: &'static crate::static_assets::TemplateUrls,
-    pub token: String,
     pub error: Option<String>,
     pub form_action: String,
 }
@@ -213,7 +211,6 @@ pub async fn shared_file_view(
         let tpl = ShareAccessValidationTemplate {
             t,
             urls: crate::static_assets::template_urls(),
-            token: token.clone(),
             error: wrong_password_error(provided_pwd, t),
             form_action: format!("/f/{}/", token),
         };
@@ -342,7 +339,6 @@ pub async fn shared_file_view_post(
         let tpl = ShareAccessValidationTemplate {
             t,
             urls: crate::static_assets::template_urls(),
-            token: token.clone(),
             error: Some(t.tr("pub.incorrect_password").to_string()),
             form_action: format!("/f/{}/", token),
         };
@@ -443,7 +439,6 @@ pub async fn shared_dir_view(
         let tpl = ShareAccessValidationTemplate {
             t,
             urls: crate::static_assets::template_urls(),
-            token: token.clone(),
             error: wrong_password_error(provided_pwd, t),
             form_action: format!("/d/{}/", token),
         };
@@ -787,7 +782,6 @@ pub async fn shared_dir_view_post(
         let tpl = ShareAccessValidationTemplate {
             t,
             urls: crate::static_assets::template_urls(),
-            token: token.clone(),
             error: Some(t.tr("pub.incorrect_password").to_string()),
             form_action: format!("/d/{}/", token),
         };

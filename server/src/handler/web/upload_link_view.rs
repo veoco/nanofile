@@ -14,15 +14,12 @@ use crate::i18n::I18n;
 use crate::service::sharing::share::{UPLOAD_LINK_EXPIRED, UPLOAD_LINK_NOT_FOUND};
 use base::error::AppError;
 
-#[allow(dead_code)]
 #[derive(Template)]
 #[template(path = "web/upload_link_view.html")]
 struct UploadLinkViewTemplate {
     pub t: &'static I18n,
     pub urls: &'static crate::static_assets::TemplateUrls,
     pub token: String,
-    pub repo_id: String,
-    pub path: String,
     pub dir_name: String,
     pub has_password: bool,
     pub max_upload_size_mb: i64,
@@ -172,7 +169,6 @@ pub async fn upload_link_view(
         let tpl = ShareAccessValidationTemplate {
             t,
             urls: crate::static_assets::template_urls(),
-            token: token.clone(),
             error: wrong_password_error(provided_pwd, t),
             form_action: format!("/u/{}/", token),
         };
@@ -193,8 +189,6 @@ pub async fn upload_link_view(
         t: I18n::from_headers(&headers, &state.config().ui.default_language),
         urls: crate::static_assets::template_urls(),
         token: link.token.clone(),
-        repo_id: link.repo_id.clone(),
-        path: link.path.clone(),
         dir_name,
         has_password: link.password.is_some(),
         max_upload_size_mb: state.config().server.max_upload_size_mb as i64,
@@ -265,7 +259,6 @@ pub async fn upload_link_view_post(
         let tpl = ShareAccessValidationTemplate {
             t,
             urls: crate::static_assets::template_urls(),
-            token: token.clone(),
             error: Some(t.tr("pub.incorrect_password").to_string()),
             form_action: format!("/u/{}/", token),
         };

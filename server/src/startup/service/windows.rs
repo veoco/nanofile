@@ -2,6 +2,10 @@
 //! probe) and the service control loop itself. Nothing here shows a dialog: the
 //! tray owns the confirmations; a headless install reports on its own console.
 
+// `unsafe` is the SCM API. The registration and control-loop invariants are in the
+// module doc and in `super`'s notes.
+#![allow(unsafe_code)]
+
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 

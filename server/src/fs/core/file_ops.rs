@@ -175,7 +175,6 @@ impl FileOps {
     /// fs_object, then read-modify-write the FS tree and the commit. The
     /// streaming uploader writes blocks straight from the wire and never holds
     /// the whole file in memory.
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_file_from_blocks(
         db: &DatabaseConnection,
         repos: &Repositories,
@@ -559,7 +558,6 @@ impl FileOps {
     /// Apply `update_fn` to the parent directory's entries, persist the tree up
     /// to the root, create a commit and update HEAD. `parent_fs_id` is the parent
     /// id **before** modification.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn update_dir_tree_and_commit(
         db: &DatabaseConnection,
         repos: &Repositories,
@@ -621,7 +619,6 @@ impl FileOps {
 
     /// Shared body of the two `update_dir_tree_*` helpers: lock the repo, apply
     /// `update_fn`, persist and walk up the ancestors to get the root fs_id.
-    #[allow(clippy::too_many_arguments)]
     async fn apply_tree_update(
         db: &DatabaseConnection,
         repos: &Repositories,

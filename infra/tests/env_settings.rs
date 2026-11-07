@@ -4,6 +4,10 @@
 //! second test could see half of this one's overrides. `server/tests` covers the
 //! integration paths; this pins which variable feeds which setting and origin.
 
+// `unsafe` is `env::set_var`, which Rust 2024 made unsafe because the environment is
+// process-global; this binary has a single test, so nothing reads it concurrently.
+#![allow(unsafe_code)]
+
 use std::collections::BTreeSet;
 
 use infra::config::CaptchaMode;

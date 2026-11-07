@@ -10,6 +10,9 @@
 //! would only fail to bind, and a tray with no server of its own is what keeps
 //! the service switchable while it runs.
 
+// `unsafe` is the Windows confirmation dialog; see `confirm_elevated_registration`.
+#![cfg_attr(target_os = "windows", allow(unsafe_code))]
+
 mod actions;
 mod icon;
 pub(crate) mod icon_gen;

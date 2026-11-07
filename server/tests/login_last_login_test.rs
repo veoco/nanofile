@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 mod common;
 
 use common::{TestServer, create_test_admin, create_test_user};

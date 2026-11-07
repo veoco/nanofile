@@ -7,6 +7,10 @@
 //! `icacls` gives `(OI)(CI)` inheritance and the `*<SID>` form, so a virtual
 //! account's SID needs no name lookup.
 
+// `unsafe` is the SID conversion and `LocalFree` around it; the module doc explains
+// the access this grants.
+#![allow(unsafe_code)]
+
 use std::path::Path;
 use std::process::Command;
 

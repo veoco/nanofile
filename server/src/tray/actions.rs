@@ -9,6 +9,10 @@
 //! Queuing is also why the service toggle needs no in-flight flag: a second click
 //! is prevented by disabling the item while the helper runs.
 
+// `unsafe` is the Win32 process/dialog calls; the re-entrancy contract is in the
+// module doc above.
+#![cfg_attr(target_os = "windows", allow(unsafe_code))]
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 #[cfg(target_os = "windows")]

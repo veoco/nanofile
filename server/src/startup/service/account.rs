@@ -5,6 +5,10 @@
 //! `LocalSystem` stays available for a deployment whose state directory is
 //! somewhere a virtual account cannot be granted access to.
 
+// `unsafe` is the Windows account/token lookup; the module doc explains the account
+// model, and the `cfg` keeps the lint active in the test build on other platforms.
+#![cfg_attr(target_os = "windows", allow(unsafe_code))]
+
 /// `NT SERVICE\Nanofile`, written out because the SDK's `%SERVICE_NAME%` is not expandable here.
 pub(crate) const VIRTUAL_ACCOUNT: &str = r"NT SERVICE\Nanofile";
 /// The machine account on the network, with minimal local privileges.

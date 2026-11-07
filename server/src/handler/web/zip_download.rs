@@ -26,7 +26,6 @@ use crate::middleware::auth::AuthUser;
 use base::error::AppError;
 
 /// Task info stored per zip-token.
-#[allow(dead_code)]
 struct ZipTaskInfo {
     repo_id: String,
     /// Who requested the archive; re-checked when the token is consumed so a user
@@ -190,8 +189,7 @@ pub struct ZipTaskResponse {
 }
 
 /// Determine the zip filename (without extension) based on the request.
-#[allow(unused_variables)]
-fn determine_zip_name(parent_dir: &str, dirents: &[String]) -> String {
+fn determine_zip_name(dirents: &[String]) -> String {
     if dirents.len() == 1 {
         dirents[0].trim_end_matches('/').to_string()
     } else {
@@ -300,7 +298,7 @@ pub async fn zip_task_handler(
         return Err(AppError::NotFound("No files to download".into()));
     }
 
-    let zip_name = determine_zip_name(&payload.parent_dir, &payload.dirents);
+    let zip_name = determine_zip_name(&payload.dirents);
     let token = generate_token();
     let now = now_secs();
 
