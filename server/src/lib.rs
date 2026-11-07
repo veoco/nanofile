@@ -179,7 +179,7 @@ enum IndexerSlot {
     Create,
     /// The process-lifetime writer selected for this generation, which may be
     /// absent because indexing is off or the index could not be opened.
-    Provided(Option<TextIndexer>),
+    Provided(Option<Box<TextIndexer>>),
 }
 
 impl std::fmt::Debug for AppState {
@@ -248,7 +248,7 @@ impl AppState {
             layers,
             temp_file_manager,
             Some(tasks),
-            IndexerSlot::Provided(indexer),
+            IndexerSlot::Provided(indexer.map(Box::new)),
         )
     }
 
@@ -405,7 +405,7 @@ impl AppState {
                     &config.index.index_dir,
                 )
             }
-            IndexerSlot::Provided(indexer) => indexer,
+            IndexerSlot::Provided(indexer) => indexer.map(|indexer| *indexer),
         };
 
         // Outbound mail: settings, outbox and SMTP transport. The mailer keeps the *handle*,
