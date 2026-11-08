@@ -6,6 +6,13 @@
 cargo test --workspace
 ```
 
+CI runs the same suite under `cargo-nextest`
+(`cargo nextest run --workspace --profile ci`): every test gets its own process,
+so one test's process-global sandbox state cannot reach another, and a timing
+flake is retried alone instead of failing the row. nextest does not run
+doctests, so CI runs those separately with `cargo test --workspace --doc`. The
+command above stays the local equivalent.
+
 This runs the unit tests, the integration tests under `server/tests/` and the
 documentation tests. The workspace suite is the main gate. `server/tests/docs_api_reference_test.rs`
 keeps the API reference tied to the route table and the explicit anchors it links
