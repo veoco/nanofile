@@ -2,6 +2,7 @@
 name = "server"
 version = "0.1.21"
 edition = "2024"
+autotests = false
 description = "Nanofile server — Seafile-compatible sync server"
 license = "MIT"
 
@@ -302,3 +303,43 @@ resvg = { version = "0.49", optional = true, default-features = false }
 usvg = { version = "0.49", optional = true, default-features = false }
 tiny-skia = { version = "0.12", optional = true }
 winresource = { version = "0.1", optional = true }
+
+[[test]]
+name = "api"
+path = "tests/api.rs"
+
+[[test]]
+name = "files"
+path = "tests/files.rs"
+
+[[test]]
+name = "sharing"
+path = "tests/sharing.rs"
+
+[[test]]
+name = "auth"
+path = "tests/auth.rs"
+
+[[test]]
+name = "admin"
+path = "tests/admin.rs"
+
+[[test]]
+name = "sync"
+path = "tests/sync.rs"
+
+[[test]]
+name = "index"
+path = "tests/index.rs"
+
+[[test]]
+name = "sandbox"
+path = "tests/sandbox.rs"
+
+[[test]]
+name = "media"
+path = "tests/media.rs"
+
+[[test]]
+name = "misc"
+path = "tests/misc.rs"

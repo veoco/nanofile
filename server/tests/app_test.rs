@@ -10,7 +10,7 @@
 //! limits go with it — and the two tests that assert them fail, rather than the
 //! whole suite quietly drifting away from what the binary serves.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 

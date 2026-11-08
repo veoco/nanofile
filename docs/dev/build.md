@@ -72,8 +72,8 @@ never runs in CI; run it before and after a performance change and diff the
 `perf ...` lines (Linux reports the process's `VmRSS`):
 
 ```bash
-cargo test -p server --release --test perf_probe -- --ignored --nocapture
-PERF_FILES=500 cargo test -p server --release --test perf_probe -- --ignored --nocapture
+cargo test -p server --release --test index perf_probe -- --ignored --nocapture
+PERF_FILES=500 cargo test -p server --release --test index perf_probe -- --ignored --nocapture
 ```
 
 ## Optional feature: `tray`

@@ -3,7 +3,7 @@
 //! These cover the session-facing surface only: keys do not authenticate
 //! anything yet, so every request here uses an ordinary login token.
 
-mod common;
+use crate::common;
 
 use common::{TestFixture, TestServer, create_test_repo, create_test_user};
 use serde_json::{Value, json};

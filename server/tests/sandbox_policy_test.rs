@@ -16,7 +16,7 @@
 //! environment variable — a child's environment is cleared before it starts.
 #![cfg(target_os = "linux")]
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};

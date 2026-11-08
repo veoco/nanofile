@@ -1,6 +1,6 @@
 //! Integration tests for the WebDAV endpoint and per-library WebDAV keys.
 
-mod common;
+use crate::common;
 
 use common::{TestFixture, TestServer, create_test_repo, create_test_user};
 use reqwest::Method;

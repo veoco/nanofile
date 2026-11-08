@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};

@@ -6,7 +6,7 @@
 //! shebang needs. A reply past the pipe deadline is a failed document.
 #![cfg(target_os = "linux")]
 
-mod common;
+use crate::common;
 
 use std::time::{Duration, Instant};
 

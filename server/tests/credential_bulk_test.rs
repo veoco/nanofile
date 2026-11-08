@@ -6,7 +6,7 @@
 //! is touched. They drive the plain HTML form, since the page has to work
 //! without JavaScript.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use infra::entity::api_token;

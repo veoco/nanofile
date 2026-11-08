@@ -5,7 +5,7 @@
 //! has to be reversible — a document skipped while it is off is *retryable*, or
 //! nothing would re-index it when it returns.
 
-mod common;
+use crate::common;
 
 use server::indexer::DocStatus;
 use server::sandbox::{Requirement, worker};

@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::{NotifLimits, TestFixture, TestServer};
 use futures_util::{SinkExt, StreamExt};

@@ -50,8 +50,8 @@ release 二进制把 Web 资源与语言包用 DEFLATE（`include-flate`）内�
 热路径探针在 `server/tests/perf_probe.rs`，带 `#[ignore]`，因此从不在 CI 里跑；性能改动前后各跑一次并对比 `perf ...` 行（Linux 会打印进程 `VmRSS`）：
 
 ```bash
-cargo test -p server --release --test perf_probe -- --ignored --nocapture
-PERF_FILES=500 cargo test -p server --release --test perf_probe -- --ignored --nocapture
+cargo test -p server --release --test index perf_probe -- --ignored --nocapture
+PERF_FILES=500 cargo test -p server --release --test index perf_probe -- --ignored --nocapture
 ```
 
 ## 可选 feature：`tray`

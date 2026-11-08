@@ -7,7 +7,7 @@
 //! every removed route must be gone rather than silently answering something
 //! else.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 

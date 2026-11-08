@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use base::common::{CommitData, DirEntryData, FsDirData, FsFileData, S_IFREG};
 use common::{TestFixture, fs_object_id};

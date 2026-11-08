@@ -119,7 +119,7 @@ UI 文案以 `server/locales/en.toml` 与 `server/locales/zh.toml` 为准，不�
 npm ci --prefix docs
 npm run --prefix docs check
 npm run --prefix docs build
-cargo test -p server --test docs_api_reference_test
+cargo test -p server --test api docs_api_reference
 ```
 
 checker 会遍历 `docs/guide`、`docs/reference` 与 `docs/dev`，比较中英页面集合、指南标题层级、所有内部链接与锚点、sidebar 覆盖，以及 `description` frontmatter。

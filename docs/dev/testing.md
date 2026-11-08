@@ -3,20 +3,21 @@
 ## Rust
 
 ```bash
-cargo test --workspace
+cargo nextest run --workspace
 ```
 
-CI runs the same suite under `cargo-nextest`
-(`cargo nextest run --workspace --profile ci`): every test gets its own process,
-so one test's process-global sandbox state cannot reach another, and a timing
-flake is retried alone instead of failing the row. nextest does not run
-doctests, so CI runs those separately with `cargo test --workspace --doc`. The
-OCR cases are the slowest in the suite and run in their own `ocr-tests` job on
-linux-amd64, macos-arm64 and windows-amd64, in parallel with the main rows. The command above
-stays the local equivalent.
+`cargo nextest run --workspace` is the local equivalent; CI adds `--profile ci`
+for per-test retries, the OCR concurrency cap and JUnit output. nextest gives
+every test its own process, so one test's process-global sandbox state cannot
+reach another. `cargo test --workspace` still runs the same tests, but the
+grouped integration targets share one process per target, so the full-suite
+isolation contract is nextest's, not libtest's. nextest does not run doctests,
+so run `cargo test --workspace --doc` too. The OCR cases are the slowest in the
+suite and run in their own `ocr-tests` job on linux-amd64, macos-arm64 and
+windows-amd64, in parallel with the main rows.
 
-This runs the unit tests, the integration tests under `server/tests/` and the
-documentation tests. The workspace suite is the main gate. `server/tests/docs_api_reference_test.rs`
+This runs the unit tests and the integration tests under `server/tests/`; the
+doctest command above covers the documentation tests. The workspace suite is the main gate. `server/tests/docs_api_reference_test.rs`
 keeps the API reference tied to the route table and the explicit anchors it links
 to; see [API reference](/reference/api/). The docs workflow also runs
 `npm run --prefix docs check`, which compares the English and Chinese page sets, the
@@ -34,7 +35,7 @@ Automatic people tags and the embedded YuNet model are in the default test set;
 run them on their own with:
 
 ```bash
-cargo test -p server --test face_tags_model_test --test face_tags_test
+cargo nextest run -p server --test media -E 'test(/face_tags/)'
 ```
 
 ## Frontend
@@ -66,7 +67,7 @@ The media tests need a real `ffmpeg`. Point the suite at one with
 `NANOFILE_TEST_FFMPEG_PATH`:
 
 ```bash
-NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo test --workspace --no-fail-fast
+NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo nextest run --workspace
 ```
 
 Without ffmpeg the media tests are skipped. CI installs ffmpeg on every runner, so
@@ -86,7 +87,7 @@ PBKDF2 and an HTTP upload/list/history scenario. Every case is `#[ignore]`d so t
 suite stays deterministic; run it in release mode and diff the `perf ...` lines:
 
 ```bash
-cargo test -p server --release --test perf_probe -- --ignored --nocapture
+cargo test -p server --release --test index perf_probe -- --ignored --nocapture
 ```
 
 See [Building](/dev/build#binary-size-and-the-performance-probe) for the release
@@ -99,7 +100,8 @@ profile notes and the `cargo bloat` command.
 | `lint` | Linux | `cargo fmt --check`, clippy, rustdoc, dependency guards, audit |
 | `lint-platforms` | macOS, Windows | clippy and rustdoc for the platform-specific `cfg` code |
 | `tray-check` | Linux, macOS, Windows | clippy, rustdoc and unit tests for the `tray` feature |
-| `tests` | Linux x86_64/arm64, macOS arm64, Windows amd64 | the whole Rust suite |
+| `tests` | Linux x86_64/arm64, macOS arm64, Windows amd64 | the Rust suite minus OCR |
+| `ocr-tests` | Linux amd64, macOS arm64, Windows amd64 | the OCR cases, in parallel |
 | `cross-check` | Linux | compiles and lints four targets with no runner |
 | `frontend-test` | Linux | `node --test` |
 | `e2e` | Linux | Playwright |

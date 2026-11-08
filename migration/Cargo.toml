@@ -2,6 +2,7 @@
 name = "migration"
 version = "0.1.21"
 edition = "2024"
+autotests = false
 publish = false
 
 [lib]
@@ -29,3 +30,7 @@ sea-orm = { version = "2", features = [
     "runtime-tokio",
 ] }
 tempfile = { workspace = true }
+
+[[test]]
+name = "migration"
+path = "tests/migration.rs"

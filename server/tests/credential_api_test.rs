@@ -7,7 +7,7 @@
 //! second is that the surface is capability-gated like the rest of the device
 //! management API, in both directions.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use serde_json::{Value, json};

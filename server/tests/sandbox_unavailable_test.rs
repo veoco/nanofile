@@ -5,7 +5,7 @@
 //! The executable is process-global, so this is a binary of its own, and nothing
 //! here may build a fixture before it is pointed away.
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

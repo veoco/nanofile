@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::{TestFixture, TestServer, create_test_user, get_sync_token};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};

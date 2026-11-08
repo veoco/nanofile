@@ -4,7 +4,7 @@
 //! event that was supposed to invalidate it: a deactivation, a device wipe, a
 //! password reset.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};

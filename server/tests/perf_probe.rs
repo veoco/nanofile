@@ -12,7 +12,7 @@
 //! (default 200). The output is one `perf <name> ...` line per scenario so a
 //! before/after run can be diffed.
 
-mod common;
+use crate::common;
 
 use std::time::{Duration, Instant};
 

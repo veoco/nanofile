@@ -6,7 +6,7 @@
 //! their name and reason in `skipped0`/`skipped1`/`skipped2`; each test goes through
 //! `with_requirement`, which clears both records, so the whole ladder is asserted.
 
-mod common;
+use crate::common;
 
 #[cfg(windows)]
 use std::time::{Duration, Instant};

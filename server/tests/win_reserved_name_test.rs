@@ -4,7 +4,7 @@
 //! or any of their extension variants (`CON.txt`), so the server rejects
 //! creating such entries at the upload / mkdir / rename boundaries with 400.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 

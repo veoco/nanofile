@@ -6,7 +6,7 @@
 //! shebang needs. The phases are one test: deadline, process group, reply cap.
 #![cfg(target_os = "linux")]
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::time::{Duration, Instant};

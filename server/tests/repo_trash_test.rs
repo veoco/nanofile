@@ -7,7 +7,7 @@
 //! enumerate those blocks again, so these tests cover the whole cycle through
 //! the public API: delete, list, restore, purge.
 
-mod common;
+use crate::common;
 
 use common::{TestFixture, create_test_user};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};

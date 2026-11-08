@@ -4,7 +4,7 @@
 //! the way a browser without scripts would: fetch the CSRF token from the page,
 //! POST the form, and read the result back out of the returned HTML.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 

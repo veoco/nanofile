@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use common::create_test_user;

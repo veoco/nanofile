@@ -9,7 +9,7 @@
 //! - Error cases: invalid token, empty dirents, nonexistent entry, unauthorized
 //! - Deeply nested directory structure
 
-mod common;
+use crate::common;
 
 use common::{TestFixture, ZipLimits, create_test_user};
 use std::io::Read;

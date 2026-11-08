@@ -6,7 +6,7 @@
 //! these ids are exposed to a page and a guessed id must not reach another
 //! account.
 
-mod common;
+use crate::common;
 
 use common::{TestFixture, create_test_user};
 use sea_orm::{ActiveModelTrait, Set};

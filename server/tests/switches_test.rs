@@ -6,7 +6,7 @@
 //! and the sharing switch was skipped by the upload-token mint and by the token
 //! consumers.
 
-mod common;
+use crate::common;
 
 use common::TestServer;
 

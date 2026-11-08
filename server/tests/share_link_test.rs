@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::{AuthLimits, TestFixture, create_test_user};
 

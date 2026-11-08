@@ -4,7 +4,7 @@
 //! keep a link redeemable indefinitely (its `expires_at` was written and never
 //! read) with no cap on link creation.
 
-mod common;
+use crate::common;
 
 use common::{TestServer, create_test_user};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};

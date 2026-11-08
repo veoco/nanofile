@@ -5,7 +5,7 @@
 //! register, and what the journal holds — is not something a unit test can
 //! stand in for.
 
-mod common;
+use crate::common;
 
 use common::TestServer;
 use infra::settings::Section;

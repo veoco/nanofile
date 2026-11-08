@@ -15,7 +15,7 @@
 //! * `op=downloadblks`, `op=download|view`, `reloaddir=true`, multipart
 //!   `zip-task`, `sub_repo_id` and the 441/442 status codes match upstream.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use infra::serialization::pack_fs;

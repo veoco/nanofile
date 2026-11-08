@@ -5,7 +5,7 @@
 //! parse a form and call exactly these methods, so this is where the layering
 //! contract — what wins, what is stored, and what takes effect when — is pinned.
 
-mod common;
+use crate::common;
 
 use common::TestServer;
 use infra::settings::{ConfigPolicy, Section, SettingRow, SettingsPolicy};

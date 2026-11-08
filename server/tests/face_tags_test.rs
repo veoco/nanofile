@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
-mod common;
+use crate::common;
 
 async fn wait_for<F, Fut>(timeout: Duration, mut predicate: F) -> bool
 where

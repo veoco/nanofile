@@ -8,7 +8,7 @@
 //! cannot see is one they cannot revoke, which is how a 365-day sync token used
 //! to be.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 

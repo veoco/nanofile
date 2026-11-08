@@ -5,7 +5,7 @@
 //! host with no helper fails the test rather than passing it, so the file
 //! authorization, the decode and the resize are measured, not described.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use common::sandbox::{generate_clip, generate_large_clip, helper, helper_runs, without_ffmpeg};

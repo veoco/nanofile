@@ -9,7 +9,7 @@
 //! official clients read, and that activity logging reports only what the merge
 //! itself introduced.
 
-mod common;
+use crate::common;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

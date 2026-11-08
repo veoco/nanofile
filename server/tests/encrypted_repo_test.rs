@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::{TestFixture, create_test_user};
 use infra::crypto::{key_derivation, pwd_hash};

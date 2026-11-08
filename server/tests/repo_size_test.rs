@@ -15,7 +15,7 @@
 //! merge path, and the user-visible consequence that deleting through a client
 //! frees quota again.
 
-mod common;
+use crate::common;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

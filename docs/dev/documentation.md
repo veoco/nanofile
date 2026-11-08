@@ -136,7 +136,7 @@ same change.
 npm ci --prefix docs
 npm run --prefix docs check
 npm run --prefix docs build
-cargo test -p server --test docs_api_reference_test
+cargo test -p server --test api docs_api_reference
 ```
 
 The checker walks `docs/guide`, `docs/reference` and `docs/dev`; it compares the

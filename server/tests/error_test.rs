@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::{TestServer, create_test_user, get_sync_token};
 

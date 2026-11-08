@@ -5,7 +5,7 @@
 //! puts it back. The executable and the switch are process-global and set once,
 //! which is why this is a binary of its own.
 
-mod common;
+use crate::common;
 
 use common::TestServer;
 use infra::settings::Section;

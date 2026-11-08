@@ -2,6 +2,7 @@
 name = "infra"
 version = "0.1.21"
 edition = "2024"
+autotests = false
 description = "Infrastructure layer for nanofile — entities, storage, crypto, config"
 license = "MIT"
 
@@ -57,3 +58,6 @@ zeroize = "1"
 [dev-dependencies]
 tempfile = { workspace = true }
 
+[[test]]
+name = "infra"
+path = "tests/infra.rs"

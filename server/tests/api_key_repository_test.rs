@@ -4,7 +4,7 @@
 //! they pin the invariants the auth path depends on: lookup by presented
 //! secret, atomic bindings, immediate cache invalidation, and orphan cleanup.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use server::repository::api_key::{ApiKeyBinding, CreateApiKeyParams, UpdateApiKeyParams};

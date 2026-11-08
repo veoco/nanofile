@@ -6,7 +6,7 @@
 //! shebang needs. The host is asked once per profile and per requirement.
 #![cfg(target_os = "linux")]
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 

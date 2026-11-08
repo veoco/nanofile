@@ -5,7 +5,7 @@
 //! checks in at its chunks, and the requests that arrive while that job is
 //! running are timed.
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

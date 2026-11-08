@@ -1,6 +1,6 @@
 //! Proof-of-work challenges on the anonymous web forms.
 
-mod common;
+use crate::common;
 
 use common::{TestServer, create_test_user};
 use sha2::{Digest, Sha256};

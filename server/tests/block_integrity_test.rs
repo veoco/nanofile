@@ -7,7 +7,7 @@
 //! every block as if it were versioned under-reports each legacy block by six
 //! bytes, which shifts every byte after it.
 
-mod common;
+use crate::common;
 
 use base::common::FsFileData;
 use common::{TestServer, client, create_test_repo, create_test_user, get_sync_token};

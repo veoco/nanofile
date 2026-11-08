@@ -3,16 +3,19 @@
 ## Rust
 
 ```bash
-cargo test --workspace
+cargo nextest run --workspace
 ```
 
-CI 用 `cargo-nextest` 跑同一套测试（`cargo nextest run --workspace --profile ci`）：
-每个测试独立进程，一个测试的进程级沙箱状态不会影响另一个；偶发的时序失败只
-重试那一个测试，而不是整行变红。nextest 不跑文档测试，所以 CI 另外用
+本地等价命令是 `cargo nextest run --workspace`；CI 额外用 `--profile ci` 开启
+单测重试、OCR 并发上限和 JUnit 输出。nextest 让每个测试独立进程，一个测试的
+进程级沙箱状态不会影响另一个。`cargo test --workspace` 仍会跑同一套测试，但
+合并后的集成测试 group 每个 target 共享一个进程，所以全量套件的隔离契约以
+nextest 为准，而不是 libtest。nextest 不跑文档测试，另外用
 `cargo test --workspace --doc` 跑。OCR 用例最慢，单独放在 `ocr-tests` job 里跑
-（linux-amd64、macos-arm64 与 windows-amd64），与主套件并行。上面的命令仍是本地等价写法。
+（linux-amd64、macos-arm64 与 windows-amd64），与主套件并行。
 
-它会跑单元测试、`server/tests/` 下的集成测试与文档测试。workspace 套件是主门禁。`server/tests/docs_api_reference_test.rs` 把 API 参考与路由表、被链接的显式锚点钉在一起，见 [API 参考](/zh/reference/api/)。docs workflow 还会跑 `npm run --prefix docs check`，比较中英页面集合、指南标题层级、内部链接与锚点，以及 sidebar 覆盖，见[文档](/zh/dev/documentation)。
+它会跑单元测试与 `server/tests/` 下的集成测试；文档测试用上面的
+`cargo test --workspace --doc`。workspace 套件是主门禁。`server/tests/docs_api_reference_test.rs` 把 API 参考与路由表、被链接的显式锚点钉在一起，见 [API 参考](/zh/reference/api/)。docs workflow 还会跑 `npm run --prefix docs check`，比较中英页面集合、指南标题层级、内部链接与锚点，以及 sidebar 覆盖，见[文档](/zh/dev/documentation)。
 
 可选的 tray feature 默认不编译，因此它的单元测试要显式开启：
 
@@ -23,7 +26,7 @@ cargo test -p server --features tray --bin nanofile
 自动人物标签与内嵌 YuNet 模型默认就在测试集里；单独跑它们：
 
 ```bash
-cargo test -p server --test face_tags_model_test --test face_tags_test
+cargo nextest run -p server --test media -E 'test(/face_tags/)'
 ```
 
 ## 前端
@@ -51,7 +54,7 @@ npm run --prefix e2e test
 媒体测试需要真实的 `ffmpeg`。用 `NANOFILE_TEST_FFMPEG_PATH` 指给它：
 
 ```bash
-NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo test --workspace --no-fail-fast
+NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo nextest run --workspace
 ```
 
 没有 ffmpeg 时媒体测试会被跳过。CI 在每个 runner 上都安装 ffmpeg，因此媒体断言是在 CI 上真正测过的，而不是被静默跳过。
@@ -65,7 +68,7 @@ NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo test --workspace --no-fai
 `server/tests/perf_probe.rs` 测量存在性缓存、CDC 吞吐、PBKDF2 以及一个 HTTP 上传/列表/历史场景。每个用例都带 `#[ignore]`，保证测试套件仍然确定；用 release 模式跑，并对比 `perf ...` 行：
 
 ```bash
-cargo test -p server --release --test perf_probe -- --ignored --nocapture
+cargo test -p server --release --test index perf_probe -- --ignored --nocapture
 ```
 
 release profile 说明与 `cargo bloat` 命令见[构建](/zh/dev/build#二进制体积与性能探针)。
@@ -77,7 +80,8 @@ release profile 说明与 `cargo bloat` 命令见[构建](/zh/dev/build#二进�
 | `lint` | Linux | `cargo fmt --check`、clippy、rustdoc、依赖守卫、审计 |
 | `lint-platforms` | macOS、Windows | 针对平台 `cfg` 代码的 clippy 与 rustdoc |
 | `tray-check` | Linux、macOS、Windows | `tray` feature 的 clippy、rustdoc 与单元测试 |
-| `tests` | Linux x86_64/arm64、macOS arm64、Windows amd64 | 完整 Rust 套件 |
+| `tests` | Linux x86_64/arm64、macOS arm64、Windows amd64 | Rust 套件（不含 OCR） |
+| `ocr-tests` | Linux amd64、macOS arm64、Windows amd64 | OCR 用例，并行 |
 | `cross-check` | Linux | 编译并 lint 四个没有 runner 的目标 |
 | `frontend-test` | Linux | `node --test` |
 | `e2e` | Linux | Playwright |

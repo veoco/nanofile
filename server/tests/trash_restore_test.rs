@@ -13,7 +13,7 @@
 //!   `/`-level restore silently pushed a second dirent with the name it was
 //!   supposed to reject.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use sea_orm::EntityTrait;

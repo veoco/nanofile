@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::{TestFixture, TestServer, create_test_user};
 use serde_json::Value;

@@ -12,7 +12,7 @@
 //! answer — is this host weak, or is the program it runs broken? — away from the
 //! admin exactly when the answer matters.
 
-mod common;
+use crate::common;
 
 use common::TestServer;
 

@@ -5,7 +5,7 @@
 //! other half of the rule: on a *page* route a browser gets a page, and every
 //! wire endpoint keeps its JSON no matter what the browser asks for.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 

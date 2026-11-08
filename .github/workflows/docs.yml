@@ -52,7 +52,7 @@ jobs:
       - name: Install Tailwind CSS and esbuild
         run: npm ci
       - name: Test the API reference
-        run: cargo test -p server --test docs_api_reference_test
+        run: cargo test -p server --test api docs_api_reference
 
   build:
     name: Build

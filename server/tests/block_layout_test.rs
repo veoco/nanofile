@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use server::fs::core::block_migration::{BlockLayoutMigration, MigrationMode};

@@ -10,7 +10,7 @@
 //! first sync (the bug this file pins), and one device's sync must not move
 //! another device's token out of its card.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use server::service::user::DeviceService;

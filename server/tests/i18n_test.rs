@@ -1,6 +1,6 @@
 //! Tests for per-user UI language preference and the i18n machinery.
 
-mod common;
+use crate::common;
 
 use common::{TestServer, create_test_user};
 use server::i18n::I18n;

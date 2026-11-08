@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::{TestFixture, add_repo_member, create_test_user};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};

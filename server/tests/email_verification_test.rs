@@ -4,7 +4,7 @@
 //! is created unverified, no session is issued, the mail is queued, and only the
 //! one-time link makes the account usable.
 
-mod common;
+use crate::common;
 
 use common::TestServer;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};

@@ -1,6 +1,6 @@
 //! Tests for per-repo history retention settings (history_limit / history_ttl_days).
 
-mod common;
+use crate::common;
 
 use common::{TestFixture, sync_commit};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};

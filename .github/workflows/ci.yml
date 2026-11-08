@@ -636,7 +636,9 @@ jobs:
         # step.
         run: cargo test --workspace --doc --quiet
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: failure()
+        # Always: the per-test durations are the baseline for the test-phase
+        # work, not just a postmortem of a red run.
+        if: always()
         with:
           name: nextest-junit-${{ matrix.label }}
           path: target/nextest/ci/junit.xml
@@ -700,20 +702,21 @@ jobs:
       - name: Install Tailwind CSS
         run: npm ci
       - name: Run the OCR tests
-        # Only the targets that carry OCR cases are built: the lib covers the
-        # engine and index unit cases, the four integration targets the
+        # Only the groups that carry OCR cases are built: the lib covers the
+        # engine and index unit cases, the three integration groups the
         # end-to-end scans. The filter is the same one the main row excludes.
         run: >-
           cargo nextest run
           -p server --lib
-          --test index_test
-          --test model_assets_test
-          --test sandbox_probe_test
-          --test sandbox_protocol_test
+          --test index
+          --test media
+          --test sandbox
           --profile ci
           -E 'test(/ocr/)'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: failure()
+        # Always: OCR is the parallel half of the suite, so its durations need
+        # to be comparable with the main rows on every run.
+        if: always()
         with:
           name: nextest-junit-ocr-${{ matrix.label }}
           path: target/nextest/ci/junit.xml

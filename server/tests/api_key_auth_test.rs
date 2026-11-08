@@ -5,7 +5,7 @@
 //! never manage other keys. Each case also checks the negative side, because a
 //! fail-open regression here is silent.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use serde_json::{Value, json};

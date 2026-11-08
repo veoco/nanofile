@@ -7,7 +7,7 @@
 //! label is a credential filed in the wrong place — and a credential filed
 //! nowhere is invisible.
 
-mod common;
+use crate::common;
 
 use common::TestFixture;
 use infra::entity::api_token;

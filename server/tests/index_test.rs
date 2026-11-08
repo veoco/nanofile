@@ -2,7 +2,7 @@
 //! Tantivy index. Tests use `TestFixture::new_with_index()`, which starts the server with
 //! the indexer on a temporary index directory.
 
-mod common;
+use crate::common;
 
 /// How long a test waits for a background index commit.
 ///

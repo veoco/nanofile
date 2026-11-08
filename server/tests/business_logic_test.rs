@@ -1,7 +1,7 @@
 //! Authorization, rate-limiting and input-validation regression tests: each test pins a
 //! specific access-control or input guard (V-1 through V-7).
 
-mod common;
+use crate::common;
 
 use common::{TestFixture, create_test_user};
 use sea_orm::{ActiveModelTrait, EntityTrait};

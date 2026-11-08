@@ -1,6 +1,6 @@
 //! Integration tests for the file-tag feature (metadata-service API).
 
-mod common;
+use crate::common;
 
 use common::{TestFixture, create_test_user};
 

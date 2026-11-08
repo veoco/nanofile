@@ -8,7 +8,7 @@
 //! commit (history untouched, tree unchanged, idempotent), and that structural
 //! damage is reported without being "repaired".
 
-mod common;
+use crate::common;
 
 use base::common::{DirEntryData, FsDirData, S_IFDIR, S_IFREG, SEAF_METADATA_TYPE_DIR};
 use common::{TestFixture, sync_commit};

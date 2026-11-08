@@ -5,7 +5,7 @@
 //! because the worker's executable is process-global, and it is pointed at this
 //! package's binary here before any probe.
 
-mod common;
+use crate::common;
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
