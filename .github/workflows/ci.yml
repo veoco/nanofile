@@ -98,6 +98,9 @@ jobs:
               # reports success with every job skipped (which is how an earlier
               # audit-job change went unverified).
               - '.github/workflows/**'
+              # nextest's profile decides retries, OCR concurrency and the
+              # JUnit path; a change there needs the suite to run.
+              - '.config/**'
             frontend:
               - 'server/frontend/**'
               - 'server/static/**'
