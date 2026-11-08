@@ -166,7 +166,7 @@ jobs:
         shell: bash
         run: |
           for attempt in 1 2 3; do
-            if cargo install cargo-machete; then
+            if cargo install cargo-machete --force; then
               break
             fi
             echo "cargo install failed (attempt $attempt); retrying"
@@ -283,7 +283,7 @@ jobs:
         # cached, so this is a one-time cost per OS and architecture.
         run: |
           for attempt in 1 2 3; do
-            if cargo install cargo-nextest --version 0.9.151 --locked; then
+            if cargo install cargo-nextest --version 0.9.151 --locked --force; then
               break
             fi
             echo "cargo install failed (attempt $attempt); retrying"
@@ -365,7 +365,7 @@ jobs:
         shell: bash
         run: |
           for attempt in 1 2 3; do
-            if cargo install cargo-audit; then
+            if cargo install cargo-audit --force; then
               break
             fi
             echo "cargo install failed (attempt $attempt); retrying"
@@ -431,7 +431,7 @@ jobs:
         shell: bash
         run: |
           for attempt in 1 2 3; do
-            if cargo install cargo-zigbuild --version 0.23.4; then
+            if cargo install cargo-zigbuild --version 0.23.4 --force; then
               break
             fi
             echo "cargo install failed (attempt $attempt); retrying"
@@ -522,7 +522,7 @@ jobs:
         # cached, so this is a one-time cost per OS and architecture.
         run: |
           for attempt in 1 2 3; do
-            if cargo install cargo-nextest --version 0.9.151 --locked; then
+            if cargo install cargo-nextest --version 0.9.151 --locked --force; then
               break
             fi
             echo "cargo install failed (attempt $attempt); retrying"
@@ -684,7 +684,7 @@ jobs:
         # cached, so this is a one-time cost per OS and architecture.
         run: |
           for attempt in 1 2 3; do
-            if cargo install cargo-nextest --version 0.9.151 --locked; then
+            if cargo install cargo-nextest --version 0.9.151 --locked --force; then
               break
             fi
             echo "cargo install failed (attempt $attempt); retrying"
