@@ -1,0 +1,27 @@
+# CI profile for cargo-nextest. nextest runs every test in its own process, so a
+# test that mutates process-global state cannot see another test's changes; the
+# retries absorb the remaining timing jitter (background indexing, OCR load)
+# without hiding the flake: the summary reports it as FLAKY.
+[profile.ci]
+retries = 2
+fail-fast = false
+# A hung test is bounded, but a slow OCR test is not killed: the period is the
+# warning threshold, and terminate-after is the multiple that fails the test.
+slow-timeout = { period = "120s", terminate-after = 6 }
+# Keep the log quiet on a green run: failures, retries and the slow-test summary
+# are what matter now that the workflow no longer passes --nocapture.
+status-level = "fail"
+final-status-level = "slow"
+
+[profile.ci.junit]
+path = "target/nextest/ci/junit.xml"
+
+# The in-process OCR gate in `index_test` is per test process, which under
+# nextest means per test. Cap the group here so two model passes run at a time,
+# the concurrency the server itself admits.
+[test-groups]
+ocr = { max-threads = 2 }
+
+[[profile.ci.overrides]]
+filter = 'test(/ocr/)'
+test-group = 'ocr'

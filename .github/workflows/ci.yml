@@ -448,6 +448,15 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: "nanofile-build-v2"
+          # A red test row still has a usable build. Saving it keeps the next
+          # rerun from paying the full dependency compile again, which is what
+          # a flaky Windows test would otherwise force on every attempt.
+          cache-on-failure: true
+      - name: Install cargo-nextest (pilot)
+        if: matrix.label == 'linux-amd64'
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: cargo-nextest@0.9.151
       - name: Install Tailwind CSS
         run: npm ci
       - name: Install ffmpeg (Linux)
@@ -536,11 +545,28 @@ jobs:
           # here rather than inside the probe, which measures the sandbox.
           time "$FFMPEG" -version >/dev/null
           echo "NANOFILE_TEST_FFMPEG_PATH=$(cygpath -w "$FFMPEG")" >> "$GITHUB_ENV"
+      - name: Run the workspace suite (nextest pilot)
+        # Pilot: only the Linux row switches runner here. nextest puts every
+        # test in its own process, so one test's process-global sandbox state
+        # cannot reach another; `--profile ci` in `.config/nextest.toml` retries
+        # a failed test alone, caps the OCR group at two model passes, and
+        # prints only failures and slow tests.
+        if: matrix.label == 'linux-amd64'
+        run: cargo nextest run --workspace --profile ci
       - name: Run the workspace suite
-        # `--no-fail-fast`: cargo stops at the first failing test binary, and a
-        # platform's first full run has failures in more than one. `--quiet`
-        # prints one character per test instead of a line each; the failure
-        # section still names the test and prints its output. Output stays
-        # captured, so passing tests' JSON dumps and the panic messages of
-        # tests that assert on panics no longer flood the log either.
+        # Rows still on libtest: `--no-fail-fast` reports every failing binary
+        # on a platform's first run; `--quiet` keeps the per-test "ok" lines out
+        # of the log.
+        if: matrix.label != 'linux-amd64'
         run: cargo test --workspace --no-fail-fast --quiet
+      - name: Run doctests (nextest pilot)
+        # nextest does not run doctests; the `cargo test` rows above still
+        # include theirs.
+        if: matrix.label == 'linux-amd64'
+        run: cargo test --workspace --doc --quiet
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: failure() && matrix.label == 'linux-amd64'
+        with:
+          name: nextest-junit-linux-amd64
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
