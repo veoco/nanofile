@@ -152,12 +152,21 @@ jobs:
       - name: Install Tailwind CSS
         run: npm ci
 
-      # Prebuilt from GitHub Releases instead of `cargo install`: same version
-      # pin (0.23.4), without compiling the installer on every cross row.
-      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+      # crates.io with retries instead of the release CDN: the latter has
+      # answered 504 often enough to fail a cross row. The version pin stays
+      # 0.23.4.
+      - name: Install cargo-zigbuild
         if: matrix.cross
-        with:
-          tool: cargo-zigbuild@0.23.4
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if cargo install cargo-zigbuild --version 0.23.4; then
+              break
+            fi
+            echo "cargo install failed (attempt $attempt); retrying"
+            sleep 10
+          done
+          cargo-zigbuild --version
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 

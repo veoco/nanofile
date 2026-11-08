@@ -161,9 +161,18 @@ jobs:
       # default features. The content analyzer is dictionary-free and embedded
       # assets are DEFLATE-only now; these two checks keep both properties.
       - name: Install cargo-machete
-        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
-        with:
-          tool: cargo-machete
+        # crates.io, not the release CDN: install-action's prebuilt download has
+        # answered 504 often enough to fail a lint row, and this crate is small.
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if cargo install cargo-machete; then
+              break
+            fi
+            echo "cargo install failed (attempt $attempt); retrying"
+            sleep 10
+          done
+          cargo-machete --version
       - name: Reject unused and deliberately avoided dependencies
         run: |
           cargo machete
@@ -266,6 +275,9 @@ jobs:
           key: nextest-0.9.151-${{ runner.os }}-${{ runner.arch }}
       - name: Install cargo-nextest
         if: steps.nextest-cache.outputs.cache-hit != 'true'
+        # `bash`, not the runner's default `pwsh`: the retry loop below is a
+        # shell script, and Windows picks PowerShell for `run` by default.
+        shell: bash
         # GitHub's release downloads intermittently answer 504; compiling from
         # crates.io is slower but does not depend on that CDN. The binary is
         # cached, so this is a one-time cost per OS and architecture.
@@ -347,10 +359,19 @@ jobs:
     if: needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # Prebuilt binary: compiling cargo-audit on every run would cost minutes.
-      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
-        with:
-          tool: cargo-audit
+      - name: Install cargo-audit
+        # Same reason as cargo-machete: crates.io with retries instead of the
+        # release CDN, which has been answering 504.
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if cargo install cargo-audit; then
+              break
+            fi
+            echo "cargo install failed (attempt $attempt); retrying"
+            sleep 10
+          done
+          cargo-audit --version
       # Fails on vulnerabilities only; unmaintained/unsound crates are reported
       # as warnings. Four are expected: `zvariant`, `zvariant_derive` and
       # `zbus_names` (zbus 5, which `ksni` and `notify-rust` pin) and
@@ -403,11 +424,20 @@ jobs:
           echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz" | sha256sum -c -
           tar xf /tmp/zig.tar.xz -C /tmp
           echo "/tmp/zig-x86_64-linux-0.16.0" >> $GITHUB_PATH
-      # Prebuilt from GitHub Releases instead of `cargo install`: same version
-      # pin (0.23.4), without compiling the installer on every row.
-      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
-        with:
-          tool: cargo-zigbuild@0.23.4
+      # crates.io with retries instead of the release CDN: the latter has
+      # answered 504 often enough to fail a cross row. The compile is small next
+      # to the cross build it enables; the version pin stays 0.23.4.
+      - name: Install cargo-zigbuild
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if cargo install cargo-zigbuild --version 0.23.4; then
+              break
+            fi
+            echo "cargo install failed (attempt $attempt); retrying"
+            sleep 10
+          done
+          cargo-zigbuild --version
       # clippy-driver as the workspace wrapper runs clippy's lints inside the same
       # `cargo zigbuild` pass: no second compile, and the zig CC/linker wiring
       # cargo-zigbuild already sets up is reused instead of re-derived (`cargo
@@ -484,6 +514,9 @@ jobs:
           key: nextest-0.9.151-${{ runner.os }}-${{ runner.arch }}
       - name: Install cargo-nextest
         if: steps.nextest-cache.outputs.cache-hit != 'true'
+        # `bash`, not the runner's default `pwsh`: the retry loop below is a
+        # shell script, and Windows picks PowerShell for `run` by default.
+        shell: bash
         # GitHub's release downloads intermittently answer 504; compiling from
         # crates.io is slower but does not depend on that CDN. The binary is
         # cached, so this is a one-time cost per OS and architecture.
@@ -643,6 +676,9 @@ jobs:
           key: nextest-0.9.151-${{ runner.os }}-${{ runner.arch }}
       - name: Install cargo-nextest
         if: steps.nextest-cache.outputs.cache-hit != 'true'
+        # `bash`, not the runner's default `pwsh`: the retry loop below is a
+        # shell script, and Windows picks PowerShell for `run` by default.
+        shell: bash
         # GitHub's release downloads intermittently answer 504; compiling from
         # crates.io is slower but does not depend on that CDN. The binary is
         # cached, so this is a one-time cost per OS and architecture.
