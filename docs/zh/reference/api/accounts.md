@@ -188,4 +188,4 @@ seahub 的通知计数。Nanofile 没有通知收件箱，计数永远是 `0`。
 
 `version` 是 `server.version`，客户端解析它并据此裁剪功能。`desktop-custom-brand` 与 `desktop-custom-logo` 只在配置后出现；`encrypted_library_pwd_hash_algo`/`encrypted_library_pwd_hash_params` 只在该服务器声明客户端密码哈希算法时出现。`features` 始终包含 `seafile-basic` 与 `seafile-pro`；`file-search` 与 `client-sso-via-local-browser` 跟随配置，关闭分享下载时额外加上 `share-link-disabled`。
 
-**Seafile** —— 路由与形状相同。`encrypted_library_version` 默认是 2，与 seahub 一致；也支持 4（每库盐），客户端新建加密资料库时会用它。
+**Seafile** —— 路由与形状相同。`encrypted_library_version` 默认是 2，与 seahub 一致；也支持 4（每库盐）。客户端新建加密资料库时会采用服务器公告的值，所以默认 2 时新建的就是 v2 库；要让新库使用每库盐，需把它设为 4。客户端只发送 `passwd`、由服务端代生成密钥时，也使用这个值。

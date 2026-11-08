@@ -222,5 +222,8 @@ contains `seafile-basic` and `seafile-pro`; `file-search` and
 `share-link-disabled` is added when share downloads are turned off.
 
 **Seafile** — same route and shape. `encrypted_library_version` defaults to 2,
-like seahub; 4 (per-library salt) is also supported and is what clients use for
-new encrypted libraries.
+like seahub; 4 (per-library salt) is also supported. Clients take the advertised
+value as the `enc_version` of a library they create, so with the default 2 they
+create v2 libraries; set it to 4 to make new libraries use the per-library salt.
+The same value drives server-side key generation when a client creates an
+encrypted library with only `passwd`.
