@@ -574,9 +574,11 @@ jobs:
   # ── OCR tests, beside the main suite ───────────────────────────────
   # The PP-OCR graphs are the slowest tests in the suite: two to four minutes of
   # CPU per platform. Keeping them in every main row made that row's CPU the
-  # wall clock, so they run here, in parallel with it. The model is pure Rust
-  # and the two architectures are what differ (x86_64 on Linux, aarch64 on
-  # macOS); Windows and Linux arm64 share those code paths.
+  # wall clock, so they run here, in parallel with it. The model is pure Rust,
+  # but the OCR profile runs through the platform's sandbox (AppContainer,
+  # Seatbelt, Landlock), so every OS we ship runs this job; linux-arm64 shares
+  # the aarch64 model path with macOS but not a sandbox implementation, and its
+  # main row still covers the non-OCR sandbox cases.
   ocr-tests:
     name: Ocr tests (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
@@ -590,6 +592,7 @@ jobs:
         include:
           - { os: ubuntu-latest, label: linux-amd64 }
           - { os: macos-latest, label: macos-arm64 }
+          - { os: windows-latest, label: windows-amd64 }
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
