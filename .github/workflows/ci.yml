@@ -258,13 +258,26 @@ jobs:
         with:
           shared-key: "nanofile-build-v2"
           save-if: false
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+      - name: Cache cargo-nextest
+        id: nextest-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          tool: cargo-nextest@0.9.151
-          # GitHub's release downloads intermittently answer 504. Compiling
-          # from crates.io is slower, but a red job is worse than a slow install.
-          fallback: cargo-install
+          path: ~/.cargo/bin/cargo-nextest*
+          key: nextest-0.9.151-${{ runner.os }}-${{ runner.arch }}
+      - name: Install cargo-nextest
+        if: steps.nextest-cache.outputs.cache-hit != 'true'
+        # GitHub's release downloads intermittently answer 504; compiling from
+        # crates.io is slower but does not depend on that CDN. The binary is
+        # cached, so this is a one-time cost per OS and architecture.
+        run: |
+          for attempt in 1 2 3; do
+            if cargo install cargo-nextest --version 0.9.151 --locked; then
+              break
+            fi
+            echo "cargo install failed (attempt $attempt); retrying"
+            sleep 10
+          done
+          cargo nextest --version
       - name: Install Tailwind CSS
         run: npm ci
       - name: Lint with the tray feature
@@ -463,13 +476,26 @@ jobs:
           # rerun from paying the full dependency compile again, which is what
           # a flaky Windows test would otherwise force on every attempt.
           cache-on-failure: true
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+      - name: Cache cargo-nextest
+        id: nextest-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          tool: cargo-nextest@0.9.151
-          # GitHub's release downloads intermittently answer 504. Compiling
-          # from crates.io is slower, but a red job is worse than a slow install.
-          fallback: cargo-install
+          path: ~/.cargo/bin/cargo-nextest*
+          key: nextest-0.9.151-${{ runner.os }}-${{ runner.arch }}
+      - name: Install cargo-nextest
+        if: steps.nextest-cache.outputs.cache-hit != 'true'
+        # GitHub's release downloads intermittently answer 504; compiling from
+        # crates.io is slower but does not depend on that CDN. The binary is
+        # cached, so this is a one-time cost per OS and architecture.
+        run: |
+          for attempt in 1 2 3; do
+            if cargo install cargo-nextest --version 0.9.151 --locked; then
+              break
+            fi
+            echo "cargo install failed (attempt $attempt); retrying"
+            sleep 10
+          done
+          cargo nextest --version
       - name: Install Tailwind CSS
         run: npm ci
       - name: Install ffmpeg (Linux)
@@ -609,13 +635,26 @@ jobs:
         with:
           shared-key: "nanofile-build-v2"
           save-if: false
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+      - name: Cache cargo-nextest
+        id: nextest-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          tool: cargo-nextest@0.9.151
-          # GitHub's release downloads intermittently answer 504. Compiling
-          # from crates.io is slower, but a red job is worse than a slow install.
-          fallback: cargo-install
+          path: ~/.cargo/bin/cargo-nextest*
+          key: nextest-0.9.151-${{ runner.os }}-${{ runner.arch }}
+      - name: Install cargo-nextest
+        if: steps.nextest-cache.outputs.cache-hit != 'true'
+        # GitHub's release downloads intermittently answer 504; compiling from
+        # crates.io is slower but does not depend on that CDN. The binary is
+        # cached, so this is a one-time cost per OS and architecture.
+        run: |
+          for attempt in 1 2 3; do
+            if cargo install cargo-nextest --version 0.9.151 --locked; then
+              break
+            fi
+            echo "cargo install failed (attempt $attempt); retrying"
+            sleep 10
+          done
+          cargo nextest --version
       - name: Install Tailwind CSS
         run: npm ci
       - name: Run the OCR tests
