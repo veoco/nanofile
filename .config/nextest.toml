@@ -14,7 +14,9 @@ status-level = "fail"
 final-status-level = "slow"
 
 [profile.ci.junit]
-path = "target/nextest/ci/junit.xml"
+# Relative to this profile's target directory (`target/nextest/ci/`), which is
+# what CI uploads.
+path = "junit.xml"
 
 # The in-process OCR gate in `index_test` is per test process, which under
 # nextest means per test. Cap the group here so two model passes run at a time,
