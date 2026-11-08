@@ -39,6 +39,13 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # `actions/checkout` creates the repository with `git init`, and a fresh
+  # repository prints a long hint about the initial branch name on every job.
+  # The repository's default branch is `main`, so setting it here silences the
+  # hint without a pre-checkout step in each of the jobs below.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
 
 jobs:
   # ── Detect which areas changed, so Rust jobs can be skipped on pure
@@ -52,6 +59,14 @@ jobs:
   # the full suite. In both cases the outputs are forced true, never false.
   changes:
     runs-on: ubuntu-latest
+    # `dorny/paths-filter` lists a pull request's files through the API, which
+    # the default token may only do with `pull-requests: read`; the
+    # workflow-level `contents: read` alone leaves the scope unset, and the
+    # action fails instead of falling back to a git diff. `contents: read` is
+    # repeated here because a job-level block replaces the workflow-level one.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust == 'true' || github.event.forced == true || inputs.force == true }}
       frontend: ${{ steps.filter.outputs.frontend == 'true' || github.event.forced == true || inputs.force == true }}
@@ -303,8 +318,10 @@ jobs:
         with:
           tool: cargo-audit
       # Fails on vulnerabilities only; unmaintained/unsound crates are reported
-      # as warnings. The in-tree HS256 codec keeps the RSA/ECDSA algorithms out of
-      # the graph, so no advisory currently needs an ignore here.
+      # as warnings. Four are expected: `zvariant`, `zvariant_derive` and
+      # `zbus_names` (zbus 5, which `ksni` and `notify-rust` pin) and
+      # `basic-toml` (askama's derive). None has a fixed release to move to yet;
+      # a vulnerability in any crate still fails the step.
       - name: Check for known vulnerabilities
         run: cargo audit
 
@@ -419,10 +436,12 @@ jobs:
       - name: Install ffmpeg (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          # `--no-install-recommends`: without it apt pulls 99 packages, most of
-          # them video drivers and subtitle libraries no assertion can reach.
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          # `-qq` keeps apt's package lists and per-package unpack lines out of
+          # the log; errors still reach stderr. `--no-install-recommends`:
+          # without it apt pulls 99 packages, most of them video drivers and
+          # subtitle libraries no assertion can reach.
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
           echo "NANOFILE_TEST_FFMPEG_PATH=$(command -v ffmpeg)" >> "$GITHUB_ENV"
       - name: Install ffmpeg (macOS)
         if: runner.os == 'macOS'
@@ -456,8 +475,17 @@ jobs:
           FFMPEG=""
           if command -v winget >/dev/null 2>&1; then
             echo "installing ffmpeg with winget"
-            winget install --id Gyan.FFmpeg -e --silent --disable-interactivity \
-              --accept-package-agreements --accept-source-agreements || true
+            # The progress bar is written with carriage returns and block
+            # characters, one screenful per update; keep it in a file and only
+            # show it when the install fails.
+            if winget install --id Gyan.FFmpeg -e --silent --disable-interactivity \
+              --accept-package-agreements --accept-source-agreements \
+              > /tmp/winget.log 2>&1; then
+              echo "winget installed ffmpeg"
+            else
+              echo "winget could not install ffmpeg; tail of its log:"
+              tail -20 /tmp/winget.log
+            fi
             FFMPEG="$(find "$(cygpath -u "$LOCALAPPDATA")/Microsoft/WinGet/Packages" \
               -name ffmpeg.exe 2>/dev/null | head -1 || true)"
           fi
@@ -493,5 +521,9 @@ jobs:
           echo "NANOFILE_TEST_FFMPEG_PATH=$(cygpath -w "$FFMPEG")" >> "$GITHUB_ENV"
       - name: Run the workspace suite
         # `--no-fail-fast`: cargo stops at the first failing test binary, and a
-        # platform's first full run has failures in more than one.
-        run: cargo test --workspace --no-fail-fast -- --nocapture
+        # platform's first full run has failures in more than one. `--quiet`
+        # prints one character per test instead of a line each; the failure
+        # section still names the test and prints its output. Output stays
+        # captured, so passing tests' JSON dumps and the panic messages of
+        # tests that assert on panics no longer flood the log either.
+        run: cargo test --workspace --no-fail-fast --quiet

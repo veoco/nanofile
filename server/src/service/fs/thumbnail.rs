@@ -662,9 +662,31 @@ fn normalize_path_for_file(path: &str) -> String {
 mod tests {
     use super::*;
 
+    /// The ffmpeg the media tests run: the binary `NANOFILE_TEST_FFMPEG_PATH`
+    /// names (CI installs one per platform), else whatever `ffmpeg` resolves to.
+    /// The integration tests' helper reads the same variable; a package
+    /// manager's shim is not on `PATH` in a CI process, so naming the binary is
+    /// what keeps these tests running there.
+    ///
+    /// A missing binary is a skip on a development host and a failure on CI:
+    /// the suite is not allowed to report green without having measured the
+    /// media pipeline.
+    fn test_ffmpeg() -> String {
+        let ffmpeg =
+            std::env::var("NANOFILE_TEST_FFMPEG_PATH").unwrap_or_else(|_| "ffmpeg".to_string());
+        if !ffmpeg_available(&ffmpeg) {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "{ffmpeg} is not runnable; CI installs ffmpeg on this platform"
+            );
+        }
+        ffmpeg
+    }
+
     #[test]
     fn extract_video_frame_writes_png() {
-        if !ffmpeg_available("ffmpeg") {
+        let ffmpeg = test_ffmpeg();
+        if !ffmpeg_available(&ffmpeg) {
             eprintln!("ffmpeg not available; skipping video thumbnail test");
             return;
         }
@@ -680,7 +702,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("test.mp4");
 
-        let status = Command::new("ffmpeg")
+        let status = Command::new(&ffmpeg)
             .arg("-y")
             .arg("-loglevel")
             .arg("error")
@@ -695,7 +717,7 @@ mod tests {
             .expect("failed to spawn ffmpeg");
         assert!(status.success(), "ffmpeg failed to create test video");
 
-        let ok = media::grab_frame(Path::new("ffmpeg"), MediaKind::Video, &src);
+        let ok = media::grab_frame(Path::new(&ffmpeg), MediaKind::Video, &src);
         let _ = std::fs::remove_file(&src);
         let bytes = ok.expect("ffmpeg frame extraction failed");
 
@@ -710,7 +732,8 @@ mod tests {
 
     #[test]
     fn extract_audio_cover_writes_png() {
-        if !ffmpeg_available("ffmpeg") {
+        let ffmpeg = test_ffmpeg();
+        if !ffmpeg_available(&ffmpeg) {
             eprintln!("ffmpeg not available; skipping audio cover test");
             return;
         }
@@ -726,7 +749,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("cover.m4a");
 
-        let status = Command::new("ffmpeg")
+        let status = Command::new(&ffmpeg)
             .arg("-y")
             .arg("-loglevel")
             .arg("error")
@@ -754,7 +777,7 @@ mod tests {
             .expect("failed to spawn ffmpeg");
         assert!(status.success(), "ffmpeg failed to create test audio");
 
-        let ok = media::grab_frame(Path::new("ffmpeg"), MediaKind::Audio, &src);
+        let ok = media::grab_frame(Path::new(&ffmpeg), MediaKind::Audio, &src);
         let _ = std::fs::remove_file(&src);
         let bytes = ok.expect("audio cover extraction failed");
 
@@ -769,7 +792,8 @@ mod tests {
 
     #[test]
     fn extract_image_writes_png() {
-        if !ffmpeg_available("ffmpeg") {
+        let ffmpeg = test_ffmpeg();
+        if !ffmpeg_available(&ffmpeg) {
             eprintln!("ffmpeg not available; skipping image thumbnail test");
             return;
         }
@@ -785,7 +809,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("test.jpg");
 
-        let status = Command::new("ffmpeg")
+        let status = Command::new(&ffmpeg)
             .arg("-y")
             .arg("-loglevel")
             .arg("error")
@@ -800,7 +824,7 @@ mod tests {
             .expect("failed to spawn ffmpeg");
         assert!(status.success(), "ffmpeg failed to create test image");
 
-        let ok = media::grab_frame(Path::new("ffmpeg"), MediaKind::Image, &src);
+        let ok = media::grab_frame(Path::new(&ffmpeg), MediaKind::Image, &src);
         let _ = std::fs::remove_file(&src);
         let bytes = ok.expect("ffmpeg image extraction failed");
 
