@@ -70,30 +70,6 @@ pub async fn compute_tree_size(
     Ok(total)
 }
 
-/// Adjust a repo's stored size by `delta` bytes.
-/// If `repo.size` is 0 (never computed), falls back to a full traversal for a
-/// correct baseline; otherwise applies the delta incrementally.
-pub async fn adjust_repo_size(
-    repos: &Repositories,
-    repo_id: &str,
-    delta: i64,
-) -> Result<(), AppError> {
-    let r = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-
-    let current_size = r.size;
-    if current_size == 0 {
-        let size = compute_repo_size(repos, repo_id).await?;
-        repos.repo.adjust_size(repo_id, size).await?;
-    } else {
-        repos.repo.adjust_size(repo_id, delta).await?;
-    }
-    Ok(())
-}
-
 /// Resolve the directory entry at `path`, or `None` when it does not exist.
 ///
 /// This is the common half of [`get_entry_total_size`] and [`entry_exists`]: the

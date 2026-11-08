@@ -72,7 +72,9 @@ run carries its own error; the run id, summary and full error are one disclosure
   in-flight requests, running jobs, queued tasks, database connections, busy workers
   and live tasks.
 - The left rail's storage meter shows the signed-in account's usage against its
-  quota.
+  quota. If a size looks wrong after an upgrade, run the manual **Usage reconcile**
+  job under **Task Management → Registered tasks**; it recomputes each library from
+  its HEAD tree.
 - The data directory grows with `blocks/`, the database, the index, thumbnails and
   avatars. Watch the filesystem, not just the database:
 

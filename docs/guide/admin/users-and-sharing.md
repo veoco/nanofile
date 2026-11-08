@@ -91,6 +91,23 @@ aliases; the name was wrong, not the value — this is the quota of one account,
 a cap on every account together, and a saved setting row is moved to the new key on
 upgrade.
 
+A library belongs to exactly one account; nanofile has no user-to-user library
+sharing. Usage is the sum of `repos.size` over the libraries the account owns, and
+every logical growth — an upload, a directory copy, a trash/history restore, or a
+sub-library created from a folder — is checked against the owner's quota at the
+moment it commits. An overwrite is charged only for the size difference.
+
+`repo.size` is the logical size of the files in the library's HEAD, not the bytes on
+disk. Deleting a file or a library frees quota immediately, while its blocks stay
+until garbage collection reclaims them; thumbnails, the index and temporary uploads
+are outside the account quota. There is no server-wide total cap: the quota is one
+account's limit, so watch the data directory as well as the storage meter. See
+[Monitoring](/guide/operate/monitoring).
+
+If an upgraded instance reports an implausible size, run the manual **Usage
+reconcile** job in **System Settings → Task Management**; it recomputes every
+library from its HEAD tree.
+
 ## Sharing policy {#sharing-policy}
 
 Users create share and upload links from the file browser; see

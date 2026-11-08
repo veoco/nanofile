@@ -4,6 +4,7 @@ mod common;
 
 use common::{TestFixture, TestServer, create_test_repo, create_test_user};
 use reqwest::Method;
+use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use server::repository::member::CreateMemberParams;
 
 /// A plain HTTP client for WebDAV requests (Basic auth not handled by
@@ -420,6 +421,38 @@ async fn test_put_large_file_crosses_blocks() {
     let resp = dav_get(&client, base, &f.repo_id, "/large.bin", &f.email, &key).await;
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.bytes().await.unwrap().as_ref(), data.as_slice());
+}
+
+#[tokio::test]
+async fn test_put_over_quota_is_507() {
+    let f = TestFixture::new().await;
+    let user = infra::entity::user::Entity::find_by_id(f.user_id)
+        .one(&*f.server.db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: infra::entity::user::ActiveModel = user.into();
+    active.storage_quota = Set(Some(100));
+    active.update(&*f.server.db).await.unwrap();
+
+    let base = &f.server.base_url;
+    let client = http();
+    let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
+    let resp = dav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/too-big.bin",
+        &f.email,
+        &key,
+        &vec![7u8; 2048],
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::INSUFFICIENT_STORAGE,
+        "WebDAV clients distinguish a full library from a 500"
+    );
 }
 
 #[tokio::test]

@@ -1,6 +1,7 @@
 mod common;
 
 use common::TestFixture;
+use sea_orm::EntityTrait;
 
 /// B.10.6 — GET /api2/unseen_messages/
 #[tokio::test]
@@ -288,6 +289,17 @@ async fn test_sub_repo_copies_referenced_blocks() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let new_repo = body["id"].as_str().unwrap().to_string();
+
+    let created = infra::entity::repo::Entity::find_by_id(new_repo.clone())
+        .one(&*f.server.db)
+        .await
+        .unwrap()
+        .expect("new library row");
+    assert_eq!(
+        created.size,
+        content.len() as i64,
+        "the sub-library must be charged for the copied subtree"
+    );
 
     let resp = f
         .client

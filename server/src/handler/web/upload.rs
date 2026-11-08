@@ -279,6 +279,25 @@ fn map_temp_error(e: std::io::Error) -> AppError {
     }
 }
 
+/// Remove a finished resumable upload and release its quota reservation.
+async fn finish_resumable(
+    temp_mgr: &crate::handler::web::temp_file::TempFileManager,
+    state: &AppState,
+    repo_id: &str,
+    file_path: &str,
+) {
+    if let Some((owner, upload_id)) = temp_mgr.finish(repo_id, file_path).await
+        && let Some(uid) = owner
+    {
+        crate::service::fs::quota::release_upload(
+            &state.repos,
+            uid,
+            repo_id,
+            &upload_id.to_string(),
+        );
+    }
+}
+
 /// Handle a chunked (resumable) upload when a `Content-Range` header is present.
 ///
 /// `Ok(None)` means not chunked (the caller handles it as a regular upload);
@@ -340,15 +359,17 @@ async fn try_handle_chunked(
     }
 
     // Reserve (not just compare) the declared size so an upload abandoned before
-    // its final chunk cannot leave quota-exempt blocks behind; the reservation is
-    // released on commit, abort, or stale reaping.
-    if start == 0
-        && let Some(uid) = user_id
-    {
-        crate::service::fs::quota::reserve_block_bytes(
+    // its final chunk cannot leave quota-exempt blocks behind. The upload id makes
+    // a retried first chunk idempotent; the reservation is released on commit,
+    // abort, or stale reaping.
+    if start == 0 && user_id.is_some() {
+        let Some(upload_id) = temp_mgr.upload_id(repo_id, &file_path).await else {
+            return Err(AppError::Internal("temp upload disappeared".into()));
+        };
+        crate::service::fs::quota::reserve_upload_bytes(
             &state.repos,
-            uid,
             repo_id,
+            &upload_id.to_string(),
             file_size as i64,
             state.config().storage.default_user_quota_bytes,
         )
@@ -380,7 +401,7 @@ async fn try_handle_chunked(
         .take_streamed_blocks(&state.block_store, repo_id, &file_path, file_size)
         .await
     {
-        let (fs_id, effective_name) = state
+        let committed = state
             .file_service()
             .upload_file_committed_stream(
                 repo_id,
@@ -394,8 +415,19 @@ async fn try_handle_chunked(
                 replace,
                 new_block_ids,
             )
-            .await?;
-        temp_mgr.finish(repo_id, &file_path).await;
+            .await;
+        let (fs_id, effective_name) = match committed {
+            Ok(v) => v,
+            Err(e) => {
+                if matches!(e, AppError::QuotaExceeded) {
+                    temp_mgr
+                        .abort(&state.repos, repo_id, &file_path, &state.block_store)
+                        .await;
+                }
+                return Err(e);
+            }
+        };
+        finish_resumable(temp_mgr, state, repo_id, &file_path).await;
         return Ok(Some(ChunkResult::Committed {
             id: fs_id,
             name: effective_name,
@@ -438,7 +470,7 @@ async fn try_handle_chunked(
         )));
     }
 
-    let (fs_id, effective_name) = state
+    let committed = state
         .file_service()
         .upload_file_committed_stream(
             repo_id,
@@ -452,9 +484,20 @@ async fn try_handle_chunked(
             replace,
             new_block_ids,
         )
-        .await?;
+        .await;
+    let (fs_id, effective_name) = match committed {
+        Ok(v) => v,
+        Err(e) => {
+            if matches!(e, AppError::QuotaExceeded) {
+                temp_mgr
+                    .abort(&state.repos, repo_id, &file_path, &state.block_store)
+                    .await;
+            }
+            return Err(e);
+        }
+    };
 
-    temp_mgr.finish(repo_id, &file_path).await;
+    finish_resumable(temp_mgr, state, repo_id, &file_path).await;
 
     Ok(Some(ChunkResult::Committed {
         id: fs_id,
@@ -573,17 +616,11 @@ pub async fn upload_aj(
     headers: HeaderMap,
     body: axum::body::Body,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Pre-check quota against Content-Length before consuming the body, so an
-    // over-quota upload is rejected without writing blocks; chunked uploads are
-    // pre-checked on their first chunk instead.
-    if headers.get("content-range").is_none() {
-        precheck_quota(
-            &state,
-            Some(user.user_id),
-            headers.get("content-length").and_then(|v| v.to_str().ok()),
-        )
-        .await?;
-    }
+    // No Content-Length precheck here: this endpoint can replace an existing
+    // file, and the old size is only known after the multipart fields are parsed.
+    // A full-size precheck would reject a legitimate same-size overwrite near the
+    // quota; the commit-time delta check is authoritative and failure cleanup
+    // removes any blocks this request created.
     let boundary = extract_multipart_boundary(&headers)?;
     // Multer's Multipart consumes the raw body stream, so the file part can be
     // read incrementally via `field.chunk()` (axum's extractor offers only
@@ -1365,13 +1402,6 @@ pub async fn upload_api(
         .get("content-range")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned());
-    let content_length = req
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_owned());
-    let has_range = content_range.is_some();
-
     let info = state
         .token_manager
         .validate(&token)
@@ -1401,9 +1431,9 @@ pub async fn upload_api(
     .await?;
     let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
 
-    if !has_range {
-        precheck_quota(&state, Some(info.user_id), content_length.as_deref()).await?;
-    }
+    // This token can name a replacement, so a full Content-Length precheck would
+    // reject a same-size overwrite near the quota. The commit-time delta check is
+    // authoritative.
 
     // Qt's QHttpMultiPart sends a quoted boundary (`boundary="_.Seafile._UUID"`)
     // while the body uses the unquoted form, so strip surrounding quotes. The
@@ -1893,21 +1923,38 @@ pub async fn upload_blks_api(
                 // map to "out of quota".
                 crate::service::fs::quota::reserve_block_bytes(
                     &state.repos,
-                    info.user_id,
                     &info.repo_id,
+                    &block_id,
                     data.len() as i64,
                     state.config().storage.default_user_quota_bytes,
                 )
                 .await?;
-                let (_, was_new) = state
+                match state
                     .block_store
                     .write_block_with_id_tracked(&info.repo_id, &block_id, &data)
                     .await
-                    .map_err(|e| {
-                        AppError::Internal(format!("failed to write block {block_id}: {e}"))
-                    })?;
-                if was_new {
-                    new_block_ids.push(block_id);
+                {
+                    Ok((_, true)) => new_block_ids.push(block_id),
+                    Ok((_, false)) => {
+                        // Already present (retry/concurrent upload): already paid for.
+                        crate::service::fs::quota::release_block_bytes(
+                            &state.repos,
+                            &info.repo_id,
+                            &block_id,
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        crate::service::fs::quota::release_block_bytes(
+                            &state.repos,
+                            &info.repo_id,
+                            &block_id,
+                        )
+                        .await;
+                        return Err(AppError::Internal(format!(
+                            "failed to write block {block_id}: {e}"
+                        )));
+                    }
                 }
             }
         } else {
@@ -1991,25 +2038,6 @@ pub async fn upload_blks_api(
             ));
         }
 
-        // Pre-check quota against the actual block bytes before assembling. On
-        // failure, remove blocks newly written by this request so they don't
-        // linger as orphans.
-        if let Err(e) = crate::service::fs::quota::check_upload_quota(
-            &state.repos,
-            info.user_id,
-            real_size,
-            state.config().storage.default_user_quota_bytes,
-        )
-        .await
-        {
-            for id in &new_block_ids {
-                if let Err(e) = state.block_store.remove_block(&info.repo_id, id).await {
-                    tracing::warn!("failed to cleanup orphaned block {id}: {e}");
-                }
-            }
-            return Err(e);
-        }
-
         // Resolve the target directory **before** writing the file object, via
         // the upload-link-aware helper: an `upload_link_id` token is scoped to
         // the link's directory and must not commit outside it. Rejecting an
@@ -2026,14 +2054,22 @@ pub async fn upload_blks_api(
             obj_type: 1,
             version: 1,
         };
-        let file_fs_id =
-            crate::fs::core::store_fs_file_object(state.db.as_ref(), &info.repo_id, &file_fs_data)
-                .await?;
-
         let now = chrono::Utc::now().timestamp();
 
         let fp = base::sanitize::safe_join_path(&target_dir, file_name)
             .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
+
+        // Serialize quota accounting from here through the commit, then resolve
+        // the parent and its base root. A positive delta is checked and applied in
+        // the same commit helper; no separate post-commit adjust can drift.
+        let owner = state.repos.repo_owner_id(&info.repo_id).await?;
+        let scope = state.repos.lock_quota(owner).await;
+        let default_quota = state.config().storage.default_user_quota_bytes;
+
+        let base_root_id =
+            infra::common::util::get_head_root_id_opt(state.db.as_ref(), &info.repo_id)
+                .await?
+                .unwrap_or_else(|| base::common::EMPTY_SHA1.to_string());
 
         // Resolve the parent and its ancestor chain to avoid O(d²) re-resolution.
         let (parent_fs_id, ancestor_chain) =
@@ -2052,17 +2088,51 @@ pub async fn upload_blks_api(
                 .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
         let existing = parent_data.dirents.iter().find(|d| d.name == *file_name);
         let file_exists = existing.is_some();
-        let old_size = existing.map(|d| d.size).unwrap_or(0);
+        let old_size = if replace {
+            match existing {
+                Some(d) if d.mode & infra::serialization::S_IFDIR != 0 => {
+                    crate::fs::core::compute_tree_size(&state.repos, &info.repo_id, &d.id).await?
+                }
+                Some(d) => d.size,
+                None => 0,
+            }
+        } else {
+            0
+        };
+        let size_delta = file_size - old_size;
+
+        if size_delta > 0
+            && let Err(e) = state
+                .repos
+                .check_repo_quota_locked(&scope, &info.repo_id, size_delta, default_quota)
+                .await
+        {
+            // No file object has been written yet, so the cleanup sees only the
+            // blocks this request created and can remove them safely.
+            state
+                .file_service()
+                .cleanup_uncommitted_blocks(&info.repo_id, &new_block_ids)
+                .await;
+            for id in &new_block_ids {
+                crate::service::fs::quota::release_block_bytes(&state.repos, &info.repo_id, id)
+                    .await;
+            }
+            return Err(e);
+        }
+        let file_fs_id =
+            crate::fs::core::store_fs_file_object(state.db.as_ref(), &info.repo_id, &file_fs_data)
+                .await?;
 
         let entry_name = file_name.clone();
         let modifier_name = info.username.clone();
         // The stored name may differ from the requested one: without `replace`, a
         // collision is resolved with `name (1).ext`, which the caller reports back.
         let mut effective_name = entry_name.clone();
-        crate::fs::core::file_ops::FileOps::update_dir_tree_and_commit(
+        let committed = crate::fs::core::file_ops::FileOps::update_dir_tree_and_commit_sized(
             state.db.as_ref(),
             &state.repos,
             &info.repo_id,
+            &base_root_id,
             &target_dir,
             &parent_fs_id,
             &modifier_name,
@@ -2096,22 +2166,35 @@ pub async fn upload_blks_api(
                 }
                 Ok(())
             },
+            size_delta,
+            &scope,
+            default_quota,
         )
-        .await
-        .map_err(|e| AppError::Internal(format!("commit blocks failed: {e}")))?;
+        .await;
+        if let Err(e) = committed {
+            if matches!(e, AppError::QuotaExceeded) {
+                state
+                    .file_service()
+                    .cleanup_uncommitted_blocks(&info.repo_id, &new_block_ids)
+                    .await;
+                for id in &new_block_ids {
+                    crate::service::fs::quota::release_block_bytes(&state.repos, &info.repo_id, id)
+                        .await;
+                }
+            }
+            return Err(e);
+        }
+        drop(scope);
 
-        // Adjust repo size and log activity.
+        // The blocks in `block_ids` are now referenced by HEAD; their reservations
+        // must go. Blocks uploaded in this request but not committed stay reserved
+        // until the TTL reaper.
+        crate::service::fs::quota::release_blocks(&state.repos, &info.repo_id, &block_ids).await;
+
+        // Log activity only; the commit already adjusted `repo.size`.
         state
             .file_service()
-            .finalize_upload(
-                &info.repo_id,
-                &fp,
-                &file_fs_id,
-                file_size,
-                uid,
-                file_exists,
-                old_size,
-            )
+            .finalize_upload(&info.repo_id, &fp, &file_fs_id, file_size, uid, file_exists)
             .await?;
 
         return Ok(upload_commit_response(

@@ -5,10 +5,11 @@ use sea_orm::DatabaseConnection;
 use crate::fs::core::file_ops::FileOps;
 use crate::repository::Repositories;
 use crate::service::index::{IndexScheduler, IndexTarget};
+use crate::settings::RuntimeConfig;
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::activity_log;
-use infra::common::util::{generate_unique_filename, join_path};
+use infra::common::util::{generate_unique_filename, get_head_root_id, join_path};
 use infra::serialization::S_IFDIR;
 
 pub fn parse_file_names(s: &str) -> Vec<String> {
@@ -27,6 +28,7 @@ pub struct FileOpsService {
     indexer: Option<crate::indexer::TextIndexer>,
     /// Where a copy or move submits the index work it implies.
     scheduler: IndexScheduler,
+    config: RuntimeConfig,
 }
 
 impl FileOpsService {
@@ -35,12 +37,14 @@ impl FileOpsService {
         repos: Arc<Repositories>,
         indexer: Option<crate::indexer::TextIndexer>,
         scheduler: IndexScheduler,
+        config: RuntimeConfig,
     ) -> Self {
         Self {
             db,
             repos,
             indexer,
             scheduler,
+            config,
         }
     }
 
@@ -61,7 +65,18 @@ impl FileOpsService {
             return Ok(());
         }
 
+        // A repeated name must not subtract its bytes twice (nor add two trash
+        // rows for the same deletion).
+        let mut unique_names = file_names.to_vec();
+        unique_names.sort();
+        unique_names.dedup();
+        let file_names = unique_names.as_slice();
+
         let db = self.db();
+        // Capture the base before resolving the parent, so a concurrent commit
+        // makes the base check fail instead of letting the update land on a newer
+        // HEAD with a delta computed from an older tree.
+        let base_root_id = get_head_root_id(db, repo_id).await?;
 
         // Resolve the parent dir and its ancestor chain once, so the tree update
         // below walks ancestors in O(d). NotFound propagates as 404.
@@ -133,10 +148,13 @@ impl FileOpsService {
             }
         }
 
-        FileOps::update_dir_tree_and_commit(
+        let owner = self.repos.repo_owner_id(repo_id).await?;
+        let scope = self.repos.lock_quota(owner).await;
+        FileOps::update_dir_tree_and_commit_sized(
             db,
             &self.repos,
             repo_id,
+            &base_root_id,
             parent_dir,
             &parent_fs_id,
             email,
@@ -146,9 +164,13 @@ impl FileOpsService {
                 dirents.retain(|d| !names_to_delete_set.contains(d.name.as_str()));
                 Ok(())
             },
+            -total_deleted,
+            &scope,
+            self.config.get().storage.default_user_quota_bytes,
         )
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
+        drop(scope);
 
         for name in file_names {
             let fp = join_path(parent_dir, name);
@@ -179,8 +201,6 @@ impl FileOpsService {
             }
         }
 
-        crate::fs::core::adjust_repo_size(&self.repos, repo_id, -total_deleted).await?;
-
         Ok(())
     }
 
@@ -200,6 +220,8 @@ impl FileOpsService {
         }
 
         let db = self.db();
+        // Capture the base before resolving either side; see batch_delete.
+        let base_root_id = get_head_root_id(db, repo_id).await?;
 
         // Resolve the source parent dir; its chain is unused, the destination
         // tree update below carries the ancestor chain.
@@ -278,6 +300,20 @@ impl FileOpsService {
             });
         }
 
+        // A directory dirent carries `size = 0`; the copied subtree's logical
+        // size is what the copy must add to the library. Summing `entry.size`
+        // alone made directory copies free and let a copy/delete cycle reset the
+        // account's usage while the original data stayed on disk.
+        let mut total_copied: i64 = 0;
+        for entry in &entries_to_add {
+            if entry.mode & S_IFDIR != 0 {
+                total_copied +=
+                    crate::fs::core::compute_tree_size(&self.repos, repo_id, &entry.id).await?;
+            } else {
+                total_copied += entry.size;
+            }
+        }
+
         let description = if entries_to_add.len() == 1 {
             format!("Added \"{}\"", entries_to_add[0].name)
         } else {
@@ -288,10 +324,13 @@ impl FileOpsService {
             )
         };
 
-        FileOps::update_dir_tree_and_commit(
+        let owner = self.repos.repo_owner_id(repo_id).await?;
+        let scope = self.repos.lock_quota(owner).await;
+        FileOps::update_dir_tree_and_commit_sized(
             db,
             &self.repos,
             repo_id,
+            &base_root_id,
             dst_dir,
             &dst_parent_fs_id,
             email,
@@ -311,9 +350,12 @@ impl FileOpsService {
                 }
                 Ok(())
             },
+            total_copied,
+            &scope,
+            self.config.get().storage.default_user_quota_bytes,
         )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .await?;
+        drop(scope);
 
         for entry in &entries_to_add {
             let fp = join_path(dst_dir, &entry.name);
@@ -349,9 +391,6 @@ impl FileOpsService {
                 .collect();
             self.scheduler.schedule(repo_id, targets, "copy").await;
         }
-
-        let total_copied: i64 = entries_to_add.iter().map(|e| e.size).sum();
-        crate::fs::core::adjust_repo_size(&self.repos, repo_id, total_copied).await?;
 
         Ok(results)
     }

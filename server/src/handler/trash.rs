@@ -117,6 +117,7 @@ pub async fn revert_trash(
             &access.user.email,
             access.user.user_id,
             body,
+            state.config().storage.default_user_quota_bytes,
         )
         .await?,
     )?;
@@ -160,6 +161,7 @@ pub async fn revert_dirents(
             access.user.user_id,
             commit_id,
             paths,
+            state.config().storage.default_user_quota_bytes,
         )
         .await?,
     )?;
@@ -272,7 +274,14 @@ pub async fn restore_deleted_repo(
     // library ceiling did not see it.
     auth.ensure_repo_allowed(&repo_id, true)?;
 
-    trash::restore_deleted_repo(state.db.as_ref(), &state.repos, &repo_id, auth.user_id).await?;
+    trash::restore_deleted_repo(
+        state.db.as_ref(),
+        &state.repos,
+        &repo_id,
+        auth.user_id,
+        state.config().storage.default_user_quota_bytes,
+    )
+    .await?;
 
     Ok(ok_json())
 }

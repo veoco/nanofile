@@ -271,17 +271,17 @@ pub async fn update_branch(
     drop(new_commit);
 
     let _ = svc
-        .update_branch(&repo_id, new_head, _auth.user_id, &commit_desc)
+        .update_branch(
+            &repo_id,
+            new_head,
+            _auth.user_id,
+            &commit_desc,
+            state.config().storage.default_user_quota_bytes,
+        )
         .await?;
 
-    // The blocks and FS objects this client uploaded are now referenced by the new
-    // head, so drop its uncommitted-block reservation for the repo; blocks uploaded
-    // but never committed are left to GC, and holding the reservation after a commit
-    // would double-count bytes that are now part of the repo's size.
-    crate::service::fs::quota::release_repo_reservation(&state.repos, _auth.user_id, &repo_id);
-    // The commit changed the repo's size, so the cached per-user usage snapshot
-    // must not be reused by the next quota check.
-    crate::service::fs::quota::invalidate_user(&state.repos, _auth.user_id);
-
+    // `update_branch` released the reservations for the blocks the new head
+    // references and invalidated the owner's usage snapshot; blocks uploaded but
+    // never committed stay reserved until the TTL reaper.
     Ok(StatusCode::OK)
 }

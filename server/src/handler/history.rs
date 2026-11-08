@@ -151,6 +151,7 @@ pub async fn restore_file_revision_v21(
         &p,
         &path.user.email,
         path.user.user_id,
+        state.config().storage.default_user_quota_bytes,
     )
     .await?;
 

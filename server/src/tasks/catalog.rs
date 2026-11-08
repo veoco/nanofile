@@ -238,6 +238,25 @@ pub fn policy(key: JobKey) -> JobSpec {
             }),
             ..housekeeping(key, "gc", Trigger::Manual)
         },
+        JobKey::UsageReconcile => JobSpec {
+            name: "usage reconcile",
+            priority: Priority::Background,
+            resource: Resource::Cpu,
+            timeout: TimeoutPolicy {
+                no_progress_for_secs: Some(1800),
+                max_total_secs: None,
+            },
+            chunkable: Some(ChunkPolicy {
+                max_chunk_ms: 500,
+                unit: "repository",
+            }),
+            quiet: Some(QuietPolicy {
+                min_idle_for_secs: 30,
+                max_deferral_hours: 0,
+                on_spike: SpikePolicy::Throttle,
+            }),
+            ..housekeeping(key, "usage reconcile", Trigger::Manual)
+        },
         JobKey::BlockEncryptionConvert => JobSpec {
             name: "block encryption convert",
             priority: Priority::Background,

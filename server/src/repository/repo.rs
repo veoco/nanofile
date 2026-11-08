@@ -106,9 +106,22 @@ pub trait RepoRepository: Send + Sync {
         to: &str,
         updated_at: i64,
     ) -> Result<bool, AppError>;
+    /// Compare-and-swap HEAD **and** apply `size_delta` to the same row in one
+    /// statement. A crash can therefore never leave the new HEAD visible with the
+    /// old size (or vice versa), and a concurrent commit that moves HEAD makes the
+    /// whole update a no-op.
+    async fn advance_head_and_size(
+        &self,
+        repo_id: &str,
+        from: Option<&str>,
+        to: &str,
+        updated_at: i64,
+        size_delta: i64,
+    ) -> Result<bool, AppError>;
     async fn delete_by_id(&self, repo_id: &str) -> Result<(), AppError>;
-    /// Add a delta to the repo's size (can be negative).
-    async fn adjust_size(&self, repo_id: &str, delta: i64) -> Result<(), AppError>;
+    /// Set the repo size outright. For reconciliation and library restore, not for
+    /// incremental accounting.
+    async fn set_size(&self, repo_id: &str, size: i64) -> Result<(), AppError>;
     async fn update_repo_keys(
         &self,
         repo_id: &str,
@@ -300,13 +313,29 @@ impl RepoRepository for DbRepoRepository {
         to: &str,
         updated_at: i64,
     ) -> Result<bool, AppError> {
+        self.advance_head_and_size(repo_id, from, to, updated_at, 0)
+            .await
+    }
+
+    async fn advance_head_and_size(
+        &self,
+        repo_id: &str,
+        from: Option<&str>,
+        to: &str,
+        updated_at: i64,
+        size_delta: i64,
+    ) -> Result<bool, AppError> {
         let mut query = repo::Entity::update_many()
             .filter(repo::Column::Id.eq(repo_id))
             .set(repo::ActiveModel {
                 head_commit_id: Set(Some(to.to_string())),
                 updated_at: Set(normalized_updated_at(updated_at)),
                 ..Default::default()
-            });
+            })
+            .col_expr(
+                repo::Column::Size,
+                Expr::cust_with_values("MAX(0, size + ?)", [size_delta]),
+            );
         query = match from {
             Some(head) => query.filter(repo::Column::HeadCommitId.eq(head)),
             None => query.filter(repo::Column::HeadCommitId.is_null()),
@@ -322,14 +351,10 @@ impl RepoRepository for DbRepoRepository {
         Ok(())
     }
 
-    async fn adjust_size(&self, repo_id: &str, delta: i64) -> Result<(), AppError> {
-        // Atomic `size = MAX(0, size + delta)` avoids the read-then-write lost update.
+    async fn set_size(&self, repo_id: &str, size: i64) -> Result<(), AppError> {
         repo::Entity::update_many()
             .filter(repo::Column::Id.eq(repo_id))
-            .col_expr(
-                repo::Column::Size,
-                Expr::cust_with_values("MAX(0, size + ?)", [delta]),
-            )
+            .col_expr(repo::Column::Size, Expr::value(size))
             .exec(self.db.as_ref())
             .await?;
         Ok(())

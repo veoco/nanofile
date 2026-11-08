@@ -177,18 +177,29 @@ pub async fn put_block(
     // bound. The reservation is released when the branch update commits the blocks.
     crate::service::fs::quota::reserve_block_bytes(
         &state.repos,
-        auth.user_id,
         &repo_id,
+        &block_id,
         data.len() as i64,
         state.config().storage.default_user_quota_bytes,
     )
     .await?;
 
     let block_store = state.block_store.clone();
-    block_store
-        .write_block_with_id(&repo_id, &block_id, &data)
+    match block_store
+        .write_block_with_id_tracked(&repo_id, &block_id, &data)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    {
+        Ok((_, true)) => {}
+        Ok((_, false)) => {
+            // The block already existed (a retry or a concurrent upload); it is
+            // already paid for, so release the reservation just taken.
+            crate::service::fs::quota::release_block_bytes(&state.repos, &repo_id, &block_id).await;
+        }
+        Err(e) => {
+            crate::service::fs::quota::release_block_bytes(&state.repos, &repo_id, &block_id).await;
+            return Err(AppError::internal(e.to_string()));
+        }
+    }
 
     Ok(StatusCode::OK)
 }

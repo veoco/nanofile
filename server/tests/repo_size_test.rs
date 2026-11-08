@@ -351,9 +351,9 @@ async fn sync_merge_that_deletes_a_head_file_subtracts_it() {
 }
 
 /// Restoring a historical revision repoints a dirent at another fs id, so the
-/// library's size changes by the difference between the two versions — but the
-/// restore commits without an `adjust_repo_size`, which used to leave the size
-/// at the newer (or older) value.
+/// library's size changes by the difference between the two versions. The commit
+/// helper applies that delta in the same statement as HEAD; this used to be a
+/// separate adjustment that could be missed.
 #[tokio::test]
 async fn file_revision_restore_adjusts_size_by_the_difference() {
     let f = TestFixture::new().await;

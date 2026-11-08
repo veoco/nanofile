@@ -39,8 +39,14 @@ struct Inner {
     max_bytes: u64,
 }
 
+/// One reaped upload: repo id, temp path, owner, upload id, new block ids.
+type StaleUpload = (String, PathBuf, Option<i32>, Uuid, Vec<String>);
+
 struct TempFileEntry {
     tmp_path: PathBuf,
+    /// Stable identity for this upload's quota reservation. Retrying the first
+    /// chunk reuses it, so the declared size is reserved once.
+    upload_id: Uuid,
     /// Total file size as declared in the first Content-Range header
     file_size: u64,
     created_at: Instant,
@@ -204,10 +210,12 @@ impl TempFileManager {
         fs::write(&tmp_path, &[]).await?;
 
         guard.reserved_bytes += file_size;
+        let upload_id = Uuid::new_v4();
         guard.entries.insert(
             key,
             TempFileEntry {
                 tmp_path: tmp_path.clone(),
+                upload_id,
                 file_size,
                 created_at: Instant::now(),
                 owner: None,
@@ -511,19 +519,33 @@ impl TempFileManager {
         )
     }
 
-    pub async fn finish(&self, repo_id: &str, file_path: &str) {
+    /// Remove the temp entry and return `(owner, upload_id)` so the caller can
+    /// release that upload's quota reservation. The blocks were committed, so the
+    /// reservation itself is what must go; the blocks are now counted by `repo.size`.
+    pub async fn finish(&self, repo_id: &str, file_path: &str) -> Option<(Option<i32>, Uuid)> {
         let key = (repo_id.to_string(), file_path.to_string());
-        let tmp_path = {
+        let (tmp_path, reservation) = {
             let mut guard = self.inner.active.write().await;
             let removed = guard.entries.remove(&key);
             if let Some(e) = &removed {
                 guard.reserved_bytes -= e.file_size;
             }
-            removed.map(|e| e.tmp_path)
+            match removed {
+                Some(e) => (Some(e.tmp_path), Some((e.owner, e.upload_id))),
+                None => (None, None),
+            }
         };
         if let Some(p) = tmp_path {
             let _ = fs::remove_file(&p).await;
         }
+        reservation
+    }
+
+    /// The reservation id of an existing temp upload.
+    pub async fn upload_id(&self, repo_id: &str, file_path: &str) -> Option<Uuid> {
+        let key = (repo_id.to_string(), file_path.to_string());
+        let guard = self.inner.active.read().await;
+        guard.entries.get(&key).map(|e| e.upload_id)
     }
 
     /// Abort an upload: remove its temp file, delete the blocks it wrote that no
@@ -540,23 +562,28 @@ impl TempFileManager {
         store: &DynBlockStorage,
     ) {
         let key = (repo_id.to_string(), file_path.to_string());
-        let (tmp_path, owner, blocks) = {
+        let (tmp_path, owner, upload_id, blocks) = {
             let mut guard = self.inner.active.write().await;
             let removed = guard.entries.remove(&key);
             if let Some(e) = &removed {
                 guard.reserved_bytes -= e.file_size;
             }
             match removed {
-                Some(e) => (Some(e.tmp_path), e.owner, e.new_block_ids),
-                None => (None, None, Vec::new()),
+                Some(e) => (
+                    Some(e.tmp_path),
+                    e.owner,
+                    Some(e.upload_id),
+                    e.new_block_ids,
+                ),
+                None => (None, None, None, Vec::new()),
             }
         };
         if let Some(p) = tmp_path {
             let _ = fs::remove_file(&p).await;
         }
         delete_uncommitted_blocks(repos, store, repo_id, &blocks).await;
-        if let Some(uid) = owner {
-            crate::service::fs::quota::release_repo_reservation(repos, uid, repo_id);
+        if let (Some(uid), Some(upload_id)) = (owner, upload_id) {
+            crate::service::fs::quota::release_upload(repos, uid, repo_id, &upload_id.to_string());
         }
     }
 
@@ -573,7 +600,7 @@ impl TempFileManager {
         store: &DynBlockStorage,
     ) -> usize {
         let cutoff = Instant::now() - ttl;
-        let stale: Vec<(String, PathBuf, Option<i32>, Vec<String>)> = {
+        let stale: Vec<StaleUpload> = {
             let mut guard = self.inner.active.write().await;
             let mut removed = Vec::new();
             // Collect keys first so the closure doesn't borrow `entries` and
@@ -589,19 +616,24 @@ impl TempFileManager {
                     guard.reserved_bytes -= e.file_size;
                     // The key carries the repo id; the on-disk dir name is only a
                     // hash of it, so it cannot be recovered from the path.
-                    removed.push((key.0, e.tmp_path, e.owner, e.new_block_ids));
+                    removed.push((key.0, e.tmp_path, e.owner, e.upload_id, e.new_block_ids));
                 }
             }
             removed
         };
         let dropped = stale.len();
-        for (repo_id, p, owner, blocks) in stale {
+        for (repo_id, p, owner, upload_id, blocks) in stale {
             if let Err(e) = fs::remove_file(&p).await {
                 tracing::warn!("Failed to remove stale temp file {:?}: {e}", p);
             }
             delete_uncommitted_blocks(repos, store, &repo_id, &blocks).await;
             if let Some(uid) = owner {
-                crate::service::fs::quota::release_repo_reservation(repos, uid, &repo_id);
+                crate::service::fs::quota::release_upload(
+                    repos,
+                    uid,
+                    &repo_id,
+                    &upload_id.to_string(),
+                );
             }
         }
         dropped

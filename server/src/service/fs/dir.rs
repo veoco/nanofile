@@ -504,10 +504,13 @@ impl DirService {
         )
         .await;
 
-        FileOps::update_dir_tree_and_commit(
+        let owner = self.repos.repo_owner_id(repo_id).await?;
+        let scope = self.repos.lock_quota(owner).await;
+        FileOps::update_dir_tree_and_commit_sized(
             db,
             &self.repos,
             repo_id,
+            &head_root_id,
             parent_path,
             &parent_fs_id,
             email,
@@ -517,11 +520,12 @@ impl DirService {
                 dirents.retain(|d| d.name != name);
                 Ok(())
             },
+            -deleted_size,
+            &scope,
+            self.config.get().storage.default_user_quota_bytes,
         )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-
-        crate::fs::core::adjust_repo_size(&self.repos, repo_id, -deleted_size).await?;
+        .await?;
+        drop(scope);
 
         activity_log::log_activity(
             db, repo_id, "delete", "dir", path, user_id, None, None, None, None, None,
@@ -621,6 +625,11 @@ impl DirService {
             .rsplit('/')
             .next()
             .unwrap_or("subrepo");
+        // The new library gets its own copy of the blocks, so its whole logical
+        // subtree is charged. Summing unique file fs objects (the old
+        // `copy_subtree_blocks` return) undercounts duplicate references.
+        let tree_size =
+            crate::fs::core::compute_tree_size(&self.repos, repo_id, &source_dir_fs_id).await?;
 
         self.repos
             .repo
@@ -654,51 +663,65 @@ impl DirService {
             })
             .await?;
 
-        copy_fs_tree(&self.repos, repo_id, &new_repo_id, &source_dir_fs_id).await?;
+        let default_quota = self.config.get().storage.default_user_quota_bytes;
+        let scope = self.repos.lock_quota(user_id).await;
+
+        // Refuse before copying any block, while the half-built library can still
+        // be rolled back cleanly.
+        if let Err(e) = self
+            .repos
+            .check_repo_quota_locked(&scope, &new_repo_id, tree_size, default_quota)
+            .await
+        {
+            let _ = self.repos.member.delete_by_repo(&new_repo_id).await;
+            let _ = self.repos.repo.delete_by_id(&new_repo_id).await;
+            return Err(e);
+        }
+
+        if let Err(e) = copy_fs_tree(&self.repos, repo_id, &new_repo_id, &source_dir_fs_id).await {
+            let _ = self.repos.member.delete_by_repo(&new_repo_id).await;
+            let _ = self.repos.repo.delete_by_id(&new_repo_id).await;
+            return Err(e);
+        }
 
         // `copy_fs_tree` copies FS objects that reference the parent library's block ids; blocks
         // are stored per library, so every download would 404 until they are copied too. Do that
         // **before** the commit, so a failure leaves no library that looks complete but is not.
-        let copied_bytes = match copy_subtree_blocks(
+        if let Err(e) = copy_subtree_blocks(
             &self.repos,
             &self.block_store,
             repo_id,
             &new_repo_id,
             &source_dir_fs_id,
-            user_id,
-            self.config.get().storage.default_user_quota_bytes,
         )
         .await
         {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                // Roll the half-built library back rather than leaving it behind, empty or with
-                // blocks already on disk (a quota refusal).
-                let _ = self.repos.member.delete_by_repo(&new_repo_id).await;
-                let _ = self.repos.repo.delete_by_id(&new_repo_id).await;
-                return Err(e);
-            }
-        };
+            let _ = self.repos.member.delete_by_repo(&new_repo_id).await;
+            let _ = self.repos.repo.delete_by_id(&new_repo_id).await;
+            return Err(e);
+        }
 
-        FileOps::create_commit(
+        if let Err(e) = FileOps::create_commit_sized(
             &self.repos,
             &new_repo_id,
+            EMPTY_SHA1,
             &source_dir_fs_id,
             email,
             "Created sub-repo",
+            tree_size,
+            &scope,
+            default_quota,
         )
         .await
-        .map_err(|e| AppError::Internal(format!("create commit failed: {e}")))?;
-
-        // Charge the duplicated blocks to the new library: otherwise it reports `size = 0`, so
-        // `compute_user_usage` misses the bytes and repeated sub-repo creation is a free disk
-        // amplifier.
-        if copied_bytes > 0
-            && let Err(e) =
-                crate::fs::core::adjust_repo_size(&self.repos, &new_repo_id, copied_bytes).await
         {
-            tracing::warn!("could not record the sub-repo size: {e}");
+            let _ = self.repos.member.delete_by_repo(&new_repo_id).await;
+            let _ = self.repos.repo.delete_by_id(&new_repo_id).await;
+            return Err(match e {
+                AppError::QuotaExceeded => e,
+                other => AppError::Internal(format!("create commit failed: {other}")),
+            });
         }
+        drop(scope);
 
         Ok(serde_json::json!({
             // The desktop client reads `sub_repo_id` to open the new library (`api2/views.py:4199`,
@@ -793,10 +816,13 @@ impl DirService {
             }
         }
 
-        FileOps::update_dir_tree_and_commit(
+        let owner = self.repos.repo_owner_id(repo_id).await?;
+        let scope = self.repos.lock_quota(owner).await;
+        FileOps::update_dir_tree_and_commit_sized(
             db,
             &self.repos,
             repo_id,
+            &head_commit.root_id,
             parent_path,
             &parent_fs_id,
             email,
@@ -806,17 +832,18 @@ impl DirService {
                 dirents.retain(|d| d.name != name);
                 Ok(())
             },
+            -deleted_size,
+            &scope,
+            self.config.get().storage.default_user_quota_bytes,
         )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .await?;
+        drop(scope);
 
         if let Some(indexer) = &self.indexer
             && let Err(e) = indexer.delete_file_async(repo_id, path).await
         {
             tracing::warn!("Failed to delete index for {path}: {e}");
         }
-
-        crate::fs::core::adjust_repo_size(&self.repos, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
             db, repo_id, "delete", obj, path, user_id, None, None, None, None, None,
@@ -996,8 +1023,6 @@ async fn copy_subtree_blocks(
     src_repo_id: &str,
     dst_repo_id: &str,
     root_fs_id: &str,
-    owner_id: i32,
-    default_quota: u64,
 ) -> Result<i64, AppError> {
     if root_fs_id == EMPTY_SHA1 {
         return Ok(0);
@@ -1045,10 +1070,8 @@ async fn copy_subtree_blocks(
         frontier = next;
     }
 
-    // Refuse before writing anything: duplicating a folder consumes real disk,
-    // and the caller may be over quota already.
-    crate::service::fs::quota::check_upload_quota(repos, owner_id, total_size, default_quota)
-        .await?;
+    // Quota is checked by `create_sub_repo` under the owner's scope before this
+    // copy starts; the returned size is used only for logging.
 
     for id in block_ids {
         if block_store.has_block(dst_repo_id, &id).await {

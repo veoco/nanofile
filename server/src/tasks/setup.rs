@@ -76,6 +76,7 @@ pub fn install_default_jobs(
     let face_tags_config = face_tags.get();
     let face_tags_enabled = face_tags_config.face_tags.enabled;
     let scheduler = IndexScheduler::new(tasks.clone(), indexer.is_some(), face_tags_enabled);
+    let runtime_config = face_tags.clone();
     // The index jobs read `[ocr]` from the live snapshot, so a saved switch reaches
     // the next upload or backfill pass without a restart.
     let index_config = face_tags.clone();
@@ -87,16 +88,23 @@ pub fn install_default_jobs(
         let repos = repos.clone();
         let indexer = indexer.cloned();
         let scheduler = scheduler.clone();
+        let runtime_config = runtime_config.clone();
         move |ctx, params| {
             let db = db.clone();
             let repos = repos.clone();
             let indexer = indexer.clone();
             let scheduler = scheduler.clone();
+            let runtime_config = runtime_config.clone();
             async move {
                 let p: BatchParams = parse_params(params)?;
                 let user_id = ctx.owner().unwrap_or(0);
-                let svc =
-                    crate::service::fs::fileops::FileOpsService::new(db, repos, indexer, scheduler);
+                let svc = crate::service::fs::fileops::FileOpsService::new(
+                    db,
+                    repos,
+                    indexer,
+                    scheduler,
+                    runtime_config,
+                );
                 let copied = svc
                     .batch_copy(
                         &p.repo_id,
@@ -119,16 +127,23 @@ pub fn install_default_jobs(
         let repos = repos.clone();
         let indexer = indexer.cloned();
         let scheduler = scheduler.clone();
+        let runtime_config = runtime_config.clone();
         move |ctx, params| {
             let db = db.clone();
             let repos = repos.clone();
             let indexer = indexer.clone();
             let scheduler = scheduler.clone();
+            let runtime_config = runtime_config.clone();
             async move {
                 let p: BatchParams = parse_params(params)?;
                 let user_id = ctx.owner().unwrap_or(0);
-                let svc =
-                    crate::service::fs::fileops::FileOpsService::new(db, repos, indexer, scheduler);
+                let svc = crate::service::fs::fileops::FileOpsService::new(
+                    db,
+                    repos,
+                    indexer,
+                    scheduler,
+                    runtime_config,
+                );
                 let moved = svc
                     .batch_move(
                         &p.repo_id,
@@ -343,7 +358,61 @@ pub fn install_default_jobs(
                     parts.push("temporary uploads never expire".to_string());
                 }
 
+                let expired_reservations = repos.quota_cache.expire_stale();
+                if expired_reservations > 0 {
+                    removed += expired_reservations as u64;
+                    parts.push(format!("{expired_reservations} expired reservations"));
+                }
+
                 cleanup_outcome(&parts, &failures, removed)
+            }
+        }
+    }));
+
+    // Manual repair pass for historical drift. Commits now update HEAD and size
+    // atomically, but an instance upgraded from an older build can still carry a
+    // stale `size`; this recomputes every library from its HEAD tree.
+    jobs.push(job(JobKey::UsageReconcile, {
+        let repos = repos.clone();
+        move |ctx, _params| {
+            let repos = repos.clone();
+            async move {
+                let all = repos.repo.find_all().await.map_err(JobFailure::App)?;
+                let mut repaired = 0u64;
+                for snapshot in &all {
+                    ctx.checkpoint().await?;
+                    let Some(repo) = repos
+                        .repo
+                        .find_by_id(&snapshot.id)
+                        .await
+                        .map_err(JobFailure::App)?
+                    else {
+                        continue;
+                    };
+                    // Serialize with commits for this owner: a concurrent upload
+                    // must not land between computing the tree size and writing it
+                    // back, or the repair itself would introduce drift.
+                    let scope = repos.lock_quota(repo.owner_id).await;
+                    let actual = crate::fs::core::compute_repo_size(&repos, &repo.id)
+                        .await
+                        .map_err(JobFailure::App)?;
+                    if actual != repo.size {
+                        repos
+                            .repo
+                            .set_size(&repo.id, actual)
+                            .await
+                            .map_err(JobFailure::App)?;
+                        repos.invalidate_quota(repo.owner_id);
+                        repaired += 1;
+                    }
+                    drop(scope);
+                }
+                ctx.set_detail("checked", serde_json::json!(all.len()));
+                ctx.set_detail("repaired", serde_json::json!(repaired));
+                Ok(Outcome::success(
+                    format!("Checked {} libraries, repaired {repaired}", all.len()),
+                    Some(repaired),
+                ))
             }
         }
     }));

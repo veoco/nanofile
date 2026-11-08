@@ -425,7 +425,7 @@ impl FileService {
     /// concurrent upload of identical content, so deleting unconditionally would remove a block a
     /// committed file needs. Each candidate is checked against the FS objects; a false positive (an
     /// id that merely appears as a substring elsewhere) only leaves an orphan for GC, the safe side.
-    async fn cleanup_uncommitted_blocks(&self, repo_id: &str, ids: &[String]) {
+    pub(crate) async fn cleanup_uncommitted_blocks(&self, repo_id: &str, ids: &[String]) {
         for id in ids {
             match self.fs_object_references_block(repo_id, id).await {
                 Ok(true) => {
@@ -547,46 +547,22 @@ impl FileService {
         base::sanitize::validate_filename(filename)
             .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
 
-        let fp = base::sanitize::safe_join_path(target_dir, filename)
-            .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
+        // The old size and the delta are resolved inside `create_file_from_blocks`
+        // under the repository lock, so they describe the same parent the commit
+        // is based on even if a concurrent rename moved the target in between.
+        let owner = self.repos.repo_owner_id(repo_id).await?;
+        let scope = self.repos.lock_quota(owner).await;
+        let default_quota = self.config.get().storage.default_user_quota_bytes;
 
-        // An overwrite frees the bytes of the file it replaces, so only the
-        // increase may be charged: billing the whole upload rejected a same-size
-        // replacement whenever the owner was close to the quota. A lookup failure
-        // other than "no such entry" must not be read as zero old bytes.
-        let old_size = if replace {
-            match crate::fs::core::get_entry_total_size(&self.repos, repo_id, &fp).await {
-                Ok(size) => size,
-                Err(AppError::NotFound(_)) => 0,
-                Err(e) => return Err(e),
-            }
-        } else {
-            0
-        };
-        let size_delta = total_size - old_size;
-
-        // On quota failure, remove newly-written blocks so they don't accumulate as orphans
-        // (GC is disabled by default). Deduped blocks are left alone.
-        if let Some(uid) = user_id
-            && let Err(e) = crate::service::fs::quota::check_upload_quota(
-                &self.repos,
-                uid,
-                size_delta,
-                self.config.get().storage.default_user_quota_bytes,
-            )
-            .await
-        {
-            self.cleanup_uncommitted_blocks(repo_id, &new_block_ids)
-                .await;
-            return Err(e);
-        }
         // Ensure the target directory exists (folder uploads with missing subdirs).
+        // These are delta-0 commits, so they do not need the quota scope themselves;
+        // holding it here keeps the lock order quota → repository.
         if ensure_dir && let Some(uid) = user_id {
             self.ensure_dir_recursive(repo_id, target_dir, modifier, uid)
                 .await?;
         }
 
-        let (fs_id, effective_name) = FileOps::create_file_from_blocks(
+        let committed = FileOps::create_file_from_blocks(
             self.db(),
             &self.repos,
             repo_id,
@@ -596,25 +572,29 @@ impl FileService {
             total_size,
             modifier,
             replace,
+            &scope,
+            default_quota,
         )
-        .await
-        .map_err(|e| AppError::Internal(format!("upload failed: {e}")))?;
+        .await;
+
+        let (fs_id, effective_name) = match committed {
+            Ok(v) => v,
+            Err(e) => {
+                if matches!(e, AppError::QuotaExceeded) {
+                    // The blocks were written before the commit was refused; remove
+                    // only those this upload created, and re-check references first.
+                    self.cleanup_uncommitted_blocks(repo_id, &new_block_ids)
+                        .await;
+                }
+                return Err(e);
+            }
+        };
+        drop(scope);
 
         // Without `replace` the commit lands under a unique name (`name (1).ext`), so the activity
         // entry and the search index must use the effective path, not the requested one.
         let effective_fp = base::sanitize::safe_join_path(target_dir, &effective_name)
             .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
-
-        crate::fs::core::adjust_repo_size(&self.repos, repo_id, size_delta).await?;
-
-        // The bytes are now part of the repo's committed `size`, which `user_usage` counts, so drop
-        // this uploader's uncommitted-block reservation (keeping it would double-count the file and
-        // keep counting orphaned blocks, which are GC's business). The cached usage snapshot is
-        // dropped too, so the next upload sees the new total instead of the pre-commit one.
-        if let Some(uid) = user_id {
-            crate::service::fs::quota::release_repo_reservation(&self.repos, uid, repo_id);
-            crate::service::fs::quota::invalidate_user(&self.repos, uid);
-        }
 
         if let Some(uid) = user_id {
             let op_type = if replace { "edit" } else { "create" };
@@ -710,9 +690,10 @@ impl FileService {
         Ok(())
     }
 
-    /// Adjust repo size and log activity — the shared tail of the block-commit upload path
-    /// (`upload_blks_api`). The caller resolves `file_exists` / `old_size` from the parent dirents.
-    /// `op_type` comes from whether the file actually exists, not from a client-supplied `replace`.
+    /// Log the activity tail of the block-commit upload path (`upload_blks_api`).
+    /// The commit itself already adjusted `repo.size` atomically with HEAD.
+    /// `op_type` comes from whether the file actually existed, not from a
+    /// client-supplied `replace`.
     pub async fn finalize_upload(
         &self,
         repo_id: &str,
@@ -721,10 +702,7 @@ impl FileService {
         size: i64,
         user_id: Option<i32>,
         file_exists: bool,
-        old_size: i64,
     ) -> Result<(), AppError> {
-        crate::fs::core::adjust_repo_size(&self.repos, repo_id, size - old_size).await?;
-
         if let Some(uid) = user_id {
             let op_type = if file_exists { "edit" } else { "create" };
             activity_log::log_activity(
@@ -783,10 +761,13 @@ impl FileService {
         trash::record_deleted_entry(db, &self.repos, repo_id, path, name, email, &parent_fs_id)
             .await;
 
-        FileOps::update_dir_tree_and_commit(
+        let owner = self.repos.repo_owner_id(repo_id).await?;
+        let scope = self.repos.lock_quota(owner).await;
+        FileOps::update_dir_tree_and_commit_sized(
             db,
             &self.repos,
             repo_id,
+            &head_root_id,
             parent_path,
             &parent_fs_id,
             email,
@@ -796,17 +777,18 @@ impl FileService {
                 dirents.retain(|d| d.name != name);
                 Ok(())
             },
+            -deleted_size,
+            &scope,
+            self.config.get().storage.default_user_quota_bytes,
         )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .await?;
+        drop(scope);
 
         if let Some(indexer) = &self.indexer
             && let Err(e) = indexer.delete_file_async(repo_id, path).await
         {
             tracing::warn!("Failed to delete index for {path}: {e}");
         }
-
-        crate::fs::core::adjust_repo_size(&self.repos, repo_id, -deleted_size).await?;
 
         activity_log::log_activity(
             db, repo_id, "delete", "file", path, user_id, None, None, None, None, None,

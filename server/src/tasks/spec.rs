@@ -26,6 +26,8 @@ pub enum JobKey {
     /// share links, upload links and abandoned temporary uploads.
     ExpiredDataCleanup,
     GarbageCollection,
+    /// Recompute every library's `size` from its HEAD tree and repair drift.
+    UsageReconcile,
     BlockEncryptionConvert,
     IndexCommit,
     /// The low-load pass that finds files the index has never seen, or whose
@@ -48,6 +50,7 @@ impl JobKey {
         Self::PasswordCacheCleanup,
         Self::ExpiredDataCleanup,
         Self::GarbageCollection,
+        Self::UsageReconcile,
         Self::BlockEncryptionConvert,
         Self::IndexCommit,
         Self::IndexBackfill,
@@ -84,6 +87,7 @@ impl JobKey {
             Self::PasswordCacheCleanup => "password-cache-cleanup",
             Self::ExpiredDataCleanup => "expired-data-cleanup",
             Self::GarbageCollection => "gc",
+            Self::UsageReconcile => "usage-reconcile",
             Self::BlockEncryptionConvert => "block-encryption-convert",
             Self::IndexCommit => "index-commit",
             Self::IndexBackfill => "index-backfill",

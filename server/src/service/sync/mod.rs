@@ -672,7 +672,17 @@ impl SyncService {
         new_commit: &infra::entity::commit::Model,
         current_head: Option<&str>,
         base_root_id: Option<&str>,
-    ) -> Result<(String, String, Option<String>, i64, bool), AppError> {
+    ) -> Result<
+        (
+            String,
+            String,
+            Option<String>,
+            i64,
+            bool,
+            std::collections::HashSet<String>,
+        ),
+        AppError,
+    > {
         let head_id =
             current_head.ok_or_else(|| AppError::Internal("merge without HEAD".into()))?;
         let head_commit = self
@@ -698,12 +708,14 @@ impl SyncService {
         // rather than against the client's base.
         let mut missing = Vec::new();
         let mut delta = 0;
+        let mut referenced_blocks = std::collections::HashSet::new();
         self.check_commit_blocks(
             repo_id,
             &outcome.merged_root,
             Some(&head_commit.root_id),
             &mut missing,
             &mut delta,
+            &mut referenced_blocks,
         )
         .await?;
         if !missing.is_empty() {
@@ -727,6 +739,7 @@ impl SyncService {
             Some(head_commit.root_id),
             delta,
             outcome.kept_deleted,
+            referenced_blocks,
         ))
     }
 
@@ -817,6 +830,7 @@ impl SyncService {
         base_root_id: Option<&str>,
         missing: &mut Vec<String>,
         size_delta: &mut i64,
+        referenced_blocks: &mut std::collections::HashSet<String>,
     ) -> Result<(), AppError> {
         /// An empty directory is the `EMPTY_SHA1` sentinel: never a missing object.
         fn stored_dir(id: &str) -> Option<String> {
@@ -1055,6 +1069,11 @@ impl SyncService {
                             .cloned()
                             .collect()
                     };
+                    // Every block referenced by a changed/new file may have been
+                    // uploaded via `put_block`; the successful branch update releases
+                    // exactly these reservations. Blocks uploaded but never
+                    // referenced stay reserved until the TTL reaper.
+                    referenced_blocks.extend(unique_ids.iter().cloned());
                     let missing_ids: std::collections::HashSet<String> = {
                         const BATCH_SIZE: usize = 8;
                         let store = self.block_store.clone();
@@ -1224,6 +1243,7 @@ impl SyncService {
         new_head: &str,
         user_id: i32,
         commit_desc: &str,
+        default_quota: u64,
     ) -> Result<bool, AppError> {
         use crate::fs::core::tree_diff;
         use infra::events;
@@ -1276,12 +1296,14 @@ impl SyncService {
 
         let mut missing = Vec::new();
         let mut size_delta: i64 = 0;
+        let mut referenced_blocks = std::collections::HashSet::new();
         self.check_commit_blocks(
             repo_id,
             &new_commit.root_id,
             base_root_id.as_deref(),
             &mut missing,
             &mut size_delta,
+            &mut referenced_blocks,
         )
         .await?;
         if !missing.is_empty() {
@@ -1305,6 +1327,8 @@ impl SyncService {
             return Err(AppError::BadRequest("parent commit not found".into()));
         }
 
+        let owner = self.repos.repo_owner_id(repo_id).await?;
+        let scope = self.repos.lock_quota(owner).await;
         let mut attempt: u32 = 0;
 
         loop {
@@ -1344,14 +1368,21 @@ impl SyncService {
             // not the device, produced the tree (see `merge_branch`).
             let is_merge = current_head.is_some() && !parent_matches_head;
 
-            let (target_head, target_root, diff_base_root, delta, merge_kept_deleted) = if !is_merge
-            {
+            let (
+                target_head,
+                target_root,
+                diff_base_root,
+                delta,
+                merge_kept_deleted,
+                attempt_blocks,
+            ) = if !is_merge {
                 (
                     new_head.to_string(),
                     new_commit.root_id.clone(),
                     base_root_id.clone(),
                     size_delta,
                     false,
+                    referenced_blocks.clone(),
                 )
             } else {
                 self.merge_branch(
@@ -1377,14 +1408,21 @@ impl SyncService {
                 new_commit.ctime
             };
 
+            if delta > 0 {
+                self.repos
+                    .check_repo_quota_locked(&scope, repo_id, delta, default_quota)
+                    .await?;
+            }
+
             if !self
                 .repos
                 .repo
-                .test_and_update_head_commit(
+                .advance_head_and_size(
                     repo_id,
                     current_head.as_deref(),
                     &target_head,
                     target_updated_at,
+                    delta,
                 )
                 .await?
             {
@@ -1403,7 +1441,13 @@ impl SyncService {
                 continue;
             }
 
-            crate::fs::core::adjust_repo_size(&self.repos, repo_id, delta).await?;
+            // The blocks the new tree references are now committed; release only
+            // those reservations. Blocks uploaded but never referenced stay until
+            // the TTL reaper, so a failed/abandoned sync still bounds its writes.
+            let blocks: Vec<String> = attempt_blocks.iter().cloned().collect();
+            crate::service::fs::quota::release_blocks(&self.repos, repo_id, &blocks).await;
+            self.repos.invalidate_quota(owner);
+            drop(scope);
 
             // Activity logging and reindexing describe what *this* commit introduced:
             // for a fast-forward the client's diff against its own base, for a merge

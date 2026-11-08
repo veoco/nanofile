@@ -660,6 +660,7 @@ impl AppState {
             self.repos.clone(),
             self.indexer.clone(),
             self.index_scheduler(),
+            self.config.clone(),
         )
     }
 

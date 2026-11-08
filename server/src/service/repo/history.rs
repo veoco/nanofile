@@ -312,6 +312,7 @@ impl HistoryService {
         path: &str,
         modifier: &str,
         user_id: i32,
+        default_quota: u64,
     ) -> Result<(), AppError> {
         let c = repos
             .commit
@@ -337,15 +338,25 @@ impl HistoryService {
         let now = chrono::Utc::now().timestamp();
         let target_size = target_file.size;
 
-        // Repointing the dirent also changes the library's size, which is maintained
-        // incrementally: the entry's size before the update is the only place the
-        // "old" value is still available.
-        let mut previous_size: Option<i64> = None;
+        // The dirent's current size is the "old" side of the delta. Read it from
+        // the same parent snapshot the update is based on, then commit the change
+        // and the size in one statement.
+        let parent_data = crate::fs::core::read_fs_dir_data(repos, repo_id, &parent_fs_id).await?;
+        let current_size = parent_data
+            .dirents
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| d.size)
+            .unwrap_or(0);
+        let size_delta = target_size - current_size;
 
-        FileOps::update_dir_tree_and_commit(
+        let owner = repos.repo_owner_id(repo_id).await?;
+        let scope = repos.lock_quota(owner).await;
+        FileOps::update_dir_tree_and_commit_sized(
             db,
             repos,
             repo_id,
+            &head_root_id,
             parent_path,
             &parent_fs_id,
             modifier,
@@ -353,7 +364,6 @@ impl HistoryService {
             crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
             |dirents| {
                 if let Some(d) = dirents.iter_mut().find(|d| d.name == name) {
-                    previous_size = Some(d.size);
                     d.id = target_fs_id.clone();
                     d.size = target_size;
                     d.mtime = now;
@@ -361,12 +371,12 @@ impl HistoryService {
                 }
                 Ok(())
             },
+            size_delta,
+            &scope,
+            default_quota,
         )
         .await?;
-
-        if let Some(previous_size) = previous_size {
-            crate::fs::core::adjust_repo_size(repos, repo_id, target_size - previous_size).await?;
-        }
+        drop(scope);
 
         activity_log::log_activity(
             db,

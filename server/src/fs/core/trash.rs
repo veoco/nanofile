@@ -413,6 +413,7 @@ pub async fn restore_trash_items(
     modifier: &str,
     user_id: i32,
     restore_map: HashMap<String, Vec<String>>,
+    default_quota: u64,
 ) -> Result<RevertResult, AppError> {
     let mut success = Vec::new();
     let mut failed = Vec::new();
@@ -594,10 +595,16 @@ pub async fn restore_trash_items(
         let now = chrono::Utc::now().timestamp();
         let description = format!("Recovered {}", item.obj_name);
 
-        let result = FileOps::update_dir_tree_and_commit(
+        let base_root_id = head_root_id
+            .clone()
+            .ok_or_else(|| AppError::Internal("restore commit without a head root".into()))?;
+        let owner = repos.repo_owner_id(repo_id).await?;
+        let scope = repos.lock_quota(owner).await;
+        let result = FileOps::update_dir_tree_and_commit_sized(
             db,
             repos,
             repo_id,
+            &base_root_id,
             &item.parent_dir,
             &parent_fs_id,
             modifier,
@@ -618,19 +625,18 @@ pub async fn restore_trash_items(
                 });
                 Ok(())
             },
+            restored_size,
+            &scope,
+            default_quota,
         )
-        .await
-        .map_err(|e| AppError::Internal(format!("Restore commit failed: {e}")));
+        .await;
+        drop(scope);
 
         match result {
             Ok(new_root) => {
                 // Later items in this request must see this item's restore.
                 head_root_id = Some(new_root);
                 successful_ids.push(trash_id);
-
-                // The commit linked the entry (and a directory's whole subtree) back
-                // into HEAD, so the bytes the delete path subtracted come back too.
-                crate::fs::core::adjust_repo_size(repos, repo_id, restored_size).await?;
 
                 activity_log::log_activity(
                     db,
@@ -678,10 +684,11 @@ pub async fn restore_dirents(
     user_id: i32,
     commit_id: &str,
     paths: Vec<String>,
+    default_quota: u64,
 ) -> Result<RevertResult, AppError> {
     let mut map = HashMap::new();
     map.insert(commit_id.to_string(), paths);
-    restore_trash_items(db, repos, repo_id, modifier, user_id, map).await
+    restore_trash_items(db, repos, repo_id, modifier, user_id, map, default_quota).await
 }
 
 /// Clean trash items for a repo, optionally keeping items newer than
@@ -886,6 +893,7 @@ pub async fn restore_deleted_repo(
     repos: &Repositories,
     repo_id: &str,
     user_id: i32,
+    default_quota: u64,
 ) -> Result<(), AppError> {
     let trashed = repos
         .deleted_repo
@@ -896,6 +904,13 @@ pub async fn restore_deleted_repo(
     if trashed.owner_id != user_id {
         return Err(AppError::Forbidden);
     }
+
+    // A restored library is a new allocation of its recorded bytes. Check before
+    // touching the archive, so an over-quota restore fails without half-restoring.
+    let scope = repos.lock_quota(user_id).await;
+    repos
+        .check_user_quota_locked(&scope, user_id, trashed.size, default_quota)
+        .await?;
 
     let now = chrono::Utc::now().timestamp();
 
@@ -990,6 +1005,8 @@ pub async fn restore_deleted_repo(
     crate::fs::core::repo_archive::drop_archive(db, &trashed.repo_id).await?;
 
     repos.deleted_repo.delete_by_id(repo_id).await?;
+    repos.invalidate_quota(user_id);
+    drop(scope);
 
     activity_log::log_activity(
         db, repo_id, "recover", "repo", "/", user_id, None, None, None, None, None,

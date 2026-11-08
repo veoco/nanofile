@@ -4,7 +4,8 @@ use base::error::AppError;
 /// Read a user's storage usage from a fresh-enough cached snapshot (it lives on
 /// `Repositories`, so it describes this server's database), recomputing a full
 /// SUM only on cache miss or expiry; commits invalidate it outright, so the TTL
-/// is only a backstop.
+/// is only a backstop. Prechecks use this; authoritative commit checks use
+/// `Repositories::check_repo_quota_locked`, which sums under the per-user lock.
 async fn user_usage(repos: &Repositories, user_id: i32) -> Result<i64, AppError> {
     if let Some(usage) = repos.quota_cache.cached_usage(user_id) {
         return Ok(usage);
@@ -15,7 +16,11 @@ async fn user_usage(repos: &Repositories, user_id: i32) -> Result<i64, AppError>
     Ok(usage)
 }
 
-/// Check whether a user has enough remaining quota for a `delta`-byte upload.
+/// Pre-check whether a user has enough remaining quota for a `delta`-byte upload.
+///
+/// This is the fast/advisory path: it may use a 500 ms cached total and is not the
+/// authority. A positive-delta commit must call
+/// [`Repositories::check_repo_quota_locked`] while holding that owner's quota scope.
 ///
 /// `users.storage_quota` decides: `Some(0)` unlimited, `Some(n)` n bytes, `None`
 /// falls back to `default_quota`, the server's default space quota (its `0` is
@@ -31,13 +36,11 @@ pub async fn check_upload_quota(
         return Ok(());
     }
 
-    let Some(quota) = effective_quota(repos, user_id, default_quota).await? else {
+    let Some(quota) = repos.effective_user_quota(user_id, default_quota).await? else {
         return Ok(());
     };
 
-    // Current usage (sum of owned repo sizes), cached against a full SUM per chunk.
     let usage = user_usage(repos, user_id).await?;
-
     if usage + delta > quota {
         return Err(AppError::QuotaExceeded);
     }
@@ -54,7 +57,7 @@ pub async fn check_sync_quota(
     delta: i64,
     default_quota: u64,
 ) -> Result<(), AppError> {
-    let Some(quota) = effective_quota(repos, user_id, default_quota).await? else {
+    let Some(quota) = repos.effective_user_quota(user_id, default_quota).await? else {
         return Ok(());
     };
 
@@ -66,53 +69,16 @@ pub async fn check_sync_quota(
     Ok(())
 }
 
-/// Drop a user's cached usage so the next check reads the committed total, else
-/// uploads inside the 500 ms window all see pre-commit usage — a check-then-write
-/// race that can exceed the quota by roughly the number of concurrent uploads.
-/// Commits are the only writer of committed usage.
-pub fn invalidate_user(repos: &Repositories, user_id: i32) {
-    repos.quota_cache.invalidate_usage(user_id);
-}
-
-/// Resolve a user's effective quota in bytes, or `None` for unlimited.
+/// Reserve one **new** block write against the repository owner's quota.
 ///
-/// An account with no quota of its own follows `default_quota`, so changing that
-/// setting re-bounds every such account — new registrations included.
-async fn effective_quota(
-    repos: &Repositories,
-    user_id: i32,
-    default_quota: u64,
-) -> Result<Option<i64>, AppError> {
-    let user = repos
-        .user
-        .find_by_id(user_id)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-
-    let quota = match user.storage_quota {
-        Some(0) => return Ok(None), // explicitly unlimited
-        Some(n) => n,
-        None => default_quota as i64, // the account has no quota of its own
-    };
-
-    if quota <= 0 {
-        return Ok(None); // the default quota is unlimited
-    }
-    Ok(Some(quota))
-}
-
-/// Reserve `delta` bytes of **uncommitted** block writes for `(user_id, repo_id)`.
-/// Content-addressed storage means a block write never changes a repo's `size`, so
-/// committed usage alone let a client write blocks and never commit without
-/// touching quota; a reservation is held until the upload commits or the blocks are
-/// deleted. Returns `QuotaExceeded` (HTTP 443) when committed usage plus every
-/// outstanding reservation plus `delta` would exceed the quota — callers must not
-/// have written the bytes yet, or must clean them up on failure. Reservations live
-/// on the server instance, so a restart clears them and GC reclaims the leftovers.
+/// The block id makes the reservation idempotent: a client that re-sends the same
+/// block, or retries a `PUT block` after a timeout, does not reserve its bytes
+/// twice. Callers must release it when the block is found to be already present
+/// (`was_new == false`) or when the upload commits/aborts.
 pub async fn reserve_block_bytes(
     repos: &Repositories,
-    user_id: i32,
     repo_id: &str,
+    block_id: &str,
     delta: i64,
     default_quota: u64,
 ) -> Result<(), AppError> {
@@ -120,33 +86,82 @@ pub async fn reserve_block_bytes(
         return Ok(());
     }
 
-    let Some(quota) = effective_quota(repos, user_id, default_quota).await? else {
+    // Quota is a property of the repository owner, not of whoever happens to be
+    // holding a sync token. Current libraries are single-user, but keeping the
+    // owner lookup here means a future share cannot bill the wrong account.
+    let owner = repos.repo_owner_id(repo_id).await?;
+    let scope = repos.lock_quota(owner).await;
+
+    let Some(quota) = repos.effective_user_quota(owner, default_quota).await? else {
         return Ok(());
     };
 
-    // Committed usage first (cached) plus the reservation; the check and insert
-    // share one lock, so concurrent requests cannot both spend the same headroom.
-    let usage = user_usage(repos, user_id).await?;
+    // The cached total is safe under the scope: every size-changing commit holds
+    // the same scope and invalidates the entry before releasing it.
+    let usage = user_usage(repos, owner).await?;
     repos
         .quota_cache
-        .reserve_if_fits(user_id, repo_id, delta, usage, quota)
-        .map_err(|_| AppError::QuotaExceeded)
+        .reserve_block(owner, repo_id, block_id, delta, usage, quota)
+        .map_err(|_| AppError::QuotaExceeded)?;
+    drop(scope);
+    Ok(())
 }
 
-/// Drop every outstanding reservation for `(user_id, repo_id)`: after a commit those
-/// bytes are part of the committed `size` or orphaned (left to GC), so keeping them
-/// reserved would double-count; also called when an abandoned upload is deleted.
-pub fn release_repo_reservation(repos: &Repositories, user_id: i32, repo_id: &str) {
-    let released = repos.quota_cache.release_repo(user_id, repo_id);
-    if released != 0 {
-        tracing::debug!(
-            user_id,
-            repo_id,
-            bytes = released,
-            "released block reservation"
-        );
+/// Reserve a resumable upload's declared size against the repository owner's
+/// quota. The upload id makes a retried first chunk idempotent.
+pub async fn reserve_upload_bytes(
+    repos: &Repositories,
+    repo_id: &str,
+    upload_id: &str,
+    delta: i64,
+    default_quota: u64,
+) -> Result<(), AppError> {
+    if delta <= 0 {
+        return Ok(());
     }
+    let owner = repos.repo_owner_id(repo_id).await?;
+    let scope = repos.lock_quota(owner).await;
+    let Some(quota) = repos.effective_user_quota(owner, default_quota).await? else {
+        return Ok(());
+    };
+    let usage = user_usage(repos, owner).await?;
+    repos
+        .quota_cache
+        .reserve_upload(owner, repo_id, upload_id, delta, usage, quota)
+        .map_err(|_| AppError::QuotaExceeded)?;
+    drop(scope);
+    Ok(())
 }
 
-// Reservations are unit-tested on `infra::quota_cache::QuotaCache`; quota
-// resolution is covered by `server/tests/quota_test.rs`.
+/// Drop one block reservation (deduped write, failed write, or committed block).
+pub async fn release_block_bytes(repos: &Repositories, repo_id: &str, block_id: &str) -> i64 {
+    let owner = match repos.repo_owner_id(repo_id).await {
+        Ok(owner) => owner,
+        Err(_) => return 0,
+    };
+    repos.quota_cache.release_block(owner, repo_id, block_id)
+}
+
+/// Drop several block reservations after a successful commit.
+pub async fn release_blocks(repos: &Repositories, repo_id: &str, block_ids: &[String]) -> i64 {
+    if block_ids.is_empty() {
+        return 0;
+    }
+    let owner = match repos.repo_owner_id(repo_id).await {
+        Ok(owner) => owner,
+        Err(_) => return 0,
+    };
+    repos.quota_cache.release_blocks(owner, repo_id, block_ids)
+}
+
+/// Drop one resumable upload's reservation. `owner` comes from the temp-upload
+/// entry, so this still works while the repository row is being deleted.
+pub fn release_upload(repos: &Repositories, owner: i32, repo_id: &str, upload_id: &str) -> i64 {
+    repos.quota_cache.release_upload(owner, repo_id, upload_id)
+}
+
+// Authoritative quota resolution and the check-and-commit sequence live on
+// `Repositories` (`effective_user_quota`, `lock_quota`,
+// `check_repo_quota_locked`); the unit tests for reservations are on
+// `infra::quota_cache::QuotaCache` and the integration tests on
+// `server/tests/quota_test.rs`.

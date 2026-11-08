@@ -163,7 +163,11 @@ These differ from upstream on purpose:
   `time_from`, `size_from`, `search_path`, `with_permission`) and is served even
   when the search index is off (filename matches only).
 - **Overwrite quota accounting uses `new - old`**; upstream charges the whole new
-  `Content-Length` on the upload path and nothing at `update-branch`.
+  `Content-Length` on the upload path and nothing at `update-branch`. Every other
+  logical growth — directory copy, trash/history restore, sub-library creation and
+  a deduplicated sync commit — is also charged at the commit point, and `repo.size`
+  is updated in the same statement that advances HEAD. Uncommitted block writes are
+  reserved by upload id / block id and released on commit, abort or a 24-hour TTL.
 - **No `Created library` initial commit.** Repos start headless; `commit/HEAD`
   answers the `000…0` sentinel and `get_commit` synthesizes it (upstream always has a
   real commit).

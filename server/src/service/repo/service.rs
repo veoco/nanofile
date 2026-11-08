@@ -924,6 +924,11 @@ impl RepoService {
 
         crate::fs::core::repo_archive::archive_and_delete(db, repo_id).await?;
 
+        // The library no longer contributes to `SUM(repos.size)`; drop the owner's
+        // cached total and any reservations keyed to a library that is now gone.
+        repos.invalidate_quota(r.owner_id);
+        let _ = repos.quota_cache.release_repo(r.owner_id, repo_id);
+
         // Token rows went with the library; drop cached copies so revocation holds.
         repos.sync_token.delete_by_repo(repo_id).await?;
 

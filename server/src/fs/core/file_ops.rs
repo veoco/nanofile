@@ -8,6 +8,7 @@ use infra::crypto::fs_id::sha1_hex;
 use infra::crypto::random_key::encrypt_block;
 use infra::entity::commit;
 use infra::events;
+use infra::quota_cache::QuotaScope;
 use infra::storage::DynBlockStorage;
 use sea_orm::DatabaseConnection;
 use std::collections::HashMap;
@@ -186,6 +187,8 @@ impl FileOps {
         total_size: i64,
         modifier: &str,
         replace: bool,
+        quota: &QuotaScope,
+        default_quota: u64,
     ) -> Result<(String, String), AppError> {
         upload_activity::touch(repo_id);
         let now = chrono::Utc::now().timestamp();
@@ -196,21 +199,37 @@ impl FileOps {
             obj_type: 1,
             version: 1,
         };
-        let file_fs_id = crate::fs::core::store_fs_file_object(db, repo_id, &file_fs_data).await?;
+        // Compute the content id without writing the row yet: a quota refusal must
+        // not leave an orphan fs_object that references the blocks and defeats the
+        // block cleanup (`references_block` sees every fs_object, not just HEAD).
+        let file_fs_id = domain::fs::compute_file(&file_fs_data)
+            .map(|(id, _)| id)
+            .unwrap_or_else(|| EMPTY_SHA1.to_string());
 
         // Serialize the FS tree mutation (read-modify-write + commit).
         let _lock = acquire_repo_lock(repo_id).await;
 
+        // Capture the head this tree is built from. The commit helper re-checks it
+        // and applies the size delta in the same statement, so a concurrent delta-0
+        // rename cannot make the delta describe a different parent.
+        let repo_model = repos.repo.find_by_id(repo_id).await?;
+        let head_commit_id = repo_model.as_ref().and_then(|r| r.head_commit_id.clone());
+        let base_root_id = match head_commit_id.as_deref() {
+            Some(head_id) => {
+                repos
+                    .commit
+                    .find_by_repo_and_commit_id(repo_id, head_id)
+                    .await?
+                    .ok_or_else(|| AppError::NotFound("head commit not found".into()))?
+                    .root_id
+            }
+            None => EMPTY_SHA1.to_string(),
+        };
+
         // Resolve the parent, pre-computing the ancestor chain to avoid O(d²) re-resolution.
         let (parent_fs_id, ancestor_chain) = if parent_path == "/" {
-            let repo_model = repos.repo.find_by_id(repo_id).await?;
-            if let Some(commit_id) = repo_model.as_ref().and_then(|r| r.head_commit_id.clone()) {
-                let commit_ent = repos
-                    .commit
-                    .find_by_repo_and_commit_id(repo_id, &commit_id)
-                    .await?
-                    .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
-                (commit_ent.root_id, Vec::new())
+            if head_commit_id.is_some() {
+                (base_root_id.clone(), Vec::new())
             } else {
                 let empty_dir = FsDirData {
                     dirents: vec![],
@@ -235,14 +254,43 @@ impl FileOps {
         // unchanged and no spurious commit appears when the re-upload lands in a
         // different second.
         let mut identical_replace = false;
+        let mut old_size: i64 = 0;
         if replace {
             identical_replace = dirents
                 .iter()
                 .any(|d| d.name == name && d.id == file_fs_id && d.size == total_size);
             if !identical_replace {
+                // Replacing a directory frees its whole subtree, not the dirent's
+                // (always zero) size; the delta has to subtract those bytes.
+                if let Some(existing) = dirents.iter().find(|d| d.name == name) {
+                    old_size = if existing.mode & infra::serialization::S_IFDIR != 0 {
+                        crate::fs::core::compute_tree_size(repos, repo_id, &existing.id).await?
+                    } else {
+                        existing.size
+                    };
+                }
                 dirents.retain(|d| d.name != name);
             }
         }
+        let size_delta = if identical_replace {
+            0
+        } else {
+            total_size - old_size
+        };
+
+        if size_delta > 0 {
+            // Check before writing the file object or mutating the tree, so a refusal
+            // leaves no orphan object behind. The commit below is told the check is
+            // already done under this same quota scope.
+            repos
+                .check_repo_quota_locked(quota, repo_id, size_delta, default_quota)
+                .await?;
+        }
+
+        // Only now persist the file object: a quota refusal must not leave an
+        // fs_object that references the blocks and makes `references_block` treat
+        // them as live during cleanup.
+        let file_fs_id = crate::fs::core::store_fs_file_object(db, repo_id, &file_fs_data).await?;
 
         // Name this upload is stored under. `replace=0` is the official default
         // (Android/iOS "keep both", the desktop uploader, a plain POST) and must
@@ -291,90 +339,22 @@ impl FileOps {
             .await?
         };
 
-        let repo_model = repos.repo.find_by_id(repo_id).await?;
-        let parent_commit_id = repo_model.as_ref().and_then(|r| r.head_commit_id.clone());
-
-        // Identical re-upload leaves the FS tree unchanged, so skip the redundant
-        // commit (also avoids a commit_id collision within the same second).
-        if let Some(head_id) = parent_commit_id.as_deref() {
-            let head_commit = repos
-                .commit
-                .find_by_repo_and_commit_id(repo_id, head_id)
-                .await?;
-            if head_commit.is_some_and(|c| c.root_id == root_fs_id) {
-                return Ok((file_fs_id, effective_name));
-            }
-        }
-
         // The effective name is the one actually stored (`name (1).ext` when the
-        // upload kept both). The commit id is a hash of the description, so the
-        // description that is hashed must be the one persisted, not the requested
-        // name.
+        // upload kept both). The commit helper applies `size_delta` in the same
+        // statement that moves HEAD and checks the owner's quota under `quota`.
         let description = format!("Added {effective_name}");
-
-        let commit_data = base::common::CommitData {
-            commit_id: String::new(),
-            repo_id: repo_id.to_string(),
-            root_id: root_fs_id.clone(),
-            creator_name: modifier.to_string(),
-            creator: EMPTY_SHA1.to_string(),
-            description: description.clone(),
-            ctime: now,
-            parent_id: parent_commit_id.clone(),
-            second_parent_id: None,
-            repo_name: None,
-            repo_desc: None,
-            repo_category: None,
-            encrypted: None,
-            enc_version: None,
-            magic: None,
-            salt: None,
-            pwd_hash: None,
-            pwd_hash_algo: None,
-            pwd_hash_params: None,
-            key: None,
-            version: 1,
-            conflict: None,
-            new_merge: None,
-        };
-        let commit_id = domain::commit::compute_commit_id(&commit_data);
-
-        let commit_model = commit::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: sea_orm::Set(repo_id.to_string()),
-            commit_id: sea_orm::Set(commit_id.clone()),
-            root_id: sea_orm::Set(root_fs_id),
-            parent_id: sea_orm::Set(parent_commit_id.clone()),
-            second_parent_id: sea_orm::NotSet,
-            creator_name: sea_orm::Set(modifier.to_string()),
-            creator: sea_orm::Set(EMPTY_SHA1.to_string()),
-            description: sea_orm::Set(description),
-            ctime: sea_orm::Set(now),
-            version: sea_orm::Set(1i8),
-            new_merge: sea_orm::NotSet,
-            conflict: sea_orm::NotSet,
-        };
-        repos.commit.insert(commit_model).await?;
-
-        if repo_model.is_none() {
-            return Err(AppError::NotFound("repo not found".into()));
-        }
-
-        // Same compare-and-swap as `create_commit`: the per-repo lock serializes
-        // REST writes only, so an upload may have advanced HEAD since it was read.
-        if !repos
-            .repo
-            .test_and_update_head_commit(repo_id, parent_commit_id.as_deref(), &commit_id, now)
-            .await?
-        {
-            return Err(AppError::Conflict(format!(
-                "HEAD of {repo_id} advanced while this upload was being committed"
-            )));
-        }
-
-        // Notify clients through the broadcast channel; otherwise the Seafile
-        // client learns about the file only on its next poll.
-        events::publish_repo_update(repo_id, commit_id);
+        Self::create_commit_inner(
+            repos,
+            repo_id,
+            Some(&base_root_id),
+            &root_fs_id,
+            modifier,
+            &description,
+            size_delta,
+            Some((quota, default_quota)),
+            false,
+        )
+        .await?;
 
         Ok((file_fs_id, effective_name))
     }
@@ -588,6 +568,56 @@ impl FileOps {
         Ok(root_fs_id)
     }
 
+    /// Commit a tree update that changes the library size.
+    ///
+    /// `base_root_id` is the HEAD root the caller resolved the parent from. The
+    /// commit helper re-checks it and applies `size_delta` in the same SQL that
+    /// moves HEAD; a positive delta is checked against the owner's quota under
+    /// `quota`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn update_dir_tree_and_commit_sized(
+        db: &DatabaseConnection,
+        repos: &Repositories,
+        repo_id: &str,
+        base_root_id: &str,
+        parent_path: &str,
+        parent_fs_id: &str,
+        modifier: &str,
+        description: &str,
+        ancestor_chain: &[(String, String)],
+        update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
+        size_delta: i64,
+        quota: &QuotaScope,
+        default_quota: u64,
+    ) -> Result<String, AppError> {
+        let root_fs_id = Self::apply_tree_update(
+            db,
+            repos,
+            repo_id,
+            parent_path,
+            parent_fs_id,
+            ancestor_chain,
+            None,
+            update_fn,
+        )
+        .await?;
+
+        Self::create_commit_sized(
+            repos,
+            repo_id,
+            base_root_id,
+            &root_fs_id,
+            modifier,
+            description,
+            size_delta,
+            quota,
+            default_quota,
+        )
+        .await?;
+
+        Ok(root_fs_id)
+    }
+
     /// Same as `update_dir_tree_and_commit` without the commit, so a multi-step
     /// operation (e.g. move) can update several parts of the tree and commit
     /// once. Returns the new root fs_id.
@@ -655,6 +685,10 @@ impl FileOps {
     }
 
     /// Create a commit with the given root_fs_id and update the repo's HEAD.
+    ///
+    /// Kept for delta-zero commits (rename, move, mkdir, empty file); size-changing
+    /// paths use [`Self::create_commit_sized`] so the HEAD swap and the size change
+    /// are one statement and the quota is checked under the owner's scope.
     pub(crate) async fn create_commit(
         repos: &Repositories,
         repo_id: &str,
@@ -662,11 +696,95 @@ impl FileOps {
         creator_name: &str,
         description: &str,
     ) -> Result<(), AppError> {
+        Self::create_commit_inner(
+            repos,
+            repo_id,
+            None,
+            root_fs_id,
+            creator_name,
+            description,
+            0,
+            None,
+            false,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Commit a tree that changes the library size by `size_delta`.
+    ///
+    /// `base_root_id` is the HEAD root the tree was built from. It is checked again
+    /// here: if HEAD moved between resolution and commit, the delta and the tree do
+    /// not describe the same parent, so the commit is refused instead of being
+    /// applied to the wrong base.
+    pub(crate) async fn create_commit_sized(
+        repos: &Repositories,
+        repo_id: &str,
+        base_root_id: &str,
+        root_fs_id: &str,
+        creator_name: &str,
+        description: &str,
+        size_delta: i64,
+        quota: &QuotaScope,
+        default_quota: u64,
+    ) -> Result<bool, AppError> {
+        Self::create_commit_inner(
+            repos,
+            repo_id,
+            Some(base_root_id),
+            root_fs_id,
+            creator_name,
+            description,
+            size_delta,
+            Some((quota, default_quota)),
+            true,
+        )
+        .await
+    }
+
+    async fn create_commit_inner(
+        repos: &Repositories,
+        repo_id: &str,
+        base_root_id: Option<&str>,
+        root_fs_id: &str,
+        creator_name: &str,
+        description: &str,
+        size_delta: i64,
+        quota: Option<(&QuotaScope, u64)>,
+        check_quota: bool,
+    ) -> Result<bool, AppError> {
         upload_activity::touch(repo_id);
         let now = chrono::Utc::now().timestamp();
 
         let repo_model = repos.repo.find_by_id(repo_id).await?;
         let parent_commit_id = repo_model.as_ref().and_then(|r| r.head_commit_id.clone());
+        let owner_id = repo_model
+            .as_ref()
+            .map(|r| r.owner_id)
+            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+        // The tree and the delta must describe the same base. Reading the head root
+        // again under the caller's quota scope (and, for tree updates, after the
+        // per-repo lock) turns a stale delta into a conflict rather than a silent
+        // over/under-charge.
+        if let Some(base_root_id) = base_root_id {
+            let current_root = match parent_commit_id.as_deref() {
+                Some(head_id) => {
+                    repos
+                        .commit
+                        .find_by_repo_and_commit_id(repo_id, head_id)
+                        .await?
+                        .ok_or_else(|| AppError::NotFound("head commit not found".into()))?
+                        .root_id
+                }
+                None => EMPTY_SHA1.to_string(),
+            };
+            if current_root != base_root_id {
+                return Err(AppError::Conflict(format!(
+                    "HEAD of {repo_id} advanced while this change was being prepared"
+                )));
+            }
+        }
 
         // Skip a commit when the tree didn't change: a no-op delete/move/rename
         // would otherwise collide on the unique (repo_id, commit_id) key.
@@ -676,8 +794,16 @@ impl FileOps {
                 .find_by_repo_and_commit_id(repo_id, head_id)
                 .await?;
             if head_commit.is_some_and(|c| c.root_id == root_fs_id) {
-                return Ok(());
+                return Ok(false);
             }
+        }
+
+        if check_quota && size_delta > 0 {
+            let (scope, default_quota) = quota
+                .ok_or_else(|| AppError::internal("positive size commit without a quota scope"))?;
+            repos
+                .check_repo_quota_locked(scope, repo_id, size_delta, default_quota)
+                .await?;
         }
 
         let commit_data = base::common::CommitData {
@@ -724,23 +850,19 @@ impl FileOps {
         };
         repos.commit.insert(commit_model).await?;
 
-        if repo_model.is_none() {
-            return Err(AppError::NotFound("repo not found".into()));
-        }
         let commit_id_clone = commit_id.clone();
 
         // Move HEAD only while it is still the commit this tree was computed
-        // from. A client upload or another REST request can advance HEAD between
-        // the read above and this write; overwriting it would silently drop that
-        // commit, so report the race instead — the tree was built from the old
-        // HEAD, and the caller can re-read and retry.
+        // from. The size delta rides in the same UPDATE, so a crash cannot leave
+        // the new HEAD visible with the old size.
         if !repos
             .repo
-            .test_and_update_head_commit(
+            .advance_head_and_size(
                 repo_id,
                 parent_commit_id.as_deref(),
                 &commit_id_clone,
                 now,
+                size_delta,
             )
             .await?
         {
@@ -749,9 +871,12 @@ impl FileOps {
             )));
         }
 
+        if size_delta != 0 {
+            repos.invalidate_quota(owner_id);
+        }
         events::publish_repo_update(repo_id, commit_id_clone);
 
-        Ok(())
+        Ok(true)
     }
 
     pub async fn read_dir_fs_object(

@@ -109,6 +109,9 @@ NUL 终止符是哈希的一部分：每个字符串都按 C 字符串（`strlen
 - **`/api/v2.1/search-file/` 有上限**（共享的 200 条预算），上游无界遍历整棵树。两个移动客户端拿到的 `data` 会被截断。
 - **`/api2/search/` 忽略 Pro 专属过滤参数**（`search_type`、`obj_type`、`time_from`、`size_from`、`search_path`、`with_permission`），并且在索引关闭时也可用（只匹配文件名）。
 - **覆盖上传的额度按 `新 - 旧` 计**；上游上传路径按整个新 `Content-Length` 计，`update-branch` 处按 0。
+  其它逻辑增长——目录复制、回收站/历史恢复、子库创建、去重后的 sync 提交——同样在提交点计费，
+  `repo.size` 与 HEAD 在同一条语句里更新。未提交的块写入按上传 id / 块 id 预留，在提交、放弃或 24 小时
+  TTL 到期时释放。
 - **不写 `Created library` 初始提交**：资料库可以没有 head，`commit/HEAD` 返回 `000…0` 哨兵，`get_commit` 合成它（上游总有一个真实提交）。
 - **`dir/detail/` 的 `mtime` 是数字**，seahub 是 ISO 字符串（Android 的模型声明为 `long`，且从未调用该接口）。
 - **未实现 `?oid=` 复用校验**（seahub 回 `"uptodate"`）：官方客户端不发它。

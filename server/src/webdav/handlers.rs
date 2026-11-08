@@ -42,6 +42,16 @@ pub async fn dispatch_path(
     route_request(state, auth, path, request).await
 }
 
+/// WebDAV's status for an application error. A full library is 507 Insufficient
+/// Storage, not a generic 500: clients distinguish the two and retry/abort
+/// differently.
+fn webdav_status(error: &AppError) -> StatusCode {
+    match error {
+        AppError::QuotaExceeded => StatusCode::INSUFFICIENT_STORAGE,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 async fn route_request(
     state: Arc<AppState>,
     auth: WebDavAuth,
@@ -235,7 +245,7 @@ async fn put_handler(
         }
         Err(e) => {
             tracing::warn!("WebDAV PUT failed for {path}: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            webdav_status(&e).into_response()
         }
     }
 }
@@ -430,7 +440,7 @@ async fn move_copy_handler(
         }
         Err(e) => {
             tracing::warn!("WebDAV MOVE/COPY failed: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            webdav_status(&e).into_response()
         }
     }
 }
