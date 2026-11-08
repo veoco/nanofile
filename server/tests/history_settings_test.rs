@@ -499,3 +499,87 @@ async fn test_gc_collects_nested_fs_ids() {
         );
     }
 }
+
+/// A TTL-only policy must keep the head of a library that has been idle longer
+/// than the TTL: the head is current state, not prunable history.
+#[tokio::test]
+async fn test_gc_ttl_keeps_head_of_idle_repo() {
+    let f = TestFixture::new().await;
+    let (_dir, block_store) = temp_block_store();
+    let db = &*f.server.db;
+    let now = chrono::Utc::now().timestamp();
+
+    let old_root = "1".repeat(40);
+    let head_root = "2".repeat(40);
+    let old_commit = "3".repeat(40);
+    let head_commit = "4".repeat(40);
+
+    insert_commit_and_root(
+        db,
+        &f.repo_id,
+        &old_commit,
+        &old_root,
+        None,
+        now - 20 * 86_400,
+    )
+    .await;
+    insert_commit_and_root(
+        db,
+        &f.repo_id,
+        &head_commit,
+        &head_root,
+        Some(old_commit.clone()),
+        now - 10 * 86_400,
+    )
+    .await;
+
+    let mut repo: infra::entity::repo::ActiveModel =
+        infra::entity::repo::Entity::find_by_id(&f.repo_id)
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+            .into();
+    repo.head_commit_id = Set(Some(head_commit.clone()));
+    repo.update(db).await.unwrap();
+
+    set_history(db, &f.repo_id, 0, 5).await;
+
+    let removed = GcManager::garbage_collect(&f.server.repos, &block_store, GcPolicy::immediate())
+        .await
+        .unwrap();
+    assert_eq!(
+        removed, 1,
+        "only the root of the pruned history should be removed"
+    );
+
+    let commits = f
+        .server
+        .repos
+        .commit
+        .find_by_repo_id_ordered_by_ctime_desc(&f.repo_id, None)
+        .await
+        .unwrap();
+    assert_eq!(commits.len(), 1, "the head commit must survive");
+    assert_eq!(commits[0].commit_id, head_commit);
+    assert!(
+        f.server
+            .repos
+            .fs_object
+            .find_by_repo_and_fs_id(&f.repo_id, &head_root)
+            .await
+            .unwrap()
+            .is_some(),
+        "the head root must survive"
+    );
+    assert!(
+        f.server
+            .repos
+            .fs_object
+            .find_by_repo_and_fs_id(&f.repo_id, &old_root)
+            .await
+            .unwrap()
+            .is_none(),
+        "the old root must be pruned"
+    );
+}

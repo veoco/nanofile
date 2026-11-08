@@ -108,6 +108,7 @@ impl GcManager {
 
             let keep = Self::compute_keep_commits(
                 &commits,
+                repo_model.head_commit_id.as_deref(),
                 repo_model.history_limit,
                 repo_model.history_ttl_days,
                 now,
@@ -254,13 +255,24 @@ impl GcManager {
     /// commits newer than the cutoff. With both at 0 the repo is unlimited, so
     /// **every** commit is retained — otherwise its blocks would be
     /// mis-identified as orphans.
+    ///
+    /// The current head is always retained, even when it falls outside both
+    /// windows: `ctime` is client-supplied, so the head is not necessarily the
+    /// newest row, and a TTL can expire while the library sits idle. Dropping it
+    /// would delete the tree the library currently serves.
     fn compute_keep_commits(
         commits: &[commit::Model],
+        head_commit_id: Option<&str>,
         history_limit: i32,
         history_ttl_days: i32,
         now: i64,
     ) -> std::collections::HashSet<i64> {
         let mut keep = std::collections::HashSet::new();
+        if let Some(head_id) = head_commit_id
+            && let Some(head) = commits.iter().find(|c| c.commit_id.as_str() == head_id)
+        {
+            keep.insert(head.id);
+        }
         if history_limit > 0 {
             for c in commits.iter().take(history_limit as usize) {
                 keep.insert(c.id);
@@ -768,7 +780,8 @@ mod tests {
         );
     }
 
-    /// When the TTL retains no commits at all, every fs_object of the repo is pruned.
+    /// A repo with no head (a commit uploaded but never promoted) has no current
+    /// tree to protect: a TTL that retains no commits prunes every fs_object.
     #[tokio::test]
     async fn test_gc_prunes_all_when_no_commits_kept() {
         let db = setup_gc_test_db(0, 1).await; // 1-day TTL
