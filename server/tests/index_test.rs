@@ -4,6 +4,14 @@
 
 mod common;
 
+/// How long a test waits for a background index commit.
+///
+/// The indexer commits asynchronously and debounced, and the OCR cases in this
+/// same binary can hold the runner for more than a minute. A 15s budget then
+/// measured the machine's load rather than the indexer; the assertion still
+/// fails when the commit never lands, just later.
+const INDEX_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 async fn search_results(f: &common::TestFixture, token: &str, q: &str) -> Vec<serde_json::Value> {
     let resp = f
         .client
@@ -85,7 +93,7 @@ async fn test_upload_and_search_content() {
     assert_eq!(resp.status(), 200, "upload should succeed");
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "nanofile").await;
             !results.is_empty()
         })
@@ -117,7 +125,7 @@ async fn test_search_content_not_filename() {
     assert_eq!(resp.status(), 200);
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "installation").await;
             !results.is_empty()
         })
@@ -163,7 +171,7 @@ async fn test_cjk_content_search() {
     // `测试文档`, percent-encoded.
     let query = "%E6%B5%8B%E8%AF%95%E6%96%87%E6%A1%A3";
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             !search_results(&f, token, query).await.is_empty()
         })
         .await,
@@ -209,7 +217,7 @@ async fn test_binary_file_skipped() {
         .await;
     assert_eq!(resp.status(), 200);
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "signal").await;
             !results.is_empty()
         })
@@ -240,7 +248,7 @@ async fn test_delete_cleans_index() {
     assert_eq!(resp.status(), 200);
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "delete").await;
             !results.is_empty()
         })
@@ -258,7 +266,7 @@ async fn test_delete_cleans_index() {
     assert_eq!(resp.status(), 200);
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "delete").await;
             results.is_empty()
         })
@@ -290,7 +298,7 @@ async fn test_rename_updates_index() {
     assert_eq!(resp.status(), 200);
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "rename+content").await;
             !results.is_empty()
         })
@@ -331,7 +339,7 @@ async fn test_move_updates_index() {
     assert_eq!(resp.status(), 200);
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "move+content").await;
             !results.is_empty()
         })
@@ -608,7 +616,7 @@ async fn test_batch_delete_cleans_index() {
     }
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "batch").await;
             results.len() >= 3
         })
@@ -634,7 +642,7 @@ async fn test_batch_delete_cleans_index() {
     // commit). Filenames might still match via the FS tree walk, so assert the
     // content term "batch content 0" is gone rather than an empty result set.
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "batch+0").await;
             !results
                 .iter()
@@ -665,7 +673,7 @@ async fn test_content_search_multi_repo() {
     assert_eq!(resp.status(), 200);
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "xyz987").await;
             results.len() == 2
         })
@@ -693,7 +701,7 @@ async fn test_reindex_endpoint() {
     assert_eq!(resp.status(), 200);
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "reindexable").await;
             !results.is_empty()
         })
@@ -930,7 +938,7 @@ async fn test_index_file_text_for_binary() {
         .await;
     assert_eq!(resp.status(), 200);
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "signal").await;
             !results.is_empty()
         })
@@ -961,7 +969,7 @@ async fn test_index_file_text_for_binary() {
     assert_eq!(body["status"], "ok");
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "vision+model+extracted").await;
             !results.is_empty() && results[0]["name"].as_str().unwrap_or("") == "screenshot.png"
         })
@@ -984,7 +992,7 @@ async fn test_index_file_text_for_binary() {
     assert_eq!(resp.status(), 200);
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let old_results = search_results(&f, token, "login+page+username").await;
             let new_results = search_results(&f, token, "different+vision+model").await;
             old_results.is_empty()
@@ -1015,7 +1023,7 @@ async fn test_prefix_matching_in_content() {
     assert_eq!(resp.status(), 200);
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "Caseend").await;
             !results.is_empty()
         })
@@ -1043,7 +1051,7 @@ async fn test_invalid_query_syntax_returns_empty_not_500() {
         .await;
     assert_eq!(resp.status(), 200);
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "content").await;
             !results.is_empty()
         })
@@ -1135,7 +1143,7 @@ async fn test_zero_repo_user_cannot_search_other_repos() {
     assert_eq!(resp.status(), 200, "upload should succeed");
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             !search_results(&f, token, "zqxjwv").await.is_empty()
         })
         .await,
@@ -1187,7 +1195,7 @@ async fn test_owner_still_finds_own_content_after_search_fix() {
     assert_eq!(resp.status(), 200);
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             !search_results(&f, token, "qqzzxx").await.is_empty()
         })
         .await,
@@ -1215,7 +1223,7 @@ async fn test_uppercase_search_scope_is_accepted() {
     assert_eq!(resp.status(), 200);
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             !search_results(&f, token, "zzqquu").await.is_empty()
         })
         .await,
@@ -1302,7 +1310,7 @@ async fn a_backfill_pass_indexes_a_file_the_index_never_saw() {
     // Wait until the scheduled index run has both written the document and
     // finished, so removing it below is not racing a run in flight.
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             !search_results(&f, token, "needle").await.is_empty()
                 && f.server
                     .state
@@ -1341,7 +1349,7 @@ async fn a_backfill_pass_indexes_a_file_the_index_never_saw() {
     indexer.commit().expect("commit");
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             !search_results(&f, token, "needle").await.is_empty()
         })
         .await,
@@ -1500,7 +1508,7 @@ async fn a_document_without_a_text_layer_is_not_indexed() {
     );
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             let results = search_results(&f, token, "blank").await;
             results
                 .iter()
@@ -1620,7 +1628,7 @@ async fn a_backfill_pass_picks_up_what_an_older_extractor_skipped() {
     indexer.commit().expect("commit");
 
     assert!(
-        wait_for(std::time::Duration::from_secs(15), || async {
+        wait_for(INDEX_WAIT, || async {
             !search_results(&f, token, "upgradeneedle").await.is_empty()
         })
         .await,
