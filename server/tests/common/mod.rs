@@ -702,7 +702,13 @@ impl TestServer {
                 block_dir: block_root.join("blocks"),
                 temp_dir: block_root.join("tmp"),
                 default_user_quota_bytes: 10_737_418_240,
-                ffmpeg_path: "ffmpeg".to_string(),
+                // The helper is process-global: every fixture in a binary writes
+                // this into the same slot, so they must all name the same file. A
+                // bare `ffmpeg` resolves through `PATH` when the server is built,
+                // and on a runner where the package manager only edited the
+                // registry it stays relative -- overwriting the absolute path a
+                // sibling fixture set and failing that fixture's media job.
+                ffmpeg_path: sandbox::helper().to_string(),
                 max_temp_uploads: temp_limits.unwrap_or_default().max_uploads,
                 max_temp_upload_bytes: temp_limits.unwrap_or_default().max_bytes,
                 temp_upload_ttl_hours: temp_limits.unwrap_or_default().ttl_hours,
