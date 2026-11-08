@@ -160,11 +160,17 @@ jobs:
       # through `image`'s default formats, and zstd-sys through `include-flate`'s
       # default features. The content analyzer is dictionary-free and embedded
       # assets are DEFLATE-only now; these two checks keep both properties.
-      - name: Install cargo-machete
-        # crates.io, not the release CDN: install-action's prebuilt download has
-        # answered 504 often enough to fail a lint row, and this crate is small.
+      - name: Install cargo-machete if missing
+        # The Ubuntu image ships cargo-machete; the install is only the fallback
+        # for an image that drops it. Reinstalling it every run was compiling a
+        # tool that is already on PATH. The version is whatever the image has,
+        # which is fine for a lint; crates.io is the fallback, not a CDN.
         shell: bash
         run: |
+          if command -v cargo-machete >/dev/null 2>&1; then
+            cargo-machete --version
+            exit 0
+          fi
           for attempt in 1 2 3; do
             if cargo install cargo-machete --force; then
               break
