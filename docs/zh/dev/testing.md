@@ -9,7 +9,8 @@ cargo test --workspace
 CI 用 `cargo-nextest` 跑同一套测试（`cargo nextest run --workspace --profile ci`）：
 每个测试独立进程，一个测试的进程级沙箱状态不会影响另一个；偶发的时序失败只
 重试那一个测试，而不是整行变红。nextest 不跑文档测试，所以 CI 另外用
-`cargo test --workspace --doc` 跑。上面的命令仍是本地等价写法。
+`cargo test --workspace --doc` 跑。OCR 用例最慢，单独放在 `ocr-tests` job 里跑
+（linux-amd64 与 macos-arm64），与主套件并行。上面的命令仍是本地等价写法。
 
 它会跑单元测试、`server/tests/` 下的集成测试与文档测试。workspace 套件是主门禁。`server/tests/docs_api_reference_test.rs` 把 API 参考与路由表、被链接的显式锚点钉在一起，见 [API 参考](/zh/reference/api/)。docs workflow 还会跑 `npm run --prefix docs check`，比较中英页面集合、指南标题层级、内部链接与锚点，以及 sidebar 覆盖，见[文档](/zh/dev/documentation)。
 

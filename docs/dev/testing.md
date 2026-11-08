@@ -11,7 +11,9 @@ CI runs the same suite under `cargo-nextest`
 so one test's process-global sandbox state cannot reach another, and a timing
 flake is retried alone instead of failing the row. nextest does not run
 doctests, so CI runs those separately with `cargo test --workspace --doc`. The
-command above stays the local equivalent.
+OCR cases are the slowest in the suite and run in their own `ocr-tests` job on
+linux-amd64 and macos-arm64, in parallel with the main rows. The command above
+stays the local equivalent.
 
 This runs the unit tests, the integration tests under `server/tests/` and the
 documentation tests. The workspace suite is the main gate. `server/tests/docs_api_reference_test.rs`
