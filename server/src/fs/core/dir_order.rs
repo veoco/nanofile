@@ -24,6 +24,7 @@ use infra::entity::{commit, fs_object, repo};
 use crate::domain;
 use crate::fs::core::store::store_fs_dir_object;
 use crate::fs::core::traversal::max_tree_depth;
+use crate::fs::core::upload_activity;
 
 /// Type bits used like C's `S_ISDIR()` / `S_ISREG()`. `base::common::S_IFREG`
 /// carries permission bits (`0100644`), so it cannot be used as a mask here.
@@ -351,6 +352,7 @@ async fn append_normalizing_commit(
     head_commit: &commit::Model,
     new_root: &str,
 ) -> Result<Option<String>, AppError> {
+    upload_activity::touch(&repo_row.id);
     let ctime = chrono::Utc::now().timestamp();
     let data = CommitData {
         commit_id: String::new(),

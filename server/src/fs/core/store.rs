@@ -1,5 +1,6 @@
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
+use super::upload_activity;
 use crate::domain;
 use base::common::{EMPTY_SHA1, FsDirData, FsFileData};
 use base::error::AppError;
@@ -14,6 +15,7 @@ pub async fn store_fs_dir_object(
     repo_id: &str,
     data: &FsDirData,
 ) -> Result<String, AppError> {
+    upload_activity::touch(repo_id);
     if data.dirents.is_empty() {
         return Ok(EMPTY_SHA1.to_string());
     }
@@ -43,6 +45,7 @@ pub async fn store_fs_file_object(
     repo_id: &str,
     data: &FsFileData,
 ) -> Result<String, AppError> {
+    upload_activity::touch(repo_id);
     let Some((fs_id, json)) = domain::fs::compute_file(data) else {
         return Ok(EMPTY_SHA1.to_string());
     };
@@ -59,4 +62,43 @@ pub async fn store_fs_file_object(
         ))
         .await?;
     Ok(fs_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+
+    /// Server-side FS writes must touch the activity lease before inserting;
+    /// GC relies on that to leave a library mid-upload alone.
+    #[tokio::test]
+    async fn storing_a_file_touches_upload_activity() {
+        let repo = "store-activity-test";
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        db.execute_raw(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE TABLE fs_objects (\
+                 id INTEGER PRIMARY KEY AUTOINCREMENT, \
+                 repo_id VARCHAR(36) NOT NULL, \
+                 fs_id VARCHAR(40) NOT NULL, \
+                 obj_type TINYINT NOT NULL, \
+                 data TEXT NOT NULL)",
+        ))
+        .await
+        .unwrap();
+
+        let data = FsFileData {
+            block_ids: vec!["a".repeat(40)],
+            size: 1,
+            obj_type: 1,
+            version: 1,
+        };
+        store_fs_file_object(&db, repo, &data).await.unwrap();
+
+        assert!(upload_activity::is_active(
+            repo,
+            upload_activity::UPLOAD_ACTIVITY_TTL
+        ));
+        upload_activity::clear(repo);
+    }
 }

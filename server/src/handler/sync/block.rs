@@ -7,6 +7,7 @@ use futures::stream::{self, StreamExt};
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::fs::core::upload_activity;
 use crate::handler::{MAX_BLOCK_UPLOAD_BYTES, read_body_limited};
 use crate::middleware::auth::SyncAuth;
 use base::error::AppError;
@@ -154,6 +155,10 @@ pub async fn put_block(
         auth.user_id,
     )
     .await?;
+
+    // A block upload is part of a multi-request sync; keep GC out of the repo
+    // until the branch update arrives (or the lease expires).
+    upload_activity::touch(&repo_id);
 
     let data = read_body_limited(body, MAX_BLOCK_UPLOAD_BYTES).await?;
 

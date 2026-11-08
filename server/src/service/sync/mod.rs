@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use rand::RngExt;
 use sea_orm::DatabaseConnection;
 
+use crate::fs::core::upload_activity;
 use crate::indexer::TextIndexer;
 use crate::repository::Repositories;
 use base::common::{
@@ -443,6 +444,7 @@ impl SyncService {
         repo_id: &str,
         entries: Vec<(String, Vec<u8>)>,
     ) -> Result<(), AppError> {
+        upload_activity::touch(repo_id);
         let repo_id = repo_id.to_string();
 
         // Bound the entry count before parsing: many tiny objects each cost a parse
@@ -593,6 +595,7 @@ impl SyncService {
     /// [`SyncService::update_branch`] once everything has been uploaded.
     pub async fn put_commit(&self, data: &base::common::CommitData) -> Result<(), AppError> {
         use crate::repository::commit::CreateCommitParams;
+        upload_activity::touch(&data.repo_id);
         let existing = self
             .repos
             .commit
@@ -1224,6 +1227,8 @@ impl SyncService {
     ) -> Result<bool, AppError> {
         use crate::fs::core::tree_diff;
         use infra::events;
+
+        upload_activity::touch(repo_id);
 
         const EXCLUDED_ACTIVITY_PREFIXES: &[&str] =
             &["/_Internal", "/images/sdoc", "/images/auto-upload"];

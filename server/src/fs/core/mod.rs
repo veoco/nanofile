@@ -17,6 +17,7 @@ pub mod trash;
 pub mod traversal;
 pub mod tree;
 pub mod tree_diff;
+pub(crate) mod upload_activity;
 
 pub use download::{Downloader, stream_blocks};
 pub use file_ops::FileOps;

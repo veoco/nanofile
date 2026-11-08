@@ -1,10 +1,12 @@
 use crate::fs::core::tree::read_fs_file_data_batch;
+use crate::fs::core::upload_activity;
 use crate::repository::Repositories;
 use crate::tasks::run::JobFailure;
 use base::common::{FsDirData, S_IFDIR, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::entity::{commit, repo};
 use infra::storage::DynBlockStorage;
+use std::time::Duration;
 
 const SECS_PER_DAY: i64 = 86_400;
 
@@ -20,23 +22,32 @@ pub struct GcPolicy {
     /// Re-read each repository's head right before deleting its blocks and skip
     /// that repository when the head moved after the snapshot was taken.
     pub verify_head: bool,
+    /// Skip a repository whose write activity is younger than this. A sync
+    /// upload spans several requests, so this lease is what keeps a pass from
+    /// pruning FS objects between the commit upload and the branch update.
+    /// `None` disables the check (reachability tests use that).
+    pub upload_activity_ttl: Option<Duration>,
 }
 
 impl GcPolicy {
-    /// The production policy: age grace window on, head re-checked.
+    /// The production policy: age grace window on, head re-checked, and recent
+    /// uploads left alone.
     pub fn new(min_block_age_secs: u64) -> Self {
         Self {
             min_block_age_secs,
             verify_head: true,
+            upload_activity_ttl: Some(upload_activity::UPLOAD_ACTIVITY_TTL),
         }
     }
 
-    /// No grace window and no head re-check: what a reachability test wants (its
-    /// blocks were just written, so the grace window would spare them).
+    /// No grace window, no head re-check and no upload lease: what a reachability
+    /// test wants (its blocks were just written, so the grace window would spare
+    /// them).
     pub fn immediate() -> Self {
         Self {
             min_block_age_secs: 0,
             verify_head: false,
+            upload_activity_ttl: None,
         }
     }
 }
@@ -97,6 +108,20 @@ impl GcManager {
             // A repository boundary is the natural place to wait: the previous
             // repository is done, so a later run can simply continue from here.
             checkpoint(ctx).await?;
+
+            // A sync upload spans several requests. Any write in the last lease
+            // window means this library may be mid-upload, so leave the whole
+            // repository alone for this pass.
+            if let Some(ttl) = policy.upload_activity_ttl
+                && upload_activity::is_active(&repo_model.id, ttl)
+            {
+                tracing::debug!(
+                    repo_id = %repo_model.id,
+                    "skipping GC: recent upload activity"
+                );
+                continue;
+            }
+
             // GC needs every commit, so it passes `None` to fetch all rows.
             let commits = repos
                 .commit
@@ -105,6 +130,21 @@ impl GcManager {
             if commits.is_empty() {
                 continue;
             }
+
+            // Snapshot the FS rows this pass is allowed to delete. A row inserted
+            // after this point may belong to an upload that started during the
+            // pass, so it must never be a candidate here.
+            let prunes_history = repo_model.history_limit != 0 || repo_model.history_ttl_days != 0;
+            let fs_snapshot = if prunes_history {
+                Some(
+                    repos
+                        .fs_object
+                        .find_ids_and_fs_ids_by_repo_id(&repo_model.id)
+                        .await?,
+                )
+            } else {
+                None
+            };
 
             let keep = Self::compute_keep_commits(
                 &commits,
@@ -129,8 +169,27 @@ impl GcManager {
 
             // Only repos with retention limits are pruned; an unlimited repo's
             // history is all live.
-            if repo_model.history_limit != 0 || repo_model.history_ttl_days != 0 {
-                removed += Self::prune_repo(repos, repo_model, &commits, &keep, reachable).await?;
+            if let Some(fs_snapshot) = &fs_snapshot {
+                // An upload may have started after the early check. Re-check right
+                // before the irreversible deletes, and skip when the head moved
+                // after the snapshot this pass works from.
+                if let Some(ttl) = policy.upload_activity_ttl
+                    && upload_activity::is_active(&repo_model.id, ttl)
+                {
+                    tracing::debug!(
+                        repo_id = %repo_model.id,
+                        "skipping history prune: recent upload activity"
+                    );
+                    continue;
+                }
+                if policy.verify_head && Self::repo_head_moved(repos, repo_model).await? {
+                    tracing::debug!(
+                        repo_id = %repo_model.id,
+                        "skipping history prune: the repository head moved during this GC pass"
+                    );
+                    continue;
+                }
+                removed += Self::prune_repo(repos, &commits, &keep, reachable, fs_snapshot).await?;
             }
 
             // Stream the disk blocks so the full list is never materialised; only
@@ -152,6 +211,20 @@ impl GcManager {
                 )
                 .await?;
             let orphan_blocks = orphan_blocks.lock().unwrap().clone();
+
+            // An upload that started while the blocks were being enumerated may
+            // reuse an old block this pass classified as an orphan; leave the
+            // repository's blocks for a later pass when activity is recent.
+            if let Some(ttl) = policy.upload_activity_ttl
+                && upload_activity::is_active(&repo_model.id, ttl)
+            {
+                tracing::debug!(
+                    repo_id = %repo_model.id,
+                    orphans = orphan_blocks.len(),
+                    "skipping block deletion: recent upload activity"
+                );
+                continue;
+            }
 
             // A commit that landed since the snapshot can reference a block this pass
             // classified as an orphan, so re-read the head and leave the repository
@@ -333,25 +406,26 @@ impl GcManager {
 
     /// Prune one repo's history per its retention settings, deleting fs_object and
     /// commit rows no longer reachable from any retained commit. The caller
-    /// supplies the full commit list and the kept-set.
+    /// supplies the full commit list, the kept-set, and the FS-object snapshot
+    /// taken at the start of the pass.
+    ///
+    /// Only rows from `fs_snapshot` are candidates: a row inserted after the
+    /// snapshot may belong to an upload that is still in flight.
     async fn prune_repo(
         repos: &Repositories,
-        repo_model: &repo::Model,
         commits: &[commit::Model],
         keep: &std::collections::HashSet<i64>,
         active_fs_ids: std::collections::HashSet<[u8; 20]>,
+        fs_snapshot: &[(i64, [u8; 20])],
     ) -> Result<u64, AppError> {
         if keep.len() == commits.len() {
             return Ok(0);
         }
 
-        // Delete no-longer-reachable fs objects. Only project (id, fs_id): the
-        // `data` JSON can be large and is irrelevant for computing orphans.
-        let all_fs = repos
-            .fs_object
-            .find_ids_and_fs_ids_by_repo_id(&repo_model.id)
-            .await?;
-        let inactive_ids: Vec<i64> = all_fs
+        // Delete no-longer-reachable fs objects from the pass snapshot. Only
+        // project (id, fs_id): the `data` JSON can be large and is irrelevant for
+        // computing orphans.
+        let inactive_ids: Vec<i64> = fs_snapshot
             .iter()
             .filter(|(_, fs_id)| !active_fs_ids.contains(fs_id))
             .map(|(id, _)| *id)
@@ -446,6 +520,16 @@ mod tests {
         history_limit: i32,
         history_ttl_days: i32,
     ) -> sea_orm::DatabaseConnection {
+        setup_gc_test_db_for(REPO, history_limit, history_ttl_days).await
+    }
+
+    /// The same setup with an explicit repo id, so activity-lease tests can use a
+    /// unique key instead of sharing the process-global activity map.
+    async fn setup_gc_test_db_for(
+        repo_id: &str,
+        history_limit: i32,
+        history_ttl_days: i32,
+    ) -> sea_orm::DatabaseConnection {
         let db = Database::connect("sqlite::memory:").await.unwrap();
 
         db.execute_raw(Statement::from_string(
@@ -508,7 +592,7 @@ mod tests {
             format!(
                 "INSERT INTO repos (id, name, description, owner_id, encrypted, enc_version, salt, \
                  permission, created_at, updated_at, size, repo_version, history_limit, history_ttl_days) \
-                 VALUES ('test-repo', 'test', '', 1, 0, 0, '', 'rw', 0, 0, 0, 1, {history_limit}, {history_ttl_days})"
+                 VALUES ('{repo_id}', 'test', '', 1, 0, 0, '', 'rw', 0, 0, 0, 1, {history_limit}, {history_ttl_days})"
             ),
         ))
         .await
@@ -523,11 +607,21 @@ mod tests {
         root_id: &str,
         ctime: i64,
     ) {
+        insert_commit_for(db, REPO, commit_id, root_id, ctime).await;
+    }
+
+    async fn insert_commit_for(
+        db: &sea_orm::DatabaseConnection,
+        repo_id: &str,
+        commit_id: &str,
+        root_id: &str,
+        ctime: i64,
+    ) {
         db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
                 "INSERT INTO commits (repo_id, commit_id, root_id, creator_name, ctime, version) \
-                 VALUES ('test-repo', '{commit_id}', '{root_id}', 'u1', {ctime}, 1)"
+                 VALUES ('{repo_id}', '{commit_id}', '{root_id}', 'u1', {ctime}, 1)"
             ),
         ))
         .await
@@ -541,11 +635,21 @@ mod tests {
         obj_type: i8,
         data: &str,
     ) {
+        insert_fs_object_for(db, REPO, fs_id, obj_type, data).await;
+    }
+
+    async fn insert_fs_object_for(
+        db: &sea_orm::DatabaseConnection,
+        repo_id: &str,
+        fs_id: &str,
+        obj_type: i8,
+        data: &str,
+    ) {
         db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
                 "INSERT INTO fs_objects (repo_id, fs_id, obj_type, data) \
-                 VALUES ('test-repo', '{fs_id}', {obj_type}, '{data}')"
+                 VALUES ('{repo_id}', '{fs_id}', {obj_type}, '{data}')"
             ),
         ))
         .await
@@ -604,6 +708,119 @@ mod tests {
         assert_eq!(count_rows(&db, "commits").await, 1);
         // a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 + b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1 remain; a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3 + b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 deleted.
         assert_eq!(count_rows(&db, "fs_objects").await, 2);
+    }
+
+    /// A recent upload lease makes a pass skip the repository entirely; once the
+    /// lease is treated as expired, normal retention pruning resumes.
+    #[tokio::test]
+    async fn test_gc_skips_repo_with_recent_upload_activity() {
+        let repo = "gc-activity-test";
+        let db = setup_gc_test_db_for(repo, 1, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+
+        let old_root = "e1".repeat(20);
+        let head_root = "e2".repeat(20);
+        insert_commit_for(&db, repo, &"e3".repeat(20), &old_root, 1000).await;
+        insert_commit_for(&db, repo, &"e4".repeat(20), &head_root, 2000).await;
+        insert_fs_object_for(
+            &db,
+            repo,
+            &old_root,
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
+        insert_fs_object_for(
+            &db,
+            repo,
+            &head_root,
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
+
+        crate::fs::core::upload_activity::touch(repo);
+
+        GcManager::garbage_collect(&repos, &store, GcPolicy::new(0))
+            .await
+            .expect("gc succeeds");
+        assert_eq!(
+            count_rows(&db, "commits").await,
+            2,
+            "activity must skip the repository"
+        );
+
+        // Treat the lease as expired: the same pass now prunes the older commit.
+        let expired = GcPolicy {
+            upload_activity_ttl: Some(Duration::ZERO),
+            ..GcPolicy::new(0)
+        };
+        GcManager::garbage_collect(&repos, &store, expired)
+            .await
+            .expect("gc succeeds");
+        assert_eq!(count_rows(&db, "commits").await, 1);
+        assert_eq!(count_rows(&db, "fs_objects").await, 1);
+        crate::fs::core::upload_activity::clear(repo);
+    }
+
+    /// `prune_repo` only considers the FS-object snapshot it was given: a row
+    /// inserted after the pass started must survive even when it is unreachable.
+    #[tokio::test]
+    async fn test_prune_repo_deletes_only_snapshot_rows() {
+        let repo = "gc-snapshot-test";
+        let db = setup_gc_test_db_for(repo, 1, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+
+        let old_root = "f1".repeat(20);
+        let head_root = "f2".repeat(20);
+        let late_root = "f3".repeat(20);
+        insert_commit_for(&db, repo, &"f4".repeat(20), &old_root, 1000).await;
+        insert_commit_for(&db, repo, &"f5".repeat(20), &head_root, 2000).await;
+        for root in [&old_root, &head_root, &late_root] {
+            insert_fs_object_for(&db, repo, root, 3, r#"{"dirents":[],"type":3,"version":1}"#)
+                .await;
+        }
+
+        // Snapshot taken before `late_root` existed.
+        let snapshot = repos
+            .fs_object
+            .find_ids_and_fs_ids_by_repo_id(repo)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|(_, fs_id)| *fs_id != GcManager::decode_sha1_hex(&late_root))
+            .collect::<Vec<_>>();
+        assert_eq!(snapshot.len(), 2);
+
+        let commits = repos
+            .commit
+            .find_by_repo_id_ordered_by_ctime_desc(repo, None)
+            .await
+            .unwrap();
+        let keep = std::collections::HashSet::from([commits[0].id]);
+        let removed = GcManager::prune_repo(
+            &repos,
+            &commits,
+            &keep,
+            std::collections::HashSet::new(),
+            &snapshot,
+        )
+        .await
+        .expect("prune succeeds");
+
+        assert_eq!(removed, 2, "both snapshot FS rows are unreachable");
+        assert!(
+            repos
+                .fs_object
+                .find_by_repo_and_fs_id(repo, &late_root)
+                .await
+                .unwrap()
+                .is_some(),
+            "a row inserted after the snapshot must survive"
+        );
+        assert_eq!(count_rows(&db, "fs_objects").await, 1);
+        assert_eq!(count_rows(&db, "commits").await, 1);
     }
 
     /// Repos with both retention settings at 0 are unlimited and must not be touched.
@@ -871,7 +1088,13 @@ mod tests {
         )
         .await;
 
-        let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::new(3600))
+        // This test exercises the block-age window, not the upload lease; a
+        // process-global activity mark from a parallel test must not skip it.
+        let policy = GcPolicy {
+            upload_activity_ttl: None,
+            ..GcPolicy::new(3600)
+        };
+        let removed = GcManager::garbage_collect(&repos, &store, policy)
             .await
             .expect("gc succeeds");
         assert_eq!(removed, 1, "only the orphan past the window is removable");

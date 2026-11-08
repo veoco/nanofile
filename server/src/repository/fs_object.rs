@@ -33,7 +33,8 @@ pub trait FsObjectRepository: Send + Sync {
     async fn references_block(&self, repo_id: &str, block_id: &str) -> Result<bool, AppError>;
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<fs_object::Model>, AppError>;
     /// Project only `(id, fs_id)` for every object of a repo, without the large `data` JSON column
-    /// (used by garbage collection); fs_id comes back as its raw 20-byte SHA-1 to avoid allocations.
+    /// (used by garbage collection as the pass snapshot); fs_id comes back as its raw 20-byte SHA-1
+    /// to avoid allocations.
     async fn find_ids_and_fs_ids_by_repo_id(
         &self,
         repo_id: &str,

@@ -1,4 +1,5 @@
 use crate::domain;
+use crate::fs::core::upload_activity;
 use crate::repository::Repositories;
 use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
@@ -186,6 +187,7 @@ impl FileOps {
         modifier: &str,
         replace: bool,
     ) -> Result<(String, String), AppError> {
+        upload_activity::touch(repo_id);
         let now = chrono::Utc::now().timestamp();
 
         let file_fs_data = FsFileData {
@@ -660,6 +662,7 @@ impl FileOps {
         creator_name: &str,
         description: &str,
     ) -> Result<(), AppError> {
+        upload_activity::touch(repo_id);
         let now = chrono::Utc::now().timestamp();
 
         let repo_model = repos.repo.find_by_id(repo_id).await?;

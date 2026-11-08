@@ -2,10 +2,11 @@
 
 mod common;
 
-use common::TestFixture;
+use common::{TestFixture, sync_commit};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use server::fs::core::GcManager;
 use server::fs::core::gc::GcPolicy;
+use std::time::Duration;
 
 /// A throwaway filesystem-backed block store for GC calls. These pruned-history
 /// tests never write blocks, so an empty store suffices.
@@ -581,5 +582,108 @@ async fn test_gc_ttl_keeps_head_of_idle_repo() {
             .unwrap()
             .is_none(),
         "the old root must be pruned"
+    );
+}
+
+/// A real sync upload leaves the activity lease set; GC must skip the library
+/// until the lease is treated as expired, then prune the older history.
+#[tokio::test]
+async fn test_gc_skips_recent_sync_upload_until_lease_expires() {
+    let f = TestFixture::new().await;
+    let (_dir, block_store) = temp_block_store();
+
+    let c1 = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("a.txt", b"one", 0o100644)],
+        &[],
+        None,
+    )
+    .await;
+    let c2 = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("a.txt", b"two", 0o100644)],
+        &[],
+        Some(&c1),
+    )
+    .await;
+
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/repos/{}/?op=update", f.repo_id),
+            Some(&f.api_token),
+            &serde_json::json!({"history_limit": 1}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let before = f
+        .server
+        .repos
+        .commit
+        .find_by_repo_id_ordered_by_ctime_desc(&f.repo_id, None)
+        .await
+        .unwrap();
+    assert_eq!(before.len(), 2, "both sync commits must exist");
+    let head_root = before[0].root_id.clone();
+    let old_root = before[1].root_id.clone();
+
+    // The upload touched the lease; the first pass must leave both commits alone.
+    GcManager::garbage_collect(&f.server.repos, &block_store, GcPolicy::new(0))
+        .await
+        .unwrap();
+    let after_lease = f
+        .server
+        .repos
+        .commit
+        .find_by_repo_id_ordered_by_ctime_desc(&f.repo_id, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        after_lease.len(),
+        2,
+        "recent upload activity must skip the library"
+    );
+
+    // An expired lease is what a normal GC pass sees; retention now applies.
+    let expired = GcPolicy {
+        upload_activity_ttl: Some(Duration::ZERO),
+        ..GcPolicy::new(0)
+    };
+    GcManager::garbage_collect(&f.server.repos, &block_store, expired)
+        .await
+        .unwrap();
+    let after = f
+        .server
+        .repos
+        .commit
+        .find_by_repo_id_ordered_by_ctime_desc(&f.repo_id, None)
+        .await
+        .unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].commit_id, c2);
+    assert!(
+        f.server
+            .repos
+            .fs_object
+            .find_by_repo_and_fs_id(&f.repo_id, &head_root)
+            .await
+            .unwrap()
+            .is_some(),
+        "the head tree must survive"
+    );
+    assert!(
+        f.server
+            .repos
+            .fs_object
+            .find_by_repo_and_fs_id(&f.repo_id, &old_root)
+            .await
+            .unwrap()
+            .is_none(),
+        "the older tree must be pruned once the lease is expired"
     );
 }

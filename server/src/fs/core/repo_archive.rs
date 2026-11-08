@@ -14,6 +14,7 @@
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait};
 
+use crate::fs::core::upload_activity;
 use base::error::AppError;
 
 /// Archived columns in `INSERT ... SELECT` order; they mirror the entities.
@@ -48,6 +49,7 @@ async fn run<C: ConnectionTrait>(conn: &C, sql: String, repo_id: &str) -> Result
 /// re-archiving must not keep objects the current content no longer has, or a
 /// second restore would resurrect pruned commits.
 pub async fn copy_to<C: ConnectionTrait>(conn: &C, repo_id: &str) -> Result<u64, AppError> {
+    upload_activity::touch(repo_id);
     drop_archive(conn, repo_id).await?;
     let mut copied = run(
         conn,
@@ -68,6 +70,7 @@ pub async fn copy_to<C: ConnectionTrait>(conn: &C, repo_id: &str) -> Result<u64,
 ///
 /// Returns the number of rows restored; the archive stays so a retry works.
 pub async fn copy_from<C: ConnectionTrait>(conn: &C, repo_id: &str) -> Result<u64, AppError> {
+    upload_activity::touch(repo_id);
     let mut restored = run(
         conn,
         copy_sql("deleted_repo_commits", "commits", COMMIT_COLUMNS),
@@ -96,6 +99,7 @@ pub async fn drop_archive<C: ConnectionTrait>(conn: &C, repo_id: &str) -> Result
 /// keys: a trashed library is reachable by none of them. Callers only have to
 /// flush the cached sync tokens afterwards.
 pub async fn archive_and_delete(db: &DatabaseConnection, repo_id: &str) -> Result<u64, AppError> {
+    upload_activity::touch(repo_id);
     let txn = db.begin().await?;
     let archived = copy_to(&txn, repo_id).await?;
     for sql in [

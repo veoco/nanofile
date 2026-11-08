@@ -4,6 +4,7 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
 use crate::fs::core::file_ops::FileOps;
+use crate::fs::core::upload_activity;
 use crate::repository::Repositories;
 use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
@@ -1077,6 +1078,7 @@ async fn copy_fs_tree(
     dst_repo_id: &str,
     root_fs_id: &str,
 ) -> Result<(), AppError> {
+    upload_activity::touch(dst_repo_id);
     // Level-frontier walk: batch-read each level, batch-skip existing objects, then batch-insert
     // the rest instead of three round-trips per object.
     let mut frontier = vec![root_fs_id.to_string()];
