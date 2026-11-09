@@ -741,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "base"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "axum",
  "sea-orm",
@@ -2672,7 +2672,7 @@ dependencies = [
 
 [[package]]
 name = "infra"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "aes",
  "aes-gcm-siv",
@@ -3177,7 +3177,7 @@ dependencies = [
 
 [[package]]
 name = "migration"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "flate2",
  "sea-orm",
@@ -4883,7 +4883,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "aes",
  "anyhow",
