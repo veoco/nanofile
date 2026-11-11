@@ -55,13 +55,23 @@ impl Answer {
         (tag, &rest[4..])
     }
 
-    /// The reason the child gave, which has to be a refusal frame.
+    /// The reason the child gave, which has to be a refusal frame: the run failed.
     fn refusal(&self) -> &str {
+        self.tagged(b'U')
+    }
+
+    /// The reason the child gave, which has to be the bytes-refused frame: the input
+    /// will never decode, so the parent records it instead of retrying.
+    fn refused(&self) -> &str {
+        self.tagged(b'R')
+    }
+
+    fn tagged(&self, expected: u8) -> &str {
         let (tag, body) = self.frame();
         assert_eq!(
-            tag, b'U',
-            "an unexpected request is a refusal, not {:?}",
-            tag as char
+            tag, expected,
+            "expected {:?}, got {:?}",
+            expected as char, tag as char
         );
         std::str::from_utf8(body).expect("a refusal is text")
     }
@@ -384,10 +394,11 @@ fn a_face_request_answers_a_count_or_is_refused() {
     assert_eq!(value["face_count"], 0);
     assert!(value["max_score"].is_number(), "{value}");
 
-    // Undecodable bytes are a refusal the parent records, not a crash.
+    // Undecodable bytes are refused by the decoder, which the parent records as a
+    // verdict on the file rather than a failure to retry. Not a crash either way.
     let answer = run_worker(&args, &image_request(b'D', 0, b"not an image"));
     answer.finished("undecodable bytes");
-    assert!(!answer.refusal().is_empty(), "a refusal says why");
+    assert!(!answer.refused().is_empty(), "a refusal says why");
 
     let answer = run_worker(&args, &image_request(b'?', 0, b""));
     answer.finished("an unknown operation");
@@ -399,7 +410,7 @@ fn a_face_request_answers_a_count_or_is_refused() {
     let oversized = image_request(b'D', 0, &vec![0u8; 32 * 1024 * 1024 + 1]);
     let answer = run_worker(&args, &oversized);
     answer.finished("an oversized image");
-    assert_eq!(answer.refusal(), "image over the size cap");
+    assert_eq!(answer.refused(), "image over the size cap");
 }
 
 /// The media child reads the one file it was granted, whatever the request
