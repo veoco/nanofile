@@ -182,12 +182,23 @@ pub fn run(
             "something already serves this address; the tray starts without a server"
         );
     } else {
+        // Supervised: the server is a task like any other, and a task that panics
+        // would otherwise vanish into a `JoinHandle` nobody reads — the tray icon
+        // would stay up over a server that accepts nothing, and nothing would say so.
+        // Waiting on it here means every way it can end (clean shutdown, error,
+        // panic) leaves the process with a logged reason instead of a half-dead tray.
+        let server = rt.spawn(async move {
+            crate::run_server_flow(config, env_keys, Some(quit_rx), listener).await
+        });
         rt.spawn(async move {
-            let result = crate::run_server_flow(config, env_keys, Some(quit_rx), listener).await;
-            match result {
-                Ok(()) => std::process::exit(0),
-                Err(e) => {
+            match server.await {
+                Ok(Ok(())) => std::process::exit(0),
+                Ok(Err(e)) => {
                     tracing::error!("Server failed: {e:#}");
+                    std::process::exit(1);
+                }
+                Err(join) => {
+                    tracing::error!("Server task ended without a shutdown signal: {join}");
                     std::process::exit(1);
                 }
             }

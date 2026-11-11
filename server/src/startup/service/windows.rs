@@ -198,21 +198,41 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows_sys::core
     };
     // No first-run setup: a service has no desktop or console, and the preflight
     // already reported what a missing config means.
-    match runtime.block_on(crate::run_server_flow(
-        config,
-        env_keys,
-        Some(quit_rx),
-        None,
-    )) {
-        Ok(()) => {
+    //
+    // The SCM waits for a status report, so a panic must not unwind past this:
+    // without the boundary the process would stay "running" from the SCM's point of
+    // view with no `ServiceMain` left to serve anything.
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.block_on(crate::run_server_flow(
+            config,
+            env_keys,
+            Some(quit_rx),
+            None,
+        ))
+    }));
+    match stopped {
+        Ok(Ok(())) => {
             tracing::info!("service stopped");
             report(SERVICE_STOPPED, 0, 0);
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             tracing::error!("service failed: {e:#}");
             report(SERVICE_STOPPED, EXIT_FAILED, 0);
         }
+        Err(payload) => {
+            tracing::error!("service task panicked: {}", panic_message(payload));
+            report(SERVICE_STOPPED, EXIT_FAILED, 0);
+        }
     }
+}
+
+/// The message of a caught panic, for the log line the SCM never sees.
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".to_string())
 }
 
 /// Hand this process to the SCM; blocks until the service stops. Fails
