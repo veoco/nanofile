@@ -385,7 +385,8 @@ jobs:
       # as warnings. Four are expected: `zvariant`, `zvariant_derive` and
       # `zbus_names` (zbus 5, which `ksni` and `notify-rust` pin) and
       # `basic-toml` (askama's derive). None has a fixed release to move to yet;
-      # a vulnerability in any crate still fails the step.
+      # a vulnerability in any crate still fails the step, except the one entry
+      # `.cargo/audit.toml` names together with the fix it is waiting for.
       - name: Check for known vulnerabilities
         run: cargo audit
 

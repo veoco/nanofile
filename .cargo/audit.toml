@@ -1,0 +1,18 @@
+# Read by `cargo audit` from the project directory, so the CI step and a local run
+# judge the same way.
+
+[advisories]
+# RUSTSEC-2026-0459: SQLite before 3.54.0 can return stale page-cache bytes when a
+# database is opened next to a crafted sibling `-wal` file whose page size differs
+# from the database's. The fix ships in `libsqlite3-sys` 0.39.0; `sqlx-sqlite` 0.9.0
+# — still the newest release — requires `<0.38.0`, so no version of the driver can
+# carry it yet.
+#
+# The exposure here is local: both files have to be placed on the host, and the
+# database and its `-wal`/`-shm` sidecars are created owner-only (see
+# `infra/src/db.rs`), so it takes write access as the account the server runs as.
+#
+# Delete this entry once a sqlx release allows `libsqlite3-sys` 0.39.0: every other
+# advisory still fails the audit step, and so does this one as soon as it leaves the
+# ignore list.
+ignore = ["RUSTSEC-2026-0459"]
