@@ -157,7 +157,26 @@ pub fn init(config: &Config, kind: Kind, no_console: bool, config_path: &Path) {
 fn env_filter(config: &Config) -> EnvFilter {
     EnvFilter::builder()
         .with_default_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
-        .parse_lossy(&config.logging.level)
+        .parse_lossy(filter_spec(&config.logging.level))
+}
+
+/// The filter directives the subscriber is built from.
+///
+/// `logging.level` is a filter specification, and `debug` there also switches on
+/// tantivy's directory layer, which logs an `Open Read` line per index segment file:
+/// megabytes a day that nobody diagnosing the server wants, in the same file where
+/// the useful lines land. The dependency stays at WARN unless the operator named
+/// tantivy themselves. `off` is left alone: it means silent, not "silent except
+/// tantivy".
+fn filter_spec(level: &str) -> String {
+    let level = level.trim();
+    if level.contains("tantivy") || level == "off" {
+        return level.to_string();
+    }
+    if level.is_empty() {
+        return "tantivy=warn".to_string();
+    }
+    format!("{level},tantivy=warn")
 }
 
 fn init_stdout(config: &Config) {
@@ -403,6 +422,22 @@ mod tests {
 
     fn tmp_log(dir: &tempfile::TempDir, name: &str) -> PathBuf {
         dir.path().join(name)
+    }
+
+    /// `debug` is a request for this server's own detail, not for a search index's
+    /// per-segment file chatter; an explicit tantivy directive still wins, and `off`
+    /// stays off.
+    #[test]
+    fn a_debug_level_keeps_tantivy_at_warning() {
+        assert_eq!(filter_spec("debug"), "debug,tantivy=warn");
+        assert_eq!(filter_spec("trace"), "trace,tantivy=warn");
+        assert_eq!(filter_spec("info"), "info,tantivy=warn");
+        assert_eq!(filter_spec(" debug "), "debug,tantivy=warn");
+        // Nothing configured: the subscriber's own INFO default decides.
+        assert_eq!(filter_spec(""), "tantivy=warn");
+        // An operator who named tantivy gets exactly what they asked for.
+        assert_eq!(filter_spec("debug,tantivy=trace"), "debug,tantivy=trace");
+        assert_eq!(filter_spec("off"), "off");
     }
 
     #[test]
