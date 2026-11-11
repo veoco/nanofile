@@ -79,15 +79,22 @@ trusted_proxies = ["loopback"]
 
 ## Caddy
 
-Caddy 自己申请并续期证书，所以站点配置只有一行：
+Caddy 自己申请并续期证书：
 
 ```txt
 files.example.com {
-	reverse_proxy 127.0.0.1:8082
+	reverse_proxy 127.0.0.1:8082 {
+		# 让代理比服务器更早退掉空闲的上游连接。
+		transport http {
+			keepalive 10s
+		}
+	}
 }
 ```
 
 Caddy 会转发 `X-Forwarded-For` 与 `X-Forwarded-Proto`；照上面的方式设置 `server.site_url` 与 `server.trusted_proxies = ["loopback"]`。
+
+`keepalive` 这一行不是可有可无的。Caddy 会复用上游连接，而服务器在等待下一个请求头超过 `server.header_read_timeout_secs`（默认 120 秒）时会退掉空闲的那条。请求若正好写进一条刚被服务器关掉的连接，客户端收到的就是 502——只在空闲一段时间后的第一个请求上出现，其余一切看起来都正常。10 秒短于任何轮询间隔；要提高吞吐可以调大，但别超过服务器的截止时间。上面的 nginx 配方发往上游的是 `Connection: close`，不存在空闲复用，因此不需要这一项。
 
 ## Cloudflare Tunnel
 
@@ -127,6 +134,7 @@ trusted_proxies = ["private"]
 ## 排障
 
 - **502/504** —— 代理连不上 `127.0.0.1:8082`；检查 `server.addr`、`server.port` 和服务器是否在运行。
+- **偶发 502、过一会儿自己好** —— 请求落在了服务器刚退掉的空闲上游连接上；见上面 Caddy 的 `keepalive` 说明，或把 `server.header_read_timeout_secs` 调到大于客户端的轮询间隔。
 - **重定向循环** —— 代理发的是 `X-Forwarded-Proto: http`，或 `site_url` 写的是 `https` 而代理转发的是明文 HTTP；修正头或地址。
 - **WebSocket 断开** —— 缺少 `Upgrade`/`Connection` 头，或代理把它们剥掉了。
 - **上传到固定大小就失败** —— 代理的请求体上限小于文件；nginx 里设 `client_max_body_size 0`，其他代理找等价设置。

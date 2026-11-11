@@ -460,6 +460,13 @@ pub struct ServerConfig {
     pub request_timeout_secs: u64,
     /// How long a client may take to send request headers (slowloris guard); 0
     /// disables the deadline. Env: NANOFILE_SERVER_HEADER_READ_TIMEOUT_SECS
+    ///
+    /// One deadline covers both a slow header and an idle keep-alive connection:
+    /// hyper arms it whenever it waits for a request head. A value near the
+    /// interval at which a proxy reuses its upstream connections retires the
+    /// connection just as the next request is written into it, and the proxy
+    /// answers that request with 502. Keep it well above that interval, or keep
+    /// the proxy's own upstream keepalive well below this.
     #[serde(default = "default_header_read_timeout_secs")]
     pub header_read_timeout_secs: u64,
     /// How long a client may take to send the body before 408 (0 = only bounded by
@@ -637,7 +644,7 @@ fn default_max_chunk_size_mb() -> u64 {
     32
 }
 fn default_header_read_timeout_secs() -> u64 {
-    30
+    120
 }
 fn default_request_timeout_secs() -> u64 {
     600

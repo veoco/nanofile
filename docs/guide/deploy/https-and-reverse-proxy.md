@@ -92,16 +92,30 @@ trusted_proxies = ["loopback"]
 
 ## Caddy
 
-Caddy obtains and renews the certificate by itself, so the site block is one line:
+Caddy obtains and renews the certificate by itself:
 
 ```txt
 files.example.com {
-	reverse_proxy 127.0.0.1:8082
+	reverse_proxy 127.0.0.1:8082 {
+		# Retire idle upstream connections before the server does.
+		transport http {
+			keepalive 10s
+		}
+	}
 }
 ```
 
 Caddy forwards `X-Forwarded-For` and `X-Forwarded-Proto`; set `server.site_url` and
 `server.trusted_proxies = ["loopback"]` as above.
+
+The `keepalive` line is not optional. Caddy reuses its upstream connections, and the
+server retires one when `server.header_read_timeout_secs` (120 s by default) passes
+while it waits for the next request head. A request written into a connection the
+server has just closed reaches the client as a 502 — the sporadic kind that appears
+only on the first request after an idle period, because everything else looks
+healthy. Ten seconds is under any polling interval; raise it for throughput, but keep
+it below the server's deadline. The nginx recipe above sends `Connection: close`
+upstream, so it never reuses an idle connection and needs no equivalent.
 
 ## Cloudflare Tunnel
 
@@ -153,6 +167,9 @@ that can reach the server from those addresses.
 
 - **502/504** — the proxy cannot reach `127.0.0.1:8082`; check `server.addr`,
   `server.port` and whether the server is running.
+- **Sporadic 502 that clears by itself** — a proxied request landed on an idle
+  upstream connection the server had just retired; see the Caddy `keepalive` note
+  above, or raise `server.header_read_timeout_secs` past the client's poll interval.
 - **Redirect loop** — the proxy sends `X-Forwarded-Proto: http`, or `site_url` says
   `https` while the proxy forwards plain HTTP; fix the header or the URL.
 - **WebSocket disconnects** — the `Upgrade`/`Connection` headers are missing, or the
