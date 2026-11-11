@@ -68,7 +68,21 @@ pub async fn serve_with_timeouts(
 
     loop {
         let (stream, remote_addr) = tokio::select! {
-            conn = listener.accept() => conn?,
+            conn = listener.accept() => match conn {
+                Ok(accepted) => accepted,
+                // Some accept errors describe the connection that was queued, not the
+                // listener: a peer that resets while it waits in the accept queue is
+                // reported as `ECONNABORTED`/`ECONNRESET` (Windows does this for an
+                // ordinary aborted connection), and tokio hands the error straight to
+                // us. Propagating one ended this loop silently — the run loop only
+                // awaits the task on a shutdown signal — leaving the port bound with
+                // nobody accepting. Keep serving instead.
+                Err(error) if is_transient_accept_error(error.kind()) => {
+                    tracing::debug!("accept failed, continuing: {error}");
+                    continue;
+                }
+                Err(error) => return Err(error),
+            },
             _ = signal_tx.closed() => break,
         };
         let io = TokioIo::new(stream);
@@ -121,4 +135,55 @@ pub async fn serve_with_timeouts(
     // Wait for in-flight connections to finish.
     close_tx.closed().await;
     Ok(())
+}
+
+/// Whether an `accept` error is about one queued connection rather than the listener.
+///
+/// Tokio's own documentation calls these "not necessarily fatal"; the kinds here are
+/// what a peer aborting a connection produces (`ECONNABORTED`, and `ECONNRESET` for
+/// Windows' aborted queue entry), plus a call interrupted by a signal. Anything else
+/// means the listening socket itself failed, which a retry cannot heal.
+fn is_transient_accept_error(kind: std::io::ErrorKind) -> bool {
+    use std::io::ErrorKind;
+    matches!(
+        kind,
+        ErrorKind::ConnectionAborted | ErrorKind::ConnectionReset | ErrorKind::Interrupted
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_transient_accept_error;
+    use std::io::ErrorKind;
+
+    /// One connection aborted while it waited for the accept loop to reach it.
+    #[test]
+    fn an_aborted_queued_connection_is_not_fatal() {
+        for kind in [
+            ErrorKind::ConnectionAborted,
+            ErrorKind::ConnectionReset,
+            ErrorKind::Interrupted,
+        ] {
+            assert!(
+                is_transient_accept_error(kind),
+                "{kind:?} must not end the accept loop"
+            );
+        }
+    }
+
+    /// A listener that failed is not something the loop can retry past.
+    #[test]
+    fn a_broken_listener_is_fatal() {
+        for kind in [
+            ErrorKind::Other,
+            ErrorKind::InvalidInput,
+            ErrorKind::NotConnected,
+            ErrorKind::PermissionDenied,
+        ] {
+            assert!(
+                !is_transient_accept_error(kind),
+                "{kind:?} must end the accept loop"
+            );
+        }
+    }
 }
