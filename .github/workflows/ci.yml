@@ -349,7 +349,20 @@ jobs:
       - name: Install e2e deps
         run: npm ci --prefix e2e
       - name: Install Playwright browsers
-        run: npx --prefix e2e playwright install --with-deps chromium
+        # `--with-deps` runs apt for the libraries Chromium needs, so a runner
+        # that cannot resolve the archive hosts fails here rather than in the
+        # tests. Retry: the browser download and the archive lookups are separate
+        # failures, and the first usually still works when the second does not.
+        run: |
+          for attempt in 1 2 3; do
+            if npx --prefix e2e playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "playwright install failed (attempt $attempt); retrying in 15s"
+            sleep 15
+          done
+          echo "::error::playwright could not install chromium after three attempts"
+          exit 1
       - name: Run e2e tests
         run: npm run --prefix e2e test
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -548,9 +561,25 @@ jobs:
           # the log; errors still reach stderr. `--no-install-recommends`:
           # without it apt pulls 99 packages, most of them video drivers and
           # subtitle libraries no assertion can reach.
-          sudo apt-get update -qq
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
-          echo "NANOFILE_TEST_FFMPEG_PATH=$(command -v ffmpeg)" >> "$GITHUB_ENV"
+          #
+          # Bounded and retried: a runner that cannot resolve the archive hosts
+          # sits in `apt-get update` rather than failing it (measured: 35 minutes
+          # of silence, twice, before the job deadline ended it).
+          apt() {
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get \
+              -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 \
+              -o Acquire::Retries=2 "$@"
+          }
+          for attempt in 1 2 3; do
+            if apt update -qq && apt install -y -qq --no-install-recommends ffmpeg; then
+              echo "NANOFILE_TEST_FFMPEG_PATH=$(command -v ffmpeg)" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "apt could not install ffmpeg (attempt $attempt); retrying in 15s"
+            sleep 15
+          done
+          echo "::error::apt could not install ffmpeg after three attempts"
+          exit 1
       - name: Install ffmpeg (macOS)
         if: runner.os == 'macOS'
         run: |
