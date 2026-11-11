@@ -22,7 +22,7 @@ use crate::fs::core::tree::read_fs_file_data;
 use crate::repository::Repositories;
 use crate::repository::face_tags::ScanRecord;
 use crate::repository::repo_tag::TagInput;
-use crate::sandbox::jobs::faces;
+use crate::sandbox::jobs::faces::{self, FaceError};
 use crate::sandbox::jobs::media::{self, StillError};
 use crate::tasks::context::JobContext;
 use base::common::FsFileData;
@@ -83,6 +83,20 @@ enum ScanOutcome {
     Skip(String),
     /// The environment or a timeout: a retryable failure.
     Retry(String),
+}
+
+/// A worker failure as the outcome it is.
+///
+/// A refused decode is a verdict on the bytes — the same file will not decode on the
+/// next backfill pass either — so it is recorded as a skip. Everything else (a child
+/// that could not start, a detector that failed) stays retryable.
+fn outcome_for_failure(error: FaceError) -> ScanOutcome {
+    match error {
+        FaceError::Refused(reason) => {
+            ScanOutcome::Skip(format!("image cannot be decoded: {reason}"))
+        }
+        FaceError::Retry(reason) => ScanOutcome::Retry(reason),
+    }
 }
 
 /// Whether a stored scan row is worth another attempt for this content.
@@ -427,7 +441,7 @@ impl FaceTagService {
         };
         match tokio::task::spawn_blocking(move || faces::detect(&data, options)).await {
             Ok(Ok(summary)) => ScanOutcome::Count(summary),
-            Ok(Err(why)) => ScanOutcome::Retry(why),
+            Ok(Err(why)) => outcome_for_failure(why),
             Err(join) => ScanOutcome::Retry(format!("face-tag worker task failed: {join}")),
         }
     }
@@ -479,7 +493,7 @@ impl FaceTagService {
             };
             match faces::detect(&frame, options) {
                 Ok(summary) => ScanOutcome::Count(summary),
-                Err(why) => ScanOutcome::Retry(why),
+                Err(why) => outcome_for_failure(why),
             }
         })
         .await;
@@ -743,6 +757,23 @@ mod tests {
             max_score: None,
             attempted_at,
         }
+    }
+
+    /// A refused decode is recorded as a skip, so the backfill stops asking; a
+    /// failed child stays retryable.
+    #[test]
+    fn a_refused_decode_is_a_skip_and_a_failed_run_is_not() {
+        let skipped = outcome_for_failure(FaceError::Refused(
+            "image decoder creation failed: Image size exceeds limit".to_string(),
+        ));
+        let ScanOutcome::Skip(reason) = skipped else {
+            panic!("a refusal must be a skip");
+        };
+        assert!(reason.starts_with("image cannot be decoded: "), "{reason}");
+        assert!(reason.contains("Image size exceeds limit"), "{reason}");
+
+        let retry = outcome_for_failure(FaceError::Retry("detector failed".to_string()));
+        assert!(matches!(retry, ScanOutcome::Retry(why) if why == "detector failed"));
     }
 
     /// The extension decides which decoder the bytes need; the two lists are the
