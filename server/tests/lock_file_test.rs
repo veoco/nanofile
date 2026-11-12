@@ -1,6 +1,9 @@
 use crate::common;
 
-use common::{TestFixture, create_test_user, get_sync_token};
+use base::common::S_IFREG;
+use common::{TestFixture, create_test_user, get_sync_token, sync_commit, sync_commit_unchecked};
+
+const REG: i32 = S_IFREG;
 
 #[tokio::test]
 async fn test_lock_file_success() {
@@ -374,4 +377,186 @@ async fn test_lock_file_readonly_member_forbidden() {
         )
         .await;
     assert_eq!(resp.status(), 403, "read-only member must not unlock files");
+}
+
+/// A second account with write access to the fixture's library.
+async fn add_writer(f: &TestFixture, email: &str) -> String {
+    let user_id = create_test_user(f.server.db.as_ref(), email, "password").await;
+    common::add_repo_member(f.server.db.as_ref(), &f.repo_id, user_id, "rw").await;
+    let resp = f.client.login(email, "password").await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let api_token = body["token"].as_str().unwrap().to_string();
+    get_sync_token(&f.client, &api_token, &f.repo_id).await
+}
+
+async fn lock_via_sync(f: &TestFixture, path: &str, sync_token: &str) {
+    let resp = f
+        .client
+        .put_sync(
+            &format!("/seafhttp/repo/{}/lock-file?p={path}", f.repo_id),
+            sync_token,
+            vec![],
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "lock {path} failed");
+}
+
+/// A foreign lock protects only the locked path: another user's edits to other
+/// files must still be accepted. A whole-tree check would freeze every other
+/// device in the library until the lock is released.
+#[tokio::test]
+async fn test_foreign_lock_does_not_block_unrelated_files() {
+    let f = TestFixture::new().await;
+
+    let base = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("locked.txt", b"v0", REG), ("other.txt", b"v0", REG)],
+        &[],
+        None,
+    )
+    .await;
+    lock_via_sync(&f, "/locked.txt", &f.sync_token).await;
+
+    let writer = add_writer(&f, "writer@example.com").await;
+    sync_commit(
+        &f.client,
+        &writer,
+        &f.repo_id,
+        &[("locked.txt", b"v0", REG), ("other.txt", b"v1", REG)],
+        &[],
+        Some(&base),
+    )
+    .await;
+}
+
+/// Editing, deleting or renaming the locked path is still rejected for another
+/// user. Those three operations are the ones a whole-tree check got right for
+/// modifications and missed for deletes and renames.
+#[tokio::test]
+async fn test_foreign_lock_blocks_changes_to_the_locked_path() {
+    let f = TestFixture::new().await;
+
+    let base = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("locked.txt", b"v0", REG), ("other.txt", b"v0", REG)],
+        &[],
+        None,
+    )
+    .await;
+    lock_via_sync(&f, "/locked.txt", &f.sync_token).await;
+
+    let writer = add_writer(&f, "writer@example.com").await;
+
+    // Edit.
+    let (_, resp) = sync_commit_unchecked(
+        &f.client,
+        &writer,
+        &f.repo_id,
+        &[("locked.txt", b"v1", REG), ("other.txt", b"v0", REG)],
+        &[],
+        Some(&base),
+    )
+    .await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(
+        resp.text().await.unwrap(),
+        "File locked.txt is locked",
+        "the official client parses this body"
+    );
+
+    // Delete.
+    let (_, resp) = sync_commit_unchecked(
+        &f.client,
+        &writer,
+        &f.repo_id,
+        &[("other.txt", b"v0", REG)],
+        &[],
+        Some(&base),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "deleting a locked file must be rejected"
+    );
+
+    // Rename (same content, so the diff pairs the old and new path).
+    let (_, resp) = sync_commit_unchecked(
+        &f.client,
+        &writer,
+        &f.repo_id,
+        &[("renamed.txt", b"v0", REG), ("other.txt", b"v0", REG)],
+        &[],
+        Some(&base),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "renaming a locked file must be rejected"
+    );
+}
+
+/// The lock owner may delete the file, and the stale lock row must be swept in
+/// the same request.
+#[tokio::test]
+async fn test_owner_delete_prunes_the_lock() {
+    let f = TestFixture::new().await;
+
+    let base = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("locked.txt", b"v0", REG), ("other.txt", b"v0", REG)],
+        &[],
+        None,
+    )
+    .await;
+    lock_via_sync(&f, "/locked.txt", &f.sync_token).await;
+
+    sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("other.txt", b"v0", REG)],
+        &[],
+        Some(&base),
+    )
+    .await;
+
+    assert_locked_files_empty(&f).await;
+}
+
+/// A lock on a path that does not exist is meaningless; the commit-time sweep
+/// removes it so it cannot block a later file at the same path.
+#[tokio::test]
+async fn test_lock_on_a_missing_path_is_swept_after_a_commit() {
+    let f = TestFixture::new().await;
+
+    let base = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("other.txt", b"v0", REG)],
+        &[],
+        None,
+    )
+    .await;
+    lock_via_sync(&f, "ghost.txt", &f.sync_token).await;
+
+    sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("other.txt", b"v1", REG)],
+        &[],
+        Some(&base),
+    )
+    .await;
+
+    assert_locked_files_empty(&f).await;
 }

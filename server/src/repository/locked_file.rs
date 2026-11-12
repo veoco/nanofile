@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, Set,
+};
 use std::sync::Arc;
 
 use base::error::AppError;
@@ -13,6 +15,8 @@ pub trait LockedFileRepository: Send + Sync {
         path: &str,
     ) -> Result<Option<locked_file::Model>, AppError>;
     async fn find_by_repo(&self, repo_id: &str) -> Result<Vec<locked_file::Model>, AppError>;
+    /// Libraries that still have at least one lock row, for the stale-lock sweep.
+    async fn find_repo_ids(&self) -> Result<Vec<String>, AppError>;
     async fn create(
         &self,
         repo_id: &str,
@@ -58,6 +62,16 @@ impl LockedFileRepository for DbLockedFileRepository {
     async fn find_by_repo(&self, repo_id: &str) -> Result<Vec<locked_file::Model>, AppError> {
         Ok(locked_file::Entity::find()
             .filter(locked_file::Column::RepoId.eq(repo_id))
+            .all(self.db.as_ref())
+            .await?)
+    }
+
+    async fn find_repo_ids(&self) -> Result<Vec<String>, AppError> {
+        Ok(locked_file::Entity::find()
+            .select_only()
+            .column(locked_file::Column::RepoId)
+            .distinct()
+            .into_tuple::<String>()
             .all(self.db.as_ref())
             .await?)
     }

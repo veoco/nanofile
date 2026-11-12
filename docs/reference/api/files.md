@@ -72,9 +72,12 @@ Locks or unlocks a file for other sync clients. The request body is a
 URL-encoded form with `operation=lock` or `operation=unlock`.
 
 **Response `200`** — `{"success": true}`. Requires write permission and
-`file.write`. Locks are advisory: the server records who holds them and rejects
-conflicting writes from other clients with `403` and the plain-text body
-`File <path> is locked`, but any writer may lock or unlock.
+`file.write`. Locks are advisory: any writer may lock or unlock, and only sync
+commit uploads enforce them. A commit that creates, edits, deletes, renames or
+moves a path held by another user is rejected with `403` and the plain-text body
+`File <path> is locked`; commits that do not touch that path are unaffected.
+Direct REST and WebDAV writes do not consult locks. A lock whose file is gone
+from the library is removed, so it cannot block a later file at the same path.
 
 ## Delete a file {#delete-api2-repos-repo-id-file}
 

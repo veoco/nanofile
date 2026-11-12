@@ -346,6 +346,10 @@ pub fn install_default_jobs(
                     "expired upload links",
                     repos.upload_link.delete_expired(now).await,
                 );
+                part(
+                    "stale file locks",
+                    crate::fs::core::prune_all_stale_file_locks(repos.as_ref(), db.as_ref()).await,
+                );
 
                 if temp_upload_ttl_hours > 0 {
                     let ttl = Duration::from_secs(temp_upload_ttl_hours * 3600);

@@ -1015,6 +1015,10 @@ impl FileService {
 
         match operation {
             "lock" => {
+                // Name the row's actual owner in the event: locking an
+                // already-locked file is a no-op here, so claiming the caller
+                // would tell subscribed clients they hold someone else's lock.
+                let mut lock_user = email.to_string();
                 match self.find_lock(repo_id, &path).await? {
                     None => {
                         self.repos
@@ -1031,6 +1035,11 @@ impl FileService {
                     // Migrate a legacy absolute row to the canonical key while
                     // keeping its original owner.
                     Some(record) if record.path != path => {
+                        if record.user_id != user_record.id
+                            && let Some(owner) = self.repos.user.find_by_id(record.user_id).await?
+                        {
+                            lock_user = owner.email;
+                        }
                         self.repos
                             .locked_file
                             .delete_by_repo_and_path(repo_id, &record.path)
@@ -1046,7 +1055,13 @@ impl FileService {
                             )
                             .await?;
                     }
-                    Some(_) => {}
+                    Some(record) => {
+                        if record.user_id != user_record.id
+                            && let Some(owner) = self.repos.user.find_by_id(record.user_id).await?
+                        {
+                            lock_user = owner.email;
+                        }
+                    }
                 }
 
                 if let Some(mgr) = &self.notification_manager {
@@ -1054,7 +1069,7 @@ impl FileService {
                         repo_id: repo_id.to_string(),
                         path: path.clone(),
                         change_event: "locked".to_string(),
-                        lock_user: email.to_string(),
+                        lock_user,
                     };
                     mgr.notify(event).await;
                 }

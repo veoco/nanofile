@@ -1028,17 +1028,19 @@ pub async fn sync_put_file(
     id
 }
 
-/// Build and advance a sync commit for a flat root directory. `entries` is
-/// `(file name, content)`, `dirs` is `(directory name, child entries)` and `parent` is
-/// the previous commit id (`None` for the first); returns the new commit id.
-pub async fn sync_commit(
+/// Build and upload a sync commit for a flat root directory. `entries` is
+/// `(file name, content)`, `dirs` is `(directory name, child entries)` and
+/// `parent` is the previous commit id (`None` for the first). Returns the
+/// commit id and the update-branch response without asserting it, so a
+/// rejection test can check the status.
+pub async fn sync_commit_unchecked(
     client: &client::TestClient,
     sync_token: &str,
     repo_id: &str,
     entries: &[SyncFileSpec<'_>],
     dirs: &[(&str, &[SyncFileSpec<'_>])],
     parent: Option<&str>,
-) -> String {
+) -> (String, reqwest::Response) {
     use base::common::{CommitData, DirEntryData, FsDirData};
 
     let now = chrono::Utc::now().timestamp();
@@ -1148,6 +1150,20 @@ pub async fn sync_commit(
         .await;
     assert_eq!(resp.status(), 200, "put_commit failed");
     let resp = client.update_branch(sync_token, repo_id, &commit_id).await;
+    (commit_id, resp)
+}
+
+/// [`sync_commit_unchecked`] with the branch advanced; panics on rejection.
+pub async fn sync_commit(
+    client: &client::TestClient,
+    sync_token: &str,
+    repo_id: &str,
+    entries: &[SyncFileSpec<'_>],
+    dirs: &[(&str, &[SyncFileSpec<'_>])],
+    parent: Option<&str>,
+) -> String {
+    let (commit_id, resp) =
+        sync_commit_unchecked(client, sync_token, repo_id, entries, dirs, parent).await;
     assert_eq!(resp.status(), 200, "update_branch failed");
     commit_id
 }

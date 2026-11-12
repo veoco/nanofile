@@ -1310,14 +1310,6 @@ impl SyncService {
             return Err(AppError::BlockMissing);
         }
 
-        crate::fs::core::check_commit_file_locks(
-            self.db.as_ref(),
-            repo_id,
-            &new_commit.root_id,
-            user_id,
-        )
-        .await?;
-
         // Parent existence is known from the `find_commit` above: a real parent
         // yields a `base_root_id`, the sentinel yields `None`.
         if let Some(parent_id) = new_commit.parent_id.as_deref()
@@ -1353,6 +1345,19 @@ impl SyncService {
                 events::publish_repo_update(repo_id, new_head.to_string());
                 return Ok(true);
             }
+
+            // Re-check on every CAS attempt: a lock acquired between attempts must
+            // still reject the commit. The diff is against this commit's own parent,
+            // so only the paths the device changes are considered — an unrelated or
+            // stale lock cannot freeze the rest of the library.
+            crate::fs::core::check_commit_file_locks(
+                &self.repos,
+                repo_id,
+                base_root_id.as_deref(),
+                &new_commit.root_id,
+                user_id,
+            )
+            .await?;
 
             // Upstream compares the uploaded commit's *parent* with HEAD
             // (`base->commit_id` vs `current_head->commit_id`). A library without a
@@ -1448,6 +1453,16 @@ impl SyncService {
             crate::service::fs::quota::release_blocks(&self.repos, repo_id, &blocks).await;
             self.repos.invalidate_quota(owner);
             drop(scope);
+
+            // A delete or rename leaves its lock row pointing at a path that no
+            // longer exists; drop those rows so they cannot block a later file at
+            // the same path. Best effort: the commit itself succeeded.
+            if let Err(e) =
+                crate::fs::core::prune_stale_file_locks(&self.repos, self.db.as_ref(), repo_id)
+                    .await
+            {
+                tracing::warn!("failed to prune stale file locks for {repo_id}: {e}");
+            }
 
             // Activity logging and reindexing describe what *this* commit introduced:
             // for a fast-forward the client's diff against its own base, for a merge

@@ -55,7 +55,7 @@ Seafile 重载的文件接口。请求体形状决定操作：
 
 为其他同步客户端加锁或解锁。请求体是 URL 编码表单，`operation=lock` 或 `operation=unlock`。
 
-**响应 `200`** —— `{"success": true}`。需要写权限与 `file.write`。锁是建议性的：服务器记录持有者，并以 `403` 加纯文本 `File <path> is locked` 拒绝其他客户端的冲突写入，但任何写者都可以加锁或解锁。
+**响应 `200`** —— `{"success": true}`。需要写权限与 `file.write`。锁是建议性的：任何写者都可以加锁或解锁，只有同步提交会执行它。提交若创建、编辑、删除、重命名或移动了他人持有的路径，会以 `403` 加纯文本 `File <path> is locked` 拒绝；不涉及该路径的提交不受影响。REST 与 WebDAV 的直接写入不检查锁。路径已不在资料库中的锁会被清理，不会挡住之后同路径的新文件。
 
 ## 删除文件 {#delete-api2-repos-repo-id-file}
 
