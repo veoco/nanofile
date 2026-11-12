@@ -30,6 +30,8 @@
 
 目录在前、文件在后，各自按小写名称排序——这是 seahub 的展示顺序，不是对象存储顺序。递归列表按深度优先，条目额外带 `parent_dir`；文件条目还带 `modifier_name` 与 `modifier_contact_email`。
 
+被锁定的文件额外带 `is_locked: true`、`locked_by_me`（调用者是否持锁）、`lock_owner`、`lock_owner_name` 与 `lock_time`（unix 时间戳）。未锁定条目省略这五个键，官方客户端把「没有」当成「未锁定」。正是这些字段让桌面客户端显示**解锁**而不是**加锁**。
+
 **响应头** —— `oid` 是所列出目录的 FS 对象 id（40 位十六进制），`dir_perm` 是 `"rw"` 或 `"r"`。尚无提交的资料库返回空列表，`oid: 0000000000000000000000000000000000000000`。
 
 需要读权限与 `file.read`。
@@ -99,7 +101,7 @@
 }
 ```
 
-`user_perm` 等于每个条目的 `permission`（Nanofile 没有目录级分享）。带 `with_thumbnail=true` 时每个文件条目多一个 `encoded_thumbnail_src`，永远是空字符串；客户端把它当作「自己拼缩略图 URL」的信号。递归形状相同。这里也设置 `oid`/`dir_perm` 头，无提交资料库的 `dir_id` 用全零哨兵。
+`user_perm` 等于每个条目的 `permission`（Nanofile 没有目录级分享）。带 `with_thumbnail=true` 时每个文件条目多一个 `encoded_thumbnail_src`，永远是空字符串；客户端把它当作「自己拼缩略图 URL」的信号。递归形状相同。被锁定的文件与旧版列表一样带那五个锁字段。这里也设置 `oid`/`dir_perm` 头，无提交资料库的 `dir_id` 用全零哨兵。
 
 需要读权限与 `file.read`。
 

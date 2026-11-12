@@ -14,6 +14,7 @@ use crate::AppState;
 use crate::handler::{MAX_SMALL_BODY_BYTES, ok_json, read_body_limited};
 use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
+use crate::service::fs::dir::fill_lock_fields;
 use base::error::AppError;
 use base::sanitize::safe_normalize_path;
 use infra::common::{DirEntry, EMPTY_SHA1};
@@ -124,9 +125,11 @@ pub(crate) async fn reload_dir_response(
     repo_id: &str,
     path: &str,
     permission: &'static str,
+    user_id: i32,
 ) -> Result<Response, AppError> {
     let (dir_id, entries) = state.dir_service().list_dir(repo_id, path).await?;
     let mut entries = present_api_entries(state, entries, permission).await?;
+    fill_lock_fields(&state.repos, repo_id, user_id, path, &mut entries).await?;
     sort_api_entries(&mut entries);
     Ok((dir_headers(&dir_id, permission), Json(entries)).into_response())
 }
@@ -185,13 +188,29 @@ pub async fn list_dir(
         let filtered = filter_by_type(all_entries, query.t.as_deref());
         // seahub's recursive listing is a depth-first walk, so its order is a traversal
         // artifact; only the permission is a contract.
-        let entries = present_api_entries(&state, filtered, access.permission).await?;
+        let mut entries = present_api_entries(&state, filtered, access.permission).await?;
+        fill_lock_fields(
+            &state.repos,
+            repo_id,
+            access.user.user_id,
+            &path,
+            &mut entries,
+        )
+        .await?;
         return Ok((dir_headers(&dir_id, access.permission), Json(entries)));
     }
 
     let (dir_id, entries) = svc.list_dir(repo_id, &path).await?;
     let entries = filter_by_type(entries, query.t.as_deref());
     let mut entries = present_api_entries(&state, entries, access.permission).await?;
+    fill_lock_fields(
+        &state.repos,
+        repo_id,
+        access.user.user_id,
+        &path,
+        &mut entries,
+    )
+    .await?;
     sort_api_entries(&mut entries);
     Ok((dir_headers(&dir_id, access.permission), Json(entries)))
 }
@@ -260,7 +279,8 @@ pub async fn dir_post_handler(
             // body; otherwise the new folder would not appear until a refresh.
             if is_true(query.reloaddir.as_deref()) {
                 let parent = parent_dir_of(&path);
-                return reload_dir_response(&state, repo_id, &parent, "rw").await;
+                return reload_dir_response(&state, repo_id, &parent, "rw", access.user.user_id)
+                    .await;
             }
             // Otherwise seahub answers 201 with a `Location` for the new folder.
             let mut headers = HeaderMap::new();
@@ -300,7 +320,14 @@ pub async fn delete_dir(
 
     // seahub's `DirView.delete` ends in `reloaddir_if_necessary`.
     if is_true(query.reloaddir.as_deref()) {
-        return reload_dir_response(&state, repo_id, &parent_dir_of(&path), "rw").await;
+        return reload_dir_response(
+            &state,
+            repo_id,
+            &parent_dir_of(&path),
+            "rw",
+            access.user.user_id,
+        )
+        .await;
     }
     Ok(ok_json().into_response())
 }
@@ -482,7 +509,15 @@ pub async fn list_dir_v21(
         let dirent_list = filter_by_type(all_entries, query.t.as_deref());
         // seahub's recursive listing is a depth-first walk, so its order is a traversal
         // artifact; iOS and Android sort locally, and the permission is the contract.
-        let dirent_list = present_api_entries(&state, dirent_list, access.permission).await?;
+        let mut dirent_list = present_api_entries(&state, dirent_list, access.permission).await?;
+        fill_lock_fields(
+            &state.repos,
+            repo_id,
+            access.user.user_id,
+            &normalized,
+            &mut dirent_list,
+        )
+        .await?;
 
         let body = serde_json::json!({
             "user_perm": access.permission,

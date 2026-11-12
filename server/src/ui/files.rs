@@ -1475,6 +1475,11 @@ mod tests {
             parent_dir: None,
             modifier_name: None,
             modifier_contact_email: None,
+            is_locked: None,
+            locked_by_me: None,
+            lock_owner: None,
+            lock_owner_name: None,
+            lock_time: None,
         }
     }
 

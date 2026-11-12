@@ -72,6 +72,98 @@ pub(crate) async fn fill_modifier_names(
     Ok(())
 }
 
+/// Fill the lock fields the official clients read from a listing:
+/// `is_locked`, `locked_by_me`, `lock_owner`, `lock_owner_name` and
+/// `lock_time`. Only locked files carry them; unlocked entries keep the keys
+/// absent, exactly like seahub's Pro listing. The desktop client's file
+/// browser keys its Lock/Unlock action off `is_locked`/`locked_by_me`, so a
+/// listing without these fields can lock but never unlock.
+pub(crate) async fn fill_lock_fields(
+    repos: &Repositories,
+    repo_id: &str,
+    user_id: i32,
+    parent_dir: &str,
+    entries: &mut [DirEntry],
+) -> Result<(), AppError> {
+    if !entries.iter().any(|e| e.entry_type == "file") {
+        return Ok(());
+    }
+    let locks = repos.locked_file.find_by_repo(repo_id).await?;
+    if locks.is_empty() {
+        return Ok(());
+    }
+
+    struct LockInfo {
+        owner_id: i32,
+        locked_at: i64,
+        owner_name: String,
+    }
+
+    // One lock per canonical path. A legacy `/`-prefixed row addresses the
+    // same file; when both forms exist, prefer the row owned by someone else
+    // so a shared lock is never presented as ours.
+    let mut by_path: HashMap<String, LockInfo> = HashMap::new();
+    for lock in locks {
+        let key = lock.path.trim_start_matches('/');
+        if key.is_empty() {
+            continue;
+        }
+        match by_path.entry(key.to_string()) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(LockInfo {
+                    owner_id: lock.user_id,
+                    locked_at: lock.locked_at,
+                    owner_name: lock.lock_owner_name,
+                });
+            }
+            std::collections::hash_map::Entry::Occupied(mut slot) => {
+                if slot.get().owner_id == user_id && lock.user_id != user_id {
+                    slot.insert(LockInfo {
+                        owner_id: lock.user_id,
+                        locked_at: lock.locked_at,
+                        owner_name: lock.lock_owner_name,
+                    });
+                }
+            }
+        }
+    }
+
+    let mut owner_ids: Vec<i32> = by_path.values().map(|l| l.owner_id).collect();
+    owner_ids.sort_unstable();
+    owner_ids.dedup();
+    let owners: HashMap<i32, (String, String)> = repos
+        .user
+        .find_by_ids(&owner_ids)
+        .await?
+        .into_iter()
+        .map(|u| (u.id, (u.email.clone(), u.nickname())))
+        .collect();
+
+    for entry in entries.iter_mut().filter(|e| e.entry_type == "file") {
+        let parent = entry.parent_dir.as_deref().unwrap_or(parent_dir);
+        let parent = parent.trim_matches('/');
+        let path = if parent.is_empty() {
+            entry.name.clone()
+        } else {
+            format!("{parent}/{}", entry.name)
+        };
+        let Some(lock) = by_path.get(&path) else {
+            continue;
+        };
+        let (owner_email, owner_name) = owners
+            .get(&lock.owner_id)
+            .cloned()
+            .unwrap_or_else(|| (lock.owner_name.clone(), lock.owner_name.clone()));
+        entry.is_locked = Some(true);
+        entry.locked_by_me = Some(lock.owner_id == user_id);
+        entry.lock_owner = Some(owner_email);
+        entry.lock_owner_name = Some(owner_name);
+        entry.lock_time = Some(lock.locked_at);
+    }
+
+    Ok(())
+}
+
 /// List directory entries by traversing the FS object tree from the head commit.
 pub(crate) async fn list_dir_from_fs_tree(
     repos: &Repositories,
@@ -142,6 +234,11 @@ pub(crate) async fn list_dir_from_root(
                 parent_dir: None,
                 modifier_name: None,
                 modifier_contact_email: None,
+                is_locked: None,
+                locked_by_me: None,
+                lock_owner: None,
+                lock_owner_name: None,
+                lock_time: None,
             })
             .collect(),
     ))
@@ -252,6 +349,11 @@ pub(crate) async fn list_dir_recursive_from_root(
                     parent_dir: Some(parent_path.clone()),
                     modifier_name: None,
                     modifier_contact_email: None,
+                    is_locked: None,
+                    locked_by_me: None,
+                    lock_owner: None,
+                    lock_owner_name: None,
+                    lock_time: None,
                 });
                 // Stop as soon as the cap is exceeded; one entry of slack keeps the check out of
                 // the hot path and still bounds memory to `max + 1`.
@@ -871,6 +973,9 @@ impl DirService {
     ) -> Result<serde_json::Value, AppError> {
         let user_perm = permission;
 
+        let mut entries = entries;
+        fill_lock_fields(&self.repos, repo_id, user_id, path, &mut entries).await?;
+
         let mut dir_list: Vec<_> = Vec::new();
         let mut file_list: Vec<_> = Vec::new();
         for e in entries {
@@ -952,6 +1057,15 @@ impl DirService {
                 "modifier_name": modifier_name,
                 "modifier_contact_email": modifier_contact_email,
             });
+            if e.is_locked == Some(true) {
+                entry["is_locked"] = serde_json::Value::Bool(true);
+                entry["locked_by_me"] = serde_json::Value::Bool(e.locked_by_me.unwrap_or(false));
+                entry["lock_owner"] =
+                    serde_json::Value::String(e.lock_owner.clone().unwrap_or_default());
+                entry["lock_owner_name"] =
+                    serde_json::Value::String(e.lock_owner_name.clone().unwrap_or_default());
+                entry["lock_time"] = serde_json::Value::from(e.lock_time.unwrap_or(0));
+            }
             if with_thumbnail {
                 entry["encoded_thumbnail_src"] = serde_json::Value::String(String::new());
             }

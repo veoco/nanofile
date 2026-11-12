@@ -39,6 +39,12 @@ display order, not the stored object order. Recursive listings are depth-first
 and additionally carry `parent_dir`; their file entries also carry
 `modifier_name` and `modifier_contact_email`.
 
+A locked file additionally carries `is_locked: true`, `locked_by_me` (whether the
+caller holds the lock), `lock_owner`, `lock_owner_name` and `lock_time` (a unix
+timestamp). Unlocked entries omit all five keys, which the official clients read
+as "not locked". These fields are what let the desktop client offer **Unlock**
+instead of **Lock**.
+
 **Headers** — `oid` is the listed directory's FS object id (40 hex characters),
 and `dir_perm` is `"rw"` or `"r"`. A library with no commit yet answers an empty
 list with `oid: 0000000000000000000000000000000000000000`.
@@ -121,7 +127,8 @@ The listing shape the mobile clients and the web interface use.
 `user_perm` equals every entry's `permission` (Nanofile has no per-folder
 shares). With `with_thumbnail=true` each file entry gains
 `encoded_thumbnail_src`, which is always the empty string; the clients treat
-that as "build the thumbnail URL yourself". The recursive shape is the same.
+that as "build the thumbnail URL yourself". The recursive shape is the same. A
+locked file carries the same five lock keys as the legacy listing above.
 The `oid`/`dir_perm` headers are set here too, with `dir_id` falling back to the
 all-zero sentinel for a headless library.
 

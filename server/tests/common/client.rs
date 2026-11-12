@@ -130,6 +130,19 @@ impl TestClient {
         req.body(body).send().await.unwrap()
     }
 
+    pub async fn put_form(
+        &self,
+        path: &str,
+        token: Option<&str>,
+        fields: &[(&str, &str)],
+    ) -> reqwest::Response {
+        let mut req = self.client.put(self.url(path));
+        if let Some(t) = token {
+            req = req.bearer_auth(t);
+        }
+        req.form(fields).send().await.unwrap()
+    }
+
     pub async fn delete(&self, path: &str, token: Option<&str>) -> reqwest::Response {
         let mut req = self.client.delete(self.url(path));
         if let Some(t) = token {

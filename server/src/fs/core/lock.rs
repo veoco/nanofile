@@ -10,6 +10,41 @@ use infra::entity::{file_lock_timestamp, fs_object, locked_file};
 /// SQLite has a ~999 bound on bound parameters; chunk IN / NOT IN lists.
 const IN_BATCH: usize = 500;
 
+/// Longest lock path accepted, matching the server's general path bound.
+const MAX_LOCK_PATH_LEN: usize = 4096;
+
+/// Canonical key for a file lock: the repo-relative path the sync tree walk
+/// and the clients' indexes use (`dir/file`), with no leading `/`.
+///
+/// The REST surface receives an absolute repo path (`/dir/file`) while the
+/// sync protocol and older rows may carry either form. Normalizing here keeps
+/// a lock created through one endpoint visible — and unlockable — through the
+/// other, and lets the commit-time check match it.
+pub fn canonical_lock_path(path: &str) -> Result<String, AppError> {
+    let relative = path.trim_start_matches('/');
+    if relative.is_empty() {
+        return Err(AppError::BadRequest("cannot lock the library root".into()));
+    }
+    if relative.len() > MAX_LOCK_PATH_LEN {
+        return Err(AppError::BadRequest("lock path too long".into()));
+    }
+    if relative.contains('\0')
+        || relative
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        return Err(AppError::BadRequest("invalid lock path".into()));
+    }
+    Ok(relative.to_string())
+}
+
+/// Key for reading a stored lock. Rows written before lock paths were
+/// canonicalized may still carry a leading `/`; they must address the same
+/// file as new rows.
+fn lock_path_key(path: &str) -> &str {
+    path.trim_start_matches('/')
+}
+
 /// Walk the FS tree of a commit and check whether any file in it is locked by a
 /// different user, returning `AppError::Locked(path)` (403) on conflict.
 ///
@@ -35,14 +70,21 @@ pub async fn check_commit_file_locks(
         return Ok(());
     }
 
-    // Load every lock for the repo once, indexed by path.
-    let locks: std::collections::HashMap<String, i32> = locked_file::Entity::find()
+    // Load every lock for the repo once, keyed by the canonical path. Rows
+    // written before locks were canonicalized may still carry a leading `/`,
+    // and a file can briefly have both forms (one from each endpoint), so
+    // keep every owner per path.
+    let mut locks: std::collections::HashMap<String, Vec<i32>> = std::collections::HashMap::new();
+    for lock in locked_file::Entity::find()
         .filter(locked_file::Column::RepoId.eq(repo_id))
         .all(db)
         .await?
-        .into_iter()
-        .map(|l| (l.path, l.user_id))
-        .collect();
+    {
+        let key = lock_path_key(&lock.path);
+        if !key.is_empty() {
+            locks.entry(key.to_string()).or_default().push(lock.user_id);
+        }
+    }
 
     // Level frontier: one batched `IN` query per level instead of per entry.
     let mut frontier: Vec<(String, String)> = vec![(root_id.to_string(), String::new())];
@@ -67,8 +109,8 @@ pub async fn check_commit_file_locks(
 
             match obj.obj_type {
                 1 => {
-                    if let Some(&owner) = locks.get(path)
-                        && owner != user_id
+                    if let Some(owners) = locks.get(path)
+                        && owners.iter().any(|owner| *owner != user_id)
                     {
                         return Err(AppError::Locked(path.clone()));
                     }
@@ -244,6 +286,25 @@ mod tests {
         assert!(result.is_ok(), "empty tree should always succeed");
     }
 
+    /// The REST surface sends `/dir/file`, the sync surface and the commit
+    /// walk use `dir/file`; both must resolve to the same lock key.
+    #[test]
+    fn test_canonical_lock_path() {
+        assert_eq!(
+            canonical_lock_path("/dir/file.txt").unwrap(),
+            "dir/file.txt"
+        );
+        assert_eq!(canonical_lock_path("dir/file.txt").unwrap(), "dir/file.txt");
+        assert_eq!(canonical_lock_path("//file.txt").unwrap(), "file.txt");
+
+        // The library root cannot be locked, and traversal is rejected.
+        assert!(canonical_lock_path("/").is_err());
+        assert!(canonical_lock_path("").is_err());
+        assert!(canonical_lock_path("../etc/passwd").is_err());
+        assert!(canonical_lock_path("/dir/../file.txt").is_err());
+        assert!(canonical_lock_path("/dir//file.txt").is_err());
+    }
+
     /// Skipped tree walk when the repo has no locks, even for a populated tree.
     #[tokio::test]
     async fn test_check_locks_skips_tree_walk_for_unlocked_repo() {
@@ -310,11 +371,13 @@ mod tests {
         .await
         .unwrap();
 
+        // A legacy row written with an absolute path still has to block the
+        // repo-relative path the commit walk produces.
         db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             "
             INSERT INTO locked_files (repo_id, path, user_id, locked_at, lock_owner_name)
-            VALUES ('test-repo', 'locked.txt', 2, 1000, 'user2')
+            VALUES ('test-repo', '/locked.txt', 2, 1000, 'user2')
             ",
         ))
         .await

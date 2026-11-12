@@ -69,6 +69,7 @@ NUL 终止符是哈希的一部分：每个字符串都按 C 字符串（`strlen
 | 同库移动是一个提交（先加后删，再提交） | `seafile-server/server/repo-op.c:3161-3245` |
 | 旧版列表：字段、`dir_perm` 取真实权限、目录组+文件组各自按 `name.lower()` 排序 | `seahub/api2/views.py:2380-2462` |
 | v2.1 列表：`{dirent_list, dir_id, user_perm}`、逐条 `permission`、`parent_dir`、`starred`、`modifier_email` | `seahub/api2/endpoints/dir.py:45-215`、`:343-344` |
+| 列表中被锁定的文件多出 `is_locked`、`locked_by_me`、`lock_owner`、`lock_owner_name`、`lock_time`；未锁定条目不带这些键 | `seafile-client/src/filebrowser/seaf-dirent.cpp:22-44` |
 | `/api/v2.1/search-file/`：`{"data": [{path, size, mtime(ISO), type: file/folder}]}`，无上限，文件名子串匹配 | `seahub/api2/endpoints/search_file.py` |
 | `/api2/search/`：`{results, total, has_more}`，`per_page <= 100`，仅 Pro 版 | `seahub/api2/views.py:452-700` |
 | 认证失败体是 `{"detail": …}`；功能错误才是 `{"error_msg": …}` | `seahub/api2/authentication.py:28-33`、`seahub/api2/utils.py:49-51` |

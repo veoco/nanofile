@@ -45,6 +45,32 @@ pub struct DirEntry {
     /// Modifier contact email. Present only for file entries in recursive listings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modifier_contact_email: Option<String>,
+    /// Lock state, as the official clients read it (`SeafDirent::fromJSON`):
+    /// `is_locked`, `locked_by_me`, `lock_owner`, `lock_owner_name` and
+    /// `lock_time` are emitted only for a locked file. Without them the
+    /// desktop client's file browser always offers "Lock" and never "Unlock".
+    #[serde(rename = "is_locked", default, skip_serializing_if = "Option::is_none")]
+    pub is_locked: Option<bool>,
+    #[serde(
+        rename = "locked_by_me",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub locked_by_me: Option<bool>,
+    #[serde(
+        rename = "lock_owner",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub lock_owner: Option<String>,
+    #[serde(
+        rename = "lock_owner_name",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub lock_owner_name: Option<String>,
+    #[serde(rename = "lock_time", default, skip_serializing_if = "Option::is_none")]
+    pub lock_time: Option<i64>,
 }
 
 /// A single entry in a directory listing (storage format).

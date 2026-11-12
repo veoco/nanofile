@@ -22,7 +22,7 @@ pub(crate) mod upload_activity;
 pub use download::{Downloader, stream_blocks};
 pub use file_ops::FileOps;
 pub use gc::{GcManager, GcPolicy};
-pub use lock::{check_commit_file_locks, upsert_lock_timestamp};
+pub use lock::{canonical_lock_path, check_commit_file_locks, upsert_lock_timestamp};
 pub use size::{compute_repo_size, compute_tree_size, entry_exists, get_entry_total_size};
 pub use store::{store_fs_dir_object, store_fs_file_object};
 pub use tree::{

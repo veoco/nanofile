@@ -960,6 +960,41 @@ impl FileService {
         }))
     }
 
+    /// Find a lock row by its canonical path or by the legacy `/`-prefixed
+    /// form written by older versions or by the other protocol surface.
+    async fn find_lock(
+        &self,
+        repo_id: &str,
+        path: &str,
+    ) -> Result<Option<infra::entity::locked_file::Model>, AppError> {
+        if let Some(record) = self
+            .repos
+            .locked_file
+            .find_by_repo_and_path(repo_id, path)
+            .await?
+        {
+            return Ok(Some(record));
+        }
+        self.repos
+            .locked_file
+            .find_by_repo_and_path(repo_id, &format!("/{path}"))
+            .await
+    }
+
+    /// Remove both the canonical and the legacy leading-slash row, so a file
+    /// locked before paths were normalized is actually released.
+    async fn delete_lock(&self, repo_id: &str, path: &str) -> Result<(), AppError> {
+        self.repos
+            .locked_file
+            .delete_by_repo_and_path(repo_id, path)
+            .await?;
+        self.repos
+            .locked_file
+            .delete_by_repo_and_path(repo_id, &format!("/{path}"))
+            .await?;
+        Ok(())
+    }
+
     pub async fn lock_file(
         &self,
         repo_id: &str,
@@ -967,6 +1002,10 @@ impl FileService {
         operation: &str,
         email: &str,
     ) -> Result<(), AppError> {
+        // The REST surface takes an absolute repo path (`/dir/file`); the lock
+        // table, the sync tree walk and the clients' indexes use `dir/file`.
+        let path = crate::fs::core::canonical_lock_path(path)?;
+
         let user_record = self
             .repos
             .user
@@ -976,29 +1015,44 @@ impl FileService {
 
         match operation {
             "lock" => {
-                let existing = self
-                    .repos
-                    .locked_file
-                    .find_by_repo_and_path(repo_id, path)
-                    .await?;
-
-                if existing.is_none() {
-                    self.repos
-                        .locked_file
-                        .create(
-                            repo_id,
-                            path,
-                            user_record.id,
-                            chrono::Utc::now().timestamp(),
-                            email,
-                        )
-                        .await?;
+                match self.find_lock(repo_id, &path).await? {
+                    None => {
+                        self.repos
+                            .locked_file
+                            .create(
+                                repo_id,
+                                &path,
+                                user_record.id,
+                                chrono::Utc::now().timestamp(),
+                                email,
+                            )
+                            .await?;
+                    }
+                    // Migrate a legacy absolute row to the canonical key while
+                    // keeping its original owner.
+                    Some(record) if record.path != path => {
+                        self.repos
+                            .locked_file
+                            .delete_by_repo_and_path(repo_id, &record.path)
+                            .await?;
+                        self.repos
+                            .locked_file
+                            .create(
+                                repo_id,
+                                &path,
+                                record.user_id,
+                                record.locked_at,
+                                &record.lock_owner_name,
+                            )
+                            .await?;
+                    }
+                    Some(_) => {}
                 }
 
                 if let Some(mgr) = &self.notification_manager {
                     let event = FileLockEvent {
                         repo_id: repo_id.to_string(),
-                        path: path.to_string(),
+                        path: path.clone(),
                         change_event: "locked".to_string(),
                         lock_user: email.to_string(),
                     };
@@ -1006,15 +1060,12 @@ impl FileService {
                 }
             }
             "unlock" => {
-                self.repos
-                    .locked_file
-                    .delete_by_repo_and_path(repo_id, path)
-                    .await?;
+                self.delete_lock(repo_id, &path).await?;
 
                 if let Some(mgr) = &self.notification_manager {
                     let event = FileLockEvent {
                         repo_id: repo_id.to_string(),
-                        path: path.to_string(),
+                        path: path.clone(),
                         change_event: "unlocked".to_string(),
                         lock_user: email.to_string(),
                     };
@@ -1028,6 +1079,10 @@ impl FileService {
             }
         }
 
+        // Sync clients invalidate their cached lock list from this timestamp;
+        // the sync protocol already updates it, so the REST surface must too.
+        crate::fs::core::upsert_lock_timestamp(self.db.as_ref(), repo_id).await?;
+
         Ok(())
     }
 
@@ -1038,30 +1093,38 @@ impl FileService {
         path: &str,
         user_id: i32,
     ) -> Result<(), AppError> {
+        let path = crate::fs::core::canonical_lock_path(path)?;
         let now = chrono::Utc::now().timestamp();
-        let existing = self
-            .repos
-            .locked_file
-            .find_by_repo_and_path(repo_id, path)
-            .await?;
 
-        match existing {
-            Some(record) => {
+        match self.find_lock(repo_id, &path).await? {
+            Some(record) if record.path == path => {
                 self.repos
                     .locked_file
                     .update_locked_file_owner(record.id, user_id, now)
                     .await?;
             }
+            // Migrate a legacy absolute row to the canonical key. The sync
+            // protocol hands the lock to the caller, as a re-lock always did.
+            Some(record) => {
+                self.repos
+                    .locked_file
+                    .delete_by_repo_and_path(repo_id, &record.path)
+                    .await?;
+                self.repos
+                    .locked_file
+                    .create(repo_id, &path, user_id, now, "")
+                    .await?;
+            }
             None => {
                 self.repos
                     .locked_file
-                    .create(repo_id, path, user_id, now, "")
+                    .create(repo_id, &path, user_id, now, "")
                     .await?;
             }
         }
 
         crate::fs::core::upsert_lock_timestamp(self.db.as_ref(), repo_id).await?;
-        self.notify_file_lock(repo_id, path, "locked", user_id)
+        self.notify_file_lock(repo_id, &path, "locked", user_id)
             .await;
         Ok(())
     }
@@ -1073,13 +1136,11 @@ impl FileService {
         path: &str,
         user_id: i32,
     ) -> Result<(), AppError> {
-        self.repos
-            .locked_file
-            .delete_by_repo_and_path(repo_id, path)
-            .await?;
+        let path = crate::fs::core::canonical_lock_path(path)?;
+        self.delete_lock(repo_id, &path).await?;
 
         crate::fs::core::upsert_lock_timestamp(self.db.as_ref(), repo_id).await?;
-        self.notify_file_lock(repo_id, path, "unlocked", user_id)
+        self.notify_file_lock(repo_id, &path, "unlocked", user_id)
             .await;
         Ok(())
     }
@@ -1144,16 +1205,24 @@ impl FileService {
 
         let files = if token_valid {
             let locked = self.repos.locked_file.find_by_repo(repo_id).await?;
-            locked
-                .into_iter()
-                .map(|entry| {
-                    let by_me = match token_user_id {
-                        Some(tuid) if tuid == entry.user_id => 1,
-                        _ => 0,
-                    };
-                    (entry.path, by_me)
-                })
-                .collect()
+            // Report one entry per canonical path: a legacy absolute row and a
+            // canonical row address the same file, and "locked by someone
+            // else" must win when both exist so a client never mistakes a
+            // shared lock for its own.
+            let mut by_path: std::collections::BTreeMap<String, i32> =
+                std::collections::BTreeMap::new();
+            for entry in locked {
+                let path = entry.path.trim_start_matches('/');
+                if path.is_empty() {
+                    continue;
+                }
+                let mine = token_user_id == Some(entry.user_id);
+                let by_me = by_path.entry(path.to_string()).or_insert(1);
+                if !mine {
+                    *by_me = 0;
+                }
+            }
+            by_path.into_iter().collect()
         } else {
             vec![]
         };

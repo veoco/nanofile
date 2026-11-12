@@ -105,6 +105,7 @@ Line numbers below are from those revisions; they drift, the commit ids do not.
 | same-repo move is one commit (add + delete, then commit) | `seafile-server/server/repo-op.c:3161-3245` |
 | legacy listing: fields, `dir_perm` via `check_permission_by_path`, dirs then files sorted by `name.lower()` | `seahub/api2/views.py:2380-2462` |
 | v2.1 listing: `{dirent_list, dir_id, user_perm}`, per-entry `permission`, `parent_dir`, `starred`, `modifier_email` | `seahub/api2/endpoints/dir.py:45-215`, `:343-344` |
+| locked files in a listing gain `is_locked`, `locked_by_me`, `lock_owner`, `lock_owner_name`, `lock_time`; unlocked entries omit them | `seafile-client/src/filebrowser/seaf-dirent.cpp:22-44` |
 | `/api/v2.1/search-file/`: `{"data": [{path, size, mtime(ISO), type: file/folder}]}`, unbounded, filename substring | `seahub/api2/endpoints/search_file.py` |
 | `/api2/search/`: `{results, total, has_more}`, `per_page <= 100`, Pro only | `seahub/api2/views.py:452-700` |
 | auth failure body is `{"detail": …}`; functional errors are `{"error_msg": …}` | `seahub/api2/authentication.py:28-33`, `seahub/api2/utils.py:49-51` |

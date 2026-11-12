@@ -54,6 +54,194 @@ async fn test_lock_and_unlock_file() {
     assert_eq!(resp.status(), 200);
 }
 
+/// The desktop client locks through one endpoint and may unlock through the
+/// other: its file browser uses the REST endpoint, while the sync daemon uses
+/// the sync endpoint. Both address the same repo file, so either unlock must
+/// release the lock. Regression: `/file.txt` and `file.txt` used to be
+/// distinct rows, making the cross-endpoint unlock a silent no-op.
+#[tokio::test]
+async fn test_rest_unlock_releases_a_sync_lock() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "shared.txt", b"data")
+        .await;
+    assert!(resp.status().is_success());
+
+    let resp = f
+        .client
+        .put_sync(
+            &format!("/seafhttp/repo/{}/lock-file?p=/shared.txt", f.repo_id),
+            &f.sync_token,
+            vec![],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = f
+        .client
+        .put_form(
+            &format!("/api2/repos/{}/file/?p=/shared.txt", f.repo_id),
+            Some(&f.api_token),
+            &[("operation", "unlock")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    assert_locked_files_empty(&f).await;
+}
+
+/// The reverse direction, and the path the sync clients expect: a lock created
+/// through the REST endpoint is listed repo-relative so the daemon's index
+/// (`dir/file`, no leading slash) can match it.
+#[tokio::test]
+async fn test_sync_unlock_releases_a_rest_lock() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "shared.txt", b"data")
+        .await;
+    assert!(resp.status().is_success());
+
+    let resp = f
+        .client
+        .put_form(
+            &format!("/api2/repos/{}/file/?p=/shared.txt", f.repo_id),
+            Some(&f.api_token),
+            &[("operation", "lock")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let req_body = serde_json::json!([{
+        "repo_id": f.repo_id,
+        "token": f.sync_token,
+        "ts": 0,
+    }]);
+    let resp = f
+        .client
+        .post_sync_json("/seafhttp/repo/locked-files", &f.sync_token, &req_body)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let entry = &body.as_array().unwrap()[0];
+    assert_eq!(entry["locked_files"][0]["path"], "shared.txt");
+    assert_eq!(entry["locked_files"][0]["by_me"], 1);
+
+    let resp = f
+        .client
+        .put_sync(
+            &format!("/seafhttp/repo/{}/unlock-file?p=shared.txt", f.repo_id),
+            &f.sync_token,
+            vec![],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    assert_locked_files_empty(&f).await;
+}
+
+/// The desktop client's file browser chooses between "Lock" and "Unlock"
+/// from the listing's `is_locked`/`locked_by_me`. Without those fields it can
+/// only offer "Lock" again, so an unlock from its UI never reaches the server.
+#[tokio::test]
+async fn test_listing_exposes_lock_state_for_the_desktop_client() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "ui.txt", b"data")
+        .await;
+    assert!(resp.status().is_success());
+
+    let resp = f
+        .client
+        .put_form(
+            &format!("/api2/repos/{}/file/?p=/ui.txt", f.repo_id),
+            Some(&f.api_token),
+            &[("operation", "lock")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let entry = listed_entry(&f, "ui.txt").await;
+    assert_eq!(entry["is_locked"], true, "lock state must reach the client");
+    assert_eq!(entry["locked_by_me"], true);
+    assert_eq!(entry["lock_owner"], "test@example.com");
+    assert!(
+        entry["lock_time"].as_i64().unwrap() > 0,
+        "the client formats lock_time, so it must be a unix timestamp: {entry}"
+    );
+
+    // The v2.1 listing the mobile clients and the web interface use carries
+    // the same fields.
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/dir/?p=/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let entry = body["dirent_list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "ui.txt")
+        .expect("ui.txt missing from the v2.1 listing");
+    assert_eq!(entry["is_locked"], true);
+    assert_eq!(entry["locked_by_me"], true);
+
+    let resp = f
+        .client
+        .put_form(
+            &format!("/api2/repos/{}/file/?p=/ui.txt", f.repo_id),
+            Some(&f.api_token),
+            &[("operation", "unlock")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let entry = listed_entry(&f, "ui.txt").await;
+    assert!(
+        entry.get("is_locked").is_none(),
+        "an unlocked entry keeps the lock fields absent: {entry}"
+    );
+}
+
+async fn listed_entry(f: &TestFixture, name: &str) -> serde_json::Value {
+    let resp = f.client.list_dir(&f.api_token, &f.repo_id, "/").await;
+    assert_eq!(resp.status(), 200);
+    let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+    body.into_iter()
+        .find(|e| e["name"] == name)
+        .unwrap_or_else(|| panic!("{name} missing from the listing"))
+}
+
+async fn assert_locked_files_empty(f: &TestFixture) {
+    let req_body = serde_json::json!([{
+        "repo_id": f.repo_id,
+        "token": f.sync_token,
+        "ts": 0,
+    }]);
+    let resp = f
+        .client
+        .post_sync_json("/seafhttp/repo/locked-files", &f.sync_token, &req_body)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body.as_array().unwrap()[0]["locked_files"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "unlock must remove the lock record: {body}"
+    );
+}
+
 #[tokio::test]
 async fn test_locked_files_list() {
     let f = TestFixture::new().await;
@@ -90,7 +278,9 @@ async fn test_locked_files_list() {
 
     let entry = &list[0];
     assert_eq!(entry["repo_id"], f.repo_id);
-    assert_eq!(entry["locked_files"][0]["path"], "/locked.txt");
+    // Locks are keyed the way the sync tree walk names files: repo-relative,
+    // no leading slash, even when the lock arrived with an absolute path.
+    assert_eq!(entry["locked_files"][0]["path"], "locked.txt");
 }
 
 #[tokio::test]
