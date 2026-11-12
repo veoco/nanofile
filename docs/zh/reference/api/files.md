@@ -131,7 +131,7 @@ Seafile 重载的文件接口。请求体形状决定操作：
 
 **请求体**（JSON）—— `{"repo_id": "…", "p": "/old.txt", "new_name": "new.txt"}`。
 
-**响应 `200`** —— 空正文。需要写权限与 `file.write`。
+**响应 `200`** —— 空正文。同目录里已存在该名字时返回 `409`，不做任何修改。需要写权限与 `file.write`。
 
 ## 移动文件 {#post-api2-repos-repo-id-file-move}
 
@@ -139,7 +139,7 @@ Seafile 重载的文件接口。请求体形状决定操作：
 
 **请求体**（JSON）—— `{"repo_id": "…", "p": "/a.txt", "new_parent_dir": "/target"}`。同库内移动是一个提交；不支持跨库移动。
 
-**响应 `200`** —— 空正文。需要 `file.write`。
+**响应 `200`** —— 空正文。目标目录里已有同名条目时返回 `409`，不做任何修改。需要 `file.write`。
 
 ## EXIF 元数据 {#get-api2-repos-repo-id-file-exif}
 

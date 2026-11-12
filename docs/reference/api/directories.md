@@ -73,6 +73,9 @@ directory and the JSON string `"success"`. With `reloaddir=true` the response is
 instead the parent directory's listing (the bare array the iOS client expects),
 with the same `oid`/`dir_perm` headers. Rename answers `"success"` with `200`.
 
+Renaming onto a name that already exists in the same directory answers `409` and
+changes nothing.
+
 Requires write permission and `file.write`.
 
 ## Delete a directory {#delete-api2-repos-repo-id-dir}
@@ -175,7 +178,9 @@ Android model declares it as a number and never calls this endpoint.
 **Body** (JSON) — `{"repo_id": "…", "p": "/old/name", "new_name": "new-name"}`.
 The library id is part of the body, unlike the other directory endpoints.
 
-**Response `200`** — empty body. Requires write permission and `file.write`.
+**Response `200`** — empty body. A name that already exists in the same
+directory answers `409` and changes nothing. Requires write permission and
+`file.write`.
 
 ## Move a directory {#post-api2-repos-repo-id-dir-move}
 

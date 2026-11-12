@@ -915,23 +915,28 @@ async fn test_activity_batch_copy() {
     );
 
     let (events, _) = get_activities(&f, 1, 25).await;
+    // New uploads are `create` events too, so the feed aggregates them with the
+    // copies; what matters is that both copy targets appear in the details.
     let batch_create: Vec<_> = events
         .iter()
-        .filter(|e| {
-            e["op_type"] == "batch_create"
-                && e["path"].as_str().unwrap_or("").contains("/copy_dest/")
-        })
+        .filter(|e| e["op_type"] == "batch_create")
         .collect();
     assert_eq!(
         batch_create.len(),
         1,
-        "expected 1 batch_create event (aggregated from 2 files), got {}",
+        "expected 1 batch_create event, got {}",
         batch_create.len()
     );
+    let details = batch_create[0]["details"].as_array().unwrap();
+    let copied: Vec<&str> = details
+        .iter()
+        .filter_map(|d| d["path"].as_str())
+        .filter(|p| p.starts_with("/copy_dest/"))
+        .collect();
     assert_eq!(
-        batch_create[0]["count"].as_u64().unwrap_or(0),
+        copied.len(),
         2,
-        "batch_create should have count=2"
+        "each copied file must have a create detail at its target path: {details:?}"
     );
 }
 
@@ -1029,24 +1034,24 @@ async fn test_activity_async_batch_copy() {
     let (events, _) = get_activities(&f, 1, 25).await;
     let batch_create: Vec<_> = events
         .iter()
-        .filter(|e| {
-            e["op_type"] == "batch_create"
-                && e["path"]
-                    .as_str()
-                    .unwrap_or("")
-                    .contains("/async_copy_dest/")
-        })
+        .filter(|e| e["op_type"] == "batch_create")
         .collect();
     assert_eq!(
         batch_create.len(),
         1,
-        "expected 1 batch_create event for async copy (2 files), got {}",
+        "expected 1 batch_create event for async copy, got {}",
         batch_create.len()
     );
+    let details = batch_create[0]["details"].as_array().unwrap();
+    let copied: Vec<&str> = details
+        .iter()
+        .filter_map(|d| d["path"].as_str())
+        .filter(|p| p.starts_with("/async_copy_dest/"))
+        .collect();
     assert_eq!(
-        batch_create[0]["count"].as_u64().unwrap_or(0),
+        copied.len(),
         2,
-        "batch_create should have count=2"
+        "each asynchronously copied file must have a create detail at its target path: {details:?}"
     );
 }
 

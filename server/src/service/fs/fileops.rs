@@ -397,8 +397,8 @@ impl FileOpsService {
 
     /// Batch move files/directories within the same repo.
     ///
-    /// Two commits: remove from the source dir and commit, then add to the
-    /// destination dir and commit; returns the batch results.
+    /// Both tree mutations run under one repo lock and produce one commit;
+    /// returns the batch results.
     pub async fn batch_move(
         &self,
         repo_id: &str,
@@ -413,6 +413,16 @@ impl FileOpsService {
         }
 
         let db = self.db();
+
+        // One lock across both phases and the commit: taking it per phase let a
+        // concurrent writer advance HEAD between the removal and the re-add, and
+        // the then-unchecked commit dropped that writer's change.
+        let lock = crate::fs::core::file_ops::acquire_repo_lock(repo_id).await;
+
+        // The HEAD root the source and destination are resolved against. The
+        // commit re-checks it, so a concurrent writer is reported instead of
+        // reverted.
+        let base_root_id = get_head_root_id(db, repo_id).await?;
 
         // Resolve the source parent dir and its ancestor chain once, so the
         // step-1 tree update walks ancestors in O(d).
@@ -480,7 +490,7 @@ impl FileOpsService {
         let src_names_for_closure: std::collections::HashSet<&str> =
             entries_to_move.iter().map(|e| e.name.as_str()).collect();
 
-        let intermediate_root = FileOps::update_dir_tree_no_commit(
+        let intermediate_root = FileOps::update_dir_tree_no_commit_locked(
             db,
             &self.repos,
             repo_id,
@@ -548,7 +558,7 @@ impl FileOpsService {
             entries_to_add.push(added);
         }
 
-        let new_root = FileOps::update_dir_tree_no_commit(
+        let new_root = FileOps::update_dir_tree_no_commit_locked(
             db,
             &self.repos,
             repo_id,
@@ -563,7 +573,16 @@ impl FileOpsService {
         )
         .await?;
 
-        FileOps::create_commit(&self.repos, repo_id, &new_root, email, &remove_desc).await?;
+        FileOps::create_commit_checked(
+            &self.repos,
+            repo_id,
+            &base_root_id,
+            &new_root,
+            email,
+            &remove_desc,
+        )
+        .await?;
+        drop(lock);
 
         for (source, added) in entries_to_move.iter().zip(&entries_to_add) {
             let old_fp = join_path(src_parent_dir, &source.name);

@@ -559,6 +559,124 @@ async fn a_move_to_a_missing_destination_leaves_the_source_untouched() {
     );
 }
 
+/// Renaming onto a name that already exists in the same directory used to write a
+/// second entry with that name: listings showed it twice and every lookup picked an
+/// arbitrary one of the two.
+#[tokio::test]
+async fn renaming_onto_an_existing_name_is_refused() {
+    let f = TestFixture::new().await;
+    upload_test_file(&f, "a.txt", b"aaa", "/").await;
+    upload_test_file(&f, "b.txt", b"bbb", "/").await;
+    let before = repo_head(&f).await;
+
+    let resp = f
+        .client
+        .rename_file(&f.api_token, &f.repo_id, "/a.txt", "b.txt")
+        .await;
+    assert_eq!(
+        resp.status(),
+        409,
+        "rename onto an existing name must be refused: {:?}",
+        resp.text().await
+    );
+
+    assert_eq!(dir_names(&f, "/").await, vec!["a.txt", "b.txt"]);
+    assert_eq!(
+        repo_head(&f).await,
+        before,
+        "a refused rename must not advance HEAD"
+    );
+
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/a.txt")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"aaa");
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/b.txt")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"bbb");
+}
+
+/// Moving a file into a directory that already holds the same name used to commit
+/// the removal and skip the re-add: the moved file vanished from HEAD with no trash
+/// record, while the destination kept its old content.
+#[tokio::test]
+async fn moving_onto_an_existing_name_in_the_destination_is_refused() {
+    let f = TestFixture::new().await;
+    create_subdir(&f, "/dest").await;
+    upload_test_file(&f, "a.txt", b"source", "/").await;
+    upload_test_file(&f, "a.txt", b"destination", "/dest").await;
+    let before = repo_head(&f).await;
+
+    let resp = f
+        .client
+        .move_file(&f.api_token, &f.repo_id, "/a.txt", &f.repo_id, "/dest")
+        .await;
+    assert_eq!(
+        resp.status(),
+        409,
+        "move onto an existing name must be refused: {:?}",
+        resp.text().await
+    );
+
+    assert_eq!(dir_names(&f, "/").await, vec!["a.txt", "dest"]);
+    assert_eq!(dir_names(&f, "/dest").await, vec!["a.txt"]);
+    assert_eq!(
+        repo_head(&f).await,
+        before,
+        "a refused move must not advance HEAD"
+    );
+
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/a.txt")
+        .await;
+    assert_eq!(resp.status(), 200, "the moved source must still exist");
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"source");
+
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/dest/a.txt")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.bytes().await.unwrap().as_ref(),
+        b"destination",
+        "the destination must not be overwritten"
+    );
+}
+
+/// `replace=1` replaces a file, not a directory: the old path removed the dirent
+/// and pushed the file, dropping the directory and its subtree with no trash record.
+#[tokio::test]
+async fn uploading_over_a_directory_is_refused() {
+    let f = TestFixture::new().await;
+    create_subdir(&f, "/dir").await;
+    upload_test_file(&f, "x.txt", b"x", "/dir").await;
+
+    // `upload_file` sends `replace=1`, the shape every official client uses.
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "dir", b"not a directory")
+        .await;
+    assert_eq!(
+        resp.status(),
+        409,
+        "replacing a directory with a file must be refused: {:?}",
+        resp.text().await
+    );
+
+    assert_eq!(
+        dir_entries(&f, "/").await,
+        vec![("dir".into(), "dir".into())]
+    );
+    assert_eq!(dir_names(&f, "/dir").await, vec!["x.txt"]);
+}
+
 /// A head commit that cannot be read is not an empty library. Treating the two
 /// alike based the next directory commit on an empty tree, which replaced HEAD's
 /// whole tree with the one new directory.

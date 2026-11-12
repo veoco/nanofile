@@ -177,6 +177,11 @@ impl FileOps {
     /// fs_object, then read-modify-write the FS tree and the commit. The
     /// streaming uploader writes blocks straight from the wire and never holds
     /// the whole file in memory.
+    ///
+    /// Returns `(file_id, effective_name, existed)`. `existed` says whether the
+    /// requested name was already in the directory when the repo lock was taken,
+    /// so a caller can log the operation as a create or an edit without racing a
+    /// concurrent request.
     pub async fn create_file_from_blocks(
         db: &DatabaseConnection,
         repos: &Repositories,
@@ -189,7 +194,7 @@ impl FileOps {
         replace: bool,
         quota: &QuotaScope,
         default_quota: u64,
-    ) -> Result<(String, String), AppError> {
+    ) -> Result<(String, String, bool), AppError> {
         upload_activity::touch(repo_id);
         let now = chrono::Utc::now().timestamp();
 
@@ -248,6 +253,26 @@ impl FileOps {
         let parent_data = Self::read_dir_fs_object(repos, repo_id, &parent_fs_id).await?;
 
         let mut dirents = parent_data.dirents;
+
+        // Whether the target name already exists is resolved here, under the repo
+        // lock, and returned to the caller: a caller's pre-check can race with the
+        // streamed upload, and the activity type must describe what the commit
+        // actually did rather than what the request expected.
+        let existed = dirents.iter().any(|d| d.name == name);
+
+        // `replace` means "replace the file at this path", never "delete the
+        // directory at this path": the old code removed the dirent and pushed the
+        // file, silently dropping the whole subtree with no trash record.
+        if replace
+            && dirents
+                .iter()
+                .find(|d| d.name == name)
+                .is_some_and(|d| d.mode & infra::serialization::S_IFDIR != 0)
+        {
+            return Err(AppError::Conflict(format!(
+                "cannot replace directory {name:?} with a file"
+            )));
+        }
 
         // An identical replace (same fs_id and size) leaves the old entry
         // untouched, so the directory hash — and thus the commit id — is
@@ -356,7 +381,7 @@ impl FileOps {
         )
         .await?;
 
-        Ok((file_fs_id, effective_name))
+        Ok((file_fs_id, effective_name, existed))
     }
 
     /// Walk from the immediate parent up to root, rewriting each ancestor's
@@ -366,7 +391,7 @@ impl FileOps {
     ///
     /// `root_override` replaces the root object read from HEAD when this walk
     /// continues a tree update that has not been committed yet (see
-    /// [`Self::update_dir_tree_no_commit`]); `None` resolves the root from HEAD.
+    /// [`Self::update_dir_tree_no_commit_locked`]); `None` resolves the root from HEAD.
     pub(crate) async fn walk_up_ancestors(
         repos: &Repositories,
         db: &DatabaseConnection,
@@ -539,11 +564,20 @@ impl FileOps {
 
     /// Apply `update_fn` to the parent directory's entries, persist the tree up
     /// to the root, create a commit and update HEAD. `parent_fs_id` is the parent
-    /// id **before** modification.
+    /// id **before** modification; `base_root_id` is the HEAD root it was
+    /// resolved from, so a concurrent commit is reported as a conflict instead of
+    /// silently reverting the other writer's change.
+    ///
+    /// The repo lock is held across the tree update *and* the commit: releasing it
+    /// between the two let another writer advance HEAD, and the unchecked commit
+    /// then recorded a root computed from the old tree as the child of the new
+    /// HEAD — a lost update.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn update_dir_tree_and_commit(
         db: &DatabaseConnection,
         repos: &Repositories,
         repo_id: &str,
+        base_root_id: &str,
         parent_path: &str,
         parent_fs_id: &str,
         modifier: &str,
@@ -551,7 +585,8 @@ impl FileOps {
         ancestor_chain: &[(String, String)],
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
     ) -> Result<String, AppError> {
-        let root_fs_id = Self::apply_tree_update(
+        let _lock = acquire_repo_lock(repo_id).await;
+        let root_fs_id = Self::apply_tree_update_locked(
             db,
             repos,
             repo_id,
@@ -563,7 +598,15 @@ impl FileOps {
         )
         .await?;
 
-        Self::create_commit(repos, repo_id, &root_fs_id, modifier, description).await?;
+        Self::create_commit_checked(
+            repos,
+            repo_id,
+            base_root_id,
+            &root_fs_id,
+            modifier,
+            description,
+        )
+        .await?;
 
         Ok(root_fs_id)
     }
@@ -590,7 +633,8 @@ impl FileOps {
         quota: &QuotaScope,
         default_quota: u64,
     ) -> Result<String, AppError> {
-        let root_fs_id = Self::apply_tree_update(
+        let _lock = acquire_repo_lock(repo_id).await;
+        let root_fs_id = Self::apply_tree_update_locked(
             db,
             repos,
             repo_id,
@@ -618,15 +662,16 @@ impl FileOps {
         Ok(root_fs_id)
     }
 
-    /// Same as `update_dir_tree_and_commit` without the commit, so a multi-step
-    /// operation (e.g. move) can update several parts of the tree and commit
-    /// once. Returns the new root fs_id.
+    /// Apply a tree update without committing, for a multi-step operation (e.g.
+    /// move) that commits once at the end. The caller must already hold the repo
+    /// lock so the steps and their commit stay atomic.
     ///
     /// `root_override` names the root the update is layered on: after a first
     /// no-commit step this is the root that step returned, so the ancestor walk
     /// rewrites *that* tree instead of re-reading HEAD (which still points at
     /// the pre-update tree). `None` resolves the root from HEAD.
-    pub(crate) async fn update_dir_tree_no_commit(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn update_dir_tree_no_commit_locked(
         db: &DatabaseConnection,
         repos: &Repositories,
         repo_id: &str,
@@ -636,7 +681,7 @@ impl FileOps {
         root_override: Option<&str>,
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
     ) -> Result<String, AppError> {
-        Self::apply_tree_update(
+        Self::apply_tree_update_locked(
             db,
             repos,
             repo_id,
@@ -649,9 +694,11 @@ impl FileOps {
         .await
     }
 
-    /// Shared body of the two `update_dir_tree_*` helpers: lock the repo, apply
-    /// `update_fn`, persist and walk up the ancestors to get the root fs_id.
-    async fn apply_tree_update(
+    /// Shared body of the `update_dir_tree_*` helpers: apply `update_fn`, persist
+    /// and walk up the ancestors to get the root fs_id. The caller owns the repo
+    /// lock.
+    #[allow(clippy::too_many_arguments)]
+    async fn apply_tree_update_locked(
         db: &DatabaseConnection,
         repos: &Repositories,
         repo_id: &str,
@@ -661,7 +708,6 @@ impl FileOps {
         root_override: Option<&str>,
         update_fn: impl FnOnce(&mut Vec<DirEntryData>) -> Result<(), AppError>,
     ) -> Result<String, AppError> {
-        let _lock = acquire_repo_lock(repo_id).await;
         let mut parent_data = Self::read_dir_fs_object(repos, repo_id, parent_fs_id).await?;
         update_fn(&mut parent_data.dirents)?;
 
@@ -684,22 +730,25 @@ impl FileOps {
         }
     }
 
-    /// Create a commit with the given root_fs_id and update the repo's HEAD.
+    /// Create a delta-zero commit (rename, move, mkdir, empty file) and update
+    /// HEAD only if HEAD is still the tree the mutation was based on.
     ///
-    /// Kept for delta-zero commits (rename, move, mkdir, empty file); size-changing
-    /// paths use [`Self::create_commit_sized`] so the HEAD swap and the size change
-    /// are one statement and the quota is checked under the owner's scope.
-    pub(crate) async fn create_commit(
+    /// The base check is what makes a concurrent write visible as a conflict
+    /// instead of being silently reverted by a root computed from the old tree.
+    /// Size-changing paths use [`Self::create_commit_sized`], which applies the
+    /// same check together with the size delta.
+    pub(crate) async fn create_commit_checked(
         repos: &Repositories,
         repo_id: &str,
+        base_root_id: &str,
         root_fs_id: &str,
         creator_name: &str,
         description: &str,
-    ) -> Result<(), AppError> {
+    ) -> Result<bool, AppError> {
         Self::create_commit_inner(
             repos,
             repo_id,
-            None,
+            Some(base_root_id),
             root_fs_id,
             creator_name,
             description,
@@ -708,7 +757,6 @@ impl FileOps {
             false,
         )
         .await
-        .map(|_| ())
     }
 
     /// Commit a tree that changes the library size by `size_delta`.

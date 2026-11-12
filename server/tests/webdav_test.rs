@@ -639,6 +639,46 @@ async fn test_head_matches_get_headers() {
     assert_eq!(head.bytes().await.unwrap().len(), 0);
 }
 
+/// RFC 4918: PUT replaces a file, not a collection. The old handler replaced the
+/// directory's dirent with a file, dropping its subtree without a trash record.
+#[tokio::test]
+async fn test_put_over_a_collection_is_method_not_allowed() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+    let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
+
+    assert_eq!(
+        dav(
+            &client,
+            "MKCOL",
+            &dav_url(base, &f.repo_id, "/subdir"),
+            &f.email,
+            &key
+        )
+        .await
+        .status(),
+        201
+    );
+
+    let resp = dav_put(
+        &client, base, &f.repo_id, "/subdir", &f.email, &key, b"clobber",
+    )
+    .await;
+    assert_eq!(resp.status(), 405);
+
+    // The collection is still a collection.
+    let resp = dav(
+        &client,
+        "PROPFIND",
+        &dav_url(base, &f.repo_id, "/subdir"),
+        &f.email,
+        &key,
+    )
+    .await;
+    assert_eq!(resp.status(), 207);
+}
+
 #[tokio::test]
 async fn test_put_missing_parent_conflict() {
     let f = TestFixture::new().await;
@@ -1190,6 +1230,91 @@ async fn test_path_traversal_rejected() {
 
     let resp = dav_get(&client, base, &f.repo_id, "/../secret", &f.email, &key).await;
     assert!(!resp.status().is_success());
+}
+
+/// REST and WebDAV are two front ends over one library store: a write through
+/// either must be visible, readable and movable through the other. Each surface
+/// has its own tests; this one pins the shared state between them.
+#[tokio::test]
+async fn rest_and_webdav_share_one_library_state() {
+    let f = TestFixture::new().await;
+    let base = &f.server.base_url;
+    let client = http();
+    let key = gen_key(&client, base, &f.api_token, &f.repo_id, "dev").await;
+
+    // REST upload -> WebDAV read.
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "from-rest.txt", b"rest")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let resp = dav_get(&client, base, &f.repo_id, "/from-rest.txt", &f.email, &key).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"rest");
+
+    // WebDAV PUT -> REST read.
+    let resp = dav_put(
+        &client,
+        base,
+        &f.repo_id,
+        "/from-dav.txt",
+        &f.email,
+        &key,
+        b"dav",
+    )
+    .await;
+    assert_eq!(resp.status(), 201);
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/from-dav.txt")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"dav");
+
+    // WebDAV MOVE across parents and rename -> REST sees only the new path.
+    assert_eq!(
+        dav(
+            &client,
+            "MKCOL",
+            &dav_url(base, &f.repo_id, "/moved"),
+            &f.email,
+            &key
+        )
+        .await
+        .status(),
+        201
+    );
+    let resp = client
+        .request(
+            Method::from_bytes(b"MOVE").unwrap(),
+            dav_url(base, &f.repo_id, "/from-dav.txt"),
+        )
+        .basic_auth(&f.email, Some(&key))
+        .header(
+            "Destination",
+            dav_url(base, &f.repo_id, "/moved/renamed.txt"),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/moved/renamed.txt")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"dav");
+    // `download_file` asserts on the link step, so ask for the metadata instead:
+    // the old path must be gone.
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/file/detail/?p=/from-dav.txt", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 404, "the old path must be gone");
 }
 
 #[tokio::test]

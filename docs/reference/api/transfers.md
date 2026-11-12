@@ -65,7 +65,7 @@ Uploads one or more files to the directory bound into the token. The body is
 | `file` | yes | File contents; the part's filename is the entry name. |
 | `parent_dir` | no | Overrides the token's directory. |
 | `relative_path` | no | Sub-path below the target directory. |
-| `replace` | no | `1`/`true` replaces an existing file. |
+| `replace` | no | `1`/`true` replaces an existing file; a directory at that path answers `409`. |
 
 **Response `200`**
 

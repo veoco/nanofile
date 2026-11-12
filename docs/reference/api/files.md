@@ -156,7 +156,9 @@ Metadata for one file, including its last modifier and star state.
 
 **Body** (JSON) — `{"repo_id": "…", "p": "/old.txt", "new_name": "new.txt"}`.
 
-**Response `200`** — empty body. Requires write permission and `file.write`.
+**Response `200`** — empty body. A name that already exists in the same
+directory answers `409` and changes nothing. Requires write permission and
+`file.write`.
 
 ## Move a file {#post-api2-repos-repo-id-file-move}
 
@@ -166,7 +168,8 @@ Metadata for one file, including its last modifier and star state.
 A move inside one library is a single commit; cross-library moves are not
 supported.
 
-**Response `200`** — empty body. Requires `file.write`.
+**Response `200`** — empty body. A destination that already contains an entry
+with the same name answers `409` and changes nothing. Requires `file.write`.
 
 ## EXIF metadata {#get-api2-repos-repo-id-file-exif}
 

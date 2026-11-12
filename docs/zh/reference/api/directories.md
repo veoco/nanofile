@@ -52,6 +52,8 @@
 
 **响应** —— 创建返回 `201`，带指向新目录的 `Location` 头与 JSON 字符串 `"success"`。带 `reloaddir=true` 时改为返回父目录的列表（iOS 客户端期望的裸数组），带同样的 `oid`/`dir_perm` 头。重命名返回 `200` 与 `"success"`。
 
+改名到同目录里已存在的名字返回 `409`，不做任何修改。
+
 需要写权限与 `file.write`。
 
 ## 删除目录 {#delete-api2-repos-repo-id-dir}
@@ -141,7 +143,7 @@
 
 **请求体**（JSON）—— `{"repo_id": "…", "p": "/old/name", "new_name": "new-name"}`。资料库 id 在请求体里，与其他目录接口不同。
 
-**响应 `200`** —— 空正文。需要写权限与 `file.write`。
+**响应 `200`** —— 空正文。同目录里已存在该名字时返回 `409`，不做任何修改。需要写权限与 `file.write`。
 
 ## 移动目录 {#post-api2-repos-repo-id-dir-move}
 

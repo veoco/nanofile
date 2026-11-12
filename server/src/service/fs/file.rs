@@ -59,10 +59,18 @@ pub(crate) async fn rename_entry(
             })
         })?;
 
+    // A rename to the current name is a no-op, not a tree mutation: committing it
+    // would still skip the commit but would log an activity and schedule index work.
+    // Checked after resolution so a missing source still answers 404.
+    if new_name == old_name {
+        return Ok(());
+    }
+
     let new_root = FileOps::update_dir_tree_and_commit(
         db,
         repos,
         repo_id,
+        &head_root_id,
         parent_path,
         &parent_fs_id,
         modifier,
@@ -73,17 +81,26 @@ pub(crate) async fn rename_entry(
         },
         crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
         |dirents| {
+            // Names are unique within a directory. Renaming onto an existing name
+            // used to write a second entry with that name: listings showed it twice
+            // and every lookup picked an arbitrary one of the two. Refuse instead.
+            if dirents.iter().any(|d| d.name == new_name) {
+                return Err(AppError::Conflict(format!(
+                    "a file or directory named {new_name:?} already exists in {parent_path}"
+                )));
+            }
             // Match on the name, not on `child_id`: `EMPTY_SHA1` is the id of every empty
             // directory *and* every zero-byte file, so an id match can rename a sibling that
             // shares it. Names are unique within a directory, and `old_name` is the entry asked for.
-            if let Some(d) = dirents.iter_mut().find(|d| d.name == old_name) {
-                d.name = new_name.to_string();
-            }
+            let entry = dirents
+                .iter_mut()
+                .find(|d| d.name == old_name)
+                .ok_or_else(|| AppError::NotFound(format!("{old_name} not found")))?;
+            entry.name = new_name.to_string();
             Ok(())
         },
     )
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
+    .await?;
 
     let new_path = join_path(parent_path, new_name);
     activity_log::log_activity(
@@ -198,8 +215,8 @@ async fn update_index_on_path_change(
         .await;
 }
 
-/// Move a file or directory to a new parent directory using the two-phase commit sequence (remove
-/// from old parent, commit, re-add to new parent).
+/// Move a file or directory to a new parent directory using the two-phase tree
+/// update (remove from the old parent, re-add under the new one) and one commit.
 ///
 /// `is_dir` controls the commit description, activity type and error wording. A moved directory's
 /// subtree is re-indexed here; a moved file's index update is left to the caller.
@@ -215,6 +232,11 @@ pub(crate) async fn move_entry(
     indexer: Option<&crate::indexer::TextIndexer>,
     scheduler: &crate::service::index::IndexScheduler,
 ) -> Result<String, AppError> {
+    // One lock covers both tree mutations and the commit. Taking it per phase
+    // let another writer advance HEAD between the removal and the re-add; the
+    // unchecked commit then recorded a root computed from the old tree.
+    let lock = crate::fs::core::file_ops::acquire_repo_lock(repo_id).await;
+
     let head_root_id = get_head_root_id(db, repo_id).await?;
     let entry_name = basename(path);
     let parent_path = parent_path_from(path);
@@ -250,6 +272,14 @@ pub(crate) async fn move_entry(
     let new_parent_path = base::sanitize::safe_normalize_path(new_parent_dir)
         .map_err(|e| AppError::Internal(format!("path normalization failed: {e}")))?;
 
+    // A move into the current parent is a no-op. Rewriting the directory anyway
+    // would make the unchecked commit path look like a change and re-run the
+    // index/path bookkeeping for an entry that did not move.
+    if parent_path == new_parent_path {
+        drop(lock);
+        return Ok(path.to_string());
+    }
+
     // Reject a move into the entry itself or its own subtree *before* any mutation: the
     // destination would be removed by the source-side update, so the destination could no
     // longer resolve when the entry is added back.
@@ -276,7 +306,7 @@ pub(crate) async fn move_entry(
     // HEAD. Committing the removal first left the entry out of HEAD whenever the
     // destination update failed (a CAS conflict or a database error), and a move
     // never writes a trash entry, so that failure lost the file.
-    let intermediate_root = FileOps::update_dir_tree_no_commit(
+    let intermediate_root = FileOps::update_dir_tree_no_commit_locked(
         db,
         repos,
         repo_id,
@@ -307,7 +337,8 @@ pub(crate) async fn move_entry(
     let now = chrono::Utc::now().timestamp();
     let email_clone = email.to_string();
     let entry_name_clone = entry_name.to_string();
-    let new_root = FileOps::update_dir_tree_no_commit(
+    let new_parent_path_for_error = new_parent_path.clone();
+    let new_root = FileOps::update_dir_tree_no_commit_locked(
         db,
         repos,
         repo_id,
@@ -316,22 +347,38 @@ pub(crate) async fn move_entry(
         &dst_ancestor_chain,
         Some(&intermediate_root),
         |dirents| {
-            if !dirents.iter().any(|d| d.name == entry_name_clone) {
-                dirents.push(DirEntryData {
-                    id: entry_fs_id.clone(),
-                    mode: entry_mode,
-                    modifier: email_clone.clone(),
-                    mtime: now,
-                    name: entry_name_clone.clone(),
-                    size: entry_size,
-                });
+            // The destination already has an entry with this name. Pushing the
+            // moved entry regardless would leave two entries sharing a name;
+            // skipping it (the old behaviour) dropped the moved file from the
+            // tree entirely, with no trash record to recover it from.
+            if dirents.iter().any(|d| d.name == entry_name_clone) {
+                return Err(AppError::Conflict(format!(
+                    "a file or directory named {entry_name_clone:?} already exists in {new_parent_path_for_error}"
+                )));
             }
+            dirents.push(DirEntryData {
+                id: entry_fs_id.clone(),
+                mode: entry_mode,
+                modifier: email_clone.clone(),
+                mtime: now,
+                name: entry_name_clone.clone(),
+                size: entry_size,
+            });
             Ok(())
         },
     )
     .await?;
 
-    FileOps::create_commit(repos, repo_id, &new_root, email, &description).await?;
+    FileOps::create_commit_checked(
+        repos,
+        repo_id,
+        &head_root_id,
+        &new_root,
+        email,
+        &description,
+    )
+    .await?;
+    drop(lock);
 
     let new_path = join_path(&new_parent_path, entry_name);
     activity_log::log_activity(
@@ -577,7 +624,7 @@ impl FileService {
         )
         .await;
 
-        let (fs_id, effective_name) = match committed {
+        let (fs_id, effective_name, existed) = match committed {
             Ok(v) => v,
             Err(e) => {
                 if matches!(e, AppError::QuotaExceeded) {
@@ -597,7 +644,10 @@ impl FileService {
             .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
 
         if let Some(uid) = user_id {
-            let op_type = if replace { "edit" } else { "create" };
+            // `existed` was resolved under the commit's repo lock. Using the
+            // caller's `replace` alone mislabelled a WebDAV PUT that raced a
+            // create as an edit (and vice versa) in the activity feed.
+            let op_type = if existed && replace { "edit" } else { "create" };
             activity_log::log_activity(
                 self.db(),
                 repo_id,
@@ -1275,9 +1325,14 @@ impl FileService {
         };
         let file_fs_id = crate::fs::core::store_fs_file_object(db, repo_id, &file_fs_data).await?;
 
+        let head_root_id = get_head_root_id_opt(db, repo_id).await?;
+        let base_root_id = head_root_id
+            .clone()
+            .unwrap_or_else(|| EMPTY_SHA1.to_string());
+
         let parent_fs_id = if parent_path == "/" {
-            match get_head_root_id_opt(db, repo_id).await? {
-                Some(root_id) => root_id,
+            match &head_root_id {
+                Some(root_id) => root_id.clone(),
                 None => {
                     let empty_dir = FsDirData {
                         dirents: vec![],
@@ -1288,10 +1343,10 @@ impl FileService {
                 }
             }
         } else {
-            let head_root_id = get_head_root_id_opt(db, repo_id)
-                .await?
+            let root_id = head_root_id
+                .as_deref()
                 .ok_or_else(|| AppError::NotFound("repo has no commits".into()))?;
-            crate::fs::core::resolve_dir_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
+            crate::fs::core::resolve_dir_fs_id(&self.repos, repo_id, root_id, parent_path)
                 .await
                 .map_err(|e| crate::service::fs::resolve_parent_error(e, "resolve parent failed"))?
         };
@@ -1302,6 +1357,7 @@ impl FileService {
             db,
             &self.repos,
             repo_id,
+            &base_root_id,
             parent_path,
             &parent_fs_id,
             email,
@@ -1321,8 +1377,7 @@ impl FileService {
                 Ok(())
             },
         )
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .await?;
 
         activity_log::log_activity(
             db, repo_id, "create", "file", path, user_id, None, None, None, None, None,

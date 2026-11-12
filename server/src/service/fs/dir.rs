@@ -415,12 +415,17 @@ pub(crate) async fn create_dir_by_path(
     let dir_fs_id = EMPTY_SHA1.to_string();
     let now = chrono::Utc::now().timestamp();
 
+    // Only `Ok(None)` means "no commits yet". Treating a failed lookup as an
+    // empty library would base this commit on an empty tree and replace HEAD's
+    // whole tree with the new directory.
+    let head_root_id = get_head_root_id_opt(db, repo_id).await?;
+    let base_root_id = head_root_id
+        .clone()
+        .unwrap_or_else(|| EMPTY_SHA1.to_string());
+
     let parent_fs_id = if parent_path == "/" {
-        // Only `Ok(None)` means "no commits yet". Treating a failed lookup as an
-        // empty library would base this commit on an empty tree and replace
-        // HEAD's whole tree with the new directory.
-        match get_head_root_id_opt(db, repo_id).await? {
-            Some(root_id) => root_id,
+        match &head_root_id {
+            Some(root_id) => root_id.clone(),
             None => {
                 let empty_root = FsDirData {
                     dirents: vec![],
@@ -431,8 +436,10 @@ pub(crate) async fn create_dir_by_path(
             }
         }
     } else {
-        let head_root_id = get_head_root_id(db, repo_id).await?;
-        crate::fs::core::resolve_dir_fs_id(repos, repo_id, &head_root_id, &parent_path)
+        let root_id = head_root_id
+            .as_deref()
+            .ok_or_else(|| AppError::NotFound("repo has no commits".into()))?;
+        crate::fs::core::resolve_dir_fs_id(repos, repo_id, root_id, &parent_path)
             .await
             .map_err(|e| crate::service::fs::resolve_parent_error(e, "resolve parent failed"))?
     };
@@ -443,6 +450,7 @@ pub(crate) async fn create_dir_by_path(
         db,
         repos,
         repo_id,
+        &base_root_id,
         &parent_path,
         &parent_fs_id,
         email,

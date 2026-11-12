@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { readState, seedRepo, uploadFile } from "../helpers/api";
+import { createRepo, readState, seedRepo, uploadFile } from "../helpers/api";
 import { clickRowAction } from "../helpers/details";
 
 let state: ReturnType<typeof readState>;
@@ -8,18 +8,14 @@ test.beforeAll(async () => {
   state = readState();
 });
 
-async function openFreshRepo(page: import("@playwright/test").Page): Promise<string> {
-  const repoId = await seedRepo(state.baseURL, state.adminToken, `act-${Date.now()}`);
-  await page.goto(`/libraries/${repoId}/files`);
-  await page.waitForSelector(".js-entry-row");
-  return repoId;
-}
-
 const activityRow = (page: import("@playwright/test").Page, name: string) =>
   page.locator("main .nf-prow").filter({ hasText: name }).first();
 
 test("uploading a file records an activity", async ({ page }) => {
-  const repoId = await openFreshRepo(page);
+  // An empty library, not `seedRepo`: seeding creates six files in the same
+  // aggregation bucket, and the feed collapses them into one "Created N files"
+  // row that lists only four names — the uploaded one can hide behind "+N".
+  const repoId = await createRepo(state.baseURL, state.adminToken, `act-${Date.now()}`);
   const name = `uploaded-${Date.now()}.txt`;
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", name, "hello\n");
   await page.goto("/activities/");

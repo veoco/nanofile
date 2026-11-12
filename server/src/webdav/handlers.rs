@@ -48,6 +48,9 @@ pub async fn dispatch_path(
 fn webdav_status(error: &AppError) -> StatusCode {
     match error {
         AppError::QuotaExceeded => StatusCode::INSUFFICIENT_STORAGE,
+        // A concurrent writer advanced HEAD between this operation's base and its
+        // commit; the service refused rather than reverting that change.
+        AppError::Conflict(_) => StatusCode::CONFLICT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
@@ -186,10 +189,17 @@ async fn put_handler(
         _ => return StatusCode::CONFLICT.into_response(),
     }
 
-    let existed = matches!(
-        entry_metadata_with_head(&state.repos, &auth.repo_id, head, path).await,
-        Ok(Some(_))
-    );
+    let existing = match entry_metadata_with_head(&state.repos, &auth.repo_id, head, path).await {
+        Ok(v) => v,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    // RFC 4918: PUT replaces a file, not a collection. Treating a collection as a
+    // replace target removed its dirent (and its whole subtree) without a trash
+    // record.
+    if existing.as_ref().is_some_and(|m| m.is_dir) {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    }
+    let existed = existing.is_some();
 
     // Stream into CDC-chunked block writes, so a large PUT is never buffered whole.
     let content_length = headers
@@ -229,9 +239,11 @@ async fn put_handler(
             &auth.email,
             Some(auth.user_id),
             false,
-            // WebDAV PUT overwrites an existing resource, but a new one must
-            // still be committed as a create, so pass `existed`.
-            existed,
+            // A WebDAV PUT always replaces the resource at the target path. `existed`
+            // above is only a pre-check for the status code: the body is streamed
+            // before the commit, so a concurrent create would otherwise turn this
+            // PUT into an auto-renamed copy (`name (1).ext`) instead of an overwrite.
+            true,
             new_block_ids,
         )
         .await
