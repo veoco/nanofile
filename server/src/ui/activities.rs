@@ -126,6 +126,9 @@ pub async fn activities_page(
         .activity
         .find_recent_by_user(user.user_id, 50)
         .await?;
+    // The row renders at most four names; the exact total comes from `count`.
+    let displays =
+        crate::service::activity::load_activity_displays(&state.repos, &events, 4).await?;
 
     let t = I18n::get(user.language.as_deref());
 
@@ -153,6 +156,9 @@ pub async fn activities_page(
     let mut activities = Vec::with_capacity(events.len());
 
     for e in &events {
+        let Some(display) = displays.get(&e.id) else {
+            continue;
+        };
         let repo_name = repo_cache
             .get(&e.repo_id)
             .cloned()
@@ -184,40 +190,28 @@ pub async fn activities_page(
         // Detail JSON: batch item names, repo rename info, and the server-side
         // merge markers (see `ActivityItem`); a merged row must not read as a
         // device saving this path.
-        let (batch_count, detail_items, old_repo_name, merged, merge_kept) =
-            match serde_json::from_str::<serde_json::Value>(&e.detail) {
-                Ok(serde_json::Value::Array(arr)) => {
-                    let items: Vec<String> = arr
-                        .iter()
-                        .filter_map(|d| d.get("path").and_then(|p| p.as_str()))
-                        .map(|p| {
-                            p.rsplit_once('/')
-                                .map(|(_, n)| n.to_string())
-                                .unwrap_or_else(|| p.to_string())
-                        })
-                        .collect();
-                    let count = items.len();
-                    let orn = arr
-                        .first()
-                        .and_then(|d| d.get("old_repo_name"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let flag = |key: &str| {
-                        arr.iter()
-                            .any(|d| d.get(key).and_then(|v| v.as_bool()).unwrap_or(false))
-                    };
-                    (count, items, orn, flag("merge"), flag("merge_kept"))
-                }
-                Ok(serde_json::Value::Object(obj)) => {
-                    let orn = obj
-                        .get("old_repo_name")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    let flag = |key: &str| obj.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
-                    (1, vec![], orn, flag("merge"), flag("merge_kept"))
-                }
-                _ => (1, vec![], None, false, false),
-            };
+        let batch_count = display.count;
+        // A single event keeps the old link-to-the-file rendering; only a batch
+        // (or a batch-op row) lists item names in the row.
+        let detail_items: Vec<String> = if batch_count > 1 || e.op_type.starts_with("batch_") {
+            display
+                .details
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|d| d.get("path").and_then(|p| p.as_str()))
+                .map(|p| {
+                    p.rsplit_once('/')
+                        .map(|(_, n)| n.to_string())
+                        .unwrap_or_else(|| p.to_string())
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let old_repo_name = display.old_repo_name.clone();
+        let merged = display.merged;
+        let merge_kept = display.merge_kept;
 
         let old_name = e
             .old_path

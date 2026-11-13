@@ -21,6 +21,26 @@ use serde_json::{Value, json};
 const ZERO_SHA1: &str = "0000000000000000000000000000000000000000";
 const REG: i32 = S_IFREG;
 
+/// Every `activity_items` row belonging to this library's activities. The item
+/// table replaced the `detail` JSON array, so tests that inspect individual paths
+/// read it directly.
+async fn activity_items(f: &TestFixture) -> Vec<infra::entity::activity_item::Model> {
+    let rows = infra::entity::activity::Entity::find()
+        .filter(infra::entity::activity::Column::RepoId.eq(&f.repo_id))
+        .all(f.server.db.as_ref())
+        .await
+        .unwrap();
+    let ids: Vec<i32> = rows.iter().map(|row| row.id).collect();
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    infra::entity::activity_item::Entity::find()
+        .filter(infra::entity::activity_item::Column::ActivityId.is_in(ids))
+        .all(f.server.db.as_ref())
+        .await
+        .unwrap()
+}
+
 /// A fresh 40-hex commit id (the content never matters, only uniqueness).
 fn random_hex_id() -> String {
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -189,31 +209,10 @@ async fn test_merge_disjoint_changes() {
 
     // Activity logging must describe what the *merge* introduced. Diffing
     // against B's own base would report A's a.txt a second time (it was already
-    // logged when A's commit landed). Creates are aggregated into one row per
-    // (op_type, obj_type) within a 5-minute window, so the assertion is on the
-    // recorded paths: every path appears exactly once.
-    let rows = infra::entity::activity::Entity::find()
-        .filter(infra::entity::activity::Column::RepoId.eq(&f.repo_id))
-        .all(f.server.db.as_ref())
-        .await
-        .unwrap();
-    let mut paths: Vec<String> = Vec::new();
-    for row in &rows {
-        let detail: Value = serde_json::from_str(&row.detail).unwrap_or(Value::Null);
-        match detail {
-            Value::Array(items) => paths.extend(
-                items
-                    .iter()
-                    .filter_map(|i| i["path"].as_str().map(String::from)),
-            ),
-            Value::Object(_) => {
-                if let Some(path) = detail["path"].as_str() {
-                    paths.push(path.to_string());
-                }
-            }
-            _ => {}
-        }
-    }
+    // logged when A's commit landed). Creates are grouped per commit, so the
+    // assertion is on the recorded item paths: every path appears exactly once.
+    let items = activity_items(&f).await;
+    let mut paths: Vec<String> = items.iter().map(|item| item.path.clone()).collect();
     paths.sort();
     let files: Vec<&str> = paths
         .iter()
@@ -859,37 +858,15 @@ async fn merge_keeps_a_renamed_directory_and_marks_the_activity() {
         "the two copies hold B's and A's content respectively"
     );
 
-    // The rows describe exactly what the merge put back, and say so. Reads are
-    // per detail item: batch aggregation appends to an existing `create` row and
-    // keeps that row's commit id, so filtering by commit would miss them.
-    let rows = infra::entity::activity::Entity::find()
-        .filter(infra::entity::activity::Column::RepoId.eq(&f.repo_id))
-        .all(f.server.db.as_ref())
-        .await
-        .unwrap();
-    let mut items: Vec<(String, bool, bool)> = Vec::new();
-    for row in &rows {
-        let detail: Value = serde_json::from_str(&row.detail).unwrap_or(Value::Null);
-        let entries: Vec<&Value> = match &detail {
-            Value::Array(arr) => arr.iter().collect(),
-            Value::Object(_) => vec![&detail],
-            _ => Vec::new(),
-        };
-        for entry in entries {
-            let Some(path) = entry["path"].as_str() else {
-                continue;
-            };
-            let flag = |key: &str| entry[key].as_bool().unwrap_or(false);
-            items.push((path.to_string(), flag("merge"), flag("merge_kept")));
-        }
-    }
+    // The items describe exactly what the merge put back, and say so.
+    let items = activity_items(&f).await;
     // Only the merge's own items carry the marker; the base commit's rows for
     // `/d*` (and A's rename row for `/e`) stay unmarked, which is what makes the
     // marker worth having.
     let mut marked: Vec<(String, bool)> = items
         .iter()
-        .filter(|(_, merged, _)| *merged)
-        .map(|(path, _, kept)| (path.clone(), *kept))
+        .filter(|item| item.merge)
+        .map(|item| (item.path.clone(), item.merge_kept))
         .collect();
     marked.sort();
     assert_eq!(

@@ -1,12 +1,168 @@
 //! Activity and notification services.
 
+use std::collections::HashMap;
+
 use crate::repository::Repositories;
 use base::error::AppError;
 use infra::common::util::timestamp_rfc3339;
+use infra::entity::{activity, activity_item};
 
 /// Largest page size the activity list accepts. The endpoint's own Web UI asks for 25; the ceiling
 /// exists so one authenticated request cannot ask the database for the entire activity table.
 pub const MAX_ACTIVITY_PER_PAGE: u32 = 100;
+
+/// Detail rows returned per activity. The summary's `item_count` remains exact
+/// for larger operations, matching seafevents' 200-item detail cap.
+pub const ACTIVITY_DETAIL_LIMIT: usize = 200;
+
+/// Hydrated view of one activity summary: the detail objects and count that the
+/// seahub-compatible API and the Web UI render. New rows read `activity_items`;
+/// rows written before the split (item_count = 0) fall back to `detail` JSON.
+pub struct ActivityDisplay {
+    pub detail_value: serde_json::Value,
+    pub details: serde_json::Value,
+    pub count: usize,
+    pub repo_name: String,
+    pub old_repo_name: Option<String>,
+    pub merged: bool,
+    pub merge_kept: bool,
+}
+
+fn detail_repo_name(detail: &serde_json::Value) -> String {
+    match detail {
+        serde_json::Value::Object(obj) => obj
+            .get("repo_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        serde_json::Value::Array(arr) => arr
+            .first()
+            .and_then(|d| d.get("repo_name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        _ => String::new(),
+    }
+}
+
+fn detail_old_repo_name(detail: &serde_json::Value) -> Option<String> {
+    let value = match detail {
+        serde_json::Value::Object(obj) => obj.get("old_repo_name"),
+        serde_json::Value::Array(arr) => arr.first().and_then(|d| d.get("old_repo_name")),
+        _ => None,
+    };
+    value.and_then(|v| v.as_str()).map(str::to_string)
+}
+
+fn detail_flag(detail: &serde_json::Value, key: &str) -> bool {
+    match detail {
+        serde_json::Value::Object(obj) => obj.get(key).and_then(|v| v.as_bool()).unwrap_or(false),
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .any(|d| d.get(key).and_then(|v| v.as_bool()).unwrap_or(false)),
+        _ => false,
+    }
+}
+
+/// Load `activity_items` for a page and shape each summary for the API/UI.
+pub async fn load_activity_displays(
+    repos: &Repositories,
+    activities: &[activity::Model],
+    detail_limit: usize,
+) -> Result<HashMap<i32, ActivityDisplay>, AppError> {
+    // Rows written before the split carry no item rows; skip their lookups.
+    let ids: Vec<i32> = activities
+        .iter()
+        .filter(|a| a.item_count > 0)
+        .map(|a| a.id)
+        .collect();
+    let items = repos
+        .activity
+        .find_items_by_activity_ids(&ids, detail_limit as u64)
+        .await?;
+    let mut by_activity: HashMap<i32, Vec<activity_item::Model>> = HashMap::new();
+    for item in items {
+        by_activity.entry(item.activity_id).or_default().push(item);
+    }
+
+    let mut out = HashMap::with_capacity(activities.len());
+    for a in activities {
+        let detail_value: serde_json::Value = serde_json::from_str(&a.detail).unwrap_or_default();
+        let repo_name = detail_repo_name(&detail_value);
+        let old_repo_name = detail_old_repo_name(&detail_value);
+        let items = by_activity.get(&a.id);
+
+        let (details, count, merged, merge_kept) = if a.item_count > 0 || items.is_some() {
+            let count = if a.item_count > 0 {
+                a.item_count as usize
+            } else {
+                items.map_or(0, Vec::len)
+            };
+            let details: Vec<serde_json::Value> = items
+                .into_iter()
+                .flatten()
+                .take(detail_limit)
+                .map(|item| {
+                    let mut entry = serde_json::json!({ "path": item.path });
+                    if let Some(old_path) = &item.old_path {
+                        entry["old_path"] = serde_json::json!(old_path);
+                    }
+                    if let Some(size) = item.size {
+                        entry["size"] = serde_json::json!(size);
+                    }
+                    if let Some(obj_id) = &item.obj_id {
+                        entry["obj_id"] = serde_json::json!(obj_id);
+                    }
+                    if !repo_name.is_empty() {
+                        entry["repo_name"] = serde_json::json!(repo_name);
+                    }
+                    if item.merge {
+                        entry["merge"] = serde_json::json!(true);
+                    }
+                    if item.merge_kept {
+                        entry["merge_kept"] = serde_json::json!(true);
+                    }
+                    entry
+                })
+                .collect();
+            let merged = detail_flag(&detail_value, "merge")
+                || items.into_iter().flatten().any(|item| item.merge);
+            let merge_kept = detail_flag(&detail_value, "merge_kept")
+                || items.into_iter().flatten().any(|item| item.merge_kept);
+            (serde_json::Value::Array(details), count, merged, merge_kept)
+        } else {
+            match &detail_value {
+                serde_json::Value::Array(arr) => (
+                    detail_value.clone(),
+                    arr.len(),
+                    detail_flag(&detail_value, "merge"),
+                    detail_flag(&detail_value, "merge_kept"),
+                ),
+                serde_json::Value::Object(_) => (
+                    serde_json::json!([detail_value]),
+                    1,
+                    detail_flag(&detail_value, "merge"),
+                    detail_flag(&detail_value, "merge_kept"),
+                ),
+                _ => (serde_json::json!([]), 0, false, false),
+            }
+        };
+
+        out.insert(
+            a.id,
+            ActivityDisplay {
+                detail_value,
+                details,
+                count,
+                repo_name,
+                old_repo_name,
+                merged,
+                merge_kept,
+            },
+        );
+    }
+    Ok(out)
+}
 
 pub const MAX_ACTIVITY_PAGE: u32 = 10_000;
 
@@ -86,10 +242,13 @@ impl ActivityService {
             .map(|u| (u.id, (u.nickname(), u.email)))
             .collect();
 
+        let displays = load_activity_displays(repos, &activities, ACTIVITY_DETAIL_LIMIT).await?;
+
         let mut items: Vec<serde_json::Value> = Vec::new();
         for a in &activities {
-            let detail_value: serde_json::Value = serde_json::from_str(&a.detail)
-                .unwrap_or(serde_json::Value::Object(Default::default()));
+            let Some(display) = displays.get(&a.id) else {
+                continue;
+            };
 
             let (user_name, user_email) = users_by_id.get(&a.user_id).cloned().unwrap_or_default();
 
@@ -109,42 +268,13 @@ impl ActivityService {
                 )
             );
 
-            // detail is an Object for single events and an Array for batch-aggregated events.
-            let (details, count, old_repo_name) = match &detail_value {
-                serde_json::Value::Array(arr) => {
-                    let orn = arr
-                        .first()
-                        .and_then(|d| d.get("old_repo_name"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    (detail_value.clone(), arr.len(), orn)
-                }
-                serde_json::Value::Object(_) => {
-                    let orn = detail_value
-                        .get("old_repo_name")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    (serde_json::json!([detail_value]), 1, orn)
-                }
-                _ => (serde_json::json!([]), 0, None),
-            };
-
+            let details = display.details.clone();
+            let count = display.count;
+            let old_repo_name = display.old_repo_name.clone();
             // repo_name from detail, set at event time by log_activity, so it reflects the name when
             // the activity occurred.
-            let repo_name = match &detail_value {
-                serde_json::Value::Object(obj) => obj
-                    .get("repo_name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                serde_json::Value::Array(arr) => arr
-                    .first()
-                    .and_then(|d| d.get("repo_name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                _ => String::new(),
-            };
+            let repo_name = display.repo_name.clone();
+            let detail_value = &display.detail_value;
 
             // name is the basename of path. Official seahub: repo events always have path="/", so
             // name="". Exception: nanofile's own repo-rename events (no seahub equivalent) keep the

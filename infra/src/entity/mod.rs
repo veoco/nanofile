@@ -1,4 +1,5 @@
 pub mod activity;
+pub mod activity_item;
 pub mod api_key;
 pub mod api_key_repo;
 pub mod api_token;

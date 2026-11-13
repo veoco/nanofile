@@ -8,7 +8,9 @@ use sea_orm::ColumnTrait;
 use sea_orm::ConnectionTrait;
 use sea_orm::DatabaseBackend;
 use sea_orm::EntityTrait;
+use sea_orm::PaginatorTrait;
 use sea_orm::QueryFilter;
+use sea_orm::Set;
 use sea_orm::Statement;
 use serde_json::Value;
 
@@ -536,6 +538,210 @@ async fn test_sync_rename_activity_has_no_delete() {
             .all(|e| e["op_type"] != "delete" && e["op_type"] != "batch_delete"),
         "rename must not leave a delete record behind: {events:?}"
     );
+}
+
+/// A sync commit is the operation boundary: all file creates from one commit
+/// become one `batch_create` summary, and a second commit does not merge into
+/// the first just because it arrived within five minutes.
+#[tokio::test]
+async fn test_sync_commit_groups_creates_into_one_batch() {
+    let f = TestFixture::new().await;
+
+    let c1 = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[
+            ("a.txt", b"a", 0o100644),
+            ("b.txt", b"b", 0o100644),
+            ("c.txt", b"c", 0o100644),
+        ],
+        &[],
+        None,
+    )
+    .await;
+    let c2 = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("d.txt", b"d", 0o100644), ("e.txt", b"e", 0o100644)],
+        &[],
+        Some(&c1),
+    )
+    .await;
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let first = events
+        .iter()
+        .find(|e| {
+            e["commit_id"].as_str() == Some(c1.as_str())
+                && e["obj_type"] == "file"
+                && e["op_type"] == "batch_create"
+        })
+        .unwrap_or_else(|| panic!("first commit's file group missing: {events:?}"));
+    assert_eq!(first["count"], 3);
+    let mut paths: Vec<&str> = first["details"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|d| d["path"].as_str())
+        .collect();
+    paths.sort();
+    assert_eq!(paths, vec!["/a.txt", "/b.txt", "/c.txt"]);
+
+    let second = events
+        .iter()
+        .find(|e| {
+            e["commit_id"].as_str() == Some(c2.as_str())
+                && e["obj_type"] == "file"
+                && e["op_type"] == "batch_create"
+        })
+        .unwrap_or_else(|| panic!("second commit's file group missing: {events:?}"));
+    assert_eq!(second["count"], 2, "commits must not merge across a window");
+    assert_ne!(
+        first["id"], second["id"],
+        "each commit keeps its own summary row"
+    );
+}
+
+/// A row written before `activity_items` existed has `item_count = 0` and a JSON
+/// detail; it must keep rendering through the legacy fallback.
+#[tokio::test]
+async fn test_legacy_activity_detail_still_renders() {
+    let f = TestFixture::new().await;
+    let now = chrono::Utc::now().timestamp();
+    let detail = serde_json::json!([
+        {"path": "/legacy-a.txt", "repo_name": "test-repo"},
+        {"path": "/legacy-b.txt", "repo_name": "test-repo"}
+    ])
+    .to_string();
+    infra::entity::activity::Entity::insert(infra::entity::activity::ActiveModel {
+        id: sea_orm::NotSet,
+        repo_id: Set(f.repo_id.clone()),
+        commit_id: Set("legacy-activity-commit".to_string()),
+        op_type: Set("batch_create".to_string()),
+        obj_type: Set("file".to_string()),
+        path: Set("/legacy-a.txt".to_string()),
+        old_path: Set(None),
+        user_id: Set(f.user_id),
+        created_at: Set(now),
+        detail: Set(detail),
+        item_count: Set(0),
+        group_kind: Set("session".to_string()),
+    })
+    .exec(f.server.db.as_ref())
+    .await
+    .unwrap();
+
+    let (events, _) = get_activities(&f, 1, 10).await;
+    let event = events
+        .iter()
+        .find(|e| e["commit_id"] == "legacy-activity-commit")
+        .unwrap_or_else(|| panic!("legacy activity missing: {events:?}"));
+    assert_eq!(event["count"], 2);
+    assert_eq!(event["details"].as_array().unwrap().len(), 2);
+}
+
+/// A single commit with more items than the detail cap keeps the exact count
+/// while returning only the bounded detail slice.
+#[tokio::test]
+async fn test_large_group_keeps_exact_count_and_caps_details() {
+    let f = TestFixture::new().await;
+    let items: Vec<infra::activity_log::ActivityItem> = (0..250)
+        .map(|i| infra::activity_log::ActivityItem {
+            op_type: "create",
+            obj_type: "file",
+            path: format!("/large-{i}.txt"),
+            old_path: None,
+            size: Some(1),
+            obj_id: None,
+            merged: false,
+            merge_kept: false,
+        })
+        .collect();
+    infra::activity_log::log_activity_batch(
+        f.server.db.as_ref(),
+        &f.repo_id,
+        "large-activity-commit",
+        "test-repo",
+        f.user_id,
+        items,
+    )
+    .await;
+
+    let (events, _) = get_activities(&f, 1, 10).await;
+    let event = events
+        .iter()
+        .find(|e| e["commit_id"] == "large-activity-commit")
+        .unwrap_or_else(|| panic!("large activity missing: {events:?}"));
+    assert_eq!(event["count"], 250);
+    assert_eq!(
+        event["details"].as_array().unwrap().len(),
+        server::service::activity::ACTIVITY_DETAIL_LIMIT
+    );
+
+    let summary = infra::entity::activity::Entity::find()
+        .filter(infra::entity::activity::Column::CommitId.eq("large-activity-commit"))
+        .one(f.server.db.as_ref())
+        .await
+        .unwrap()
+        .expect("summary row");
+    assert_eq!(summary.item_count, 250);
+    let stored = infra::entity::activity_item::Entity::find()
+        .filter(infra::entity::activity_item::Column::ActivityId.eq(summary.id))
+        .count(f.server.db.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(stored, 250, "all item rows must be stored");
+}
+
+/// The 5-minute Web-session aggregation must not append to a sync commit's
+/// summary: they are different `group_kind`s even when they happen seconds apart.
+#[tokio::test]
+async fn test_web_upload_does_not_join_sync_commit_group() {
+    let f = TestFixture::new().await;
+
+    let commit = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[
+            ("sync-a.txt", b"a", 0o100644),
+            ("sync-b.txt", b"b", 0o100644),
+        ],
+        &[],
+        None,
+    )
+    .await;
+    upload_file(&f, "web.txt").await;
+
+    let (events, _) = get_activities(&f, 1, 25).await;
+    let commit_event = events
+        .iter()
+        .find(|e| {
+            e["commit_id"].as_str() == Some(commit.as_str())
+                && e["obj_type"] == "file"
+                && e["op_type"] == "batch_create"
+        })
+        .unwrap_or_else(|| panic!("sync commit group missing: {events:?}"));
+    assert_eq!(commit_event["count"], 2);
+    let paths: Vec<&str> = commit_event["details"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|d| d["path"].as_str())
+        .collect();
+    assert!(
+        !paths.contains(&"/web.txt"),
+        "a Web upload must not join the commit summary: {paths:?}"
+    );
+
+    let web_event = events
+        .iter()
+        .find(|e| e["path"] == "/web.txt" && e["op_type"] == "create")
+        .unwrap_or_else(|| panic!("Web upload event missing: {events:?}"));
+    assert_eq!(web_event["count"], 1);
+    assert_ne!(commit_event["id"], web_event["id"]);
 }
 
 #[tokio::test]
@@ -1834,9 +2040,10 @@ async fn test_webdav_failed_auth_is_throttled() {
     assert_eq!(resp.status(), 429);
 }
 
-/// Concurrent aggregation must not lose an item: `create`/`delete` append to the newest batch row
-/// by reading its `detail` array, pushing, and writing it back, so two calls in the same window
-/// used to overwrite each other (the activity page then under-counts, permanently).
+/// Concurrent aggregation must not lose an item: `create`/`delete` append one row to
+/// `activity_items` and bump the summary's count, so two calls in the same window used
+/// to overwrite each other's read-then-write pair (the activity page then under-counts,
+/// permanently).
 #[tokio::test]
 async fn concurrent_creates_are_all_aggregated() {
     const CALLS: usize = 8;
@@ -1878,7 +2085,15 @@ async fn concurrent_creates_are_all_aggregated() {
         .iter()
         .find(|row| row.op_type == "batch_create")
         .unwrap_or_else(|| panic!("expected one aggregated batch_create row, got {rows:?}"));
-    let detail: Vec<serde_json::Value> = serde_json::from_str(&batch.detail).unwrap();
+    assert_eq!(
+        batch.item_count, CALLS as i32,
+        "summary count must be exact"
+    );
+    let detail = infra::entity::activity_item::Entity::find()
+        .filter(infra::entity::activity_item::Column::ActivityId.eq(batch.id))
+        .all(f.server.db.as_ref())
+        .await
+        .unwrap();
     assert_eq!(
         detail.len(),
         CALLS,

@@ -23,6 +23,15 @@ pub struct Model {
     pub created_at: i64,
     #[sea_orm(not_null)]
     pub detail: String,
+    /// Number of objects in this activity. Zero for rows written before the
+    /// `activity_items` split; readers then fall back to `detail`.
+    #[sea_orm(not_null)]
+    pub item_count: i32,
+    /// What produced the row: `session` for a single call that the 5-minute
+    /// aggregation may append to, `commit` for a sync commit group. Keeping the
+    /// two apart prevents a Web upload from appending to a commit's summary.
+    #[sea_orm(not_null, length = 16)]
+    pub group_kind: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

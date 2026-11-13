@@ -329,6 +329,8 @@ v2.1 收藏列表，按资料库、目录、文件分组。
 
 头像 URL 是绝对地址，因为 Android 客户端直接加载它。`old_path`、`old_name`、`old_repo_name` 每个事件都发（seahub 按条件发）；Android 客户端要求重命名事件一定有 `old_name`。需要 `activity.read`。
 
+一次同步提交算一个事件：其中的 `create`/`delete` 按对象类型分组，组内多于一个对象时用 `batch_create`/`batch_delete`，只有一个时用 `create`/`delete`。`count` 是本次操作的对象总数，而 `details` 最多返回 200 条，因此 `count` 可能大于 `details.length`。
+
 **Seafile** —— 路由与外层结构相同。Nanofile 不记录评论或分享事件，动态里只有文件与资料库操作。
 
 ## 列出群组 {#get-api2-groups}

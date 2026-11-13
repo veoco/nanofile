@@ -46,8 +46,8 @@
                     {% endif %}
                 {% else if item.detail_items.len() > 0 %}
                     <span class="base">{% for file_name in item.detail_items.iter().take(4) %}{{ file_name }}{% if !loop.last %}, {% endif %}{% endfor %}</span>
-                    {% if item.detail_items.len() > 4 %}
-                    <span class="badge badge-gray shrink-0">+{{ item.detail_items.len() - 4 }}</span>
+                    {% if item.batch_count > 4 %}
+                    <span class="badge badge-gray shrink-0">+{{ item.batch_count - 4 }}</span>
                     {% endif %}
                 {% else %}
                     <a href="/libraries/{{ item.repo_id }}/files{{ item.path }}">{{ item.name }}</a>

@@ -368,6 +368,12 @@ The avatar URL is absolute because the Android client loads it directly.
 emits them conditionally); the Android client expects `old_name` to exist on
 rename events. Requires `activity.read`.
 
+One sync commit is one event: its `create`/`delete` changes group per object
+type, using `batch_create`/`batch_delete` when the group has more than one
+object and `create`/`delete` for a single one. `count` is the exact number of
+objects in that operation, while `details` returns at most 200 entries, so
+`count` can be larger than `details.length`.
+
 **Seafile** — same route and envelope. Nanofile records no comment or share
 events, so the feed only carries file and library operations.
 

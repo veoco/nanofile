@@ -6,7 +6,7 @@ use sea_orm::{
 use std::sync::Arc;
 
 use base::error::AppError;
-use infra::entity::activity;
+use infra::entity::{activity, activity_item};
 
 /// SQLite has a ~999 bound on bound parameters; chunk IN / NOT IN lists.
 const IN_BATCH: usize = 500;
@@ -34,6 +34,13 @@ pub trait ActivityRepository: Send + Sync {
         user_id: i32,
         limit: u64,
     ) -> Result<Vec<activity::Model>, AppError>;
+    /// Items for a page of activities, at most `per_activity_limit` rows each,
+    /// ordered by activity and insertion order.
+    async fn find_items_by_activity_ids(
+        &self,
+        activity_ids: &[i32],
+        per_activity_limit: u64,
+    ) -> Result<Vec<activity_item::Model>, AppError>;
 }
 
 pub struct DbActivityRepository {
@@ -81,6 +88,7 @@ impl ActivityRepository for DbActivityRepository {
             let query = apply_extra_filters(activity::Entity::find(), user_id, repo_id);
             return Ok(query
                 .order_by_desc(activity::Column::CreatedAt)
+                .order_by_desc(activity::Column::Id)
                 .offset(offset)
                 .limit(limit)
                 .all(self.db.as_ref())
@@ -103,6 +111,7 @@ impl ActivityRepository for DbActivityRepository {
                 merged.extend(
                     query
                         .order_by_desc(activity::Column::CreatedAt)
+                        .order_by_desc(activity::Column::Id)
                         .limit(need)
                         .all(self.db.as_ref())
                         .await?,
@@ -119,13 +128,16 @@ impl ActivityRepository for DbActivityRepository {
             merged.extend(
                 query
                     .order_by_desc(activity::Column::CreatedAt)
+                    .order_by_desc(activity::Column::Id)
                     .limit(need)
                     .all(self.db.as_ref())
                     .await?,
             );
         }
 
-        merged.sort_by_key(|m| std::cmp::Reverse(m.created_at));
+        // One commit can write several summaries with the same second-resolution
+        // timestamp; id is the stable tie-breaker so paging cannot shuffle them.
+        merged.sort_by_key(|m| (std::cmp::Reverse(m.created_at), std::cmp::Reverse(m.id)));
         Ok(merged
             .into_iter()
             .skip(offset as usize)
@@ -177,8 +189,32 @@ impl ActivityRepository for DbActivityRepository {
         Ok(activity::Entity::find()
             .filter(activity::Column::UserId.eq(user_id))
             .order_by_desc(activity::Column::CreatedAt)
+            .order_by_desc(activity::Column::Id)
             .limit(limit)
             .all(self.db.as_ref())
             .await?)
+    }
+
+    async fn find_items_by_activity_ids(
+        &self,
+        activity_ids: &[i32],
+        per_activity_limit: u64,
+    ) -> Result<Vec<activity_item::Model>, AppError> {
+        // One indexed query per summary: a page only renders the first
+        // `per_activity_limit` details, and a single upload can leave tens of
+        // thousands of item rows. An IN query would pull them all just to drop
+        // them in memory.
+        let mut out = Vec::new();
+        for activity_id in activity_ids {
+            out.extend(
+                activity_item::Entity::find()
+                    .filter(activity_item::Column::ActivityId.eq(*activity_id))
+                    .order_by_asc(activity_item::Column::Id)
+                    .limit(per_activity_limit)
+                    .all(self.db.as_ref())
+                    .await?,
+            );
+        }
+        Ok(out)
     }
 }

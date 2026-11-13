@@ -107,6 +107,7 @@ migrations!(
     m20261019_000004_rename_default_quota_setting,
     m20261023_000001_backfill_repo_updated_at,
     m20261102_000001_create_face_tags,
+    m20261113_000001_create_activity_items,
 );
 
 #[cfg(test)]
