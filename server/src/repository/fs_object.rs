@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
+};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -126,26 +128,45 @@ impl FsObjectRepository for DbFsObjectRepository {
         if models.is_empty() {
             return Ok(());
         }
-        // `ON CONFLICT DO NOTHING` makes a re-uploaded object a no-op, and a client re-sending
-        // objects an earlier commit already stored (a retried sync, a second commit over the same
-        // tree) is legitimate. sea-orm reports "every row conflicted" as `RecordNotInserted`,
-        // which is success here.
-        match fs_object::Entity::insert_many(models)
-            .on_conflict(
-                sea_orm::sea_query::OnConflict::columns([
-                    fs_object::Column::RepoId,
-                    fs_object::Column::FsId,
-                ])
-                .do_nothing()
-                .to_owned(),
-            )
-            .exec(self.db.as_ref())
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(sea_orm::DbErr::RecordNotInserted) => Ok(()),
-            Err(e) => Err(e.into()),
+
+        // SQLite caps a statement at 32,766 bound variables. This table binds four
+        // columns per row (the auto-increment `id` is omitted), so one `INSERT` for
+        // a full `recv-fs` pack (several thousand objects when the client fills its
+        // 1 MiB pack with tiny objects) would hit the limit. Chunk the rows and keep
+        // the batch atomic: a retried sync is idempotent through `ON CONFLICT`, but
+        // a partial insert would still make the client resend the rest.
+        const INSERT_BATCH: usize = 1_000;
+        let txn = self.db.begin().await?;
+        let mut models = models.into_iter();
+        loop {
+            let chunk: Vec<_> = models.by_ref().take(INSERT_BATCH).collect();
+            if chunk.is_empty() {
+                break;
+            }
+
+            // `ON CONFLICT DO NOTHING` makes a re-uploaded object a no-op, and a client re-sending
+            // objects an earlier commit already stored (a retried sync, a second commit over the same
+            // tree) is legitimate. sea-orm reports "every row conflicted" as `RecordNotInserted`,
+            // which is success here.
+            match fs_object::Entity::insert_many(chunk)
+                .on_conflict(
+                    sea_orm::sea_query::OnConflict::columns([
+                        fs_object::Column::RepoId,
+                        fs_object::Column::FsId,
+                    ])
+                    .do_nothing()
+                    .to_owned(),
+                )
+                .exec(&txn)
+                .await
+            {
+                Ok(_) => {}
+                Err(sea_orm::DbErr::RecordNotInserted) => {}
+                Err(e) => return Err(e.into()),
+            }
         }
+        txn.commit().await?;
+        Ok(())
     }
 
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<fs_object::Model>, AppError> {

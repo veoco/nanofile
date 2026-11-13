@@ -55,7 +55,15 @@ const AUTO_MERGE_DESCRIPTION: &str = "Auto merge by system";
 
 /// Cap on FS objects in a single `recv-fs` pack: the entry count drives how many
 /// objects are parsed and inserted, so it is bounded apart from the body size.
-const MAX_FS_PACK_ENTRIES: usize = 4096;
+///
+/// The official client fills a pack to 1 MiB (`http-tx-mgr.c`:
+/// `MAX_OBJECT_PACK_SIZE`) regardless of the object count. With the 44-byte
+/// entry header and tiny directory/file objects, one pack can carry ~24k
+/// objects (`1 MiB / 44`), so the cap must stay above that; keeping it at the
+/// old 4096 rejected every upload of a library with more than a few thousand
+/// objects (`too many fs objects in pack`). The 32 MiB body cap still bounds
+/// the work a single request can ask for.
+const MAX_FS_PACK_ENTRIES: usize = 32 * 1024;
 
 /// Cap on the **total** decompressed size of a single `recv-fs` pack. `pack_fs`
 /// caps one object at 64 MiB, but a pack of compressible objects could still

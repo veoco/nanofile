@@ -227,6 +227,29 @@ async fn test_recv_fs_binary_format() {
     push_commit(&client, &sync_token, &repo_id, &root_fs_id, None).await;
 }
 
+/// The official client fills a `recv-fs` pack to 1 MiB (`daemon/http-tx-mgr.c`:
+/// `MAX_OBJECT_PACK_SIZE`) regardless of the entry count. A library with many
+/// tiny objects therefore sends several thousand objects per pack; the old
+/// 4096-entry cap rejected that upload forever, and an unchunked insert would
+/// then exceed SQLite's variable limit. 9,000 objects cover both bounds.
+#[tokio::test]
+async fn test_recv_fs_accepts_large_pack() {
+    let (server, _api_token, repo_id, sync_token) = setup_repo().await;
+    let client = server.client();
+
+    let entries: Vec<(String, Vec<u8>)> = (0..9_000i64)
+        .map(|size| make_fs_entry(&make_file_fs_data(vec![], size)))
+        .collect();
+    let resp = client
+        .recv_fs(&sync_token, &repo_id, pack_fs_entries(&entries))
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "a 9,000-object FS pack (the client's pack limit allows this many tiny objects) must be accepted"
+    );
+}
+
 #[tokio::test]
 async fn test_recv_fs_invalid_obj_id() {
     let (server, _api_token, repo_id, sync_token) = setup_repo().await;
