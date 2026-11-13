@@ -611,19 +611,17 @@ fn media_head_cap(kind: MediaKind) -> u64 {
 /// would keep reporting the previous path.
 fn ffmpeg_available(ffmpeg: &str) -> bool {
     let path = crate::sandbox::worker::resolve_helper(ffmpeg);
-    if !path.is_file() {
-        return false;
-    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(&path)
-            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
+        path.is_file()
+            && std::fs::metadata(&path)
+                .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
     }
     #[cfg(not(unix))]
     {
-        true
+        path.is_file()
     }
 }
 

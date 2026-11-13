@@ -449,12 +449,13 @@ jobs:
           echo "/tmp/zig-x86_64-linux-0.16.0" >> $GITHUB_PATH
       # crates.io with retries instead of the release CDN: the latter has
       # answered 504 often enough to fail a cross row. The compile is small next
-      # to the cross build it enables; the version pin stays 0.23.4.
+      # to the cross build it enables. 0.24.1 drops rustc 1.100's
+      # `-Wl,--no-rosegment` for LoongArch, which `zig cc` rejects.
       - name: Install cargo-zigbuild
         shell: bash
         run: |
           for attempt in 1 2 3; do
-            if cargo install cargo-zigbuild --version 0.23.4 --force; then
+            if cargo install cargo-zigbuild --version 0.24.1 --force; then
               break
             fi
             echo "cargo install failed (attempt $attempt); retrying"

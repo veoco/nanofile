@@ -144,11 +144,11 @@ jobs:
         run: |
           curl -sL --retry 3 --retry-delay 2 https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz \
             -o /tmp/zig.tar.xz
-          # zig 0.16.0 is the current release and is what cargo-zigbuild 0.23.4
-          # tests against (0.14 predates its support matrix). Note that zig 0.15+
-          # raises the baseline of the binaries it emits to glibc 2.31 / Linux
-          # 5.10 (0.14 emitted glibc 2.28 / Linux 4.19); add a suffix such as
-          # `--target aarch64-unknown-linux-gnu.2.28` if older hosts must keep
+          # zig 0.16.0 is the current release and is what the pinned
+          # cargo-zigbuild (0.24.1, installed below) supports. Note that zig
+          # 0.15+ raises the baseline of the binaries it emits to glibc 2.31 /
+          # Linux 5.10 (0.14 emitted glibc 2.28 / Linux 4.19); add a suffix such
+          # as `--target aarch64-unknown-linux-gnu.2.28` if older hosts must keep
           # working.
           # Pin the archive to its published SHA-256 so a compromised CDN or a
           # silently replaced tarball cannot inject a toolchain into the build.
@@ -160,14 +160,14 @@ jobs:
         run: npm ci
 
       # crates.io with retries instead of the release CDN: the latter has
-      # answered 504 often enough to fail a cross row. The version pin stays
-      # 0.23.4.
+      # answered 504 often enough to fail a cross row. 0.24.1 drops rustc
+      # 1.100's `-Wl,--no-rosegment` for LoongArch, which `zig cc` rejects.
       - name: Install cargo-zigbuild
         if: matrix.cross
         shell: bash
         run: |
           for attempt in 1 2 3; do
-            if cargo install cargo-zigbuild --version 0.23.4 --force; then
+            if cargo install cargo-zigbuild --version 0.24.1 --force; then
               break
             fi
             echo "cargo install failed (attempt $attempt); retrying"
