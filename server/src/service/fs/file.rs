@@ -693,10 +693,12 @@ impl FileService {
 
         // Only `Ok(None)` means "the repo is empty". A failed lookup must be
         // propagated: continuing here would create the directory chain on top of
-        // an empty tree and drop the library's existing entries.
-        let Some(root_id) = get_head_root_id_opt(self.db(), repo_id).await? else {
-            return Ok(());
-        };
+        // an empty tree and drop the library's existing entries. An empty library
+        // starts from the `EMPTY_SHA1` sentinel, which reads as an empty directory,
+        // so the first upload into a nested path still creates its parents.
+        let root_id = get_head_root_id_opt(self.db(), repo_id)
+            .await?
+            .unwrap_or_else(|| EMPTY_SHA1.to_string());
 
         let parts: Vec<&str> = path
             .trim_start_matches('/')
@@ -735,40 +737,6 @@ impl FileService {
                 }
             }
             current = next;
-        }
-
-        Ok(())
-    }
-
-    /// Log the activity tail of the block-commit upload path (`upload_blks_api`).
-    /// The commit itself already adjusted `repo.size` atomically with HEAD.
-    /// `op_type` comes from whether the file actually existed, not from a
-    /// client-supplied `replace`.
-    pub async fn finalize_upload(
-        &self,
-        repo_id: &str,
-        fp: &str,
-        fs_id: &str,
-        size: i64,
-        user_id: Option<i32>,
-        file_exists: bool,
-    ) -> Result<(), AppError> {
-        if let Some(uid) = user_id {
-            let op_type = if file_exists { "edit" } else { "create" };
-            activity_log::log_activity(
-                self.db(),
-                repo_id,
-                op_type,
-                "file",
-                fp,
-                uid,
-                None,
-                Some(size),
-                Some(fs_id),
-                None,
-                None,
-            )
-            .await;
         }
 
         Ok(())

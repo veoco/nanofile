@@ -30,7 +30,7 @@
 
 `GET /blks/{token}/{file_id}/{block_id}`
 
-返回文件的一个块，供逐块解密的客户端使用。令牌由 [`GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/`](/zh/reference/api/libraries#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link) 签发，只对该块有效。
+返回文件的一个块，供逐块解密的客户端使用。令牌由 [`GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/`](/zh/reference/api/libraries#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link) 签发，绑定的是资料库与调用者而不是单个块：在有效期内，调用者能读取该库中任意文件的任意块；接口仍会校验所请求的块属于路径里给出的 `file_id`。
 
 ## 上传文件 {#post-upload-api-token}
 
@@ -53,7 +53,7 @@
 
 断点续传还在接收分块时，响应是 `[{"name": "notes.txt", "uploaded": true}]`。
 
-**断点续传** —— 发送 `Content-Range: bytes <start>-<end>/<total>` 与 `Content-Length`；每个分块暂存到临时文件，最后一个分块提交。见[已上传字节](#get-api-v2-1-repos-repo-id-file-uploaded-bytes)。
+**断点续传** —— 发送 `Content-Range: bytes <start>-<end>/<total>` 与 `Content-Length`；每个分块暂存到临时文件，最后一个分块提交。只有 `/upload-aj/`、`/upload-aj/{token}`、`/upload-api/{token}` 与 `/update-aj/` 实现了它；其余上传/更新入口收到 `Content-Range` 会返回 `400`。见[已上传字节](#get-api-v2-1-repos-repo-id-file-uploaded-bytes)。
 
 需要写令牌；加密资料库要先缓存库密钥（上传链接请求会做），可分享的上传链接对加密库直接拒绝。
 
@@ -100,7 +100,7 @@
 
 没有 `commitonly` 时，每个 `file` 段是一个块：段里的 filename 是块 id，必须等于 `sha1(内容)`，否则返回 `400`。每个块写入时即计入配额（超限返回 `443`）。
 
-带 `commitonly` 时，请求是表单：`parent_dir`、`file_name`、`blockids`（JSON 数组）、`file_size` 与可选 `replace`；服务器用已上传的块组装文件并返回 `{"id": "<file_fs_id>"}`。
+带 `commitonly` 时，请求是表单：`parent_dir`、`file_name`、`blockids`（JSON 数组）、`file_size` 与可选 `replace`；服务器用已上传的块组装文件。`blockids` 只有在零字节文件时才能为空。成功时默认返回纯文本文件 id；带 `ret-json` 时返回 `[{"id": "…", "name": "…", "size": 0}]`。`replace=1` 时，`file_name` 指向已有目录会返回 `409`：文件不会替换目录。
 
 加密资料库会被拒绝：该接口用明文 SHA-1 命名块，在服务端加密下不成立。
 

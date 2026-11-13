@@ -51,7 +51,10 @@ request; an invalid or expired token is a `400`.
 
 Serves one block of a file, for clients that decrypt block by block. The token
 is minted by [`GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/`](/reference/api/libraries#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link)
-and is valid only for that block.
+and is bound to the library and caller, not to a single block: while it is valid
+it can serve any block of any file the caller may read in that library. The
+endpoint still checks that the requested block belongs to the file named in the
+path.
 
 ## Upload a file {#post-upload-api-token}
 
@@ -78,7 +81,10 @@ While a resumable upload is still receiving chunks the answer is instead
 
 **Resumable uploads** — send `Content-Range: bytes <start>-<end>/<total>` and
 `Content-Length`; each chunk is staged in a temp file and the final chunk
-commits. See [uploaded bytes](#get-api-v2-1-repos-repo-id-file-uploaded-bytes).
+commits. Only `/upload-aj/`, `/upload-aj/{token}`, `/upload-api/{token}` and
+`/update-aj/` implement this; the other upload and update endpoints reject a
+request carrying `Content-Range` with `400`. See
+[uploaded bytes](#get-api-v2-1-repos-repo-id-file-uploaded-bytes).
 
 Requires a write token; encrypted libraries need the library key to be cached
 first (the upload link request does that; a shareable upload link is refused for
@@ -138,8 +144,11 @@ charged to the quota as it is stored (`443` when over).
 
 With `commitonly`, the request is a form with `parent_dir`, `file_name`,
 `blockids` (a JSON array), `file_size` and an optional `replace`; the server
-assembles the file from blocks already uploaded and answers
-`{"id": "<file_fs_id>"}`.
+assembles the file from blocks already uploaded. `blockids` may be empty only
+for a zero-byte file. The success body is the file id as plain text — or
+`[{"id": "…", "name": "…", "size": 0}]` when `ret-json` is present. With
+`replace=1`, a `file_name` that names an existing directory is refused with
+`409`: a file never replaces a collection.
 
 Encrypted libraries are refused: this API names blocks by the plaintext SHA-1,
 which cannot hold for server-side encryption.

@@ -158,6 +158,9 @@ pub async fn file_post_handler(
     let repo_id = &access.repo_id;
 
     let (parts, body) = req.into_parts();
+    // Resumable chunks are only implemented by the token upload endpoints; this
+    // one would commit a chunk as the whole file.
+    crate::handler::web::upload::reject_content_range(&parts.headers)?;
     let content_type = parts
         .headers
         .get("content-type")

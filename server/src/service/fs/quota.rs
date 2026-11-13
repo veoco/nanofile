@@ -16,38 +16,6 @@ async fn user_usage(repos: &Repositories, user_id: i32) -> Result<i64, AppError>
     Ok(usage)
 }
 
-/// Pre-check whether a user has enough remaining quota for a `delta`-byte upload.
-///
-/// This is the fast/advisory path: it may use a 500 ms cached total and is not the
-/// authority. A positive-delta commit must call
-/// [`Repositories::check_repo_quota_locked`] while holding that owner's quota scope.
-///
-/// `users.storage_quota` decides: `Some(0)` unlimited, `Some(n)` n bytes, `None`
-/// falls back to `default_quota`, the server's default space quota (its `0` is
-/// unlimited). Returns `AppError::QuotaExceeded` when the allowance would be
-/// exceeded.
-pub async fn check_upload_quota(
-    repos: &Repositories,
-    user_id: i32,
-    delta: i64,
-    default_quota: u64,
-) -> Result<(), AppError> {
-    if delta <= 0 {
-        return Ok(());
-    }
-
-    let Some(quota) = repos.effective_user_quota(user_id, default_quota).await? else {
-        return Ok(());
-    };
-
-    let usage = user_usage(repos, user_id).await?;
-    if usage + delta > quota {
-        return Err(AppError::QuotaExceeded);
-    }
-
-    Ok(())
-}
-
 /// Sync-protocol quota probe (`GET /seafhttp/repo/{id}/quota-check/?delta=`):
 /// upstream's `checkQuota` (fileserver/quota.go) tests `usage + delta >= quota`
 /// for *any* delta, so a full client gets "out of quota", not a 200.

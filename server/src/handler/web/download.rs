@@ -303,6 +303,10 @@ pub async fn block_download(
         ));
     }
 
+    // A capability URL must stop working when the account is deactivated, like
+    // the other token consumers (`/download-api`, `/upload-api`, `/zip`).
+    ensure_token_user_active(&state, info.user_id).await?;
+
     let repo_id = &info.repo_id;
 
     // Re-check read permission: the token outlives membership, so a user

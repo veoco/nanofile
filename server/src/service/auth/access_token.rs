@@ -197,18 +197,6 @@ impl AccessTokenManager {
         before - guard.len()
     }
 
-    /// Drop `user_id`'s tokens for one repository (unshare, deleted library): the
-    /// token was minted while they were a member, so it must not outlive it.
-    pub fn revoke_user_repo(&self, user_id: i32, repo_id: &str) -> usize {
-        let mut guard = match self.tokens.write() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let before = guard.len();
-        guard.retain(|_, t| !(t.user_id == user_id && t.repo_id == repo_id));
-        before - guard.len()
-    }
-
     /// Drop the tokens minted from upload link `link_id`; deleting the link must
     /// also stop uploaders that already exchanged it for a token.
     pub fn revoke_upload_link(&self, link_id: i32) -> usize {

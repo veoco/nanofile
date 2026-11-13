@@ -18,11 +18,25 @@ pub struct UserAdminInfo {
 
 pub struct AdminUserService {
     repos: Arc<Repositories>,
+    /// Present when the service is built from `AppState`; used to drop the
+    /// account's outstanding capability URLs when it is deactivated.
+    token_manager: Option<Arc<crate::service::auth::access_token::AccessTokenManager>>,
 }
 
 impl AdminUserService {
     pub fn new(repos: Arc<Repositories>) -> Self {
-        Self { repos }
+        Self {
+            repos,
+            token_manager: None,
+        }
+    }
+
+    pub fn with_token_manager(
+        mut self,
+        token_manager: Arc<crate::service::auth::access_token::AccessTokenManager>,
+    ) -> Self {
+        self.token_manager = Some(token_manager);
+        self
     }
 
     pub async fn list_users(&self) -> Result<Vec<UserAdminInfo>, AppError> {
@@ -95,6 +109,12 @@ impl AdminUserService {
             .await?;
         // Deactivating an account must revoke the anonymous links it created immediately.
         crate::service::sharing::share::invalidate_link_creator_cache(user_id, None);
+        // The token-only endpoints (`/blks/`, `/upload-blks-api/`) authenticate
+        // with an in-memory capability rather than a session; without this an
+        // already-minted URL would keep working for its remaining TTL.
+        if !is_active && let Some(manager) = &self.token_manager {
+            manager.revoke_user(user_id);
+        }
         Ok(())
     }
 

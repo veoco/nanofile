@@ -919,3 +919,234 @@ async fn test_download_non_ascii_filename_keeps_disposition() {
     let body = dl.bytes().await.unwrap();
     assert_eq!(&body[..], b"hello", "downloaded content must match");
 }
+
+fn sha1_hex(data: &[u8]) -> String {
+    use sha1::{Digest, Sha1};
+    let mut hasher = Sha1::new();
+    hasher.update(data);
+    hex::encode(hasher.finalize())
+}
+
+async fn blks_upload_url(f: &TestFixture) -> String {
+    let resp = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+    resp.json().await.unwrap()
+}
+
+async fn upload_one_block(f: &TestFixture, upload_url: &str, data: &[u8]) -> String {
+    let block_id = sha1_hex(data);
+    let part = reqwest::multipart::Part::bytes(data.to_vec())
+        .file_name(block_id.clone())
+        .mime_str("application/octet-stream")
+        .unwrap();
+    let form = reqwest::multipart::Form::new().part("file", part);
+    let resp = f.client.post_multipart_url(upload_url, form).await;
+    assert_eq!(resp.status(), 200, "block upload failed");
+    block_id
+}
+
+#[tokio::test]
+async fn test_upload_blks_commit_cannot_replace_a_directory() {
+    let f = TestFixture::new().await;
+    assert_eq!(
+        f.client
+            .create_dir(&f.api_token, &f.repo_id, "/docs")
+            .await
+            .status(),
+        201
+    );
+    assert!(
+        f.client
+            .upload_file(&f.api_token, &f.repo_id, "/docs", "keep.txt", b"keep")
+            .await
+            .status()
+            .is_success()
+    );
+
+    let upload_url = blks_upload_url(&f).await;
+    let data = b"shadow";
+    let block_id = upload_one_block(&f, &upload_url, data).await;
+
+    let commit = reqwest::multipart::Form::new()
+        .text("commitonly", "true")
+        .text("parent_dir", "/")
+        .text("file_name", "docs")
+        .text("blockids", serde_json::to_string(&vec![block_id]).unwrap())
+        .text("file_size", data.len().to_string())
+        .text("replace", "1");
+    let resp = f.client.post_multipart_url(&upload_url, commit).await;
+    assert_eq!(
+        resp.status(),
+        409,
+        "a file must not replace a directory, even with replace=1"
+    );
+
+    // The directory and its child must still be there.
+    let listing = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/dir/?p=/docs", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(listing.status(), 200, "the directory must still exist");
+    let body: serde_json::Value = listing.json().await.unwrap();
+    let names: Vec<&str> = body
+        .as_array()
+        .expect("directory listing is an array")
+        .iter()
+        .filter_map(|entry| entry["name"].as_str())
+        .collect();
+    assert!(names.contains(&"keep.txt"), "the child file must survive");
+}
+
+#[tokio::test]
+async fn test_upload_blks_commit_rejects_windows_reserved_name() {
+    let f = TestFixture::new().await;
+    let upload_url = blks_upload_url(&f).await;
+    let data = b"reserved";
+    let block_id = upload_one_block(&f, &upload_url, data).await;
+
+    let commit = reqwest::multipart::Form::new()
+        .text("commitonly", "true")
+        .text("parent_dir", "/")
+        .text("file_name", "CON.txt")
+        .text("blockids", serde_json::to_string(&vec![block_id]).unwrap())
+        .text("file_size", data.len().to_string());
+    let resp = f.client.post_multipart_url(&upload_url, commit).await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "block commit must apply the same filename validation as every other upload entry"
+    );
+}
+
+#[tokio::test]
+async fn test_upload_blks_commit_accepts_zero_byte_file() {
+    let f = TestFixture::new().await;
+    let upload_url = blks_upload_url(&f).await;
+
+    let commit = reqwest::multipart::Form::new()
+        .text("commitonly", "true")
+        .text("parent_dir", "/")
+        .text("file_name", "empty.txt")
+        .text("blockids", "[]")
+        .text("file_size", "0");
+    let resp = f.client.post_multipart_url(&upload_url, commit).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "a zero-byte file has no blocks and must still commit"
+    );
+
+    let detail = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/file/detail/?p=/empty.txt", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(detail.status(), 200);
+    let body: serde_json::Value = detail.json().await.unwrap();
+    assert_eq!(body["size"].as_i64(), Some(0));
+}
+
+#[tokio::test]
+async fn test_upload_blks_commit_creates_missing_parent_directories() {
+    let f = TestFixture::new().await;
+    let upload_url = blks_upload_url(&f).await;
+    let data = b"nested";
+    let block_id = upload_one_block(&f, &upload_url, data).await;
+
+    let commit = reqwest::multipart::Form::new()
+        .text("commitonly", "true")
+        .text("parent_dir", "/")
+        .text("relative_path", "My Photos/Camera")
+        .text("file_name", "IMG_002.jpg")
+        .text("blockids", serde_json::to_string(&vec![block_id]).unwrap())
+        .text("file_size", data.len().to_string());
+    let resp = f.client.post_multipart_url(&upload_url, commit).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "block commit should create missing parent directories like the other upload endpoints"
+    );
+
+    let detail = f
+        .client
+        .get(
+            &format!(
+                "/api2/repos/{}/file/detail/?p=/My%20Photos/Camera/IMG_002.jpg",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(detail.status(), 200);
+}
+
+#[tokio::test]
+async fn test_api2_file_upload_rejects_content_range() {
+    let f = TestFixture::new().await;
+    let part = reqwest::multipart::Part::bytes(b"abc".to_vec()).file_name("chunk.bin");
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("parent_dir", "/");
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/api2/repos/{}/file/",
+            f.server.base_url, f.repo_id
+        ))
+        .bearer_auth(&f.api_token)
+        .header("Content-Range", "bytes 0-2/3")
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        400,
+        "the api2 file upload does not implement resumable uploads"
+    );
+}
+
+#[tokio::test]
+async fn test_update_api_rejects_content_range_chunks() {
+    let f = TestFixture::new().await;
+    assert!(
+        f.client
+            .upload_file(&f.api_token, &f.repo_id, "/", "report.txt", b"original")
+            .await
+            .status()
+            .is_success()
+    );
+
+    let link = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/update-link/?p=/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(link.status(), 200);
+    let update_url: String = link.json().await.unwrap();
+
+    // `update-api` is not resumable; a chunk must be refused instead of
+    // overwriting the target with its bytes.
+    let resp = f
+        .client
+        .post_upload_chunk(&update_url, "/", "report.txt", b"abc", 0, 3)
+        .await;
+    assert_eq!(resp.status(), 400, "chunked update must be rejected");
+
+    let dl = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/report.txt")
+        .await;
+    assert_eq!(dl.status(), 200);
+    assert_eq!(
+        dl.bytes().await.unwrap().as_ref(),
+        b"original",
+        "the rejected chunk must not have changed the file"
+    );
+}

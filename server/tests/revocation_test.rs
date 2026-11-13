@@ -397,3 +397,139 @@ async fn totp_code_cannot_be_replayed() {
         "the server must ask for a fresh code"
     );
 }
+
+/// A block-upload part whose filename is the block's SHA-1, as the block API
+/// requires.
+fn block_form(data: &[u8]) -> reqwest::multipart::Form {
+    use sha1::{Digest, Sha1};
+    let mut hasher = Sha1::new();
+    hasher.update(data);
+    let block_id = hex::encode(hasher.finalize());
+    let part = reqwest::multipart::Part::bytes(data.to_vec())
+        .file_name(block_id)
+        .mime_str("application/octet-stream")
+        .unwrap();
+    reqwest::multipart::Form::new().part("file", part)
+}
+
+/// Deactivation must stop every capability URL, including the block-level ones:
+/// `/upload-blks-api` and `/blks/` authenticate with an in-memory token rather
+/// than a session, so they need the same `is_active` check as `/download-api`.
+#[tokio::test]
+async fn deactivating_an_account_stops_block_capability_urls() {
+    let f = TestFixture::new().await;
+
+    let link = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
+    assert_eq!(link.status(), 200);
+    let upload_url: String = link.json().await.unwrap();
+
+    // A committed file gives us a block-download URL to test as well.
+    assert!(
+        f.client
+            .upload_file(&f.api_token, &f.repo_id, "/", "block.bin", b"block-bytes")
+            .await
+            .status()
+            .is_success()
+    );
+    let info = f
+        .client
+        .get(
+            &format!(
+                "/api2/repos/{}/file/?p=/block.bin&op=downloadblks",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(info.status(), 200);
+    let info: serde_json::Value = info.json().await.unwrap();
+    let file_id = info["file_id"].as_str().expect("file id");
+    let block_id = info["blklist"][0].as_str().expect("block id");
+    let link = f
+        .client
+        .get(
+            &format!(
+                "/api2/repos/{}/files/{file_id}/blks/{block_id}/download-link/",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(link.status(), 200);
+    let block_url: String = link.json().await.unwrap();
+    let block_path = block_url
+        .strip_prefix(&f.server.base_url)
+        .expect("block URL uses the server base");
+
+    // The upload URL works while the account is active.
+    let resp = f
+        .client
+        .post_multipart_url(&upload_url, block_form(b"before"))
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let user = infra::entity::user::Entity::find_by_id(f.user_id)
+        .one(&*f.server.db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: infra::entity::user::ActiveModel = user.into();
+    active.is_active = Set(false);
+    active.update(&*f.server.db).await.unwrap();
+
+    let resp = f
+        .client
+        .post_multipart_url(&upload_url, block_form(b"after"))
+        .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "a deactivated account's block-upload URL must stop working"
+    );
+
+    let resp = f.client.get(block_path, None).await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "a deactivated account's block-download URL must stop working"
+    );
+}
+
+/// Deactivation revokes the account's outstanding capability URLs outright, not
+/// only when they happen to hit an endpoint that re-checks `is_active`.
+#[tokio::test]
+async fn deactivating_an_account_revokes_outstanding_capability_tokens() {
+    let f = TestFixture::new().await;
+
+    let link = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
+    assert_eq!(link.status(), 200);
+    let upload_url: String = link.json().await.unwrap();
+    let token = upload_url
+        .rsplit('/')
+        .next()
+        .expect("token in the block URL")
+        .to_string();
+    assert!(
+        f.server.state.token_manager.validate(&token).is_some(),
+        "the token must be live before deactivation"
+    );
+
+    let user = infra::entity::user::Entity::find_by_id(f.user_id)
+        .one(&*f.server.db)
+        .await
+        .unwrap()
+        .unwrap();
+    let is_admin = user.is_admin;
+    let storage_quota = user.storage_quota;
+
+    let svc = server::service::admin::AdminUserService::new(f.server.repos.clone())
+        .with_token_manager(f.server.state.token_manager.clone());
+    svc.update_user(f.user_id, is_admin, false, storage_quota)
+        .await
+        .unwrap();
+
+    assert!(
+        f.server.state.token_manager.validate(&token).is_none(),
+        "deactivation must revoke outstanding capability URLs"
+    );
+}

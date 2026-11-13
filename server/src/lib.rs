@@ -711,6 +711,7 @@ impl AppState {
 
     pub fn admin_user_service(&self) -> crate::service::admin::AdminUserService {
         crate::service::admin::AdminUserService::new(self.repos.clone())
+            .with_token_manager(self.token_manager.clone())
     }
 
     pub fn admin_service(&self) -> crate::service::admin::AdminService {

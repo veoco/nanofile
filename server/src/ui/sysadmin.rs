@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
-use crate::service::admin::AdminUserService;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
@@ -85,7 +84,7 @@ async fn render_page(
     error: Option<String>,
     success: Option<String>,
 ) -> Result<Response, AppError> {
-    let svc = AdminUserService::new(state.repos.clone());
+    let svc = state.admin_user_service();
     let users_data = svc.list_users().await?;
 
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
@@ -167,7 +166,7 @@ pub async fn create_user(
         form.csrf_token.as_deref(),
     )?;
 
-    let svc = AdminUserService::new(state.repos.clone());
+    let svc = state.admin_user_service();
 
     let storage_quota = parse_quota(form.storage_quota.as_deref());
     let is_admin = form.is_admin.is_some();
@@ -223,7 +222,7 @@ pub async fn update_user(
         form.csrf_token.as_deref(),
     )?;
 
-    let svc = AdminUserService::new(state.repos.clone());
+    let svc = state.admin_user_service();
 
     let storage_quota = parse_quota(form.storage_quota.as_deref());
     let is_admin = form.is_admin.is_some();
@@ -265,7 +264,7 @@ pub async fn delete_user(
         form.csrf_token.as_deref(),
     )?;
 
-    let svc = AdminUserService::new(state.repos.clone());
+    let svc = state.admin_user_service();
 
     if let Err(e) = svc.delete_user(user_id).await {
         return render_sysadmin_error(&state, &user, e).await;
