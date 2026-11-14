@@ -77,15 +77,23 @@ pub async fn reserve_block_bytes_for_owner(
         return Ok(());
     }
 
-    let scope = repos.lock_quota(owner).await;
-
+    // Both reads are database round trips, so they happen *before* the per-user
+    // scope is taken: holding the scope across them serialized every block upload
+    // of the same user behind one. The usage entry the commit path maintains is
+    // invalidated/updated under the same scope, so the snapshot read below is
+    // still consistent with it.
     let Some(quota) = repos.effective_user_quota(owner, default_quota).await? else {
         return Ok(());
     };
+    let _ = user_usage(repos, owner).await?;
 
-    // The cached total is safe under the scope: every size-changing commit holds
-    // the same scope and invalidates the entry before releasing it.
-    let usage = user_usage(repos, owner).await?;
+    let scope = repos.lock_quota(owner).await;
+    let usage = match repos.quota_cache.cached_usage(owner) {
+        Some(usage) => usage,
+        // A commit that ran between the read above and the lock invalidated the
+        // snapshot; it is rare, and reading it under the scope keeps the check exact.
+        None => repos.compute_user_usage(owner).await?,
+    };
     repos
         .quota_cache
         .reserve_block(owner, repo_id, block_id, delta, usage, quota)
