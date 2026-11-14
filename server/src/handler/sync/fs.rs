@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -219,11 +219,6 @@ pub async fn pack_fs_handler(
         .header("Content-Type", "application/octet-stream")
         .body(Body::from(packed))
         .map_err(|e| AppError::internal(e.to_string()))
-}
-
-#[derive(Serialize)]
-pub struct CheckFsResponse {
-    pub missing: Vec<String>,
 }
 
 pub async fn check_fs(

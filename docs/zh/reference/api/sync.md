@@ -92,7 +92,7 @@
 
 `POST /seafhttp/repo/{repo_id}/check-fs/`
 
-请求体：FS 对象 id 的 JSON 数组。**响应 `200`** —— `{"missing": ["…"]}`。
+请求体：FS 对象 id 的 JSON 数组。**响应 `200`** —— 服务端缺少的 id，JSON 数组（与 `check-blocks` 同形；同步客户端解析的是数组而不是对象）。
 
 ## 接收 FS 对象 {#post-seafhttp-repo-repo-id-recv-fs}
 

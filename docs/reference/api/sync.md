@@ -123,8 +123,9 @@ without a bound, so a silent subset would loop forever.
 
 `POST /seafhttp/repo/{repo_id}/check-fs/`
 
-Body: a JSON array of FS object ids. **Response `200`** —
-`{"missing": ["…"]}`.
+Body: a JSON array of FS object ids. **Response `200`** — the ids the server
+does not have, as a JSON array (the same shape as `check-blocks`; the sync
+clients parse an array, not an object).
 
 ## Receive FS objects {#post-seafhttp-repo-repo-id-recv-fs}
 
