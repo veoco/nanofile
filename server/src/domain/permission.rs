@@ -68,6 +68,28 @@ pub async fn accessible_repo_ids(
     Ok(scope.intersect(ids))
 }
 
+/// Write permission check that also returns the library owner's id.
+///
+/// Quota accounting charges the owner, so a caller that reserves bytes per block
+/// takes the id from the permission row it has already read instead of looking the
+/// owner up again for every block (`repos.repo_owner_id`).
+pub async fn repo_write_owner(
+    member_repo: &dyn MemberRepository,
+    repo_id: &str,
+    user_id: i32,
+) -> Result<i32, AppError> {
+    let row = member_repo
+        .find_repo_owner_and_permission(repo_id, user_id)
+        .await?;
+
+    match row {
+        None => Err(AppError::NotFound("repo not found".into())),
+        Some((owner_id, _)) if owner_id == user_id => Ok(owner_id),
+        Some((owner_id, Some(perm))) if perm == "rw" => Ok(owner_id),
+        _ => Err(AppError::Forbidden),
+    }
+}
+
 /// Check if `user_id` has write (`rw`) permission on the repo. The owner always
 /// has full access; members are checked against `repo_member.permission`, and
 /// non-members and read-only members are rejected with `AppError::Forbidden`.
@@ -76,16 +98,9 @@ pub async fn check_repo_write_permission(
     repo_id: &str,
     user_id: i32,
 ) -> Result<(), AppError> {
-    let row = member_repo
-        .find_repo_owner_and_permission(repo_id, user_id)
-        .await?;
-
-    match row {
-        None => Err(AppError::NotFound("repo not found".into())),
-        Some((owner_id, _)) if owner_id == user_id => Ok(()),
-        Some((_, Some(perm))) if perm == "rw" => Ok(()),
-        _ => Err(AppError::Forbidden),
-    }
+    repo_write_owner(member_repo, repo_id, user_id)
+        .await
+        .map(|_| ())
 }
 
 /// Check if `user_id` is the owner of the repo. Member management is owner-only:

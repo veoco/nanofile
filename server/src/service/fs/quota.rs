@@ -58,6 +58,25 @@ pub async fn reserve_block_bytes(
     // holding a sync token. Current libraries are single-user, but keeping the
     // owner lookup here means a future share cannot bill the wrong account.
     let owner = repos.repo_owner_id(repo_id).await?;
+    reserve_block_bytes_for_owner(repos, owner, repo_id, block_id, delta, default_quota).await
+}
+
+/// [`reserve_block_bytes`] for a caller that already knows the owner.
+///
+/// The sync block paths read the owner off the write-permission row, so a per-block
+/// `repo_owner_id` lookup would be a second round trip per block for the same row.
+pub async fn reserve_block_bytes_for_owner(
+    repos: &Repositories,
+    owner: i32,
+    repo_id: &str,
+    block_id: &str,
+    delta: i64,
+    default_quota: u64,
+) -> Result<(), AppError> {
+    if delta <= 0 {
+        return Ok(());
+    }
+
     let scope = repos.lock_quota(owner).await;
 
     let Some(quota) = repos.effective_user_quota(owner, default_quota).await? else {

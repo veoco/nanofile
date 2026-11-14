@@ -1870,8 +1870,10 @@ pub async fn upload_blks_api(
     super::download::ensure_token_user_active(&state, info.user_id).await?;
 
     // Re-check write permission: the token was issued against the caller's
-    // membership, but that may have been revoked since (matches download).
-    crate::domain::permission::check_repo_write_permission(
+    // membership, but that may have been revoked since (matches download). The
+    // owner comes back from the same row so the per-block quota reservation below
+    // does not look it up again.
+    let owner = crate::domain::permission::repo_write_owner(
         state.repos.member.as_ref(),
         &info.repo_id,
         info.user_id,
@@ -1921,8 +1923,9 @@ pub async fn upload_blks_api(
                 // blocks (never a commit) cannot fill the disk while committed
                 // usage stays at zero. 443 is what the Qt client and seaf-daemon
                 // map to "out of quota".
-                crate::service::fs::quota::reserve_block_bytes(
+                crate::service::fs::quota::reserve_block_bytes_for_owner(
                     &state.repos,
+                    owner,
                     &info.repo_id,
                     &block_id,
                     data.len() as i64,

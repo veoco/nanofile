@@ -149,7 +149,9 @@ pub async fn put_block(
     validate_block_id(&block_id)?;
 
     // Writing a block mutates the object store; checked before the body is buffered.
-    crate::domain::permission::check_repo_write_permission(
+    // The same row names the owner the quota is charged to, so the reservation
+    // below does not look it up again for every block.
+    let owner = crate::domain::permission::repo_write_owner(
         state.repos.member.as_ref(),
         &repo_id,
         auth.user_id,
@@ -175,8 +177,9 @@ pub async fn put_block(
     // addressing means writing a block never changes any repo's `size`, so comparing
     // committed usage alone let `put_block` + never-commit accumulate blocks without
     // bound. The reservation is released when the branch update commits the blocks.
-    crate::service::fs::quota::reserve_block_bytes(
+    crate::service::fs::quota::reserve_block_bytes_for_owner(
         &state.repos,
+        owner,
         &repo_id,
         &block_id,
         data.len() as i64,
