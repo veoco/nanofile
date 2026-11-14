@@ -152,10 +152,8 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .layer(
             tower_http::trace::TraceLayer::new_for_http()
                 .make_span_with(RedactingMakeSpan)
-                .on_request(tower_http::trace::DefaultOnRequest::new().level(tracing::Level::INFO))
-                .on_response(
-                    tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
-                )
+                .on_request(TransferAwareOnRequest)
+                .on_response(TransferAwareOnResponse)
                 .on_failure(tower_http::trace::DefaultOnFailure::new().level(tracing::Level::WARN)),
         )
         .layer(tower_http::timeout::TimeoutLayer::with_status_code(
@@ -180,6 +178,33 @@ pub fn build_app(state: Arc<AppState>) -> Router {
     app.with_state(state)
 }
 
+/// Whether this is one block transfer of the sync protocol.
+///
+/// `GET`/`PUT /seafhttp/repo/{id}/block/{block_id}` is the bulk of a sync upload or
+/// download: one request per content block, so two INFO lines each turn a large
+/// upload into tens of thousands of lines and serialize every request behind the
+/// log writer. These are logged at DEBUG instead.
+fn is_block_transfer(method: &axum::http::Method, path: &str) -> bool {
+    use axum::http::Method;
+    if !matches!(*method, Method::GET | Method::PUT) {
+        return false;
+    }
+    let Some(rest) = path.strip_prefix("/seafhttp/repo/") else {
+        return false;
+    };
+    let mut parts = rest.split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(repo), Some("block"), Some(block), None)
+            if !repo.is_empty() && !block.is_empty()
+    )
+}
+
+/// Span target that marks a per-block transfer. The response half cannot see the
+/// request, so [`RedactingMakeSpan`] stamps the span with this target and
+/// [`TransferAwareOnResponse`] reads it back from the span's metadata.
+const BLOCK_TRANSFER_TARGET: &str = "nanofile::sync_block";
+
 /// The `make_span` half of the trace layer: a span named from the request, with
 /// the path redacted. A named type so the redaction has somewhere to be tested.
 #[derive(Clone, Copy)]
@@ -187,13 +212,69 @@ struct RedactingMakeSpan;
 
 impl<B> tower_http::trace::MakeSpan<B> for RedactingMakeSpan {
     fn make_span(&mut self, request: &axum::http::Request<B>) -> tracing::Span {
-        tracing::info_span!(
-            "request",
-            method = %request.method(),
-            path = %redact_request_path(request.uri().path()),
-            latency = tracing::field::Empty,
-            status = tracing::field::Empty,
-        )
+        let method = request.method();
+        let path = redact_request_path(request.uri().path());
+        // The span itself stays at INFO so `on_response` can inspect its metadata;
+        // only the request/response *events* drop to DEBUG for a block transfer.
+        if is_block_transfer(method, request.uri().path()) {
+            tracing::info_span!(
+                target: BLOCK_TRANSFER_TARGET,
+                "request",
+                method = %method,
+                path = %path,
+                latency = tracing::field::Empty,
+                status = tracing::field::Empty,
+            )
+        } else {
+            tracing::info_span!(
+                "request",
+                method = %method,
+                path = %path,
+                latency = tracing::field::Empty,
+                status = tracing::field::Empty,
+            )
+        }
+    }
+}
+
+/// The request half of the trace layer: the same line, at the level a block
+/// transfer deserves.
+#[derive(Clone, Copy)]
+struct TransferAwareOnRequest;
+
+impl<B> tower_http::trace::OnRequest<B> for TransferAwareOnRequest {
+    fn on_request(&mut self, request: &axum::http::Request<B>, span: &tracing::Span) {
+        let level = if is_block_transfer(request.method(), request.uri().path()) {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::INFO
+        };
+        tower_http::trace::DefaultOnRequest::new()
+            .level(level)
+            .on_request(request, span);
+    }
+}
+
+/// The response half: the span target marks a block transfer (see
+/// [`RedactingMakeSpan`]), and its completion line follows the request line down
+/// to DEBUG.
+#[derive(Clone, Copy)]
+struct TransferAwareOnResponse;
+
+impl<B> tower_http::trace::OnResponse<B> for TransferAwareOnResponse {
+    fn on_response(
+        self,
+        response: &axum::http::Response<B>,
+        latency: std::time::Duration,
+        span: &tracing::Span,
+    ) {
+        let level = match span.metadata() {
+            Some(metadata) if metadata.target() == BLOCK_TRANSFER_TARGET => tracing::Level::DEBUG,
+            _ => tracing::Level::INFO,
+        };
+        tower_http::trace::DefaultOnResponse::new()
+            .level(level)
+            .on_response(response, latency, span);
     }
 }
 
@@ -290,5 +371,42 @@ mod tests {
         // A segment that merely contains a prefix is not a token position.
         assert_eq!(redact_request_path("/files/abc/"), "/files/abc/");
         assert_eq!(redact_request_path("/"), "/");
+    }
+
+    /// Only the sync protocol's per-block transfers are demoted to DEBUG: they are
+    /// one request per block, while their neighbours in the same protocol are not.
+    #[test]
+    fn only_block_transfers_are_demoted() {
+        use axum::http::Method;
+
+        let repo = "290e789d-ba03-47c3-a4cd-4dba7bb3fff2";
+        let block = "531350019959b6817a996fa7b8fc90ed27a05afc";
+        assert!(is_block_transfer(
+            &Method::PUT,
+            &format!("/seafhttp/repo/{repo}/block/{block}")
+        ));
+        assert!(is_block_transfer(
+            &Method::GET,
+            &format!("/seafhttp/repo/{repo}/block/{block}")
+        ));
+
+        for (method, path) in [
+            (Method::POST, format!("/seafhttp/repo/{repo}/check-blocks/")),
+            (Method::PUT, format!("/seafhttp/repo/{repo}/commit/HEAD/")),
+            (Method::POST, format!("/seafhttp/repo/{repo}/recv-fs/")),
+            (Method::PUT, format!("/seafhttp/repo/{repo}/block/")),
+            (
+                Method::PUT,
+                format!("/seafhttp/repo/{repo}/block/{block}/extra"),
+            ),
+            (Method::POST, format!("/seafhttp/repo/{repo}/block/{block}")),
+            (Method::GET, format!("/api2/repos/{repo}/")),
+            (Method::PUT, "/seafhttp/repo/block/x".to_string()),
+        ] {
+            assert!(
+                !is_block_transfer(&method, &path),
+                "{method} {path} must stay at INFO"
+            );
+        }
     }
 }
