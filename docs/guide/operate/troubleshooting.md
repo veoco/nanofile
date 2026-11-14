@@ -64,6 +64,14 @@ under **Settings → Sessions & Credentials**. See
 **Only one client is affected.** Revoke that device's session or sync token, then
 sign in again. A password change revokes every sync token on the account.
 
+**An upload seems to restart every 30 seconds.** The desktop client retries the
+whole upload task, not the one request that failed: any failure ends the task and
+the next sync attempt starts again about 30 seconds later. A `400` is not fatal to
+the client, so a deterministic rejection repeats forever. The server log shows the
+same `permission-check → quota-check → check-fs → recv-fs → check-blocks` sequence
+again and again; the request with a 4xx/5xx status is the one to fix (a revoked
+permission, a missing block answering `446`, a size limit).
+
 ## Search and indexing
 
 **Search does not find something just uploaded.** Check that `index.enabled` is on,
