@@ -63,7 +63,7 @@ pub async fn check_blocks(
 
     let data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(crate::handler::body_read_error)?;
 
     let block_ids: Vec<String> = if let Ok(arr) = serde_json::from_slice::<Vec<String>>(&data) {
         arr

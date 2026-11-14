@@ -41,7 +41,58 @@ pub fn sanitize_dirent_list(names: &mut Vec<String>) -> Result<(), AppError> {
     Ok(())
 }
 
-/// Read a request body with a hard size cap; oversized bodies map to 413.
+/// Whether a failed body read is the peer giving up on its upload.
+///
+/// hyper surfaces a connection that ends before the declared `Content-Length` as a
+/// `hyper::Error` of kind `Io` whose cause is an `io::Error` with `UnexpectedEof`
+/// (not as its `IncompleteMessage` kind), and `http_body_util::Limited` /
+/// `axum::Error` each wrap the previous error. The whole source chain is therefore
+/// walked, for both spellings, plus the reset/abort kinds a peer disconnect
+/// produces. `is_canceled`/`is_closed` cover HTTP/2 and shutdown.
+fn body_read_was_aborted(error: &axum::Error) -> bool {
+    use std::io::ErrorKind;
+
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(error) = current {
+        if let Some(hyper_error) = error.downcast_ref::<hyper::Error>()
+            && (hyper_error.is_incomplete_message()
+                || hyper_error.is_canceled()
+                || hyper_error.is_closed())
+        {
+            return true;
+        }
+        if let Some(io_error) = error.downcast_ref::<std::io::Error>()
+            && matches!(
+                io_error.kind(),
+                ErrorKind::UnexpectedEof
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::BrokenPipe
+            )
+        {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
+/// Map a failed request-body read.
+///
+/// A client that disconnects or times out mid-upload is not a server fault: it is
+/// answered with a 400 ([`AppError::ClientClosed`]) so the request neither shows
+/// up as a 5xx in the log nor trips the trace layer's failure line. Everything
+/// else stays a 500.
+pub fn body_read_error(error: axum::Error) -> AppError {
+    if body_read_was_aborted(&error) {
+        AppError::ClientClosed
+    } else {
+        AppError::Internal(error.to_string())
+    }
+}
+
+/// Read a request body with a hard size cap; oversized bodies map to 413, and a
+/// peer that stops sending maps to 400 via [`body_read_error`].
 pub async fn read_body_limited(
     body: axum::body::Body,
     limit: usize,
@@ -52,7 +103,7 @@ pub async fn read_body_limited(
         if too_large {
             AppError::ContentTooLarge
         } else {
-            AppError::Internal(e.to_string())
+            body_read_error(e)
         }
     })
 }
@@ -125,3 +176,38 @@ pub mod upload_link;
 pub mod user_avatar;
 pub mod users;
 pub mod web;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The peer-abort branch: an `UnexpectedEof` anywhere in the chain means the
+    /// client stopped sending, whatever hyper wrapped it in.
+    #[test]
+    fn a_peer_abort_is_recognized_and_an_ordinary_failure_is_not() {
+        let aborted = axum::Error::new(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        assert!(body_read_was_aborted(&aborted));
+
+        let reset = axum::Error::new(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
+        assert!(body_read_was_aborted(&reset));
+
+        let other = axum::Error::new(std::io::Error::other("disk on fire"));
+        assert!(!body_read_was_aborted(&other));
+    }
+
+    #[tokio::test]
+    async fn an_aborted_upload_is_a_client_error_not_a_500() {
+        let body = axum::body::Body::from_stream(futures::stream::once(async {
+            Err::<bytes::Bytes, _>(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
+        }));
+        let error = read_body_limited(body, 1024).await.unwrap_err();
+        assert!(matches!(error, AppError::ClientClosed), "got {error:?}");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_body_is_413() {
+        let body = axum::body::Body::from(vec![0u8; 64]);
+        let error = read_body_limited(body, 8).await.unwrap_err();
+        assert!(matches!(error, AppError::ContentTooLarge), "got {error:?}");
+    }
+}

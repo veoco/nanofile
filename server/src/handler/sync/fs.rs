@@ -171,7 +171,7 @@ pub async fn pack_fs_handler(
 
     let body_data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(crate::handler::body_read_error)?;
     let fs_ids = parse_fs_ids_from_bytes(&body_data)?;
 
     let objects = state
@@ -237,7 +237,7 @@ pub async fn check_fs(
 
     let body_data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(crate::handler::body_read_error)?;
     let fs_ids = parse_fs_ids_from_bytes(&body_data)?;
 
     // Only fs_ids are needed: a column-projected, chunked query beats reading `data`.
@@ -274,7 +274,7 @@ pub async fn recv_fs(
 
     let data = axum::body::to_bytes(body, MAX_FS_PACK_BYTES)
         .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+        .map_err(crate::handler::body_read_error)?;
 
     // A malformed pack is a client error that upstream answers with 400
     // (`sync_api.go:465-509`), not a 500.

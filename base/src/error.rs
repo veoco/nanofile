@@ -23,6 +23,13 @@ pub enum AppError {
     #[error("request body too large")]
     ContentTooLarge,
 
+    /// The peer stopped sending its request body (it disconnected or timed out).
+    /// Not a server fault, so it must not be reported as a 5xx. 400 rather than
+    /// nginx's 499 because hyper writes `<none>` as the reason phrase for a code
+    /// with no canonical text, and every client reads the body for the message.
+    #[error("client closed the request")]
+    ClientClosed,
+
     #[error("repo password required")]
     RepoPasswdRequired,
 
@@ -149,6 +156,10 @@ mod into_response_impl {
                 AppError::ContentTooLarge => (
                     StatusCode::PAYLOAD_TOO_LARGE,
                     json!({ "error_msg": "Request body too large" }),
+                ),
+                AppError::ClientClosed => (
+                    StatusCode::BAD_REQUEST,
+                    json!({ "error_msg": "Client closed the request" }),
                 ),
                 AppError::RepoPasswdRequired => (
                     StatusCode::from_u16(440).unwrap(),

@@ -21,7 +21,7 @@ pub async fn head_commits_multi(
 ) -> Result<Json<HashMap<String, String>>, AppError> {
     let bytes = axum::body::to_bytes(body, 1024 * 1024)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(crate::handler::body_read_error)?;
 
     let repo_id_list: Vec<String> = serde_json::from_slice(&bytes)
         .map_err(|_| AppError::BadRequest("expected JSON array of repo IDs".into()))?;
