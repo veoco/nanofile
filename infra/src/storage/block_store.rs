@@ -44,9 +44,24 @@ struct BlockKey {
     valid: bool,
 }
 
+/// Whether a staged block is flushed to stable storage before it is published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BlockFlush {
+    /// `sync_all` every block before it becomes visible under its id. A returned
+    /// write is durable, at the cost of one flush per block.
+    #[default]
+    Always,
+    /// Leave the write in the OS page cache, as upstream Seafile does. A crash can
+    /// then leave a committed tree referencing a truncated block, so this is only
+    /// for hosts whose flush latency dwarfs the upload (and they accept the risk).
+    Os,
+}
+
 #[derive(Debug)]
 pub struct BlockStorage {
     base_dir: PathBuf,
+    /// Flush policy for newly staged blocks (see [`BlockFlush`]).
+    flush: BlockFlush,
     /// Repositories whose prefix directories and marker already exist.
     prepared_repos: Mutex<HashSet<String>>,
     /// Recently-confirmed `(repo_id, block_id)` → (time, stored length). Content
@@ -61,9 +76,16 @@ impl BlockStorage {
     pub fn new(base_dir: PathBuf) -> Self {
         Self {
             base_dir,
+            flush: BlockFlush::Always,
             prepared_repos: Mutex::new(HashSet::new()),
             exists_cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Use the given flush policy for blocks staged from now on.
+    pub fn with_flush(mut self, flush: BlockFlush) -> Self {
+        self.flush = flush;
+        self
     }
 
     /// Root directory holding every block, i.e. the configured `block_dir`.
@@ -179,9 +201,10 @@ impl BlockStorage {
         Ok(())
     }
 
-    /// Write `data` to a temp file next to its final path and flush it, so the bytes
-    /// are durable before they become visible under the block id. Returns the temp and
-    /// final paths; the caller publishes and removes the temp file.
+    /// Write `data` to a temp file next to its final path and, under
+    /// [`BlockFlush::Always`], flush it so the bytes are durable before they become
+    /// visible under the block id. Returns the temp and final paths; the caller
+    /// publishes and removes the temp file.
     async fn stage_block(
         &self,
         repo_id: &str,
@@ -191,9 +214,11 @@ impl BlockStorage {
         self.ensure_repo_dirs(repo_id).await?;
         let path = self.block_path(repo_id, block_id);
         let tmp = path.with_file_name(format!("{block_id}.{}.tmp", uuid::Uuid::new_v4()));
-        // One exclusive create + write + flush: a failure at any step must not
-        // publish the block, or a crash could leave a visible short block.
+        // One exclusive create + write (+ flush, unless the policy leaves it to the
+        // OS): a failure at any step must not publish the block, or a crash could
+        // leave a visible short block.
         use tokio::io::AsyncWriteExt;
+        let flush = self.flush;
         let staged = async {
             let mut file = tokio::fs::OpenOptions::new()
                 .write(true)
@@ -201,7 +226,10 @@ impl BlockStorage {
                 .open(&tmp)
                 .await?;
             file.write_all(data).await?;
-            file.sync_all().await
+            if flush == BlockFlush::Always {
+                file.sync_all().await?;
+            }
+            Ok::<(), io::Error>(())
         }
         .await;
         if let Err(e) = staged {
@@ -809,6 +837,24 @@ mod tests {
         assert!(store.block_size(REPO, &id).await.unwrap() > 0);
         store.remove_block(REPO, &id).await.unwrap();
         assert!(!store.has_block(REPO, &id).await);
+    }
+
+    /// The `os` policy only skips the flush; the block must still be written,
+    /// published under its id, readable back and leave no temp file behind.
+    #[tokio::test]
+    async fn os_flush_policy_still_publishes_and_reads_blocks() {
+        let (root, _) = temp_storage();
+        let store = BlockStorage::new(root).with_flush(BlockFlush::Os);
+        let id = store.write_block(REPO, b"hello world").await.unwrap();
+        assert!(store.has_block(REPO, &id).await);
+        assert_eq!(store.read_block(REPO, &id).await.unwrap(), b"hello world");
+        let dir = store.block_path(REPO, &id).parent().unwrap().to_path_buf();
+        let leftovers = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0, "a published block must leave no temp file");
     }
 
     /// Per-repository isolation: a block written for one repo is invisible via another.

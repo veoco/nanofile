@@ -15,6 +15,8 @@ pub mod encrypting_block_store;
 
 use std::sync::Arc;
 
+pub use block_store::BlockFlush;
+
 /// Upper bound on how many leading bytes [`BlockStorageBackend::read_block_prefix`]
 /// returns; callers only need a format header.
 pub const MAX_BLOCK_PREFIX_LEN: usize = 64 * 1024;
@@ -190,5 +192,13 @@ pub type DynBlockStorage = Arc<dyn BlockStorageBackend>;
 
 /// Create a new filesystem-backed block store at the given directory.
 pub fn new_block_store(base_dir: &std::path::Path) -> DynBlockStorage {
-    Arc::new(block_store::BlockStorage::new(base_dir.to_path_buf()))
+    new_block_store_with_flush(base_dir, BlockFlush::Always)
+}
+
+/// [`new_block_store`] with an explicit flush policy for new blocks.
+pub fn new_block_store_with_flush(
+    base_dir: &std::path::Path,
+    flush: BlockFlush,
+) -> DynBlockStorage {
+    Arc::new(block_store::BlockStorage::new(base_dir.to_path_buf()).with_flush(flush))
 }

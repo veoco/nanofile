@@ -718,6 +718,7 @@ impl TestServer {
                 thumbnail_dir: block_root.join("thumbnails"),
                 avatar_dir: block_root.join("avatars"),
                 block_encryption_mode: "off".to_string(),
+                block_flush: "always".to_string(),
                 encryption_key: None,
             },
             auth: infra::config::AuthConfig {

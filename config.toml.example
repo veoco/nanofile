@@ -56,6 +56,11 @@ secret_key = ""
 # Cannot be stored from the interface: it decides how existing ciphertext is
 # read. "lazy" encrypts new writes while still reading legacy plaintext.
 #block_encryption_mode = "off"
+# file-only — block flush policy: "always" (default) fsyncs every block before
+# acknowledging it; "os" leaves flushing to the operating system (as Seafile
+# does), which lowers per-block latency on hosts where a flush is slow, at the
+# cost of a possible truncated block after a crash. Changing it needs a restart.
+#block_flush = "always"
 # file-only — dedicated key for at-rest encryption; unset derives it from
 # [server] secret_key (prefer NANOFILE_STORAGE_ENCRYPTION_KEY_FILE).
 #encryption_key = ...

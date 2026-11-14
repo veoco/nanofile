@@ -548,6 +548,11 @@ fn main() -> anyhow::Result<()> {
     if let Err(e) = config.storage.validate_block_encryption_mode() {
         anyhow::bail!("{e}");
     }
+    // Same reason for the flush policy: an unparsable value reads as `always`, so a
+    // typo would not weaken durability, but it would also not do what it says.
+    if let Err(e) = config.storage.validate_block_flush() {
+        anyhow::bail!("{e}");
+    }
 
     let enc_mode = config.storage.block_encryption_mode();
     if enc_mode != infra::storage::encrypting_block_store::BlockEncryptionMode::Off

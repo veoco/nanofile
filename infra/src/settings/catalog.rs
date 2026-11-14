@@ -853,6 +853,18 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
+        "storage.block_flush",
+        Storage,
+        "NANOFILE_STORAGE_BLOCK_FLUSH",
+        Kind::Enum(&["always", "os"]),
+        Apply::ReadOnly,
+        |c| c.storage.block_flush.clone(),
+        |c, v| {
+            c.storage.block_flush = parse_enum(v, &["always", "os"])?;
+            Ok(())
+        }
+    ),
+    setting!(
         "storage.block_encryption_mode",
         Encryption,
         "NANOFILE_STORAGE_BLOCK_ENCRYPTION_MODE",
@@ -1820,6 +1832,12 @@ pub static GROUPS: &[GroupDef] = &[
         id: "storage_media",
         title_key: "setting.group_storage_media",
         keys: &["storage.ffmpeg_path"],
+    },
+    GroupDef {
+        section: Section::Storage,
+        id: "storage_blocks",
+        title_key: "setting.group_storage_blocks",
+        keys: &["storage.block_flush"],
     },
     GroupDef {
         section: Section::Encryption,

@@ -1026,6 +1026,14 @@ pub struct StorageConfig {
     /// Env: NANOFILE_STORAGE_BLOCK_ENCRYPTION_MODE
     #[serde(default = "default_block_encryption_mode")]
     pub block_encryption_mode: String,
+    /// Whether a block is flushed to stable storage before it becomes visible.
+    /// `"always"` (the default) fsyncs every block; `"os"` leaves the flush to the
+    /// operating system, as upstream Seafile does. With `"os"` a crash can leave a
+    /// committed tree referencing a block whose tail never reached the disk, so it
+    /// is only for hosts whose flush latency dominates the upload.
+    /// Env: NANOFILE_STORAGE_BLOCK_FLUSH
+    #[serde(default = "default_block_flush")]
+    pub block_flush: String,
     /// Master key for block at-rest encryption, set via
     /// `NANOFILE_STORAGE_ENCRYPTION_KEY` or `..._KEY_FILE`. Never serialized into
     /// `config.toml` (or its `.bak`), so secrets never reach disk or backups.
@@ -1077,6 +1085,10 @@ fn default_block_encryption_mode() -> String {
     "off".to_string()
 }
 
+fn default_block_flush() -> String {
+    "always".to_string()
+}
+
 impl StorageConfig {
     /// Parse `block_encryption_mode` into the runtime mode. Callers must have
     /// validated it (see [`Self::validate_block_encryption_mode`]): an unknown
@@ -1115,6 +1127,29 @@ impl StorageConfig {
             )),
         }
     }
+
+    /// Parse `block_flush` into the runtime policy. Callers must have validated it
+    /// (see [`Self::validate_block_flush`]): an unknown value reads as `Always`
+    /// here, but a typo must not silently weaken durability at startup.
+    pub fn block_flush(&self) -> crate::storage::block_store::BlockFlush {
+        use crate::storage::block_store::BlockFlush;
+        match self.block_flush.trim().to_ascii_lowercase().as_str() {
+            "os" => BlockFlush::Os,
+            _ => BlockFlush::Always,
+        }
+    }
+
+    /// Reject a flush policy the runtime parser would read as `always` only because
+    /// of a typo or stray whitespace. Case and surrounding whitespace are accepted.
+    pub fn validate_block_flush(&self) -> Result<(), String> {
+        match self.block_flush.trim().to_ascii_lowercase().as_str() {
+            "always" | "os" => Ok(()),
+            _ => Err(format!(
+                "storage.block_flush = {:?} is not one of always, os",
+                self.block_flush
+            )),
+        }
+    }
 }
 
 impl Default for StorageConfig {
@@ -1133,6 +1168,7 @@ impl Default for StorageConfig {
             thumbnail_dir: default_thumbnail_dir(),
             avatar_dir: default_avatar_dir(),
             block_encryption_mode: default_block_encryption_mode(),
+            block_flush: default_block_flush(),
             encryption_key: None,
         }
     }
@@ -2903,6 +2939,33 @@ request_timeout_secs = 600
         assert!(
             config.storage.validate_block_encryption_mode().is_err(),
             "a value the parser would read as off must be rejected"
+        );
+    }
+
+    /// The flush policy is normalized like the encryption mode: case and padding are
+    /// harmless, a typo is rejected instead of silently meaning `always`.
+    #[test]
+    fn block_flush_is_normalized_but_not_guessed() {
+        use crate::storage::block_store::BlockFlush;
+
+        let mut config = Config::default();
+        assert_eq!(config.storage.block_flush(), BlockFlush::Always);
+        for (value, expected) in [
+            ("always", BlockFlush::Always),
+            (" Always ", BlockFlush::Always),
+            ("OS", BlockFlush::Os),
+        ] {
+            config.storage.block_flush = value.to_string();
+            assert_eq!(config.storage.block_flush(), expected, "{value:?}");
+            assert!(
+                config.storage.validate_block_flush().is_ok(),
+                "{value:?} should be accepted"
+            );
+        }
+        config.storage.block_flush = "never".to_string();
+        assert!(
+            config.storage.validate_block_flush().is_err(),
+            "a value the parser would read as always must be rejected"
         );
     }
 
