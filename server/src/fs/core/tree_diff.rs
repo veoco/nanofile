@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::fs::core::tree::read_fs_dir_data_batch;
 use crate::repository::Repositories;
@@ -207,13 +207,17 @@ pub async fn diff_trees(
                         .iter()
                         .map(|d| (d.name.as_str(), d))
                         .collect();
+                    // Names present on the new side, for the old-only scan below: a
+                    // per-entry scan over `new_dir.dirents` made the diff quadratic.
+                    let new_names: HashSet<&str> =
+                        new_dir.dirents.iter().map(|d| d.name.as_str()).collect();
 
                     // Old-only entries are recorded first: whether a new directory is a
                     // reused (unchanged) object depends on what this frame drops, and a
                     // renamed directory's entry is one of them.
                     let mut deleted_here: Vec<(String, DirEntryData)> = Vec::new();
                     for old_entry in &old_dir.dirents {
-                        if new_dir.dirents.iter().any(|e| e.name == old_entry.name) {
+                        if new_names.contains(old_entry.name.as_str()) {
                             continue;
                         }
                         let path = join_path(&frame.prefix, &old_entry.name);
@@ -826,6 +830,42 @@ mod tests {
                 ("delete dir /a/b", true),
                 ("delete file /a/b/f.txt", true),
                 ("rename dir /c /a", false),
+            ],
+        )
+        .await;
+    }
+
+    /// A flat directory with many entries: the old-only detection is a map lookup,
+    /// so an edit, a delete and a create in a 512-entry directory stay exact (and a
+    /// per-entry scan over the new side would be quadratic).
+    #[tokio::test]
+    async fn test_diff_large_flat_dir() {
+        let db = setup_diff_db().await;
+        let repos = Repositories::new_for_tests(Arc::new(db.clone()));
+
+        let names: Vec<String> = (0..512).map(|i| format!("f{i:04}")).collect();
+        let ids: Vec<String> = (0..512).map(|i| format!("id{i:04}")).collect();
+        let old: Vec<(&str, bool, &str)> = names
+            .iter()
+            .zip(&ids)
+            .map(|(name, id)| (id.as_str(), false, name.as_str()))
+            .collect();
+        // f0000 is edited (new object id), f0001 is deleted, f9999 is created.
+        let mut new: Vec<(&str, bool, &str)> = old[2..].to_vec();
+        new.push(("edited", false, "f0000"));
+        new.push(("created", false, "f9999"));
+        insert_dir(&db, "root-old", &old).await;
+        insert_dir(&db, "root-new", &new).await;
+
+        assert_incremental_matches_full(&repos, "root-old", "root-new").await;
+        assert_changes(
+            &repos,
+            "root-old",
+            "root-new",
+            &[
+                ("edit file /f0000", false),
+                ("delete file /f0001", false),
+                ("create file /f9999", false),
             ],
         )
         .await;
