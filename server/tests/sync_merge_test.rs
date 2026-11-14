@@ -955,6 +955,62 @@ async fn first_upload_referencing_a_missing_object_is_446() {
     assert_eq!(head(&f).await, before, "HEAD must not move");
 }
 
+/// The first commit's block check is batched per directory level. One missing
+/// block among several files must still be detected (446) rather than hidden by
+/// the batching or by a whole-level short circuit.
+#[tokio::test]
+async fn first_upload_with_one_missing_block_among_many_files_is_446() {
+    let f = TestFixture::new().await;
+
+    let contents: Vec<Vec<u8>> = (0..4)
+        .map(|i| format!("content-{i}").into_bytes())
+        .collect();
+    let mut fs_objects: Vec<(String, String)> = Vec::new();
+    let mut dirents: Vec<DirEntryData> = Vec::new();
+    for (i, content) in contents.iter().enumerate() {
+        let block_id = infra::crypto::fs_id::sha1_hex(content);
+        // The last file's block is never uploaded: the tree references a hole.
+        if i + 1 < contents.len() {
+            let resp = f
+                .client
+                .put_block(&f.sync_token, &f.repo_id, &block_id, content.clone())
+                .await;
+            assert_eq!(resp.status(), 200, "put_block {i} failed");
+        }
+        let file = FsFileData {
+            block_ids: vec![block_id],
+            size: content.len() as i64,
+            obj_type: 1,
+            version: 1,
+        };
+        let json = serde_json::to_string(&file).unwrap();
+        let fs_id = common::fs_object_id(json.as_bytes());
+        fs_objects.push((fs_id.clone(), json));
+        dirents.push(DirEntryData {
+            id: fs_id,
+            mode: REG,
+            modifier: "test@example.com".to_string(),
+            mtime: chrono::Utc::now().timestamp(),
+            name: format!("f{i}.txt"),
+            size: content.len() as i64,
+        });
+    }
+
+    let resp = f
+        .client
+        .recv_fs(&f.sync_token, &f.repo_id, pack_fs_objects(&fs_objects))
+        .await;
+    assert_eq!(resp.status(), 200, "recv_fs for the file objects failed");
+
+    let root = FsDirData {
+        dirents,
+        obj_type: 3,
+        version: 1,
+    };
+    let resp = upload_root_commit(&f, &root, None, "first upload with one missing block").await;
+    assert_eq!(resp.status(), 446, "a missing block must not be accepted");
+}
+
 /// Same rule for an upload on top of an existing tree: a *new* directory object
 /// the upload references has to be there. (An object only the base side
 /// references may have been pruned by GC and stays unknown.)

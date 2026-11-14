@@ -1174,6 +1174,11 @@ impl SyncService {
             let obj_map: HashMap<String, infra::entity::fs_object::Model> =
                 objects.into_iter().map(|o| (o.fs_id.clone(), o)).collect();
             let mut next: Vec<Frame> = Vec::new();
+            // Files at this level, with the block ids each one references. Their
+            // existence is checked in one deduplicated batch after the level has been
+            // walked: the per-file loop below would otherwise wait on one batch of 16
+            // stats per file, which is a round trip per file on a cold block cache.
+            let mut level_files: Vec<(String, Vec<String>)> = Vec::new();
 
             for frame in &frontier {
                 let Some(obj) = obj_map.get(&frame.fs_id) else {
@@ -1193,17 +1198,12 @@ impl SyncService {
                     continue;
                 };
                 if obj.obj_type == 1 {
-                    let file_data: base::common::FsFileData = serde_json::from_str(&obj.data)
+                    let file_data: FsFileData = serde_json::from_str(&obj.data)
                         .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
                     *size_total += file_data.size;
-                    if self
-                        .check_blocks_concurrent(repo_id, &file_data.block_ids)
-                        .await
-                    {
-                        missing.push(frame.path.clone());
-                    }
+                    level_files.push((frame.path.clone(), file_data.block_ids));
                 } else if obj.obj_type == 3 {
-                    let dir_data: base::common::FsDirData = serde_json::from_str(&obj.data)
+                    let dir_data: FsDirData = serde_json::from_str(&obj.data)
                         .map_err(|e| AppError::Internal(format!("invalid dir object: {e}")))?;
                     for entry in &dir_data.dirents {
                         let child_path = if frame.path.is_empty() {
@@ -1219,28 +1219,49 @@ impl SyncService {
                 }
             }
 
+            if !level_files.is_empty() {
+                // Deduplicate across the level: a block shared by many files is stat'ed once.
+                let mut unique: Vec<String> = Vec::new();
+                let mut seen: HashSet<&str> = HashSet::new();
+                for (_, block_ids) in &level_files {
+                    for block_id in block_ids {
+                        if seen.insert(block_id.as_str()) {
+                            unique.push(block_id.clone());
+                        }
+                    }
+                }
+
+                const BLOCK_CHECK_BATCH: usize = 16;
+                let mut missing_ids: HashSet<String> = HashSet::new();
+                for chunk in unique.chunks(BLOCK_CHECK_BATCH) {
+                    let futures: Vec<_> = chunk
+                        .iter()
+                        .map(|block_id| {
+                            let store = self.block_store.clone();
+                            async move { !store.has_block(repo_id, block_id).await }
+                        })
+                        .collect();
+                    let results = futures::future::join_all(futures).await;
+                    for (block_id, is_missing) in chunk.iter().zip(results) {
+                        if is_missing {
+                            missing_ids.insert(block_id.clone());
+                        }
+                    }
+                }
+
+                for (path, block_ids) in &level_files {
+                    if block_ids
+                        .iter()
+                        .any(|block_id| missing_ids.contains(block_id))
+                    {
+                        missing.push(path.clone());
+                    }
+                }
+            }
+
             frontier = next;
         }
         Ok(())
-    }
-
-    async fn check_blocks_concurrent(&self, repo_id: &str, block_ids: &[String]) -> bool {
-        const BATCH_SIZE: usize = 16;
-        for chunk in block_ids.chunks(BATCH_SIZE) {
-            let futures: Vec<_> = chunk
-                .iter()
-                .map(|block_id| {
-                    let store = self.block_store.clone();
-                    let id = block_id.clone();
-                    async move { !store.has_block(repo_id, &id).await }
-                })
-                .collect();
-            let results = futures::future::join_all(futures).await;
-            if results.into_iter().any(|missing| missing) {
-                return true;
-            }
-        }
-        false
     }
 
     /// Perform the branch update (CAS retry loop). Returns `true` if the commit
