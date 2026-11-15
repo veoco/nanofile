@@ -104,23 +104,28 @@ impl SyncService {
         }
     }
 
-    /// Get all repos accessible to a user with their sync tokens, batch-loading
-    /// repos, owners and tokens; `peer` is the requesting device.
+    /// Get all repos accessible to a user in the fileserver's `accessible-repos`
+    /// shape, filtered by an API key's library scope.
+    ///
+    /// SeaDrive parses this response with the same `parse_repo_list()` it uses for
+    /// `/api2/repos/`, so the entries are seafile-server's `SharedRepo`
+    /// (`fileserver/share/share.go`): `version`, `id`, `head_commit_id`, `name`,
+    /// `mtime`, `permission`, `type`, `owner`. A headless library carries the
+    /// all-zero sentinel, exactly as it does on the repo list.
     pub async fn accessible_repos(
         &self,
         user_id: i32,
-        sync_token_ttl_days: u64,
         repo_scope: &crate::domain::permission::RepoScope,
-        peer: Option<&crate::domain::device::PeerStamp>,
     ) -> Result<Vec<AccessibleRepo>, AppError> {
         let memberships = self.repos.member.find_by_user_id(user_id).await?;
 
-        // Distinct repo ids in scope; filtering before tokens are minted keeps a
-        // key from causing work (and rows) for libraries it cannot reach.
+        // Distinct repo ids in scope, with the caller's membership permission for
+        // each, so no library can appear twice in one response.
         let mut repo_ids: Vec<String> = Vec::with_capacity(memberships.len());
-        let mut seen: HashSet<&str> = HashSet::with_capacity(memberships.len());
+        let mut permissions: HashMap<&str, &str> = HashMap::with_capacity(memberships.len());
         for m in &memberships {
-            if repo_scope.allows(&m.repo_id) && seen.insert(m.repo_id.as_str()) {
+            if repo_scope.allows(&m.repo_id) && !permissions.contains_key(m.repo_id.as_str()) {
+                permissions.insert(m.repo_id.as_str(), m.permission.as_str());
                 repo_ids.push(m.repo_id.clone());
             }
         }
@@ -140,30 +145,33 @@ impl SyncService {
         let owner_email: HashMap<i32, String> =
             owners.iter().map(|u| (u.id, u.email.clone())).collect();
 
-        // Membership already grants access, so the permission check inside the
-        // single-repo resolver would only repeat it; resolve the whole batch.
-        let mut tokens = crate::service::auth::token::ensure_sync_tokens_for_repos(
-            &self.repos,
-            &repo_ids,
-            user_id,
-            peer,
-            sync_token_ttl_days,
-        )
-        .await?;
-
-        let mut result = Vec::with_capacity(memberships.len());
-        for member in &memberships {
-            let Some(r) = repo_by_id.get(member.repo_id.as_str()) else {
+        let mut result = Vec::with_capacity(repos.len());
+        for repo_id in &repo_ids {
+            let Some(r) = repo_by_id.get(repo_id.as_str()) else {
                 continue; // repo deleted → skip, matching the previous behavior
             };
-            let token = tokens.remove(r.id.as_str()).unwrap_or_default();
+            let Some(permission) = permissions.get(repo_id.as_str()) else {
+                continue;
+            };
             result.push(AccessibleRepo {
-                repo_id: r.id.clone(),
-                repo_name: r.name.clone(),
-                repo_desc: r.description.clone(),
-                owner_email: owner_email.get(&r.owner_id).cloned().unwrap_or_default(),
-                token,
-                permission: member.permission.clone(),
+                version: r.repo_version,
+                id: r.id.clone(),
+                head_commit_id: r
+                    .head_commit_id
+                    .as_deref()
+                    .filter(|head| *head != EMPTY_SHA1)
+                    .unwrap_or(EMPTY_SHA1)
+                    .to_string(),
+                name: r.name.clone(),
+                mtime: r.updated_at,
+                permission: (*permission).to_string(),
+                type_: if r.owner_id == user_id {
+                    "repo"
+                } else {
+                    "srepo"
+                }
+                .to_string(),
+                owner: owner_email.get(&r.owner_id).cloned().unwrap_or_default(),
             });
         }
         Ok(result)
@@ -1656,14 +1664,25 @@ impl SyncService {
     }
 }
 
+/// One entry of `GET /seafhttp/accessible-repos`.
+///
+/// This is seafile-server's `share.SharedRepo` JSON (`fileserver/share/share.go`),
+/// not the REST repo shape: SeaDrive's daemon parses the response with the same
+/// `parse_repo_list()` it uses for `/api2/repos/`, and rejects the whole list when
+/// a member is missing or malformed. `type` is `repo` for the owner and `srepo`
+/// for a library shared to the caller; `head_commit_id` is the all-zero sentinel
+/// for a library that has no commit yet.
 #[derive(serde::Serialize)]
 pub struct AccessibleRepo {
-    pub repo_id: String,
-    pub repo_name: String,
-    pub repo_desc: String,
-    pub owner_email: String,
-    pub token: String,
+    pub version: i32,
+    pub id: String,
+    pub head_commit_id: String,
+    pub name: String,
+    pub mtime: i64,
     pub permission: String,
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub owner: String,
 }
 
 pub struct FolderPermResult {

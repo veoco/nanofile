@@ -235,13 +235,26 @@ rather than an error.
 
 `GET /seafhttp/accessible-repos`
 
-Every library the token's user can sync, with a usable token for each.
+Every library the token's user can sync, in the fileserver's `SharedRepo` shape.
+SeaDrive's daemon parses this response with the same routine it uses for
+`/api2/repos/`, so the members are the ones that routine requires: `version`,
+`id`, `head_commit_id`, `name`, `mtime`, `permission`, `type`, `owner`. A library
+with no commit yet reports the all-zero `head_commit_id` sentinel.
 
 **Response `200`**
 
 ```json
 [
-  { "repo_id": "…", "repo_name": "Docs", "repo_desc": "", "owner_email": "user@example.com", "token": "…", "permission": "rw" }
+  {
+    "version": 1,
+    "id": "…",
+    "head_commit_id": "…",
+    "name": "Docs",
+    "mtime": 1760000000,
+    "permission": "rw",
+    "type": "repo",
+    "owner": "user@example.com"
+  }
 ]
 ```
 

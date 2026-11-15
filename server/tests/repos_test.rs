@@ -101,6 +101,19 @@ async fn test_list_repos() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let repos = body.as_array().unwrap();
     assert_eq!(repos.len(), 2);
+
+    // Regression: SeaDrive's `parse_repo_list()` (seadrive `sync-mgr.c`) requires
+    // `version` on every entry and fails the whole response without it ("Invalid
+    // repo list response: no version."). It also insists `head_commit_id` is a
+    // 40-hex object id, so a library that has no commit yet must carry the
+    // all-zero sentinel rather than null ("invalid head_commit_id").
+    for repo in repos {
+        assert_eq!(repo["version"].as_i64().unwrap(), 1);
+        assert_eq!(
+            repo["head_commit_id"].as_str().unwrap(),
+            "0000000000000000000000000000000000000000"
+        );
+    }
 }
 
 #[tokio::test]

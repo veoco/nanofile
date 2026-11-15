@@ -25,6 +25,7 @@
     "mtime": 1760000000,
     "permission": "rw",
     "head_commit_id": "…",
+    "version": 1,
     "type": "repo",
     "virtual": false,
     "root": "…",
@@ -33,7 +34,7 @@
 ]
 ```
 
-`permission` 是 `"rw"` 或 `"r"`。加密资料库还会带 `enc_version`，以及调用者有权拿到的 `magic`/`random_key`/`salt`。
+`permission` 是 `"rw"` 或 `"r"`。`version` 是资料库格式版本；SeaDrive 的 repo 列表解析器要求这个键，值为 0 的条目会被跳过。同一个值也会以 `repo_version` 出现，那是创建与 download-info 响应使用的字段名。加密资料库还会带 `enc_version`，以及调用者有权拿到的 `magic`/`random_key`/`salt`。
 
 ## 创建资料库 {#post-api2-repos}
 
@@ -60,7 +61,7 @@
 
 `GET /api2/repos/{repo_id}/`
 
-返回一个资料库的元数据，形状同列表项，包含 `permission` 与 `head_commit_id`。尚无提交的资料库 `head_commit_id` 与 `root` 为 `null`。
+返回一个资料库的元数据，形状同列表项，包含 `permission` 与 `head_commit_id`。尚无提交的资料库把 `head_commit_id` 报成全零哨兵（`000…0`，与 `GET /seafhttp/repo/{repo_id}/commit/HEAD` 一致），`root` 为 `null`：官方客户端要求这里必须是 40 位对象 id，所以用哨兵表示「没有 HEAD」。
 
 ## 修改资料库 {#post-api2-repos-repo-id}
 

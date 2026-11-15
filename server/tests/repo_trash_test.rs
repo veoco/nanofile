@@ -510,9 +510,10 @@ async fn restore_without_archived_content_comes_back_empty() {
         .json()
         .await
         .unwrap();
-    assert!(
-        repo["head_commit_id"].is_null(),
-        "there is no commit left to restore"
+    assert_eq!(
+        repo["head_commit_id"].as_str().unwrap(),
+        "0000000000000000000000000000000000000000",
+        "the restored library has no commit: its head is the empty-head sentinel"
     );
 
     let link = f

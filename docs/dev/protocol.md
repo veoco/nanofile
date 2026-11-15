@@ -171,7 +171,10 @@ These differ from upstream on purpose:
   reserved by upload id / block id and released on commit, abort or a 24-hour TTL.
 - **No `Created library` initial commit.** Repos start headless; `commit/HEAD`
   answers the `000…0` sentinel and `get_commit` synthesizes it (upstream always has a
-  real commit).
+  real commit). The repo list and `/seafhttp/accessible-repos` report that state as
+  `head_commit_id: "000…0"` instead of null: the official clients require a
+  40-character object id, and SeaDrive's `parse_repo_list()` discards the whole list
+  when an entry's `head_commit_id` is missing or malformed.
 - **`dir/detail/` reports `mtime` as a number**, seahub as an ISO string (Android's
   model declares `long` and never calls it).
 - **`?oid=` revalidation** (seahub answers `"uptodate"`): not implemented; the

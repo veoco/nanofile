@@ -112,9 +112,29 @@ async fn test_accessible_repos_returns_list() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let repos = body.as_array().unwrap();
-    assert!(!repos.is_empty(), "should have at least one repo");
-    assert!(!repos[0]["repo_id"].as_str().unwrap_or("").is_empty());
-    assert!(!repos[0]["token"].as_str().unwrap_or("").is_empty());
+    assert_eq!(repos.len(), 1, "should have exactly the fixture library");
+
+    // SeaDrive parses this response with `parse_repo_list()` (seadrive
+    // `sync-mgr.c`), which requires seafile-server's `share.SharedRepo` members:
+    // `version`, `id`, `head_commit_id`, `name`, `mtime`, `permission`, `type`,
+    // `owner`. A renamed or missing member fails the whole list.
+    let repo = &repos[0];
+    assert_eq!(repo["version"].as_i64().unwrap(), 1);
+    assert_eq!(repo["id"].as_str().unwrap(), f.repo_id.as_str());
+    assert_eq!(
+        repo["head_commit_id"].as_str().unwrap(),
+        "0000000000000000000000000000000000000000",
+        "a headless library reports the empty-head sentinel"
+    );
+    assert_eq!(repo["name"].as_str().unwrap(), "test-repo");
+    assert!(repo["mtime"].as_i64().unwrap() > 0);
+    assert_eq!(repo["permission"].as_str().unwrap(), "rw");
+    assert_eq!(repo["type"].as_str().unwrap(), "repo");
+    assert_eq!(repo["owner"].as_str().unwrap(), "test@example.com");
+    assert!(
+        repo.get("token").is_none(),
+        "the fileserver response carries no per-library token"
+    );
 }
 
 #[tokio::test]

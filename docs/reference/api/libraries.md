@@ -32,6 +32,7 @@ bound libraries.
     "mtime": 1760000000,
     "permission": "rw",
     "head_commit_id": "…",
+    "version": 1,
     "type": "repo",
     "virtual": false,
     "root": "…",
@@ -40,9 +41,12 @@ bound libraries.
 ]
 ```
 
-`permission` is `"rw"` or `"r"`. For an encrypted library the response also
-carries `enc_version`, and `magic`/`random_key`/`salt` where the caller is
-entitled to them.
+`permission` is `"rw"` or `"r"`. `version` is the library format version;
+SeaDrive's repo-list parser requires the key and skips entries whose value is 0.
+The same value is also emitted as `repo_version`, the name the create and
+download-info responses use. For an encrypted library the response also carries
+`enc_version`, and `magic`/`random_key`/`salt` where the caller is entitled to
+them.
 
 ## Create a library {#post-api2-repos}
 
@@ -75,8 +79,10 @@ values.
 `GET /api2/repos/{repo_id}/`
 
 Returns one library's metadata in the list shape, including `permission` and
-`head_commit_id`. A library with no commit yet has `head_commit_id: null` and
-`root: null`.
+`head_commit_id`. A library with no commit yet reports `head_commit_id` as the
+all-zero sentinel (`000…0`, the same value `GET /seafhttp/repo/{repo_id}/commit/HEAD`
+answers) and `root: null`; official clients require a 40-character object id
+there, so the sentinel stands in for "no HEAD".
 
 ## Modify a library {#post-api2-repos-repo-id}
 

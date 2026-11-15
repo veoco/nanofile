@@ -6,10 +6,27 @@ use crate::AccessTokenManager;
 use crate::domain::device::PeerStamp;
 use crate::repository::Repositories;
 use crate::service::auth::token::{ensure_sync_token_for, ensure_sync_tokens_for_repos};
+use base::common::EMPTY_SHA1;
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::util::{format_size, timestamp_rfc3339};
 use infra::entity::{repo, user};
+
+/// A headless library's `head_commit_id` on the wire.
+///
+/// Upstream libraries always have a "Created library" commit, so clients treat
+/// `head_commit_id` as a mandatory 40-hex object id. nanofile keeps a library
+/// headless until its first upload; the sync protocol already reports that state
+/// as [`EMPTY_SHA1`] (`GET /seafhttp/repo/{id}/commit/HEAD`), so the repo metadata
+/// reports the same sentinel. SeaDrive's `parse_repo_list()` rejects the **whole**
+/// list when an entry's id is missing or not a 40-hex object id ("Invalid repo
+/// list response: invalid head_commit_id").
+fn serialize_head_commit_id<S>(value: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(value.as_deref().unwrap_or(EMPTY_SHA1))
+}
 
 #[derive(Serialize)]
 pub struct RepoInfo {
@@ -29,8 +46,12 @@ pub struct RepoInfo {
     pub mtime: i64,
     #[serde(rename = "permission")]
     pub permission: String,
-    #[serde(rename = "head_commit_id")]
+    #[serde(serialize_with = "serialize_head_commit_id")]
     pub head_commit_id: Option<String>,
+    /// Library format version under seahub's list key. SeaDrive's repo-list
+    /// parser requires it (`Invalid repo list response: no version.`) and skips
+    /// entries whose value is 0.
+    pub version: i32,
     #[serde(rename = "type")]
     pub type_: String,
     #[serde(rename = "virtual")]
@@ -54,6 +75,11 @@ pub struct RepoInfo {
     pub pwd_hash_algo: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pwd_hash_params: Option<String>,
+    /// The same value as `version`, under the key the download-info / create
+    /// responses use (`repo_download_info()` in seahub, `RepoDownloadInfo` in
+    /// the desktop client). The library list needs both spellings: seahub uses
+    /// `version` there, while the desktop client's clone path reads
+    /// `repo_version` from the create response.
     pub repo_version: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lib_need_decrypt: Option<bool>,
@@ -345,6 +371,7 @@ fn build_repo_info_from_model(
         pwd_hash_algo: crypto.pwd_hash_algo.clone(),
         pwd_hash_params: crypto.pwd_hash_params.clone(),
         repo_version: r.repo_version,
+        version: r.repo_version,
         lib_need_decrypt: if encrypted { Some(true) } else { None },
         repo_id_dup: None,
         repo_name_dup: None,
@@ -667,6 +694,7 @@ impl RepoService {
             pwd_hash_algo: crypto.pwd_hash_algo.clone(),
             pwd_hash_params: crypto.pwd_hash_params.clone(),
             repo_version: 1,
+            version: 1,
             lib_need_decrypt: if encrypted { Some(true) } else { None },
             repo_id_dup: Some(repo_id),
             repo_name_dup: Some(name.to_string()),
@@ -757,6 +785,7 @@ impl RepoService {
             pwd_hash_algo: crypto.pwd_hash_algo.clone(),
             pwd_hash_params: crypto.pwd_hash_params.clone(),
             repo_version: r.repo_version,
+            version: r.repo_version,
             lib_need_decrypt: if encrypted { Some(true) } else { None },
             repo_id_dup: None,
             repo_name_dup: None,

@@ -178,13 +178,22 @@
 
 `GET /seafhttp/accessible-repos`
 
-令牌用户可同步的全部资料库，每个带一个可用令牌。
+令牌用户可同步的全部资料库，形状是 fileserver 的 `SharedRepo`。SeaDrive 守护进程用与 `/api2/repos/` 相同的那段代码解析这个响应，所以字段必须是它要求的：`version`、`id`、`head_commit_id`、`name`、`mtime`、`permission`、`type`、`owner`。尚无提交的资料库返回全零的 `head_commit_id` 哨兵。
 
 **响应 `200`**
 
 ```json
 [
-  { "repo_id": "…", "repo_name": "Docs", "repo_desc": "", "owner_email": "user@example.com", "token": "…", "permission": "rw" }
+  {
+    "version": 1,
+    "id": "…",
+    "head_commit_id": "…",
+    "name": "Docs",
+    "mtime": 1760000000,
+    "permission": "rw",
+    "type": "repo",
+    "owner": "user@example.com"
+  }
 ]
 ```
 

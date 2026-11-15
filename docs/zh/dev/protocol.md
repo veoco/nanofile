@@ -113,7 +113,7 @@ NUL 终止符是哈希的一部分：每个字符串都按 C 字符串（`strlen
   其它逻辑增长——目录复制、回收站/历史恢复、子库创建、去重后的 sync 提交——同样在提交点计费，
   `repo.size` 与 HEAD 在同一条语句里更新。未提交的块写入按上传 id / 块 id 预留，在提交、放弃或 24 小时
   TTL 到期时释放。
-- **不写 `Created library` 初始提交**：资料库可以没有 head，`commit/HEAD` 返回 `000…0` 哨兵，`get_commit` 合成它（上游总有一个真实提交）。
+- **不写 `Created library` 初始提交**：资料库可以没有 head，`commit/HEAD` 返回 `000…0` 哨兵，`get_commit` 合成它（上游总有一个真实提交）。资料库列表与 `/seafhttp/accessible-repos` 把这种状态报成 `head_commit_id: "000…0"` 而不是 null：官方客户端要求这里必须是 40 位对象 id，条目缺失或格式不对时 SeaDrive 的 `parse_repo_list()` 会丢弃整个列表。
 - **`dir/detail/` 的 `mtime` 是数字**，seahub 是 ISO 字符串（Android 的模型声明为 `long`，且从未调用该接口）。
 - **未实现 `?oid=` 复用校验**（seahub 回 `"uptodate"`）：官方客户端不发它。
 - **未实现 `If-Match`/`If-Unmodified-Since`/`If-Modified-Since` 与 `PROPPATCH`**。
