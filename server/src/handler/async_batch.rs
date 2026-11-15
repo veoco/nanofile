@@ -23,6 +23,13 @@ pub async fn async_batch_copy_item(
     State(state): State<Arc<AppState>>,
     Json(mut body): Json<super::batch::SyncBatchCopyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // The task below only carries one repo id, so a cross-repo copy would run
+    // against the source library with the destination path and silently copy to
+    // the wrong place. Fail closed exactly like the synchronous endpoint.
+    if body.src_repo_id != body.dst_repo_id {
+        return Err(AppError::BadRequest("cross-repo copy not supported".into()));
+    }
+
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
         &body.src_repo_id,
@@ -73,6 +80,14 @@ pub async fn async_batch_move_item(
     State(state): State<Arc<AppState>>,
     Json(mut body): Json<super::batch::BatchMoveRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // SeaDrive sends every cross-library drag here. The task payload carries only
+    // `src_repo_id`, so accepting it would move the entries within the source
+    // library to `dst_parent_dir` (or fail there) instead of moving them to the
+    // destination library. Reject it the same way the synchronous endpoint does.
+    if body.src_repo_id != body.dst_repo_id {
+        return Err(AppError::BadRequest("cross-repo move not supported".into()));
+    }
+
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
         &body.src_repo_id,
@@ -130,6 +145,14 @@ pub async fn copy_move_task(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CopyMoveTaskRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Like the two batch endpoints: the submitted task has one repo id, so a
+    // cross-library request must be rejected instead of running in the source.
+    if body.src_repo_id != body.dst_repo_id {
+        return Err(AppError::BadRequest(
+            "cross-repo copy or move not supported".into(),
+        ));
+    }
+
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
         &body.src_repo_id,

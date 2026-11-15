@@ -348,9 +348,15 @@ pub async fn file_post_handler(
                 Ok(ok_json().into_response())
             }
             Some("move") => {
-                let _dst_repo = form
+                let dst_repo = form
                     .get("dst_repo")
                     .ok_or_else(|| AppError::BadRequest("dst_repo required".into()))?;
+                // Same-repo only: `move_file` resolves `dst_dir` inside the URL's
+                // repo, so a foreign `dst_repo` must be rejected instead of
+                // silently moving the file within the source library.
+                if dst_repo.as_str() != repo_id.as_str() {
+                    return Err(AppError::BadRequest("cross-repo move not supported".into()));
+                }
                 let dst_dir = form.get("dst_dir").map(|s| s.as_str()).unwrap_or("/");
                 svc.move_file(
                     repo_id,

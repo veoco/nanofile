@@ -272,7 +272,9 @@ accepts both because the desktop client uses `DELETE` and the web UI `POST`.
 
 `POST /api/v2.1/repos/async-batch-copy-item/`
 
-Same body as the synchronous copy. Starts a background task.
+Same body as the synchronous copy. Starts a background task. `src_repo_id`
+must equal `dst_repo_id`: cross-library copy returns `400`, because the task
+runs inside one library.
 
 **Response `200`** — `{"task_id": "…"}`. Poll it with
 [`query-copy-move-progress`](#get-api-v2-1-query-copy-move-progress). Requires
@@ -282,7 +284,10 @@ Same body as the synchronous copy. Starts a background task.
 
 `POST /api/v2.1/repos/async-batch-move-item/`
 
-Same body as the synchronous move. **Response `200`** — `{"task_id": "…"}`.
+Same body as the synchronous move. `src_repo_id` must equal `dst_repo_id`:
+cross-library move returns `400`, because the task runs inside one library.
+
+**Response `200`** — `{"task_id": "…"}`.
 Requires `file.write`.
 
 ## Copy or move task {#post-api-v2-1-copy-move-task}
@@ -292,7 +297,8 @@ Requires `file.write`.
 The desktop client's combined entry point.
 
 **Body** (JSON) — the batch body plus `"operation": "copy"` (default) or
-`"move"`.
+`"move"`. `src_repo_id` must equal `dst_repo_id`: cross-library operations
+return `400`.
 
 **Response `200`** — `{"task_id": "…"}`. Requires `file.write`.
 

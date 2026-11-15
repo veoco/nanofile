@@ -236,11 +236,11 @@ Nanofile 没有评论功能。
 
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |
-| [Batch copy items synchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-sync-batch-copy-item)<br>`POST /api/v2.1/repos/sync-batch-copy-item/` | 一致 | [本地接口](/zh/reference/api/files#post-api-v2-1-repos-sync-batch-copy-item) |  |
-| [Batch move items synchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-sync-batch-move-item)<br>`POST /api/v2.1/repos/sync-batch-move-item/` | 一致 | [本地接口](/zh/reference/api/files#post-api-v2-1-repos-sync-batch-move-item) |  |
+| [Batch copy items synchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-sync-batch-copy-item)<br>`POST /api/v2.1/repos/sync-batch-copy-item/` | 有差异 | [本地接口](/zh/reference/api/files#post-api-v2-1-repos-sync-batch-copy-item) | 跨库操作返回 `400`。 |
+| [Batch move items synchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-sync-batch-move-item)<br>`POST /api/v2.1/repos/sync-batch-move-item/` | 有差异 | [本地接口](/zh/reference/api/files#post-api-v2-1-repos-sync-batch-move-item) | 跨库操作返回 `400`。 |
 | [Batch delete items](https://seafile-api.readme.io/reference/delete_api-v2-1-repos-batch-delete-item)<br>`DELETE /api/v2.1/repos/batch-delete-item/` | 有差异 | [本地接口](/zh/reference/api/files#post-api-v2-1-repos-batch-delete-item) | 只返回 `{success}`，没有 `commit_id`。 |
-| [Batch copy items asynchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-async-batch-copy-item)<br>`POST /api/v2.1/repos/async-batch-copy-item/` | 一致 | [本地接口](/zh/reference/api/files#post-api-v2-1-repos-async-batch-copy-item) |  |
-| [Batch move items asynchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-async-batch-move-item)<br>`POST /api/v2.1/repos/async-batch-move-item/` | 一致 | [本地接口](/zh/reference/api/files#post-api-v2-1-repos-async-batch-move-item) |  |
+| [Batch copy items asynchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-async-batch-copy-item)<br>`POST /api/v2.1/repos/async-batch-copy-item/` | 有差异 | [本地接口](/zh/reference/api/files#post-api-v2-1-repos-async-batch-copy-item) | 跨库操作返回 `400`。 |
+| [Batch move items asynchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-async-batch-move-item)<br>`POST /api/v2.1/repos/async-batch-move-item/` | 有差异 | [本地接口](/zh/reference/api/files#post-api-v2-1-repos-async-batch-move-item) | 跨库操作返回 `400`。 |
 | [Query async operation progress](https://seafile-api.readme.io/reference/get_api-v2-1-query-copy-move-progress)<br>`GET /api/v2.1/query-copy-move-progress/` | 有差异 | — | 进度字段是 `state`/`done_count`/`total`/`cancelable`；没有 `canceled`，`done` 是布尔值。 |
 | [Cancel async operation](https://seafile-api.readme.io/reference/delete_api-v2-1-copy-move-task)<br>`DELETE /api/v2.1/copy-move-task/` | 未实现 | — | 任务不能取消：进度里 `cancelable: false`。 |
 

@@ -236,11 +236,11 @@ Nanofile has no comments.
 
 | Official operation | Status | Nanofile | Notes |
 | --- | --- | --- | --- |
-| [Batch copy items synchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-sync-batch-copy-item)<br>`POST /api/v2.1/repos/sync-batch-copy-item/` | Same | [our endpoint](/reference/api/files#post-api-v2-1-repos-sync-batch-copy-item) |  |
-| [Batch move items synchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-sync-batch-move-item)<br>`POST /api/v2.1/repos/sync-batch-move-item/` | Same | [our endpoint](/reference/api/files#post-api-v2-1-repos-sync-batch-move-item) |  |
+| [Batch copy items synchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-sync-batch-copy-item)<br>`POST /api/v2.1/repos/sync-batch-copy-item/` | Differs | [our endpoint](/reference/api/files#post-api-v2-1-repos-sync-batch-copy-item) | Cross-library operations return `400`. |
+| [Batch move items synchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-sync-batch-move-item)<br>`POST /api/v2.1/repos/sync-batch-move-item/` | Differs | [our endpoint](/reference/api/files#post-api-v2-1-repos-sync-batch-move-item) | Cross-library operations return `400`. |
 | [Batch delete items](https://seafile-api.readme.io/reference/delete_api-v2-1-repos-batch-delete-item)<br>`DELETE /api/v2.1/repos/batch-delete-item/` | Differs | [our endpoint](/reference/api/files#post-api-v2-1-repos-batch-delete-item) | Returns `{success}` without `commit_id`. |
-| [Batch copy items asynchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-async-batch-copy-item)<br>`POST /api/v2.1/repos/async-batch-copy-item/` | Same | [our endpoint](/reference/api/files#post-api-v2-1-repos-async-batch-copy-item) |  |
-| [Batch move items asynchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-async-batch-move-item)<br>`POST /api/v2.1/repos/async-batch-move-item/` | Same | [our endpoint](/reference/api/files#post-api-v2-1-repos-async-batch-move-item) |  |
+| [Batch copy items asynchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-async-batch-copy-item)<br>`POST /api/v2.1/repos/async-batch-copy-item/` | Differs | [our endpoint](/reference/api/files#post-api-v2-1-repos-async-batch-copy-item) | Cross-library operations return `400`. |
+| [Batch move items asynchronously](https://seafile-api.readme.io/reference/post_api-v2-1-repos-async-batch-move-item)<br>`POST /api/v2.1/repos/async-batch-move-item/` | Differs | [our endpoint](/reference/api/files#post-api-v2-1-repos-async-batch-move-item) | Cross-library operations return `400`. |
 | [Query async operation progress](https://seafile-api.readme.io/reference/get_api-v2-1-query-copy-move-progress)<br>`GET /api/v2.1/query-copy-move-progress/` | Differs | — | Progress is `state`/`done_count`/`total`/`cancelable`; `canceled` is absent and `done` is a boolean. |
 | [Cancel async operation](https://seafile-api.readme.io/reference/delete_api-v2-1-copy-move-task)<br>`DELETE /api/v2.1/copy-move-task/` | Missing | — | Tasks cannot be cancelled: progress reports `cancelable: false`. |
 

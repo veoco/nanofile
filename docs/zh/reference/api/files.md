@@ -229,7 +229,7 @@ Seafile 重载的文件接口。请求体形状决定操作：
 
 `POST /api/v2.1/repos/async-batch-copy-item/`
 
-请求体同同步复制。启动后台任务。
+请求体同同步复制。启动后台任务。`src_repo_id` 必须等于 `dst_repo_id`：任务只在单个资料库内执行，跨库复制返回 `400`。
 
 **响应 `200`** —— `{"task_id": "…"}`。用 [`query-copy-move-progress`](#get-api-v2-1-query-copy-move-progress) 轮询。需要 `file.write`。
 
@@ -237,7 +237,9 @@ Seafile 重载的文件接口。请求体形状决定操作：
 
 `POST /api/v2.1/repos/async-batch-move-item/`
 
-请求体同同步移动。**响应 `200`** —— `{"task_id": "…"}`。需要 `file.write`。
+请求体同同步移动。`src_repo_id` 必须等于 `dst_repo_id`：任务只在单个资料库内执行，跨库移动返回 `400`。
+
+**响应 `200`** —— `{"task_id": "…"}`。需要 `file.write`。
 
 ## 复制或移动任务 {#post-api-v2-1-copy-move-task}
 
@@ -245,7 +247,7 @@ Seafile 重载的文件接口。请求体形状决定操作：
 
 桌面端的合并入口。
 
-**请求体**（JSON）—— 批量请求体加 `"operation": "copy"`（默认）或 `"move"`。
+**请求体**（JSON）—— 批量请求体加 `"operation": "copy"`（默认）或 `"move"`。`src_repo_id` 必须等于 `dst_repo_id`：跨库操作返回 `400`。
 
 **响应 `200`** —— `{"task_id": "…"}`。需要 `file.write`。
 

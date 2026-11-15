@@ -79,6 +79,56 @@ async fn test_async_batch_rejects_empty_and_oversized_dirents() {
     assert_eq!(resp.status(), 400, "oversized dirent list must be rejected");
 }
 
+/// Cross-library batch copy/move: the async task payload carries only
+/// `src_repo_id`, so accepting the request would run the operation inside the
+/// source library with the destination path. Reject it like the synchronous
+/// endpoints do instead of moving data to the wrong place.
+#[tokio::test]
+async fn test_async_batch_rejects_cross_repo() {
+    let f = TestFixture::new().await;
+    let other = common::create_test_repo(&f.client, &f.api_token, "other-library").await;
+
+    let resp = f
+        .client
+        .async_batch_copy(&f.api_token, &f.repo_id, "/", &["f.txt"], &other, "/")
+        .await;
+    assert_eq!(resp.status(), 400, "cross-repo async copy must be rejected");
+
+    let resp = f
+        .client
+        .async_batch_move(&f.api_token, &f.repo_id, "/", &["f.txt"], &other, "/")
+        .await;
+    assert_eq!(resp.status(), 400, "cross-repo async move must be rejected");
+}
+
+/// The single-file move endpoint resolves `dst_dir` inside the URL's library, so
+/// a foreign `dst_repo` must be a client error rather than a same-library move.
+#[tokio::test]
+async fn test_file_move_rejects_cross_repo() {
+    let f = TestFixture::new().await;
+    let other = common::create_test_repo(&f.client, &f.api_token, "other-library").await;
+
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "move-me.txt", b"x")
+        .await;
+    assert!(resp.status().is_success());
+
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{}/file/?p=/move-me.txt", f.repo_id),
+            Some(&f.api_token),
+            &[
+                ("operation", "move"),
+                ("dst_repo", other.as_str()),
+                ("dst_dir", "/"),
+            ],
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "cross-repo file move must be rejected");
+}
+
 // V-2: Upload-link / update-link — verify that a user without write
 // permission cannot obtain an upload or update URL.
 
