@@ -235,6 +235,9 @@ rather than an error.
 
 `GET /seafhttp/accessible-repos`
 
+Both this path and its trailing-slash form
+(`/seafhttp/accessible-repos/?repo_id=…`, which SeaDrive requests) are served.
+
 Every library the token's user can sync, in the fileserver's `SharedRepo` shape.
 SeaDrive's daemon parses this response with the same routine it uses for
 `/api2/repos/`, so the members are the ones that routine requires: `version`,

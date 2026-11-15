@@ -135,6 +135,24 @@ async fn test_accessible_repos_returns_list() {
         repo.get("token").is_none(),
         "the fileserver response carries no per-library token"
     );
+
+    // SeaDrive asks for the fileserver list with a trailing slash and the first
+    // library's id. A 404 here makes it disable this API and fall back to
+    // `/api2/repos/`, logging "Bad response code ... 404" on every start.
+    let resp = f
+        .client
+        .get_sync(
+            &format!("/seafhttp/accessible-repos/?repo_id={}", f.repo_id),
+            &f.sync_token,
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "the daemon's trailing-slash URL must match"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body.as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]

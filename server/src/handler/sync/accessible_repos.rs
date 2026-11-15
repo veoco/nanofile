@@ -21,5 +21,10 @@ pub async fn accessible_repos(
 }
 
 pub fn accessible_repos_routes() -> Router<Arc<AppState>> {
-    Router::new().route("/accessible-repos", axum::routing::get(accessible_repos))
+    // The daemon calls `/seafhttp/accessible-repos/?repo_id=…` with a trailing
+    // slash (seadrive-fuse sync-mgr.c), while the fileserver also serves the
+    // slash-less form. Register both; Axum matches paths exactly.
+    Router::new()
+        .route("/accessible-repos", axum::routing::get(accessible_repos))
+        .route("/accessible-repos/", axum::routing::get(accessible_repos))
 }

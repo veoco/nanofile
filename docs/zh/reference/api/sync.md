@@ -178,6 +178,8 @@
 
 `GET /seafhttp/accessible-repos`
 
+这个路径和带尾斜杠的形式（`/seafhttp/accessible-repos/?repo_id=…`，SeaDrive 请求的就是它）都可用。
+
 令牌用户可同步的全部资料库，形状是 fileserver 的 `SharedRepo`。SeaDrive 守护进程用与 `/api2/repos/` 相同的那段代码解析这个响应，所以字段必须是它要求的：`version`、`id`、`head_commit_id`、`name`、`mtime`、`permission`、`type`、`owner`。尚无提交的资料库返回全零的 `head_commit_id` 哨兵。
 
 **响应 `200`**
