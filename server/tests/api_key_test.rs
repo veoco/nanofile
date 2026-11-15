@@ -452,7 +452,7 @@ async fn webdav_capabilities_are_rejected_on_an_encrypted_library() {
         .client
         .create_encrypted_repo_with_password(&f.api_token, "enc", "secret-pw")
         .await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let encrypted_repo = resp.json::<Value>().await.unwrap()["id"]
         .as_str()
         .unwrap()

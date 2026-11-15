@@ -824,7 +824,7 @@ async fn test_sync_batch_copy_item_cross_repo_fails() {
 
     let repo2_id = {
         let resp = f.client.create_repo(&f.api_token, "repo2").await;
-        assert_eq!(resp.status(), 201);
+        assert_eq!(resp.status(), 200);
         let body: serde_json::Value = resp.json().await.unwrap();
         body["id"].as_str().unwrap().to_string()
     };

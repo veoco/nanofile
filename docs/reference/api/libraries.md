@@ -66,8 +66,9 @@ Creates a library owned by the caller. Bodies may be JSON, URL-encoded forms
 | `pwd_hash`, `pwd_hash_algo`, `pwd_hash_params` | no | The Seafile 11+ password verifier triple, sent when `/api2/server-info/` advertised an algorithm. |
 | `passwd` | no | A plaintext password the server hashes itself. |
 
-**Response `201`** — the created library in the `GET /api2/repos/{repo_id}/`
-shape. Requires `library.create`.
+**Response `200`** — the created library in the `GET /api2/repos/{repo_id}/`
+shape. Requires `library.create`. The sync daemon treats any other status as a
+failure, so creation answers `200`, not `201`.
 
 An encrypted library is created by a client, which alone holds the password; the
 server stores `magic`/`random_key` (or the `pwd_hash` triple) and can never

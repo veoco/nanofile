@@ -265,7 +265,7 @@ async fn a_sync_token_for_a_known_device_is_not_listed_as_unknown() {
     // the fixture's own token is then pointed at the device that signed in
     // above, so it belongs to that card instead.
     let resp = f.client.create_repo(&f.api_token, "second").await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let second_id = resp.json::<serde_json::Value>().await.unwrap()["id"]
         .as_str()
         .unwrap()
@@ -342,7 +342,7 @@ async fn a_sync_token_for_a_known_device_is_not_listed_as_unknown() {
 async fn creating_a_library_from_the_web_mints_no_token() {
     let f = TestFixture::new().await;
     let resp = f.client.create_repo(&f.api_token, "web-made").await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     assert!(
         resp.json::<serde_json::Value>()
             .await
@@ -457,7 +457,7 @@ async fn another_accounts_credential_cannot_be_revoked() {
     // because the row has a foreign key to one; whose library it is does not
     // matter, since the scoping under test is by owner.
     let resp = f.client.create_repo(&f.api_token, "second").await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let other_repo = resp.json::<serde_json::Value>().await.unwrap()["id"]
         .as_str()
         .expect("repo id")

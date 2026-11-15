@@ -38,7 +38,7 @@ fn key_body(capabilities: &[&str], all_repos: bool, repos: &[(&str, &str)]) -> V
 
 async fn second_repo(f: &TestFixture) -> String {
     let resp = f.client.create_repo(&f.api_token, "second").await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     resp.json::<Value>().await.unwrap()["id"]
         .as_str()
         .unwrap()

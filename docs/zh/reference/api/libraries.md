@@ -53,7 +53,7 @@
 | `pwd_hash`、`pwd_hash_algo`、`pwd_hash_params` | 否 | Seafile 11+ 的密码校验三元组，`/api2/server-info/` 声明算法时发送。 |
 | `passwd` | 否 | 明文密码，由服务器自行计算上述值。 |
 
-**响应 `201`** —— 创建的资料库，形状同 `GET /api2/repos/{repo_id}/`。需要 `library.create`。
+**响应 `200`** —— 创建的资料库，形状同 `GET /api2/repos/{repo_id}/`。需要 `library.create`。同步守护进程把其他状态码都视为失败，所以这里返回 `200` 而不是 `201`。
 
 加密资料库由客户端创建，密码只在客户端；服务器只保存 `magic`/`random_key`（或 `pwd_hash` 三元组），永远无法解密其块。`passwd` 供让服务器代算的客户端使用。
 

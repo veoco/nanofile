@@ -1591,7 +1591,7 @@ async fn test_left_panel_reflects_repo_changes() {
         .client
         .create_repo(&fixture.api_token, "second-repo")
         .await;
-    assert_eq!(create.status(), 201, "create_repo should return 201");
+    assert_eq!(create.status(), 200, "create_repo should return 200");
     let repo_info: serde_json::Value = create.json().await.unwrap();
     let second_id = repo_info["id"].as_str().unwrap().to_string();
 

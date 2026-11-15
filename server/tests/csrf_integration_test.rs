@@ -53,8 +53,9 @@ async fn create_repo_api(base_url: &str, api_token: &str, name: &str) -> String 
         .send()
         .await
         .unwrap();
-    assert!(
-        resp.status() == 200 || resp.status() == 201,
+    assert_eq!(
+        resp.status(),
+        200,
         "create repo {name} returned {}",
         resp.status()
     );

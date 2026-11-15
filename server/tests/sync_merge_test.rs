@@ -660,7 +660,7 @@ async fn test_merge_in_encrypted_library() {
         .client
         .create_encrypted_repo_with_password(&f.api_token, "enc-merge", "secret-pass")
         .await;
-    assert_eq!(resp.status(), 201, "encrypted library creation failed");
+    assert_eq!(resp.status(), 200, "encrypted library creation failed");
     let body: Value = resp.json().await.unwrap();
     let repo_id = body["id"].as_str().unwrap().to_string();
     let sync_token = common::get_sync_token(&f.client, &f.api_token, &repo_id).await;

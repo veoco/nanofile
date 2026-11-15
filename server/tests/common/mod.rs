@@ -960,7 +960,7 @@ pub async fn create_test_admin(db: &DatabaseConnection, email: &str, password: &
 
 pub async fn create_test_repo(client: &client::TestClient, token: &str, name: &str) -> String {
     let resp = client.create_repo(token, name).await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     body["id"].as_str().unwrap().to_string()
 }

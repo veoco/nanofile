@@ -13,7 +13,7 @@ async fn test_create_repo() {
     let token = body["token"].as_str().unwrap();
 
     let resp = client.create_repo(token, "My Library").await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body["id"].as_str().is_some());
@@ -79,7 +79,7 @@ async fn test_create_repo_allows_punctuation() {
     let token = body["token"].as_str().unwrap();
 
     let resp = client.create_repo(token, "My (Team) Docs").await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
 }
 
 #[tokio::test]
@@ -236,7 +236,7 @@ async fn test_create_repo_trailing_slash() {
     let token = body["token"].as_str().unwrap();
 
     let resp = client.create_repo(token, "Test Repo").await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
 }
 
 #[tokio::test]
@@ -394,7 +394,7 @@ async fn test_create_repo_json_body() {
             &serde_json::json!({"name": "JSON Created Repo"}),
         )
         .await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["name"], "JSON Created Repo");
     assert!(body["id"].as_str().is_some());
@@ -408,7 +408,7 @@ async fn test_create_repo_multipart_body() {
         .client
         .create_repo_multipart(&f.api_token, "Multipart Created Repo")
         .await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["name"], "Multipart Created Repo");
     assert_eq!(body["repo_name"], "Multipart Created Repo");
@@ -438,7 +438,7 @@ async fn a_library_created_without_a_device_has_no_sync_token() {
     let api_token = body["token"].as_str().unwrap();
 
     let resp = client.create_repo(api_token, "No Token Yet").await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let repo_id = body["id"].as_str().unwrap().to_string();
     assert!(
@@ -482,9 +482,17 @@ async fn a_device_that_creates_a_library_gets_its_token() {
     let api_token = body["token"].as_str().unwrap();
 
     let resp = client.create_repo(api_token, "Device Library").await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let repo_id = body["id"].as_str().unwrap();
+    // The sync daemon reads these three fields from the create response before
+    // it can fetch the empty head: a string sentinel (not null), the repo format
+    // version, and the repo token.
+    assert_eq!(
+        body["head_commit_id"].as_str(),
+        Some("0000000000000000000000000000000000000000")
+    );
+    assert_eq!(body["version"], 1);
     let token = body["token"]
         .as_str()
         .expect("a device-attributed create returns its token");
@@ -517,7 +525,7 @@ async fn test_create_repo_multipart_with_desc() {
         .client
         .create_repo_multipart_with_desc(&f.api_token, "Repo With Desc", "A test repo")
         .await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["name"], "Repo With Desc");
     assert_eq!(body["repo_name"], "Repo With Desc");
@@ -655,7 +663,7 @@ async fn test_create_repo_accepts_valid_uuid_repo_id() {
 
     let proposed = "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D";
     let resp = create_repo_with_id(&f, "client-id-repo", proposed).await;
-    assert_eq!(resp.status(), 201, "a valid UUID must be accepted");
+    assert_eq!(resp.status(), 200, "a valid UUID must be accepted");
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(
@@ -767,7 +775,7 @@ async fn test_compat_desktop_plain_repo_without_repo_id() {
             &serde_json::json!({ "name": "desktop-plain", "desc": "desktop-plain" }),
         )
         .await;
-    assert_eq!(resp.status(), 201, "plain create without repo_id must work");
+    assert_eq!(resp.status(), 200, "plain create without repo_id must work");
 
     let body: serde_json::Value = resp.json().await.unwrap();
     let repo_id = body["repo_id"].as_str().expect("repo_id in response");
@@ -830,7 +838,7 @@ async fn test_compat_desktop_encrypted_create_form_payload() {
 
     assert_eq!(
         resp.status(),
-        201,
+        200,
         "desktop encrypted-create form payload must succeed, body={:?}",
         resp.text().await
     );
@@ -923,7 +931,7 @@ async fn test_compat_client_uuid_is_validated_not_rejected_wholesale() {
         .await;
     assert_eq!(
         resp.status(),
-        201,
+        200,
         "a client-proposed lowercase UUID must pass validation and create the library"
     );
     let created: serde_json::Value = resp.json().await.unwrap();
@@ -961,7 +969,7 @@ async fn test_compat_uppercase_client_uuid_round_trips_consistently() {
             }),
         )
         .await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = resp.json().await.unwrap();
     let repo_id = body["repo_id"].as_str().unwrap().to_string();

@@ -551,7 +551,7 @@ async fn test_share_link_encrypted_repo_blocked() {
         .client
         .create_encrypted_repo(&f.api_token, "enc-repo", &repo_id, &magic, &random_key, 2)
         .await;
-    assert_eq!(resp.status(), 201, "create encrypted repo failed");
+    assert_eq!(resp.status(), 200, "create encrypted repo failed");
 
     let resp = f
         .client

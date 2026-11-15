@@ -32,7 +32,7 @@ async fn create_encrypted_repo(f: &TestFixture, name: &str, password: &str) -> S
         .await;
     assert_eq!(
         resp.status(),
-        201,
+        200,
         "encrypted repo creation failed: {}",
         resp.text().await.unwrap_or_default()
     );
@@ -50,7 +50,7 @@ async fn test_create_encrypted_repo_client_side() {
         .client
         .create_encrypted_repo(&f.api_token, "enc-lib", &repo_id, &magic, &random_key, 2)
         .await;
-    assert_eq!(resp.status(), 201, "create encrypted repo failed");
+    assert_eq!(resp.status(), 200, "create encrypted repo failed");
 
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["encrypted"], true);
@@ -395,7 +395,7 @@ async fn test_create_encrypted_repo_accepts_v4() {
         .await;
     assert_eq!(
         resp.status(),
-        201,
+        200,
         "enc_version 4 with valid keys should succeed, body={:?}",
         resp.text().await
     );
@@ -804,7 +804,7 @@ async fn android_bare_passwd_creation_produces_a_usable_encrypted_library() {
         .client
         .create_repo_multipart_with_passwd(&f.api_token, "android-enc", password)
         .await;
-    assert_eq!(resp.status(), 201, "creation must succeed");
+    assert_eq!(resp.status(), 200, "creation must succeed");
     let created: serde_json::Value = resp.json().await.unwrap();
     let repo_id = created["id"].as_str().unwrap().to_string();
     assert_eq!(
@@ -915,7 +915,7 @@ async fn v4_commits_carry_the_library_salt() {
             },
         )
         .await;
-    assert_eq!(resp.status(), 201, "v4 library creation must succeed");
+    assert_eq!(resp.status(), 200, "v4 library creation must succeed");
 
     let sync_token = common::get_sync_token(&f.client, &f.api_token, &repo_id).await;
 
@@ -1075,7 +1075,7 @@ async fn desktop_pwd_hash_create_payload_is_accepted_and_usable() {
     .await;
     assert_eq!(
         resp.status(),
-        201,
+        200,
         "desktop pwd_hash create payload must succeed, body={:?}",
         resp.text().await
     );
@@ -1144,7 +1144,7 @@ async fn pwd_hash_commit_carries_the_verifier_and_no_magic() {
         None,
     )
     .await;
-    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+    assert_eq!(resp.status(), 200, "create failed: {:?}", resp.text().await);
 
     let sync_token = common::get_sync_token(&f.client, &f.api_token, &repo_id).await;
     let empty = "0000000000000000000000000000000000000000";
@@ -1200,7 +1200,7 @@ async fn pwd_hash_create_drops_a_client_supplied_magic() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+    assert_eq!(resp.status(), 200, "create failed: {:?}", resp.text().await);
 
     let created: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(created["pwd_hash"], derived);
@@ -1243,7 +1243,7 @@ async fn pwd_hash_without_an_algorithm_is_ignored() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+    assert_eq!(resp.status(), 200, "create failed: {:?}", resp.text().await);
 
     let created: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(created["magic"], magic);
@@ -1351,7 +1351,7 @@ async fn bare_passwd_creation_uses_the_configured_pwd_hash_algo() {
         .client
         .create_repo_multipart_with_passwd(&f.api_token, "android", password)
         .await;
-    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+    assert_eq!(resp.status(), 200, "create failed: {:?}", resp.text().await);
 
     let created: serde_json::Value = resp.json().await.unwrap();
     let repo_id = created["repo_id"].as_str().unwrap().to_string();
@@ -1401,7 +1401,7 @@ async fn bare_passwd_creation_honours_argon2id_and_its_params() {
         .client
         .create_repo_multipart_with_passwd(&f.api_token, "android-argon2", password)
         .await;
-    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+    assert_eq!(resp.status(), 200, "create failed: {:?}", resp.text().await);
 
     let created: serde_json::Value = resp.json().await.unwrap();
     let repo_id = created["repo_id"].as_str().unwrap().to_string();
@@ -1438,7 +1438,7 @@ async fn change_password_regenerates_pwd_hash() {
         Some("2000"),
     )
     .await;
-    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+    assert_eq!(resp.status(), 200, "create failed: {:?}", resp.text().await);
     let before: serde_json::Value = resp.json().await.unwrap();
 
     let resp = f
@@ -1491,7 +1491,7 @@ async fn pwd_hash_library_checkpassword_reports_missing_magic() {
         None,
     )
     .await;
-    assert_eq!(resp.status(), 201, "create failed: {:?}", resp.text().await);
+    assert_eq!(resp.status(), 200, "create failed: {:?}", resp.text().await);
 
     let resp = f
         .client

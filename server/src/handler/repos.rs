@@ -178,7 +178,10 @@ pub async fn create_repo(
 
     state.left_panel_cache.clear_all();
 
-    Ok((StatusCode::CREATED, Json(repo_info)))
+    // 200, not 201: seahub and the official reference answer 200 here, and the
+    // sync daemon checks `status != 200` exactly, so a 201 breaks creating a
+    // library from the SeaDrive drive root.
+    Ok((StatusCode::OK, Json(repo_info)))
 }
 
 pub async fn get_repo(

@@ -93,7 +93,7 @@ async fn download_info_hands_a_device_its_own_attributed_token() {
     // creating a library mints nothing, so this is the sync protocol's own
     // device-less request.
     let resp = f.client.create_repo(&f.api_token, "second").await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let second = resp.json::<serde_json::Value>().await.unwrap()["id"]
         .as_str()
         .expect("repo id")
@@ -125,7 +125,7 @@ async fn a_repository_created_by_a_device_has_its_token_from_the_start() {
     let device = login_device(&f, "linux", "dev-a").await;
 
     let resp = f.client.create_repo(&device, "from-device").await;
-    assert_eq!(resp.status(), 201);
+    assert_eq!(resp.status(), 200);
     let created = resp.json::<serde_json::Value>().await.unwrap()["id"]
         .as_str()
         .expect("repo id")

@@ -103,7 +103,7 @@ Two shapes are special:
 | Status | Meaning |
 | --- | --- |
 | `200` | Success. |
-| `201` | Created (library creation, share-link creation). |
+| `201` | Created (directory creation). |
 | `204` | Success with no body (several `DELETE`s). |
 | `400` | Malformed request, missing parameter, or invalid value. |
 | `401` | Missing or invalid credential. |
