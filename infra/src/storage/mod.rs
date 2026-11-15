@@ -192,7 +192,7 @@ pub type DynBlockStorage = Arc<dyn BlockStorageBackend>;
 
 /// Create a new filesystem-backed block store at the given directory.
 pub fn new_block_store(base_dir: &std::path::Path) -> DynBlockStorage {
-    new_block_store_with_flush(base_dir, BlockFlush::Always)
+    new_block_store_with_flush(base_dir, BlockFlush::default())
 }
 
 /// [`new_block_store`] with an explicit flush policy for new blocks.

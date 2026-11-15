@@ -48,12 +48,14 @@ struct BlockKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BlockFlush {
     /// `sync_all` every block before it becomes visible under its id. A returned
-    /// write is durable, at the cost of one flush per block.
-    #[default]
+    /// write is durable, but the upload waits for a device-level flush: with several
+    /// blocks in flight those flushes serialize and can stall a sync for minutes, so
+    /// this is opt-in rather than the default.
     Always,
-    /// Leave the write in the OS page cache, as upstream Seafile does. A crash can
-    /// then leave a committed tree referencing a truncated block, so this is only
-    /// for hosts whose flush latency dwarfs the upload (and they accept the risk).
+    /// Leave the write in the OS page cache, as upstream Seafile does. Uploads are
+    /// acknowledged without waiting for the device; a crash can then leave a
+    /// committed tree referencing a truncated block.
+    #[default]
     Os,
 }
 
@@ -76,7 +78,7 @@ impl BlockStorage {
     pub fn new(base_dir: PathBuf) -> Self {
         Self {
             base_dir,
-            flush: BlockFlush::Always,
+            flush: BlockFlush::default(),
             prepared_repos: Mutex::new(HashSet::new()),
             exists_cache: Mutex::new(HashMap::new()),
         }

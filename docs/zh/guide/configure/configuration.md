@@ -45,6 +45,7 @@ description: 配置文件、环境变量与设置页如何分层。
 | `server.secret_key` | 主密钥，只能写在文件里；见[安全](/zh/guide/admin/security)。 |
 | `storage.block_dir`、`storage.temp_dir`、`storage.thumbnail_dir`、`storage.avatar_dir`、`index.index_dir` | 状态目录。相对路径相对于二进制所在目录解析；绝对路径可放到其他位置。 |
 | `storage.block_encryption_mode` | `off`、`on` 或 `lazy`。只能写在文件里：它决定已有密文如何读取。 |
+| `storage.block_flush` | `os`（默认）交给操作系统后台刷盘，与 Seafile 一致。`always` 每块 fsync，上传要等设备级刷盘，并发客户端可能被拖住数分钟。只能写在文件里。 |
 
 存储上限：进行中的断点续传合计默认最多声明 32 GiB，单个压缩包默认最多 8 GiB。在存储页（或 `[storage]`）把对应项设为 `0` 即取消上限。
 

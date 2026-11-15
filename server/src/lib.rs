@@ -288,11 +288,10 @@ impl AppState {
         let block_dir = Arc::new(PathBuf::from(&config.storage.block_dir));
         let mut block_store: infra::storage::DynBlockStorage =
             infra::storage::new_block_store_with_flush(&block_dir, config.storage.block_flush());
-        if config.storage.block_flush() == infra::storage::BlockFlush::Os {
-            tracing::warn!(
-                "storage.block_flush = os: block writes are not flushed before they are \
-                 acknowledged; a crash can leave a committed tree referencing a truncated \
-                 block. Only use this where flush latency dominates the upload."
+        if config.storage.block_flush() == infra::storage::BlockFlush::Always {
+            tracing::info!(
+                "storage.block_flush = always: every block is flushed before its upload is \
+                 acknowledged, and concurrent sync clients can stall behind those flushes."
             );
         }
         let enc_mode = config.storage.block_encryption_mode();

@@ -1026,11 +1026,12 @@ pub struct StorageConfig {
     /// Env: NANOFILE_STORAGE_BLOCK_ENCRYPTION_MODE
     #[serde(default = "default_block_encryption_mode")]
     pub block_encryption_mode: String,
-    /// Whether a block is flushed to stable storage before it becomes visible.
-    /// `"always"` (the default) fsyncs every block; `"os"` leaves the flush to the
-    /// operating system, as upstream Seafile does. With `"os"` a crash can leave a
-    /// committed tree referencing a block whose tail never reached the disk, so it
-    /// is only for hosts whose flush latency dominates the upload.
+    /// Whether a block is flushed to stable storage before the upload is
+    /// acknowledged. `"os"` (the default) leaves the flush to the operating system,
+    /// as upstream Seafile does. `"always"` fsyncs every block, so each upload waits
+    /// for a device-level flush: with several blocks in flight those flushes
+    /// serialize and can stall a sync for minutes, and it only narrows the crash
+    /// window in which a committed tree references a truncated block.
     /// Env: NANOFILE_STORAGE_BLOCK_FLUSH
     #[serde(default = "default_block_flush")]
     pub block_flush: String,
@@ -1086,7 +1087,7 @@ fn default_block_encryption_mode() -> String {
 }
 
 fn default_block_flush() -> String {
-    "always".to_string()
+    "os".to_string()
 }
 
 impl StorageConfig {
@@ -2949,7 +2950,12 @@ request_timeout_secs = 600
         use crate::storage::block_store::BlockFlush;
 
         let mut config = Config::default();
-        assert_eq!(config.storage.block_flush(), BlockFlush::Always);
+        assert_eq!(config.storage.block_flush(), BlockFlush::Os);
+        assert_eq!(
+            config.storage.block_flush(),
+            BlockFlush::default(),
+            "the config default and the storage layer's default must agree"
+        );
         for (value, expected) in [
             ("always", BlockFlush::Always),
             (" Always ", BlockFlush::Always),

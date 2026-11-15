@@ -64,6 +64,7 @@ quietly served a different database on a different port.
 | `server.secret_key` | The master key. File-only; see [Security](/guide/admin/security). |
 | `storage.block_dir`, `storage.temp_dir`, `storage.thumbnail_dir`, `storage.avatar_dir`, `index.index_dir` | State directories. Relative paths resolve against the binary's directory; absolute paths place state elsewhere. |
 | `storage.block_encryption_mode` | `off`, `on` or `lazy`. File-only: it decides how existing ciphertext is read. |
+| `storage.block_flush` | `os` (the default) leaves flushing to the OS, as Seafile does. `always` fsyncs every block, so each upload waits for a device-level flush and concurrent clients can stall for minutes. File-only. |
 
 Storage caps: open resumable uploads may declare 32 GiB in total and one archive
 may build 8 GiB by default. Setting either limit to `0` on the Storage page (or in
