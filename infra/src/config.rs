@@ -1529,7 +1529,9 @@ pub struct GcConfig {
     /// How long a block that an upload wrote but no commit references is kept before
     /// the collector removes it. Must be at least `storage.temp_upload_ttl_hours`, so a
     /// paused resumable upload's blocks survive until the upload itself expires.
-    /// `0` disables the sweep: an interrupted upload's blocks then wait for an audit.
+    /// `0` disables the block sweep: an interrupted upload's blocks then wait for an
+    /// audit. The ledger rows that announce them are still dropped, after a fixed
+    /// 30-day horizon, so the table cannot grow forever.
     /// Env: NANOFILE_GC_PENDING_TTL_HOURS
     #[serde(default = "default_gc_pending_ttl_hours")]
     pub pending_ttl_hours: u64,

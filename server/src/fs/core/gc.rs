@@ -1,9 +1,10 @@
-use crate::fs::core::tree::read_fs_file_data_batch;
 use crate::fs::core::upload_activity;
 use crate::repository::Repositories;
 use crate::repository::gc_state::LAST_AUDIT_AT;
 use crate::tasks::run::JobFailure;
-use base::common::{FsDirData, S_IFDIR, SEAF_METADATA_TYPE_DIR};
+use base::common::{
+    FsDirData, FsFileData, S_IFDIR, SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE,
+};
 use base::error::AppError;
 use infra::entity::{commit, repo};
 use infra::storage::DynBlockStorage;
@@ -31,7 +32,8 @@ pub struct GcPolicy {
     /// How the pass finds the blocks it deletes.
     pub mode: GcMode,
     /// Blocks an upload announced and never committed are kept at least this long.
-    /// `0` disables the sweep, leaving them to an audit.
+    /// `0` disables the block sweep, leaving them to an audit; the ledger rows
+    /// themselves are still dropped after a longer, fixed horizon.
     pub pending_ttl_secs: u64,
     /// In [`GcMode::Incremental`], how often a full audit replaces the incremental
     /// plan. `0` disables the automatic audit.
@@ -70,6 +72,15 @@ pub struct GcReport {
     pub skipped_fresh: u64,
     /// Blocks removed because an upload announced them and never committed them.
     pub expired_pending: u64,
+    /// Libraries skipped because they may still be receiving an upload.
+    pub busy_repos: u64,
+    /// Libraries skipped because their stored data could not be read. The rest of
+    /// the pass still runs; the error is logged per library.
+    pub failed_repos: u64,
+    /// Libraries skipped because a retained commit references objects that are not
+    /// stored (normally an upload in progress, whose tree is written before its
+    /// commit). Deleting against such a tree would under-approximate the live set.
+    pub incomplete_repos: u64,
     /// Whether this pass planned with [`GcMode::Audit`] (in incremental mode, the
     /// periodic audit turns one pass into an audit).
     pub audited: bool,
@@ -87,6 +98,9 @@ impl GcReport {
         self.removed_repos += other.removed_repos;
         self.skipped_fresh += other.skipped_fresh;
         self.expired_pending += other.expired_pending;
+        self.busy_repos += other.busy_repos;
+        self.failed_repos += other.failed_repos;
+        self.incomplete_repos += other.incomplete_repos;
         self.audited |= other.audited;
     }
 }
@@ -101,6 +115,9 @@ struct RepoPlan {
     commit_rows: Vec<i64>,
     /// Blocks this pass may delete.
     blocks: Vec<PlannedBlock>,
+    /// The retained history references objects that are not stored, so the live set
+    /// is an under-approximation and nothing may be deleted.
+    incomplete: bool,
 }
 
 /// A block a pass intends to delete, with the age the enumeration reported.
@@ -164,6 +181,12 @@ async fn checkpoint(ctx: Option<&crate::tasks::context::JobContext>) -> Result<(
 pub struct GcManager;
 
 impl GcManager {
+    /// How long a pending-block row is kept when the block sweep is switched off
+    /// (`gc.pending_ttl_hours = 0`). Long enough that no resumable upload — bounded
+    /// by `storage.temp_upload_ttl_hours`, normally a day — can still own it, and
+    /// short enough that the ledger cannot grow without bound.
+    const LEDGER_RETENTION_SECS: i64 = 30 * SECS_PER_DAY;
+
     /// Garbage-collect every repository: delete its unreachable blocks and remove
     /// block directories whose repository no longer exists.
     ///
@@ -173,7 +196,8 @@ impl GcManager {
     ///
     /// Reachability alone does not authorize a delete: an upload writes blocks
     /// *before* the commit that references them, so a block can be live while
-    /// absent from the snapshot — [`GcPolicy`] carries the two guards for that window.
+    /// absent from the snapshot — [`GcPolicy`] and the upload ledger carry the
+    /// guards for that window.
     pub async fn garbage_collect(
         repos: &Repositories,
         block_store: &DynBlockStorage,
@@ -233,11 +257,11 @@ impl GcManager {
 
         // Blocks an upload announced and never committed, past their window. This
         // runs before planning so the per-repository plans never see them, and it is
-        // the only cleanup for them when the schedule is incremental.
-        if policy.pending_ttl_secs > 0 {
-            report.expired_pending +=
-                Self::sweep_expired_pending(repos, block_store, &policy, now, ctx).await?;
-        }
+        // the only cleanup for them when the schedule is incremental. With the block
+        // sweep switched off it still drops ledger rows that have outlived their
+        // purpose, so the ledger cannot grow forever.
+        report.expired_pending +=
+            Self::sweep_expired_pending(repos, block_store, &policy, now, ctx).await?;
 
         let all_repos = repos.repo.find_all().await?;
         for repo_model in &all_repos {
@@ -245,28 +269,36 @@ impl GcManager {
             // repository is done, so a later run can simply continue from here.
             checkpoint(ctx).await?;
 
-            // A sync upload spans several requests. Any write in the last lease
-            // window means this library may be mid-upload, so leave the whole
-            // repository alone for this pass.
-            if let Some(ttl) = policy.upload_activity_ttl
-                && upload_activity::is_active(&repo_model.id, ttl)
-            {
+            // A sync upload spans several requests. Any recent write means this
+            // library may be mid-upload, so leave the whole repository alone for this
+            // pass. The check reads the in-process lease and the durable ledger, so a
+            // separate `nanofile gc` process sees the same protection.
+            if Self::repo_busy(repos, &repo_model.id, policy, now).await? {
                 tracing::debug!(
                     repo_id = %repo_model.id,
                     "skipping GC: recent upload activity"
                 );
+                report.busy_repos += 1;
                 continue;
             }
 
             // Plan first, delete second: the plan is a read-only description of what
             // this pass would remove, which is also exactly what a dry run reports.
-            let Some(plan) = Self::plan_repo(repos, block_store, repo_model, policy, now).await?
-            else {
-                continue;
-            };
-            report.merge(
-                Self::apply_repo(repos, block_store, repo_model, &plan, policy, now, ctx).await?,
-            );
+            // One library's damaged data must not stop the pass for every other
+            // library; a failure that is the pass's own (database, IO, cancellation)
+            // still does.
+            match Self::collect_repo(repos, block_store, repo_model, policy, now, ctx).await {
+                Ok(Some(applied)) => report.merge(applied),
+                Ok(None) => {}
+                Err(e) if Self::is_repo_data_error(&e) => {
+                    tracing::warn!(
+                        repo_id = %repo_model.id,
+                        "skipping GC for this library: {e}"
+                    );
+                    report.failed_repos += 1;
+                }
+                Err(e) => return Err(e),
+            }
         }
 
         report.removed_repos = Self::sweep_orphan_repos(repos, block_store, policy, ctx).await?;
@@ -281,6 +313,57 @@ impl GcManager {
         Ok(report)
     }
 
+    /// Plan and apply one repository, or `None` when the pass has nothing to do
+    /// there. Split out so the caller can isolate one library's damaged data.
+    async fn collect_repo(
+        repos: &Repositories,
+        block_store: &DynBlockStorage,
+        repo_model: &repo::Model,
+        policy: GcPolicy,
+        now: i64,
+        ctx: Option<&crate::tasks::context::JobContext>,
+    ) -> Result<Option<GcReport>, AppError> {
+        let Some(plan) = Self::plan_repo(repos, block_store, repo_model, policy, now).await? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            Self::apply_repo(repos, block_store, repo_model, &plan, policy, now, ctx).await?,
+        ))
+    }
+
+    /// Whether this library may be mid-upload, so a pass must leave it alone.
+    ///
+    /// The in-process lease is the live signal. The pending-block ledger is the
+    /// durable one: a separate `nanofile gc` process has an empty lease map, and a
+    /// restart clears it, while the announcement rows survive both. An upload writes
+    /// its blocks before the commit that references them, so either signal means the
+    /// reachability snapshot cannot yet see what is in flight.
+    async fn repo_busy(
+        repos: &Repositories,
+        repo_id: &str,
+        policy: GcPolicy,
+        now: i64,
+    ) -> Result<bool, AppError> {
+        let Some(ttl) = policy.upload_activity_ttl else {
+            return Ok(false);
+        };
+        if ttl.is_zero() {
+            return Ok(false);
+        }
+        if upload_activity::is_active(repo_id, ttl) {
+            return Ok(true);
+        }
+        let cutoff = now.saturating_sub(i64::try_from(ttl.as_secs()).unwrap_or(i64::MAX));
+        repos.pending_block.announced_since(repo_id, cutoff).await
+    }
+
+    /// Whether an error describes one library's stored data rather than the pass
+    /// itself. A library with an unreadable object can be skipped so every other
+    /// library is still collected; a database or IO failure must fail the pass.
+    fn is_repo_data_error(error: &AppError) -> bool {
+        matches!(error, AppError::RepoCorrupted | AppError::BadRequest(_))
+    }
+
     /// Remove blocks an upload announced and never committed, once the pending
     /// window has passed.
     ///
@@ -289,6 +372,11 @@ impl GcManager {
     /// commit-side delete failed, or a deduplicated write this upload did not really
     /// own) is kept and its row is already gone — the safe direction, at the cost of
     /// an orphan an audit will find.
+    ///
+    /// With `pending_ttl_secs == 0` the block sweep is off, but the rows are still
+    /// dropped after [`Self::LEDGER_RETENTION_SECS`]: they protect nothing in that
+    /// configuration, and leaving them forever would turn the ledger into an
+    /// append-only table. The blocks themselves wait for an audit, as documented.
     async fn sweep_expired_pending(
         repos: &Repositories,
         block_store: &DynBlockStorage,
@@ -299,13 +387,28 @@ impl GcManager {
         /// Bound one pass so a long-neglected deployment cannot stall it.
         const LIMIT: usize = 10_000;
 
-        let cutoff = now.saturating_sub(policy.pending_ttl_secs as i64);
+        let sweeping = policy.pending_ttl_secs > 0;
+        let retention = if sweeping {
+            i64::try_from(policy.pending_ttl_secs).unwrap_or(i64::MAX)
+        } else {
+            Self::LEDGER_RETENTION_SECS
+        };
+        let cutoff = now.saturating_sub(retention);
         let expired = if policy.dry_run {
             repos.pending_block.expired_before(cutoff, LIMIT).await?
         } else {
             repos.pending_block.claim_expired(cutoff, LIMIT).await?
         };
         if expired.is_empty() {
+            return Ok(0);
+        }
+        if !sweeping {
+            if !policy.dry_run {
+                tracing::debug!(
+                    rows = expired.len(),
+                    "dropped expired pending-block rows; the block sweep is off"
+                );
+            }
             return Ok(0);
         }
 
@@ -432,11 +535,28 @@ impl GcManager {
             return Ok(None);
         }
 
-        // Snapshot the FS rows this pass is allowed to prune. A row inserted after
-        // this point may belong to an upload that started during the pass, so it
-        // must never be a candidate here.
-        let prunes_history = repo_model.history_limit != 0 || repo_model.history_ttl_days != 0;
-        let fs_snapshot = if prunes_history {
+        let keep = Self::compute_keep_commits(
+            &commits,
+            repo_model.head_commit_id.as_deref(),
+            repo_model.history_limit,
+            repo_model.history_ttl_days,
+            now,
+        );
+        let prunes_commits = keep.len() != commits.len();
+
+        // The incremental planner derives every candidate from the FS rows this
+        // pass prunes; with nothing to prune it has no work, and the reachability
+        // walk below — the expensive half on a large library — would collect
+        // nothing. Skipping it is what makes an idle incremental pass cheap.
+        if policy.mode == GcMode::Incremental && !prunes_commits {
+            return Ok(None);
+        }
+
+        // Only a pass that actually prunes commits deletes rows, so only such a pass
+        // pays for reading every object row of the repository. The snapshot is taken
+        // *before* the reachability walk: a row inserted while that walk runs may
+        // belong to an upload the pass has not seen, so it must never be a candidate.
+        let fs_snapshot = if prunes_commits {
             Some(
                 repos
                     .fs_object
@@ -447,19 +567,12 @@ impl GcManager {
             None
         };
 
-        let keep = Self::compute_keep_commits(
-            &commits,
-            repo_model.head_commit_id.as_deref(),
-            repo_model.history_limit,
-            repo_model.history_ttl_days,
-            now,
-        );
-
         // Block ids referenced by this repository's retained history; rebuilt per
         // repository because there is no cross-repository sharing. `reachable` is
-        // the set of fs ids those commits can see.
+        // the set of fs ids those commits can see, and `complete` says whether all of
+        // them are stored.
         let mut alive_blocks: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let reachable = Self::collect_repo_alive_blocks(
+        let (reachable, complete) = Self::collect_repo_alive_blocks(
             repos,
             &repo_model.id,
             &commits,
@@ -470,20 +583,24 @@ impl GcManager {
 
         let mut plan = RepoPlan {
             repo_id: repo_model.id.clone(),
+            incomplete: !complete,
             ..RepoPlan::default()
         };
+        if !complete {
+            tracing::warn!(
+                repo_id = %repo_model.id,
+                "skipping GC: a retained commit references objects that are not stored"
+            );
+            return Ok(Some(plan));
+        }
 
-        // Only a pass that actually prunes commits deletes rows. A repository whose
-        // retention keeps every commit leaves even the rows no commit references
-        // (leftovers from an interrupted upload) to the block sweep, as before.
-        // The incremental planner derives its candidates from exactly these rows:
-        // deleting blocks while their rows stay behind would leave objects the
-        // database still points at.
-        let prunes_commits = keep.len() != commits.len();
+        // A repository whose retention keeps every commit leaves even the rows no
+        // commit references (leftovers from an interrupted upload) to the block
+        // sweep, as before. The incremental planner derives its candidates from
+        // exactly these rows: deleting blocks while their rows stay behind would
+        // leave objects the database still points at.
         let mut pruned_fs_ids: Vec<String> = Vec::new();
-        if let Some(snapshot) = fs_snapshot.as_ref()
-            && prunes_commits
-        {
+        if let Some(snapshot) = fs_snapshot.as_ref() {
             plan.fs_object_rows = snapshot
                 .iter()
                 .filter(|(_, fs_id)| !reachable.contains(fs_id))
@@ -551,9 +668,9 @@ impl GcManager {
         Ok(Some(plan))
     }
 
-    /// Apply one repository's plan, re-running the two guards that make deleting
-    /// blocks safe under a concurrent upload. A dry run performs the same reads and
-    /// returns the same count without writing or deleting.
+    /// Apply one repository's plan, re-running the upload and head guards before
+    /// each irreversible step. A dry run performs the same reads and returns the same
+    /// count without writing or deleting.
     async fn apply_repo(
         repos: &Repositories,
         block_store: &DynBlockStorage,
@@ -563,9 +680,31 @@ impl GcManager {
         now: i64,
         ctx: Option<&crate::tasks::context::JobContext>,
     ) -> Result<GcReport, AppError> {
+        // The retained history is not fully stored, so the live set is unknown: any
+        // deletion would be a guess. `plan_repo` already logged the warning.
+        if plan.incomplete {
+            return Ok(GcReport {
+                incomplete_repos: 1,
+                ..GcReport::default()
+            });
+        }
+
         // An upload may have started, or a commit may have landed, after the
         // snapshot this plan works from. Re-check right before the irreversible
-        // deletes and leave the repository alone when either moved.
+        // changes and leave the repository alone when either moved. The durability
+        // of the check matters: the lease map is empty in a separate `nanofile gc`
+        // process, so the ledger row is what protects a paused upload there.
+        if Self::repo_busy(repos, &snapshot.id, policy, now).await? {
+            tracing::debug!(
+                repo_id = %snapshot.id,
+                planned_blocks = plan.blocks.len(),
+                "skipping GC: recent upload activity"
+            );
+            return Ok(GcReport {
+                busy_repos: 1,
+                ..GcReport::default()
+            });
+        }
         if policy.verify_head && Self::repo_head_moved(repos, snapshot).await? {
             tracing::debug!(
                 repo_id = %snapshot.id,
@@ -576,6 +715,15 @@ impl GcManager {
         }
 
         let mut report = GcReport::default();
+        // Delete the commits first: they are what references the file objects. A
+        // crash between the two statements then leaves unreferenced FS rows for a
+        // later pass, never a commit pointing at objects that no longer exist.
+        if !plan.commit_rows.is_empty() && !policy.dry_run {
+            repos
+                .commit
+                .delete_many_by_ids(plan.commit_rows.clone())
+                .await?;
+        }
         if !plan.fs_object_rows.is_empty() {
             if !policy.dry_run {
                 repos
@@ -585,21 +733,17 @@ impl GcManager {
             }
             report.pruned_objects += plan.fs_object_rows.len() as u64;
         }
-        if !plan.commit_rows.is_empty() && !policy.dry_run {
-            repos
-                .commit
-                .delete_many_by_ids(plan.commit_rows.clone())
-                .await?;
-        }
 
-        if let Some(ttl) = policy.upload_activity_ttl
-            && upload_activity::is_active(&snapshot.id, ttl)
-        {
+        // The rows above can be pruned on the strength of the snapshot; the block
+        // deletion below cannot, because a block has no version of its own. Re-run
+        // both guards immediately before it.
+        if Self::repo_busy(repos, &snapshot.id, policy, now).await? {
             tracing::debug!(
                 repo_id = %snapshot.id,
                 planned_blocks = plan.blocks.len(),
                 "skipping block deletion: recent upload activity"
             );
+            report.busy_repos += 1;
             return Ok(report);
         }
         if policy.verify_head && Self::repo_head_moved(repos, snapshot).await? {
@@ -691,8 +835,8 @@ impl GcManager {
     ///
     /// The pruned side is read from the database in chunks: a large prune can name
     /// hundreds of thousands of objects, and their JSON is needed only here, never
-    /// for the reachability walk. `read_fs_file_data_batch` drops directory objects,
-    /// so only file ids put blocks into the result.
+    /// for the reachability walk. [`Self::read_file_objects`] drops directory
+    /// objects, so only file ids put blocks into the result.
     async fn blocks_of_file_objects(
         repos: &Repositories,
         repo_id: &str,
@@ -702,7 +846,7 @@ impl GcManager {
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for chunk in fs_ids.chunks(500) {
-            let files = read_fs_file_data_batch(repos, repo_id, chunk).await?;
+            let files = Self::read_file_objects(repos, repo_id, chunk).await?;
             for file in files.values() {
                 for block_id in &file.block_ids {
                     if alive.contains(block_id) || !seen.insert(block_id.clone()) {
@@ -716,6 +860,32 @@ impl GcManager {
                         modified_secs: None,
                     });
                 }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The file objects among `fs_ids`, keyed by fs id.
+    ///
+    /// [`crate::fs::core::tree::read_fs_file_data_batch`] is shared with the read
+    /// paths, where a malformed stored object surfaces as an internal error —
+    /// indistinguishable there from a database failure. For garbage collection it is
+    /// one library's damage, so it is classified as [`AppError::RepoCorrupted`] and
+    /// the pass skips that library instead of failing for every other library.
+    async fn read_file_objects(
+        repos: &Repositories,
+        repo_id: &str,
+        fs_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, FsFileData>, AppError> {
+        let mut out = std::collections::HashMap::with_capacity(fs_ids.len());
+        for chunk in fs_ids.chunks(500) {
+            let objects = crate::fs::core::tree::fetch_fs_object_map(repos, repo_id, chunk).await?;
+            for (fs_id, obj) in objects {
+                if obj.obj_type != SEAF_METADATA_TYPE_FILE as i8 {
+                    continue;
+                }
+                let data = Self::decode_file_object(repo_id, &fs_id, &obj.data)?;
+                out.insert(fs_id, data);
             }
         }
         Ok(out)
@@ -766,17 +936,25 @@ impl GcManager {
     }
 
     /// Collect the block ids referenced by any file reachable from the retained
-    /// commits of one repo. The per-repository layout makes this exactly the set of
-    /// blocks that repository may keep, i.e. the authorization-relevant live set.
+    /// commits of one repo, and report whether every reachable object is stored.
+    /// The per-repository layout makes the block set exactly the set that repository
+    /// may keep, i.e. the authorization-relevant live set.
+    ///
+    /// A sync client writes its commit *before* the objects it references
+    /// (`update_branch` validates the root once everything has arrived), so a
+    /// retained commit with an unstored subtree is normally an upload in progress.
+    /// The live set is then an under-approximation, and deleting blocks against it
+    /// would take data the upload is about to reference. The caller skips the whole
+    /// library in that case.
     async fn collect_repo_alive_blocks(
         repos: &Repositories,
         repo_id: &str,
         commits: &[commit::Model],
         keep: &std::collections::HashSet<i64>,
         alive_blocks: &mut std::collections::HashSet<String>,
-    ) -> Result<std::collections::HashSet<[u8; 20]>, AppError> {
+    ) -> Result<(std::collections::HashSet<[u8; 20]>, bool), AppError> {
         if commits.is_empty() {
-            return Ok(std::collections::HashSet::new());
+            return Ok((std::collections::HashSet::new(), true));
         }
 
         // Every fs_id reachable from the retained commits' roots. Returned so
@@ -787,19 +965,50 @@ impl GcManager {
                 Self::collect_fs_ids(repos, repo_id, &c.root_id, &mut reachable).await?;
             }
         }
-        if reachable.is_empty() {
-            return Ok(reachable);
+
+        // The empty-file / empty-directory sentinel is not a stored object.
+        let ids: Vec<String> = reachable
+            .iter()
+            .filter(|fs_id| **fs_id != [0u8; 20])
+            .map(hex::encode)
+            .collect();
+        if ids.is_empty() {
+            return Ok((reachable, true));
         }
 
-        // Batch-fetch the reachable *file* objects and record their block ids.
-        let ids: Vec<String> = reachable.iter().map(hex::encode).collect();
-        let files = read_fs_file_data_batch(repos, repo_id, &ids).await?;
-        for file in files.values() {
-            for block_id in &file.block_ids {
-                alive_blocks.insert(block_id.clone());
+        // One fetch of every reachable object does both jobs: it yields the file
+        // objects whose blocks are live, and it proves the tree is fully stored.
+        // Chunked so the peak memory is one batch of object JSON, not the repository.
+        let mut complete = true;
+        for chunk in ids.chunks(500) {
+            let objects = crate::fs::core::tree::fetch_fs_object_map(repos, repo_id, chunk).await?;
+            if objects.len() != chunk.len() {
+                complete = false;
+            }
+            for (fs_id, obj) in objects {
+                if obj.obj_type != SEAF_METADATA_TYPE_FILE as i8 {
+                    continue;
+                }
+                let data = Self::decode_file_object(repo_id, &fs_id, &obj.data)?;
+                for block_id in data.block_ids {
+                    alive_blocks.insert(block_id);
+                }
             }
         }
-        Ok(reachable)
+        Ok((reachable, complete))
+    }
+
+    /// Parse one stored file object, reporting a malformed value as this library's
+    /// damage rather than as a pass-wide internal error.
+    fn decode_file_object(repo_id: &str, fs_id: &str, data: &str) -> Result<FsFileData, AppError> {
+        serde_json::from_str(data).map_err(|e| {
+            tracing::warn!(
+                repo_id,
+                fs_id,
+                "garbage collection cannot decode a file object: {e}"
+            );
+            AppError::RepoCorrupted
+        })
     }
 
     /// Decode a 40-char hex SHA-1 (block id or fs id) to its raw 20 bytes, so sets
@@ -836,8 +1045,16 @@ impl GcManager {
             let mut next = Vec::new();
             for obj in objs.values() {
                 if obj.obj_type == SEAF_METADATA_TYPE_DIR as i8 {
-                    let dir_data: FsDirData = serde_json::from_str(&obj.data)
-                        .map_err(|e| AppError::internal(e.to_string()))?;
+                    // A malformed directory object is this library's damage: the
+                    // pass skips the library, the other libraries are still swept.
+                    let dir_data: FsDirData = serde_json::from_str(&obj.data).map_err(|e| {
+                        tracing::warn!(
+                            repo_id,
+                            fs_id = %obj.fs_id,
+                            "garbage collection cannot decode a directory object: {e}"
+                        );
+                        AppError::RepoCorrupted
+                    })?;
                     for entry in &dir_data.dirents {
                         let is_new = collected.insert(Self::decode_sha1_hex(&entry.id));
                         // Only directories have children; use the dirent's `mode` bit
@@ -966,6 +1183,19 @@ mod tests {
         .await
         .unwrap();
 
+        insert_repo(&db, repo_id, history_limit, history_ttl_days).await;
+
+        db
+    }
+
+    /// Add one library row to an already-created test database, so a test can have
+    /// more than one library in the same pass.
+    async fn insert_repo(
+        db: &sea_orm::DatabaseConnection,
+        repo_id: &str,
+        history_limit: i32,
+        history_ttl_days: i32,
+    ) {
         db.execute_raw(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
@@ -976,8 +1206,6 @@ mod tests {
         ))
         .await
         .unwrap();
-
-        db
     }
 
     async fn insert_commit(
@@ -1141,6 +1369,236 @@ mod tests {
         assert_eq!(count_rows(&db, "commits").await, 1);
         assert_eq!(count_rows(&db, "fs_objects").await, 1);
         crate::fs::core::upload_activity::clear(repo);
+    }
+
+    /// The ledger is the durable half of the activity guard: a pass that never saw
+    /// the upload in this process (another `nanofile gc`, or after a restart that
+    /// emptied the in-memory map) still skips the library while its announcement is
+    /// recent.
+    #[tokio::test]
+    async fn a_recent_announcement_skips_the_library_without_a_local_lease() {
+        let repo = "gc-durable-activity-test";
+        let db = setup_gc_test_db_for(repo, 0, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+
+        // An empty head tree makes the block an orphan; only the guard can spare it.
+        let root = "a1".repeat(20);
+        insert_commit_for(&db, repo, &"b1".repeat(20), &root, 3000).await;
+        insert_fs_object_for(
+            &db,
+            repo,
+            &root,
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
+        let orphan = store
+            .write_block(repo, b"announced but uncommitted")
+            .await
+            .unwrap();
+        repos
+            .pending_block
+            .mark_written(
+                repo,
+                std::slice::from_ref(&orphan),
+                chrono::Utc::now().timestamp(),
+            )
+            .await
+            .unwrap();
+
+        let report = GcManager::garbage_collect_report(&repos, &store, GcPolicy::new(0), None)
+            .await
+            .expect("gc succeeds");
+        assert_eq!(
+            report.busy_repos, 1,
+            "the ledger row must mark the library busy"
+        );
+        assert_eq!(report.deleted_blocks, 0);
+        assert!(store.has_block(repo, &orphan).await);
+
+        // Withdraw the announcement, as the commit or the abort does: the same pass
+        // now collects the orphan.
+        repos
+            .pending_block
+            .forget(repo, std::slice::from_ref(&orphan))
+            .await
+            .unwrap();
+        let report = GcManager::garbage_collect_report(&repos, &store, GcPolicy::new(0), None)
+            .await
+            .expect("gc succeeds");
+        assert_eq!(report.busy_repos, 0);
+        assert!(
+            !store.has_block(repo, &orphan).await,
+            "without the announcement the block is ordinary garbage"
+        );
+    }
+
+    /// A sync client writes its commit before the objects it references, so a
+    /// retained commit with an unstored subtree is normally an upload in progress.
+    /// The live set is then an under-approximation: the pass must skip the library
+    /// instead of deleting blocks the upload is about to reference.
+    #[tokio::test]
+    async fn an_unstored_subtree_skips_the_library() {
+        let db = setup_gc_test_db(1, 0).await; // history_limit = 1
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+
+        let block = store
+            .write_block(REPO, b"live through the parent commit only")
+            .await
+            .unwrap();
+        let old_root = "e1".repeat(20);
+        let old_file = "e2".repeat(20);
+        insert_commit(&db, "c1", &old_root, 1000).await;
+        insert_fs_object(
+            &db,
+            &old_root,
+            3,
+            &format!(
+                r#"{{"dirents":[{{"id":"{old_file}","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}}],"type":3,"version":1}}"#
+            ),
+        )
+        .await;
+        insert_fs_object(
+            &db,
+            &old_file,
+            1,
+            &format!(r#"{{"block_ids":["{block}"],"size":10,"type":1,"version":1}}"#),
+        )
+        .await;
+
+        // The newest commit is the one `history_limit` keeps, and its root has not
+        // been uploaded yet, so the walk cannot reach the parent's file.
+        insert_commit(&db, "c2", &"e3".repeat(20), 2000).await;
+
+        let report = GcManager::garbage_collect_report(
+            &repos,
+            &store,
+            GcPolicy {
+                verify_head: false,
+                upload_activity_ttl: None,
+                ..GcPolicy::new(0)
+            },
+            None,
+        )
+        .await
+        .expect("gc succeeds");
+
+        assert_eq!(report.incomplete_repos, 1);
+        assert_eq!(report.pruned_objects, 0);
+        assert_eq!(report.deleted_blocks, 0);
+        assert_eq!(count_rows(&db, "commits").await, 2);
+        assert!(
+            store.has_block(REPO, &block).await,
+            "the block is reachable through the parent commit once the upload finishes"
+        );
+    }
+
+    /// A library whose stored objects cannot be decoded is skipped and counted; the
+    /// other libraries in the pass are still collected.
+    #[tokio::test]
+    async fn a_corrupt_library_is_skipped_without_failing_the_pass() {
+        let db = setup_gc_test_db_for("gc-corrupt-dir", 0, 0).await;
+        insert_repo(&db, "gc-corrupt-file", 0, 0).await;
+        insert_repo(&db, REPO, 1, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+
+        // A directory object that is not JSON.
+        let bad_dir = "c1".repeat(20);
+        insert_commit_for(&db, "gc-corrupt-dir", &"c2".repeat(20), &bad_dir, 1000).await;
+        insert_fs_object_for(&db, "gc-corrupt-dir", &bad_dir, 3, "{not json").await;
+
+        // A directory that reaches a file object that is not JSON.
+        let file_dir = "c3".repeat(20);
+        let bad_file = "c4".repeat(20);
+        insert_commit_for(&db, "gc-corrupt-file", &"c5".repeat(20), &file_dir, 1000).await;
+        insert_fs_object_for(
+            &db,
+            "gc-corrupt-file",
+            &file_dir,
+            3,
+            &format!(
+                r#"{{"dirents":[{{"id":"{bad_file}","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":1}}],"type":3,"version":1}}"#
+            ),
+        )
+        .await;
+        insert_fs_object_for(&db, "gc-corrupt-file", &bad_file, 1, "{not json").await;
+
+        // A healthy library with a prunable commit, to prove the pass went on.
+        let (old_block, _shared) = seed_pruned_history(&db, &store).await;
+
+        let report = GcManager::garbage_collect_report(
+            &repos,
+            &store,
+            GcPolicy {
+                verify_head: false,
+                upload_activity_ttl: None,
+                ..GcPolicy::new(0)
+            },
+            None,
+        )
+        .await
+        .expect("one damaged library must not fail the pass");
+
+        assert_eq!(report.failed_repos, 2, "both damaged libraries are counted");
+        assert_eq!(report.pruned_objects, 2, "the healthy library was pruned");
+        assert_eq!(report.deleted_blocks, 1);
+        assert!(
+            !store.has_block(REPO, &old_block).await,
+            "the healthy library's orphan block is gone"
+        );
+    }
+
+    /// With nothing to prune, an incremental pass has no candidates at all, so it
+    /// must not pay for the reachability walk (which is also what would trip over a
+    /// damaged object).
+    #[tokio::test]
+    async fn an_incremental_pass_without_prunable_commits_skips_the_walk() {
+        let db = setup_gc_test_db(0, 0).await; // unlimited retention
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+
+        let root = "d1".repeat(20);
+        insert_commit(&db, "d2", &root, 1000).await;
+        insert_fs_object(&db, &root, 3, "{not json").await;
+        let repo_model = repos.repo.find_by_id(REPO).await.unwrap().unwrap();
+        let base = GcPolicy {
+            upload_activity_ttl: None,
+            verify_head: false,
+            ..GcPolicy::new(0)
+        };
+
+        let incremental = GcManager::plan_repo(
+            &repos,
+            &store,
+            &repo_model,
+            GcPolicy {
+                mode: GcMode::Incremental,
+                ..base
+            },
+            10_000,
+        )
+        .await
+        .expect("nothing to prune means nothing to read");
+        assert!(incremental.is_none());
+
+        let audit = GcManager::plan_repo(
+            &repos,
+            &store,
+            &repo_model,
+            GcPolicy {
+                mode: GcMode::Audit,
+                ..base
+            },
+            10_000,
+        )
+        .await;
+        assert!(
+            matches!(audit, Err(AppError::RepoCorrupted)),
+            "an audit still walks the tree and reports the damage as this library's"
+        );
     }
 
     /// Planning takes the FS-object snapshot; a row inserted after the pass
@@ -1620,6 +2078,88 @@ mod tests {
         );
     }
 
+    /// With the block sweep switched off the ledger must not become append-only: its
+    /// rows are dropped after the fixed horizon, while the blocks they announced are
+    /// left for an audit.
+    #[tokio::test]
+    async fn a_disabled_sweep_still_drops_the_ledger_rows() {
+        let db = setup_gc_test_db(0, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+        let now = chrono::Utc::now().timestamp();
+
+        // The block is referenced by the head tree, so the audit keeps it whether or
+        // not the sweep runs; the assertion is about the ledger row.
+        let kept = store.write_block(REPO, b"still referenced").await.unwrap();
+        let root = "a1".repeat(20);
+        let file = "a2".repeat(20);
+        insert_commit(&db, "c1", &root, now).await;
+        insert_fs_object(
+            &db,
+            &root,
+            3,
+            &format!(
+                r#"{{"dirents":[{{"id":"{file}","mode":33188,"modifier":"u1","mtime":1000,"name":"a.txt","size":10}}],"type":3,"version":1}}"#
+            ),
+        )
+        .await;
+        insert_fs_object(
+            &db,
+            &file,
+            1,
+            &format!(r#"{{"block_ids":["{kept}"],"size":10,"type":1,"version":1}}"#),
+        )
+        .await;
+
+        let stale = "b1".repeat(20);
+        let recent = "b2".repeat(20);
+        repos
+            .pending_block
+            .mark_written(REPO, std::slice::from_ref(&stale), now - 31 * SECS_PER_DAY)
+            .await
+            .unwrap();
+        repos
+            .pending_block
+            .mark_written(REPO, std::slice::from_ref(&recent), now - SECS_PER_DAY)
+            .await
+            .unwrap();
+
+        let report = GcManager::garbage_collect_report(
+            &repos,
+            &store,
+            GcPolicy {
+                pending_ttl_secs: 0,
+                verify_head: false,
+                upload_activity_ttl: None,
+                ..GcPolicy::new(0)
+            },
+            None,
+        )
+        .await
+        .expect("gc succeeds");
+
+        assert_eq!(report.expired_pending, 0, "no block is swept in this mode");
+        assert!(store.has_block(REPO, &kept).await);
+        assert!(
+            !repos
+                .pending_block
+                .written_after(REPO, std::slice::from_ref(&stale), 0)
+                .await
+                .unwrap()
+                .contains(&stale),
+            "a row past the fixed horizon is dropped even with the sweep off"
+        );
+        assert!(
+            repos
+                .pending_block
+                .written_after(REPO, std::slice::from_ref(&recent), 0)
+                .await
+                .unwrap()
+                .contains(&recent),
+            "a row inside the horizon is kept"
+        );
+    }
+
     /// An incremental schedule turns one pass into an audit when the last one is old
     /// (or unknown), records the time, and goes back to incremental afterwards.
     #[tokio::test]
@@ -1817,13 +2357,20 @@ mod tests {
             r#"{"dirents":[],"type":3,"version":1}"#,
         )
         .await;
+        insert_fs_object(
+            &db,
+            "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
 
         let removed = GcManager::garbage_collect(&repos, &store, GcPolicy::immediate())
             .await
             .expect("gc succeeds");
         assert_eq!(removed, 0);
         assert_eq!(count_rows(&db, "commits").await, 2);
-        assert_eq!(count_rows(&db, "fs_objects").await, 1);
+        assert_eq!(count_rows(&db, "fs_objects").await, 2);
     }
 
     /// With only a TTL set, old commits and their unreachable fs objects are pruned.

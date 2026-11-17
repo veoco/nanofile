@@ -46,7 +46,7 @@ than `gc.min_block_age_secs`:
 | `gc.enabled` | whether garbage collection runs. |
 | `gc.interval_hours` | how often it runs. |
 | `gc.mode` | how a pass finds orphaned blocks: `audit` lists every library and diffs it against what its retained commits reference; `incremental` deletes only what history pruning just orphaned and needs no listing. |
-| `gc.pending_ttl_hours` | how long a block an upload wrote but never committed is kept. It must be at least the resumable-upload lifetime; `0` disables the sweep and leaves those blocks to an audit. |
+| `gc.pending_ttl_hours` | how long a block an upload wrote but never committed is kept. It must be at least the resumable-upload lifetime; `0` disables the block sweep, leaves those blocks to an audit, and still drops the ledger rows after 30 days. |
 | `gc.audit_interval_hours` | in `incremental` mode, how often a pass becomes a full audit instead. `0` disables the automatic audit. |
 | `gc.min_block_age_secs` | how long a block must exist before it is eligible — this is the buffer for a block that was just uploaded and is not referenced yet. |
 
@@ -58,6 +58,11 @@ removes the prefix of a library that no longer exists, and every
 blocks are still collected eventually. An upload's blocks are recorded when they
 are written, so a restart in the middle of an upload no longer hides them from the
 next pass; they are swept once `gc.pending_ttl_hours` has passed without a commit.
+A library with write activity in the last hour is skipped for that pass — the
+scheduled job and a manual `nanofile gc` both read the upload ledger for that
+signal, so a separate process applies the same protection. One library whose
+stored objects cannot be read, or whose retained history references objects that
+are not stored yet, is skipped and reported while the rest of the pass continues.
 Run `nanofile gc --dry-run` to see what a pass would remove without touching
 anything.
 

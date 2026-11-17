@@ -39,7 +39,8 @@ references any more.
   `--mode`, that scheduled upgrade is suppressed for this run.
 - Blocks younger than `gc.min_block_age_secs` are never deleted. Blocks an upload
   announced and never committed are swept after `gc.pending_ttl_hours`.
-- The output names the scan mode and how much each category removed.
+- The output names the scan mode, how much each category removed, and how many
+  libraries were skipped because they were busy, unreadable, or not fully stored.
 - The command takes the grace window and the default mode from the configuration
   file and `NANOFILE_*` variables. Saved settings are not consulted: they configure
   the background job, which reads them at start.

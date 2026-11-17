@@ -448,7 +448,7 @@ pub fn install_default_jobs(
                     async move {
                         // The pass checks in at every repository boundary, so it
                         // parks while the server is busy; a cancellation lands there.
-                        let removed = GcManager::garbage_collect_with(
+                        let report = GcManager::garbage_collect_report(
                             &repos,
                             &block_store,
                             policy,
@@ -464,14 +464,30 @@ pub fn install_default_jobs(
                                 JobFailure::App(e)
                             }
                         })?;
-                        Ok(if removed > 0 {
-                            Outcome::success(
-                                format!("GC removed {removed} unreferenced objects/blocks"),
-                                Some(removed),
-                            )
+                        let removed = report.total();
+                        let mut message = if removed > 0 {
+                            format!("GC removed {removed} unreferenced objects/blocks")
                         } else {
-                            Outcome::success("GC completed: nothing to remove", None)
-                        })
+                            "GC completed: nothing to remove".to_string()
+                        };
+                        // A library is skipped rather than forced when it may still
+                        // be uploading, and one library's damage must not hide the
+                        // rest of the pass. Both are worth reporting, or an operator
+                        // sees a growing disk and a successful job.
+                        if report.busy_repos > 0 {
+                            message.push_str(&format!("; {} libraries busy", report.busy_repos));
+                        }
+                        if report.failed_repos > 0 {
+                            message
+                                .push_str(&format!("; {} libraries failed", report.failed_repos));
+                        }
+                        if report.incomplete_repos > 0 {
+                            message.push_str(&format!(
+                                "; {} libraries incomplete",
+                                report.incomplete_repos
+                            ));
+                        }
+                        Ok(Outcome::success(message, (removed > 0).then_some(removed)))
                     }
                 }
             },

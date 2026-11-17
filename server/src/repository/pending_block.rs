@@ -45,6 +45,14 @@ pub trait PendingBlockRepository: Send + Sync {
         cutoff: i64,
     ) -> Result<HashSet<String>, AppError>;
 
+    /// Whether `repo_id` has any announcement written at or after `cutoff`.
+    ///
+    /// This is the durable half of the upload-activity guard: the in-process lease
+    /// is empty in a separate `nanofile gc` process and after a restart, while the
+    /// row survives both. A hit means the library may still be uploading, so a pass
+    /// leaves its rows and blocks alone.
+    async fn announced_since(&self, repo_id: &str, cutoff: i64) -> Result<bool, AppError>;
+
     /// Atomically remove up to `limit` rows written before `cutoff` and return them.
     ///
     /// Removing the row first is what makes the sweep safe against a commit racing
@@ -144,6 +152,21 @@ impl PendingBlockRepository for DbPendingBlockRepository {
         Ok(out)
     }
 
+    async fn announced_since(&self, repo_id: &str, cutoff: i64) -> Result<bool, AppError> {
+        // Project one column and stop after the first row: this runs once per
+        // library per pass, and only the existence of a recent write matters.
+        let row: Option<(String,)> = pending_block::Entity::find()
+            .select_only()
+            .column(pending_block::Column::BlockId)
+            .filter(pending_block::Column::RepoId.eq(repo_id))
+            .filter(pending_block::Column::WrittenAt.gte(cutoff))
+            .limit(1)
+            .into_tuple()
+            .one(self.db.as_ref())
+            .await?;
+        Ok(row.is_some())
+    }
+
     async fn claim_expired(
         &self,
         cutoff: i64,
@@ -229,6 +252,29 @@ mod tests {
         assert_eq!(claimed.len(), 2, "the claim returns the rows it removed");
         assert!(repo.claim_expired(500, 10).await.unwrap().is_empty());
         assert!(repo.written_after("r1", &ids, 0).await.unwrap().is_empty());
+    }
+
+    /// The durable activity probe sees only this repository's recent rows: an old
+    /// announcement, or another library's fresh one, must not make it look busy.
+    #[tokio::test]
+    async fn announced_since_is_scoped_to_the_repository_and_the_cutoff() {
+        let repo = repo().await;
+        let old = "e5".repeat(20);
+        let fresh = "f6".repeat(20);
+        repo.mark_written("r1", std::slice::from_ref(&old), 100)
+            .await
+            .unwrap();
+        repo.mark_written("r1", std::slice::from_ref(&fresh), 900)
+            .await
+            .unwrap();
+        repo.mark_written("r2", std::slice::from_ref(&fresh), 900)
+            .await
+            .unwrap();
+
+        assert!(repo.announced_since("r1", 500).await.unwrap());
+        assert!(!repo.announced_since("r1", 901).await.unwrap());
+        assert!(repo.announced_since("r2", 500).await.unwrap());
+        assert!(!repo.announced_since("r3", 0).await.unwrap());
     }
 
     /// The two halves of the commit race: whoever removes the row second must not

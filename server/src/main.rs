@@ -697,6 +697,9 @@ fn main() -> anyhow::Result<()> {
                 println!("  expired pending:      {}", report.expired_pending);
                 println!("  removed repositories: {}", report.removed_repos);
                 println!("  skipped (too young):  {}", report.skipped_fresh);
+                println!("  skipped (busy):       {}", report.busy_repos);
+                println!("  skipped (failed):     {}", report.failed_repos);
+                println!("  skipped (incomplete): {}", report.incomplete_repos);
                 anyhow::Ok(())
             })
         }
