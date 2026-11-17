@@ -117,6 +117,27 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
     /// Delete a block file from this repository's directory.
     async fn remove_block(&self, repo_id: &str, block_id: &str) -> Result<(), std::io::Error>;
 
+    /// Delete several blocks of one repository, returning how many were handled.
+    ///
+    /// The default walks [`Self::remove_block`], which is what the filesystem
+    /// backend wants: an unlink is already the cheapest primitive. A backend with
+    /// a batch operation (S3 `DeleteObjects`, 1000 keys per call) overrides this so
+    /// retiring a large library or a pruned history costs one round trip per
+    /// thousand blocks instead of one per block. A block that is already gone is
+    /// not an error.
+    async fn remove_blocks(
+        &self,
+        repo_id: &str,
+        block_ids: &[String],
+    ) -> Result<u64, std::io::Error> {
+        let mut removed = 0u64;
+        for block_id in block_ids {
+            self.remove_block(repo_id, block_id).await?;
+            removed += 1;
+        }
+        Ok(removed)
+    }
+
     /// Logical size of a block; must equal `read_block(repo_id, block_id).len()`.
     async fn block_size(&self, repo_id: &str, block_id: &str) -> Result<i64, std::io::Error>;
 
@@ -159,6 +180,24 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
         Ok(())
     }
 
+    /// Visit every block ID together with its modification time, when the backend
+    /// already knows it.
+    ///
+    /// `None` means *not reported*, not *absent*: the filesystem gets no `stat`
+    /// from `readdir`, and forcing one would turn garbage collection's
+    /// orphan-only age check into a full-tree `stat`. The collect pass therefore
+    /// falls back to [`Self::block_modified_secs`] for the blocks it actually
+    /// wants to delete. An object store that gets `LastModified` back from a
+    /// listing returns it here and owes no per-block request at all.
+    async fn for_each_block_with_mtime(
+        &self,
+        repo_id: &str,
+        mut f: Box<dyn for<'a> FnMut(&'a str, Option<i64>) + Send>,
+    ) -> Result<(), std::io::Error> {
+        self.for_each_block_in_repo(repo_id, Box::new(move |id| f(id, None)))
+            .await
+    }
+
     /// Enumerate block IDs through a bounded channel so an async caller can process
     /// each id while the walk runs. [`Self::for_each_block_in_repo`] takes a synchronous
     /// callback, which forces buffering the whole list first. Ids are sent in
@@ -177,9 +216,50 @@ pub trait BlockStorageBackend: Send + Sync + std::fmt::Debug {
     }
 
     /// Repository ids with a block directory on disk, paired with it. Used by GC's
-    /// orphan sweep.
+    /// orphan sweep and by the admin commands that inspect one repository's bytes.
+    ///
+    /// This shape is filesystem-specific; a backend without directories leaves it
+    /// empty and implements [`Self::repo_ids`] / [`Self::remove_repo`] instead. No
+    /// runtime path may depend on the path being real.
     async fn repo_dirs(&self) -> Result<Vec<(String, std::path::PathBuf)>, std::io::Error> {
         Ok(Vec::new())
+    }
+
+    /// Repository ids that have a block prefix in this store.
+    ///
+    /// Defaults to the ids [`Self::repo_dirs`] reports. An object store overrides
+    /// it (list the `repos/` prefixes, then read each prefix's marker object) so
+    /// the orphan sweep never needs a `PathBuf`.
+    async fn repo_ids(&self) -> Result<Vec<String>, std::io::Error> {
+        Ok(self
+            .repo_dirs()
+            .await?
+            .into_iter()
+            .map(|(repo_id, _dir)| repo_id)
+            .collect())
+    }
+
+    /// Drop every stored block of one repository, including whatever marker the
+    /// backend keeps for it. `Ok(false)` when the repository had nothing stored.
+    ///
+    /// Deliberately a repository-level operation rather than "delete these ids":
+    /// the filesystem clears the directory, its two prefix levels and the
+    /// `.repo_id` marker in one call, and a per-id delete would leave an empty
+    /// prefix behind for every later sweep to rediscover. An object store lists
+    /// the prefix and deletes it in batches; the caller only cares that the prefix
+    /// is gone afterwards.
+    async fn remove_repo(&self, repo_id: &str) -> Result<bool, std::io::Error> {
+        for (id, dir) in self.repo_dirs().await? {
+            if id != repo_id {
+                continue;
+            }
+            return match tokio::fs::remove_dir_all(&dir).await {
+                Ok(()) => Ok(true),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(e) => Err(e),
+            };
+        }
+        Ok(false)
     }
 
     /// Drop cached presence results, so a later [`Self::has_block`] re-stats disk (GC

@@ -816,6 +816,7 @@ mod tests {
             "gc.enabled",
             "gc.interval_hours",
             "gc.min_block_age_secs",
+            "gc.mode",
             "index.enabled",
             "index.index_dir",
             "index.backfill_enabled",

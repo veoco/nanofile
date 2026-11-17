@@ -1512,6 +1512,20 @@ pub struct GcConfig {
     pub enabled: bool,
     #[serde(default = "default_gc_interval_hours")]
     pub interval_hours: u64,
+    /// How a pass finds the blocks it deletes.
+    ///
+    /// - `audit`: enumerate every block of each repository and delete the ones no
+    ///   retained commit references. One listing per repository, and the only mode
+    ///   that also finds what a crash left behind (a block written before its
+    ///   commit). This is the default.
+    /// - `incremental`: delete only what pruning history just orphaned, which needs
+    ///   no listing at all. Cheaper on an object store, where a listing is one
+    ///   request per thousand blocks, but a crashed upload's blocks survive until an
+    ///   operator runs `nanofile gc --mode audit`.
+    ///
+    /// Env: NANOFILE_GC_MODE
+    #[serde(default = "default_gc_mode")]
+    pub mode: String,
     /// Blocks written less than this many seconds ago are never deleted, even when the
     /// reference snapshot cannot see the commit that will reference them: an upload
     /// writes its blocks before committing them, so a pass started just before that
@@ -1521,11 +1535,26 @@ pub struct GcConfig {
     pub min_block_age_secs: u64,
 }
 
+impl GcConfig {
+    /// Reject a mode the runtime parser would read as `audit` only because of a typo
+    /// or stray whitespace. Case and surrounding whitespace are accepted.
+    pub fn validate_mode(&self) -> Result<(), String> {
+        match self.mode.trim().to_ascii_lowercase().as_str() {
+            "audit" | "incremental" => Ok(()),
+            _ => Err(format!(
+                "gc.mode = {:?} is not one of audit, incremental",
+                self.mode
+            )),
+        }
+    }
+}
+
 impl Default for GcConfig {
     fn default() -> Self {
         Self {
             enabled: false,
             interval_hours: default_gc_interval_hours(),
+            mode: default_gc_mode(),
             min_block_age_secs: default_gc_min_block_age_secs(),
         }
     }
@@ -1533,6 +1562,10 @@ impl Default for GcConfig {
 
 fn default_gc_interval_hours() -> u64 {
     24
+}
+
+fn default_gc_mode() -> String {
+    "audit".to_string()
 }
 
 fn default_gc_min_block_age_secs() -> u64 {
@@ -1907,6 +1940,7 @@ impl Config {
     pub fn validate(&self) -> Result<(), String> {
         self.server.validate_encrypted_library()?;
         self.storage.validate_block_encryption_mode()?;
+        self.gc.validate_mode()?;
 
         if self.server.version.trim().is_empty() {
             return Err("server.version must not be empty".to_string());

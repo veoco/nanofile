@@ -19,6 +19,17 @@ nanofile adduser [--email <地址>] [--regular]
 ## 块维护
 
 ```
+nanofile gc [--dry-run] [--mode audit|incremental]
+```
+
+手动跑一轮垃圾回收：按各库的历史保留设置裁剪历史，删除不再被任何提交引用的块，以及已不存在的库的整个前缀。
+
+- `--dry-run` 只报告会删除什么，不动任何数据。
+- `--mode` 覆盖本次运行的 `[gc] mode`。`audit` 会列举每个库的块，也能发现崩溃上传留下的块；`incremental` 只删除历史裁剪刚刚变成孤儿的块，不做列举。
+- 存活时间不足 `gc.min_block_age_secs` 的块永不删除。
+- 保护窗口与默认模式取自配置文件与 `NANOFILE_*` 环境变量；设置页保存的值不参与——它们配置的是后台作业，由作业在启动时读取。
+
+```
 nanofile migrate-blocks [--dry-run]
 ```
 

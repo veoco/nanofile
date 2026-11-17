@@ -41,12 +41,7 @@ impl BlockEncryptionConverter {
         batch_sleep: Duration,
     ) -> Result<u64, AppError> {
         let batch_limit = batch_limit.max(1);
-        let repo_ids: Vec<String> = block_store
-            .repo_dirs()
-            .await?
-            .into_iter()
-            .map(|(repo_id, _dir)| repo_id)
-            .collect();
+        let repo_ids = block_store.repo_ids().await?;
 
         let mut converted = 0u64;
         for repo_id in repo_ids {

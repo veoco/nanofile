@@ -424,7 +424,13 @@ pub fn install_default_jobs(
     // Garbage collection is registered only when it is switched on: a disabled
     // pass has no interval to show, and the switch is a restart-time setting.
     if gc_config.enabled {
-        let policy = GcPolicy::new(gc_config.min_block_age_secs);
+        let mut policy = GcPolicy::new(gc_config.min_block_age_secs);
+        // `Config::validate` has already rejected anything but the two known
+        // words; the fallback here is the safe one, never the cheap one.
+        policy.mode = match gc_config.mode.trim().to_ascii_lowercase().as_str() {
+            "incremental" => crate::fs::core::gc::GcMode::Incremental,
+            _ => crate::fs::core::gc::GcMode::Audit,
+        };
         jobs.push(job_with_trigger(
             JobKey::GarbageCollection,
             Trigger::Periodic {

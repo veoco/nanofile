@@ -185,6 +185,12 @@ impl BlockStorageBackend for EncryptingBlockStore {
         self.inner.remove_block(repo_id, block_id).await
     }
 
+    /// Ciphertext and plaintext carry the same id, so a batch delete needs no
+    /// translation; forwarding keeps a backend's batch primitive in play.
+    async fn remove_blocks(&self, repo_id: &str, block_ids: &[String]) -> Result<u64, io::Error> {
+        self.inner.remove_blocks(repo_id, block_ids).await
+    }
+
     /// Logical size of a stored block: must equal `read_block(..).len()`, because clients
     /// derive range/segmented offsets from it and `range_stream` skips by it, so a
     /// systematic error shifts everything after it.
@@ -299,8 +305,26 @@ impl BlockStorageBackend for EncryptingBlockStore {
         self.inner.for_each_block_in_repo(repo_id, f).await
     }
 
+    /// Encryption changes a block's length, not when it was written, so the age an
+    /// enumeration reports is already the right one.
+    async fn for_each_block_with_mtime(
+        &self,
+        repo_id: &str,
+        f: Box<dyn for<'a> FnMut(&'a str, Option<i64>) + Send>,
+    ) -> Result<(), io::Error> {
+        self.inner.for_each_block_with_mtime(repo_id, f).await
+    }
+
     async fn repo_dirs(&self) -> Result<Vec<(String, std::path::PathBuf)>, io::Error> {
         self.inner.repo_dirs().await
+    }
+
+    async fn repo_ids(&self) -> Result<Vec<String>, io::Error> {
+        self.inner.repo_ids().await
+    }
+
+    async fn remove_repo(&self, repo_id: &str) -> Result<bool, io::Error> {
+        self.inner.remove_repo(repo_id).await
     }
 
     fn invalidate_exists_cache(&self) {

@@ -160,12 +160,7 @@ impl BlockVerify {
     ) -> Result<VerifyReport, AppError> {
         let repo_ids: Vec<String> = match repo_filter {
             Some(id) => vec![id.to_string()],
-            None => store
-                .repo_dirs()
-                .await?
-                .into_iter()
-                .map(|(repo_id, _dir)| repo_id)
-                .collect(),
+            None => store.repo_ids().await?,
         };
 
         let mut report = VerifyReport {

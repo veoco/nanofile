@@ -188,10 +188,11 @@ impl Repositories {
         }
     }
 
-    /// Test-only constructor: derives the repository ciphers from an empty master key. Production
-    /// must call [`Repositories::new`] with ciphers derived from the configured server secret.
-    #[cfg(test)]
-    pub fn new_for_tests(db: Arc<DatabaseConnection>) -> Self {
+    /// Repository access for a maintenance command that only reads library
+    /// metadata (the `gc` command). The ciphers are derived from an empty key and
+    /// must never be used to decrypt anything: a command that touches tokens or
+    /// TOTP builds [`Repositories::new`] with the configured server secret instead.
+    pub fn without_secrets(db: Arc<DatabaseConnection>) -> Self {
         Self::new(
             db,
             Arc::new(infra::crypto::token_encryption::TokenCipher::from_master_key(b"")),
@@ -199,6 +200,13 @@ impl Repositories {
                 b"",
             )),
         )
+    }
+
+    /// Test-only constructor: derives the repository ciphers from an empty master key. Production
+    /// must call [`Repositories::new`] with ciphers derived from the configured server secret.
+    #[cfg(test)]
+    pub fn new_for_tests(db: Arc<DatabaseConnection>) -> Self {
+        Self::without_secrets(db)
     }
 
     /// Total storage usage for a user, summed in SQL rather than by pulling every repo row.

@@ -1081,33 +1081,21 @@ pub async fn purge_deleted_repos_of_owner(
     Ok(purged)
 }
 
-/// Remove a purged library's block directory. Best effort: garbage collection
-/// reclaims the directory of any library with neither a `repos` row nor a trash
-/// entry, so failing here only delays the cleanup.
+/// Remove a purged library's block prefix. Best effort: garbage collection reclaims
+/// the prefix of any library with neither a `repos` row nor a trash entry, so failing
+/// here only delays the cleanup.
+///
+/// Goes through `remove_repo` rather than looking the directory up: the filesystem
+/// implementation clears it in one `remove_dir_all`, and a store without directories
+/// deletes the prefix its own way. Enumerating every repository to find one path is
+/// exactly what the store-neutral operation exists to avoid.
 async fn remove_repo_block_dir(block_store: &DynBlockStorage, repo_id: &str) {
-    let dir = match block_store.repo_dirs().await {
-        Ok(dirs) => dirs
-            .into_iter()
-            .find(|(id, _)| id == repo_id)
-            .map(|(_, dir)| dir),
-        Err(e) => {
-            tracing::warn!(repo_id, "failed to list block directories: {e}");
-            return;
-        }
-    };
-    let Some(dir) = dir else { return };
-
-    match tokio::fs::remove_dir_all(&dir).await {
-        Ok(()) => tracing::info!(
-            repo_id,
-            dir = %dir.display(),
-            "removed the block directory of a purged library"
-        ),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+    match block_store.remove_repo(repo_id).await {
+        Ok(true) => tracing::info!(repo_id, "removed the block prefix of a purged library"),
+        Ok(false) => {}
         Err(e) => tracing::warn!(
             repo_id,
-            dir = %dir.display(),
-            "failed to remove the block directory of a purged library, the next garbage \
+            "failed to remove the block prefix of a purged library, the next garbage \
              collection will reclaim it: {e}"
         ),
     }

@@ -1111,6 +1111,18 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
+        "gc.mode",
+        Maintenance,
+        "NANOFILE_GC_MODE",
+        Kind::Enum(&["audit", "incremental"]),
+        Apply::Restart,
+        |c| c.gc.mode.clone(),
+        |c, v| {
+            c.gc.mode = parse_enum(v, &["audit", "incremental"])?;
+            Ok(())
+        }
+    ),
+    setting!(
         "gc.min_block_age_secs",
         Maintenance,
         "NANOFILE_GC_MIN_BLOCK_AGE_SECS",
@@ -1888,7 +1900,12 @@ pub static GROUPS: &[GroupDef] = &[
         section: Section::Maintenance,
         id: "maintenance_gc",
         title_key: "setting.group_maintenance_gc",
-        keys: &["gc.enabled", "gc.interval_hours", "gc.min_block_age_secs"],
+        keys: &[
+            "gc.enabled",
+            "gc.interval_hours",
+            "gc.mode",
+            "gc.min_block_age_secs",
+        ],
     },
     GroupDef {
         section: Section::Maintenance,

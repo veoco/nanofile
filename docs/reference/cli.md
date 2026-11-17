@@ -23,6 +23,23 @@ output.
 ## Block maintenance
 
 ```
+nanofile gc [--dry-run] [--mode audit|incremental]
+```
+
+Runs one garbage-collection pass by hand: prunes history beyond each library's
+retention settings and removes blocks — and whole library prefixes — that nothing
+references any more.
+
+- `--dry-run` reports what it would remove and changes nothing.
+- `--mode` overrides `[gc] mode` for this run. `audit` lists every library's blocks
+  and also finds what a crashed upload left behind; `incremental` deletes only what
+  pruning history just orphaned and needs no listing.
+- Blocks younger than `gc.min_block_age_secs` are never deleted.
+- The command takes the grace window and the default mode from the configuration
+  file and `NANOFILE_*` variables. Saved settings are not consulted: they configure
+  the background job, which reads them at start.
+
+```
 nanofile migrate-blocks [--dry-run]
 ```
 

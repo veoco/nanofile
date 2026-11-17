@@ -81,6 +81,19 @@ enum Command {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
+    /// Remove block storage that no library references any more: unreachable
+    /// blocks, and the whole prefix of a library that no longer exists.
+    /// `--dry-run` reports what it would remove.
+    Gc {
+        /// Report what would be removed; touch nothing.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// Override `[gc] mode` for this run. `audit` lists every library's blocks
+        /// and also finds what a crashed upload left behind; `incremental` deletes
+        /// only what pruning history just orphaned, with no listing.
+        #[arg(long, value_name = "audit|incremental")]
+        mode: Option<String>,
+    },
     /// Verify stored blocks against their content-addressed ids and file objects
     /// against the sizes they declare. Read-only unless `--repair` is given.
     VerifyBlocks {
@@ -629,6 +642,43 @@ fn main() -> anyhow::Result<()> {
                         report.missing_block_ids.join(", ")
                     );
                 }
+                anyhow::Ok(())
+            })
+        }
+        Command::Gc { dry_run, mode } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async move {
+                let db = establish_connection(&config.database).await?;
+                migration::Migrator::up(&db, None).await?;
+                infra::common::util::ensure_private_dir(&config.storage.block_dir)?;
+                let store = server::fs::core::block_verify::open_block_store(&config)?;
+                let repos =
+                    server::repository::Repositories::without_secrets(std::sync::Arc::new(db));
+
+                // The configuration file and `NANOFILE_*` decide the defaults (`gc.mode`
+                // is a restart-time setting, so a saved row in the admin console is not
+                // consulted here); `--mode` wins for this run.
+                let mut policy = server::fs::core::gc::GcPolicy::new(config.gc.min_block_age_secs);
+                policy.dry_run = dry_run;
+                if let Some(mode) = mode {
+                    policy.mode = match mode.trim().to_ascii_lowercase().as_str() {
+                        "audit" => server::fs::core::gc::GcMode::Audit,
+                        "incremental" => server::fs::core::gc::GcMode::Incremental,
+                        other => {
+                            anyhow::bail!("unknown --mode {other:?}: expected audit or incremental")
+                        }
+                    };
+                }
+
+                let report = server::fs::core::gc::GcManager::garbage_collect_report(
+                    &repos, &store, policy, None,
+                )
+                .await?;
+                println!("{}", if dry_run { "would remove:" } else { "removed:" });
+                println!("  pruned objects:       {}", report.pruned_objects);
+                println!("  deleted blocks:       {}", report.deleted_blocks);
+                println!("  removed repositories: {}", report.removed_repos);
+                println!("  skipped (too young):  {}", report.skipped_fresh);
                 anyhow::Ok(())
             })
         }

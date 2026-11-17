@@ -27,6 +27,75 @@ pub struct GcPolicy {
     /// pruning FS objects between the commit upload and the branch update.
     /// `None` disables the check (reachability tests use that).
     pub upload_activity_ttl: Option<Duration>,
+    /// How the pass finds the blocks it deletes.
+    pub mode: GcMode,
+    /// Compute the deletions and report them without changing the database or the
+    /// store. The same guards run, so the returned count is what a real pass would
+    /// remove right now.
+    pub dry_run: bool,
+}
+
+/// How a pass finds the blocks it deletes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GcMode {
+    /// Enumerate every block of each repository and delete the ones no retained
+    /// commit references. One listing per repository, and the only mode that finds
+    /// what a crash left behind (a block written before its commit arrived).
+    #[default]
+    Audit,
+    /// Delete only the blocks this pass itself orphaned by pruning history: no
+    /// enumeration, just the pruned file objects read from the database. It cannot
+    /// see a crashed upload, which is what an occasional `nanofile gc --mode audit`
+    /// is for.
+    Incremental,
+}
+
+/// What one pass did, or — when it was a dry run — what it would have done.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GcReport {
+    /// fs_object rows pruned from the database.
+    pub pruned_objects: u64,
+    /// Blocks deleted (a dry run reports what it would delete).
+    pub deleted_blocks: u64,
+    /// Block prefixes of repositories that no longer exist.
+    pub removed_repos: u64,
+    /// Blocks kept because they are younger than the grace window.
+    pub skipped_fresh: u64,
+}
+
+impl GcReport {
+    /// The same total [`GcManager::garbage_collect`] returns.
+    pub fn total(&self) -> u64 {
+        self.pruned_objects + self.deleted_blocks + self.removed_repos
+    }
+
+    fn merge(&mut self, other: GcReport) {
+        self.pruned_objects += other.pruned_objects;
+        self.deleted_blocks += other.deleted_blocks;
+        self.removed_repos += other.removed_repos;
+        self.skipped_fresh += other.skipped_fresh;
+    }
+}
+
+/// One repository's deletions, computed before anything is removed.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct RepoPlan {
+    repo_id: String,
+    /// fs_object rows to prune from the database.
+    fs_object_rows: Vec<i64>,
+    /// commit rows to prune from the database.
+    commit_rows: Vec<i64>,
+    /// Blocks this pass may delete.
+    blocks: Vec<PlannedBlock>,
+}
+
+/// A block a pass intends to delete, with the age the enumeration reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlannedBlock {
+    id: String,
+    /// `None` when the enumeration had no age for it (the filesystem gets none
+    /// from `readdir`); the delete path then asks the store for this one block.
+    modified_secs: Option<i64>,
 }
 
 impl GcPolicy {
@@ -37,6 +106,8 @@ impl GcPolicy {
             min_block_age_secs,
             verify_head: true,
             upload_activity_ttl: Some(upload_activity::UPLOAD_ACTIVITY_TTL),
+            mode: GcMode::Audit,
+            dry_run: false,
         }
     }
 
@@ -48,13 +119,15 @@ impl GcPolicy {
             min_block_age_secs: 0,
             verify_head: false,
             upload_activity_ttl: None,
+            mode: GcMode::Audit,
+            dry_run: false,
         }
     }
 }
 
 /// How many block deletions may run between checkpoints. Bounded by count rather
-/// than time so the interval is predictable; a deletion is an unlink, so batches
-/// are short.
+/// than time so the interval is predictable; one batch is a handful of unlinks on
+/// the filesystem, or one object-store delete call.
 const CHECKPOINT_EVERY_BLOCKS: usize = 256;
 
 /// Ask the run to stop, if there is a run to ask.
@@ -100,9 +173,24 @@ impl GcManager {
         policy: GcPolicy,
         ctx: Option<&crate::tasks::context::JobContext>,
     ) -> Result<u64, AppError> {
+        Ok(
+            Self::garbage_collect_report(repos, block_store, policy, ctx)
+                .await?
+                .total(),
+        )
+    }
+
+    /// The full result of a pass, for a caller that wants the breakdown (the
+    /// `nanofile gc` command prints it).
+    pub async fn garbage_collect_report(
+        repos: &Repositories,
+        block_store: &DynBlockStorage,
+        policy: GcPolicy,
+        ctx: Option<&crate::tasks::context::JobContext>,
+    ) -> Result<GcReport, AppError> {
         let now = chrono::Utc::now().timestamp();
         let all_repos = repos.repo.find_all().await?;
-        let mut removed = 0u64;
+        let mut report = GcReport::default();
 
         for repo_model in &all_repos {
             // A repository boundary is the natural place to wait: the previous
@@ -122,158 +210,20 @@ impl GcManager {
                 continue;
             }
 
-            // GC needs every commit, so it passes `None` to fetch all rows.
-            let commits = repos
-                .commit
-                .find_by_repo_id_ordered_by_ctime_desc(&repo_model.id, None)
-                .await?;
-            if commits.is_empty() {
+            // Plan first, delete second: the plan is a read-only description of what
+            // this pass would remove, which is also exactly what a dry run reports.
+            let Some(plan) = Self::plan_repo(repos, block_store, repo_model, policy, now).await?
+            else {
                 continue;
-            }
-
-            // Snapshot the FS rows this pass is allowed to delete. A row inserted
-            // after this point may belong to an upload that started during the
-            // pass, so it must never be a candidate here.
-            let prunes_history = repo_model.history_limit != 0 || repo_model.history_ttl_days != 0;
-            let fs_snapshot = if prunes_history {
-                Some(
-                    repos
-                        .fs_object
-                        .find_ids_and_fs_ids_by_repo_id(&repo_model.id)
-                        .await?,
-                )
-            } else {
-                None
             };
-
-            let keep = Self::compute_keep_commits(
-                &commits,
-                repo_model.head_commit_id.as_deref(),
-                repo_model.history_limit,
-                repo_model.history_ttl_days,
-                now,
+            report.merge(
+                Self::apply_repo(repos, block_store, repo_model, &plan, policy, now, ctx).await?,
             );
-
-            // Block ids referenced by this repository's retained history; rebuilt
-            // per repository because there is no cross-repository sharing.
-            let mut alive_blocks: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-            let reachable = Self::collect_repo_alive_blocks(
-                repos,
-                &repo_model.id,
-                &commits,
-                &keep,
-                &mut alive_blocks,
-            )
-            .await?;
-
-            // Only repos with retention limits are pruned; an unlimited repo's
-            // history is all live.
-            if let Some(fs_snapshot) = &fs_snapshot {
-                // An upload may have started after the early check. Re-check right
-                // before the irreversible deletes, and skip when the head moved
-                // after the snapshot this pass works from.
-                if let Some(ttl) = policy.upload_activity_ttl
-                    && upload_activity::is_active(&repo_model.id, ttl)
-                {
-                    tracing::debug!(
-                        repo_id = %repo_model.id,
-                        "skipping history prune: recent upload activity"
-                    );
-                    continue;
-                }
-                if policy.verify_head && Self::repo_head_moved(repos, repo_model).await? {
-                    tracing::debug!(
-                        repo_id = %repo_model.id,
-                        "skipping history prune: the repository head moved during this GC pass"
-                    );
-                    continue;
-                }
-                removed += Self::prune_repo(repos, &commits, &keep, reachable, fs_snapshot).await?;
-            }
-
-            // Stream the disk blocks so the full list is never materialised; only
-            // the orphan subset (usually tiny) is collected for deletion.
-            block_store.invalidate_exists_cache();
-            // A `'static` callback can't borrow, so the live set and orphan
-            // collector are shared through Arc rather than borrowed.
-            let alive_blocks = std::sync::Arc::new(alive_blocks);
-            let orphan_blocks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-            let (alive_ref, orphan_ref) = (alive_blocks.clone(), orphan_blocks.clone());
-            block_store
-                .for_each_block_in_repo(
-                    &repo_model.id,
-                    Box::new(move |id| {
-                        if !alive_ref.contains(id) {
-                            orphan_ref.lock().unwrap().push(id.to_string());
-                        }
-                    }),
-                )
-                .await?;
-            let orphan_blocks = orphan_blocks.lock().unwrap().clone();
-
-            // An upload that started while the blocks were being enumerated may
-            // reuse an old block this pass classified as an orphan; leave the
-            // repository's blocks for a later pass when activity is recent.
-            if let Some(ttl) = policy.upload_activity_ttl
-                && upload_activity::is_active(&repo_model.id, ttl)
-            {
-                tracing::debug!(
-                    repo_id = %repo_model.id,
-                    orphans = orphan_blocks.len(),
-                    "skipping block deletion: recent upload activity"
-                );
-                continue;
-            }
-
-            // A commit that landed since the snapshot can reference a block this pass
-            // classified as an orphan, so re-read the head and leave the repository
-            // alone when it moved. Placed as late as possible to keep the window narrow.
-            if policy.verify_head && Self::repo_head_moved(repos, repo_model).await? {
-                tracing::warn!(
-                    repo_id = %repo_model.id,
-                    orphans = orphan_blocks.len(),
-                    "skipping block deletion: the repository head moved during this GC pass"
-                );
-                continue;
-            }
-
-            let mut deleted = 0u64;
-            let mut skipped_fresh = 0u64;
-            for (index, id) in orphan_blocks.iter().enumerate() {
-                // Many orphans can make a long tail, so check in periodically
-                // rather than only between repositories.
-                if index % CHECKPOINT_EVERY_BLOCKS == 0 {
-                    checkpoint(ctx).await?;
-                }
-                // Second guard: a block written at or after the snapshot may belong to
-                // an upload whose commit is not visible yet — leave it for a later pass.
-                if policy.min_block_age_secs > 0
-                    && block_store
-                        .block_modified_secs(&repo_model.id, id)
-                        .await?
-                        .is_some_and(|m| now.saturating_sub(m) < policy.min_block_age_secs as i64)
-                {
-                    skipped_fresh += 1;
-                    continue;
-                }
-                block_store.remove_block(&repo_model.id, id).await?;
-                deleted += 1;
-            }
-            if skipped_fresh > 0 {
-                tracing::debug!(
-                    repo_id = %repo_model.id,
-                    skipped_fresh,
-                    min_block_age_secs = policy.min_block_age_secs,
-                    "kept blocks younger than the GC grace window"
-                );
-            }
-            removed += deleted;
         }
 
-        removed += Self::sweep_orphan_repo_dirs(repos, block_store).await?;
+        report.removed_repos = Self::sweep_orphan_repos(repos, block_store, policy, ctx).await?;
 
-        Ok(removed)
+        Ok(report)
     }
 
     /// Whether the repository's head differs from the snapshot this pass read. A
@@ -289,38 +239,344 @@ impl GcManager {
         })
     }
 
-    /// Remove block directories whose repository no longer exists.
+    /// Remove the block prefix of every repository that has neither a `repos` row
+    /// nor a trash entry.
     ///
     /// Deleting a repository removes its rows (cascading to commits and fs_objects)
-    /// but leaves its block files, which would otherwise stay on disk forever.
-    /// Directories whose id is still in the trash table are kept: restoring a
-    /// deleted library reuses the same repository id.
-    async fn sweep_orphan_repo_dirs(
+    /// but leaves its block prefix, which would otherwise stay in the store
+    /// forever. A repository whose id is still in the trash table is kept:
+    /// restoring a deleted library reuses the same repository id.
+    ///
+    /// The sweep is also the only cleanup for what a crash left behind (a block
+    /// written before its commit arrived), which is why it stays available even in
+    /// [`GcMode::Incremental`].
+    async fn sweep_orphan_repos(
         repos: &Repositories,
         block_store: &DynBlockStorage,
+        policy: GcPolicy,
+        ctx: Option<&crate::tasks::context::JobContext>,
     ) -> Result<u64, AppError> {
         let mut removed = 0u64;
-        for (repo_id, dir) in block_store.repo_dirs().await? {
+        for repo_id in block_store.repo_ids().await? {
+            checkpoint(ctx).await?;
             if repos.repo.find_by_id(&repo_id).await?.is_some() {
                 continue;
             }
             if repos.deleted_repo.find_by_id(&repo_id).await?.is_some() {
                 continue;
             }
+            if policy.dry_run {
+                tracing::info!(
+                    repo_id = %repo_id,
+                    "would remove the block prefix of a repository that no longer exists"
+                );
+                removed += 1;
+                continue;
+            }
             tracing::info!(
                 repo_id = %repo_id,
-                dir = %dir.display(),
-                "removing block directory of a repository that no longer exists"
+                "removing the block prefix of a repository that no longer exists"
             );
-            match tokio::fs::remove_dir_all(&dir).await {
-                Ok(()) => removed += 1,
+            match block_store.remove_repo(&repo_id).await {
+                Ok(true) => removed += 1,
+                Ok(false) => {}
                 Err(e) => tracing::warn!(
-                    dir = %dir.display(),
-                    "failed to remove orphan block directory: {e}"
+                    repo_id = %repo_id,
+                    "failed to remove the orphan block prefix: {e}"
                 ),
             }
         }
         Ok(removed)
+    }
+
+    /// What this pass would delete from one repository. Read-only: it takes the
+    /// database snapshot, walks the retained history, and (in [`GcMode::Audit`])
+    /// enumerates the store. Nothing is removed until [`Self::apply_repo`].
+    async fn plan_repo(
+        repos: &Repositories,
+        block_store: &DynBlockStorage,
+        repo_model: &repo::Model,
+        policy: GcPolicy,
+        now: i64,
+    ) -> Result<Option<RepoPlan>, AppError> {
+        // GC needs every commit, so it passes `None` to fetch all rows.
+        let commits = repos
+            .commit
+            .find_by_repo_id_ordered_by_ctime_desc(&repo_model.id, None)
+            .await?;
+        if commits.is_empty() {
+            return Ok(None);
+        }
+
+        // Snapshot the FS rows this pass is allowed to prune. A row inserted after
+        // this point may belong to an upload that started during the pass, so it
+        // must never be a candidate here.
+        let prunes_history = repo_model.history_limit != 0 || repo_model.history_ttl_days != 0;
+        let fs_snapshot = if prunes_history {
+            Some(
+                repos
+                    .fs_object
+                    .find_ids_and_fs_ids_by_repo_id(&repo_model.id)
+                    .await?,
+            )
+        } else {
+            None
+        };
+
+        let keep = Self::compute_keep_commits(
+            &commits,
+            repo_model.head_commit_id.as_deref(),
+            repo_model.history_limit,
+            repo_model.history_ttl_days,
+            now,
+        );
+
+        // Block ids referenced by this repository's retained history; rebuilt per
+        // repository because there is no cross-repository sharing. `reachable` is
+        // the set of fs ids those commits can see.
+        let mut alive_blocks: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let reachable = Self::collect_repo_alive_blocks(
+            repos,
+            &repo_model.id,
+            &commits,
+            &keep,
+            &mut alive_blocks,
+        )
+        .await?;
+
+        let mut plan = RepoPlan {
+            repo_id: repo_model.id.clone(),
+            ..RepoPlan::default()
+        };
+
+        // Only a pass that actually prunes commits deletes rows. A repository whose
+        // retention keeps every commit leaves even the rows no commit references
+        // (leftovers from an interrupted upload) to the block sweep, as before.
+        // The incremental planner derives its candidates from exactly these rows:
+        // deleting blocks while their rows stay behind would leave objects the
+        // database still points at.
+        let prunes_commits = keep.len() != commits.len();
+        let mut pruned_fs_ids: Vec<String> = Vec::new();
+        if let Some(snapshot) = fs_snapshot.as_ref()
+            && prunes_commits
+        {
+            plan.fs_object_rows = snapshot
+                .iter()
+                .filter(|(_, fs_id)| !reachable.contains(fs_id))
+                .map(|(id, _)| *id)
+                .collect();
+            plan.commit_rows = commits
+                .iter()
+                .filter(|c| !keep.contains(&c.id))
+                .map(|c| c.id)
+                .collect();
+            pruned_fs_ids = snapshot
+                .iter()
+                .filter(|(_, fs_id)| !reachable.contains(fs_id))
+                .map(|(_, fs_id)| hex::encode(fs_id))
+                .collect();
+        }
+
+        plan.blocks = match policy.mode {
+            GcMode::Audit => {
+                // Stream the disk blocks so the full list is never materialised;
+                // only the orphan subset (usually tiny) is collected. A `'static`
+                // callback cannot borrow, so the live set and the collector are
+                // shared through Arc.
+                let alive_blocks = std::sync::Arc::new(alive_blocks);
+                let orphan_blocks =
+                    std::sync::Arc::new(std::sync::Mutex::new(Vec::<PlannedBlock>::new()));
+                let (alive_ref, orphan_ref) = (alive_blocks.clone(), orphan_blocks.clone());
+                block_store
+                    .for_each_block_with_mtime(
+                        &repo_model.id,
+                        Box::new(move |id, modified_secs| {
+                            if !alive_ref.contains(id) {
+                                orphan_ref.lock().unwrap().push(PlannedBlock {
+                                    id: id.to_string(),
+                                    modified_secs,
+                                });
+                            }
+                        }),
+                    )
+                    .await?;
+                std::mem::take(&mut *orphan_blocks.lock().unwrap())
+            }
+            GcMode::Incremental => {
+                Self::blocks_of_file_objects(repos, &repo_model.id, &pruned_fs_ids, &alive_blocks)
+                    .await?
+            }
+        };
+
+        Ok(Some(plan))
+    }
+
+    /// Apply one repository's plan, re-running the two guards that make deleting
+    /// blocks safe under a concurrent upload. A dry run performs the same reads and
+    /// returns the same count without writing or deleting.
+    async fn apply_repo(
+        repos: &Repositories,
+        block_store: &DynBlockStorage,
+        snapshot: &repo::Model,
+        plan: &RepoPlan,
+        policy: GcPolicy,
+        now: i64,
+        ctx: Option<&crate::tasks::context::JobContext>,
+    ) -> Result<GcReport, AppError> {
+        // An upload may have started, or a commit may have landed, after the
+        // snapshot this plan works from. Re-check right before the irreversible
+        // deletes and leave the repository alone when either moved.
+        if policy.verify_head && Self::repo_head_moved(repos, snapshot).await? {
+            tracing::debug!(
+                repo_id = %snapshot.id,
+                planned_blocks = plan.blocks.len(),
+                "skipping GC: the repository head moved during this pass"
+            );
+            return Ok(GcReport::default());
+        }
+
+        let mut report = GcReport::default();
+        if !plan.fs_object_rows.is_empty() {
+            if !policy.dry_run {
+                repos
+                    .fs_object
+                    .delete_many_by_ids(plan.fs_object_rows.clone())
+                    .await?;
+            }
+            report.pruned_objects += plan.fs_object_rows.len() as u64;
+        }
+        if !plan.commit_rows.is_empty() && !policy.dry_run {
+            repos
+                .commit
+                .delete_many_by_ids(plan.commit_rows.clone())
+                .await?;
+        }
+
+        if let Some(ttl) = policy.upload_activity_ttl
+            && upload_activity::is_active(&snapshot.id, ttl)
+        {
+            tracing::debug!(
+                repo_id = %snapshot.id,
+                planned_blocks = plan.blocks.len(),
+                "skipping block deletion: recent upload activity"
+            );
+            return Ok(report);
+        }
+        if policy.verify_head && Self::repo_head_moved(repos, snapshot).await? {
+            tracing::warn!(
+                repo_id = %snapshot.id,
+                planned_blocks = plan.blocks.len(),
+                "skipping block deletion: the repository head moved during this pass"
+            );
+            return Ok(report);
+        }
+
+        if !policy.dry_run {
+            // Every delete below invalidates presence entries; a backend that
+            // caches them gets the chance to drop the whole map once instead.
+            block_store.invalidate_exists_cache();
+        }
+
+        for chunk in plan.blocks.chunks(CHECKPOINT_EVERY_BLOCKS) {
+            // Many orphans can make a long tail, so check in periodically rather
+            // than only between repositories.
+            checkpoint(ctx).await?;
+            let deletable = Self::deletable_blocks(
+                chunk,
+                block_store,
+                &plan.repo_id,
+                policy,
+                now,
+                &mut report.skipped_fresh,
+            )
+            .await?;
+            if deletable.is_empty() {
+                continue;
+            }
+            if policy.dry_run {
+                report.deleted_blocks += deletable.len() as u64;
+            } else {
+                report.deleted_blocks +=
+                    block_store.remove_blocks(&plan.repo_id, &deletable).await?;
+            }
+        }
+        if report.skipped_fresh > 0 {
+            tracing::debug!(
+                repo_id = %plan.repo_id,
+                skipped_fresh = report.skipped_fresh,
+                min_block_age_secs = policy.min_block_age_secs,
+                "kept blocks younger than the GC grace window"
+            );
+        }
+
+        Ok(report)
+    }
+
+    /// The subset of one batch that is old enough to delete.
+    ///
+    /// The age comes from the enumeration when the backend reported it (an object
+    /// store's listing carries `LastModified`), and is fetched for that one block
+    /// otherwise — which is what the filesystem does, because `readdir` has no
+    /// `stat`.
+    async fn deletable_blocks(
+        chunk: &[PlannedBlock],
+        block_store: &DynBlockStorage,
+        repo_id: &str,
+        policy: GcPolicy,
+        now: i64,
+        skipped_fresh: &mut u64,
+    ) -> Result<Vec<String>, AppError> {
+        if policy.min_block_age_secs == 0 {
+            return Ok(chunk.iter().map(|block| block.id.clone()).collect());
+        }
+        let mut out = Vec::with_capacity(chunk.len());
+        for block in chunk {
+            let modified = match block.modified_secs {
+                Some(secs) => Some(secs),
+                None => block_store.block_modified_secs(repo_id, &block.id).await?,
+            };
+            // A block written at or after the snapshot may belong to an upload
+            // whose commit is not visible yet — leave it for a later pass.
+            if modified.is_some_and(|m| now.saturating_sub(m) < policy.min_block_age_secs as i64) {
+                *skipped_fresh += 1;
+                continue;
+            }
+            out.push(block.id.clone());
+        }
+        Ok(out)
+    }
+
+    /// Blocks referenced by the given file objects, minus the live set.
+    ///
+    /// The pruned side is read from the database in chunks: a large prune can name
+    /// hundreds of thousands of objects, and their JSON is needed only here, never
+    /// for the reachability walk. `read_fs_file_data_batch` drops directory objects,
+    /// so only file ids put blocks into the result.
+    async fn blocks_of_file_objects(
+        repos: &Repositories,
+        repo_id: &str,
+        fs_ids: &[String],
+        alive: &std::collections::HashSet<String>,
+    ) -> Result<Vec<PlannedBlock>, AppError> {
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for chunk in fs_ids.chunks(500) {
+            let files = read_fs_file_data_batch(repos, repo_id, chunk).await?;
+            for file in files.values() {
+                for block_id in &file.block_ids {
+                    if alive.contains(block_id) || !seen.insert(block_id.clone()) {
+                        continue;
+                    }
+                    out.push(PlannedBlock {
+                        id: block_id.clone(),
+                        // Not an enumeration: the delete path asks the store for
+                        // this block's age when the grace window is on.
+                        modified_secs: None,
+                    });
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Compute the set of commit ids (by DB primary key) to retain.
@@ -382,7 +638,7 @@ impl GcManager {
         }
 
         // Every fs_id reachable from the retained commits' roots. Returned so
-        // `prune_repo` can reuse it instead of re-walking the same trees.
+        // `plan_repo` can reuse it instead of re-walking the same trees.
         let mut reachable = std::collections::HashSet::new();
         for c in commits {
             if keep.contains(&c.id) {
@@ -402,49 +658,6 @@ impl GcManager {
             }
         }
         Ok(reachable)
-    }
-
-    /// Prune one repo's history per its retention settings, deleting fs_object and
-    /// commit rows no longer reachable from any retained commit. The caller
-    /// supplies the full commit list, the kept-set, and the FS-object snapshot
-    /// taken at the start of the pass.
-    ///
-    /// Only rows from `fs_snapshot` are candidates: a row inserted after the
-    /// snapshot may belong to an upload that is still in flight.
-    async fn prune_repo(
-        repos: &Repositories,
-        commits: &[commit::Model],
-        keep: &std::collections::HashSet<i64>,
-        active_fs_ids: std::collections::HashSet<[u8; 20]>,
-        fs_snapshot: &[(i64, [u8; 20])],
-    ) -> Result<u64, AppError> {
-        if keep.len() == commits.len() {
-            return Ok(0);
-        }
-
-        // Delete no-longer-reachable fs objects from the pass snapshot. Only
-        // project (id, fs_id): the `data` JSON can be large and is irrelevant for
-        // computing orphans.
-        let inactive_ids: Vec<i64> = fs_snapshot
-            .iter()
-            .filter(|(_, fs_id)| !active_fs_ids.contains(fs_id))
-            .map(|(id, _)| *id)
-            .collect();
-        let removed = inactive_ids.len();
-        if !inactive_ids.is_empty() {
-            repos.fs_object.delete_many_by_ids(inactive_ids).await?;
-        }
-
-        let pruned_ids: Vec<i64> = commits
-            .iter()
-            .filter(|c| !keep.contains(&c.id))
-            .map(|c| c.id)
-            .collect();
-        if !pruned_ids.is_empty() {
-            repos.commit.delete_many_by_ids(pruned_ids).await?;
-        }
-
-        Ok(removed as u64)
     }
 
     /// Decode a 40-char hex SHA-1 (block id or fs id) to its raw 20 bytes, so sets
@@ -503,6 +716,7 @@ impl GcManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use infra::storage::BlockStorageBackend;
 
     const REPO: &str = "test-repo";
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
@@ -581,6 +795,15 @@ mod tests {
                 fs_id VARCHAR(40) NOT NULL,
                 obj_type TINYINT NOT NULL,
                 data TEXT NOT NULL
+            );
+
+            CREATE TABLE deleted_repos (
+                repo_id VARCHAR(36) PRIMARY KEY,
+                repo_name VARCHAR(255) NOT NULL DEFAULT '',
+                head_id VARCHAR(40),
+                owner_id INTEGER NOT NULL,
+                size BIGINT NOT NULL DEFAULT 0,
+                del_time BIGINT NOT NULL
             );
             ",
         ))
@@ -764,52 +987,58 @@ mod tests {
         crate::fs::core::upload_activity::clear(repo);
     }
 
-    /// `prune_repo` only considers the FS-object snapshot it was given: a row
-    /// inserted after the pass started must survive even when it is unreachable.
+    /// Planning takes the FS-object snapshot; a row inserted after the pass
+    /// started must survive even when it is unreachable.
     #[tokio::test]
-    async fn test_prune_repo_deletes_only_snapshot_rows() {
+    async fn test_repo_plan_snapshots_rows() {
         let repo = "gc-snapshot-test";
         let db = setup_gc_test_db_for(repo, 1, 0).await;
         let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
 
-        let old_root = "f1".repeat(20);
-        let head_root = "f2".repeat(20);
-        let late_root = "f3".repeat(20);
-        insert_commit_for(&db, repo, &"f4".repeat(20), &old_root, 1000).await;
-        insert_commit_for(&db, repo, &"f5".repeat(20), &head_root, 2000).await;
-        for root in [&old_root, &head_root, &late_root] {
+        let older_root = "f1".repeat(20);
+        let old_root = "f2".repeat(20);
+        let head_root = "f3".repeat(20);
+        let late_root = "f4".repeat(20);
+        insert_commit_for(&db, repo, &"f5".repeat(20), &older_root, 1000).await;
+        insert_commit_for(&db, repo, &"f6".repeat(20), &old_root, 1500).await;
+        insert_commit_for(&db, repo, &"f7".repeat(20), &head_root, 2000).await;
+        for root in [&older_root, &old_root, &head_root] {
             insert_fs_object_for(&db, repo, root, 3, r#"{"dirents":[],"type":3,"version":1}"#)
                 .await;
         }
 
-        // Snapshot taken before `late_root` existed.
-        let snapshot = repos
-            .fs_object
-            .find_ids_and_fs_ids_by_repo_id(repo)
+        // The plan reads the rows that exist now; `late_root` is inserted after it,
+        // so the plan cannot name it.
+        let repo_model = repos.repo.find_by_id(repo).await.unwrap().unwrap();
+        let policy = GcPolicy {
+            upload_activity_ttl: None,
+            verify_head: false,
+            ..GcPolicy::new(0)
+        };
+        let plan = GcManager::plan_repo(&repos, &store, &repo_model, policy, 10_000)
             .await
-            .unwrap()
-            .into_iter()
-            .filter(|(_, fs_id)| *fs_id != GcManager::decode_sha1_hex(&late_root))
-            .collect::<Vec<_>>();
-        assert_eq!(snapshot.len(), 2);
+            .expect("plan succeeds")
+            .expect("repo has commits");
 
-        let commits = repos
-            .commit
-            .find_by_repo_id_ordered_by_ctime_desc(repo, None)
-            .await
-            .unwrap();
-        let keep = std::collections::HashSet::from([commits[0].id]);
-        let removed = GcManager::prune_repo(
-            &repos,
-            &commits,
-            &keep,
-            std::collections::HashSet::new(),
-            &snapshot,
+        insert_fs_object_for(
+            &db,
+            repo,
+            &late_root,
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
         )
-        .await
-        .expect("prune succeeds");
+        .await;
 
-        assert_eq!(removed, 2, "both snapshot FS rows are unreachable");
+        let report =
+            GcManager::apply_repo(&repos, &store, &repo_model, &plan, policy, 10_000, None)
+                .await
+                .expect("apply succeeds");
+
+        assert_eq!(
+            report.pruned_objects, 2,
+            "both snapshot FS rows are unreachable"
+        );
         assert!(
             repos
                 .fs_object
@@ -819,8 +1048,419 @@ mod tests {
                 .is_some(),
             "a row inserted after the snapshot must survive"
         );
-        assert_eq!(count_rows(&db, "fs_objects").await, 1);
+        // The retained head's root and the late row.
+        assert_eq!(count_rows(&db, "fs_objects").await, 2);
         assert_eq!(count_rows(&db, "commits").await, 1);
+    }
+
+    /// Two commits, one file each, sharing one block. With `history_limit = 1` the
+    /// older commit is pruned, so exactly one block becomes an orphan.
+    async fn seed_pruned_history(
+        db: &sea_orm::DatabaseConnection,
+        store: &DynBlockStorage,
+    ) -> (String, String) {
+        let old_block = store.write_block(REPO, b"old-only").await.unwrap();
+        let shared = store.write_block(REPO, b"shared").await.unwrap();
+
+        let dir_old = "d1".repeat(20);
+        let dir_head = "d2".repeat(20);
+        let file_old = "e1".repeat(20);
+        let file_head = "e2".repeat(20);
+        insert_commit(db, "c1", &dir_old, 1000).await;
+        insert_commit(db, "c2", &dir_head, 2000).await;
+        insert_fs_object(
+            db,
+            &dir_old,
+            3,
+            &format!(
+                r#"{{"dirents":[{{"id":"{file_old}","mode":33188,"modifier":"u1","mtime":1000,"name":"old.txt","size":18}}],"type":3,"version":1}}"#
+            ),
+        )
+        .await;
+        insert_fs_object(
+            db,
+            &dir_head,
+            3,
+            &format!(
+                r#"{{"dirents":[{{"id":"{file_head}","mode":33188,"modifier":"u1","mtime":2000,"name":"head.txt","size":6}}],"type":3,"version":1}}"#
+            ),
+        )
+        .await;
+        insert_fs_object(
+            db,
+            &file_old,
+            1,
+            &format!(
+                r#"{{"block_ids":["{old_block}","{shared}"],"size":18,"type":1,"version":1}}"#
+            ),
+        )
+        .await;
+        insert_fs_object(
+            db,
+            &file_head,
+            1,
+            &format!(r#"{{"block_ids":["{shared}"],"size":6,"type":1,"version":1}}"#),
+        )
+        .await;
+        (old_block, shared)
+    }
+
+    fn planned_ids(plan: &RepoPlan) -> Vec<String> {
+        let mut ids: Vec<String> = plan.blocks.iter().map(|block| block.id.clone()).collect();
+        ids.sort();
+        ids
+    }
+
+    /// Both planners must delete the same blocks: the audit by listing, the
+    /// incremental by reading the pruned objects.
+    #[tokio::test]
+    async fn incremental_and_audit_plans_agree() {
+        let db = setup_gc_test_db(1, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+        let (old_block, shared) = seed_pruned_history(&db, &store).await;
+
+        let repo_model = repos.repo.find_by_id(REPO).await.unwrap().unwrap();
+        let base = GcPolicy {
+            upload_activity_ttl: None,
+            verify_head: false,
+            ..GcPolicy::new(0)
+        };
+        let audit = GcManager::plan_repo(
+            &repos,
+            &store,
+            &repo_model,
+            GcPolicy {
+                mode: GcMode::Audit,
+                ..base
+            },
+            10_000,
+        )
+        .await
+        .unwrap()
+        .expect("repo has commits");
+        let incremental = GcManager::plan_repo(
+            &repos,
+            &store,
+            &repo_model,
+            GcPolicy {
+                mode: GcMode::Incremental,
+                ..base
+            },
+            10_000,
+        )
+        .await
+        .unwrap()
+        .expect("repo has commits");
+
+        assert_eq!(
+            planned_ids(&audit),
+            planned_ids(&incremental),
+            "both planners must agree on the orphan set"
+        );
+        assert_eq!(planned_ids(&incremental), vec![old_block.clone()]);
+        assert_eq!(audit.fs_object_rows.len(), 2);
+        assert_eq!(audit.fs_object_rows, incremental.fs_object_rows);
+
+        let report = GcManager::apply_repo(
+            &repos,
+            &store,
+            &repo_model,
+            &incremental,
+            GcPolicy {
+                mode: GcMode::Incremental,
+                ..base
+            },
+            10_000,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.pruned_objects, 2);
+        assert_eq!(report.deleted_blocks, 1);
+        assert!(!store.has_block(REPO, &old_block).await);
+        assert!(store.has_block(REPO, &shared).await);
+    }
+
+    /// A dry run reports what a real pass would remove and changes nothing.
+    #[tokio::test]
+    async fn dry_run_reports_without_deleting() {
+        let db = setup_gc_test_db(1, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+        let (old_block, shared) = seed_pruned_history(&db, &store).await;
+        let policy = GcPolicy {
+            upload_activity_ttl: None,
+            verify_head: false,
+            ..GcPolicy::new(0)
+        };
+
+        let dry = GcManager::garbage_collect_report(
+            &repos,
+            &store,
+            GcPolicy {
+                dry_run: true,
+                ..policy
+            },
+            None,
+        )
+        .await
+        .expect("dry run succeeds");
+
+        assert_eq!(dry.pruned_objects, 2);
+        assert_eq!(dry.deleted_blocks, 1);
+        assert_eq!(dry.total(), 3);
+        assert_eq!(count_rows(&db, "fs_objects").await, 4);
+        assert_eq!(count_rows(&db, "commits").await, 2);
+        assert!(store.has_block(REPO, &old_block).await);
+
+        let real = GcManager::garbage_collect_report(&repos, &store, policy, None)
+            .await
+            .expect("gc succeeds");
+
+        assert_eq!(real.total(), dry.total(), "a dry run must predict the pass");
+        assert_eq!(count_rows(&db, "fs_objects").await, 2);
+        assert_eq!(count_rows(&db, "commits").await, 1);
+        assert!(!store.has_block(REPO, &old_block).await);
+        assert!(store.has_block(REPO, &shared).await);
+    }
+
+    /// A block prefix with neither a `repos` row nor a trash entry is removed.
+    #[tokio::test]
+    async fn sweep_removes_prefixes_of_repositories_that_no_longer_exist() {
+        let db = setup_gc_test_db(0, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+        let ghost = "ghost-repo";
+        store.write_block(ghost, b"ghost bytes").await.unwrap();
+        assert!(store.repo_ids().await.unwrap().contains(&ghost.to_string()));
+
+        let report = GcManager::garbage_collect_report(
+            &repos,
+            &store,
+            GcPolicy {
+                upload_activity_ttl: None,
+                verify_head: false,
+                ..GcPolicy::new(0)
+            },
+            None,
+        )
+        .await
+        .expect("gc succeeds");
+
+        assert_eq!(report.removed_repos, 1);
+        assert!(
+            !store.repo_ids().await.unwrap().contains(&ghost.to_string()),
+            "the orphan prefix must be gone"
+        );
+    }
+
+    /// `(repo, block) → (bytes, modification time)` for the fake object store.
+    type StoredBlocks =
+        std::sync::Mutex<std::collections::HashMap<(String, String), (Vec<u8>, i64)>>;
+
+    /// A backend shaped like an object store: its enumeration reports an age and its
+    /// deletes are batched. Both are what the S3 backend will do, and both are easy to
+    /// lose again — a regression here would put one HEAD and one DELETE per block back
+    /// on the wire.
+    #[derive(Debug, Default)]
+    struct ObjectStoreLike {
+        blocks: StoredBlocks,
+        delete_calls: std::sync::atomic::AtomicUsize,
+        repo_removals: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ObjectStoreLike {
+        fn put(&self, repo_id: &str, block_id: &str, bytes: &[u8], modified: i64) {
+            self.blocks.lock().unwrap().insert(
+                (repo_id.to_string(), block_id.to_string()),
+                (bytes.to_vec(), modified),
+            );
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl infra::storage::BlockStorageBackend for ObjectStoreLike {
+        async fn has_block(&self, repo_id: &str, block_id: &str) -> bool {
+            self.blocks
+                .lock()
+                .unwrap()
+                .contains_key(&(repo_id.to_string(), block_id.to_string()))
+        }
+
+        async fn read_block(
+            &self,
+            repo_id: &str,
+            block_id: &str,
+        ) -> Result<Vec<u8>, std::io::Error> {
+            self.blocks
+                .lock()
+                .unwrap()
+                .get(&(repo_id.to_string(), block_id.to_string()))
+                .map(|(bytes, _)| bytes.clone())
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no block"))
+        }
+
+        async fn write_block(&self, repo_id: &str, data: &[u8]) -> Result<String, std::io::Error> {
+            let id = infra::crypto::fs_id::sha1_hex(data);
+            self.put(repo_id, &id, data, 0);
+            Ok(id)
+        }
+
+        async fn remove_block(&self, repo_id: &str, block_id: &str) -> Result<(), std::io::Error> {
+            self.blocks
+                .lock()
+                .unwrap()
+                .remove(&(repo_id.to_string(), block_id.to_string()));
+            Ok(())
+        }
+
+        async fn block_size(&self, repo_id: &str, block_id: &str) -> Result<i64, std::io::Error> {
+            let blocks = self.blocks.lock().unwrap();
+            match blocks.get(&(repo_id.to_string(), block_id.to_string())) {
+                Some((bytes, _)) => Ok(bytes.len() as i64),
+                None => Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no block",
+                )),
+            }
+        }
+
+        async fn list_blocks(&self, repo_id: &str) -> Result<Vec<String>, std::io::Error> {
+            Ok(self
+                .blocks
+                .lock()
+                .unwrap()
+                .keys()
+                .filter(|(repo, _)| repo == repo_id)
+                .map(|(_, block)| block.clone())
+                .collect())
+        }
+
+        async fn for_each_block_with_mtime(
+            &self,
+            repo_id: &str,
+            mut f: Box<dyn for<'a> FnMut(&'a str, Option<i64>) + Send>,
+        ) -> Result<(), std::io::Error> {
+            let snapshot: Vec<(String, i64)> = self
+                .blocks
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|((repo, _), _)| repo == repo_id)
+                .map(|((_, block), (_, modified))| (block.clone(), *modified))
+                .collect();
+            for (block, modified) in snapshot {
+                f(&block, Some(modified));
+            }
+            Ok(())
+        }
+
+        async fn remove_blocks(
+            &self,
+            repo_id: &str,
+            block_ids: &[String],
+        ) -> Result<u64, std::io::Error> {
+            self.delete_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut blocks = self.blocks.lock().unwrap();
+            let mut removed = 0u64;
+            for block_id in block_ids {
+                if blocks
+                    .remove(&(repo_id.to_string(), block_id.clone()))
+                    .is_some()
+                {
+                    removed += 1;
+                }
+            }
+            Ok(removed)
+        }
+
+        async fn repo_ids(&self) -> Result<Vec<String>, std::io::Error> {
+            let mut ids: Vec<String> = self
+                .blocks
+                .lock()
+                .unwrap()
+                .keys()
+                .map(|(repo, _)| repo.clone())
+                .collect();
+            ids.sort();
+            ids.dedup();
+            Ok(ids)
+        }
+
+        async fn remove_repo(&self, repo_id: &str) -> Result<bool, std::io::Error> {
+            self.repo_removals
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut blocks = self.blocks.lock().unwrap();
+            let before = blocks.len();
+            blocks.retain(|(repo, _), _| repo != repo_id);
+            Ok(blocks.len() != before)
+        }
+    }
+
+    /// The audit path must take the age from the enumeration (no per-block probe) and
+    /// delete a batch with one call, and the prefix sweep must go through `remove_repo`.
+    #[tokio::test]
+    async fn audit_uses_the_listed_age_and_batches_deletes() {
+        use std::sync::atomic::Ordering;
+
+        let db = setup_gc_test_db(0, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let now = chrono::Utc::now().timestamp();
+
+        // An empty root makes every stored block an orphan.
+        insert_commit(&db, "c1", &"a1".repeat(20), now).await;
+        insert_fs_object(
+            &db,
+            &"a1".repeat(20),
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
+
+        let old_one = "b1".repeat(20);
+        let old_two = "b2".repeat(20);
+        let fresh = "b3".repeat(20);
+        let ghost_block = "b4".repeat(20);
+        let store = Arc::new(ObjectStoreLike::default());
+        store.put(REPO, &old_one, b"old one", now - 7200);
+        store.put(REPO, &old_two, b"old two", now - 7200);
+        store.put(REPO, &fresh, b"fresh", now);
+        store.put("ghost-repo", &ghost_block, b"ghost", now - 7200);
+        let backend: DynBlockStorage = store.clone();
+
+        let report = GcManager::garbage_collect_report(
+            &repos,
+            &backend,
+            GcPolicy {
+                min_block_age_secs: 3600,
+                verify_head: false,
+                upload_activity_ttl: None,
+                ..GcPolicy::new(3600)
+            },
+            None,
+        )
+        .await
+        .expect("gc succeeds");
+
+        assert_eq!(report.deleted_blocks, 2);
+        assert_eq!(report.skipped_fresh, 1);
+        assert_eq!(report.removed_repos, 1);
+        assert_eq!(
+            store.delete_calls.load(Ordering::Relaxed),
+            1,
+            "the two old blocks must go out as one batch"
+        );
+        assert_eq!(
+            store.repo_removals.load(Ordering::Relaxed),
+            1,
+            "the orphan prefix is removed as a prefix, not block by block"
+        );
+        assert!(!store.has_block(REPO, &old_one).await);
+        assert!(!store.has_block(REPO, &old_two).await);
+        assert!(store.has_block(REPO, &fresh).await);
+        assert!(!store.has_block("ghost-repo", &ghost_block).await);
     }
 
     /// Repos with both retention settings at 0 are unlimited and must not be touched.

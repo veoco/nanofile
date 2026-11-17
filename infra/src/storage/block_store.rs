@@ -809,6 +809,26 @@ impl BlockStorageBackend for BlockStorage {
         }
         Ok(out)
     }
+
+    /// Remove one repository's whole block tree without enumerating it first.
+    ///
+    /// `remove_dir_all` clears the two prefix levels and the `.repo_id` marker in
+    /// one call; going through `repo_dirs()` would list every repository on the
+    /// store to find the one directory that this id hashes to.
+    async fn remove_repo(&self, repo_id: &str) -> Result<bool, io::Error> {
+        let dir = self.repo_dir(repo_id);
+        match tokio::fs::remove_dir_all(&dir).await {
+            Ok(()) => {
+                // Every cached presence entry of this repository now describes bytes
+                // that are gone. Dropping the whole map is cheaper than walking the
+                // cache and cannot leave a stale positive behind.
+                self.invalidate_exists_cache();
+                Ok(true)
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 #[cfg(test)]
