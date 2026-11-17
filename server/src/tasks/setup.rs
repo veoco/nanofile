@@ -431,6 +431,8 @@ pub fn install_default_jobs(
             "incremental" => crate::fs::core::gc::GcMode::Incremental,
             _ => crate::fs::core::gc::GcMode::Audit,
         };
+        policy.pending_ttl_secs = gc_config.pending_ttl_hours.saturating_mul(3600);
+        policy.audit_interval_secs = gc_config.audit_interval_hours.saturating_mul(3600);
         jobs.push(job_with_trigger(
             JobKey::GarbageCollection,
             Trigger::Periodic {

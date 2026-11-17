@@ -108,6 +108,7 @@ migrations!(
     m20261023_000001_backfill_repo_updated_at,
     m20261102_000001_create_face_tags,
     m20261113_000001_create_activity_items,
+    m20261117_000001_create_pending_blocks,
 );
 
 #[cfg(test)]

@@ -1488,6 +1488,15 @@ impl SyncService {
             // the TTL reaper, so a failed/abandoned sync still bounds its writes.
             let blocks: Vec<String> = attempt_blocks.iter().cloned().collect();
             crate::service::fs::quota::release_blocks(&self.repos, repo_id, &blocks).await;
+            // Those blocks are referenced by the new head now; drop their restart
+            // guard. A failure leaves rows that the expiry sweep clears after
+            // re-checking references, so it must not fail the commit.
+            if let Err(e) = self.repos.pending_block.forget(repo_id, &blocks).await {
+                tracing::warn!(
+                    repo_id,
+                    "could not clear pending-block rows after a commit: {e}"
+                );
+            }
             self.repos.invalidate_quota(owner);
             drop(scope);
 

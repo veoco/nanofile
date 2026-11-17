@@ -324,7 +324,10 @@ impl SettingDef {
             | "auth.sync_token_ttl_days"
             | "auth.api_key_ttl_presets_days"
             | "auth.api_key_max_ttl_days" => "days",
-            "gc.interval_hours" | "storage.temp_upload_ttl_hours" => "hours",
+            "gc.interval_hours"
+            | "gc.pending_ttl_hours"
+            | "gc.audit_interval_hours"
+            | "storage.temp_upload_ttl_hours" => "hours",
             "storage.default_user_quota_bytes"
             | "storage.max_temp_upload_bytes"
             | "storage.max_zip_bytes"
@@ -817,6 +820,8 @@ mod tests {
             "gc.interval_hours",
             "gc.min_block_age_secs",
             "gc.mode",
+            "gc.pending_ttl_hours",
+            "gc.audit_interval_hours",
             "index.enabled",
             "index.index_dir",
             "index.backfill_enabled",

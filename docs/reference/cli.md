@@ -34,7 +34,12 @@ references any more.
 - `--mode` overrides `[gc] mode` for this run. `audit` lists every library's blocks
   and also finds what a crashed upload left behind; `incremental` deletes only what
   pruning history just orphaned and needs no listing.
-- Blocks younger than `gc.min_block_age_secs` are never deleted.
+- Without `--mode`, the run follows the configured schedule: it becomes a full audit
+  when `gc.audit_interval_hours` has passed, and records that audit time. With
+  `--mode`, that scheduled upgrade is suppressed for this run.
+- Blocks younger than `gc.min_block_age_secs` are never deleted. Blocks an upload
+  announced and never committed are swept after `gc.pending_ttl_hours`.
+- The output names the scan mode and how much each category removed.
 - The command takes the grace window and the default mode from the configuration
   file and `NANOFILE_*` variables. Saved settings are not consulted: they configure
   the background job, which reads them at start.

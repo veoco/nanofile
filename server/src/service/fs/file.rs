@@ -492,6 +492,15 @@ impl FileService {
                 tracing::warn!("failed to cleanup orphaned block {id}: {e}");
             }
         }
+        // The blocks are gone (or proven referenced), so their restart guard is
+        // spent. A row that survives here — a database hiccup — is picked up by the
+        // expiry sweep, which re-checks references before deleting anything.
+        if let Err(e) = self.repos.pending_block.forget(repo_id, ids).await {
+            tracing::warn!(
+                repo_id,
+                "could not clear pending-block rows after a cleanup: {e}"
+            );
+        }
     }
 
     async fn fs_object_references_block(
@@ -593,6 +602,9 @@ impl FileService {
     ) -> Result<(String, String), AppError> {
         base::sanitize::validate_filename(filename)
             .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
+        // The restart guard these blocks carried ends with this commit; the ids are
+        // cloned because `create_file_from_blocks` takes the list by value.
+        let committed_block_ids = block_ids.clone();
 
         // The old size and the delta are resolved inside `create_file_from_blocks`
         // under the repository lock, so they describe the same parent the commit
@@ -637,6 +649,21 @@ impl FileService {
             }
         };
         drop(scope);
+
+        // The blocks are referenced by a commit now. A failure here leaves rows for
+        // live blocks; the expiry sweep re-checks references before deleting, so the
+        // worst case is a row that lives until the sweep instead of until now.
+        if let Err(e) = self
+            .repos
+            .pending_block
+            .forget(repo_id, &committed_block_ids)
+            .await
+        {
+            tracing::warn!(
+                repo_id,
+                "could not clear pending-block rows after a commit: {e}"
+            );
+        }
 
         // Without `replace` the commit lands under a unique name (`name (1).ext`), so the activity
         // entry and the search index must use the effective path, not the requested one.

@@ -1526,6 +1526,18 @@ pub struct GcConfig {
     /// Env: NANOFILE_GC_MODE
     #[serde(default = "default_gc_mode")]
     pub mode: String,
+    /// How long a block that an upload wrote but no commit references is kept before
+    /// the collector removes it. Must be at least `storage.temp_upload_ttl_hours`, so a
+    /// paused resumable upload's blocks survive until the upload itself expires.
+    /// `0` disables the sweep: an interrupted upload's blocks then wait for an audit.
+    /// Env: NANOFILE_GC_PENDING_TTL_HOURS
+    #[serde(default = "default_gc_pending_ttl_hours")]
+    pub pending_ttl_hours: u64,
+    /// How often a full audit runs while `mode = "incremental"`. `0` disables the
+    /// automatic audit; `nanofile gc --mode audit` stays available.
+    /// Env: NANOFILE_GC_AUDIT_INTERVAL_HOURS
+    #[serde(default = "default_gc_audit_interval_hours")]
+    pub audit_interval_hours: u64,
     /// Blocks written less than this many seconds ago are never deleted, even when the
     /// reference snapshot cannot see the commit that will reference them: an upload
     /// writes its blocks before committing them, so a pass started just before that
@@ -1547,6 +1559,34 @@ impl GcConfig {
             )),
         }
     }
+
+    /// The grace window for an upload's blocks must outlive the upload itself.
+    ///
+    /// Resumable uploads may pause between chunks for up to
+    /// `storage.temp_upload_ttl_hours`; collecting their blocks earlier would leave
+    /// the final commit referencing objects that no longer exist. When uploads are
+    /// configured never to expire, the sweep cannot run at all.
+    pub fn validate_pending_ttl(&self, temp_upload_ttl_hours: u64) -> Result<(), String> {
+        if temp_upload_ttl_hours == 0 {
+            return if self.pending_ttl_hours == 0 {
+                Ok(())
+            } else {
+                Err(
+                    "gc.pending_ttl_hours must be 0 when storage.temp_upload_ttl_hours is 0: \
+                     resumable uploads never expire, so their blocks must never be swept"
+                        .to_string(),
+                )
+            };
+        }
+        if self.pending_ttl_hours > 0 && self.pending_ttl_hours < temp_upload_ttl_hours {
+            return Err(format!(
+                "gc.pending_ttl_hours = {} is shorter than storage.temp_upload_ttl_hours = {}; \
+                 a paused resumable upload's blocks would be collected before the upload expires",
+                self.pending_ttl_hours, temp_upload_ttl_hours
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl Default for GcConfig {
@@ -1555,6 +1595,8 @@ impl Default for GcConfig {
             enabled: false,
             interval_hours: default_gc_interval_hours(),
             mode: default_gc_mode(),
+            pending_ttl_hours: default_gc_pending_ttl_hours(),
+            audit_interval_hours: default_gc_audit_interval_hours(),
             min_block_age_secs: default_gc_min_block_age_secs(),
         }
     }
@@ -1566,6 +1608,14 @@ fn default_gc_interval_hours() -> u64 {
 
 fn default_gc_mode() -> String {
     "audit".to_string()
+}
+
+fn default_gc_pending_ttl_hours() -> u64 {
+    48
+}
+
+fn default_gc_audit_interval_hours() -> u64 {
+    168
 }
 
 fn default_gc_min_block_age_secs() -> u64 {
@@ -1941,6 +1991,8 @@ impl Config {
         self.server.validate_encrypted_library()?;
         self.storage.validate_block_encryption_mode()?;
         self.gc.validate_mode()?;
+        self.gc
+            .validate_pending_ttl(self.storage.temp_upload_ttl_hours)?;
 
         if self.server.version.trim().is_empty() {
             return Err("server.version must not be empty".to_string());
@@ -3007,6 +3059,30 @@ request_timeout_secs = 600
             config.storage.validate_block_flush().is_err(),
             "a value the parser would read as always must be rejected"
         );
+    }
+
+    #[test]
+    fn the_pending_ttl_must_outlive_a_resumable_upload() {
+        let mut config = Config::default();
+        // The defaults are consistent: 48h of pending grace over a 24h upload life.
+        assert!(config.gc.validate_pending_ttl(24).is_ok());
+        assert_eq!(config.gc.pending_ttl_hours, 48);
+
+        config.gc.pending_ttl_hours = 12;
+        assert!(
+            config.gc.validate_pending_ttl(24).is_err(),
+            "collecting an upload's blocks before the upload expires would corrupt the commit"
+        );
+
+        // Sweeping is off, so the block stays until an audit: allowed.
+        config.gc.pending_ttl_hours = 0;
+        assert!(config.gc.validate_pending_ttl(24).is_ok());
+
+        // Uploads that never expire cannot coexist with a sweep.
+        config.gc.pending_ttl_hours = 48;
+        assert!(config.gc.validate_pending_ttl(0).is_err());
+        config.gc.pending_ttl_hours = 0;
+        assert!(config.gc.validate_pending_ttl(0).is_ok());
     }
 
     #[test]

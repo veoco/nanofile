@@ -1,6 +1,7 @@
 use crate::fs::core::tree::read_fs_file_data_batch;
 use crate::fs::core::upload_activity;
 use crate::repository::Repositories;
+use crate::repository::gc_state::LAST_AUDIT_AT;
 use crate::tasks::run::JobFailure;
 use base::common::{FsDirData, S_IFDIR, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
@@ -29,6 +30,12 @@ pub struct GcPolicy {
     pub upload_activity_ttl: Option<Duration>,
     /// How the pass finds the blocks it deletes.
     pub mode: GcMode,
+    /// Blocks an upload announced and never committed are kept at least this long.
+    /// `0` disables the sweep, leaving them to an audit.
+    pub pending_ttl_secs: u64,
+    /// In [`GcMode::Incremental`], how often a full audit replaces the incremental
+    /// plan. `0` disables the automatic audit.
+    pub audit_interval_secs: u64,
     /// Compute the deletions and report them without changing the database or the
     /// store. The same guards run, so the returned count is what a real pass would
     /// remove right now.
@@ -61,12 +68,17 @@ pub struct GcReport {
     pub removed_repos: u64,
     /// Blocks kept because they are younger than the grace window.
     pub skipped_fresh: u64,
+    /// Blocks removed because an upload announced them and never committed them.
+    pub expired_pending: u64,
+    /// Whether this pass planned with [`GcMode::Audit`] (in incremental mode, the
+    /// periodic audit turns one pass into an audit).
+    pub audited: bool,
 }
 
 impl GcReport {
     /// The same total [`GcManager::garbage_collect`] returns.
     pub fn total(&self) -> u64 {
-        self.pruned_objects + self.deleted_blocks + self.removed_repos
+        self.pruned_objects + self.deleted_blocks + self.removed_repos + self.expired_pending
     }
 
     fn merge(&mut self, other: GcReport) {
@@ -74,6 +86,8 @@ impl GcReport {
         self.deleted_blocks += other.deleted_blocks;
         self.removed_repos += other.removed_repos;
         self.skipped_fresh += other.skipped_fresh;
+        self.expired_pending += other.expired_pending;
+        self.audited |= other.audited;
     }
 }
 
@@ -107,6 +121,8 @@ impl GcPolicy {
             verify_head: true,
             upload_activity_ttl: Some(upload_activity::UPLOAD_ACTIVITY_TTL),
             mode: GcMode::Audit,
+            pending_ttl_secs: 0,
+            audit_interval_secs: 0,
             dry_run: false,
         }
     }
@@ -120,6 +136,8 @@ impl GcPolicy {
             verify_head: false,
             upload_activity_ttl: None,
             mode: GcMode::Audit,
+            pending_ttl_secs: 0,
+            audit_interval_secs: 0,
             dry_run: false,
         }
     }
@@ -189,9 +207,39 @@ impl GcManager {
         ctx: Option<&crate::tasks::context::JobContext>,
     ) -> Result<GcReport, AppError> {
         let now = chrono::Utc::now().timestamp();
-        let all_repos = repos.repo.find_all().await?;
-        let mut report = GcReport::default();
 
+        // An incremental schedule still needs a full audit eventually: it is the
+        // only planner that finds what a crash left behind. When one is due, this
+        // pass *is* the audit; the timestamp is written only after it succeeds.
+        let incremental_schedule = policy.mode == GcMode::Incremental;
+        let audit_due = match policy.mode {
+            GcMode::Audit => true,
+            GcMode::Incremental => {
+                policy.audit_interval_secs > 0
+                    && match repos.gc_state.get_i64(LAST_AUDIT_AT).await? {
+                        Some(last) => now.saturating_sub(last) >= policy.audit_interval_secs as i64,
+                        None => true,
+                    }
+            }
+        };
+        let mut policy = policy;
+        if audit_due {
+            policy.mode = GcMode::Audit;
+        }
+        let mut report = GcReport {
+            audited: audit_due,
+            ..GcReport::default()
+        };
+
+        // Blocks an upload announced and never committed, past their window. This
+        // runs before planning so the per-repository plans never see them, and it is
+        // the only cleanup for them when the schedule is incremental.
+        if policy.pending_ttl_secs > 0 {
+            report.expired_pending +=
+                Self::sweep_expired_pending(repos, block_store, &policy, now, ctx).await?;
+        }
+
+        let all_repos = repos.repo.find_all().await?;
         for repo_model in &all_repos {
             // A repository boundary is the natural place to wait: the previous
             // repository is done, so a later run can simply continue from here.
@@ -223,7 +271,83 @@ impl GcManager {
 
         report.removed_repos = Self::sweep_orphan_repos(repos, block_store, policy, ctx).await?;
 
+        if incremental_schedule && audit_due && !policy.dry_run {
+            // A failure only means the next pass audits again: the safe direction.
+            if let Err(e) = repos.gc_state.set_i64(LAST_AUDIT_AT, now).await {
+                tracing::warn!("could not record the time of the last audit: {e}");
+            }
+        }
+
         Ok(report)
+    }
+
+    /// Remove blocks an upload announced and never committed, once the pending
+    /// window has passed.
+    ///
+    /// The row is claimed first, so a commit that cleared it in the meantime wins
+    /// and its block is left alone. A block that is referenced anyway (a row whose
+    /// commit-side delete failed, or a deduplicated write this upload did not really
+    /// own) is kept and its row is already gone — the safe direction, at the cost of
+    /// an orphan an audit will find.
+    async fn sweep_expired_pending(
+        repos: &Repositories,
+        block_store: &DynBlockStorage,
+        policy: &GcPolicy,
+        now: i64,
+        ctx: Option<&crate::tasks::context::JobContext>,
+    ) -> Result<u64, AppError> {
+        /// Bound one pass so a long-neglected deployment cannot stall it.
+        const LIMIT: usize = 10_000;
+
+        let cutoff = now.saturating_sub(policy.pending_ttl_secs as i64);
+        let expired = if policy.dry_run {
+            repos.pending_block.expired_before(cutoff, LIMIT).await?
+        } else {
+            repos.pending_block.claim_expired(cutoff, LIMIT).await?
+        };
+        if expired.is_empty() {
+            return Ok(0);
+        }
+
+        let mut by_repo: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for (repo_id, block_id) in expired {
+            by_repo.entry(repo_id).or_default().push(block_id);
+        }
+
+        let mut removed = 0u64;
+        for (repo_id, ids) in by_repo {
+            checkpoint(ctx).await?;
+            let mut deletable = Vec::with_capacity(ids.len());
+            for id in ids {
+                match repos.fs_object.references_block(&repo_id, &id).await {
+                    Ok(true) => {
+                        tracing::debug!(
+                            repo_id,
+                            block_id = %id,
+                            "keeping an expired pending block: a file references it"
+                        );
+                    }
+                    Ok(false) => deletable.push(id),
+                    Err(e) => {
+                        // Unknown: keep the block rather than risk deleting data.
+                        tracing::warn!(
+                            repo_id,
+                            block_id = %id,
+                            "could not check references for an expired pending block: {e}"
+                        );
+                    }
+                }
+            }
+            for chunk in deletable.chunks(CHECKPOINT_EVERY_BLOCKS) {
+                if policy.dry_run {
+                    removed += chunk.len() as u64;
+                } else {
+                    removed += block_store.remove_blocks(&repo_id, chunk).await?;
+                }
+            }
+        }
+        Ok(removed)
     }
 
     /// Whether the repository's head differs from the snapshot this pass read. A
@@ -408,6 +532,22 @@ impl GcManager {
             }
         };
 
+        // A block an upload announced recently is not garbage even when nothing
+        // references it yet: the commit may still be in flight (the sync case), or
+        // the upload may be resumable and paused between chunks. The ledger answers
+        // this locally, so neither planner needs a per-block request.
+        if policy.pending_ttl_secs > 0 && !plan.blocks.is_empty() {
+            let cutoff = now.saturating_sub(policy.pending_ttl_secs as i64);
+            let ids: Vec<String> = plan.blocks.iter().map(|block| block.id.clone()).collect();
+            let fresh = repos
+                .pending_block
+                .written_after(&repo_model.id, &ids, cutoff)
+                .await?;
+            if !fresh.is_empty() {
+                plan.blocks.retain(|block| !fresh.contains(&block.id));
+            }
+        }
+
         Ok(Some(plan))
     }
 
@@ -517,7 +657,8 @@ impl GcManager {
     /// The age comes from the enumeration when the backend reported it (an object
     /// store's listing carries `LastModified`), and is fetched for that one block
     /// otherwise — which is what the filesystem does, because `readdir` has no
-    /// `stat`.
+    /// `stat`. A plan from the incremental planner is already filtered against the
+    /// pending ledger, so it needs no store round trip at all.
     async fn deletable_blocks(
         chunk: &[PlannedBlock],
         block_store: &DynBlockStorage,
@@ -526,7 +667,7 @@ impl GcManager {
         now: i64,
         skipped_fresh: &mut u64,
     ) -> Result<Vec<String>, AppError> {
-        if policy.min_block_age_secs == 0 {
+        if policy.min_block_age_secs == 0 || policy.mode == GcMode::Incremental {
             return Ok(chunk.iter().map(|block| block.id.clone()).collect());
         }
         let mut out = Vec::with_capacity(chunk.len());
@@ -569,8 +710,9 @@ impl GcManager {
                     }
                     out.push(PlannedBlock {
                         id: block_id.clone(),
-                        // Not an enumeration: the delete path asks the store for
-                        // this block's age when the grace window is on.
+                        // Not an enumeration. The incremental planner has already
+                        // filtered the list against the pending ledger, so the delete
+                        // path treats it as old without asking the store.
                         modified_secs: None,
                     });
                 }
@@ -804,6 +946,20 @@ mod tests {
                 owner_id INTEGER NOT NULL,
                 size BIGINT NOT NULL DEFAULT 0,
                 del_time BIGINT NOT NULL
+            );
+
+            CREATE TABLE pending_blocks (
+                repo_id VARCHAR(36) NOT NULL,
+                block_id VARCHAR(40) NOT NULL,
+                written_at BIGINT NOT NULL,
+                PRIMARY KEY (repo_id, block_id)
+            );
+            CREATE INDEX idx_pending_blocks_written_at ON pending_blocks (written_at);
+
+            CREATE TABLE gc_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at BIGINT NOT NULL
             );
             ",
         ))
@@ -1397,6 +1553,188 @@ mod tests {
             blocks.retain(|(repo, _), _| repo != repo_id);
             Ok(blocks.len() != before)
         }
+    }
+
+    /// A block an upload announced and never committed is removed once its window
+    /// passes; one announced recently is left alone even though no commit references
+    /// it yet, in both planning modes.
+    #[tokio::test]
+    async fn pending_ledger_sweeps_expired_and_spares_fresh() {
+        let db = setup_gc_test_db(0, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+        let now = chrono::Utc::now().timestamp();
+
+        insert_commit(&db, "c1", &"a1".repeat(20), now).await;
+        insert_fs_object(
+            &db,
+            &"a1".repeat(20),
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
+
+        let old = store.write_block(REPO, b"old pending").await.unwrap();
+        let fresh = store.write_block(REPO, b"fresh pending").await.unwrap();
+        repos
+            .pending_block
+            .mark_written(REPO, std::slice::from_ref(&old), now - 7200)
+            .await
+            .unwrap();
+        repos
+            .pending_block
+            .mark_written(REPO, std::slice::from_ref(&fresh), now)
+            .await
+            .unwrap();
+
+        let report = GcManager::garbage_collect_report(
+            &repos,
+            &store,
+            GcPolicy {
+                min_block_age_secs: 0,
+                verify_head: false,
+                upload_activity_ttl: None,
+                pending_ttl_secs: 3600,
+                ..GcPolicy::new(0)
+            },
+            None,
+        )
+        .await
+        .expect("gc succeeds");
+
+        assert_eq!(report.expired_pending, 1);
+        assert_eq!(report.deleted_blocks, 0);
+        assert!(!store.has_block(REPO, &old).await);
+        assert!(
+            store.has_block(REPO, &fresh).await,
+            "a recently announced block must survive the audit"
+        );
+        assert!(
+            repos
+                .pending_block
+                .written_after(REPO, std::slice::from_ref(&fresh), now - 60)
+                .await
+                .unwrap()
+                .contains(&fresh),
+            "its row is still there, so the next pass keeps treating it as fresh"
+        );
+    }
+
+    /// An incremental schedule turns one pass into an audit when the last one is old
+    /// (or unknown), records the time, and goes back to incremental afterwards.
+    #[tokio::test]
+    async fn incremental_audits_when_due_and_records_the_time() {
+        let db = setup_gc_test_db(0, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+        let now = chrono::Utc::now().timestamp();
+
+        insert_commit(&db, "c1", &"a1".repeat(20), now).await;
+        insert_fs_object(
+            &db,
+            &"a1".repeat(20),
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
+
+        let crashed = store
+            .write_block(REPO, b"crashed before commit")
+            .await
+            .unwrap();
+        let policy = GcPolicy {
+            mode: GcMode::Incremental,
+            audit_interval_secs: 3600,
+            pending_ttl_secs: 0,
+            verify_head: false,
+            upload_activity_ttl: None,
+            ..GcPolicy::new(0)
+        };
+
+        let first = GcManager::garbage_collect_report(&repos, &store, policy, None)
+            .await
+            .expect("gc succeeds");
+        assert!(first.audited, "no audit has ever run, so this pass is one");
+        assert_eq!(first.deleted_blocks, 1);
+        assert!(!store.has_block(REPO, &crashed).await);
+        assert!(
+            repos
+                .gc_state
+                .get_i64(crate::repository::gc_state::LAST_AUDIT_AT)
+                .await
+                .unwrap()
+                .is_some(),
+            "the audit time is recorded"
+        );
+
+        let after_audit = store
+            .write_block(REPO, b"crash after the audit")
+            .await
+            .unwrap();
+        let second = GcManager::garbage_collect_report(&repos, &store, policy, None)
+            .await
+            .expect("gc succeeds");
+        assert!(!second.audited, "the audit is not due again yet");
+        assert_eq!(second.deleted_blocks, 0);
+        assert!(
+            store.has_block(REPO, &after_audit).await,
+            "incremental planning does not enumerate, so it cannot see this one"
+        );
+    }
+
+    /// A dry run reports the audit it would do and leaves the timestamp alone.
+    #[tokio::test]
+    async fn a_dry_run_does_not_record_the_audit_time() {
+        let db = setup_gc_test_db(0, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+        let now = chrono::Utc::now().timestamp();
+
+        insert_commit(&db, "c1", &"a1".repeat(20), now).await;
+        insert_fs_object(
+            &db,
+            &"a1".repeat(20),
+            3,
+            r#"{"dirents":[],"type":3,"version":1}"#,
+        )
+        .await;
+        let crashed = store
+            .write_block(REPO, b"crashed before commit")
+            .await
+            .unwrap();
+
+        let report = GcManager::garbage_collect_report(
+            &repos,
+            &store,
+            GcPolicy {
+                mode: GcMode::Incremental,
+                audit_interval_secs: 3600,
+                pending_ttl_secs: 0,
+                verify_head: false,
+                upload_activity_ttl: None,
+                dry_run: true,
+                ..GcPolicy::new(0)
+            },
+            None,
+        )
+        .await
+        .expect("gc succeeds");
+
+        assert!(report.audited);
+        assert_eq!(report.deleted_blocks, 1, "it predicts the deletion");
+        assert!(
+            store.has_block(REPO, &crashed).await,
+            "but nothing is deleted"
+        );
+        assert!(
+            repos
+                .gc_state
+                .get_i64(crate::repository::gc_state::LAST_AUDIT_AT)
+                .await
+                .unwrap()
+                .is_none(),
+            "a dry run must not record that an audit happened"
+        );
     }
 
     /// The audit path must take the age from the enumeration (no per-block probe) and

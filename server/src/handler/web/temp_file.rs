@@ -129,6 +129,15 @@ async fn delete_uncommitted_blocks(
             tracing::warn!("failed to remove abandoned block {id} in repo {repo_id}: {e}");
         }
     }
+    // The abandoned upload no longer needs its restart guard for these blocks; a
+    // row that survives is cleared by the expiry sweep after it re-checks
+    // references, so nothing a commit references can be deleted here.
+    if let Err(e) = repos.pending_block.forget(repo_id, ids).await {
+        tracing::warn!(
+            repo_id,
+            "could not clear pending-block rows of an abandoned upload: {e}"
+        );
+    }
 }
 
 impl TempFileManager {

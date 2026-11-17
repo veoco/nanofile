@@ -26,7 +26,9 @@ nanofile gc [--dry-run] [--mode audit|incremental]
 
 - `--dry-run` 只报告会删除什么，不动任何数据。
 - `--mode` 覆盖本次运行的 `[gc] mode`。`audit` 会列举每个库的块，也能发现崩溃上传留下的块；`incremental` 只删除历史裁剪刚刚变成孤儿的块，不做列举。
-- 存活时间不足 `gc.min_block_age_secs` 的块永不删除。
+- 不带 `--mode` 时按配置的调度走：`gc.audit_interval_hours` 到期就把这一轮变成完整审计，并记录审计时间；带了 `--mode` 则本次不套用这个调度。
+- 存活时间不足 `gc.min_block_age_secs` 的块永不删除；上传写入但一直没提交的块在 `gc.pending_ttl_hours` 之后被清掉。
+- 输出会写明本次的扫描方式，以及各类别删了多少。
 - 保护窗口与默认模式取自配置文件与 `NANOFILE_*` 环境变量；设置页保存的值不参与——它们配置的是后台作业，由作业在启动时读取。
 
 ```

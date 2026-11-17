@@ -18,6 +18,7 @@ pub mod file_lock_timestamp;
 pub mod file_tag;
 pub mod file_trash;
 pub mod fs_object;
+pub mod gc_state;
 pub mod invitation_code;
 pub mod job_run;
 pub mod locked_file;
@@ -25,6 +26,7 @@ pub mod member;
 pub mod metadata_config;
 pub mod metadata_record;
 pub mod password_reset_token;
+pub mod pending_block;
 pub mod repo;
 pub mod repo_tag;
 pub mod s2fa_token;
@@ -59,6 +61,7 @@ use crate::repository::file_lock_timestamp::*;
 use crate::repository::file_tag::*;
 use crate::repository::file_trash::*;
 use crate::repository::fs_object::*;
+use crate::repository::gc_state::*;
 use crate::repository::invitation_code::*;
 use crate::repository::job_run::*;
 use crate::repository::locked_file::*;
@@ -66,6 +69,7 @@ use crate::repository::member::*;
 use crate::repository::metadata_config::*;
 use crate::repository::metadata_record::*;
 use crate::repository::password_reset_token::*;
+use crate::repository::pending_block::*;
 use crate::repository::repo::*;
 use crate::repository::repo_tag::*;
 use crate::repository::s2fa_token::*;
@@ -117,6 +121,11 @@ pub struct Repositories {
     pub email_verification_token: Arc<dyn EmailVerificationTokenRepository>,
     pub user_2fa_backup_code: Arc<dyn User2faBackupCodeRepository>,
     pub file_lock_timestamp: Arc<dyn FileLockTimestampRepository>,
+    /// Durable record of blocks an upload wrote but no commit references yet; the
+    /// in-memory reservation above is the quota accounting, this is the liveness one.
+    pub pending_block: Arc<dyn PendingBlockRepository>,
+    /// Garbage-collection state that must survive a restart (the last audit time).
+    pub gc_state: Arc<dyn GcStateRepository>,
     /// Per-server quota accounting state (committed-usage snapshots and uncommitted-block
     /// reservations). Owned here, not in process-global statics, so it describes this database.
     pub quota_cache: Arc<infra::quota_cache::QuotaCache>,
@@ -184,6 +193,8 @@ impl Repositories {
             email_verification_token: Arc::new(DbEmailVerificationTokenRepository::new(db.clone())),
             user_2fa_backup_code: Arc::new(DbUser2faBackupCodeRepository::new(db.clone())),
             file_lock_timestamp: Arc::new(DbFileLockTimestampRepository::new(db.clone())),
+            pending_block: Arc::new(DbPendingBlockRepository::new(db.clone())),
+            gc_state: Arc::new(DbGcStateRepository::new(db.clone())),
             quota_cache: Arc::new(infra::quota_cache::QuotaCache::new()),
         }
     }

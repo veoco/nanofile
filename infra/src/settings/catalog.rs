@@ -1123,6 +1123,30 @@ pub static CATALOG: &[SettingDef] = &[
         }
     ),
     setting!(
+        "gc.pending_ttl_hours",
+        Maintenance,
+        "NANOFILE_GC_PENDING_TTL_HOURS",
+        Kind::U64,
+        Apply::Restart,
+        |c| c.gc.pending_ttl_hours.to_string(),
+        |c, v| {
+            c.gc.pending_ttl_hours = parse_u64(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
+        "gc.audit_interval_hours",
+        Maintenance,
+        "NANOFILE_GC_AUDIT_INTERVAL_HOURS",
+        Kind::U64,
+        Apply::Restart,
+        |c| c.gc.audit_interval_hours.to_string(),
+        |c, v| {
+            c.gc.audit_interval_hours = parse_u64(v)?;
+            Ok(())
+        }
+    ),
+    setting!(
         "gc.min_block_age_secs",
         Maintenance,
         "NANOFILE_GC_MIN_BLOCK_AGE_SECS",
@@ -1904,6 +1928,8 @@ pub static GROUPS: &[GroupDef] = &[
             "gc.enabled",
             "gc.interval_hours",
             "gc.mode",
+            "gc.pending_ttl_hours",
+            "gc.audit_interval_hours",
             "gc.min_block_age_secs",
         ],
     },

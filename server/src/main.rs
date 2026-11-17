@@ -660,6 +660,7 @@ fn main() -> anyhow::Result<()> {
                 // consulted here); `--mode` wins for this run.
                 let mut policy = server::fs::core::gc::GcPolicy::new(config.gc.min_block_age_secs);
                 policy.dry_run = dry_run;
+                policy.pending_ttl_secs = config.gc.pending_ttl_hours.saturating_mul(3600);
                 if let Some(mode) = mode {
                     policy.mode = match mode.trim().to_ascii_lowercase().as_str() {
                         "audit" => server::fs::core::gc::GcMode::Audit,
@@ -668,6 +669,14 @@ fn main() -> anyhow::Result<()> {
                             anyhow::bail!("unknown --mode {other:?}: expected audit or incremental")
                         }
                     };
+                    // An explicit mode is what the operator asked for this run; the
+                    // schedule's periodic audit must not override it.
+                    policy.audit_interval_secs = 0;
+                } else {
+                    // A plain `gc` stands in for the scheduled pass, including the
+                    // periodic audit when one is due.
+                    policy.audit_interval_secs =
+                        config.gc.audit_interval_hours.saturating_mul(3600);
                 }
 
                 let report = server::fs::core::gc::GcManager::garbage_collect_report(
@@ -675,8 +684,17 @@ fn main() -> anyhow::Result<()> {
                 )
                 .await?;
                 println!("{}", if dry_run { "would remove:" } else { "removed:" });
+                println!(
+                    "  scan mode:            {}",
+                    if report.audited {
+                        "audit"
+                    } else {
+                        "incremental"
+                    }
+                );
                 println!("  pruned objects:       {}", report.pruned_objects);
                 println!("  deleted blocks:       {}", report.deleted_blocks);
+                println!("  expired pending:      {}", report.expired_pending);
                 println!("  removed repositories: {}", report.removed_repos);
                 println!("  skipped (too young):  {}", report.skipped_fresh);
                 anyhow::Ok(())

@@ -314,6 +314,15 @@ impl AppState {
                 ),
             );
         }
+        // Announce every upload block to the durable pending ledger before it is
+        // written, so an interrupted upload's blocks are still findable after a
+        // restart. Wrapped last: the ids are the logical ones the commit and the
+        // collector use, whether or not at-rest encryption is on.
+        let block_store: infra::storage::DynBlockStorage =
+            Arc::new(crate::fs::core::pending_store::PendingBlockStore::new(
+                block_store,
+                repos.pending_block.clone(),
+            ));
         let shutdown_token = CancellationToken::new();
         // Adopted from the process-lifetime task system, so a restart keeps the run table.
         let tasks = tasks.unwrap_or_else(|| {
