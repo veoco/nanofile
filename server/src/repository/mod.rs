@@ -19,6 +19,7 @@ pub mod file_tag;
 pub mod file_trash;
 pub mod fs_object;
 pub mod gc_state;
+pub mod history_prune;
 pub mod invitation_code;
 pub mod job_run;
 pub mod locked_file;
@@ -62,6 +63,7 @@ use crate::repository::file_tag::*;
 use crate::repository::file_trash::*;
 use crate::repository::fs_object::*;
 use crate::repository::gc_state::*;
+use crate::repository::history_prune::*;
 use crate::repository::invitation_code::*;
 use crate::repository::job_run::*;
 use crate::repository::locked_file::*;
@@ -91,6 +93,9 @@ pub struct Repositories {
     pub repo: Arc<dyn RepoRepository>,
     pub member: Arc<dyn MemberRepository>,
     pub commit: Arc<dyn CommitRepository>,
+    /// Deletes the commit and file-object rows of one history prune in one
+    /// transaction, so a crash cannot leave commits pointing at removed objects.
+    pub history_prune: Arc<dyn HistoryPruneRepository>,
     pub share_link: Arc<dyn ShareLinkRepository>,
     pub starred: Arc<dyn StarredRepository>,
     pub upload_link: Arc<dyn UploadLinkRepository>,
@@ -157,6 +162,7 @@ impl Repositories {
             repo: Arc::new(DbRepoRepository::new(db.clone())),
             member: Arc::new(DbMemberRepository::new(db.clone())),
             commit: Arc::new(DbCommitRepository::new(db.clone())),
+            history_prune: Arc::new(DbHistoryPruneRepository::new(db.clone())),
             share_link: Arc::new(DbShareLinkRepository::new(db.clone())),
             starred: Arc::new(DbStarredRepository::new(db.clone())),
             upload_link: Arc::new(DbUploadLinkRepository::new(db.clone())),

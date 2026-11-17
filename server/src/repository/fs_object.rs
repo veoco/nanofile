@@ -1,10 +1,12 @@
 use async_trait::async_trait;
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    TransactionTrait,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use base::common::SEAF_METADATA_TYPE_FILE;
 use base::error::AppError;
 use infra::entity::fs_object;
 
@@ -33,6 +35,21 @@ pub trait FsObjectRepository: Send + Sync {
     /// that very block, and deleting it would corrupt the committed file. The match is a substring
     /// search over the object JSON, so a false positive only leaves an orphan for GC: the safe way.
     async fn references_block(&self, repo_id: &str, block_id: &str) -> Result<bool, AppError>;
+    /// Subset of `block_ids` that any stored object of `repo_id` mentions.
+    ///
+    /// Checked before deleting a block an interrupted upload wrote: a concurrent commit
+    /// of identical content can reference that very block, and deleting it would corrupt
+    /// the committed file. One pass over the library's object JSON replaces one full
+    /// table scan per block, which is quadratic once an abandoned-upload backlog names
+    /// thousands of blocks. The match is a 40-hex token scan, so a false positive only
+    /// leaves an orphan for GC — the safe direction. An id that is not a 40-character
+    /// lowercase hex string is reported as referenced: nothing this store could have
+    /// written under it can be ruled out.
+    async fn referenced_blocks(
+        &self,
+        repo_id: &str,
+        block_ids: &[String],
+    ) -> Result<HashSet<String>, AppError>;
     async fn find_by_repo_id(&self, repo_id: &str) -> Result<Vec<fs_object::Model>, AppError>;
     /// Project only `(id, fs_id)` for every object of a repo, without the large `data` JSON column
     /// (used by garbage collection as the pass snapshot); fs_id comes back as its raw 20-byte SHA-1
@@ -41,7 +58,6 @@ pub trait FsObjectRepository: Send + Sync {
         &self,
         repo_id: &str,
     ) -> Result<Vec<(i64, [u8; 20])>, AppError>;
-    async fn delete_many_by_ids(&self, ids: Vec<i64>) -> Result<(), AppError>;
 }
 
 pub struct DbFsObjectRepository {
@@ -193,6 +209,67 @@ impl FsObjectRepository for DbFsObjectRepository {
         Ok(row.is_some())
     }
 
+    async fn referenced_blocks(
+        &self,
+        repo_id: &str,
+        block_ids: &[String],
+    ) -> Result<HashSet<String>, AppError> {
+        if block_ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        // Decode the candidates once; the scan then compares raw bytes. An id that
+        // cannot be a stored block id is kept, exactly as the per-block check did.
+        let mut wanted: std::collections::HashMap<[u8; 20], &str> =
+            std::collections::HashMap::with_capacity(block_ids.len());
+        let mut found: HashSet<String> = HashSet::new();
+        for block_id in block_ids {
+            match decode_lower_hex_id(block_id) {
+                Some(bytes) => {
+                    wanted.insert(bytes, block_id.as_str());
+                }
+                None => {
+                    found.insert(block_id.clone());
+                }
+            }
+        }
+        if wanted.is_empty() {
+            return Ok(found);
+        }
+        let total = wanted.len() + found.len();
+
+        /// Bound one query's payload; the scan stops after the first match of every
+        /// candidate anyway, so a quiet library costs one page.
+        const PAGE: u64 = 500;
+        let mut last_id = i64::MIN;
+        loop {
+            let rows: Vec<(i64, String)> = fs_object::Entity::find()
+                .select_only()
+                .column(fs_object::Column::Id)
+                .column(fs_object::Column::Data)
+                .filter(fs_object::Column::RepoId.eq(repo_id))
+                // Only file objects name blocks; a directory lists fs ids, not blocks.
+                .filter(fs_object::Column::ObjType.eq(SEAF_METADATA_TYPE_FILE as i8))
+                .filter(fs_object::Column::Id.gt(last_id))
+                .order_by_asc(fs_object::Column::Id)
+                .limit(PAGE)
+                .into_tuple()
+                .all(self.db.as_ref())
+                .await?;
+            if rows.is_empty() {
+                break;
+            }
+            for (id, data) in &rows {
+                scan_id_tokens(data, &wanted, &mut found);
+                last_id = *id;
+            }
+            if found.len() >= total {
+                break;
+            }
+        }
+        Ok(found)
+    }
+
     async fn find_ids_and_fs_ids_by_repo_id(
         &self,
         repo_id: &str,
@@ -214,18 +291,159 @@ impl FsObjectRepository for DbFsObjectRepository {
             })
             .collect())
     }
+}
 
-    async fn delete_many_by_ids(&self, ids: Vec<i64>) -> Result<(), AppError> {
-        if ids.is_empty() {
-            return Ok(());
+/// Length of a SHA-1 id in hex, which is how every block and object id is stored.
+const ID_HEX_LEN: usize = 40;
+
+fn is_lower_hex(byte: u8) -> bool {
+    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+}
+
+fn decode_lower_hex_id(id: &str) -> Option<[u8; 20]> {
+    if id.len() != ID_HEX_LEN || !id.bytes().all(is_lower_hex) {
+        return None;
+    }
+    let mut buf = [0u8; 20];
+    hex::decode_to_slice(id, &mut buf).ok()?;
+    Some(buf)
+}
+
+/// Visit every 40-character lowercase-hex run in `data` and record the wanted ones.
+///
+/// Stored ids sit between quotes, so a real id is exactly one run; a longer run (some
+/// other hex value) or a shorter one is ignored. A match means the object literally
+/// contains the block id, and a false positive would only keep a block.
+fn scan_id_tokens(
+    data: &str,
+    wanted: &std::collections::HashMap<[u8; 20], &str>,
+    found: &mut HashSet<String>,
+) {
+    let bytes = data.as_bytes();
+    let mut start = 0usize;
+    let mut len = 0usize;
+    for (i, byte) in bytes.iter().enumerate() {
+        if is_lower_hex(*byte) {
+            if len == 0 {
+                start = i;
+            }
+            len += 1;
+        } else {
+            record_id_token(bytes, start, len, wanted, found);
+            len = 0;
         }
-        const IN_BATCH: usize = 500;
-        for chunk in ids.chunks(IN_BATCH) {
-            fs_object::Entity::delete_many()
-                .filter(fs_object::Column::Id.is_in(chunk.to_vec()))
-                .exec(self.db.as_ref())
-                .await?;
+    }
+    record_id_token(bytes, start, len, wanted, found);
+}
+
+fn record_id_token(
+    bytes: &[u8],
+    start: usize,
+    len: usize,
+    wanted: &std::collections::HashMap<[u8; 20], &str>,
+    found: &mut HashSet<String>,
+) {
+    if len != ID_HEX_LEN {
+        return;
+    }
+    let mut buf = [0u8; 20];
+    if hex::decode_to_slice(&bytes[start..start + ID_HEX_LEN], &mut buf).is_err() {
+        return;
+    }
+    if let Some(original) = wanted.get(&buf) {
+        found.insert((*original).to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use migration::{Migrator, MigratorTrait};
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+
+    async fn repo() -> DbFsObjectRepository {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite");
+        Migrator::up(&db, None).await.expect("migrate");
+        // The objects are seeded without their library parent; the scan under test
+        // reads the rows and the foreign key has nothing to add.
+        db.execute_raw(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "PRAGMA foreign_keys = OFF",
+        ))
+        .await
+        .expect("disable foreign keys");
+        DbFsObjectRepository::new(Arc::new(db))
+    }
+
+    async fn insert(db: &DatabaseConnection, id: i64, repo_id: &str, data: &str) {
+        let fs_id = format!("{id:040x}");
+        db.execute_raw(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            format!("INSERT INTO fs_objects (id, repo_id, fs_id, obj_type, data) VALUES ({id}, '{repo_id}', '{fs_id}', 1, '{data}')"),
+        ))
+        .await
+        .expect("insert fs object");
+    }
+
+    /// The scan is scoped to one library, finds ids inside the stored JSON, and keeps
+    /// an id it could not have written (the conservative direction).
+    #[tokio::test]
+    async fn referenced_blocks_is_scoped_and_conservative() {
+        let repo = repo().await;
+        let db = repo.db.as_ref();
+        let hit = "a1".repeat(20);
+        let miss = "b2".repeat(20);
+        insert(
+            db,
+            1,
+            "r1",
+            &format!(r#"{{"block_ids":["{hit}"],"size":1,"type":1,"version":1}}"#),
+        )
+        .await;
+        insert(
+            db,
+            2,
+            "r2",
+            &format!(r#"{{"block_ids":["{miss}"],"size":1,"type":1,"version":1}}"#),
+        )
+        .await;
+
+        let found = repo
+            .referenced_blocks("r1", &[hit.clone(), miss.clone(), "not-an-id".to_string()])
+            .await
+            .expect("scan");
+        assert!(found.contains(&hit));
+        assert!(
+            !found.contains(&miss),
+            "another library's object must not protect the block"
+        );
+        assert!(
+            found.contains("not-an-id"),
+            "an id that cannot be stored is reported as referenced"
+        );
+    }
+
+    /// The scan pages through the library, so a match past the first page is still seen.
+    #[tokio::test]
+    async fn referenced_blocks_pages_through_a_large_library() {
+        let repo = repo().await;
+        let db = repo.db.as_ref();
+        let hit = "c3".repeat(20);
+        for id in 1..=501 {
+            let data = if id == 501 {
+                format!(r#"{{"block_ids":["{hit}"]}}"#)
+            } else {
+                r#"{"block_ids":[]}"#.to_string()
+            };
+            insert(db, id, "r1", &data).await;
         }
-        Ok(())
+
+        let found = repo
+            .referenced_blocks("r1", std::slice::from_ref(&hit))
+            .await
+            .expect("scan");
+        assert!(found.contains(&hit), "the second page must be reached");
     }
 }

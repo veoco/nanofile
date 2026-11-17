@@ -421,27 +421,32 @@ impl GcManager {
         let mut removed = 0u64;
         for (repo_id, ids) in by_repo {
             checkpoint(ctx).await?;
-            let mut deletable = Vec::with_capacity(ids.len());
-            for id in ids {
-                match repos.fs_object.references_block(&repo_id, &id).await {
-                    Ok(true) => {
-                        tracing::debug!(
-                            repo_id,
-                            block_id = %id,
-                            "keeping an expired pending block: a file references it"
-                        );
-                    }
-                    Ok(false) => deletable.push(id),
-                    Err(e) => {
-                        // Unknown: keep the block rather than risk deleting data.
-                        tracing::warn!(
-                            repo_id,
-                            block_id = %id,
-                            "could not check references for an expired pending block: {e}"
-                        );
-                    }
+            // One pass over the library's objects, rather than one full table scan
+            // per block: an abandoned-upload backlog can name thousands of blocks and
+            // the per-block query would be quadratic against a large library.
+            let referenced = match repos.fs_object.referenced_blocks(&repo_id, &ids).await {
+                Ok(referenced) => referenced,
+                Err(e) => {
+                    // Unknown: keep every block rather than risk deleting data.
+                    tracing::warn!(
+                        repo_id,
+                        blocks = ids.len(),
+                        "could not check references for expired pending blocks: {e}"
+                    );
+                    continue;
                 }
+            };
+            if !referenced.is_empty() {
+                tracing::debug!(
+                    repo_id,
+                    kept = referenced.len(),
+                    "keeping expired pending blocks that a file references"
+                );
             }
+            let deletable: Vec<String> = ids
+                .into_iter()
+                .filter(|id| !referenced.contains(id))
+                .collect();
             for chunk in deletable.chunks(CHECKPOINT_EVERY_BLOCKS) {
                 if policy.dry_run {
                     removed += chunk.len() as u64;
@@ -571,7 +576,8 @@ impl GcManager {
         // repository because there is no cross-repository sharing. `reachable` is
         // the set of fs ids those commits can see, and `complete` says whether all of
         // them are stored.
-        let mut alive_blocks: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut alive_blocks: std::collections::HashSet<[u8; 20]> =
+            std::collections::HashSet::new();
         let (reachable, complete) = Self::collect_repo_alive_blocks(
             repos,
             &repo_model.id,
@@ -632,7 +638,7 @@ impl GcManager {
                     .for_each_block_with_mtime(
                         &repo_model.id,
                         Box::new(move |id, modified_secs| {
-                            if !alive_ref.contains(id) {
+                            if !alive_ref.contains(&Self::decode_sha1_hex(id)) {
                                 orphan_ref.lock().unwrap().push(PlannedBlock {
                                     id: id.to_string(),
                                     modified_secs,
@@ -715,22 +721,16 @@ impl GcManager {
         }
 
         let mut report = GcReport::default();
-        // Delete the commits first: they are what references the file objects. A
-        // crash between the two statements then leaves unreferenced FS rows for a
-        // later pass, never a commit pointing at objects that no longer exist.
-        if !plan.commit_rows.is_empty() && !policy.dry_run {
+        // One transaction for both tables: the commit rows and the file objects they
+        // reference must disappear together, or a crash in between leaves a commit
+        // pointing at objects that are gone.
+        if !policy.dry_run && (!plan.commit_rows.is_empty() || !plan.fs_object_rows.is_empty()) {
             repos
-                .commit
-                .delete_many_by_ids(plan.commit_rows.clone())
+                .history_prune
+                .prune(plan.commit_rows.clone(), plan.fs_object_rows.clone())
                 .await?;
         }
         if !plan.fs_object_rows.is_empty() {
-            if !policy.dry_run {
-                repos
-                    .fs_object
-                    .delete_many_by_ids(plan.fs_object_rows.clone())
-                    .await?;
-            }
             report.pruned_objects += plan.fs_object_rows.len() as u64;
         }
 
@@ -841,7 +841,7 @@ impl GcManager {
         repos: &Repositories,
         repo_id: &str,
         fs_ids: &[String],
-        alive: &std::collections::HashSet<String>,
+        alive: &std::collections::HashSet<[u8; 20]>,
     ) -> Result<Vec<PlannedBlock>, AppError> {
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -849,7 +849,8 @@ impl GcManager {
             let files = Self::read_file_objects(repos, repo_id, chunk).await?;
             for file in files.values() {
                 for block_id in &file.block_ids {
-                    if alive.contains(block_id) || !seen.insert(block_id.clone()) {
+                    let decoded = Self::decode_sha1_hex(block_id);
+                    if alive.contains(&decoded) || !seen.insert(decoded) {
                         continue;
                     }
                     out.push(PlannedBlock {
@@ -951,7 +952,7 @@ impl GcManager {
         repo_id: &str,
         commits: &[commit::Model],
         keep: &std::collections::HashSet<i64>,
-        alive_blocks: &mut std::collections::HashSet<String>,
+        alive_blocks: &mut std::collections::HashSet<[u8; 20]>,
     ) -> Result<(std::collections::HashSet<[u8; 20]>, bool), AppError> {
         if commits.is_empty() {
             return Ok((std::collections::HashSet::new(), true));
@@ -991,7 +992,7 @@ impl GcManager {
                 }
                 let data = Self::decode_file_object(repo_id, &fs_id, &obj.data)?;
                 for block_id in data.block_ids {
-                    alive_blocks.insert(block_id);
+                    alive_blocks.insert(Self::decode_sha1_hex(&block_id));
                 }
             }
         }

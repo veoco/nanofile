@@ -49,7 +49,6 @@ pub trait CommitRepository: Send + Sync {
     async fn insert(&self, model: commit::ActiveModel) -> Result<commit::Model, AppError>;
     async fn find_all_ordered_by_ctime_desc(&self) -> Result<Vec<commit::Model>, AppError>;
     async fn insert_commit(&self, params: CreateCommitParams) -> Result<commit::Model, AppError>;
-    async fn delete_many_by_ids(&self, ids: Vec<i64>) -> Result<(), AppError>;
 }
 
 pub struct DbCommitRepository {
@@ -155,19 +154,5 @@ impl CommitRepository for DbCommitRepository {
             .order_by_desc(commit::Column::Ctime)
             .all(self.db.as_ref())
             .await?)
-    }
-
-    async fn delete_many_by_ids(&self, ids: Vec<i64>) -> Result<(), AppError> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        const IN_BATCH: usize = 500;
-        for chunk in ids.chunks(IN_BATCH) {
-            commit::Entity::delete_many()
-                .filter(commit::Column::Id.is_in(chunk.to_vec()))
-                .exec(self.db.as_ref())
-                .await?;
-        }
-        Ok(())
     }
 }
