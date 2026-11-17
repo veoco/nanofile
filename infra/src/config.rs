@@ -1535,8 +1535,11 @@ pub struct GcConfig {
     /// Env: NANOFILE_GC_PENDING_TTL_HOURS
     #[serde(default = "default_gc_pending_ttl_hours")]
     pub pending_ttl_hours: u64,
-    /// How often a full audit runs while `mode = "incremental"`. `0` disables the
-    /// automatic audit; `nanofile gc --mode audit` stays available.
+    /// How often each library's own full audit is due while `mode = "incremental"`.
+    /// One pass audits the libraries whose time has come and prunes the others
+    /// incrementally, so a library that was busy is not made to wait for the whole
+    /// server's next audit. `0` disables the automatic audit; `nanofile gc --mode
+    /// audit` stays available.
     /// Env: NANOFILE_GC_AUDIT_INTERVAL_HOURS
     #[serde(default = "default_gc_audit_interval_hours")]
     pub audit_interval_hours: u64,

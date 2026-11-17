@@ -35,8 +35,9 @@ pub struct GcPolicy {
     /// `0` disables the block sweep, leaving them to an audit; the ledger rows
     /// themselves are still dropped after a longer, fixed horizon.
     pub pending_ttl_secs: u64,
-    /// In [`GcMode::Incremental`], how often a full audit replaces the incremental
-    /// plan. `0` disables the automatic audit.
+    /// In [`GcMode::Incremental`], how often each library's own full audit is due.
+    /// A pass audits the libraries whose time has come and prunes the rest
+    /// incrementally. `0` disables the automatic audit.
     pub audit_interval_secs: u64,
     /// Compute the deletions and report them without changing the database or the
     /// store. The same guards run, so the returned count is what a real pass would
@@ -81,9 +82,14 @@ pub struct GcReport {
     /// stored (normally an upload in progress, whose tree is written before its
     /// commit). Deleting against such a tree would under-approximate the live set.
     pub incomplete_repos: u64,
-    /// Whether this pass planned with [`GcMode::Audit`] (in incremental mode, the
-    /// periodic audit turns one pass into an audit).
-    pub audited: bool,
+    /// Libraries whose head moved between the snapshot and the delete, so the pass
+    /// left them alone instead of deleting against a stale live set.
+    pub moved_repos: u64,
+    /// Libraries planned with [`GcMode::Audit`] in this pass.
+    pub audited_repos: u64,
+    /// Libraries planned with [`GcMode::Incremental`] in this pass. In `incremental`
+    /// mode each library has its own audit schedule, so one pass can mix both.
+    pub incremental_repos: u64,
 }
 
 impl GcReport {
@@ -101,7 +107,9 @@ impl GcReport {
         self.busy_repos += other.busy_repos;
         self.failed_repos += other.failed_repos;
         self.incomplete_repos += other.incomplete_repos;
-        self.audited |= other.audited;
+        self.moved_repos += other.moved_repos;
+        self.audited_repos += other.audited_repos;
+        self.incremental_repos += other.incremental_repos;
     }
 }
 
@@ -231,29 +239,7 @@ impl GcManager {
         ctx: Option<&crate::tasks::context::JobContext>,
     ) -> Result<GcReport, AppError> {
         let now = chrono::Utc::now().timestamp();
-
-        // An incremental schedule still needs a full audit eventually: it is the
-        // only planner that finds what a crash left behind. When one is due, this
-        // pass *is* the audit; the timestamp is written only after it succeeds.
-        let incremental_schedule = policy.mode == GcMode::Incremental;
-        let audit_due = match policy.mode {
-            GcMode::Audit => true,
-            GcMode::Incremental => {
-                policy.audit_interval_secs > 0
-                    && match repos.gc_state.get_i64(LAST_AUDIT_AT).await? {
-                        Some(last) => now.saturating_sub(last) >= policy.audit_interval_secs as i64,
-                        None => true,
-                    }
-            }
-        };
-        let mut policy = policy;
-        if audit_due {
-            policy.mode = GcMode::Audit;
-        }
-        let mut report = GcReport {
-            audited: audit_due,
-            ..GcReport::default()
-        };
+        let mut report = GcReport::default();
 
         // Blocks an upload announced and never committed, past their window. This
         // runs before planning so the per-repository plans never see them, and it is
@@ -282,14 +268,47 @@ impl GcManager {
                 continue;
             }
 
+            // Each library carries its own audit schedule, so one pass can audit the
+            // libraries whose turn has come and prune the rest incrementally. A library
+            // that was busy above is not recorded and is audited on the next pass.
+            let audit_repo = match policy.mode {
+                GcMode::Audit => true,
+                GcMode::Incremental => {
+                    Self::audit_due(repos, &repo_model.id, now, policy.audit_interval_secs).await?
+                }
+            };
+            let repo_policy = GcPolicy {
+                mode: if audit_repo {
+                    GcMode::Audit
+                } else {
+                    GcMode::Incremental
+                },
+                ..policy
+            };
+            if audit_repo {
+                report.audited_repos += 1;
+            } else {
+                report.incremental_repos += 1;
+            }
+
             // Plan first, delete second: the plan is a read-only description of what
             // this pass would remove, which is also exactly what a dry run reports.
             // One library's damaged data must not stop the pass for every other
             // library; a failure that is the pass's own (database, IO, cancellation)
             // still does.
-            match Self::collect_repo(repos, block_store, repo_model, policy, now, ctx).await {
-                Ok(Some(applied)) => report.merge(applied),
-                Ok(None) => {}
+            let mut completed_audit = false;
+            match Self::collect_repo(repos, block_store, repo_model, repo_policy, now, ctx).await {
+                Ok(Some(applied)) => {
+                    // An incomplete tree, a busy library or a moved head means the
+                    // audit could not see (or act on) the whole library; it is retried
+                    // on the next pass rather than counted as done.
+                    completed_audit = audit_repo
+                        && applied.incomplete_repos == 0
+                        && applied.busy_repos == 0
+                        && applied.moved_repos == 0;
+                    report.merge(applied);
+                }
+                Ok(None) => completed_audit = audit_repo,
                 Err(e) if Self::is_repo_data_error(&e) => {
                     tracing::warn!(
                         repo_id = %repo_model.id,
@@ -299,18 +318,47 @@ impl GcManager {
                 }
                 Err(e) => return Err(e),
             }
+            if completed_audit && !policy.dry_run {
+                let key = crate::repository::gc_state::audit_key(&repo_model.id);
+                if let Err(e) = repos.gc_state.set_i64(&key, now).await {
+                    tracing::warn!(
+                        repo_id = %repo_model.id,
+                        "could not record the time of the last audit: {e}"
+                    );
+                }
+            }
         }
 
         report.removed_repos = Self::sweep_orphan_repos(repos, block_store, policy, ctx).await?;
 
-        if incremental_schedule && audit_due && !policy.dry_run {
-            // A failure only means the next pass audits again: the safe direction.
-            if let Err(e) = repos.gc_state.set_i64(LAST_AUDIT_AT, now).await {
-                tracing::warn!("could not record the time of the last audit: {e}");
-            }
-        }
-
         Ok(report)
+    }
+
+    /// Whether one library's own full audit is due.
+    ///
+    /// The row falls back to the pre-per-library timestamp: an installation upgrading
+    /// from a single whole-server audit time keeps its amortisation instead of
+    /// auditing every library again on the first incremental pass.
+    async fn audit_due(
+        repos: &Repositories,
+        repo_id: &str,
+        now: i64,
+        interval_secs: u64,
+    ) -> Result<bool, AppError> {
+        if interval_secs == 0 {
+            return Ok(false);
+        }
+        let key = crate::repository::gc_state::audit_key(repo_id);
+        let last = match repos.gc_state.get_i64(&key).await? {
+            Some(last) => Some(last),
+            None => repos.gc_state.get_i64(LAST_AUDIT_AT).await?,
+        };
+        Ok(match last {
+            Some(last) => {
+                now.saturating_sub(last) >= i64::try_from(interval_secs).unwrap_or(i64::MAX)
+            }
+            None => true,
+        })
     }
 
     /// Plan and apply one repository, or `None` when the pass has nothing to do
@@ -510,8 +558,23 @@ impl GcManager {
                 "removing the block prefix of a repository that no longer exists"
             );
             match block_store.remove_repo(&repo_id).await {
-                Ok(true) => removed += 1,
-                Ok(false) => {}
+                Ok(removed_prefix) => {
+                    if removed_prefix {
+                        removed += 1;
+                    }
+                    // The library is gone for good, so its audit schedule has no
+                    // owner left. Best effort: a leftover row is harmless.
+                    if let Err(e) = repos
+                        .gc_state
+                        .delete(&crate::repository::gc_state::audit_key(&repo_id))
+                        .await
+                    {
+                        tracing::warn!(
+                            repo_id = %repo_id,
+                            "could not drop the orphan library's audit row: {e}"
+                        );
+                    }
+                }
                 Err(e) => tracing::warn!(
                     repo_id = %repo_id,
                     "failed to remove the orphan block prefix: {e}"
@@ -717,7 +780,10 @@ impl GcManager {
                 planned_blocks = plan.blocks.len(),
                 "skipping GC: the repository head moved during this pass"
             );
-            return Ok(GcReport::default());
+            return Ok(GcReport {
+                moved_repos: 1,
+                ..GcReport::default()
+            });
         }
 
         let mut report = GcReport::default();
@@ -752,6 +818,7 @@ impl GcManager {
                 planned_blocks = plan.blocks.len(),
                 "skipping block deletion: the repository head moved during this pass"
             );
+            report.moved_repos += 1;
             return Ok(report);
         }
 
@@ -2161,10 +2228,10 @@ mod tests {
         );
     }
 
-    /// An incremental schedule turns one pass into an audit when the last one is old
-    /// (or unknown), records the time, and goes back to incremental afterwards.
+    /// Each library has its own audit schedule: a pass audits the one whose turn has
+    /// come, records that library's time, and goes back to incremental for it.
     #[tokio::test]
-    async fn incremental_audits_when_due_and_records_the_time() {
+    async fn incremental_audits_when_due_and_records_the_library_time() {
         let db = setup_gc_test_db(0, 0).await;
         let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
         let (_dir, store) = temp_block_store();
@@ -2195,17 +2262,21 @@ mod tests {
         let first = GcManager::garbage_collect_report(&repos, &store, policy, None)
             .await
             .expect("gc succeeds");
-        assert!(first.audited, "no audit has ever run, so this pass is one");
+        assert_eq!(
+            first.audited_repos, 1,
+            "no audit has ever run, so this pass is one"
+        );
+        assert_eq!(first.incremental_repos, 0);
         assert_eq!(first.deleted_blocks, 1);
         assert!(!store.has_block(REPO, &crashed).await);
         assert!(
             repos
                 .gc_state
-                .get_i64(crate::repository::gc_state::LAST_AUDIT_AT)
+                .get_i64(&crate::repository::gc_state::audit_key(REPO))
                 .await
                 .unwrap()
                 .is_some(),
-            "the audit time is recorded"
+            "the library's audit time is recorded"
         );
 
         let after_audit = store
@@ -2215,11 +2286,141 @@ mod tests {
         let second = GcManager::garbage_collect_report(&repos, &store, policy, None)
             .await
             .expect("gc succeeds");
-        assert!(!second.audited, "the audit is not due again yet");
+        assert_eq!(
+            second.audited_repos, 0,
+            "the library's audit is not due again yet"
+        );
+        assert_eq!(second.incremental_repos, 1);
         assert_eq!(second.deleted_blocks, 0);
         assert!(
             store.has_block(REPO, &after_audit).await,
             "incremental planning does not enumerate, so it cannot see this one"
+        );
+    }
+
+    /// One library's audit is due while another's is not: the pass audits the first
+    /// and leaves the second on its incremental plan, updating only the first row.
+    #[tokio::test]
+    async fn each_library_has_its_own_audit_schedule() {
+        let db = setup_gc_test_db(0, 0).await;
+        let other = "gc-audit-other";
+        insert_repo(&db, other, 0, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+        let now = chrono::Utc::now().timestamp();
+
+        // A complete tree for each library, so neither is skipped as incomplete.
+        for (repo_id, root, commit) in [
+            (REPO, "a1".repeat(20), "a2".repeat(20)),
+            (other, "b1".repeat(20), "b2".repeat(20)),
+        ] {
+            insert_commit_for(&db, repo_id, &commit, &root, now).await;
+            insert_fs_object_for(
+                &db,
+                repo_id,
+                &root,
+                3,
+                r#"{"dirents":[],"type":3,"version":1}"#,
+            )
+            .await;
+        }
+        // The other library was audited a minute ago; this one has no row and is due.
+        let other_time = now - 60;
+        repos
+            .gc_state
+            .set_i64(&crate::repository::gc_state::audit_key(other), other_time)
+            .await
+            .unwrap();
+
+        let report = GcManager::garbage_collect_report(
+            &repos,
+            &store,
+            GcPolicy {
+                mode: GcMode::Incremental,
+                audit_interval_secs: 3600,
+                verify_head: false,
+                upload_activity_ttl: None,
+                ..GcPolicy::new(0)
+            },
+            None,
+        )
+        .await
+        .expect("gc succeeds");
+
+        assert_eq!(report.audited_repos, 1);
+        assert_eq!(report.incremental_repos, 1);
+        assert!(
+            repos
+                .gc_state
+                .get_i64(&crate::repository::gc_state::audit_key(REPO))
+                .await
+                .unwrap()
+                .is_some(),
+            "the due library records its audit time"
+        );
+        assert_eq!(
+            repos
+                .gc_state
+                .get_i64(&crate::repository::gc_state::audit_key(other))
+                .await
+                .unwrap(),
+            Some(other_time),
+            "a library that was not due keeps its old row"
+        );
+    }
+
+    /// An installation that only has the pre-per-library row treats it as every
+    /// library's baseline, so the upgrade does not trigger an audit of everything.
+    #[tokio::test]
+    async fn a_legacy_global_audit_time_still_defers_the_audit() {
+        let db = setup_gc_test_db(0, 0).await;
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+        let now = chrono::Utc::now().timestamp();
+        let root = "a1".repeat(20);
+        insert_commit(&db, "a2", &root, now).await;
+        insert_fs_object(&db, &root, 3, r#"{"dirents":[],"type":3,"version":1}"#).await;
+        let global_time = now - 60;
+        repos
+            .gc_state
+            .set_i64(crate::repository::gc_state::LAST_AUDIT_AT, global_time)
+            .await
+            .unwrap();
+
+        let report = GcManager::garbage_collect_report(
+            &repos,
+            &store,
+            GcPolicy {
+                mode: GcMode::Incremental,
+                audit_interval_secs: 3600,
+                verify_head: false,
+                upload_activity_ttl: None,
+                ..GcPolicy::new(0)
+            },
+            None,
+        )
+        .await
+        .expect("gc succeeds");
+
+        assert_eq!(report.audited_repos, 0);
+        assert_eq!(report.incremental_repos, 1);
+        assert!(
+            repos
+                .gc_state
+                .get_i64(&crate::repository::gc_state::audit_key(REPO))
+                .await
+                .unwrap()
+                .is_none(),
+            "no per-library row is written when the library is not audited"
+        );
+        assert_eq!(
+            repos
+                .gc_state
+                .get_i64(crate::repository::gc_state::LAST_AUDIT_AT)
+                .await
+                .unwrap(),
+            Some(global_time),
+            "the legacy row is read, not rewritten"
         );
     }
 
@@ -2261,7 +2462,7 @@ mod tests {
         .await
         .expect("gc succeeds");
 
-        assert!(report.audited);
+        assert_eq!(report.audited_repos, 1);
         assert_eq!(report.deleted_blocks, 1, "it predicts the deletion");
         assert!(
             store.has_block(REPO, &crashed).await,
@@ -2270,7 +2471,7 @@ mod tests {
         assert!(
             repos
                 .gc_state
-                .get_i64(crate::repository::gc_state::LAST_AUDIT_AT)
+                .get_i64(&crate::repository::gc_state::audit_key(REPO))
                 .await
                 .unwrap()
                 .is_none(),
@@ -2722,5 +2923,48 @@ mod tests {
             GcManager::repo_head_moved(&repos, &snapshot).await.unwrap(),
             "a deleted repository counts as moved"
         );
+    }
+
+    /// A commit landing between the plan and the delete makes the block plan stale:
+    /// the pass must leave the library alone and say so, not prune against it.
+    #[tokio::test]
+    async fn a_head_that_moves_between_plan_and_apply_is_counted() {
+        let db = setup_gc_test_db(1, 0).await; // history_limit = 1
+        let repos = crate::repository::Repositories::new_for_tests(Arc::new(db.clone()));
+        let (_dir, store) = temp_block_store();
+        seed_pruned_history(&db, &store).await;
+
+        let repo_model = repos.repo.find_by_id(REPO).await.unwrap().unwrap();
+        let policy = GcPolicy {
+            verify_head: true,
+            upload_activity_ttl: None,
+            ..GcPolicy::new(0)
+        };
+        let plan = GcManager::plan_repo(&repos, &store, &repo_model, policy, 10_000)
+            .await
+            .expect("plan succeeds")
+            .expect("repo has commits");
+        assert_eq!(plan.fs_object_rows.len(), 2);
+
+        db.execute_raw(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "UPDATE repos SET head_commit_id = 'cccccccccccccccccccccccccccccccccccccccc'"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let report =
+            GcManager::apply_repo(&repos, &store, &repo_model, &plan, policy, 10_000, None)
+                .await
+                .expect("apply succeeds");
+        assert_eq!(report.moved_repos, 1);
+        assert_eq!(report.pruned_objects, 0);
+        assert_eq!(
+            count_rows(&db, "commits").await,
+            2,
+            "nothing is pruned against a stale snapshot"
+        );
+        assert_eq!(count_rows(&db, "fs_objects").await, 4);
     }
 }

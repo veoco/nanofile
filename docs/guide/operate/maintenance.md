@@ -47,17 +47,18 @@ than `gc.min_block_age_secs`:
 | `gc.interval_hours` | how often it runs. |
 | `gc.mode` | how a pass finds orphaned blocks: `audit` lists every library and diffs it against what its retained commits reference; `incremental` deletes only what history pruning just orphaned and needs no listing. |
 | `gc.pending_ttl_hours` | how long a block an upload wrote but never committed is kept. It must be at least the resumable-upload lifetime; `0` disables the block sweep, leaves those blocks to an audit, and still drops the ledger rows after 30 days. |
-| `gc.audit_interval_hours` | in `incremental` mode, how often a pass becomes a full audit instead. `0` disables the automatic audit. |
+| `gc.audit_interval_hours` | in `incremental` mode, how often each library's own full audit is due. A pass audits the libraries whose turn has come and prunes the rest incrementally. `0` disables the automatic audit. |
 | `gc.min_block_age_secs` | how long a block must exist before it is eligible — this is the buffer for a block that was just uploaded and is not referenced yet. |
 
 `audit` is the default and the only mode that finds blocks a crashed upload left
 behind; it costs one listing per library per run. `incremental` exists for storage
 backends where a listing is charged per request: it still prunes history and still
-removes the prefix of a library that no longer exists, and every
-`gc.audit_interval_hours` one pass becomes a full audit, so a crashed upload's
-blocks are still collected eventually. An upload's blocks are recorded when they
-are written, so a restart in the middle of an upload no longer hides them from the
-next pass; they are swept once `gc.pending_ttl_hours` has passed without a commit.
+removes the prefix of a library that no longer exists, and each library is fully
+audited every `gc.audit_interval_hours` — a pass audits the libraries whose turn has
+come — so a crashed upload's blocks are still collected eventually. An upload's
+blocks are recorded when they are written, so a restart in the middle of an upload
+no longer hides them from the next pass; they are swept once
+`gc.pending_ttl_hours` has passed without a commit.
 A library with write activity in the last hour is skipped for that pass — the
 scheduled job and a manual `nanofile gc` both read the upload ledger for that
 signal, so a separate process applies the same protection. One library whose

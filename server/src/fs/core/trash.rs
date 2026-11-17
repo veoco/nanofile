@@ -1052,6 +1052,19 @@ pub async fn purge_deleted_repo(
     repos.deleted_repo.delete_by_id(repo_id).await?;
     remove_repo_block_dir(block_store, &trashed.repo_id).await;
 
+    // The library is gone for good, so its per-library audit schedule has no owner
+    // left. Best effort: a leftover row is harmless.
+    if let Err(e) = repos
+        .gc_state
+        .delete(&crate::repository::gc_state::audit_key(&trashed.repo_id))
+        .await
+    {
+        tracing::warn!(
+            repo_id = %trashed.repo_id,
+            "could not drop the purged library's audit row: {e}"
+        );
+    }
+
     tracing::info!(repo_id = %trashed.repo_id, "purged a library from the trash");
     Ok(())
 }

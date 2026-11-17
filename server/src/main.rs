@@ -661,6 +661,13 @@ fn main() -> anyhow::Result<()> {
                 let mut policy = server::fs::core::gc::GcPolicy::new(config.gc.min_block_age_secs);
                 policy.dry_run = dry_run;
                 policy.pending_ttl_secs = config.gc.pending_ttl_hours.saturating_mul(3600);
+                // The configured mode is this run's default; `--mode` overrides it. The
+                // fallback is the safe plan (audit), never the cheap one, in case the
+                // configuration was not validated on this path.
+                policy.mode = match config.gc.mode.trim().to_ascii_lowercase().as_str() {
+                    "incremental" => server::fs::core::gc::GcMode::Incremental,
+                    _ => server::fs::core::gc::GcMode::Audit,
+                };
                 if let Some(mode) = mode {
                     policy.mode = match mode.trim().to_ascii_lowercase().as_str() {
                         "audit" => server::fs::core::gc::GcMode::Audit,
@@ -684,14 +691,18 @@ fn main() -> anyhow::Result<()> {
                 )
                 .await?;
                 println!("{}", if dry_run { "would remove:" } else { "removed:" });
-                println!(
-                    "  scan mode:            {}",
-                    if report.audited {
-                        "audit"
-                    } else {
-                        "incremental"
-                    }
-                );
+                // A library has its own audit schedule, so one pass can audit some
+                // libraries and prune others incrementally.
+                let scan_mode = match (report.audited_repos, report.incremental_repos) {
+                    (0, 0) => match policy.mode {
+                        server::fs::core::gc::GcMode::Audit => "audit",
+                        server::fs::core::gc::GcMode::Incremental => "incremental",
+                    },
+                    (0, _) => "incremental",
+                    (_, 0) => "audit",
+                    _ => "mixed",
+                };
+                println!("  scan mode:            {scan_mode}");
                 println!("  pruned objects:       {}", report.pruned_objects);
                 println!("  deleted blocks:       {}", report.deleted_blocks);
                 println!("  expired pending:      {}", report.expired_pending);
@@ -700,6 +711,7 @@ fn main() -> anyhow::Result<()> {
                 println!("  skipped (busy):       {}", report.busy_repos);
                 println!("  skipped (failed):     {}", report.failed_repos);
                 println!("  skipped (incomplete): {}", report.incomplete_repos);
+                println!("  skipped (head moved): {}", report.moved_repos);
                 anyhow::Ok(())
             })
         }

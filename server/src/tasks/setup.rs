@@ -487,6 +487,12 @@ pub fn install_default_jobs(
                                 report.incomplete_repos
                             ));
                         }
+                        if report.moved_repos > 0 {
+                            message.push_str(&format!(
+                                "; {} libraries changed during the pass",
+                                report.moved_repos
+                            ));
+                        }
                         Ok(Outcome::success(message, (removed > 0).then_some(removed)))
                     }
                 }
