@@ -48,17 +48,28 @@ pub fn helper_runs() -> bool {
         .unwrap_or(false)
 }
 
-/// Whether the helper can decode this file at all.
+/// Whether the helper can bind and run the HEIF tile-grid graph.
 ///
-/// A helper that predates HEIF support (the Linux CI image's ffmpeg) answers
-/// false; a test for a format the product never claimed to read skips instead
-/// of failing on the decode. A helper that decodes the file but produces a
-/// tile still runs the caller's assertions.
-pub fn helper_decodes(path: &Path) -> bool {
+/// A helper that predates `TILE_GRID` stream groups (the Linux CI image's
+/// ffmpeg 6.1) still reads a HEIC, but presents only its first tile as a
+/// single video stream; the `[0:g:0]` input then fails to bind. Running the
+/// graph is the capability test: the product cannot assemble a grid the helper
+/// cannot expose, so the tiled-grid tests skip there.
+pub fn helper_exposes_tile_grid(path: &Path) -> bool {
     Command::new(helper())
-        .args(["-v", "error", "-i"])
+        .args(["-y", "-loglevel", "error", "-hide_banner", "-i"])
         .arg(path)
-        .args(["-frames:v", "1", "-f", "null", "-"])
+        .args([
+            "-filter_complex",
+            "[0:g:0]scale=min(1024\\,iw):-2[frame]",
+            "-map",
+            "[frame]",
+            "-frames:v",
+            "1",
+            "-f",
+            "null",
+            "-",
+        ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()

@@ -8,7 +8,8 @@ It exists because a phone HEIC is usually a **grid** image, and FFmpeg exposes
 the grid as a `TILE_GRID` stream group rather than a single video stream. A
 simple `-vf` chain is then rejected ("stream fed from a complex filtergraph"),
 and on versions that accept it, the chain can return only the first tile. The
-fixture makes both failures visible in one small file.
+fixture makes both failures visible in one small file. FFmpeg 6.1 is the second
+case: it reads one tile and exposes no stream group, so the tests skip there.
 
 The file was encoded with libheif 1.23.7 (`heif_context_add_grid_image` plus
 `heif_context_add_image_tile`, HEVC, quality 80). The tiles are 64 px because a

@@ -765,19 +765,30 @@ mod tests {
         )
         .expect("write the tiled HEIC fixture");
         let helper = Path::new("ffmpeg");
-        if !Command::new(helper)
-            .args(["-v", "error", "-i"])
-            .arg(&source)
-            .args(["-frames:v", "1", "-f", "null", "-"])
+        let mut probe = frame_command(
+            helper,
+            Kind::Image,
+            &source,
+            frame_attempts(Kind::Image)[0],
+            THUMBNAIL_MAX_EDGE,
+        );
+        probe
+            .arg("-f")
+            .arg("null")
+            .arg("-")
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        let group_runs = probe
             .status()
             .map(|status| status.success())
-            .unwrap_or(false)
-        {
-            // A helper that predates HEIF support: the integration test skips
-            // the same way.
-            eprintln!("{} cannot decode tiled HEIC; skipping", helper.display());
+            .unwrap_or(false);
+        if !group_runs {
+            // FFmpeg 6.1 reads only the first tile and has no group to
+            // assemble; the integration test skips the same capability gap.
+            eprintln!(
+                "{} cannot run the tile-grid graph; skipping",
+                helper.display()
+            );
             return;
         }
 

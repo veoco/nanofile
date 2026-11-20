@@ -9,7 +9,8 @@ use crate::common;
 
 use common::TestFixture;
 use common::sandbox::{
-    generate_clip, generate_large_clip, helper, helper_decodes, helper_runs, without_ffmpeg,
+    generate_clip, generate_large_clip, helper, helper_exposes_tile_grid, helper_runs,
+    without_ffmpeg,
 };
 use image::GenericImageView;
 
@@ -124,11 +125,11 @@ async fn a_tiled_heic_thumbnail_is_the_whole_image() {
         without_ffmpeg();
         return;
     }
-    if !helper_decodes(&fixture) {
-        // The Linux CI image's ffmpeg predates HEIF support; the Windows and
-        // macOS runners use a helper that can read this fixture.
+    if !helper_exposes_tile_grid(&fixture) {
+        // The Linux CI image's ffmpeg 6.1 has no TILE_GRID stream group and
+        // would hand back one tile; Windows and macOS use a newer helper.
         eprintln!(
-            "{} cannot decode tiled HEIC; skipping the whole-image test",
+            "{} exposes no tile grid for this HEIC; skipping the whole-image test",
             helper()
         );
         return;
