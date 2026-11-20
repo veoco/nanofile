@@ -48,6 +48,24 @@ pub fn helper_runs() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the helper can decode this file at all.
+///
+/// A helper that predates HEIF support (the Linux CI image's ffmpeg) answers
+/// false; a test for a format the product never claimed to read skips instead
+/// of failing on the decode. A helper that decodes the file but produces a
+/// tile still runs the caller's assertions.
+pub fn helper_decodes(path: &Path) -> bool {
+    Command::new(helper())
+        .args(["-v", "error", "-i"])
+        .arg(path)
+        .args(["-frames:v", "1", "-f", "null", "-"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 /// Skip the test on a development host, fail it on CI: a green suite that never ran
 /// the media pipeline is the failure these tests exist to catch.
 pub fn without_ffmpeg() {

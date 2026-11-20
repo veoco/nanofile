@@ -280,40 +280,127 @@ impl FrameError {
     }
 }
 
-/// Run the helper once and hand back the PNG frame it wrote to stdout.
-pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec<u8>, FrameError> {
-    // Video is tried a second in before the first frame; a short clip has no
-    // second to seek to, and that attempt failing is not a refusal.
-    let attempts: Vec<Option<&str>> = match kind {
-        Kind::Video => vec![Some("1"), None],
-        Kind::Audio | Kind::Image | Kind::Still => vec![None],
-    };
+/// Which filter chain a frame attempt uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Filter {
+    /// The `-vf` chain for a single video stream, and the fallback for a still
+    /// image whose container has no stream group.
+    Simple,
+    /// The graph that assembles a HEIF/AVIF tile grid. FFmpeg exposes the grid
+    /// as a stream group, so only this input reaches the whole image: a simple
+    /// `-vf` chain is rejected once FFmpeg has inserted its own complex graph,
+    /// and on versions that do not reject it, it can return just one tile.
+    TileGrid,
+}
 
-    let mut last = String::from("ffmpeg produced no frame");
-    for seek in attempts {
-        let mut command = helper_command(helper);
-        command
-            .arg("-y")
-            .arg("-loglevel")
-            .arg("error")
-            .arg("-hide_banner");
-        if let Some(seek) = seek {
-            command.arg("-ss").arg(seek);
+/// One way to ask the helper for a frame.
+#[derive(Debug, Clone, Copy)]
+struct FrameAttempt {
+    /// The `-ss` value, for video's one-second-in retry.
+    seek: Option<&'static str>,
+    filter: Filter,
+}
+
+/// The long edge a thumbnail frame is fitted to before the in-process encoder.
+const THUMBNAIL_MAX_EDGE: u32 = 1024;
+
+static VIDEO_ATTEMPTS: [FrameAttempt; 2] = [
+    FrameAttempt {
+        seek: Some("1"),
+        filter: Filter::Simple,
+    },
+    FrameAttempt {
+        seek: None,
+        filter: Filter::Simple,
+    },
+];
+
+static AUDIO_ATTEMPTS: [FrameAttempt; 1] = [FrameAttempt {
+    seek: None,
+    filter: Filter::Simple,
+}];
+
+/// Still images try the tile-grid graph before the simple chain.
+///
+/// A tiled HEIC is only reachable through its stream group; on FFmpeg 9 the
+/// simple chain is rejected, and on older versions it can yield one tile. A
+/// single-stream image fails the group input immediately ("no such stream
+/// group") and the simple chain below still runs, so the order is safe for
+/// AVIF and for HEIC files without a grid.
+static STILL_IMAGE_ATTEMPTS: [FrameAttempt; 2] = [
+    FrameAttempt {
+        seek: None,
+        filter: Filter::TileGrid,
+    },
+    FrameAttempt {
+        seek: None,
+        filter: Filter::Simple,
+    },
+];
+
+fn frame_attempts(kind: Kind) -> &'static [FrameAttempt] {
+    match kind {
+        Kind::Video => &VIDEO_ATTEMPTS,
+        Kind::Audio => &AUDIO_ATTEMPTS,
+        Kind::Image | Kind::Still => &STILL_IMAGE_ATTEMPTS,
+    }
+}
+
+/// Build the helper command for one attempt, without its output format.
+///
+/// `size` is the long edge the filter fits: [`THUMBNAIL_MAX_EDGE`] for a
+/// thumbnail, [`STILL_MAX_EDGE`] for the detector's still. Both filter chains
+/// use the same scale expression; only the way FFmpeg receives the stream
+/// differs.
+fn frame_command(
+    helper: &Path,
+    kind: Kind,
+    source: &Path,
+    attempt: FrameAttempt,
+    size: u32,
+) -> Command {
+    let mut command = helper_command(helper);
+    command
+        .arg("-y")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-hide_banner");
+    if let Some(seek) = attempt.seek {
+        command.arg("-ss").arg(seek);
+    }
+    command.arg("-i").arg(source);
+    if kind == Kind::Audio {
+        command.arg("-map").arg("0:v:0");
+    }
+    command
+        .arg("-frames:v")
+        .arg("1")
+        // One frame, one thread: frame threading asks for more than the child's limits leave.
+        .arg("-threads")
+        .arg("1")
+        .arg("-filter_threads")
+        .arg("1");
+    match attempt.filter {
+        Filter::Simple => {
+            command.arg("-vf").arg(format!("scale=min({size}\\,iw):-2"));
         }
-        command.arg("-i").arg(source);
-        if kind == Kind::Audio {
-            command.arg("-map").arg("0:v:0");
+        Filter::TileGrid => {
+            command
+                .arg("-filter_complex")
+                .arg(format!("[0:g:0]scale=min({size}\\,iw):-2[frame]"))
+                .arg("-map")
+                .arg("[frame]");
         }
+    }
+    command
+}
+
+/// Run the helper through the kind's attempts and hand back the PNG frame.
+pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec<u8>, FrameError> {
+    let mut failures = Vec::new();
+    for attempt in frame_attempts(kind) {
+        let mut command = frame_command(helper, kind, source, *attempt, THUMBNAIL_MAX_EDGE);
         command
-            .arg("-frames:v")
-            .arg("1")
-            // One frame, one thread: frame threading asks for more than the child's limits leave.
-            .arg("-threads")
-            .arg("1")
-            .arg("-filter_threads")
-            .arg("1")
-            .arg("-vf")
-            .arg("scale=min(1024\\,iw):-2")
             .arg("-f")
             .arg("image2")
             .arg("-c:v")
@@ -323,10 +410,22 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
             Ok(bytes) => return Ok(bytes),
             // The environment is the same answer for the next attempt.
             Err(FrameError::Unavailable(why)) => return Err(FrameError::Unavailable(why)),
-            Err(FrameError::Failed(why)) => last = why,
+            Err(FrameError::Failed(why)) => failures.push(why),
         }
     }
-    Err(FrameError::Failed(last))
+    let message = match kind {
+        // Keep both reasons: the group graph's failure is the one that matters
+        // for a tiled image, the simple chain's for a single-stream one.
+        Kind::Image | Kind::Still => failures.join("; "),
+        // Video's second attempt is the first frame, the fallback the current
+        // error has always reported.
+        Kind::Video | Kind::Audio => failures.pop().unwrap_or_default(),
+    };
+    Err(FrameError::Failed(if message.is_empty() {
+        "ffmpeg produced no frame".to_string()
+    } else {
+        message
+    }))
 }
 
 /// Decode one still for the detector: no thumbnail resize, a JPEG, and a ceiling the
@@ -335,30 +434,28 @@ pub(crate) fn grab_frame(helper: &Path, kind: Kind, source: &Path) -> Result<Vec
 /// The scale filter keeps a very large photo inside [`STILL_MAX_EDGE`]; the detector
 /// sees the decoded image as its source, so that bound is part of the tag's meaning.
 fn still_frame(helper: &Path, source: &Path) -> Result<Vec<u8>, FrameError> {
-    let mut command = helper_command(helper);
-    command
-        .arg("-y")
-        .arg("-loglevel")
-        .arg("error")
-        .arg("-hide_banner")
-        .arg("-i")
-        .arg(source)
-        .arg("-frames:v")
-        .arg("1")
-        .arg("-threads")
-        .arg("1")
-        .arg("-filter_threads")
-        .arg("1")
-        .arg("-vf")
-        .arg(format!("scale=min({STILL_MAX_EDGE}\\,iw):-2"))
-        .arg("-f")
-        .arg("image2pipe")
-        .arg("-c:v")
-        .arg("mjpeg")
-        .arg("-q:v")
-        .arg("3")
-        .arg("pipe:1");
-    run_capped(&mut command, MAX_STILL_BYTES)
+    let mut failures = Vec::new();
+    for attempt in frame_attempts(Kind::Still) {
+        let mut command = frame_command(helper, Kind::Still, source, *attempt, STILL_MAX_EDGE);
+        command
+            .arg("-f")
+            .arg("image2pipe")
+            .arg("-c:v")
+            .arg("mjpeg")
+            .arg("-q:v")
+            .arg("3")
+            .arg("pipe:1");
+        match run_capped(&mut command, MAX_STILL_BYTES) {
+            Ok(bytes) => return Ok(bytes),
+            Err(FrameError::Unavailable(why)) => return Err(FrameError::Unavailable(why)),
+            Err(FrameError::Failed(why)) => failures.push(why),
+        }
+    }
+    Err(FrameError::Failed(if failures.is_empty() {
+        "ffmpeg produced no frame".to_string()
+    } else {
+        failures.join("; ")
+    }))
 }
 
 /// Start the helper with the standard stream setup and collect a bounded stdout.
@@ -542,6 +639,87 @@ mod tests {
         assert_eq!(Kind::from_byte(b'?'), None);
     }
 
+    /// The tile-grid graph comes first for both still-image kinds: a tiled HEIC
+    /// is rejected by the simple chain on FFmpeg 9 and can yield one tile on
+    /// versions that accept it, so the order is the fix, not just a fallback.
+    #[test]
+    fn still_images_try_the_tile_grid_graph_first() {
+        for kind in [Kind::Image, Kind::Still] {
+            let attempts = frame_attempts(kind);
+            assert_eq!(attempts.len(), 2);
+            assert_eq!(attempts[0].filter, Filter::TileGrid);
+            assert_eq!(attempts[0].seek, None);
+            assert_eq!(attempts[1].filter, Filter::Simple);
+            assert_eq!(attempts[1].seek, None);
+        }
+    }
+
+    /// Video keeps its seek-then-first-frame pair, and audio keeps its one
+    /// cover-art attempt. Neither has a tile grid to assemble.
+    #[test]
+    fn video_and_audio_keep_the_simple_chain() {
+        let video = frame_attempts(Kind::Video);
+        assert_eq!(video.len(), 2);
+        assert_eq!(video[0].seek, Some("1"));
+        assert_eq!(video[1].seek, None);
+        assert!(video.iter().all(|attempt| attempt.filter == Filter::Simple));
+
+        let audio = frame_attempts(Kind::Audio);
+        assert_eq!(audio.len(), 1);
+        assert_eq!(audio[0].filter, Filter::Simple);
+        assert_eq!(audio[0].seek, None);
+    }
+
+    /// The group attempt is a complex graph: no `-vf`, and the scaled output is
+    /// the mapped one. That is what lets FFmpeg assemble the grid itself.
+    #[test]
+    fn a_tile_grid_attempt_maps_the_group_graph() {
+        let attempt = frame_attempts(Kind::Image)[0];
+        let command = frame_command(
+            Path::new("ffmpeg"),
+            Kind::Image,
+            Path::new("source.bin"),
+            attempt,
+            THUMBNAIL_MAX_EDGE,
+        );
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.iter().any(|arg| arg == "-vf"));
+        assert!(args.iter().any(|arg| arg == "-filter_complex"));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "-map" && pair[1] == "[frame]"),
+            "the graph's output must be the mapped stream: {args:?}"
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "[0:g:0]scale=min(1024\\,iw):-2[frame]"),
+            "the group input must carry the scale: {args:?}"
+        );
+    }
+
+    /// The fallback remains the simple chain, so a single-stream image does not
+    /// pay for the group graph after it fails.
+    #[test]
+    fn a_simple_attempt_keeps_the_vf_chain() {
+        let attempt = frame_attempts(Kind::Image)[1];
+        let command = frame_command(
+            Path::new("ffmpeg"),
+            Kind::Image,
+            Path::new("source.bin"),
+            attempt,
+            THUMBNAIL_MAX_EDGE,
+        );
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.iter().any(|arg| arg == "-vf"));
+        assert!(!args.iter().any(|arg| arg == "-filter_complex"));
+    }
+
     /// The detector's source: a JPEG, at the still's own edge, decoded by the helper
     /// under the media profile rather than by the server.
     #[test]
@@ -572,6 +750,44 @@ mod tests {
         assert_eq!(&frame[..2], &[0xFF, 0xD8], "a still is a JPEG");
         let decoded = image::load_from_memory(&frame).expect("the still decodes");
         assert_eq!((decoded.width(), decoded.height()), (64, 32));
+    }
+
+    /// A tiled HEIC decodes as the whole 192×128 grid, not its first 64×64
+    /// tile. This runs the worker call directly, so it does not need the
+    /// sandbox; the integration test measures the same fixture over HTTP.
+    #[test]
+    fn a_tiled_heic_frame_is_the_whole_grid() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("tiled.heic");
+        std::fs::write(
+            &source,
+            include_bytes!("../../../tests/fixtures/media/tiled.heic"),
+        )
+        .expect("write the tiled HEIC fixture");
+        let helper = Path::new("ffmpeg");
+        if !Command::new(helper)
+            .args(["-v", "error", "-i"])
+            .arg(&source)
+            .args(["-frames:v", "1", "-f", "null", "-"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+        {
+            // A helper that predates HEIF support: the integration test skips
+            // the same way.
+            eprintln!("{} cannot decode tiled HEIC; skipping", helper.display());
+            return;
+        }
+
+        let frame = grab_frame(helper, Kind::Image, &source).expect("the tiled HEIC must decode");
+        let decoded = image::load_from_memory(&frame).expect("the frame is an image");
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (192, 128),
+            "the whole grid, not one 64x64 tile"
+        );
     }
 
     #[test]

@@ -8,7 +8,10 @@
 use crate::common;
 
 use common::TestFixture;
-use common::sandbox::{generate_clip, generate_large_clip, helper, helper_runs, without_ffmpeg};
+use common::sandbox::{
+    generate_clip, generate_large_clip, helper, helper_decodes, helper_runs, without_ffmpeg,
+};
+use image::GenericImageView;
 
 /// The media profile confines itself, decodes under the confinement, and starts
 /// the helper it is granted.
@@ -105,6 +108,65 @@ async fn a_video_thumbnail_is_generated_in_the_sandbox() {
         (decoded.width(), decoded.height()),
         (48, 36),
         "a 320x240 clip fits a 48px box at 48x36"
+    );
+}
+
+/// A HEIC whose image is a HEIF tile grid (the shape an iPhone writes) gets a
+/// whole-image thumbnail, not one tile. FFmpeg exposes the grid as a stream
+/// group and rejects a simple `-vf` chain, so the worker must assemble it.
+#[tokio::test]
+async fn a_tiled_heic_thumbnail_is_the_whole_image() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let fixture = dir.path().join("tiled.heic");
+    std::fs::write(&fixture, include_bytes!("fixtures/media/tiled.heic"))
+        .expect("write the tiled HEIC fixture");
+    if !helper_runs() {
+        without_ffmpeg();
+        return;
+    }
+    if !helper_decodes(&fixture) {
+        // The Linux CI image's ffmpeg predates HEIF support; the Windows and
+        // macOS runners use a helper that can read this fixture.
+        eprintln!(
+            "{} cannot decode tiled HEIC; skipping the whole-image test",
+            helper()
+        );
+        return;
+    }
+
+    let f = TestFixture::new_with_media_helper(helper()).await;
+    let bytes = std::fs::read(&fixture).expect("read the fixture");
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "tiled.heic", &bytes)
+        .await;
+    assert!(resp.status().is_success(), "upload should succeed");
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/thumbnail/?p=/tiled.heic&size=48", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "a tiled HEIC must get a thumbnail");
+    let data = resp.bytes().await.expect("bytes");
+    let decoded = image::load_from_memory(&data).expect("the reply is an image");
+    assert_eq!(
+        (decoded.width(), decoded.height()),
+        (48, 32),
+        "the 192x128 grid must fit a 48px box at 48x32, not one 64x64 tile at 48x48"
+    );
+
+    // The fixture is three coloured columns; a thumbnail of one tile would be a
+    // single flat colour. Sampling the columns proves the grid was assembled.
+    let left = decoded.get_pixel(4, 16).0;
+    let right = decoded.get_pixel(44, 16).0;
+    assert!(
+        left[0].abs_diff(right[0]) > 40
+            || left[1].abs_diff(right[1]) > 40
+            || left[2].abs_diff(right[2]) > 40,
+        "the thumbnail must span more than one tile: left={left:?} right={right:?}"
     );
 }
 
