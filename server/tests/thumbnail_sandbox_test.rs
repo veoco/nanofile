@@ -9,7 +9,7 @@ use crate::common;
 
 use common::TestFixture;
 use common::sandbox::{
-    generate_clip, generate_large_clip, helper, helper_exposes_tile_grid, helper_runs,
+    generate_clip, generate_large_clip, helper, helper_runs, tile_grid_frame_dimensions,
     without_ffmpeg,
 };
 use image::GenericImageView;
@@ -125,14 +125,25 @@ async fn a_tiled_heic_thumbnail_is_the_whole_image() {
         without_ffmpeg();
         return;
     }
-    if !helper_exposes_tile_grid(&fixture) {
-        // The Linux CI image's ffmpeg 6.1 has no TILE_GRID stream group and
-        // would hand back one tile; Windows and macOS use a newer helper.
-        eprintln!(
-            "{} exposes no tile grid for this HEIC; skipping the whole-image test",
-            helper()
-        );
-        return;
+    let full_grid = (192, 128);
+    match tile_grid_frame_dimensions(&fixture) {
+        Some(dimensions) if dimensions == full_grid => {}
+        Some((width, height)) => {
+            // The Linux CI image's ffmpeg 6.1 assembles one 64x64 tile instead
+            // of the grid; Windows and macOS use a newer helper.
+            eprintln!(
+                "{} assembles {width}x{height}, not the full 192x128 grid; skipping",
+                helper()
+            );
+            return;
+        }
+        None => {
+            eprintln!(
+                "{} cannot run the tile-grid graph; skipping the whole-image test",
+                helper()
+            );
+            return;
+        }
     }
 
     let f = TestFixture::new_with_media_helper(helper()).await;

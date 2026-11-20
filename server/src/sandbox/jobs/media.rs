@@ -752,6 +752,35 @@ mod tests {
         assert_eq!((decoded.width(), decoded.height()), (64, 32));
     }
 
+    /// The dimensions the tile-grid graph produces for `source`, if any. A
+    /// helper that predates `TILE_GRID` (FFmpeg 6.1) yields one tile here; the
+    /// caller treats that as a capability gap, not as the product's answer.
+    fn group_frame_dimensions(helper: &Path, source: &Path) -> Option<(u32, u32)> {
+        let dir = tempfile::tempdir().ok()?;
+        let output = dir.path().join("frame.png");
+        let mut command = frame_command(
+            helper,
+            Kind::Image,
+            source,
+            frame_attempts(Kind::Image)[0],
+            THUMBNAIL_MAX_EDGE,
+        );
+        command
+            .arg("-f")
+            .arg("image2")
+            .arg("-c:v")
+            .arg("png")
+            .arg(&output)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if !command.status().ok()?.success() {
+            return None;
+        }
+        let bytes = std::fs::read(&output).ok()?;
+        let image = image::load_from_memory(&bytes).ok()?;
+        Some((image.width(), image.height()))
+    }
+
     /// A tiled HEIC decodes as the whole 192×128 grid, not its first 64×64
     /// tile. This runs the worker call directly, so it does not need the
     /// sandbox; the integration test measures the same fixture over HTTP.
@@ -765,31 +794,22 @@ mod tests {
         )
         .expect("write the tiled HEIC fixture");
         let helper = Path::new("ffmpeg");
-        let mut probe = frame_command(
-            helper,
-            Kind::Image,
-            &source,
-            frame_attempts(Kind::Image)[0],
-            THUMBNAIL_MAX_EDGE,
-        );
-        probe
-            .arg("-f")
-            .arg("null")
-            .arg("-")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let group_runs = probe
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
-        if !group_runs {
-            // FFmpeg 6.1 reads only the first tile and has no group to
-            // assemble; the integration test skips the same capability gap.
-            eprintln!(
-                "{} cannot run the tile-grid graph; skipping",
-                helper.display()
-            );
-            return;
+        match group_frame_dimensions(helper, &source) {
+            Some((192, 128)) => {}
+            Some((width, height)) => {
+                eprintln!(
+                    "{} assembles {width}x{height}, not the full 192x128 grid; skipping",
+                    helper.display()
+                );
+                return;
+            }
+            None => {
+                eprintln!(
+                    "{} cannot run the tile-grid graph; skipping",
+                    helper.display()
+                );
+                return;
+            }
         }
 
         let frame = grab_frame(helper, Kind::Image, &source).expect("the tiled HEIC must decode");

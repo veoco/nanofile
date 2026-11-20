@@ -48,15 +48,17 @@ pub fn helper_runs() -> bool {
         .unwrap_or(false)
 }
 
-/// Whether the helper can bind and run the HEIF tile-grid graph.
+/// The dimensions the tile-grid graph produces for `path`, if it produces one.
 ///
 /// A helper that predates `TILE_GRID` stream groups (the Linux CI image's
-/// ffmpeg 6.1) still reads a HEIC, but presents only its first tile as a
-/// single video stream; the `[0:g:0]` input then fails to bind. Running the
-/// graph is the capability test: the product cannot assemble a grid the helper
-/// cannot expose, so the tiled-grid tests skip there.
-pub fn helper_exposes_tile_grid(path: &Path) -> bool {
-    Command::new(helper())
+/// ffmpeg 6.1) still reads a HEIC, but the group graph yields one tile rather
+/// than the whole grid. The caller compares the result with the fixture's full
+/// size: a tile is a capability gap to skip, while the full size is what the
+/// thumbnail assertions then measure.
+pub fn tile_grid_frame_dimensions(path: &Path) -> Option<(u32, u32)> {
+    let dir = tempfile::tempdir().ok()?;
+    let output = dir.path().join("frame.png");
+    let status = Command::new(helper())
         .args(["-y", "-loglevel", "error", "-hide_banner", "-i"])
         .arg(path)
         .args([
@@ -67,14 +69,20 @@ pub fn helper_exposes_tile_grid(path: &Path) -> bool {
             "-frames:v",
             "1",
             "-f",
-            "null",
-            "-",
+            "image2",
+            "-c:v",
+            "png",
         ])
+        .arg(&output)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+        .status();
+    if !status.ok()?.success() {
+        return None;
+    }
+    let bytes = std::fs::read(&output).ok()?;
+    let image = image::load_from_memory(&bytes).ok()?;
+    Some((image.width(), image.height()))
 }
 
 /// Skip the test on a development host, fail it on CI: a green suite that never ran
