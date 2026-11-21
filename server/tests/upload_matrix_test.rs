@@ -916,8 +916,7 @@ async fn v1_file_upload_streams_and_rejects_chunks() {
     assert_eq!(resp.status(), 400, "Content-Range must be rejected");
 
     // A multipart body with fields but no `file` part: what a client that lost
-    // the file sends. (A body with no parts at all has no boundary, which is a
-    // malformed request and not part of this matrix.)
+    // the file sends.
     let resp = f
         .client
         .post_multipart(
@@ -932,4 +931,19 @@ async fn v1_file_upload_streams_and_rejects_chunks() {
         status, 400,
         "a missing file part must be a 400, body: {body}"
     );
+
+    // A `multipart/form-data` body without a boundary is malformed; it must not
+    // surface as a 500 from the boundary parser.
+    let resp = bare
+        .post(format!(
+            "{}/api2/repos/{}/file/?p=/noboundary.txt",
+            f.server.base_url, f.repo_id
+        ))
+        .bearer_auth(&f.api_token)
+        .header("content-type", "multipart/form-data")
+        .body("not a multipart body")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "a missing boundary must be a 400");
 }
