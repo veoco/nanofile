@@ -78,6 +78,7 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET",    "/api2/repos/{repo_id}/upload-link/"),
     ("GET",    "/api2/repos/{repo_id}/update-link/"),
     ("GET",    "/api2/repos/{repo_id}/upload-blks-link/"),
+    ("POST",   "/api2/repos/{repo_id}/upload-blks-link/"),
     ("GET",    "/api2/repos/{repo_id}/update-blks-link/"),
     ("GET",    "/api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/"),
     ("POST",   "/api2/repos/{repo_id}/fileops/delete/"),

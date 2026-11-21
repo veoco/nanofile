@@ -260,6 +260,25 @@ Returns the URL for the chunked block upload endpoints used by the mobile
 clients (`/upload-blks-api/<token>`). Encrypted libraries refuse it. Requires
 write permission and `file.write`.
 
+### Mobile block handshake {#post-api2-repos-repo-id-upload-blks-link}
+
+`POST /api2/repos/{repo_id}/upload-blks-link/?p=<dir>`
+
+The iOS large-file flow. The body is a form with `blklist`, a comma-separated
+list of the client's block ids; the answer tells it which blocks this server
+still needs and gives it the two URLs bound to one short-lived token:
+
+```json
+{
+  "rawblksurl": "http://…/upload-raw-blks-api/<token>",
+  "commiturl": "http://…/upload-blks-api/<token>?commitonly=true&ret-json=true",
+  "blklist": ["…"]
+}
+```
+
+Requires write permission and `file.write`; malformed block ids are rejected
+with `400`.
+
 ## Update blocks link {#get-api2-repos-repo-id-update-blks-link}
 
 `GET /api2/repos/{repo_id}/update-blks-link/?p=<dir>`

@@ -20,7 +20,7 @@ endpoint's page and collected on the compatibility page.
 | `/seafhttp/` | The sync protocol between a client daemon and the server. See [Sync protocol](/reference/api/sync). |
 | `/dav/{repo_id}/` | WebDAV. See [WebDAV](/reference/api/webdav). |
 | `/notification` | The WebSocket the clients subscribe to for library updates. See [Notification WebSocket](/reference/api/notification). |
-| `/upload-aj/`, `/upload-api/`, `/upload-blks-api/`, `/update-aj/`, `/update-api/`, `/update-blks-api/`, `/download-api/`, `/blks/`, `/zip/`, `/repos/{repo_id}/files/` | Transfers. These are the URLs the API returns or the web interface calls; see [Uploads and downloads](/reference/api/transfers). |
+| `/upload-aj/`, `/upload-api/`, `/upload-blks-api/`, `/upload-raw-blks-api/`, `/update-aj/`, `/update-api/`, `/update-blks-api/`, `/download-api/`, `/blks/`, `/zip/`, `/repos/{repo_id}/files/` | Transfers. These are the URLs the API returns or the web interface calls; see [Uploads and downloads](/reference/api/transfers). |
 | `/health` | Operational health probe; answers `200` with the process generation header. Not part of the API. |
 
 `GET /api2/server-info/` reports the Seafile version this server advertises

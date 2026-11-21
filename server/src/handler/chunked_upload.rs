@@ -3,7 +3,9 @@ use axum::{
     extract::{Query, State},
     http::HeaderMap,
 };
+use futures::stream::{self, StreamExt};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -19,7 +21,7 @@ pub fn chunked_upload_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
             "/{repo_id}/upload-blks-link/",
-            axum::routing::get(upload_blks_link),
+            axum::routing::get(upload_blks_link).post(upload_blks_link_post),
         )
         .route(
             "/{repo_id}/update-blks-link/",
@@ -51,6 +53,90 @@ pub async fn upload_blks_link(
     let url = build_blks_op_url(&state, "upload-blks-api", &token, &headers);
 
     Ok(Json(url))
+}
+
+/// `POST /api2/repos/{repo_id}/upload-blks-link/` — the mobile clients' first
+/// call for a block upload (iOS `SeafUploadOperation.uploadLargeFileByBlocks`).
+///
+/// The body is `application/x-www-form-urlencoded` with `blklist`, a
+/// comma-separated list of the client's block ids. The answer names the blocks
+/// this server is missing and hands out the raw-block URL and the commit URL,
+/// both bound to the same short-lived token.
+pub async fn upload_blks_link_post(
+    access: RepoPathWrite,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<BlksLinkQuery>,
+    body: axum::body::Body,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Mints capability URLs for a multi-request upload, so a cookie session
+    // needs the same CSRF guard as the GET link; bearer callers are exempt.
+    crate::middleware::require_csrf_for_cookie_session(&headers, &state.csrf_secret)?;
+
+    let parent_dir = query.p.as_deref().unwrap_or("/");
+    let repo_id = &access.repo_id;
+    ensure_not_encrypted(&state, repo_id).await?;
+
+    let bytes =
+        crate::handler::read_body_limited(body, crate::handler::MAX_SMALL_BODY_BYTES).await?;
+    let form: HashMap<String, String> = serde_urlencoded::from_bytes(&bytes)
+        .map_err(|_| AppError::BadRequest("invalid form data".into()))?;
+    let requested: Vec<String> = form
+        .get("blklist")
+        .map(|list| {
+            list.split(',')
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // These ids are replayed into an fs object at commit time; reject a
+    // malformed one before it reaches the store or that list.
+    if let Some(bad) = requested
+        .iter()
+        .find(|id| !crate::handler::is_valid_block_id(id))
+    {
+        return Err(AppError::BadRequest(format!("invalid block id: {bad}")));
+    }
+
+    let store = state.block_store.clone();
+    let missing: Vec<String> = stream::iter(requested)
+        .map(|id| {
+            let store = store.clone();
+            let repo_id = repo_id.clone();
+            async move {
+                if store.has_block(&repo_id, &id).await {
+                    None
+                } else {
+                    Some(id)
+                }
+            }
+        })
+        .buffered(16)
+        .filter_map(|id| async move { id })
+        .collect()
+        .await;
+
+    let token = state.token_manager.generate(
+        repo_id,
+        access.user.user_id,
+        &access.user.email,
+        "upload-blks",
+        parent_dir,
+    );
+    let raw_url = build_blks_op_url(&state, "upload-raw-blks-api", &token, &headers);
+    let commit_url = format!(
+        "{}?commitonly=true&ret-json=true",
+        build_blks_op_url(&state, "upload-blks-api", &token, &headers)
+    );
+
+    Ok(Json(serde_json::json!({
+        "rawblksurl": raw_url,
+        "commiturl": commit_url,
+        "blklist": missing,
+    })))
 }
 
 pub async fn update_blks_link(

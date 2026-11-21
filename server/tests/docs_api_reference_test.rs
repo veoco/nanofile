@@ -224,6 +224,7 @@ fn transfer_endpoints_are_documented() {
         ("POST", "/update-aj/"),
         ("POST", "/update-api/"),
         ("POST", "/upload-blks-api/{token}"),
+        ("POST", "/upload-raw-blks-api/{token}"),
         ("POST", "/update-blks-api/{token}"),
         ("GET", "/upload_progress"),
         ("GET", "/idx_progress"),

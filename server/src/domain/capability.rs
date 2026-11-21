@@ -814,6 +814,11 @@ const ROUTES: &[RouteEntry] = &[
         RouteAccess::Capability(Capability::FileWrite),
     ),
     (
+        "POST",
+        "/api2/repos/{repo_id}/upload-blks-link/",
+        RouteAccess::Capability(Capability::FileWrite),
+    ),
+    (
         "GET",
         "/api2/repos/{repo_id}/update-blks-link/",
         RouteAccess::Capability(Capability::FileWrite),

@@ -215,6 +215,22 @@ seahub 的主资料库查询。
 
 返回移动端使用的分块上传接口 URL（`/upload-blks-api/<token>`）。加密资料库拒绝。需要写权限与 `file.write`。
 
+### 移动端块上传握手 {#post-api2-repos-repo-id-upload-blks-link}
+
+`POST /api2/repos/{repo_id}/upload-blks-link/?p=<dir>`
+
+iOS 大文件流程。请求是表单，字段 `blklist` 为逗号分隔的块 id；响应告诉客户端服务器还缺哪些块，并给出绑定同一短命令牌的两个 URL：
+
+```json
+{
+  "rawblksurl": "http://…/upload-raw-blks-api/<token>",
+  "commiturl": "http://…/upload-blks-api/<token>?commitonly=true&ret-json=true",
+  "blklist": ["…"]
+}
+```
+
+需要写权限与 `file.write`；非法块 id 返回 `400`。
+
 ## 更新块链接 {#get-api2-repos-repo-id-update-blks-link}
 
 `GET /api2/repos/{repo_id}/update-blks-link/?p=<dir>`

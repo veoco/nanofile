@@ -161,6 +161,105 @@ async fn test_upload_blks_commit_honours_replace() {
     );
 }
 
+/// The iOS large-file chain: POST the client's block list to
+/// `upload-blks-link/`, upload the missing blocks to the returned raw URL, then
+/// commit through the returned commit URL (seahub's `UploadBlksLinkView.post`).
+#[tokio::test]
+async fn test_ios_block_upload_chain() {
+    let f = TestFixture::new().await;
+    let content = b"iOS block upload payload".to_vec();
+    let block_id = infra::crypto::fs_id::sha1_hex(&content);
+
+    let link_path = format!("/api2/repos/{}/upload-blks-link/?p=/", f.repo_id);
+    let resp = f
+        .client
+        .post_form(
+            &link_path,
+            Some(&f.api_token),
+            &[("blklist", block_id.as_str())],
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "upload-blks-link POST failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let raw_url = body["rawblksurl"].as_str().unwrap().to_string();
+    let commit_url = body["commiturl"].as_str().unwrap().to_string();
+    assert!(
+        raw_url.contains("/upload-raw-blks-api/"),
+        "bad raw url: {raw_url}"
+    );
+    assert!(
+        commit_url.contains("/upload-blks-api/"),
+        "bad commit url: {commit_url}"
+    );
+    assert!(commit_url.contains("commitonly=true"), "{commit_url}");
+    assert!(commit_url.contains("ret-json=true"), "{commit_url}");
+    assert_eq!(
+        body["blklist"],
+        serde_json::json!([block_id.clone()]),
+        "the missing list must name the only block"
+    );
+
+    // Raw block upload: one `file` part per block, the part filename is the id.
+    let part = reqwest::multipart::Part::bytes(content.clone()).file_name(block_id.clone());
+    let form = reqwest::multipart::Form::new().part("file", part);
+    let resp = f.client.post_multipart_url(&raw_url, form).await;
+    assert_eq!(resp.status(), 200, "raw block upload failed");
+
+    // Commit through the URL seahub hands out (`?commitonly=true&ret-json=true`).
+    let form = reqwest::multipart::Form::new()
+        .text("parent_dir", "/")
+        .text("file_name", "ios-large.bin")
+        .text("file_size", content.len().to_string())
+        .text(
+            "blockids",
+            serde_json::json!([block_id.clone()]).to_string(),
+        );
+    let resp = f.client.post_multipart_url(&commit_url, form).await;
+    assert_eq!(resp.status(), 200, "block commit failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body.is_array(),
+        "ret-json commit should answer an array: {body}"
+    );
+    assert_eq!(body[0]["name"], "ios-large.bin");
+
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/ios-large.bin")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), content.as_slice());
+
+    // The same call now reports nothing missing.
+    let resp = f
+        .client
+        .post_form(
+            &link_path,
+            Some(&f.api_token),
+            &[("blklist", block_id.as_str())],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["blklist"], serde_json::json!([]));
+}
+
+/// A malformed block id must not reach the store or the committed fs object.
+#[tokio::test]
+async fn test_ios_block_upload_link_rejects_bad_block_id() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{}/upload-blks-link/?p=/", f.repo_id),
+            Some(&f.api_token),
+            &[("blklist", "../../etc/passwd")],
+        )
+        .await;
+    assert_eq!(resp.status(), 400);
+}
+
 #[tokio::test]
 async fn test_upload_blks_link_no_auth() {
     let f = TestFixture::new().await;

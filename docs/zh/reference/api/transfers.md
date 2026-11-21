@@ -104,6 +104,12 @@
 
 加密资料库会被拒绝：该接口用明文 SHA-1 命名块，在服务端加密下不成立。
 
+### 原始块 {#post-upload-raw-blks-api-token}
+
+`POST /upload-raw-blks-api/{token}`
+
+移动端块上传流程的原始块阶段，与提交 URL 一起由 `POST /api2/repos/{repo_id}/upload-blks-link/` 签发。每个 `file` 段是一个块：段里的 filename 是块 id，必须等于 `sha1(内容)`。响应为 `{"success": true}`；块列表随后通过 `/upload-blks-api/{token}?commitonly=true` 提交。
+
 ## 更新块 {#post-update-blks-api-token}
 
 `POST /update-blks-api/{token}`

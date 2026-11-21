@@ -152,6 +152,16 @@ for a zero-byte file. The success body is the file id as plain text — or
 Encrypted libraries are refused: this API names blocks by the plaintext SHA-1,
 which cannot hold for server-side encryption.
 
+### Raw blocks {#post-upload-raw-blks-api-token}
+
+`POST /upload-raw-blks-api/{token}`
+
+The raw half of the mobile block flow, minted by `POST
+/api2/repos/{repo_id}/upload-blks-link/` together with the commit URL. Each
+`file` part is one block: the part's filename is the block id and must equal
+`sha1(contents)`. The response is `{"success": true}`; the block list is
+committed through `/upload-blks-api/{token}?commitonly=true`.
+
 ## Update blocks {#post-update-blks-api-token}
 
 `POST /update-blks-api/{token}`
