@@ -5,10 +5,49 @@
 
 use std::path::Path;
 
-/// Split one of our command lines back into its arguments — the inverse of the
-/// quoting in `crate::startup::cmdline` and of `exec_arg`.
-#[cfg(any(target_os = "linux", target_os = "windows", test))]
-pub(crate) fn split_quoted_args(text: &str) -> Vec<String> {
+/// Split a Windows command line back into its arguments — the inverse of the
+/// quoting in `crate::startup::cmdline`. A backslash is literal except immediately
+/// before a quote, so a UNC path (`\\server\share`) keeps both leading backslashes.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn split_win_args(text: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    let mut started = false;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.as_str().starts_with('"') => {
+                current.push('"');
+                chars.next();
+                started = true;
+            }
+            '"' => {
+                quoted = !quoted;
+                started = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if started {
+                    args.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            c => {
+                current.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        args.push(current);
+    }
+    args
+}
+
+/// Split an XDG `Exec=` value back into its arguments — the inverse of `exec_arg`,
+/// where a backslash escapes both a quote and another backslash.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn split_desktop_args(text: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut quoted = false;
@@ -140,6 +179,27 @@ pub(crate) fn run_command_line(exe: &Path, config: &Path) -> String {
         win_cmd_quote(&exe.to_string_lossy()),
         win_cmd_quote(&config.to_string_lossy())
     )
+}
+
+/// Windows documents that a `Run` value's data — the command line — is no longer
+/// than 260 characters, and a longer value is not guaranteed to start.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) const WIN_RUN_VALUE_LIMIT: usize = 260;
+
+/// [`run_command_line`], or the reason it cannot be registered: an entry Windows
+/// would truncate or skip is refused here, where the menu can report it.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn run_value(exe: &Path, config: &Path) -> Result<String, String> {
+    let line = run_command_line(exe, config);
+    let length = line.encode_utf16().count();
+    if length > WIN_RUN_VALUE_LIMIT {
+        return Err(format!(
+            "the start-at-login command line is {length} characters long, over the \
+             {WIN_RUN_VALUE_LIMIT}-character limit Windows documents for a Run value; \
+             install the server in a shorter path"
+        ));
+    }
+    Ok(line)
 }
 
 /// macOS: LaunchAgent property list registered under `~/Library/LaunchAgents`.
@@ -284,7 +344,7 @@ mod tests {
         let config = PathBuf::from(r"C:\Apps\Na nofile\config.toml");
 
         let line = run_command_line(&exe, &config);
-        let args = split_quoted_args(&line);
+        let args = split_win_args(&line);
         assert_eq!(
             args,
             vec![
@@ -299,7 +359,7 @@ mod tests {
         let entry = desktop_entry(&exe, &config);
         let exec = desktop_exec(&entry).expect("the entry has an Exec line");
         assert_eq!(
-            paths_from_args(&split_quoted_args(&exec)),
+            paths_from_args(&split_desktop_args(&exec)),
             Some(expected.clone())
         );
 
@@ -318,20 +378,68 @@ mod tests {
     fn an_argument_may_contain_quotes_and_spaces() {
         let exe = PathBuf::from(r#"C:\we "ird\na nofile.exe"#);
         let config = PathBuf::from(r"C:\cfg files\config.toml");
-        let args = split_quoted_args(&run_command_line(&exe, &config));
+        let args = split_win_args(&run_command_line(&exe, &config));
         assert_eq!(args[0], r#"C:\we "ird\na nofile.exe"#);
         assert_eq!(args[2], r"C:\cfg files\config.toml");
+    }
+
+    #[test]
+    fn a_unc_command_line_keeps_its_leading_backslashes() {
+        let exe = PathBuf::from(r"\\server\share\nanofile.exe");
+        let config = PathBuf::from(r"\\server\share\config.toml");
+        let args = split_win_args(&run_command_line(&exe, &config));
+        assert_eq!(args[0], r"\\server\share\nanofile.exe", "{args:?}");
+        assert_eq!(
+            paths_from_args(&args),
+            Some((
+                exe.to_string_lossy().to_string(),
+                config.to_string_lossy().to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_desktop_exec_unescapes_only_its_own_quoting() {
+        // `exec_arg` doubles a backslash and escapes a quote; the reader is its inverse.
+        let exe = PathBuf::from(r#"/opt/na "file/nanofile"#);
+        let config = PathBuf::from(r"/opt/back\slash/config.toml");
+        let entry = desktop_entry(&exe, &config);
+        let exec = desktop_exec(&entry).expect("the entry has an Exec line");
+        assert_eq!(
+            paths_from_args(&split_desktop_args(&exec)),
+            Some((
+                exe.to_string_lossy().to_string(),
+                config.to_string_lossy().to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn the_run_value_stops_at_the_documented_limit() {
+        let exe = PathBuf::from(r"C:\apps\nanofile.exe");
+        let short = run_value(&exe, &PathBuf::from(r"C:\apps\config.toml"))
+            .expect("a normal installation fits");
+        let padding = WIN_RUN_VALUE_LIMIT - short.encode_utf16().count();
+        let file = "config.toml".len();
+
+        let at_limit = PathBuf::from(format!(r"C:\apps\{}", "c".repeat(padding + file)));
+        let line = run_value(&exe, &at_limit).expect("exactly at the limit is allowed");
+        assert_eq!(line.encode_utf16().count(), WIN_RUN_VALUE_LIMIT);
+
+        let over = PathBuf::from(format!(r"C:\apps\{}", "c".repeat(padding + file + 1)));
+        let reason = run_value(&exe, &over).expect_err("one character over is refused");
+        assert!(reason.contains("260"), "{reason}");
     }
 
     #[test]
     fn an_entry_without_a_config_is_left_alone() {
         // A hand-written or older entry that names no config file: repairing it could only guess.
         assert_eq!(
-            paths_from_args(&split_quoted_args(r#""C:\nanofile.exe""#)),
+            paths_from_args(&split_win_args(r#""C:\nanofile.exe""#)),
             None
         );
         assert_eq!(
-            paths_from_args(&split_quoted_args(r#""C:\nanofile.exe" --config"#)),
+            paths_from_args(&split_win_args(r#""C:\nanofile.exe" --config"#)),
             None
         );
         assert_eq!(paths_from_args(&[]), None);
@@ -380,7 +488,7 @@ mod tests {
 
     #[test]
     fn a_foreign_entry_is_not_parsed_into_paths() {
-        assert_eq!(paths_from_args(&split_quoted_args("just some words")), None);
+        assert_eq!(paths_from_args(&split_win_args("just some words")), None);
         // `Exec=` is only read at the start of a line.
         assert_eq!(
             desktop_exec("Name=X\nExec=/bin/x --config /c\nPath=/x"),

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use super::LoginEntry;
-use super::entry::{desktop_entry, desktop_exec, paths_from_args, split_quoted_args};
+use super::entry::{desktop_entry, desktop_exec, paths_from_args, split_desktop_args};
 
 const FILE_NAME: &str = "nanofile.desktop";
 
@@ -28,7 +28,7 @@ impl LoginEntry for LoginManager {
     fn recorded(&self) -> Option<(String, String)> {
         let text = std::fs::read_to_string(desktop_path()).ok()?;
         let exec = desktop_exec(&text)?;
-        paths_from_args(&split_quoted_args(&exec))
+        paths_from_args(&split_desktop_args(&exec))
     }
 
     fn is_enabled(&self) -> bool {

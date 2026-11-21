@@ -1,7 +1,8 @@
 //! How this installation starts without being launched by hand.
 //!
-//! Login entry (`login`): per-user, `HKCU\…\Run` on Windows, a LaunchAgent on
-//! macOS, an XDG autostart entry on Linux. Windows service (`service`):
+//! Login entry (`login`): per-user, `HKCU\…\Run` on Windows (respecting the
+//! startup switch Task Manager and Settings write), a LaunchAgent on macOS, an
+//! XDG autostart entry on Linux. Windows service (`service`):
 //! an auto-start Service Control Manager entry, with no session. The two are
 //! alternatives on Windows; confirmations and the tray menu live in `crate::tray`.
 

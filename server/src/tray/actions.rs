@@ -199,7 +199,10 @@ fn toggle_login() {
 }
 
 fn perform_login_toggle(login: PlatformLogin, item: CheckMenuItem) {
-    let result = if login.is_enabled() {
+    // Registered *and* not switched off in Windows' own startup settings: a click
+    // on an entry that Task Manager disabled turns it back on, which is what an
+    // unchecked box means.
+    let result = if login.starts_at_login() {
         tracing::info!("Disabling launch at login");
         login.disable()
     } else if !super::login_entry_write_confirmed() {
@@ -214,7 +217,7 @@ fn perform_login_toggle(login: PlatformLogin, item: CheckMenuItem) {
     if let Err(e) = result {
         tracing::error!("Failed to update launch-at-login: {e:#}");
     }
-    item.set_checked(login.is_enabled());
+    item.set_checked(login.starts_at_login());
 }
 
 fn quit() {

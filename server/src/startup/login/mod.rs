@@ -25,8 +25,9 @@ mod platform;
 
 pub(crate) use platform::LoginManager as PlatformLogin;
 
-/// What the login entry looks like right now, from a single registry/plist/desktop
-/// read, handed to the policy that decides what the tray should show and do.
+/// What the login entry looks like right now, from reading the registration (and,
+/// on Windows, its startup switch), handed to the policy that decides what the tray
+/// should show and do.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct LoginState {
     /// A registration exists under our name.
@@ -35,6 +36,9 @@ pub(crate) struct LoginState {
     pub ours: bool,
     /// The location it names no longer exists.
     pub stale: bool,
+    /// The launcher has not switched the entry off (Windows: the startup switch
+    /// Task Manager and Settings write). `true` where there is no such switch.
+    pub approved: bool,
 }
 
 /// Launch-at-login management for the current platform.
@@ -48,11 +52,35 @@ pub(crate) trait LoginEntry {
     fn recorded(&self) -> Option<(String, String)>;
 
     fn is_enabled(&self) -> bool;
+
+    /// Whether the platform's own startup switch still lets a login start it.
+    /// Windows keeps one (`…\Explorer\StartupApproved\Run`, written by Task Manager
+    /// and Settings) that turns the entry off without deleting it; a platform whose
+    /// launcher has no such switch answers `true`.
+    fn is_approved(&self) -> bool {
+        true
+    }
+
+    /// Whether a login would actually start this installation: the registration is
+    /// there, it is healthy, and it is not switched off behind this menu's back.
+    fn starts_at_login(&self) -> bool {
+        let state = self.state();
+        state.present && !state.stale && state.approved
+    }
+
     fn enable(&self) -> anyhow::Result<()>;
+
+    /// Rewrite the registration for this installation, leaving the launcher's
+    /// switch alone: repointing a broken entry must not overrule a user who turned
+    /// it off in Task Manager.
+    fn repoint(&self) -> anyhow::Result<()> {
+        self.enable()
+    }
+
     fn disable(&self) -> anyhow::Result<()>;
 
-    /// Everything about the entry, from a single read: one that exists but cannot
-    /// be read back as a pair is present, is nobody's, and is never reported as stale.
+    /// Everything about the entry: one that exists but cannot be read back as a
+    /// pair is present, is nobody's, and is never reported as stale.
     fn state(&self) -> LoginState {
         let recorded = self.recorded();
         LoginState {
@@ -63,6 +91,7 @@ pub(crate) trait LoginEntry {
             stale: recorded
                 .as_ref()
                 .is_some_and(|(exe, config)| entry::stale_between(exe, config, self.exe())),
+            approved: self.is_approved(),
         }
     }
 

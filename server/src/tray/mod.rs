@@ -275,12 +275,14 @@ fn create_tray(
     // Both mechanisms are probed *before* anything is written, and the one policy
     // decides: on Windows they are alternatives, so a stale login entry must not
     // be repointed while the service has replaced it.
-    let state = startup_state(&ctx.config_path, &autostart);
-    let plan = policy::plan(state);
+    let mut state = startup_state(&ctx.config_path, &autostart);
+    let mut plan = policy::plan(state);
 
     if plan.repair_login {
         // A login entry records absolute paths, so a folder that was moved or
-        // deleted leaves it silently launching something that is not there.
+        // deleted leaves it silently launching something that is not there. The
+        // repair keeps Windows' own startup switch as it is: a user who turned the
+        // entry off in Task Manager did not ask for it back.
         tracing::warn!(
             exe = %ctx.exe_path.display(),
             "the start-at-login entry points at a path that no longer exists; repointing it at \
@@ -288,7 +290,7 @@ fn create_tray(
         );
         if !login_entry_write_confirmed() {
             tracing::info!("repointing the start-at-login entry was not confirmed");
-        } else if let Err(e) = autostart.enable() {
+        } else if let Err(e) = autostart.repoint() {
             tracing::warn!("repointing the start-at-login entry failed: {e:#}");
         }
     } else if plan.retire_login {
@@ -297,6 +299,17 @@ fn create_tray(
             Ok(_) => {}
             Err(e) => tracing::warn!("could not remove the start-at-login entry: {e:#}"),
         }
+    }
+
+    // The repair or the retirement above changed the registration behind the
+    // plan's back; the menu shows what is there now, not what was found.
+    state = startup_state(&ctx.config_path, &autostart);
+    plan = policy::plan(state);
+    if state.login.present && !state.login.approved {
+        tracing::info!(
+            "the start-at-login entry is switched off in Windows' startup settings; the menu \
+             reports it unchecked and ticking it turns it back on"
+        );
     }
 
     // Showing the pair as alternatives is what keeps the menu honest: while this

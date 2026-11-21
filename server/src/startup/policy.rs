@@ -24,7 +24,8 @@ pub(crate) struct StartupPlan {
     pub retire_login: bool,
     /// Whether the login item accepts a click.
     pub login_enabled: bool,
-    /// The checkmark the login item shows (the registration as it really is).
+    /// The checkmark the login item shows: whether a login would start it — the
+    /// registration is there, healthy, and not switched off.
     pub login_checked: bool,
     pub service_checked: bool,
 }
@@ -40,8 +41,10 @@ pub(crate) fn plan(state: StartupState) -> StartupPlan {
         // foreign installation's entry is left alone.
         retire_login: state.login.ours && state.service_ours,
         login_enabled: !state.service_ours,
-        // The checkmark reports the registration as it is, even while disabled.
-        login_checked: state.login.present,
+        // The checkmark reports what a login would do: a registration that is broken
+        // or was switched off in Task Manager or Settings is shown unchecked, and
+        // clicking the item repairs or re-enables it (the toggle reads the same facts).
+        login_checked: state.login.present && !state.login.stale && state.login.approved,
         service_checked: state.service_ours,
     }
 }
@@ -55,6 +58,7 @@ mod tests {
             present,
             ours,
             stale,
+            approved: true,
         }
     }
 
@@ -92,7 +96,10 @@ mod tests {
             "the service must not get a login partner"
         );
         assert!(!plan.login_enabled, "the login item is disabled");
-        assert!(plan.login_checked, "it still reports the entry that exists");
+        assert!(
+            !plan.login_checked,
+            "a stale entry would not start, even though it still exists"
+        );
         assert!(plan.service_checked);
     }
 
@@ -128,6 +135,25 @@ mod tests {
         assert!(plan.login_checked, "the registration is reported as it is");
         assert!(!plan.retire_login);
         assert!(!plan.repair_login);
+    }
+
+    #[test]
+    fn a_switch_turned_off_outside_the_app_is_shown_unchecked() {
+        let off = StartupState {
+            login: LoginState {
+                approved: false,
+                ..login(true, true, false)
+            },
+            service_ours: false,
+        };
+        let plan = plan(off);
+        assert!(!plan.login_checked, "a login would not start it");
+        assert!(
+            plan.login_enabled,
+            "clicking the item turns the entry back on"
+        );
+        assert!(!plan.repair_login, "a healthy entry is left where it is");
+        assert!(!plan.retire_login);
     }
 
     #[test]

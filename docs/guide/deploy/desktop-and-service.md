@@ -58,6 +58,14 @@ so), and the tray disables that item while the service is registered.
 Removing the service enables the item again but does **not** re-create the entry:
 after that, Nanofile starts automatically only if you ask for it.
 
+## Windows' own startup switch
+
+Task Manager's **Startup** tab and **Settings ▸ Apps ▸ Startup** can turn a startup
+entry off without removing it. That switch is respected: the tray shows **Start at
+login** unchecked, and ticking it there turns the entry back on. A stale entry is
+repointed at the running copy without touching the switch, so an entry you turned
+off stays off.
+
 ## Paths and repairs
 
 Both registrations record absolute paths, so they outlive a move.
