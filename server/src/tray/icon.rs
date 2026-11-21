@@ -4,13 +4,16 @@
 //! because its menu bar inverts a template image itself.
 //!
 //! Windows keeps one raster per notification-area size: the shell asks for
-//! `SM_CXSMICON` in device pixels, and a fixed 32px source is only exact at 200%
-//! scaling.
+//! `SM_CXSMICON` in device pixels, and a fixed source would be exact at only one
+//! scaling. Linux uses a 64px pixmap for HiDPI panels, and the macOS template is
+//! 44px so the 22pt menu-bar image gets a 2x representation.
 
 use tray_icon::Icon;
 
-#[cfg(not(target_os = "windows"))]
-use super::icon_gen::TRAY_ICON_SIZE;
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+use super::icon_gen::LINUX_TRAY_ICON_SIZE;
+#[cfg(target_os = "macos")]
+use super::icon_gen::MACOS_TEMPLATE_SIZE;
 #[cfg(any(target_os = "windows", test))]
 use super::icon_gen::TRAY_ICON_SIZES;
 
@@ -20,8 +23,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSMICON}
 #[cfg(target_os = "macos")]
 pub(super) fn tray_icon() -> Icon {
     let rgba: &[u8] = TEMPLATE;
-    Icon::from_rgba(rgba.to_vec(), TRAY_ICON_SIZE, TRAY_ICON_SIZE)
-        .expect("tray icon raster does not match TRAY_ICON_SIZE — rebuild")
+    Icon::from_rgba(rgba.to_vec(), MACOS_TEMPLATE_SIZE, MACOS_TEMPLATE_SIZE)
+        .expect("tray icon raster does not match MACOS_TEMPLATE_SIZE — rebuild")
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -29,7 +32,7 @@ pub(super) fn tray_icon() -> Icon {
     #[cfg(target_os = "windows")]
     let size = windows_icon_size();
     #[cfg(not(target_os = "windows"))]
-    let size = TRAY_ICON_SIZE;
+    let size = LINUX_TRAY_ICON_SIZE;
 
     icon_for_size(size, super::theme::is_dark())
 }

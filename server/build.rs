@@ -215,10 +215,11 @@ fn build_tray_icons() {
         }
     }
 
-    // The macOS menu bar inverts a template image itself, so one 32px raster is
-    // enough there; Linux uses that size for its StatusNotifierItem pixmap.
+    // The macOS menu bar inverts a template image itself and caps it at 22 points,
+    // so 44px is its Retina representation; Linux asks for the 64px raster from
+    // the generated set below.
     let variant = icon_gen::recolor(&svg, icon_gen::MARK_TEMPLATE);
-    let pixmap = rasterize_svg(variant.as_bytes(), icon_gen::TRAY_ICON_SIZE);
+    let pixmap = rasterize_svg(variant.as_bytes(), icon_gen::MACOS_TEMPLATE_SIZE);
     let rgba = straight_alpha(&pixmap);
     std::fs::write(out_dir.join("tray_icon_template.rgba"), &rgba)
         .expect("tray: failed to write tray_icon_template.rgba");

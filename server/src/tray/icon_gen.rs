@@ -4,12 +4,17 @@
 //! `OUT_DIR`, and by `src/tray` for the size constant and the tests. Pure `std`.
 
 // This file is compiled twice — by `build.rs` (which uses the renderers) and by
-// the tray binary (which uses `TRAY_ICON_SIZE` and the tests) — so each build
+// the tray binary (which uses the size constants and the tests) — so each build
 // leaves the other side's helpers unused.
 #![allow(dead_code)]
 
-/// Edge length of the macOS template image and of the Linux tray raster.
-pub const TRAY_ICON_SIZE: u32 = 32;
+/// Edge length of the Linux tray raster: large enough for a 2x/3x panel without
+/// asking the host to upscale the mark.
+pub const LINUX_TRAY_ICON_SIZE: u32 = 64;
+
+/// Edge length of the macOS menu-bar template: tray-icon renders it at 22 points,
+/// so 44 px is the Retina 2x representation.
+pub const MACOS_TEMPLATE_SIZE: u32 = 44;
 
 /// Edge lengths generated for the Windows tray icon. The notification area asks
 /// for the small-icon metric at 100–400% scaling; supplying the matching raster
@@ -305,6 +310,10 @@ mod tests {
         for want in [16, 20, 24, 28, 32, 36, 40, 48, 56, 64] {
             assert!(TRAY_ICON_SIZES.contains(&want), "no {want}px tray icon");
         }
+        // Linux asks the generated set for the 64px raster; the macOS template is
+        // the 2x representation of its 22pt menu-bar size.
+        assert_eq!(LINUX_TRAY_ICON_SIZE, 64);
+        assert_eq!(MACOS_TEMPLATE_SIZE, 44);
     }
 
     /// The favicon's literals are what [`recolor`] substitutes: pin them here,
