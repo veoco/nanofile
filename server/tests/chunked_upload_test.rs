@@ -392,6 +392,45 @@ async fn test_multi_file_upload_returns_every_id() {
     assert_eq!(body.as_array().unwrap().len(), 2, "got {body}");
 }
 
+/// The public upload page posts only the `file` part and relies on the minted
+/// token for the directory; a missing `parent_dir` must keep working instead of
+/// answering 400 (the `public-upload` e2e spec exercises the same path).
+#[tokio::test]
+async fn test_upload_token_defaults_to_its_directory() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/upload-link/?p=/subdir&from=web", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let url: String = resp.json().await.unwrap();
+
+    // No parent_dir, no relative_path: exactly what the upload-link page sends.
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(b"only the file part".to_vec()).file_name("public.txt"),
+    );
+    let resp = f.client.post_multipart_url(&url, form).await;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        status, 200,
+        "the token's directory must be the default target: {body}"
+    );
+    assert_eq!(body[0]["name"], "public.txt");
+
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/subdir/public.txt")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"only the file part");
+}
+
 /// The Go fileserver applies `last_modify` to the committed dirent; the
 /// upstream desktop/iOS clients send it so the server keeps the local mtime.
 #[tokio::test]

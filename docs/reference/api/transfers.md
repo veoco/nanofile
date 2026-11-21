@@ -60,14 +60,14 @@ path.
 
 `POST /upload-api/{token}`
 
-Uploads one or more files to the directory named by `parent_dir` (the
-directory bound into the token is only the default for older links). The body
-is `multipart/form-data`:
+Uploads one or more files to the directory named by `parent_dir`, which
+defaults to the directory bound into the token when omitted. The body is
+`multipart/form-data`:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `file` | yes | File contents; the part's filename is the entry name. Repeat the part for multiple files. |
-| `parent_dir` | yes | Target directory; must exist or be created below the library root. |
+| `parent_dir` | no | Target directory; defaults to the token's directory (the library root in the session form). It must exist or be created below the library root. |
 | `relative_path` | no | Sub-path below the target; must not start with `/`. `//` in `parent_dir` is rejected. |
 | `replace` | no | `1`/`true` replaces an existing file; a directory at that path answers `409`. |
 | `last_modify` | no | RFC 3339 mtime for a single file. |
@@ -105,7 +105,9 @@ it through the `from=web` upload link.
 `POST /upload-aj/`
 
 The no-token variant of the same handler, authenticated by the browser session
-instead of a token; it names the library through the `repo_id` field.
+instead of a token; it names the library through the `repo_id` field. Without a
+minted token there is no bound directory, so a missing `parent_dir` means the
+library root.
 
 ## Update a file {#post-update-api-token}
 
@@ -247,5 +249,7 @@ the returned upload/update URLs are `/upload-api/<token>` and
 returned URL verbatim); `POST /api2/repos/{repo_id}/file/` also accepts a direct
 multipart upload, which the official reference does not document; the
 session-only `/upload-aj/`, `/update-aj/` and `/update-api/` endpoints are
-Nanofile extensions; `head` on an update is accepted but the commit is
-serialized on the current HEAD; `replace` also accepts `true`.
+Nanofile extensions; a missing `parent_dir` falls back to the directory bound
+into the token, which the fileserver instead rejects; `head` on an update is
+accepted but the commit is serialized on the current HEAD; `replace` also accepts
+`true`.
