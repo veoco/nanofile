@@ -8,8 +8,13 @@
 // leaves the other side's helpers unused.
 #![allow(dead_code)]
 
-/// Edge length of the tray icon rasterized into `$OUT_DIR/tray_icon_*.rgba`.
+/// Edge length of the macOS template image and of the Linux tray raster.
 pub const TRAY_ICON_SIZE: u32 = 32;
+
+/// Edge lengths generated for the Windows tray icon. The notification area asks
+/// for the small-icon metric at 100–400% scaling; supplying the matching raster
+/// keeps the mark crisp instead of letting the shell upscale the 32px default.
+pub const TRAY_ICON_SIZES: [u32; 10] = [16, 20, 24, 28, 32, 36, 40, 48, 56, 64];
 
 /// One fill pair of the brand mark: the tile and the glyph.
 #[derive(Clone, Copy)]
@@ -288,6 +293,17 @@ mod tests {
         assert_eq!(*EXE_ICON_SIZES.last().unwrap(), EXE_ICON_PNG_SIZE);
         for want in [16, 20, 24, 32, 40, 48, 64, 96, 128, 256] {
             assert!(EXE_ICON_SIZES.contains(&want), "no {want}px entry");
+        }
+    }
+
+    /// The tray sizes follow the notification-area metric from 100% to 400%.
+    #[test]
+    fn tray_icon_sizes_cover_the_notification_area() {
+        assert!(TRAY_ICON_SIZES.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(TRAY_ICON_SIZES.first(), Some(&16));
+        assert_eq!(TRAY_ICON_SIZES.last(), Some(&64));
+        for want in [16, 20, 24, 28, 32, 36, 40, 48, 56, 64] {
+            assert!(TRAY_ICON_SIZES.contains(&want), "no {want}px tray icon");
         }
     }
 

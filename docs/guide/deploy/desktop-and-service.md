@@ -17,6 +17,11 @@ Binaries built with `--features tray` carry a system tray menu:
 - open the config file,
 - quit (in a client-mode tray the item is **Close tray**; the service keeps running).
 
+On Windows the tray declares Per-Monitor V2 DPI awareness: menus and dialogs are
+drawn at the monitor's scaling, and the tray icon is rendered at the notification
+area's small-icon size (16–64 px). Mixed-DPI multi-monitor layouts are worth a
+manual check.
+
 ## Start at boot (admin)
 
 **Start at boot (admin)** registers an auto-start service with the Service Control

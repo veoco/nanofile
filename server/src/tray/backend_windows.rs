@@ -15,7 +15,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, SetTimer, TranslateMessage, WM_APP,
-    WM_SETTINGCHANGE, WM_TIMER,
+    WM_DPICHANGED, WM_SETTINGCHANGE, WM_TIMER,
 };
 
 use super::TrayContext;
@@ -99,7 +99,8 @@ pub(super) fn run(
             // dark (among other settings). GetMessageW with a null filter also
             // picks it up for the tray's hidden window, so re-read the theme here;
             // refreshing on an unrelated setting change is cheap and idempotent.
-            if msg.message == WM_SETTINGCHANGE
+            // A DPI change needs a different raster for the notification area too.
+            if matches!(msg.message, WM_SETTINGCHANGE | WM_DPICHANGED)
                 && let Err(e) = tray.set_icon(Some(super::icon::tray_icon()))
             {
                 tracing::warn!("Failed to refresh the tray icon: {e}");

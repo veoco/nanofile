@@ -201,17 +201,27 @@ fn build_tray_icons() {
     let svg = std::fs::read_to_string(manifest_dir.join("static/img/favicon.svg"))
         .expect("tray feature: failed to read static/img/favicon.svg");
 
-    for (name, colors) in [
-        ("tray_icon_on_light.rgba", icon_gen::MARK_ON_LIGHT),
-        ("tray_icon_on_dark.rgba", icon_gen::MARK_ON_DARK),
-        ("tray_icon_template.rgba", icon_gen::MARK_TEMPLATE),
+    for (prefix, colors) in [
+        ("tray_icon_on_light", icon_gen::MARK_ON_LIGHT),
+        ("tray_icon_on_dark", icon_gen::MARK_ON_DARK),
     ] {
-        let variant = icon_gen::recolor(&svg, colors);
-        let pixmap = rasterize_svg(variant.as_bytes(), icon_gen::TRAY_ICON_SIZE);
-        let rgba = straight_alpha(&pixmap);
-        std::fs::write(out_dir.join(name), &rgba)
-            .unwrap_or_else(|e| panic!("tray: failed to write {name}: {e}"));
+        for &size in &icon_gen::TRAY_ICON_SIZES {
+            let variant = icon_gen::recolor(&svg, colors);
+            let pixmap = rasterize_svg(variant.as_bytes(), size);
+            let rgba = straight_alpha(&pixmap);
+            let name = format!("{prefix}_{size}.rgba");
+            std::fs::write(out_dir.join(&name), &rgba)
+                .unwrap_or_else(|e| panic!("tray: failed to write {name}: {e}"));
+        }
     }
+
+    // The macOS menu bar inverts a template image itself, so one 32px raster is
+    // enough there; Linux uses that size for its StatusNotifierItem pixmap.
+    let variant = icon_gen::recolor(&svg, icon_gen::MARK_TEMPLATE);
+    let pixmap = rasterize_svg(variant.as_bytes(), icon_gen::TRAY_ICON_SIZE);
+    let rgba = straight_alpha(&pixmap);
+    std::fs::write(out_dir.join("tray_icon_template.rgba"), &rgba)
+        .expect("tray: failed to write tray_icon_template.rgba");
 
     // The exe icon keeps the plain brand mark: a file icon cannot follow the shell theme. The
     // favicon's rim, painted out elsewhere, outlines the graphite tile on a dark shell.
@@ -236,8 +246,11 @@ fn build_tray_icons() {
     std::fs::write(out_dir.join("nanofile.ico"), ico).expect("tray: failed to write nanofile.ico");
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let manifest = manifest_dir.join("nanofile.exe.manifest");
+        println!("cargo:rerun-if-changed={}", manifest.display());
         let mut res = winresource::WindowsResource::new();
         res.set_icon(out_dir.join("nanofile.ico").to_str().unwrap());
+        res.set_manifest_file(manifest.to_str().expect("the manifest path is valid UTF-8"));
         res.set("FileDescription", "Nanofile server");
         res.set("ProductName", "Nanofile");
         res.set("OriginalFilename", "nanofile.exe");
