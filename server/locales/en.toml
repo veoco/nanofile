@@ -1039,6 +1039,7 @@ tray.notify_body = "Nanofile is running in the system tray."
 tray.notify_client_running = "Nanofile is running in the tray; the server is running."
 tray.notify_client_stopped = "Nanofile is running in the tray; the server is not running."
 tray.notify_unknown = "Nanofile is running in the tray; the server state is unknown."
+tray.server_failed_body = "Nanofile stopped because the server failed:\n\n{detail}\n\nSee nanofile.log for details."
 
 tray.elevated_user_fallback = "the current user"
 tray.elevated_body = "Nanofile is running with administrator privileges.\n\n\"Start at login\" will be registered for the account \"{user}\", and will start at login without administrator rights.\n\nContinue?"
@@ -1049,11 +1050,13 @@ tray.service_confirm_replace = "The Windows service \"Nanofile\" is already regi
 tray.service_confirm_disable = "The Nanofile Windows service will be stopped and removed, and the \"Start at login\" entry will be removed with it. Nanofile will not start automatically any more.\n\nAdministrator rights are required for the next step. Continue?"
 tray.service_confirm_disable_running = "The Nanofile Windows service is running and will be stopped and removed, together with the \"Start at login\" entry. Nothing will be serving until Nanofile is started again.\n\nAdministrator rights are required. Continue?"
 tray.service_installed = "Nanofile is registered as a Windows service, running as {account}. It starts at the next system start, without a login, and the tray icon will appear when you log in."
+tray.service_installed_no_login = "Nanofile is registered as a Windows service, running as {account}. It starts at the next system start, without a login. The login tray entry could not be registered for this account; the tray menu shows the service state and lets you enable \"Start at login\"."
+tray.service_login_elevated = "This process is running elevated, so the login tray entry will be registered for the Windows account \"{user}\"; it starts unelevated at login."
 tray.service_removed = "The Nanofile Windows service and this installation's \"Start at login\" entry have been removed: Nanofile no longer starts automatically, and nothing is serving until it is started again."
 tray.service_failed = "The service could not be changed. The reason is in the log file (nanofile.log next to the executable)."
 tray.service_launch_failed = "The administrator prompt could not be started."
 tray.service_preflight_failed = "Nanofile cannot be registered as a Windows service; these checks failed:\n\n{details}\n\nFix those paths, or point the settings at directories the service account can write."
-tray.service_advisories = "Before registering the service:\n\n{details}\n\nContinue?"
+tray.service_advisories = "Before registering the service:\n\n{details}"
 
 
 # HTML error pages. The wire protocol (/api2/, /seafhttp/, sync, WebDAV) keeps

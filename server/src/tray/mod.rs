@@ -150,6 +150,12 @@ fn resolve_lang(config: &Config) -> &'static I18n {
     resolve_lang_with(config, sys_locale::get_locale().as_deref())
 }
 
+/// The language the tray (and a headless tray build's fatal-error dialog) uses for
+/// this config, resolved without initializing the tray icon.
+pub(crate) fn language(config: &Config) -> &'static I18n {
+    resolve_lang(config)
+}
+
 fn resolve_lang_with(config: &Config, locale: Option<&str>) -> &'static I18n {
     let forced = config.ui.tray_language.trim();
     if !forced.is_empty()
@@ -184,7 +190,7 @@ pub fn run(
     listener: Option<server::restart::BoundListener>,
     serving: bool,
 ) -> ! {
-    let _ = TRAY_I18N.set(resolve_lang(&config));
+    let _ = TRAY_I18N.set(language(&config));
 
     let exe_path = crate::startup::absolute_path(
         std::env::current_exe()
@@ -226,10 +232,12 @@ pub fn run(
                 Ok(Ok(())) => std::process::exit(0),
                 Ok(Err(e)) => {
                     tracing::error!("Server failed: {e:#}");
+                    report_server_failure(&format!("{e:#}"));
                     std::process::exit(1);
                 }
                 Err(join) => {
                     tracing::error!("Server task ended without a shutdown signal: {join}");
+                    report_server_failure(&join.to_string());
                     std::process::exit(1);
                 }
             }
@@ -238,6 +246,19 @@ pub fn run(
 
     tracing::info!("Starting system tray icon");
     backend::run(&ctx, quit_tx, client_mode);
+}
+
+/// A fatal server exit in a GUI build: without this the tray icon would simply
+/// disappear, with the reason only in the log file.
+fn report_server_failure(detail: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        let t = lang();
+        let text = t.trf("tray.server_failed_body", &[("detail", detail)]);
+        crate::logging::show_message_box(t.tr("tray.notify_title"), &text);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = detail;
 }
 
 /// The snapshot the menu is rendered from: both registrations, this process'
@@ -366,6 +387,8 @@ fn create_tray(
         action_attached: Cell::new(false),
         warning_attached: Cell::new(false),
         busy: Cell::new(false),
+        #[cfg(target_os = "windows")]
+        login_write_consented: Cell::new(false),
         serving,
         quit_tx,
     });

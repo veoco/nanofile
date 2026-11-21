@@ -301,6 +301,16 @@ fn main() -> anyhow::Result<()> {
     let service_run = false;
     let serving = matches!(command, Command::Server) || service_run;
 
+    // A `service install|uninstall|start|stop` helper shows its own dialogs; the
+    // tray must not add a second one when the helper fails before its command arm
+    // (for example, on a config file that disappeared between the check and the
+    // elevated start).
+    #[cfg(target_os = "windows")]
+    let service_helper = matches!(
+        &command,
+        Command::Service { action } if !matches!(action, startup::service::ServiceAction::Run)
+    );
+
     // A config file named on the command line or by `NANOFILE_CONFIG` has to exist:
     // auto-start entries and service registrations record these paths, and falling back
     // to defaults would quietly start a *second* instance against the default database
@@ -311,6 +321,11 @@ fn main() -> anyhow::Result<()> {
         Ok(loaded) => loaded,
         Err(e) => {
             logging::report_startup_failure(&e, !service_run);
+            // The helper already showed this in a dialog: the tray stays silent.
+            #[cfg(target_os = "windows")]
+            if service_helper {
+                std::process::exit(startup::service::EXIT_REPORTED);
+            }
             return Err(e);
         }
     };
@@ -646,7 +661,21 @@ fn main() -> anyhow::Result<()> {
             }
 
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(run_server_flow(config, env_keys, None, setup_listener))
+            // A tray build with the tray disabled is still a GUI-subsystem binary:
+            // the language is resolved here because `config` moves into the server.
+            #[cfg(all(target_os = "windows", feature = "tray"))]
+            let headless_lang = tray::language(&config);
+            let result = rt.block_on(run_server_flow(config, env_keys, None, setup_listener));
+            // A fatal server error would otherwise only reach the log file, and the
+            // user would just see the icon (or window) disappear.
+            #[cfg(all(target_os = "windows", feature = "tray"))]
+            if let Err(e) = &result {
+                let detail = format!("{e:#}");
+                let text =
+                    headless_lang.trf("tray.server_failed_body", &[("detail", detail.as_str())]);
+                logging::show_message_box(headless_lang.tr("tray.notify_title"), &text);
+            }
+            result
         }
         Command::Adduser {
             email,
@@ -822,7 +851,14 @@ fn main() -> anyhow::Result<()> {
         // `StartServiceCtrlDispatcherW`, and the server runs inside `ServiceMain`.
         #[cfg(target_os = "windows")]
         Command::Service { action } => {
-            startup::service::run_cli(action, &config, &config_path, env_keys)
+            let is_run = matches!(&action, startup::service::ServiceAction::Run);
+            match startup::service::run_cli(action, &config, &config_path, env_keys) {
+                Ok(()) => Ok(()),
+                // `run_cli` already showed the specific reason in a dialog; the
+                // dedicated code keeps the tray from adding a second, generic one.
+                Err(_) if !is_run => std::process::exit(startup::service::EXIT_REPORTED),
+                Err(e) => Err(e),
+            }
         }
         // Handled by the early return above, before any configuration is read.
         Command::ExtractWorker { .. } => Ok(()),

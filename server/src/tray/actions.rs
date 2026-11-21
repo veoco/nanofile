@@ -40,7 +40,7 @@ use super::{ID_AUTOSTART, ID_OPEN_CONFIG, ID_OPEN_WEB, ID_QUIT, TrayContext, lan
 #[cfg(target_os = "windows")]
 use super::{ID_SERVICE, ID_SERVICE_ACTION};
 #[cfg(target_os = "windows")]
-use crate::startup::service::{EXIT_REFUSED, probe_service};
+use crate::startup::service::{EXIT_REFUSED, EXIT_REPORTED, probe_service};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_CANCELLED, GetLastError, HANDLE, STILL_ACTIVE,
@@ -85,6 +85,10 @@ pub(super) struct MenuState {
     pub(super) warning_attached: Cell<bool>,
     /// A service helper is running: both self-start items and the action wait.
     pub(super) busy: Cell<bool>,
+    /// The install confirmation named the elevated account, so it is also the
+    /// consent to write that account's login entry; no second dialog.
+    #[cfg(target_os = "windows")]
+    pub(super) login_write_consented: Cell<bool>,
     /// This process brought up the server (so Quit stops it).
     pub(super) serving: bool,
     pub(super) quit_tx: UnboundedSender<TrayCommand>,
@@ -417,13 +421,19 @@ fn toggle_service() {
     let account = crate::startup::service::ServiceAccount::default().label();
 
     // Before elevation, and while a person is watching: a registration that could
-    // never serve should not raise a UAC prompt.
-    if enable && !preflight_allows(t) {
-        return;
-    }
+    // never serve should not raise a UAC prompt. Advisories are folded into the
+    // confirmation below, so a warning does not cost a second dialog.
+    let advisories = if enable {
+        match preflight_for_install(t) {
+            InstallPreflight::Proceed { advisories } => advisories,
+            InstallPreflight::Refused => return,
+        }
+    } else {
+        None
+    };
 
     let config_display = config_path.display().to_string();
-    let prompt = if enable {
+    let base = if enable {
         // The service name is fixed, so enabling this install would otherwise
         // silently repoint another copy's service at this executable and config.
         match &service {
@@ -465,15 +475,42 @@ fn toggle_service() {
         t.tr("tray.service_confirm_disable").to_string()
     };
 
+    // An elevated install writes the login entry into the elevated account's
+    // registry hive: name that account in this confirmation, and treat it as the
+    // consent for the write (`service_finished` must not ask again).
+    let elevated_install = enable && crate::startup::win32::is_elevated();
+    let mut prompt = base;
+    if elevated_install {
+        let user = std::env::var("USERNAME")
+            .unwrap_or_else(|_| t.tr("tray.elevated_user_fallback").to_string());
+        prompt = format!(
+            "{}\n\n{prompt}",
+            t.trf("tray.service_login_elevated", &[("user", user.as_str())])
+        );
+    }
+    if let Some(details) = &advisories {
+        prompt = format!(
+            "{}\n\n{prompt}",
+            t.trf("tray.service_advisories", &[("details", details.as_str())])
+        );
+    }
+    let icon = if advisories.is_some() {
+        MB_ICONWARNING
+    } else {
+        MB_ICONQUESTION
+    };
     let answer = show_message(
         t.tr("tray.notify_title"),
         &prompt,
-        MB_OKCANCEL | MB_ICONQUESTION | MB_SETFOREGROUND,
+        MB_OKCANCEL | icon | MB_SETFOREGROUND,
     );
     if answer != IDOK {
         tracing::info!("service toggle cancelled");
         sync();
         return;
+    }
+    if elevated_install {
+        with_state(|state| state.login_write_consented.set(true));
     }
 
     let outcome = if enable {
@@ -542,10 +579,12 @@ fn launch_helper(exe: &Path, config_display: &str, outcome: ServiceOutcome) {
         Err(LaunchError::Cancelled) => {
             // The user dismissed the elevation prompt: they know, so no dialog.
             tracing::info!("the elevation prompt was dismissed; nothing was changed");
+            with_state(|state| state.login_write_consented.set(false));
             set_busy(false);
         }
         Err(LaunchError::Failed(error)) => {
             tracing::error!("failed to start the elevated helper: {error}");
+            with_state(|state| state.login_write_consented.set(false));
             set_busy(false);
             let t = lang();
             let text = format!("{}\n\n{error}", t.tr("tray.service_launch_failed"));
@@ -562,7 +601,19 @@ fn launch_helper(exe: &Path, config_display: &str, outcome: ServiceOutcome) {
 #[cfg(target_os = "windows")]
 pub(super) fn service_finished(outcome: ServiceOutcome, exit_code: u32) {
     with_state(|state| state.busy.set(false));
+    // The install confirmation may have covered the login entry; consume it on
+    // every path so a later operation cannot reuse it.
+    let login_consented =
+        with_state(|state| state.login_write_consented.replace(false)).unwrap_or(false);
     let t = lang();
+
+    // The helper already showed the specific reason in its own dialog; a second,
+    // generic one would only repeat it in vaguer words.
+    if exit_code == EXIT_REPORTED as u32 {
+        tracing::warn!("the elevated helper reported the failure; showing no second dialog");
+        sync();
+        return;
+    }
 
     // The helper refused before changing anything (its own preflight): the reason
     // is in the log.
@@ -575,7 +626,10 @@ pub(super) fn service_finished(outcome: ServiceOutcome, exit_code: u32) {
     // `STILL_ACTIVE`: the helper is still running after five minutes. Its own
     // dialog owns any error, so only the menu state is refreshed.
     if exit_code != 0 && exit_code != STILL_ACTIVE as u32 {
-        tracing::error!(exit_code, "the elevated helper failed");
+        tracing::error!(
+            exit_code,
+            "the elevated helper failed without reporting a reason"
+        );
         sync();
         show_message(
             t.tr("tray.notify_title"),
@@ -589,10 +643,15 @@ pub(super) fn service_finished(outcome: ServiceOutcome, exit_code: u32) {
         match outcome {
             ServiceOutcome::Installed => {
                 // Start at boot implies the tray at login: write the user's own
-                // entry from this (unelevated) process, never from the helper.
-                ensure_login_entry();
+                // entry from this process, never from the helper.
+                let login_tray = ensure_login_entry(login_consented);
                 let account = crate::startup::service::ServiceAccount::default().label();
-                let text = t.trf("tray.service_installed", &[("account", account.as_str())]);
+                let key = if login_tray {
+                    "tray.service_installed"
+                } else {
+                    "tray.service_installed_no_login"
+                };
+                let text = t.trf(key, &[("account", account.as_str())]);
                 show_message(
                     t.tr("tray.notify_title"),
                     &text,
@@ -615,25 +674,37 @@ pub(super) fn service_finished(outcome: ServiceOutcome, exit_code: u32) {
     sync();
 }
 
+/// Ensure the tray starts at login for the account running *this* process, and
+/// report whether the entry is active afterwards.
+///
+/// `consented` means the install confirmation already named the elevated account,
+/// so the elevated-registration prompt must not appear a second time.
 #[cfg(target_os = "windows")]
-fn ensure_login_entry() {
+fn ensure_login_entry(consented: bool) -> bool {
     let Some(login) = with_state(|state| state.login.clone()) else {
-        return;
+        return false;
     };
     let state = login.state();
     // A live entry of another installation is not ours to replace; the menu warns
     // about it and leaves the click to the user.
     if state.present && state.readable && !state.ours {
         tracing::warn!("the login entry belongs to another installation; not replacing it");
-        return;
+        return false;
     }
-    if !super::login_entry_write_confirmed() {
+    if !consented && !super::login_entry_write_confirmed() {
         tracing::info!("registering the login tray entry was not confirmed");
-        return;
+        return login_tray_active(&login);
     }
     if let Err(e) = login.enable() {
         tracing::warn!("registering the login tray entry failed: {e:#}");
     }
+    login_tray_active(&login)
+}
+
+#[cfg(target_os = "windows")]
+fn login_tray_active(login: &PlatformLogin) -> bool {
+    let state = login.state();
+    state.present && state.readable && state.ours && state.approved && !state.stale
 }
 
 #[cfg(target_os = "windows")]
@@ -646,18 +717,26 @@ fn retire_login_entry() {
     }
 }
 
+/// The preflight's answer for an install: refused outright, or proceed with any
+/// advisory lines folded into the confirmation that follows.
+#[cfg(target_os = "windows")]
+enum InstallPreflight {
+    Proceed { advisories: Option<String> },
+    Refused,
+}
+
 /// Whether a service registration may proceed, asked of the preflight.
 ///
-/// A `Fail` is refused outright (the message names every path); a `Warn` is a
-/// confirmation, because the operator may know something the check cannot. A
-/// `Note` is logged only: "the port is in use" is expected while this instance
-/// serves it.
+/// A `Fail` is refused outright (the message names every path); a `Warn` comes
+/// back as advisory text for the install confirmation, so the operator makes one
+/// decision instead of dismissing two dialogs. A `Note` is logged only: "the port
+/// is in use" is expected while this instance serves it.
 #[cfg(target_os = "windows")]
-fn preflight_allows(t: &server::i18n::I18n) -> bool {
+fn preflight_for_install(t: &server::i18n::I18n) -> InstallPreflight {
     use crate::startup::service::{Severity, run_preflight};
 
     let Some(input) = with_state(|state| state.ctx.preflight.clone()) else {
-        return false;
+        return InstallPreflight::Refused;
     };
     let report = run_preflight(&input);
     report.log();
@@ -673,18 +752,12 @@ fn preflight_allows(t: &server::i18n::I18n) -> bool {
             &text,
             MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
         );
-        return false;
+        return InstallPreflight::Refused;
     }
-    if report.has(Severity::Warn) {
-        let details = report.lines_at_least(Severity::Warn).join("\n");
-        let text = t.trf("tray.service_advisories", &[("details", details.as_str())]);
-        return show_message(
-            t.tr("tray.notify_title"),
-            &text,
-            MB_OKCANCEL | MB_ICONWARNING | MB_SETFOREGROUND,
-        ) == IDOK;
-    }
-    true
+    let advisories = report
+        .has(Severity::Warn)
+        .then(|| report.lines_at_least(Severity::Warn).join("\n"));
+    InstallPreflight::Proceed { advisories }
 }
 
 #[cfg(target_os = "windows")]

@@ -36,6 +36,10 @@ pub(crate) const EXIT_FAILED: i32 = 1;
 /// check failed.
 #[cfg(target_os = "windows")]
 pub(crate) const EXIT_REFUSED: i32 = 2;
+/// Failed, and the reason was already shown in a dialog by the helper itself:
+/// the tray must not add a second, vaguer one.
+#[cfg(target_os = "windows")]
+pub(crate) const EXIT_REPORTED: i32 = 3;
 
 #[cfg(target_os = "windows")]
 #[derive(clap::Subcommand, Debug)]
