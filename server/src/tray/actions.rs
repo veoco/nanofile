@@ -36,9 +36,9 @@ use crate::startup::service::ServiceProbe;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use super::backend;
 use super::open_config_file;
-use super::{ID_AUTOSTART, ID_OPEN_CONFIG, ID_OPEN_WEB, ID_QUIT, ID_SERVICE_ACTION, TrayContext};
+use super::{ID_AUTOSTART, ID_OPEN_CONFIG, ID_OPEN_WEB, ID_QUIT, TrayContext, lang};
 #[cfg(target_os = "windows")]
-use super::{ID_SERVICE, lang};
+use super::{ID_SERVICE, ID_SERVICE_ACTION};
 #[cfg(target_os = "windows")]
 use crate::startup::service::{EXIT_REFUSED, probe_service};
 #[cfg(target_os = "windows")]
@@ -60,7 +60,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 /// Where the action row is inserted: right after the status row. The base menu is
-/// open-web, open-config, sep, login, [service], sep, status, sep, quit.
+/// open-web, open-config, sep, login, `service`, sep, status, sep, quit.
 #[cfg(target_os = "windows")]
 const ACTION_POSITION: usize = 7;
 #[cfg(not(target_os = "windows"))]

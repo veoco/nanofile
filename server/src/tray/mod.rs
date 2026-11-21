@@ -137,6 +137,9 @@ fn remember_status(status: ServerStatus) {
     STATUS.with(|cell| cell.set(Some(status)));
 }
 
+/// The status `sync` last rendered; used for the startup notification, which macOS
+/// does not post.
+#[cfg(not(target_os = "macos"))]
 pub(super) fn status() -> Option<ServerStatus> {
     STATUS.with(Cell::get)
 }

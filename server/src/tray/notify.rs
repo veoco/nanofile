@@ -3,6 +3,7 @@
 //! unsigned, non-bundled binary cannot reliably post them. Failures are logged and
 //! ignored — it is never a requirement.
 
+#[cfg(not(target_os = "macos"))]
 use crate::startup::policy::ServerStatus;
 
 /// The body depends on which process serves: "running in the tray" is all this

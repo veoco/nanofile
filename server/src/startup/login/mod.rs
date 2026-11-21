@@ -98,7 +98,9 @@ pub(crate) trait LoginEntry {
         }
     }
 
-    /// Whether the entry launches this installation.
+    /// Whether the entry launches this installation. Only the Windows uninstall and
+    /// the boot-service binding need to remove an entry they did not write.
+    #[cfg(target_os = "windows")]
     fn is_ours(&self) -> bool {
         self.state().ours
     }
@@ -107,6 +109,7 @@ pub(crate) trait LoginEntry {
     /// elevated helper may run as a different account, whose `HKCU` is somebody
     /// else's hive: deleting an entry there would destroy a registration we never
     /// wrote.
+    #[cfg(target_os = "windows")]
     fn retire_ours(&self) -> anyhow::Result<bool> {
         if !self.is_ours() {
             return Ok(false);
