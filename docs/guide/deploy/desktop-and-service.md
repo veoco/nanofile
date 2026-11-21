@@ -101,14 +101,32 @@ menu ("Start/Stop Windows service", administrator) or with
 
 ## Upgrading
 
-A running service holds its executable open, so stop it before replacing the file:
-use "Stop Windows service" in the tray, or run `nanofile service stop` from an
-elevated prompt. Replace the binary, then start it again from the tray or with
-`nanofile service start`; a reboot does the same at the next boot.
+The service and the tray run the same executable, and both keep it open, so close
+both before replacing the file:
+
+1. In the tray, use **Stop Windows service (admin)** and wait until the status row
+   says the service is stopped. Without a tray, run `nanofile service stop` from an
+   elevated prompt (add `--config` if you installed with a custom path).
+2. **Quit** the tray. The service is already stopped; Quit now only closes the tray.
+   (In a client-mode tray, Quit never stops the service.)
+3. Replace the binary at the same path. Leave the config file and data directories
+   alone. Make sure no `nanofile` process is left (the service, the tray and their
+   extract workers all run this file); otherwise the copy fails with "file in use".
+4. Start the binary again (or wait for the next login): because the service is
+   registered, it starts as a **client-mode tray** and shows "stopped (service
+   registered)". It does not start a server of its own.
+5. Use **Start Windows service (admin)** in the tray, run `nanofile service start`
+   from an elevated prompt, or reboot. The service starts the new binary from the
+   same registration; the tray then shows "running (Windows service)".
 
 Replacing the file at the same path needs no re-registration. Moving the
 installation to a new folder does: the next tray start names the old registration
 and offers to repoint it, and the login tray entry is repointed automatically.
+
+If the service does not report running after a stop/start (the port can still be in
+`TIME_WAIT`), wait a minute and retry, or reboot. Back up the database and the
+config before upgrading: the service runs migrations when it starts. The server is
+down from the stop until the service is started again.
 
 ## While the service runs
 
