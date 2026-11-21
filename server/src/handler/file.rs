@@ -173,8 +173,10 @@ pub async fn file_post_handler(
     if content_type.starts_with("multipart/form-data") {
         // Stream the multipart body: `file` chunks go to blocks on the fly and the
         // small fields are collected as text.
+        // A multipart request without a boundary is malformed, not a server
+        // fault: answer 400 like the shared `extract_multipart_boundary` does.
         let boundary = multer::parse_boundary(&content_type)
-            .map_err(|e| AppError::Internal(format!("invalid multipart boundary: {e}")))?;
+            .map_err(|e| AppError::BadRequest(format!("invalid multipart boundary: {e}")))?;
         let mut mp = multer::Multipart::new(body.into_data_stream(), boundary);
 
         let mut fields: HashMap<String, String> = HashMap::new();
