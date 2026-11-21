@@ -36,24 +36,24 @@
 
 `POST /upload-api/{token}`
 
-把文件上传到令牌绑定的目录。请求体是 `multipart/form-data`：
+把文件上传到 `parent_dir` 指定的目录（令牌里的目录只作为旧链接的默认值）。请求体是 `multipart/form-data`：
 
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
-| `file` | 是 | 文件内容；段里的 filename 是条目名。 |
-| `parent_dir` | 否 | 覆盖令牌里的目录。 |
-| `relative_path` | 否 | 目标目录下的子路径。 |
+| `file` | 是 | 文件内容；段里的 filename 是条目名。多文件时重复该段。 |
+| `parent_dir` | 是 | 目标目录；不存在时在资料库根下创建。 |
+| `relative_path` | 否 | 目标目录下的子路径；不能以 `/` 开头。`parent_dir` 中出现 `//` 会被拒绝。 |
 | `replace` | 否 | `1`/`true` 替换已有文件；该路径是目录时返回 `409`。 |
+| `last_modify` | 否 | 单文件的 RFC 3339 mtime。 |
+| `last_modify_list` | 否 | 逗号分隔的 RFC 3339 mtime，每个文件一个。 |
 
-**响应 `200`**
+`POST /upload-aj/{token}` 返回已提交文件的 JSON 数组。`-api` 形式默认返回纯文本文件 id；多文件时用 tab 分隔多个 id，`ret-json` 会切换为同样的 JSON 数组。
 
 ```json
 [{ "id": "…", "name": "notes.txt", "size": 1204 }]
 ```
 
-断点续传还在接收分块时，响应是 `[{"name": "notes.txt", "uploaded": true}]`。
-
-**断点续传** —— 发送 `Content-Range: bytes <start>-<end>/<total>` 与 `Content-Length`；每个分块暂存到临时文件，最后一个分块提交。只有 `/upload-aj/`、`/upload-aj/{token}`、`/upload-api/{token}` 与 `/update-aj/` 实现了它；其余上传/更新入口收到 `Content-Range` 会返回 `400`。见[已上传字节](#get-api-v2-1-repos-repo-id-file-uploaded-bytes)。
+**断点续传** —— 发送 `Content-Range: bytes <start>-<end>/<total>` 与 `Content-Length`；每个分块暂存到临时文件，最后一个分块提交。分块请求只能带一个文件。`/upload-aj/`、`/upload-aj/{token}`、`/upload-api/{token}`、`/update-aj/`、`/update-aj/{token}`、`/update-api/`、`/update-api/{token}` 都实现了它；`/api2/repos/{repo_id}/file/` 收到 `Content-Range` 仍返回 `400`。见[已上传字节](#get-api-v2-1-repos-repo-id-file-uploaded-bytes)。
 
 需要写令牌；加密资料库要先缓存库密钥（上传链接请求会做），可分享的上传链接对加密库直接拒绝。
 
@@ -75,22 +75,25 @@
 
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
-| `file` | 是 | 新内容。 |
-| `target_file` | 是 | 要替换的文件的绝对路径。 |
+| `file` | 是 | 新内容；只能有一个 file 段。 |
+| `target_file` | 是 | 已存在文件的绝对路径；目标不存在返回 `441`。 |
 | `relative_path` | 否 | 文件目录下的子路径。 |
-| `replace` | 否 | 为对称保留；更新总是替换。 |
+| `last_modify` | 否 | RFC 3339 mtime。 |
+| `head` | 否 | 桌面客户端的乐观基准；提交仍串行发生在当前 HEAD 上。 |
 
-**响应 `200`** —— `[{"id": "…", "name": "notes.txt", "size": 1204}]`。
+`replace` 为对称保留；更新总是替换。缺少 `file`（或 `target_file`）返回 `400`，且不改变目标。默认成功体是纯文本文件 id；带 `ret-json` 时返回 `[{"id": "…", "name": "…", "size": 1204}]`。
 
-没有 `target_file` 的请求是无操作，返回 `{"success": true}`，不会创建新文件。配额按大小差值计算，而不是整个新文件。
+`POST /update-aj/{token}` 与会话形式 `POST /update-aj/` 使用相同字段，返回 JSON 数组。
+
+`POST /update-api/` 是会话版本：用 `p` / `path` 而不是 `target_file` 指定文件，返回 JSON 数组。它属于 Nanofile 浏览器扩展，不在上游 fileserver 接口面内。
+
+`/update-api/{token}`、`/update-aj/{token}`、`/update-aj/` 与 `/update-api/` 也支持断点续传（带一个 file 段的 `Content-Range`）；见[上传文件](#post-upload-api-token)。
 
 `POST /update-aj/{token}`
 
 `POST /update-aj/`
 
 `POST /update-api/`
-
-浏览器变体（分别为令牌与会话）以及网页界面使用的会话形式；字段与响应同 `/update-api/{token}`。
 
 ## 上传块 {#post-upload-blks-api-token}
 
@@ -158,4 +161,4 @@
 
 流式返回压缩包并消耗令牌。使用令牌时会重新核对条目列表与用户权限，因此被吊销的用户无法下载之前生成的包。一个令牌只能下载一次。
 
-**Seafile** —— 传输流程与字段名与 seahub 相同。两处差异：返回的上传/更新 URL 是 `/upload-api/<token>` 与 `/update-api/<token>`，而不是 `/seafhttp/upload-api/<token>`（客户端原样使用返回的 URL）；`POST /api2/repos/{repo_id}/file/` 还接受直接的 multipart 上传，官方参考没有记录。
+**Seafile** —— 传输流程与字段名与 seahub 相同。差异：返回的上传/更新 URL 是 `/upload-api/<token>` 与 `/update-api/<token>`，而不是 `/seafhttp/upload-api/<token>`（客户端原样使用返回的 URL）；`POST /api2/repos/{repo_id}/file/` 还接受直接的 multipart 上传，官方参考没有记录；仅有会话的 `/upload-aj/`、`/update-aj/`、`/update-api/` 是 Nanofile 扩展；更新请求里的 `head` 会被接受，但提交串行发生在当前 HEAD 上；`replace` 另外接受 `true`。

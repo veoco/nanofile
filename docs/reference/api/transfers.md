@@ -60,30 +60,34 @@ path.
 
 `POST /upload-api/{token}`
 
-Uploads one or more files to the directory bound into the token. The body is
-`multipart/form-data`:
+Uploads one or more files to the directory named by `parent_dir` (the
+directory bound into the token is only the default for older links). The body
+is `multipart/form-data`:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `file` | yes | File contents; the part's filename is the entry name. |
-| `parent_dir` | no | Overrides the token's directory. |
-| `relative_path` | no | Sub-path below the target directory. |
+| `file` | yes | File contents; the part's filename is the entry name. Repeat the part for multiple files. |
+| `parent_dir` | yes | Target directory; must exist or be created below the library root. |
+| `relative_path` | no | Sub-path below the target; must not start with `/`. `//` in `parent_dir` is rejected. |
 | `replace` | no | `1`/`true` replaces an existing file; a directory at that path answers `409`. |
+| `last_modify` | no | RFC 3339 mtime for a single file. |
+| `last_modify_list` | no | Comma-separated RFC 3339 mtimes, one per file. |
 
-**Response `200`**
+`POST /upload-aj/{token}` answers a JSON array of the committed files. The
+`-api` form answers the file id as plain text, or tab-separated ids for a
+multi-file request; `ret-json` switches it to the same JSON array.
 
 ```json
 [{ "id": "…", "name": "notes.txt", "size": 1204 }]
 ```
 
-While a resumable upload is still receiving chunks the answer is instead
-`[{"name": "notes.txt", "uploaded": true}]`.
-
 **Resumable uploads** — send `Content-Range: bytes <start>-<end>/<total>` and
 `Content-Length`; each chunk is staged in a temp file and the final chunk
-commits. Only `/upload-aj/`, `/upload-aj/{token}`, `/upload-api/{token}` and
-`/update-aj/` implement this; the other upload and update endpoints reject a
-request carrying `Content-Range` with `400`. See
+commits. A chunked request carries exactly one file. `/upload-aj/`,
+`/upload-aj/{token}`, `/upload-api/{token}`, `/update-aj/`,
+`/update-aj/{token}`, `/update-api/` and `/update-api/{token}` implement this;
+`/api2/repos/{repo_id}/file/` rejects a request carrying `Content-Range` with
+`400`. See
 [uploaded bytes](#get-api-v2-1-repos-repo-id-file-uploaded-bytes).
 
 Requires a write token; encrypted libraries need the library key to be cached
@@ -111,25 +115,33 @@ Replaces an existing file's contents. Multipart body with:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `file` | yes | New contents. |
-| `target_file` | yes | Absolute path of the file to replace. |
+| `file` | yes | New contents; exactly one file part. |
+| `target_file` | yes | Absolute path of the existing file. A missing target answers `441`. |
 | `relative_path` | no | Sub-path below the file's directory. |
-| `replace` | no | Kept for symmetry; an update always replaces. |
+| `last_modify` | no | RFC 3339 mtime. |
+| `head` | no | Accepted for the desktop client's optimistic base; the commit is serialized on the current HEAD. |
 
-**Response `200`** — `[{"id": "…", "name": "notes.txt", "size": 1204}]`.
+`replace` is kept for symmetry; an update always replaces. A request without
+`file` (or `target_file`) answers `400` and changes nothing. The default success
+body is the file id as plain text; `ret-json` answers
+`[{"id": "…", "name": "…", "size": 1204}]`.
 
-A request without `target_file` is a no-op that answers `{"success": true}` and
-creates nothing. Quota accounting charges the size difference, not the whole new
-file.
+`POST /update-aj/{token}` and `POST /update-aj/` (the session form) take the
+same fields and answer the JSON array.
+
+`POST /update-api/` is the session counterpart; it names the file with `p` /
+`path` instead of `target_file` and answers the JSON array. It is a Nanofile
+browser extension, not part of the upstream fileserver surface.
+
+`/update-api/{token}`, `/update-aj/{token}`, `/update-aj/` and `/update-api/`
+also implement resumable uploads (`Content-Range` with one file part); see
+[Upload a file](#post-upload-api-token).
 
 `POST /update-aj/{token}`
 
 `POST /update-aj/`
 
 `POST /update-api/`
-
-The browser variants (token and session respectively) and the session form the
-web interface uses; same fields and response as `/update-api/{token}`.
 
 ## Upload blocks {#post-upload-blks-api-token}
 
@@ -229,8 +241,11 @@ Streams the archive and consumes the token. The entry list and the user's
 permission are re-checked when the token is used, so a revoked user cannot
 download an archive minted before the revocation. One download per token.
 
-**Seafile** — the transfer flow and field names match seahub. Two differences:
+**Seafile** — the transfer flow and field names match seahub. Differences:
 the returned upload/update URLs are `/upload-api/<token>` and
 `/update-api/<token>` rather than `/seafhttp/upload-api/<token>` (clients use the
-returned URL verbatim), and `POST /api2/repos/{repo_id}/file/` also accepts a
-direct multipart upload, which the official reference does not document.
+returned URL verbatim); `POST /api2/repos/{repo_id}/file/` also accepts a direct
+multipart upload, which the official reference does not document; the
+session-only `/upload-aj/`, `/update-aj/` and `/update-api/` endpoints are
+Nanofile extensions; `head` on an update is accepted but the commit is
+serialized on the current HEAD; `replace` also accepts `true`.

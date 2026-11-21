@@ -194,9 +194,10 @@ impl FileOps {
         replace: bool,
         quota: &QuotaScope,
         default_quota: u64,
+        mtime: Option<i64>,
     ) -> Result<(String, String, bool), AppError> {
         upload_activity::touch(repo_id);
-        let now = chrono::Utc::now().timestamp();
+        let now = mtime.unwrap_or_else(|| chrono::Utc::now().timestamp());
 
         let file_fs_data = FsFileData {
             block_ids,

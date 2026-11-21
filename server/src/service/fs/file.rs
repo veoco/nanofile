@@ -600,6 +600,40 @@ impl FileService {
         replace: bool,
         new_block_ids: Vec<String>,
     ) -> Result<(String, String), AppError> {
+        self.upload_file_committed_stream_at(
+            repo_id,
+            target_dir,
+            filename,
+            block_ids,
+            total_size,
+            modifier,
+            user_id,
+            ensure_dir,
+            replace,
+            new_block_ids,
+            None,
+        )
+        .await
+    }
+
+    /// [`Self::upload_file_committed_stream`] with an optional client-supplied
+    /// mtime (`last_modify` / `file_mtime` in the upload protocols). `None`
+    /// keeps the server's commit time.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upload_file_committed_stream_at(
+        &self,
+        repo_id: &str,
+        target_dir: &str,
+        filename: &str,
+        block_ids: Vec<String>,
+        total_size: i64,
+        modifier: &str,
+        user_id: Option<i32>,
+        ensure_dir: bool,
+        replace: bool,
+        new_block_ids: Vec<String>,
+        mtime: Option<i64>,
+    ) -> Result<(String, String), AppError> {
         base::sanitize::validate_filename(filename)
             .map_err(|e| AppError::BadRequest(format!("invalid filename: {e}")))?;
         // The restart guard these blocks carried ends with this commit; the ids are
@@ -633,6 +667,7 @@ impl FileService {
             replace,
             &scope,
             default_quota,
+            mtime,
         )
         .await;
 

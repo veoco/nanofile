@@ -144,6 +144,52 @@ fn upload_commit_response(
         .into_response()
 }
 
+/// One committed file of a (possibly multi-file) upload.
+struct CommittedFile {
+    id: String,
+    name: String,
+    size: i64,
+}
+
+/// Render a committed upload (one or more files).
+///
+/// The `-aj` endpoints answer a JSON array. The `-api` endpoints answer one id
+/// per file separated by `\t`, or the JSON array with `ret-json` — matching
+/// `postMultiFiles` in `server/fileserver/fileop.go:1944-1970`.
+fn upload_files_response(
+    style: UploadFilesReply,
+    files: &[CommittedFile],
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let as_json = match style {
+        UploadFilesReply::JsonArray => true,
+        UploadFilesReply::PlainOrJson { ret_json } => ret_json,
+    };
+    if as_json {
+        let items: Vec<serde_json::Value> = files
+            .iter()
+            .map(|f| json!({ "id": f.id, "name": f.name, "size": f.size }))
+            .collect();
+        return Json(items).into_response();
+    }
+    let ids: Vec<&str> = files.iter().map(|f| f.id.as_str()).collect();
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        ids.join("\t"),
+    )
+        .into_response()
+}
+
+#[derive(Clone, Copy)]
+enum UploadFilesReply {
+    JsonArray,
+    PlainOrJson { ret_json: bool },
+}
+
 /// Outcome of a resumable (`Content-Range`) chunk request.
 enum ChunkResult {
     /// Not the final chunk: upstream always answers `{"success": true}`.
@@ -155,7 +201,7 @@ enum ChunkResult {
     },
 }
 
-/// Render a chunk outcome for the `-aj` endpoints, which always answer JSON.
+/// Render a resumable-upload answer for an `-aj` endpoint.
 fn chunk_result_json(result: ChunkResult) -> Json<serde_json::Value> {
     match result {
         ChunkResult::Intermediate => Json(json!({ "success": true })),
@@ -163,6 +209,29 @@ fn chunk_result_json(result: ChunkResult) -> Json<serde_json::Value> {
             Json(json!([{ "id": id, "name": name, "size": size }]))
         }
     }
+}
+
+/// Render a resumable-upload answer for an `-api` endpoint: the intermediate
+/// body is always `{"success": true}`, the final one follows the endpoint's
+/// plain/JSON framing.
+fn chunk_result_response(ret_json: bool, result: ChunkResult) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    match result {
+        ChunkResult::Intermediate => Json(json!({ "success": true })).into_response(),
+        ChunkResult::Committed { id, name, size } => {
+            upload_commit_response(ret_json, &id, &name, size)
+        }
+    }
+}
+
+/// Parse an RFC 3339 `last_modify` / `file_mtime` value the way the Go
+/// fileserver does: an unparsable value is silently ignored.
+fn parse_mtime(value: Option<&str>) -> Option<i64> {
+    let value = value.map(str::trim).filter(|v| !v.is_empty())?;
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|t| t.timestamp())
 }
 
 /// Validate an upload-link commit `file_name` like seafile's `should_ignore_file`:
@@ -179,9 +248,9 @@ fn is_valid_upload_filename(name: &str) -> bool {
 
 /// Reject a resumable-upload header on an endpoint that does not implement it.
 ///
-/// Only `/upload-aj/`, `/upload-aj/{token}`, `/upload-api/{token}` and
-/// `/update-aj/` handle `Content-Range`. Ignoring it elsewhere would commit a
-/// chunk as the whole file — and, for an update, truncate the target.
+/// The upload and update handlers now all support `Content-Range`; the v1
+/// `/api2/repos/{repo_id}/file/` endpoint still does not, and ignoring the header
+/// there would commit one chunk as the whole file.
 pub(crate) fn reject_content_range(headers: &HeaderMap) -> Result<(), AppError> {
     if headers.contains_key(axum::http::header::CONTENT_RANGE) {
         return Err(AppError::BadRequest(
@@ -306,6 +375,7 @@ async fn try_handle_chunked(
     user_id: Option<i32>,
     enc_key: Option<(&[u8], &[u8])>,
     replace: bool,
+    mtime: Option<i64>,
 ) -> Result<Option<ChunkResult>, AppError> {
     let Some(range_header) = content_range else {
         return Ok(None); // not a chunked upload
@@ -394,7 +464,7 @@ async fn try_handle_chunked(
     {
         let committed = state
             .file_service()
-            .upload_file_committed_stream(
+            .upload_file_committed_stream_at(
                 repo_id,
                 target_dir,
                 file_name,
@@ -405,6 +475,7 @@ async fn try_handle_chunked(
                 true,
                 replace,
                 new_block_ids,
+                mtime,
             )
             .await;
         let (fs_id, effective_name) = match committed {
@@ -463,7 +534,7 @@ async fn try_handle_chunked(
 
     let committed = state
         .file_service()
-        .upload_file_committed_stream(
+        .upload_file_committed_stream_at(
             repo_id,
             target_dir,
             file_name,
@@ -474,6 +545,7 @@ async fn try_handle_chunked(
             true,
             replace,
             new_block_ids,
+            mtime,
         )
         .await;
     let (fs_id, effective_name) = match committed {
@@ -606,7 +678,7 @@ pub async fn upload_aj(
     uri: axum::http::Uri,
     headers: HeaderMap,
     body: axum::body::Body,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     // No Content-Length precheck here: this endpoint can replace an existing
     // file, and the old size is only known after the multipart fields are parsed.
     // A full-size precheck would reject a legitimate same-size overwrite near the
@@ -619,14 +691,12 @@ pub async fn upload_aj(
     let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
 
     let mut fields: HashMap<String, String> = HashMap::new();
-    let mut filename = String::new();
-
     // Resumable uploads need the whole chunk in hand, so they keep the buffered read.
     let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let is_chunked = content_range.is_some();
-    let mut chunked_file_data: Option<Vec<u8>> = None;
+    let mut chunked_file: Option<(String, Vec<u8>)> = None;
     // Non-chunked uploads are staged on disk, ingested only after authorization.
-    let mut staged_path: Option<std::path::PathBuf> = None;
+    let mut staged_files: Vec<StagedFile> = Vec::new();
     let staging_dir = upload_staging_dir(&state);
 
     while let Some(mut field) = multipart
@@ -636,20 +706,25 @@ pub async fn upload_aj(
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            filename = field.file_name().unwrap_or("unknown").to_string();
+            let filename = field.file_name().unwrap_or("unknown").to_string();
             if is_chunked {
-                chunked_file_data = Some(
-                    read_chunked_field(
-                        &mut field,
-                        content_range,
-                        state.config().server.max_chunk_size_mb * 1024 * 1024,
-                    )
-                    .await?,
-                );
+                if chunked_file.is_some() {
+                    return Err(AppError::BadRequest("More files in one request".into()));
+                }
+                let data = read_chunked_field(
+                    &mut field,
+                    content_range,
+                    state.config().server.max_chunk_size_mb * 1024 * 1024,
+                )
+                .await?;
+                chunked_file = Some((filename, data));
             } else {
                 let (path, _size) =
                     stage_file_field(&mut field, &staging_dir, max_upload_bytes(&state)).await?;
-                staged_path = Some(path);
+                staged_files.push(StagedFile {
+                    filename,
+                    staged: StagedUpload(Some(path)),
+                });
             }
         } else {
             fields.insert(
@@ -665,11 +740,14 @@ pub async fn upload_aj(
     let repo_id = fields
         .get("repo_id")
         .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?;
-    let parent_dir = fields.get("parent_dir").map(|s| s.as_str()).unwrap_or("/");
+    let parent_dir = fields
+        .get("parent_dir")
+        .ok_or_else(|| AppError::BadRequest("No parent_dir given".into()))?;
     let relative_path = fields
         .get("relative_path")
         .map(|s| s.as_str())
         .unwrap_or("");
+    validate_upload_paths(parent_dir, relative_path)?;
     let target_dir = compute_target_dir(parent_dir, relative_path)?;
     let query = query_params(&uri);
     let replace = parse_replace_arg(
@@ -701,63 +779,83 @@ pub async fn upload_aj(
     let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
 
     if is_chunked {
-        let file_data = bytes::Bytes::from(chunked_file_data.unwrap_or_default());
-        if !file_data.is_empty()
-            && let Some(result) = try_handle_chunked(
-                &state.temp_file_manager,
-                &state,
-                repo_id,
-                &target_dir,
-                &filename,
-                file_data,
-                content_range,
-                &user.email,
-                Some(user.user_id),
-                enc_key_ref,
-                replace,
-            )
-            .await?
-        {
-            return Ok(chunk_result_json(result));
+        let (filename, file_data) =
+            chunked_file.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+        if file_data.is_empty() {
+            return Err(AppError::BadRequest("No file in multipart form".into()));
         }
-        return Ok(Json(json!([{"name": filename, "uploaded": true}])));
+        let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
+        if let Some(result) = try_handle_chunked(
+            &state.temp_file_manager,
+            &state,
+            repo_id,
+            &target_dir,
+            &filename,
+            bytes::Bytes::from(file_data),
+            content_range,
+            &user.email,
+            Some(user.user_id),
+            enc_key_ref,
+            replace,
+            mtime,
+        )
+        .await?
+        {
+            return Ok(chunk_result_json(result).into_response());
+        }
+        return Err(AppError::Internal(
+            "chunked upload produced no outcome".into(),
+        ));
     }
 
-    // Ingest the staged bytes now that the caller is authorized; the guard
-    // removes the staging file on every exit path.
-    let staged = StagedUpload(staged_path);
-    if let Some(path) = staged.path() {
-        let ingested = ingest_staged_file(
+    if staged_files.is_empty() {
+        return Err(AppError::BadRequest("No file in multipart form".into()));
+    }
+
+    // Ingest the staged bytes now that the caller is authorized; each guard
+    // removes its staging file on every exit path.
+    let mut files = Vec::with_capacity(staged_files.len());
+    for staged in staged_files {
+        let Some(path) = staged.path() else {
+            continue;
+        };
+        let (block_ids, total_size, new_block_ids) = ingest_staged_file(
             state.block_store.clone(),
             repo_id,
             path.to_path_buf(),
             enc_key_ref,
         )
-        .await;
-        let (block_ids, total_size, new_block_ids) = ingested?;
-        // Zero-byte files are committed too: seafile gives them the `EMPTY_SHA1`
-        // sentinel id but still creates the dirent (`server/fileserver/fileop.go:3699-3702`).
-        let (fs_id, effective_name) = state
-            .file_service()
-            .upload_file_committed_stream(
-                repo_id,
-                &target_dir,
-                &filename,
-                block_ids,
-                total_size,
-                &user.email,
-                Some(user.user_id),
-                true,
-                replace,
-                new_block_ids,
-            )
-            .await?;
-        return Ok(Json(
-            json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
-        ));
+        .await?;
+        files.push(UploadedFile {
+            filename: staged.filename.clone(),
+            block_ids,
+            total_size,
+            new_block_ids,
+            mtime: None,
+        });
+        // `staged` drops here, removing the staging file.
     }
-
-    Ok(Json(json!([{"name": filename, "uploaded": true}])))
+    assign_mtimes(&mut files, &fields);
+    if !replace && duplicate_file_names(&files) {
+        return Err(AppError::BadRequest("Too many files with same name".into()));
+    }
+    // Zero-byte files are committed too: seafile gives them the `EMPTY_SHA1`
+    // sentinel id but still creates the dirent (`server/fileserver/fileop.go:3699-3702`).
+    let committed = commit_uploads(
+        &state,
+        repo_id,
+        &target_dir,
+        files,
+        &user.email,
+        Some(user.user_id),
+        true,
+        replace,
+    )
+    .await?;
+    Ok(upload_files_response(
+        UploadFilesReply::JsonArray,
+        &committed,
+    ))
 }
 
 /// Extract the multipart `boundary` from the Content-Type header.
@@ -941,6 +1039,106 @@ fn max_upload_bytes(state: &AppState) -> u64 {
     state.config().server.max_upload_size_mb * 1024 * 1024
 }
 
+/// One file whose bytes were already turned into blocks (token endpoints).
+struct UploadedFile {
+    filename: String,
+    block_ids: Vec<String>,
+    total_size: i64,
+    new_block_ids: Vec<String>,
+    mtime: Option<i64>,
+}
+
+/// One file staged on disk before authorization (session endpoints).
+struct StagedFile {
+    filename: String,
+    /// Removes the staging file on drop.
+    staged: StagedUpload,
+}
+
+impl StagedFile {
+    fn path(&self) -> Option<&std::path::Path> {
+        self.staged.path()
+    }
+}
+
+/// Reject `parent_dir`/`relative_path` shapes the Go fileserver rejects:
+/// `//` in the parent and a leading `/` on the relative path.
+fn validate_upload_paths(parent_dir: &str, relative_path: &str) -> Result<(), AppError> {
+    if parent_dir.contains("//") {
+        return Err(AppError::BadRequest(
+            "parent_dir contains // sequence".into(),
+        ));
+    }
+    if relative_path.starts_with('/') {
+        return Err(AppError::BadRequest("Invalid relative path".into()));
+    }
+    Ok(())
+}
+
+/// Apply `last_modify` (single) or `last_modify_list` (one per file) to the
+/// parsed files. An unparsable value is ignored, as in the Go fileserver.
+fn assign_mtimes(files: &mut [UploadedFile], fields: &HashMap<String, String>) {
+    if files.len() == 1 {
+        files[0].mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
+        return;
+    }
+    let Some(list) = fields.get("last_modify_list") else {
+        return;
+    };
+    let values: Vec<&str> = list.split(',').map(str::trim).collect();
+    if values.len() != files.len() {
+        return;
+    }
+    for (file, value) in files.iter_mut().zip(values) {
+        file.mtime = parse_mtime(Some(value));
+    }
+}
+
+/// Whether two files in one request share a name. Upstream rejects that unless
+/// `replace` is set (`checkFilesWithSameName`, `fileop.go:1873`).
+fn duplicate_file_names(files: &[UploadedFile]) -> bool {
+    let mut seen = std::collections::HashSet::with_capacity(files.len());
+    files.iter().any(|f| !seen.insert(f.filename.as_str()))
+}
+
+/// Commit one or more already-ingested files, in request order.
+async fn commit_uploads(
+    state: &AppState,
+    repo_id: &str,
+    target_dir: &str,
+    files: Vec<UploadedFile>,
+    modifier: &str,
+    user_id: Option<i32>,
+    ensure_dir: bool,
+    replace: bool,
+) -> Result<Vec<CommittedFile>, AppError> {
+    let mut committed = Vec::with_capacity(files.len());
+    for file in files {
+        let (id, name) = state
+            .file_service()
+            .upload_file_committed_stream_at(
+                repo_id,
+                target_dir,
+                &file.filename,
+                file.block_ids,
+                file.total_size,
+                modifier,
+                user_id,
+                ensure_dir,
+                replace,
+                file.new_block_ids,
+                file.mtime,
+            )
+            .await?;
+        committed.push(CommittedFile {
+            id,
+            name,
+            size: file.total_size,
+        });
+    }
+    Ok(committed)
+}
+
 /// `POST /update-api/` — update an existing file from the web UI (no token),
 /// taking `file`, `repo_id`, and `p` / `path` (the full target path).
 pub async fn update_api(
@@ -949,22 +1147,22 @@ pub async fn update_api(
     headers: HeaderMap,
     body: axum::body::Body,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // This endpoint replaces an existing file in one request; it does not
-    // implement resumable uploads, so a Content-Range chunk is rejected rather
-    // than committed as the whole file.
-    reject_content_range(&headers)?;
     // An update always replaces an existing file, so the bytes it frees are part
     // of the budget. A Content-Length precheck cannot know that delta and used to
     // reject a same-size replacement near the quota; the commit-time check in
     // `upload_file_committed_stream` applies the correct delta instead.
     let boundary = extract_multipart_boundary(&headers)?;
     let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
+    let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
+    let is_chunked = content_range.is_some();
 
     let mut repo_id = String::new();
     let mut file_path = String::new();
     let mut csrf_token: Option<String> = None;
+    let mut fields: HashMap<String, String> = HashMap::new();
     // Stage the bytes on disk; authorization happens after parsing.
-    let mut staged_path: Option<std::path::PathBuf> = None;
+    let mut staged: Option<StagedFile> = None;
+    let mut chunked_file: Option<Vec<u8>> = None;
     let staging_dir = upload_staging_dir(&state);
 
     while let Some(mut field) = multipart
@@ -974,9 +1172,29 @@ pub async fn update_api(
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            let (path, _size) =
-                stage_file_field(&mut field, &staging_dir, max_upload_bytes(&state)).await?;
-            staged_path = Some(path);
+            if is_chunked {
+                if chunked_file.is_some() {
+                    return Err(AppError::BadRequest("More files in one request".into()));
+                }
+                chunked_file = Some(
+                    read_chunked_field(
+                        &mut field,
+                        content_range,
+                        state.config().server.max_chunk_size_mb * 1024 * 1024,
+                    )
+                    .await?,
+                );
+            } else {
+                if staged.is_some() {
+                    return Err(AppError::BadRequest("More files in one request".into()));
+                }
+                let (path, _size) =
+                    stage_file_field(&mut field, &staging_dir, max_upload_bytes(&state)).await?;
+                staged = Some(StagedFile {
+                    filename: field.file_name().unwrap_or("unknown").to_string(),
+                    staged: StagedUpload(Some(path)),
+                });
+            }
         } else {
             let val = field
                 .text()
@@ -985,79 +1203,115 @@ pub async fn update_api(
             if name == "repo_id" {
                 repo_id = val.clone();
             } else if name == "csrf_token" {
-                csrf_token = Some(val);
+                csrf_token = Some(val.clone());
             } else if name == "p" || name == "path" {
-                file_path = val;
+                file_path = val.clone();
             }
+            fields.insert(name, val);
         }
     }
 
-    let staged = StagedUpload(staged_path);
+    if file_path.is_empty() {
+        return Err(AppError::BadRequest("Path is missing.".into()));
+    }
+    if !file_path.starts_with('/') {
+        return Err(AppError::BadRequest("Path is missing or invalid.".into()));
+    }
 
-    if !file_path.is_empty() {
-        // CSRF: these no-token endpoints authenticate via the session cookie,
-        // so a cross-site form POST must be rejected.
-        crate::service::auth::csrf::check_form_csrf(
+    // CSRF: these no-token endpoints authenticate via the session cookie,
+    // so a cross-site form POST must be rejected.
+    crate::service::auth::csrf::check_form_csrf(
+        &state,
+        &user.session_token,
+        csrf_token.as_deref(),
+    )?;
+
+    // Authorization: repo_id is client-supplied, so require write access.
+    crate::domain::permission::check_repo_write_permission(
+        state.repos.member.as_ref(),
+        &repo_id,
+        user.user_id,
+    )
+    .await?;
+
+    // Encrypted libraries need the cached key before blocks are written.
+    let enc_key = super::download::upload_block_key(&state, &repo_id, user.user_id, false).await?;
+    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+
+    let parent = file_path
+        .rsplit_once('/')
+        .map(|(p, _)| if p.is_empty() { "/" } else { p })
+        .unwrap_or("/");
+    let name = file_path
+        .rsplit_once('/')
+        .map(|(_, n)| n)
+        .unwrap_or(&file_path);
+    require_target_exists(&state, &repo_id, parent, name).await?;
+
+    if is_chunked {
+        let file_data =
+            chunked_file.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+        if file_data.is_empty() {
+            return Err(AppError::BadRequest("No file in multipart form".into()));
+        }
+        let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
+        if let Some(result) = try_handle_chunked(
+            &state.temp_file_manager,
             &state,
-            &user.session_token,
-            csrf_token.as_deref(),
-        )?;
-
-        // Authorization: repo_id is client-supplied, so require write access.
-        crate::domain::permission::check_repo_write_permission(
-            state.repos.member.as_ref(),
             &repo_id,
-            user.user_id,
+            parent,
+            name,
+            bytes::Bytes::from(file_data),
+            content_range,
+            &user.email,
+            Some(user.user_id),
+            enc_key_ref,
+            true,
+            mtime,
+        )
+        .await?
+        {
+            return Ok(chunk_result_json(result));
+        }
+        return Err(AppError::Internal(
+            "chunked upload produced no outcome".into(),
+        ));
+    }
+
+    let Some(staged) = staged else {
+        return Err(AppError::BadRequest("No file in multipart form".into()));
+    };
+    let Some(path) = staged.path() else {
+        return Err(AppError::BadRequest("No file in multipart form".into()));
+    };
+    let (block_ids, total_size, new_block_ids) = ingest_staged_file(
+        state.block_store.clone(),
+        &repo_id,
+        path.to_path_buf(),
+        enc_key_ref,
+    )
+    .await?;
+    let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
+    // Update semantics: overwrite in place, and commit zero-byte files too.
+    let (fs_id, effective_name) = state
+        .file_service()
+        .upload_file_committed_stream_at(
+            &repo_id,
+            parent,
+            name,
+            block_ids,
+            total_size,
+            &user.email,
+            Some(user.user_id),
+            true,
+            true,
+            new_block_ids,
+            mtime,
         )
         .await?;
-
-        // Encrypted libraries need the cached key before blocks are written.
-        let enc_key =
-            super::download::upload_block_key(&state, &repo_id, user.user_id, false).await?;
-        let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
-
-        let parent = file_path
-            .rsplit_once('/')
-            .map(|(p, _)| if p.is_empty() { "/" } else { p })
-            .unwrap_or("/");
-        let name = file_path
-            .rsplit_once('/')
-            .map(|(_, n)| n)
-            .unwrap_or(&file_path);
-        require_target_exists(&state, &repo_id, parent, name).await?;
-
-        if let Some(path) = staged.path() {
-            let ingested = ingest_staged_file(
-                state.block_store.clone(),
-                &repo_id,
-                path.to_path_buf(),
-                enc_key_ref,
-            )
-            .await;
-            let (block_ids, total_size, new_block_ids) = ingested?;
-            // Update semantics: overwrite in place, and commit zero-byte files too.
-            let (fs_id, effective_name) = state
-                .file_service()
-                .upload_file_committed_stream(
-                    &repo_id,
-                    parent,
-                    name,
-                    block_ids,
-                    total_size,
-                    &user.email,
-                    Some(user.user_id),
-                    true,
-                    true,
-                    new_block_ids,
-                )
-                .await?;
-            return Ok(Json(
-                json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
-            ));
-        }
-    }
-
-    Ok(ok_json())
+    Ok(Json(
+        json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
+    ))
 }
 
 /// `POST /update-aj/` — AJAX file update from the Seahub web UI (no token),
@@ -1079,6 +1333,7 @@ pub async fn update_aj(
     let mut chunked_file_data: Option<Vec<u8>> = None;
     // Non-chunked uploads are staged on disk until authorization passes.
     let mut staged_path: Option<std::path::PathBuf> = None;
+    let mut file_seen = false;
     let staging_dir = upload_staging_dir(&state);
 
     while let Some(mut field) = multipart
@@ -1088,6 +1343,10 @@ pub async fn update_aj(
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
+            if file_seen {
+                return Err(AppError::BadRequest("More files in one request".into()));
+            }
+            file_seen = true;
             if is_chunked {
                 chunked_file_data = Some(
                     read_chunked_field(
@@ -1151,60 +1410,66 @@ pub async fn update_aj(
 
     if is_chunked {
         let file_data = bytes::Bytes::from(chunked_file_data.unwrap_or_default());
-        if !file_data.is_empty()
-            && let Some(result) = try_handle_chunked(
-                &state.temp_file_manager,
-                &state,
-                repo_id,
-                parent,
-                name,
-                file_data,
-                content_range,
-                &user.email,
-                Some(user.user_id),
-                enc_key_ref,
-                // The update endpoints always replace the target in place.
-                true,
-            )
-            .await?
+        if file_data.is_empty() {
+            return Err(AppError::BadRequest("No file in multipart form".into()));
+        }
+        if let Some(result) = try_handle_chunked(
+            &state.temp_file_manager,
+            &state,
+            repo_id,
+            parent,
+            name,
+            file_data,
+            content_range,
+            &user.email,
+            Some(user.user_id),
+            enc_key_ref,
+            // The update endpoints always replace the target in place.
+            true,
+            parse_mtime(fields.get("file_mtime").map(String::as_str)),
+        )
+        .await?
         {
             return Ok(chunk_result_json(result));
         }
-        return Ok(ok_json());
-    }
-
-    let staged = StagedUpload(staged_path);
-    if let Some(path) = staged.path() {
-        let ingested = ingest_staged_file(
-            state.block_store.clone(),
-            repo_id,
-            path.to_path_buf(),
-            enc_key_ref,
-        )
-        .await;
-        let (block_ids, total_size, new_block_ids) = ingested?;
-        // Update semantics: overwrite in place, and commit zero-byte files too.
-        let (fs_id, effective_name) = state
-            .file_service()
-            .upload_file_committed_stream(
-                repo_id,
-                parent,
-                name,
-                block_ids,
-                total_size,
-                &user.email,
-                Some(user.user_id),
-                true,
-                true,
-                new_block_ids,
-            )
-            .await?;
-        return Ok(Json(
-            json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
+        return Err(AppError::Internal(
+            "chunked upload produced no outcome".into(),
         ));
     }
 
-    Ok(ok_json())
+    let staged = StagedUpload(staged_path);
+    let Some(path) = staged.path() else {
+        return Err(AppError::BadRequest("No file in multipart form".into()));
+    };
+    let ingested = ingest_staged_file(
+        state.block_store.clone(),
+        repo_id,
+        path.to_path_buf(),
+        enc_key_ref,
+    )
+    .await;
+    let (block_ids, total_size, new_block_ids) = ingested?;
+    let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
+    // Update semantics: overwrite in place, and commit zero-byte files too.
+    let (fs_id, effective_name) = state
+        .file_service()
+        .upload_file_committed_stream_at(
+            repo_id,
+            parent,
+            name,
+            block_ids,
+            total_size,
+            &user.email,
+            Some(user.user_id),
+            true,
+            true,
+            new_block_ids,
+            mtime,
+        )
+        .await?;
+    Ok(Json(
+        json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
+    ))
 }
 
 /// `POST /upload-aj/{token}` — upload with an upload-link token, as sent by the
@@ -1215,7 +1480,7 @@ pub async fn upload_aj_token(
     uri: axum::http::Uri,
     headers: HeaderMap,
     body: axum::body::Body,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     let info = state
         .token_manager
         .validate(&token)
@@ -1254,13 +1519,10 @@ pub async fn upload_aj_token(
     let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
 
     let mut fields: HashMap<String, String> = HashMap::new();
-    let mut filename = String::new();
     let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let is_chunked = content_range.is_some();
-    let mut chunked_file_data: Option<Vec<u8>> = None;
-    let mut block_ids: Vec<String> = Vec::new();
-    let mut new_block_ids: Vec<String> = Vec::new();
-    let mut total_size: i64 = 0;
+    let mut chunked_file: Option<(String, Vec<u8>)> = None;
+    let mut files: Vec<UploadedFile> = Vec::new();
 
     while let Some(mut field) = multipart
         .next_field()
@@ -1269,27 +1531,33 @@ pub async fn upload_aj_token(
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            filename = field.file_name().unwrap_or("unknown").to_string();
+            let filename = field.file_name().unwrap_or("unknown").to_string();
             if is_chunked {
-                chunked_file_data = Some(
-                    read_chunked_field(
-                        &mut field,
-                        content_range,
-                        state.config().server.max_chunk_size_mb * 1024 * 1024,
-                    )
-                    .await?,
-                );
+                if chunked_file.is_some() {
+                    return Err(AppError::BadRequest("More files in one request".into()));
+                }
+                let data = read_chunked_field(
+                    &mut field,
+                    content_range,
+                    state.config().server.max_chunk_size_mb * 1024 * 1024,
+                )
+                .await?;
+                chunked_file = Some((filename, data));
             } else {
-                let (bids, size, nids) = stream_file_into_blocks(
+                let (block_ids, total_size, new_block_ids) = stream_file_into_blocks(
                     state.block_store.clone(),
                     &info.repo_id,
                     &mut field,
                     enc_key_ref,
                 )
                 .await?;
-                block_ids = bids;
-                new_block_ids = nids;
-                total_size = size;
+                files.push(UploadedFile {
+                    filename,
+                    block_ids,
+                    total_size,
+                    new_block_ids,
+                    mtime: None,
+                });
             }
         } else {
             fields.insert(
@@ -1304,12 +1572,12 @@ pub async fn upload_aj_token(
 
     let parent_dir = fields
         .get("parent_dir")
-        .map(|s| s.as_str())
-        .unwrap_or(&info.parent_dir);
+        .ok_or_else(|| AppError::BadRequest("No parent_dir given".into()))?;
     let relative_path = fields
         .get("relative_path")
         .map(|s| s.as_str())
         .unwrap_or("");
+    validate_upload_paths(parent_dir, relative_path)?;
     let target_dir = compute_scoped_target_dir(&info, parent_dir, relative_path)?;
     let query = query_params(&uri);
     let replace = scoped_replace(
@@ -1321,52 +1589,62 @@ pub async fn upload_aj_token(
     );
 
     if is_chunked {
-        let file_data = bytes::Bytes::from(chunked_file_data.unwrap_or_default());
-        if !file_data.is_empty()
-            && let Some(result) = try_handle_chunked(
-                &state.temp_file_manager,
-                &state,
-                &info.repo_id,
-                &target_dir,
-                &filename,
-                file_data,
-                content_range,
-                &info.username,
-                // Upload-link chunked uploads count against the owner's quota.
-                Some(info.user_id),
-                enc_key_ref,
-                replace,
-            )
-            .await?
-        {
-            return Ok(chunk_result_json(result));
+        let (filename, file_data) =
+            chunked_file.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+        if file_data.is_empty() {
+            return Err(AppError::BadRequest("No file in multipart form".into()));
         }
-        return Ok(Json(json!([{"name": filename, "uploaded": true}])));
-    }
-
-    let uid = Some(info.user_id);
-    let (fs_id, effective_name) = state
-        .file_service()
-        .upload_file_committed_stream(
+        let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
+        if let Some(result) = try_handle_chunked(
+            &state.temp_file_manager,
+            &state,
             &info.repo_id,
             &target_dir,
             &filename,
-            block_ids,
-            total_size,
+            bytes::Bytes::from(file_data),
+            content_range,
             &info.username,
-            uid,
-            true,
+            // Upload-link chunked uploads count against the owner's quota.
+            Some(info.user_id),
+            enc_key_ref,
             replace,
-            new_block_ids,
+            mtime,
         )
-        .await?;
+        .await?
+        {
+            return Ok(chunk_result_json(result).into_response());
+        }
+        return Err(AppError::Internal(
+            "chunked upload produced no outcome".into(),
+        ));
+    }
+
+    if files.is_empty() {
+        return Err(AppError::BadRequest("No file in multipart form".into()));
+    }
+    assign_mtimes(&mut files, &fields);
+    if !replace && duplicate_file_names(&files) {
+        return Err(AppError::BadRequest("Too many files with same name".into()));
+    }
+    let committed = commit_uploads(
+        &state,
+        &info.repo_id,
+        &target_dir,
+        files,
+        &info.username,
+        Some(info.user_id),
+        true,
+        replace,
+    )
+    .await?;
 
     if let Some(link_id) = info.upload_link_id {
         upload_link_service::increment_upload_view_cnt(state.repos.clone(), link_id);
     }
 
-    Ok(Json(
-        json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
+    Ok(upload_files_response(
+        UploadFilesReply::JsonArray,
+        &committed,
     ))
 }
 
@@ -1439,12 +1717,9 @@ pub async fn upload_api(
     let mut multipart = multer::Multipart::new(req.into_body().into_data_stream(), boundary);
 
     let mut fields: HashMap<String, String> = HashMap::new();
-    let mut filename = String::new();
-    let mut block_ids: Vec<String> = Vec::new();
-    let mut new_block_ids: Vec<String> = Vec::new();
-    let mut total_size: i64 = 0;
+    let mut chunked_file: Option<(String, Vec<u8>)> = None;
+    let mut files: Vec<UploadedFile> = Vec::new();
     let is_chunked = content_range.is_some();
-    let mut chunked_file_data: Option<Vec<u8>> = None;
 
     while let Some(mut field) = multipart
         .next_field()
@@ -1453,27 +1728,33 @@ pub async fn upload_api(
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            filename = field.file_name().unwrap_or("unknown").to_string();
+            let filename = field.file_name().unwrap_or("unknown").to_string();
             if is_chunked {
-                chunked_file_data = Some(
-                    read_chunked_field(
-                        &mut field,
-                        content_range.as_deref(),
-                        state.config().server.max_chunk_size_mb * 1024 * 1024,
-                    )
-                    .await?,
-                );
+                if chunked_file.is_some() {
+                    return Err(AppError::BadRequest("More files in one request".into()));
+                }
+                let data = read_chunked_field(
+                    &mut field,
+                    content_range.as_deref(),
+                    state.config().server.max_chunk_size_mb * 1024 * 1024,
+                )
+                .await?;
+                chunked_file = Some((filename, data));
             } else {
-                let (bids, size, nids) = stream_file_into_blocks(
+                let (block_ids, total_size, new_block_ids) = stream_file_into_blocks(
                     state.block_store.clone(),
                     &info.repo_id,
                     &mut field,
                     enc_key_ref,
                 )
                 .await?;
-                block_ids = bids;
-                new_block_ids = nids;
-                total_size = size;
+                files.push(UploadedFile {
+                    filename,
+                    block_ids,
+                    total_size,
+                    new_block_ids,
+                    mtime: None,
+                });
             }
         } else {
             fields.insert(
@@ -1488,10 +1769,10 @@ pub async fn upload_api(
 
     let parent_dir = fields
         .get("parent_dir")
-        .cloned()
-        .unwrap_or_else(|| info.parent_dir.clone());
+        .ok_or_else(|| AppError::BadRequest("No parent_dir given".into()))?;
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
-    let target_dir = compute_scoped_target_dir(&info, &parent_dir, &relative_path)?;
+    validate_upload_paths(parent_dir, &relative_path)?;
+    let target_dir = compute_scoped_target_dir(&info, parent_dir, &relative_path)?;
     let replace = scoped_replace(
         parse_replace_arg(
             query.get("replace").map(String::as_str),
@@ -1504,54 +1785,56 @@ pub async fn upload_api(
     let ret_json = wants_ret_json(&query, &fields);
 
     if is_chunked {
-        let file_data = bytes::Bytes::from(chunked_file_data.unwrap_or_default());
-        if !file_data.is_empty()
-            && let Some(result) = try_handle_chunked(
-                &state.temp_file_manager,
-                &state,
-                &info.repo_id,
-                &target_dir,
-                &filename,
-                file_data,
-                content_range.as_deref(),
-                &info.username,
-                Some(info.user_id),
-                enc_key_ref,
-                replace,
-            )
-            .await?
-        {
-            return Ok(match result {
-                ChunkResult::Intermediate => Json(json!({ "success": true })).into_response(),
-                ChunkResult::Committed { id, name, size } => {
-                    upload_commit_response(ret_json, &id, &name, size)
-                }
-            });
+        let (filename, file_data) =
+            chunked_file.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+        if file_data.is_empty() {
+            return Err(AppError::BadRequest("No file in multipart form".into()));
         }
-        return Ok(Json(json!([{"name": filename, "uploaded": true}])).into_response());
-    }
-
-    let uid = Some(info.user_id);
-    let (fs_id, effective_name) = state
-        .file_service()
-        .upload_file_committed_stream(
+        let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
+        if let Some(result) = try_handle_chunked(
+            &state.temp_file_manager,
+            &state,
             &info.repo_id,
             &target_dir,
             &filename,
-            block_ids,
-            total_size,
+            bytes::Bytes::from(file_data),
+            content_range.as_deref(),
             &info.username,
-            uid,
-            true,
+            Some(info.user_id),
+            enc_key_ref,
             replace,
-            new_block_ids,
+            mtime,
         )
-        .await?;
-    Ok(upload_commit_response(
-        ret_json,
-        &fs_id,
-        &effective_name,
-        total_size,
+        .await?
+        {
+            return Ok(chunk_result_response(ret_json, result));
+        }
+        return Err(AppError::Internal(
+            "chunked upload produced no outcome".into(),
+        ));
+    }
+
+    if files.is_empty() {
+        return Err(AppError::BadRequest("No file in multipart form".into()));
+    }
+    assign_mtimes(&mut files, &fields);
+    if !replace && duplicate_file_names(&files) {
+        return Err(AppError::BadRequest("Too many files with same name".into()));
+    }
+    let committed = commit_uploads(
+        &state,
+        &info.repo_id,
+        &target_dir,
+        files,
+        &info.username,
+        Some(info.user_id),
+        true,
+        replace,
+    )
+    .await?;
+    Ok(upload_files_response(
+        UploadFilesReply::PlainOrJson { ret_json },
+        &committed,
     ))
 }
 
@@ -1600,9 +1883,13 @@ pub async fn update_api_handler(
     let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
 
     // See `update_api`: this endpoint only replaces an existing file, so the
-    // commit-time delta is the only correct quota check. It does not implement
-    // resumable uploads, so a chunk must not be committed as the whole file.
-    reject_content_range(req.headers())?;
+    // commit-time delta is the only correct quota check.
+    let content_range = req
+        .headers()
+        .get("content-range")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned());
+    let is_chunked = content_range.is_some();
 
     let boundary = ct
         .split("boundary=")
@@ -1614,10 +1901,9 @@ pub async fn update_api_handler(
     let mut multipart = multer::Multipart::new(req.into_body().into_data_stream(), boundary);
 
     let mut fields: HashMap<String, String> = HashMap::new();
-    let mut filename = String::new();
-    let mut block_ids: Vec<String> = Vec::new();
-    let mut new_block_ids: Vec<String> = Vec::new();
-    let mut total_size: i64 = 0;
+    let mut file_seen = false;
+    let mut file: Option<UploadedFile> = None;
+    let mut chunked_file: Option<(String, Vec<u8>)> = None;
 
     while let Some(mut field) = multipart
         .next_field()
@@ -1626,17 +1912,35 @@ pub async fn update_api_handler(
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            filename = field.file_name().unwrap_or("unknown").to_string();
-            let (bids, size, nids) = stream_file_into_blocks(
-                state.block_store.clone(),
-                &info.repo_id,
-                &mut field,
-                enc_key_ref,
-            )
-            .await?;
-            block_ids = bids;
-            new_block_ids = nids;
-            total_size = size;
+            if file_seen {
+                return Err(AppError::BadRequest("More files in one request".into()));
+            }
+            file_seen = true;
+            let filename = field.file_name().unwrap_or("unknown").to_string();
+            if is_chunked {
+                let data = read_chunked_field(
+                    &mut field,
+                    content_range.as_deref(),
+                    state.config().server.max_chunk_size_mb * 1024 * 1024,
+                )
+                .await?;
+                chunked_file = Some((filename, data));
+            } else {
+                let (block_ids, total_size, new_block_ids) = stream_file_into_blocks(
+                    state.block_store.clone(),
+                    &info.repo_id,
+                    &mut field,
+                    enc_key_ref,
+                )
+                .await?;
+                file = Some(UploadedFile {
+                    filename,
+                    block_ids,
+                    total_size,
+                    new_block_ids,
+                    mtime: None,
+                });
+            }
         } else {
             fields.insert(
                 name,
@@ -1648,82 +1952,77 @@ pub async fn update_api_handler(
         }
     }
 
-    let target_file = fields.get("target_file").cloned().unwrap_or_default();
+    let target_file = fields
+        .get("target_file")
+        .ok_or_else(|| AppError::BadRequest("No target_file given.".into()))?;
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
+    if relative_path.starts_with('/') {
+        return Err(AppError::BadRequest("Invalid relative path".into()));
+    }
     // `/update-api` honours `ret-json`; without it the body is a plain id.
     let ret_json = wants_ret_json(&query, &fields);
 
-    // No `block_ids.is_empty()` guard: a zero-byte update still has to commit
-    // (its fs id is the `EMPTY_SHA1` sentinel).
-    let uid = Some(info.user_id);
-    if !target_file.is_empty() {
-        let (raw_parent, raw_name) = target_file.rsplit_once('/').unwrap_or(("/", &target_file));
-        let parent = if raw_parent.is_empty() {
-            "/"
-        } else {
-            raw_parent
-        };
-        // Scoped for consistency: an update token never carries `upload_link_id`
-        // today, but this keeps the link-directory clamp if one ever does.
-        let target_dir = compute_scoped_target_dir(&info, parent, &relative_path)?;
-        let name = raw_name.to_string();
-        require_target_exists(&state, &info.repo_id, &target_dir, &name).await?;
+    let (raw_parent, raw_name) = target_file.rsplit_once('/').unwrap_or(("/", target_file));
+    let parent = if raw_parent.is_empty() {
+        "/"
+    } else {
+        raw_parent
+    };
+    // Scoped for consistency: an update token never carries `upload_link_id`
+    // today, but this keeps the link-directory clamp if one ever does.
+    let target_dir = compute_scoped_target_dir(&info, parent, &relative_path)?;
+    let name = raw_name.to_string();
+    require_target_exists(&state, &info.repo_id, &target_dir, &name).await?;
 
-        let (fs_id, effective_name) = state
-            .file_service()
-            .upload_file_committed_stream(
-                &info.repo_id,
-                &target_dir,
-                &name,
-                block_ids,
-                total_size,
-                &info.username,
-                uid,
-                false,
-                // The update endpoint always overwrites in place.
-                true,
-                new_block_ids,
-            )
-            .await?;
-
-        return Ok(upload_commit_response(
-            ret_json,
-            &fs_id,
-            &effective_name,
-            total_size,
+    if is_chunked {
+        let (_filename, data) =
+            chunked_file.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+        if data.is_empty() {
+            return Err(AppError::BadRequest("No file in multipart form".into()));
+        }
+        let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
+        if let Some(result) = try_handle_chunked(
+            &state.temp_file_manager,
+            &state,
+            &info.repo_id,
+            &target_dir,
+            &name,
+            bytes::Bytes::from(data),
+            content_range.as_deref(),
+            &info.username,
+            Some(info.user_id),
+            enc_key_ref,
+            true,
+            mtime,
+        )
+        .await?
+        {
+            return Ok(chunk_result_response(ret_json, result));
+        }
+        return Err(AppError::Internal(
+            "chunked upload produced no outcome".into(),
         ));
     }
 
-    // Fallback: parent_dir + relative_path + filename
-    let parent_dir = fields.get("parent_dir").cloned().unwrap_or(info.parent_dir);
-    let target_dir = compute_target_dir(&parent_dir, &relative_path)?;
-
-    if !filename.is_empty() {
-        require_target_exists(&state, &info.repo_id, &target_dir, &filename).await?;
-        let (fs_id, effective_name) = state
-            .file_service()
-            .upload_file_committed_stream(
-                &info.repo_id,
-                &target_dir,
-                &filename,
-                block_ids,
-                total_size,
-                &info.username,
-                uid,
-                true,
-                true,
-                new_block_ids,
-            )
-            .await?;
-        return Ok(upload_commit_response(
-            ret_json,
-            &fs_id,
-            &effective_name,
-            total_size,
-        ));
-    }
-
-    Ok(ok_json().into_response())
+    let Some(mut file) = file else {
+        return Err(AppError::BadRequest("No file in multipart form".into()));
+    };
+    file.mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
+    let committed = commit_uploads(
+        &state,
+        &info.repo_id,
+        &target_dir,
+        vec![file],
+        &info.username,
+        Some(info.user_id),
+        false,
+        true,
+    )
+    .await?;
+    Ok(upload_files_response(
+        UploadFilesReply::PlainOrJson { ret_json },
+        &committed,
+    ))
 }
 
 /// `POST /update-aj/{token}` — token-based AJAX file update from the Seahub web
@@ -1733,7 +2032,7 @@ pub async fn update_aj_token(
     Path(token): Path<String>,
     headers: HeaderMap,
     body: axum::body::Body,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     let info = state
         .token_manager
         .validate(&token)
@@ -1763,17 +2062,16 @@ pub async fn update_aj_token(
     .await?;
     let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
 
-    // This endpoint does not implement resumable uploads; a Content-Range chunk
-    // would otherwise overwrite the target with just that chunk.
-    reject_content_range(&headers)?;
+    let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
+    let is_chunked = content_range.is_some();
 
     let boundary = extract_multipart_boundary(&headers)?;
     let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
 
     let mut fields: HashMap<String, String> = HashMap::new();
-    let mut block_ids: Vec<String> = Vec::new();
-    let mut new_block_ids: Vec<String> = Vec::new();
-    let mut total_size: i64 = 0;
+    let mut file_seen = false;
+    let mut file: Option<UploadedFile> = None;
+    let mut chunked_file: Option<(String, Vec<u8>)> = None;
 
     while let Some(mut field) = multipart
         .next_field()
@@ -1782,16 +2080,35 @@ pub async fn update_aj_token(
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
-            let (bids, size, nids) = stream_file_into_blocks(
-                state.block_store.clone(),
-                &info.repo_id,
-                &mut field,
-                enc_key_ref,
-            )
-            .await?;
-            block_ids = bids;
-            new_block_ids = nids;
-            total_size = size;
+            if file_seen {
+                return Err(AppError::BadRequest("More files in one request".into()));
+            }
+            file_seen = true;
+            let filename = field.file_name().unwrap_or("unknown").to_string();
+            if is_chunked {
+                let data = read_chunked_field(
+                    &mut field,
+                    content_range,
+                    state.config().server.max_chunk_size_mb * 1024 * 1024,
+                )
+                .await?;
+                chunked_file = Some((filename, data));
+            } else {
+                let (block_ids, total_size, new_block_ids) = stream_file_into_blocks(
+                    state.block_store.clone(),
+                    &info.repo_id,
+                    &mut field,
+                    enc_key_ref,
+                )
+                .await?;
+                file = Some(UploadedFile {
+                    filename,
+                    block_ids,
+                    total_size,
+                    new_block_ids,
+                    mtime: None,
+                });
+            }
         } else {
             fields.insert(
                 name,
@@ -1803,47 +2120,76 @@ pub async fn update_aj_token(
         }
     }
 
-    // Update semantics: overwrite in place, and commit zero-byte files too.
-    let uid = Some(info.user_id);
-    let target_file = fields.get("target_file").cloned().unwrap_or_default();
+    let target_file = fields
+        .get("target_file")
+        .ok_or_else(|| AppError::BadRequest("No target_file given.".into()))?;
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
+    if relative_path.starts_with('/') {
+        return Err(AppError::BadRequest("Invalid relative path".into()));
+    }
 
-    if !target_file.is_empty() {
-        let slash_pos = target_file.rfind('/').unwrap_or(0);
-        let raw_parent = if slash_pos == 0 {
-            "/"
-        } else {
-            &target_file[..slash_pos]
-        };
-        let name = target_file[slash_pos + 1..].to_string();
-        // Scoped like every other token upload: an update token never carries
-        // `upload_link_id` today, but this keeps the link-directory clamp if one
-        // ever does (and matches `update_api_handler`).
-        let target_dir = compute_scoped_target_dir(&info, raw_parent, &relative_path)?;
-        require_target_exists(&state, &info.repo_id, &target_dir, &name).await?;
+    let (raw_parent, raw_name) = target_file.rsplit_once('/').unwrap_or(("/", target_file));
+    let parent = if raw_parent.is_empty() {
+        "/"
+    } else {
+        raw_parent
+    };
+    // Scoped like every other token upload: an update token never carries
+    // `upload_link_id` today, but this keeps the link-directory clamp if one
+    // ever does (and matches `update_api_handler`).
+    let target_dir = compute_scoped_target_dir(&info, parent, &relative_path)?;
+    let name = raw_name.to_string();
+    require_target_exists(&state, &info.repo_id, &target_dir, &name).await?;
 
-        let (fs_id, effective_name) = state
-            .file_service()
-            .upload_file_committed_stream(
-                &info.repo_id,
-                &target_dir,
-                &name,
-                block_ids,
-                total_size,
-                &info.username,
-                uid,
-                false,
-                true,
-                new_block_ids,
-            )
-            .await?;
-
-        return Ok(Json(
-            json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
+    if is_chunked {
+        let (_filename, data) =
+            chunked_file.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+        if data.is_empty() {
+            return Err(AppError::BadRequest("No file in multipart form".into()));
+        }
+        let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
+        if let Some(result) = try_handle_chunked(
+            &state.temp_file_manager,
+            &state,
+            &info.repo_id,
+            &target_dir,
+            &name,
+            bytes::Bytes::from(data),
+            content_range,
+            &info.username,
+            Some(info.user_id),
+            enc_key_ref,
+            true,
+            mtime,
+        )
+        .await?
+        {
+            return Ok(chunk_result_json(result).into_response());
+        }
+        return Err(AppError::Internal(
+            "chunked upload produced no outcome".into(),
         ));
     }
 
-    Ok(ok_json())
+    let Some(mut file) = file else {
+        return Err(AppError::BadRequest("No file in multipart form".into()));
+    };
+    file.mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
+    let committed = commit_uploads(
+        &state,
+        &info.repo_id,
+        &target_dir,
+        vec![file],
+        &info.username,
+        Some(info.user_id),
+        false,
+        true,
+    )
+    .await?;
+    Ok(upload_files_response(
+        UploadFilesReply::JsonArray,
+        &committed,
+    ))
 }
 
 /// `POST /upload-blks-api/{token}` — block upload and commit.
@@ -1906,6 +2252,7 @@ pub async fn upload_blks_api(
     let query = query_params(&uri);
     let mut fields: HashMap<String, String> = HashMap::new();
     let mut new_block_ids: Vec<String> = Vec::new();
+    let mut has_file = false;
 
     while let Some(mut field) = multipart
         .next_field()
@@ -1914,6 +2261,7 @@ pub async fn upload_blks_api(
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "file" {
+            has_file = true;
             let block_id = field.file_name().unwrap_or("").to_string();
             let data = read_multipart_field_limited(&mut field, MAX_BLOCK_UPLOAD_BYTES).await?;
             if !block_id.is_empty() && !data.is_empty() {
@@ -1975,6 +2323,9 @@ pub async fn upload_blks_api(
     }
 
     let commit_only = fields.contains_key("commitonly") || query.contains_key("commitonly");
+    if !commit_only && !has_file {
+        return Err(AppError::BadRequest("No file in multipart form".into()));
+    }
     // Upstream's update handler requires the commit phase; a block-only request
     // there would otherwise look like an upload and answer success without
     // touching the target.
@@ -2116,9 +2467,10 @@ pub async fn upload_blks_api(
         // accounting, activity log and index scheduling are the shared ones. The
         // blocks were written and quota-reserved by the upload loop above; they
         // are released from the reservation table once the commit references them.
+        let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
         let committed = state
             .file_service()
-            .upload_file_committed_stream(
+            .upload_file_committed_stream_at(
                 &info.repo_id,
                 &target_dir,
                 &file_name,
@@ -2131,6 +2483,7 @@ pub async fn upload_blks_api(
                 ensure_dir,
                 replace,
                 new_block_ids.clone(),
+                mtime,
             )
             .await;
 

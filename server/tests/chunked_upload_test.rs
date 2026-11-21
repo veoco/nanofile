@@ -260,6 +260,204 @@ async fn test_ios_block_upload_link_rejects_bad_block_id() {
     assert_eq!(resp.status(), 400);
 }
 
+async fn update_link(f: &TestFixture, web: bool) -> String {
+    let query = if web { "?p=/&from=web" } else { "?p=/" };
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/update-link/{}", f.repo_id, query),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    resp.json().await.unwrap()
+}
+
+/// An update request without a `file` part must not silently truncate the
+/// target (upstream answers `400` from `doUpdate`).
+#[tokio::test]
+async fn test_update_token_missing_file_does_not_truncate() {
+    for web in [false, true] {
+        let f = TestFixture::new().await;
+        let resp = f
+            .client
+            .upload_file(&f.api_token, &f.repo_id, "/", "keep.txt", b"original")
+            .await;
+        assert_eq!(resp.status(), 200);
+
+        let url = update_link(&f, web).await;
+        let form = reqwest::multipart::Form::new().text("target_file", "/keep.txt");
+        let resp = f.client.post_multipart_url(&url, form).await;
+        assert_eq!(resp.status(), 400);
+
+        let resp = f
+            .client
+            .download_file(&f.api_token, &f.repo_id, "/keep.txt")
+            .await;
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.bytes().await.unwrap().as_ref(), b"original");
+    }
+}
+
+/// The desktop client chunks updates through `/update-api`; that endpoint used
+/// to reject every `Content-Range` request.
+#[tokio::test]
+async fn test_update_token_supports_chunked_update() {
+    let f = TestFixture::new().await;
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "chunked.txt", b"old")
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let content = b"chunked update payload";
+    for web in [false, true] {
+        let url = update_link(&f, web).await;
+        let part = reqwest::multipart::Part::bytes(content.to_vec()).file_name("chunked.txt");
+        let form = reqwest::multipart::Form::new()
+            .text("target_file", "/chunked.txt")
+            .part("file", part);
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let resp = client
+            .post(&url)
+            .header(
+                "content-range",
+                format!("bytes 0-{}/{}", content.len() - 1, content.len()),
+            )
+            .multipart(form)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "chunked update failed (web={web})");
+
+        let resp = f
+            .client
+            .download_file(&f.api_token, &f.repo_id, "/chunked.txt")
+            .await;
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.bytes().await.unwrap().as_ref(), content.as_slice());
+    }
+}
+
+/// Multi-file upload is part of the upstream contract: `-aj` answers a JSON
+/// array and `-api` tab-separated ids.
+#[tokio::test]
+async fn test_multi_file_upload_returns_every_id() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/upload-link/?p=/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    let api_url: String = resp.json().await.unwrap();
+    let form = reqwest::multipart::Form::new()
+        .text("parent_dir", "/")
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(b"one".to_vec()).file_name("one.txt"),
+        )
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(b"two".to_vec()).file_name("two.txt"),
+        );
+    let resp = f.client.post_multipart_url(&api_url, form).await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.text().await.unwrap();
+    assert_eq!(body.split('\t').count(), 2, "got {body:?}");
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/upload-link/?p=/&from=web", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    let web_url: String = resp.json().await.unwrap();
+    let form = reqwest::multipart::Form::new()
+        .text("parent_dir", "/")
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(b"three".to_vec()).file_name("three.txt"),
+        )
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(b"four".to_vec()).file_name("four.txt"),
+        );
+    let resp = f.client.post_multipart_url(&web_url, form).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body.as_array().unwrap().len(), 2, "got {body}");
+}
+
+/// The Go fileserver applies `last_modify` to the committed dirent; the
+/// upstream desktop/iOS clients send it so the server keeps the local mtime.
+#[tokio::test]
+async fn test_upload_applies_client_mtime() {
+    let f = TestFixture::new().await;
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/upload-link/?p=/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    let url: String = resp.json().await.unwrap();
+    let form = reqwest::multipart::Form::new()
+        .text("parent_dir", "/")
+        .text("last_modify", "2020-01-02T03:04:05Z")
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(b"mtime".to_vec()).file_name("mtime.txt"),
+        );
+    let resp = f.client.post_multipart_url(&url, form).await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/file/detail/?p=/mtime.txt", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["mtime"].as_i64(), Some(1_577_934_245), "got {body}");
+}
+
+/// The Go fileserver rejects a leading `/` on `relative_path` and `//` in
+/// `parent_dir`; both used to be normalized away.
+#[tokio::test]
+async fn test_upload_rejects_malformed_paths() {
+    let f = TestFixture::new().await;
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/upload-link/?p=/", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    let url: String = resp.json().await.unwrap();
+
+    for (parent, relative) in [("/", "/sub"), ("/a//b", "sub")] {
+        let form = reqwest::multipart::Form::new()
+            .text("parent_dir", parent.to_string())
+            .text("relative_path", relative.to_string())
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(b"x".to_vec()).file_name("x.txt"),
+            );
+        let resp = f.client.post_multipart_url(&url, form).await;
+        assert_eq!(
+            resp.status(),
+            400,
+            "parent={parent:?} relative={relative:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_upload_blks_link_no_auth() {
     let f = TestFixture::new().await;
