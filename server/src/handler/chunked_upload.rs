@@ -73,7 +73,11 @@ pub async fn update_blks_link(
         parent_dir,
     );
 
-    let url = build_blks_op_url(&state, "update-blks-api", &token, &headers);
+    // Both links point at the one block endpoint: `upload_blks_api` accepts the
+    // `upload-blks` and `update-blks` token ops alike, and the token itself names
+    // the directory and the operation. Minting a second path here (`update-blks-api`)
+    // produced a URL no route serves.
+    let url = build_blks_op_url(&state, "upload-blks-api", &token, &headers);
 
     Ok(Json(url))
 }

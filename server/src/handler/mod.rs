@@ -18,6 +18,19 @@ pub const MAX_SMALL_BODY_BYTES: usize = 1024 * 1024;
 /// encrypted data. Shared by sync put_block and the mobile upload-blks-api.
 pub const MAX_BLOCK_UPLOAD_BYTES: usize = 12 * 1024 * 1024;
 
+/// Whether `block_id` is a Seafile block id: 40 lowercase hex characters.
+///
+/// Block ids are `sha1` output, which is always lowercase. The sync block PUT and
+/// the block-upload commit both accept a client-supplied id, so they must agree:
+/// accepting `ABC…` here and then looking it up in the content-addressed store
+/// (which stores the lowercase name) turns a valid request into a missing block.
+pub fn is_valid_block_id(block_id: &str) -> bool {
+    block_id.len() == 40
+        && block_id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// Upper bound on dirent names accepted in one request.
 ///
 /// Endpoints take a name list and then do per-name work over the tree (a recursive walk
@@ -209,5 +222,22 @@ mod tests {
         let body = axum::body::Body::from(vec![0u8; 64]);
         let error = read_body_limited(body, 8).await.unwrap_err();
         assert!(matches!(error, AppError::ContentTooLarge), "got {error:?}");
+    }
+
+    /// The predicate both the sync PUT and the block-upload commit share: only a
+    /// 40-character lowercase SHA-1 is an id the content-addressed store can serve.
+    #[test]
+    fn a_block_id_is_exactly_40_lowercase_hex_chars() {
+        assert!(is_valid_block_id(
+            "0123456789abcdef0123456789abcdef01234567"
+        ));
+        assert!(!is_valid_block_id(&"a".repeat(39)));
+        assert!(!is_valid_block_id(&"a".repeat(41)));
+        // The old validators each missed one side: `is_ascii_lowercase()` let
+        // `g`-`z` through, `is_ascii_hexdigit()` let uppercase through. The store
+        // only names blocks by the lowercase sha1 the writer computed.
+        assert!(!is_valid_block_id(&"A".repeat(40)));
+        assert!(!is_valid_block_id(&"g".repeat(40)));
+        assert!(!is_valid_block_id(""));
     }
 }

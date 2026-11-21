@@ -31,11 +31,7 @@ pub fn block_routes() -> Router<Arc<AppState>> {
 
 /// Validate that block_id is 40 lowercase hex chars (seafile's is_object_id_valid()).
 fn validate_block_id(block_id: &str) -> Result<(), AppError> {
-    if block_id.len() != 40
-        || !block_id
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-    {
+    if !crate::handler::is_valid_block_id(block_id) {
         return Err(AppError::BadRequest(format!(
             "invalid block_id format: {}",
             block_id

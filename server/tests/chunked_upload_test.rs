@@ -39,12 +39,82 @@ async fn test_update_blks_link_returns_url() {
 
     let body: String = resp.json().await.unwrap();
     assert!(
-        body.contains("update-blks-api/"),
-        "response should contain update-blks-api/ URL, got: {body}"
+        body.contains("upload-blks-api/"),
+        "update-blks-link must point at the one block endpoint, got: {body}"
     );
     assert!(
         body.starts_with("http://"),
         "response should start with http://, got: {body}"
+    );
+}
+
+/// The URL `update-blks-link` hands out used to name `/update-blks-api/{token}`,
+/// which no route served. The block endpoint accepts the `update-blks` op, so the
+/// minted URL must reach it and a zero-byte commit must succeed.
+#[tokio::test]
+async fn test_update_blks_link_url_is_routable() {
+    let f = TestFixture::new().await;
+
+    let resp = f.client.update_blks_link(&f.api_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let url: String = resp.json().await.unwrap();
+
+    let form = reqwest::multipart::Form::new()
+        .text("commitonly", "1")
+        .text("parent_dir", "/")
+        .text("file_name", "updated.txt")
+        .text("blockids", "[]")
+        .text("file_size", "0");
+    let resp = f.client.post_multipart_url(&url, form).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "the update-blks URL must reach the block endpoint"
+    );
+    let body = resp.text().await.unwrap();
+    assert_eq!(
+        body,
+        infra::common::EMPTY_SHA1,
+        "a zero-byte block commit answers the empty-file sentinel id"
+    );
+}
+
+/// `replace=true` is the documented spelling (see the transfer docs); the block
+/// commit must honour it instead of silently creating `name (1).ext`.
+#[tokio::test]
+async fn test_upload_blks_commit_honours_replace_true() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "replace-me.txt", b"original")
+        .await;
+    assert_eq!(resp.status(), 200, "seeding the file failed");
+
+    let resp = f.client.update_blks_link(&f.api_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let url: String = resp.json().await.unwrap();
+
+    let form = reqwest::multipart::Form::new()
+        .text("commitonly", "1")
+        .text("parent_dir", "/")
+        .text("file_name", "replace-me.txt")
+        .text("blockids", "[]")
+        .text("file_size", "0")
+        .text("replace", "true");
+    let resp = f.client.post_multipart_url(&url, form).await;
+    assert_eq!(resp.status(), 200, "replace=true commit failed");
+
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/replace-me.txt")
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.bytes().await.unwrap();
+    assert!(
+        body.is_empty(),
+        "replace=true must overwrite the target in place, got {} bytes",
+        body.len()
     );
 }
 
@@ -78,6 +148,28 @@ async fn test_file_uploaded_bytes_stub() {
     let resp = f
         .client
         .file_uploaded_bytes(&f.api_token, &f.repo_id, "test.txt", "/")
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["uploadedBytes"].as_i64(), Some(0));
+}
+
+/// The legacy `/api2/` alias documented next to the v2.1 route: it was documented
+/// and in the capability table but had no route (a 404 for old clients).
+#[tokio::test]
+async fn test_file_uploaded_bytes_legacy_path_is_served() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .get(
+            &format!(
+                "/api2/repos/{}/file-uploaded-bytes/?file_name=test.txt&parent_dir=/",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
         .await;
     assert_eq!(resp.status(), 200);
 

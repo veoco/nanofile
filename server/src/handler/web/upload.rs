@@ -73,7 +73,10 @@ fn scoped_replace(requested: bool, upload_link_id: Option<i32>) -> bool {
 /// `r.FormValue("replace")` does. Absent, `0` or `false` keeps both (the new
 /// file becomes `name (1).ext`); `1`/`true` overwrites in place; anything else
 /// is rejected, matching `server/fileserver/fileop.go:1220-1231`.
-fn parse_replace_arg(query: Option<&str>, form: Option<&str>) -> Result<bool, AppError> {
+///
+/// Shared with `/api2/repos/{repo_id}/file/` and the block commit so all three
+/// entry points accept the same spellings instead of silently keeping both.
+pub(crate) fn parse_replace_arg(query: Option<&str>, form: Option<&str>) -> Result<bool, AppError> {
     let raw = form.or(query).map(str::trim).filter(|v| !v.is_empty());
     match raw {
         None | Some("0") | Some("false") => Ok(false),
@@ -1813,7 +1816,10 @@ pub async fn update_aj_token(
             &target_file[..slash_pos]
         };
         let name = target_file[slash_pos + 1..].to_string();
-        let target_dir = compute_target_dir(raw_parent, &relative_path)?;
+        // Scoped like every other token upload: an update token never carries
+        // `upload_link_id` today, but this keeps the link-directory clamp if one
+        // ever does (and matches `update_api_handler`).
+        let target_dir = compute_scoped_target_dir(&info, raw_parent, &relative_path)?;
         require_target_exists(&state, &info.repo_id, &target_dir, &name).await?;
 
         let (fs_id, effective_name) = state
@@ -1992,7 +1998,10 @@ pub async fn upload_blks_api(
         // Link tokens cannot reach this operation today, but keep the add-only
         // rule here too so a future token type cannot inherit overwrite.
         let replace = scoped_replace(
-            fields.get("replace").map(|s| s.as_str()) == Some("1"),
+            parse_replace_arg(
+                query.get("replace").map(String::as_str),
+                fields.get("replace").map(String::as_str),
+            )?,
             info.upload_link_id,
         );
 
@@ -2008,10 +2017,12 @@ pub async fn upload_blks_api(
         }
 
         // Reject malformed / path-traversal ids outright — a valid block id is
-        // exactly 40 hex chars (content-addressed SHA-1).
+        // exactly 40 lowercase hex chars (content-addressed SHA-1). The sync block
+        // PUT shares this predicate, so an id cannot pass one endpoint and fail
+        // to resolve in the store behind the other.
         if let Some(bad) = block_ids
             .iter()
-            .find(|bid| bid.len() != 40 || !bid.bytes().all(|b| b.is_ascii_hexdigit()))
+            .find(|bid| !crate::handler::is_valid_block_id(bid))
         {
             return Err(AppError::BadRequest(format!("invalid block id: {bad}")));
         }
