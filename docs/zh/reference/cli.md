@@ -69,12 +69,15 @@ nanofile verify-dir-order [--dry-run] [--repair] [--repo <id>] [--json]
 nanofile service install [--account virtual|system|network|<账号>]
                          [--password <值> | --password-stdin]
 nanofile service uninstall
+nanofile service start
+nanofile service stop
 nanofile service status
 nanofile service run
 ```
 
-- `install` 注册自动启动服务（开机即运行，无需登录），并移除本安装的"登录启动"项。默认账号是 `NT SERVICE\Nanofile`；见[Windows 服务与桌面托盘](/zh/guide/deploy/desktop-and-service#开机启动管理员)。
-- `uninstall` 停止并删除服务，回收授予它的目录权限。
+- `install` 注册自动启动服务（开机即运行，无需登录）。默认账号是 `NT SERVICE\Nanofile`；从托盘安装时会同时写入「登录启动」项，登录后托盘会出现；命令行安装则留给首次运行托盘时补注册。见[Windows 服务与桌面托盘](/zh/guide/deploy/desktop-and-service#开机启动管理员)。
+- `uninstall` 停止并删除服务，回收授予它的目录权限，并移除本安装的「登录启动」项。
+- `start` / `stop` 立即启动或停止已注册的服务，需要管理员权限；托盘里的「启动/停止 Windows 服务」调用的就是它们。
 - `status` 查询注册状态与运行账号；已注册时退出码 0。
 - `run` 由 SCM 调用。手工执行会直接报错退出。
 

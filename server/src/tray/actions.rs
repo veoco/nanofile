@@ -11,34 +11,36 @@
 //!   over the backend's wake channel to the main thread, which owns the menu.
 //! - macOS: the `NSApplication` main loop runs the action directly.
 //!
-//! Queuing is also why the service toggle needs no in-flight flag: a second click
-//! is prevented by disabling the item while the helper runs.
+//! Queuing is also why a service operation needs no lock: a second click is
+//! prevented by disabling the items while the helper runs.
 
 // `unsafe` is the Win32 process/dialog calls; the re-entrancy contract is in the
 // module doc above.
 #![cfg_attr(target_os = "windows", allow(unsafe_code))]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 #[cfg(target_os = "windows")]
 use std::collections::VecDeque;
 #[cfg(target_os = "windows")]
 use std::path::{Path, PathBuf};
 
 use tokio::sync::mpsc::UnboundedSender;
-use tray_icon::menu::{CheckMenuItem, MenuEvent};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem};
 
 use crate::TrayCommand;
 use crate::startup::login::{LoginEntry as _, PlatformLogin};
-#[cfg(target_os = "windows")]
 use crate::startup::policy;
+#[cfg(target_os = "windows")]
+use crate::startup::service::ServiceProbe;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use super::backend;
-use super::{ID_AUTOSTART, ID_OPEN_CONFIG, ID_OPEN_WEB, ID_QUIT, TrayContext, open_config_file};
+use super::open_config_file;
+use super::{ID_AUTOSTART, ID_OPEN_CONFIG, ID_OPEN_WEB, ID_QUIT, ID_SERVICE_ACTION, TrayContext};
 #[cfg(target_os = "windows")]
 use super::{ID_SERVICE, lang};
 #[cfg(target_os = "windows")]
-use crate::startup::service::{ServiceProbe, probe_service};
+use crate::startup::service::{EXIT_REFUSED, probe_service};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_CANCELLED, GetLastError, HANDLE, STILL_ACTIVE,
@@ -57,6 +59,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MB_SETFOREGROUND, MB_TOPMOST, MessageBoxW, SW_HIDE,
 };
 
+/// Where the action row is inserted: right after the status row. The base menu is
+/// open-web, open-config, sep, login, [service], sep, status, sep, quit.
+#[cfg(target_os = "windows")]
+const ACTION_POSITION: usize = 7;
+#[cfg(not(target_os = "windows"))]
+const ACTION_POSITION: usize = 6;
+
 /// Everything a menu action needs, plus the items it has to update. Kept in a
 /// thread-local because menu items and OS handles are only valid on the event-loop
 /// thread.
@@ -66,9 +75,18 @@ pub(super) struct MenuState {
     pub(super) login_item: CheckMenuItem,
     #[cfg(target_os = "windows")]
     pub(super) service_item: CheckMenuItem,
-    /// Something else already serves this address, so this process runs no
-    /// server and Quit only ends the tray.
-    pub(super) client_mode: bool,
+    pub(super) open_web_item: MenuItem,
+    pub(super) status_item: MenuItem,
+    pub(super) action_item: MenuItem,
+    pub(super) warning_item: MenuItem,
+    /// The menu itself, so the action and warning rows can come and go.
+    pub(super) menu: Menu,
+    pub(super) action_attached: Cell<bool>,
+    pub(super) warning_attached: Cell<bool>,
+    /// A service helper is running: both self-start items and the action wait.
+    pub(super) busy: Cell<bool>,
+    /// This process brought up the server (so Quit stops it).
+    pub(super) serving: bool,
     pub(super) quit_tx: UnboundedSender<TrayCommand>,
 }
 
@@ -87,6 +105,79 @@ fn with_state<T>(f: impl FnOnce(&MenuState) -> T) -> Option<T> {
     MENU_STATE.with(|slot| slot.borrow().as_ref().map(f))
 }
 
+/// Re-probe the machine and render the menu from the result.
+///
+/// Takes the state out for the duration so nothing inside can re-borrow it; the
+/// menu, the items and the tooltip are all owned by the event-loop thread.
+pub(super) fn sync() {
+    let state = MENU_STATE.with(|slot| slot.borrow_mut().take());
+    if let Some(state) = state {
+        sync_state(&state);
+        MENU_STATE.with(|slot| *slot.borrow_mut() = Some(state));
+    }
+}
+
+fn sync_state(state: &MenuState) {
+    let snapshot = super::startup_state(&state.ctx, &state.login, state.serving);
+    let plan = policy::plan(&snapshot);
+    let t = lang();
+    let busy = state.busy.get();
+
+    state.open_web_item.set_enabled(plan.web_enabled);
+    state.login_item.set_checked(plan.login_checked);
+    state.login_item.set_enabled(plan.login_enabled && !busy);
+    #[cfg(target_os = "windows")]
+    {
+        state.service_item.set_checked(plan.service_checked);
+        state.service_item.set_enabled(!busy);
+    }
+    state.status_item.set_text(t.tr(plan.status.key()));
+
+    match plan.action {
+        Some(kind) => {
+            state.action_item.set_text(t.tr(kind.key()));
+            state.action_item.set_enabled(!busy);
+            if !state.action_attached.get() {
+                let _ = state.menu.insert(&state.action_item, ACTION_POSITION);
+                state.action_attached.set(true);
+            }
+        }
+        None => {
+            if state.action_attached.get() {
+                let _ = state.menu.remove(&state.action_item);
+                state.action_attached.set(false);
+            }
+        }
+    }
+
+    if plan.warnings.is_empty() {
+        if state.warning_attached.get() {
+            let _ = state.menu.remove(&state.warning_item);
+            state.warning_attached.set(false);
+        }
+    } else {
+        state.warning_item.set_text(join_warnings(&plan.warnings));
+        if !state.warning_attached.get() {
+            let position = ACTION_POSITION + usize::from(state.action_attached.get());
+            let _ = state.menu.insert(&state.warning_item, position);
+            state.warning_attached.set(true);
+        }
+    }
+
+    super::set_tooltip(t.tr(plan.status.tooltip_key()));
+    super::remember_status(plan.status);
+}
+
+fn join_warnings(warnings: &[policy::Warning]) -> String {
+    let t = lang();
+    let separator = if t.lang == "zh" { "；" } else { "; " };
+    warnings
+        .iter()
+        .map(|warning| t.tr(warning.key()))
+        .collect::<Vec<_>>()
+        .join(separator)
+}
+
 /// What a menu click asks for: no payloads, since the action reads what it needs
 /// from [`MENU_STATE`] when it runs, outside muda's borrow.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -95,6 +186,8 @@ pub(super) enum TrayAction {
     ToggleLogin,
     #[cfg(target_os = "windows")]
     ToggleService,
+    #[cfg(target_os = "windows")]
+    ServiceAction,
     OpenConfig,
     Quit,
 }
@@ -113,6 +206,8 @@ fn action_for(id: &str) -> Option<TrayAction> {
         ID_AUTOSTART => Some(TrayAction::ToggleLogin),
         #[cfg(target_os = "windows")]
         ID_SERVICE => Some(TrayAction::ToggleService),
+        #[cfg(target_os = "windows")]
+        ID_SERVICE_ACTION => Some(TrayAction::ServiceAction),
         ID_OPEN_CONFIG => Some(TrayAction::OpenConfig),
         ID_QUIT => Some(TrayAction::Quit),
         _ => None,
@@ -169,6 +264,8 @@ impl TrayAction {
             TrayAction::ToggleLogin => toggle_login(),
             #[cfg(target_os = "windows")]
             TrayAction::ToggleService => toggle_service(),
+            #[cfg(target_os = "windows")]
+            TrayAction::ServiceAction => service_action(),
             TrayAction::OpenConfig => {
                 let Some(config_path) = with_state(|state| state.ctx.config_path.clone()) else {
                     return;
@@ -181,24 +278,13 @@ impl TrayAction {
 }
 
 fn toggle_login() {
-    let Some((login, item)) = with_state(|state| (state.login.clone(), state.login_item.clone()))
-    else {
+    let Some(login) = with_state(|state| state.login.clone()) else {
         return;
     };
-    // Re-checked because the registration may have changed outside the tray.
-    #[cfg(target_os = "windows")]
-    {
-        let Some(config_path) = with_state(|state| state.ctx.config_path.clone()) else {
-            return;
-        };
-        if refuse_login_entry_change(&config_path) {
-            return;
-        }
-    }
-    perform_login_toggle(login, item);
+    perform_login_toggle(login);
 }
 
-fn perform_login_toggle(login: PlatformLogin, item: CheckMenuItem) {
+fn perform_login_toggle(login: PlatformLogin) {
     // Registered *and* not switched off in Windows' own startup settings: a click
     // on an entry that Task Manager disabled turns it back on, which is what an
     // unchecked box means.
@@ -206,8 +292,8 @@ fn perform_login_toggle(login: PlatformLogin, item: CheckMenuItem) {
         tracing::info!("Disabling launch at login");
         login.disable()
     } else if !super::login_entry_write_confirmed() {
-        // The elevated-registration warning was dismissed; leave the checkbox
-        // where the registry actually is.
+        // The elevated-registration warning was dismissed; render the state that
+        // is actually there.
         tracing::info!("launch-at-login registration cancelled");
         Ok(())
     } else {
@@ -217,44 +303,68 @@ fn perform_login_toggle(login: PlatformLogin, item: CheckMenuItem) {
     if let Err(e) = result {
         tracing::error!("Failed to update launch-at-login: {e:#}");
     }
-    item.set_checked(login.starts_at_login());
+    sync();
 }
 
 fn quit() {
-    let Some((quit_tx, client_mode)) =
-        with_state(|state| (state.quit_tx.clone(), state.client_mode))
+    let Some((quit_tx, serving)) = with_state(|state| (state.quit_tx.clone(), state.serving))
     else {
         return;
     };
-    if client_mode {
-        // Something else serves the address. Quit means stopping the server,
-        // which here is this installation's service if that is what listens.
-        quit_client();
-    } else {
+    if serving {
         tracing::info!("Quit requested from tray");
         let _ = quit_tx.send(TrayCommand::Quit);
+    } else {
+        // A client tray owns no server: Quit closes the tray, not the service.
+        tracing::info!("Quit requested from a client-mode tray");
+        std::process::exit(0);
     }
 }
 
-/// Quit from a tray that brought up no server of its own.
-fn quit_client() {
-    #[cfg(target_os = "windows")]
-    quit_in_client_mode();
-    #[cfg(not(target_os = "windows"))]
-    {
-        // No service concept: whatever holds the address is a process the user
-        // started, and ending it is not this menu's business.
-        tracing::info!("Quit requested from a client-mode tray");
-        std::process::exit(0);
+/// What one elevated helper was asked to do, carried through the wait thread.
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ServiceOutcome {
+    Installed,
+    Uninstalled,
+    Started,
+    Stopped,
+}
+
+#[cfg(target_os = "windows")]
+impl ServiceOutcome {
+    pub(super) fn wparam(self) -> usize {
+        match self {
+            Self::Installed => 0,
+            Self::Uninstalled => 1,
+            Self::Started => 2,
+            Self::Stopped => 3,
+        }
+    }
+
+    pub(super) fn from_wparam(value: usize) -> Option<Self> {
+        match value {
+            0 => Some(Self::Installed),
+            1 => Some(Self::Uninstalled),
+            2 => Some(Self::Started),
+            3 => Some(Self::Stopped),
+            _ => None,
+        }
+    }
+
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Installed => "install",
+            Self::Uninstalled => "uninstall",
+            Self::Started => "start",
+            Self::Stopped => "stop",
+        }
     }
 }
 
 #[cfg(target_os = "windows")]
 struct Snapshot {
     config_path: PathBuf,
-    service_item: CheckMenuItem,
-    login_item: CheckMenuItem,
-    login: PlatformLogin,
     /// What is registered under the service name right now.
     service: ServiceProbe,
 }
@@ -266,57 +376,15 @@ fn snapshot() -> Option<Snapshot> {
         let service = probe_service(&config_path);
         Snapshot {
             config_path,
-            service_item: state.service_item.clone(),
-            login_item: state.login_item.clone(),
-            login: state.login.clone(),
             service,
         }
     })
 }
 
-/// Put both menu items back in step with the real machine state, through the same
-/// plan the menu was built from, since install and uninstall change the login entry
-/// behind the items' back. Re-enabling the service item ends a waiting toggle.
 #[cfg(target_os = "windows")]
-fn sync(
-    service_item: &CheckMenuItem,
-    login_item: &CheckMenuItem,
-    login: &PlatformLogin,
-    config_path: &Path,
-) {
-    let plan = policy::plan(super::startup_state(config_path, login));
-    service_item.set_enabled(true);
-    service_item.set_checked(plan.service_checked);
-    login_item.set_enabled(plan.login_enabled);
-    login_item.set_checked(plan.login_checked);
-}
-
-/// Whether a login-entry change must be refused because *this* installation's
-/// service is registered. The item is disabled in that state, so this only fires
-/// when the registration changed outside the tray: silently adding a login entry
-/// next to the service would produce a second, client-mode tray at every login.
-#[cfg(target_os = "windows")]
-fn refuse_login_entry_change(config_path: &Path) -> bool {
-    let Some(snapshot) = snapshot() else {
-        return false;
-    };
-    if !snapshot.service.is_ours() {
-        return false;
-    }
-    tracing::info!("the start-at-login entry stays removed while the service is registered");
-    let t = lang();
-    sync(
-        &snapshot.service_item,
-        &snapshot.login_item,
-        &snapshot.login,
-        config_path,
-    );
-    show_message(
-        t.tr("tray.notify_title"),
-        t.tr("tray.autostart_superseded_by_service"),
-        MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
-    );
-    true
+fn set_busy(busy: bool) {
+    with_state(|state| state.busy.set(busy));
+    sync();
 }
 
 #[cfg(target_os = "windows")]
@@ -326,24 +394,18 @@ fn toggle_service() {
     };
     let Snapshot {
         config_path,
-        service_item,
-        login_item,
-        login,
         service,
+        ..
     } = snapshot;
-    // Disabled until the helper has reported back: a second click must not race
-    // the registration. `sync` re-enables the item on every terminal path.
-    if !service_item.is_enabled() {
-        tracing::info!("a service toggle is already in flight; ignoring the click");
+    if with_state(|state| state.busy.get()).unwrap_or(true) {
+        tracing::info!("a service operation is already in flight; ignoring the click");
         return;
     }
-    service_item.set_enabled(false);
 
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(e) => {
             tracing::error!("failed to locate the running executable: {e}");
-            sync(&service_item, &login_item, &login, &config_path);
             return;
         }
     };
@@ -357,7 +419,6 @@ fn toggle_service() {
     // Before elevation, and while a person is watching: a registration that could
     // never serve should not raise a UAC prompt.
     if enable && !preflight_allows(t) {
-        sync(&service_item, &login_item, &login, &config_path);
         return;
     }
 
@@ -411,19 +472,58 @@ fn toggle_service() {
     );
     if answer != IDOK {
         tracing::info!("service toggle cancelled");
-        sync(&service_item, &login_item, &login, &config_path);
+        sync();
         return;
     }
 
-    let action = if enable { "install" } else { "uninstall" };
-    let parameters = format!(
-        "service {action} --config {}",
-        crate::startup::cmdline::win_cmd_quote(&config_display)
-    );
+    let outcome = if enable {
+        ServiceOutcome::Installed
+    } else {
+        ServiceOutcome::Uninstalled
+    };
+    launch_helper(&exe, &config_display, outcome);
+}
 
-    match launch_elevated(&exe, &parameters) {
+#[cfg(target_os = "windows")]
+fn service_action() {
+    let Some(snapshot) = snapshot() else {
+        return;
+    };
+    if !snapshot.service.is_ours() {
+        return;
+    }
+    if with_state(|state| state.busy.get()).unwrap_or(true) {
+        tracing::info!("a service operation is already in flight; ignoring the click");
+        return;
+    }
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            tracing::error!("failed to locate the running executable: {e}");
+            return;
+        }
+    };
+    let outcome = if snapshot.service.is_running() {
+        ServiceOutcome::Stopped
+    } else {
+        ServiceOutcome::Started
+    };
+    launch_helper(&exe, &snapshot.config_path.display().to_string(), outcome);
+}
+
+/// Run `nanofile service <verb> --config …` elevated, disabling the menu while the
+/// helper works. The wait thread posts [`ServiceOutcome`] back to the event loop.
+#[cfg(target_os = "windows")]
+fn launch_helper(exe: &Path, config_display: &str, outcome: ServiceOutcome) {
+    let parameters = format!(
+        "service {} --config {}",
+        outcome.verb(),
+        crate::startup::cmdline::win_cmd_quote(config_display)
+    );
+    set_busy(true);
+    match launch_elevated(exe, &parameters) {
         Ok(process) => {
-            tracing::info!(action, "waiting for the elevated helper");
+            tracing::info!(action = outcome.verb(), "waiting for the elevated helper");
             // Wait off the loop thread: blocking here would freeze the tray for as
             // long as the helper runs. The handle travels as an integer because a
             // raw pointer is not `Send`.
@@ -436,16 +536,17 @@ fn toggle_service() {
                     exit_code = 1;
                 }
                 unsafe { CloseHandle(process) };
-                backend::post_service_result(enable, exit_code as isize);
+                backend::post_service_result(outcome, exit_code as isize);
             });
         }
         Err(LaunchError::Cancelled) => {
             // The user dismissed the elevation prompt: they know, so no dialog.
-            tracing::info!("the elevation prompt was dismissed; the service was not changed");
-            sync(&service_item, &login_item, &login, &config_path);
+            tracing::info!("the elevation prompt was dismissed; nothing was changed");
+            set_busy(false);
         }
         Err(LaunchError::Failed(error)) => {
             tracing::error!("failed to start the elevated helper: {error}");
+            set_busy(false);
             let t = lang();
             let text = format!("{}\n\n{error}", t.tr("tray.service_launch_failed"));
             show_message(
@@ -453,8 +554,95 @@ fn toggle_service() {
                 &text,
                 MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
             );
-            sync(&service_item, &login_item, &login, &config_path);
         }
+    }
+}
+
+/// The elevated helper exited: apply the consequence, then say what happened.
+#[cfg(target_os = "windows")]
+pub(super) fn service_finished(outcome: ServiceOutcome, exit_code: u32) {
+    with_state(|state| state.busy.set(false));
+    let t = lang();
+
+    // The helper refused before changing anything (its own preflight): the reason
+    // is in the log.
+    if exit_code == EXIT_REFUSED as u32 {
+        tracing::warn!("the elevated helper refused to change the service");
+        sync();
+        return;
+    }
+
+    // `STILL_ACTIVE`: the helper is still running after five minutes. Its own
+    // dialog owns any error, so only the menu state is refreshed.
+    if exit_code != 0 && exit_code != STILL_ACTIVE as u32 {
+        tracing::error!(exit_code, "the elevated helper failed");
+        sync();
+        show_message(
+            t.tr("tray.notify_title"),
+            t.tr("tray.service_failed"),
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
+        );
+        return;
+    }
+
+    if exit_code == 0 {
+        match outcome {
+            ServiceOutcome::Installed => {
+                // Start at boot implies the tray at login: write the user's own
+                // entry from this (unelevated) process, never from the helper.
+                ensure_login_entry();
+                let account = crate::startup::service::ServiceAccount::default().label();
+                let text = t.trf("tray.service_installed", &[("account", account.as_str())]);
+                show_message(
+                    t.tr("tray.notify_title"),
+                    &text,
+                    MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
+                );
+            }
+            ServiceOutcome::Uninstalled => {
+                retire_login_entry();
+                show_message(
+                    t.tr("tray.notify_title"),
+                    t.tr("tray.service_removed"),
+                    MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
+                );
+            }
+            // Start/stop is reflected by the status row; a dialog would only be noise.
+            ServiceOutcome::Started | ServiceOutcome::Stopped => {}
+        }
+    }
+
+    sync();
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_login_entry() {
+    let Some(login) = with_state(|state| state.login.clone()) else {
+        return;
+    };
+    let state = login.state();
+    // A live entry of another installation is not ours to replace; the menu warns
+    // about it and leaves the click to the user.
+    if state.present && state.readable && !state.ours {
+        tracing::warn!("the login entry belongs to another installation; not replacing it");
+        return;
+    }
+    if !super::login_entry_write_confirmed() {
+        tracing::info!("registering the login tray entry was not confirmed");
+        return;
+    }
+    if let Err(e) = login.enable() {
+        tracing::warn!("registering the login tray entry failed: {e:#}");
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn retire_login_entry() {
+    let Some(login) = with_state(|state| state.login.clone()) else {
+        return;
+    };
+    if let Err(e) = login.retire_ours() {
+        tracing::warn!("could not remove the start-at-login entry: {e:#}");
     }
 }
 
@@ -497,134 +685,6 @@ fn preflight_allows(t: &server::i18n::I18n) -> bool {
         ) == IDOK;
     }
     true
-}
-
-/// The elevated helper exited: apply the consequence, then say what happened.
-#[cfg(target_os = "windows")]
-pub(super) fn service_finished(enable: bool, exit_code: u32) {
-    let Some(snapshot) = snapshot() else {
-        return;
-    };
-    let t = lang();
-
-    // The helper refused before changing anything (its own preflight): the reason
-    // is in the log.
-    if exit_code == crate::startup::service::EXIT_REFUSED as u32 {
-        tracing::warn!("the elevated helper refused to change the service");
-        sync(
-            &snapshot.service_item,
-            &snapshot.login_item,
-            &snapshot.login,
-            &snapshot.config_path,
-        );
-        return;
-    }
-
-    // `STILL_ACTIVE`: the helper is still running after five minutes. Its own
-    // dialog owns any error, so only the menu state is refreshed.
-    if exit_code != 0 && exit_code != STILL_ACTIVE as u32 {
-        tracing::error!(exit_code, "the elevated helper failed");
-        sync(
-            &snapshot.service_item,
-            &snapshot.login_item,
-            &snapshot.login,
-            &snapshot.config_path,
-        );
-        show_message(
-            t.tr("tray.notify_title"),
-            t.tr("tray.service_failed"),
-            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
-        );
-        return;
-    }
-
-    if exit_code == 0 {
-        if enable {
-            // The service starts at boot, so the login entry would start a second
-            // instance that can only end up as a client-mode tray.
-            if let Err(e) = snapshot.login.retire_ours() {
-                tracing::warn!("could not remove the start-at-login entry: {e:#}");
-            }
-            tracing::info!("registered as a Windows service");
-            let account = crate::startup::service::ServiceAccount::default().label();
-            let text = t.trf("tray.service_installed", &[("account", account.as_str())]);
-            show_message(
-                t.tr("tray.notify_title"),
-                &text,
-                MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
-            );
-        } else {
-            // Deliberately *not* re-adding the login entry: "remove the service"
-            // means Nanofile no longer starts automatically, so this click must not
-            // write a startup entry the user did not ask for.
-            tracing::info!("the Windows service was removed");
-            show_message(
-                t.tr("tray.notify_title"),
-                t.tr("tray.service_removed"),
-                MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
-            );
-        }
-    }
-
-    sync(
-        &snapshot.service_item,
-        &snapshot.login_item,
-        &snapshot.login,
-        &snapshot.config_path,
-    );
-}
-
-/// Quit while another process serves this address: in the ordinary tray that means
-/// stopping the server, so when the process serving it is *this* installation's
-/// service, Quit stops that service (it starts again at the next boot). Only when
-/// that is impossible — another installation's service, or rights this process
-/// lacks — does Quit leave it running, and then it says so instead of silently.
-#[cfg(target_os = "windows")]
-fn quit_in_client_mode() {
-    let Some(config_path) = with_state(|state| state.ctx.config_path.clone()) else {
-        std::process::exit(0);
-    };
-    let t = lang();
-    match probe_service(&config_path) {
-        ServiceProbe::Ours { running: true } => match crate::startup::service::stop_service() {
-            Ok(()) => {
-                tracing::info!("service stopped from the tray menu");
-                show_message(
-                    t.tr("tray.notify_title"),
-                    t.tr("tray.quit_service_stopped"),
-                    MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
-                );
-                std::process::exit(0);
-            }
-            Err(e) => {
-                tracing::warn!("could not stop the service from the tray: {e:#}");
-                let detail = format!("{e:#}");
-                let text = t.trf("tray.quit_service_running", &[("detail", detail.as_str())]);
-                let answer = show_message(
-                    t.tr("tray.notify_title"),
-                    &text,
-                    MB_OKCANCEL | MB_ICONWARNING | MB_SETFOREGROUND,
-                );
-                // Cancel keeps the tray, and with it the way back to the service
-                // controls; OK quits the tray alone.
-                if answer == IDOK {
-                    std::process::exit(0);
-                }
-            }
-        },
-        ServiceProbe::OtherInstall { running: true, .. } => {
-            // Not ours to stop: it belongs to another installation.
-            show_message(
-                t.tr("tray.notify_title"),
-                t.tr("tray.quit_other_service"),
-                MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
-            );
-            std::process::exit(0);
-        }
-        // No service of ours is running: whatever holds the address is not ours
-        // to end.
-        _ => std::process::exit(0),
-    }
 }
 
 #[cfg(target_os = "windows")]
@@ -691,8 +751,31 @@ mod tests {
         assert_eq!(action_for(ID_AUTOSTART), Some(TrayAction::ToggleLogin));
         #[cfg(target_os = "windows")]
         assert_eq!(action_for(ID_SERVICE), Some(TrayAction::ToggleService));
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            action_for(ID_SERVICE_ACTION),
+            Some(TrayAction::ServiceAction)
+        );
         assert_eq!(action_for(ID_OPEN_CONFIG), Some(TrayAction::OpenConfig));
         assert_eq!(action_for(ID_QUIT), Some(TrayAction::Quit));
         assert_eq!(action_for("nanofile.unknown"), None);
+    }
+
+    /// The status/action rows are inserted and removed while the menu is live; the
+    /// Windows backend owns real menu handles even in a console test binary.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_action_row_can_move_in_and_out_of_a_menu() {
+        let menu = Menu::new();
+        let first = MenuItem::new("first", true, None);
+        let last = MenuItem::new("last", true, None);
+        menu.append(&first).unwrap();
+        menu.append(&last).unwrap();
+
+        let action = MenuItem::new("action", true, None);
+        menu.insert(&action, 1).unwrap();
+        assert_eq!(menu.items().len(), 3);
+        menu.remove(&action).unwrap();
+        assert_eq!(menu.items().len(), 2);
     }
 }

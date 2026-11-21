@@ -38,6 +38,10 @@ struct Cli {
     /// Path to config.toml (overrides NANOFILE_CONFIG and the default).
     #[arg(long, global = true)]
     config: Option<PathBuf>,
+    /// Start a server even when this installation's Windows service is registered.
+    /// Diagnostics only: a session server can keep the service from binding.
+    #[arg(long, hide = true, global = true)]
+    allow_session_server: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -582,13 +586,63 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
+    // A `server` start must not race this installation's Windows service: the
+    // service owns the address, and a session server would keep it from binding at
+    // the next boot. The role is decided once here, for the tray and the headless
+    // path alike.
+    let role = if matches!(&command, Command::Server) {
+        let probed_config = startup::absolute_path(&config_path);
+        let service = startup::role::service(&probed_config);
+        let busy = tray_mode && setup_listener.is_none() && startup::role::port_busy(&config);
+        let role = startup::role::decide(tray_mode, &service, busy, cli.allow_session_server);
+        tracing::info!(role = role.as_str(), "startup role");
+        role
+    } else {
+        startup::role::Role::ServeHeadless
+    };
+
     match command {
         Command::Server => {
+            if role == startup::role::Role::Refuse {
+                // A headless start cannot show a tray, so a login entry that names
+                // this executable would only start a process that refuses on every
+                // login. Remove our own entry; another installation's is left alone.
+                #[cfg(all(target_os = "windows", feature = "tray"))]
+                if !config.server.tray {
+                    use startup::login::{LoginEntry as _, PlatformLogin};
+                    if let Ok(exe) = std::env::current_exe() {
+                        let login = PlatformLogin::new(exe, config_path.clone());
+                        match login.retire_ours() {
+                            Ok(true) => tracing::info!(
+                                "removed the login tray entry: the tray is disabled in this \
+                                 configuration"
+                            ),
+                            Ok(false) => {}
+                            Err(e) => {
+                                tracing::warn!("could not remove the login tray entry: {e:#}");
+                            }
+                        }
+                    }
+                }
+                let message = "this installation's Windows service is registered, so this start \
+                     will not bind the configured address; start the service instead, or pass \
+                     --allow-session-server for a diagnostic session server";
+                tracing::error!("{message}");
+                #[cfg(all(target_os = "windows", feature = "tray"))]
+                logging::show_message_box("Nanofile", message);
+                anyhow::bail!("{message}");
+            }
             // With the tray feature compiled in and a desktop session present, the tray
             // event loop owns the main thread and the server runs on background workers.
             #[cfg(feature = "tray")]
-            if tray_mode {
-                tray::run(config, env_keys, config_path, setup_listener);
+            match role {
+                startup::role::Role::ServeAndTray => {
+                    tray::run(config, env_keys, config_path, setup_listener, true)
+                }
+                startup::role::Role::TrayClient => {
+                    tray::run(config, env_keys, config_path, setup_listener, false)
+                }
+                _ => {}
             }
 
             let rt = tokio::runtime::Runtime::new()?;

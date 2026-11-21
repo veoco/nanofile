@@ -11,7 +11,8 @@ Linux and macOS is in [Running in the background](/guide/deploy/running-in-backg
 Binaries built with `--features tray` carry a system tray menu:
 
 - **Start at login** — a per-user entry, so it starts once somebody logs in.
-- **Start at boot (admin)** on Windows — an auto-start service, described below.
+- **Start at boot (admin)** on Windows — an auto-start service, and the tray at
+  login for the account that enables it; described below.
 - open the web UI,
 - open the config file,
 - quit.
@@ -20,8 +21,9 @@ Binaries built with `--features tray` carry a system tray menu:
 
 **Start at boot (admin)** registers an auto-start service with the Service Control
 Manager, so it starts at boot with **no login at all** — what an unattended
-machine needs. `nanofile service install` does the same from a command line,
-including retiring the login entry.
+machine needs. `nanofile service install` does the same from a command line. From
+the tray it also writes the "Start at login" entry; a command-line install leaves
+that to the first run of the tray.
 
 Enabling it asks for administrator rights; dismissing the prompt changes nothing.
 Before the prompt, the tray checks that the service could actually serve (config
@@ -50,29 +52,36 @@ directory and the config file — a service identity starts with access to nothi
 Removing the service takes the grant back. A directory it may not write is refused
 before anything is registered, rather than failing at the next boot.
 
-## The two automatic-start options are alternatives
+## Start at boot includes the tray at login
 
-Registering the service removes the "Start at login" entry (the confirmation says
-so), and the tray disables that item while the service is registered.
+Registering the service also writes the "Start at login" entry for the Windows
+account that enables it, and the menu shows that item checked and disabled while
+the service is registered. The tray only attaches to the server; it never binds
+the address. Installing the service therefore does not leave you without a tray.
 
-Removing the service enables the item again but does **not** re-create the entry:
-after that, Nanofile starts automatically only if you ask for it.
+Removing the service removes that entry too, so Nanofile no longer starts
+automatically. Check "Start at login" to run a server in your session instead.
+
+The service runs for every user, but the tray entry is per Windows account:
+another account gets its own tray the first time it runs Nanofile.
 
 ## Windows' own startup switch
 
 Task Manager's **Startup** tab and **Settings ▸ Apps ▸ Startup** can turn a startup
-entry off without removing it. That switch is respected: the tray shows **Start at
-login** unchecked, and ticking it there turns the entry back on. A stale entry is
-repointed at the running copy without touching the switch, so an entry you turned
-off stays off.
+entry off without removing it. That switch is respected: a switched-off entry is
+shown unchecked, and clicking **Start at login** turns it back on. While the
+service is registered the item is otherwise checked and disabled.
 
 ## Paths and repairs
 
 Both registrations record absolute paths, so they outlive a move.
 
 - A login entry whose recorded executable or config file is gone is repointed at
-  the running copy the next time the tray starts. A healthy entry, or one this
-  build cannot read, is left alone — but never while the service has replaced it.
+  the running copy the next time the tray starts; with the service registered, a
+  missing entry is written for the same reason. A healthy entry, or one this build
+  cannot read, is left alone.
+- An entry that belongs to another installation is left alone and reported in the
+  menu.
 - A service registration that points at a folder which no longer exists is named
   as such in the confirmation before it is repointed.
 
@@ -82,18 +91,34 @@ refused start, not a silent fall back to built-in defaults.
 ## When it takes effect
 
 It takes effect at the **next system start**; the tray copy running now keeps
-serving. Handing the port over immediately is not reliable on Windows, where a
-just-closed connection stays in `TIME_WAIT` for minutes and the new process would
-fail to bind.
+serving, and the menu reports that the service is registered but not running.
+Handing the port over immediately is not reliable on Windows, where a just-closed
+connection stays in `TIME_WAIT` for minutes and the new process would fail to bind.
+
+Once the service is registered it can be started or stopped at any time from the
+menu ("Start/Stop Windows service", administrator) or with
+`nanofile service start|stop`.
+
+## Upgrading
+
+A running service holds its executable open, so stop it before replacing the file:
+use "Stop Windows service" in the tray, or run `nanofile service stop` from an
+elevated prompt. Replace the binary, then start it again from the tray or with
+`nanofile service start`; a reboot does the same at the next boot.
+
+Replacing the file at the same path needs no re-registration. Moving the
+installation to a new folder does: the next tray start names the old registration
+and offers to repoint it, and the login tray entry is repointed automatically.
 
 ## While the service runs
 
 Starting the tray by hand gives you a "client mode" tray: it brings up no second
-server, and **Quit stops the service** — the same thing Quit means in an ordinary
-tray, where it stops the server.
+server, shows who serves the address, and **Quit only closes the tray** — the
+service keeps running. Use "Stop Windows service" (administrator) to stop the
+server; it starts again at the next boot, or from "Start Windows service".
 
-It restarts at the next boot, and the tray can also install or remove the service
-from that menu.
+The menu also installs or removes the service, and opens the web UI and the config
+file.
 
 ## Logs
 
@@ -107,6 +132,8 @@ failing later with an unnamed error.
 ## Verify
 
 - The tray icon is present and its menu opens the web interface and the config file.
+- The menu shows the server state; with the service registered, "Start at login" is
+  checked and disabled.
 - `nanofile service status` reports the registration and its account.
 - After the next boot, the service runs with no login; the log names the account and
   config path.
@@ -114,4 +141,4 @@ failing later with an unnamed error.
 ## Commands
 
 See the [CLI reference](/reference/cli#windows-service) for `service install`,
-`uninstall`, `status` and `run`.
+`uninstall`, `start`, `stop`, `status` and `run`.

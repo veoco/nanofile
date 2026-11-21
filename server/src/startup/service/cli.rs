@@ -10,7 +10,8 @@ use infra::config::{Config, EnvKeys};
 
 use super::account::{PasswordSource, ServiceAccount};
 use super::windows::{
-    install, probe, registered_account, report_failure, run_as_service, uninstall,
+    install, probe, registered_account, report_failure, run_as_service, start_service,
+    stop_service, uninstall,
 };
 use super::{ServiceAction, ServiceProbe};
 use crate::startup::login::{LoginEntry as _, PlatformLogin};
@@ -21,6 +22,11 @@ pub(crate) fn run_cli(
     config_path: &Path,
     env_keys: EnvKeys,
 ) -> anyhow::Result<()> {
+    // Every path this command writes into the SCM or a login entry must be absolute:
+    // a relative `--config config.toml` would be resolved from the service's working
+    // directory (System32) at the next boot, not from where it was installed.
+    let config_path = crate::startup::absolute_path(config_path);
+    let config_path = config_path.as_path();
     match action {
         ServiceAction::Run => run_as_service(config.clone(), env_keys, config_path.to_path_buf()),
         ServiceAction::Install {
@@ -67,10 +73,10 @@ pub(crate) fn run_cli(
 
             match install(config_path, &account, &input) {
                 Ok(()) => {
-                    retire_login_entry(config_path);
                     println!(
                         "Nanofile registered as a Windows service (account: {}); it starts at \
-                         the next system start, without a login.",
+                         the next system start, without a login. The login tray is registered \
+                         the first time the tray runs.",
                         account.label()
                     );
                     Ok(())
@@ -85,13 +91,12 @@ pub(crate) fn run_cli(
             let input = super::preflight::Input::from_config(config, config_path);
             match uninstall(&input) {
                 Ok(()) => {
-                    // Deliberately *not* re-creating the login entry: "remove the
-                    // service" means Nanofile no longer starts automatically, and a
-                    // startup registration the user did not ask for is worse.
+                    // Start at boot implied the login tray; removing the service
+                    // removes that entry too, so "off" means off.
+                    retire_login_entry(config_path);
                     println!(
-                        "Nanofile is no longer registered as a Windows service, and no longer \
-                         starts automatically: install it again, or enable \"Start at login\" \
-                         from the tray."
+                        "Nanofile is no longer registered as a Windows service, and this \
+                         installation's start-at-login entry was removed."
                     );
                     Ok(())
                 }
@@ -101,6 +106,26 @@ pub(crate) fn run_cli(
                 }
             }
         }
+        ServiceAction::Start => match start_service() {
+            Ok(()) => {
+                println!("Nanofile's Windows service is running.");
+                Ok(())
+            }
+            Err(e) => {
+                report_failure("The Nanofile service could not be started", &e);
+                Err(e)
+            }
+        },
+        ServiceAction::Stop => match stop_service() {
+            Ok(()) => {
+                println!("Nanofile's Windows service was stopped.");
+                Ok(())
+            }
+            Err(e) => {
+                report_failure("The Nanofile service could not be stopped", &e);
+                Err(e)
+            }
+        },
         ServiceAction::Status => {
             let state = probe(config_path);
             // `LocalSystem` is how the SCM records an absent account name.

@@ -3,11 +3,42 @@
 //! Login entry (`login`): per-user, `HKCU\…\Run` on Windows (respecting the
 //! startup switch Task Manager and Settings write), a LaunchAgent on macOS, an
 //! XDG autostart entry on Linux. Windows service (`service`):
-//! an auto-start Service Control Manager entry, with no session. The two are
-//! alternatives on Windows; confirmations and the tray menu live in `crate::tray`.
+//! an auto-start Service Control Manager entry, with no session. Start at boot
+//! implies the login tray; confirmations and the tray menu live in `crate::tray`.
+
+use std::path::{Path, PathBuf};
 
 /// Command-line quoting and path normalization shared by both mechanisms.
 pub(crate) mod cmdline;
+
+/// Which role a `server` start takes: serve, tray client, headless, or refuse.
+pub(crate) mod role;
+
+/// Canonical absolute path, with Windows `\\?\` verbatim prefixes stripped so the
+/// result can be written into a `Run` value or an `ImagePath`. Falls back to
+/// cwd-joining for files that do not exist (yet).
+pub(crate) fn absolute_path(path: &Path) -> PathBuf {
+    let resolved = path.canonicalize().unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir().unwrap_or_default().join(path)
+        }
+    });
+    #[cfg(windows)]
+    {
+        let s = resolved.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{rest}"))
+        } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+            PathBuf::from(rest)
+        } else {
+            resolved
+        }
+    }
+    #[cfg(not(windows))]
+    resolved
+}
 
 /// The per-user login entry.
 ///

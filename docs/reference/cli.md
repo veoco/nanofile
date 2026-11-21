@@ -93,16 +93,22 @@ Administrator rights are required to install or remove the service.
 nanofile service install [--account virtual|system|network|<name>]
                          [--password <value> | --password-stdin]
 nanofile service uninstall
+nanofile service start
+nanofile service stop
 nanofile service status
 nanofile service run
 ```
 
-- `install` registers an auto-start service (starts at boot, no login) and removes
-  this installation's "Start at login" entry. The default account is
-  `NT SERVICE\Nanofile`; see
+- `install` registers an auto-start service (starts at boot, no login). The default
+  account is `NT SERVICE\Nanofile`. Installing from the tray also writes the "Start
+  at login" entry, so the tray icon appears when you log in; a command-line install
+  leaves that to the first run of the tray. See
   [Windows service and desktop tray](/guide/deploy/desktop-and-service#start-at-boot-admin).
-- `uninstall` stops and removes the service and takes back the directory access it
-  was granted.
+- `uninstall` stops and removes the service, takes back the directory access it was
+  granted, and removes this installation's "Start at login" entry.
+- `start` / `stop` start or stop the registered service now; both need
+  administrator rights. They are what the tray's "Start/Stop Windows service"
+  items call.
 - `status` reports the registration and its account; exit code 0 when the service
   is installed.
 - `run` is what the Service Control Manager calls. Running it by hand exits with

@@ -19,11 +19,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::TrayContext;
+use super::actions::ServiceOutcome;
 
 /// "Run the queued menu actions": confirmations and elevation stay out of muda's dispatch.
 const WM_APP_TRAY_ACTION: u32 = WM_APP + 1;
-/// "The elevated helper exited": `wparam` is 1 for an install and 0 for an
-/// uninstall, `lparam` is its exit code.
+/// "The elevated helper exited": `wparam` is the [`ServiceOutcome`], `lparam` is
+/// its exit code.
 const WM_APP_SERVICE_RESULT: u32 = WM_APP + 2;
 
 static LOOP_THREAD_ID: OnceLock<u32> = OnceLock::new();
@@ -41,8 +42,8 @@ pub(super) fn post_action() -> bool {
 }
 
 /// Called from the helper-waiting thread once the elevated copy exited.
-pub(super) fn post_service_result(enable: bool, exit_code: isize) -> bool {
-    post(WM_APP_SERVICE_RESULT, usize::from(enable), exit_code)
+pub(super) fn post_service_result(outcome: ServiceOutcome, exit_code: isize) -> bool {
+    post(WM_APP_SERVICE_RESULT, outcome.wparam(), exit_code)
 }
 
 pub(super) fn run(
@@ -58,11 +59,11 @@ pub(super) fn run(
     let tray = match super::create_tray(ctx, quit_tx, client_mode) {
         Ok(tray) => tray,
         Err(e) => {
-            tracing::error!("Tray unavailable, running headless: {e:#}");
-            super::park_forever()
+            tracing::error!("Tray unavailable: {e:#}");
+            super::tray_failed(client_mode)
         }
     };
-    super::notify::started(client_mode);
+    super::notify::started();
 
     unsafe {
         let mut msg: MSG = std::mem::zeroed();
@@ -75,7 +76,9 @@ pub(super) fn run(
                         continue;
                     }
                     WM_APP_SERVICE_RESULT => {
-                        super::actions::service_finished(msg.wParam != 0, msg.lParam as u32);
+                        if let Some(outcome) = ServiceOutcome::from_wparam(msg.wParam) {
+                            super::actions::service_finished(outcome, msg.lParam as u32);
+                        }
                         continue;
                     }
                     _ => {}

@@ -61,6 +61,10 @@ pub(crate) enum ServiceAction {
     },
     /// Stop and remove the service. Needs administrator rights.
     Uninstall,
+    /// Start the registered service now. Needs administrator rights.
+    Start,
+    /// Stop the running service. Needs administrator rights.
+    Stop,
     /// Report whether the service is registered. Exit code 0 when it is.
     Status,
 }
@@ -178,10 +182,15 @@ pub(crate) use checks::Severity;
 pub(crate) use cli::run_cli;
 #[cfg(all(target_os = "windows", feature = "tray"))]
 pub(crate) use preflight::{Input as PreflightInput, run as run_preflight};
-#[cfg(all(target_os = "windows", feature = "tray"))]
+#[cfg(target_os = "windows")]
 pub(crate) use windows::probe as probe_service;
-#[cfg(all(target_os = "windows", feature = "tray"))]
-pub(crate) use windows::stop_service;
+
+/// No Service Control Manager outside Windows: the login entry is the only
+/// automatic start there.
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn probe_service(_config_path: &std::path::Path) -> ServiceProbe {
+    ServiceProbe::NotInstalled
+}
 
 #[cfg(test)]
 mod tests {

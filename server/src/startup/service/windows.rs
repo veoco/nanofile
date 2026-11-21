@@ -1,6 +1,6 @@
-//! The Windows side of the service: SCM registration (install, uninstall, stop,
-//! probe) and the service control loop itself. Nothing here shows a dialog: the
-//! tray owns the confirmations; a headless install reports on its own console.
+//! The Windows side of the service: SCM registration (install, uninstall, start,
+//! stop, probe) and the service control loop itself. Nothing here shows a dialog:
+//! the tray owns the confirmations; a headless install reports on its own console.
 
 // `unsafe` is the SCM API. The registration and control-loop invariants are in the
 // module doc and in `super`'s notes.
@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use infra::config::{Config, EnvKeys};
 use windows_sys::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, ERROR_SERVICE_DOES_NOT_EXIST, ERROR_SERVICE_NOT_ACTIVE,
-    ERROR_SERVICE_SPECIFIC_ERROR, NO_ERROR,
+    ERROR_ACCESS_DENIED, ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_DOES_NOT_EXIST,
+    ERROR_SERVICE_NOT_ACTIVE, ERROR_SERVICE_SPECIFIC_ERROR, NO_ERROR,
 };
 use windows_sys::Win32::System::Registry::{
     HKEY_LOCAL_MACHINE, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegGetValueW,
@@ -699,13 +699,67 @@ fn revoke_access(account: Option<&str>, input: &super::preflight::Input) {
     revoke_paths(&sid, &paths);
 }
 
+/// Start the registered service and wait for it to report `RUNNING`.
+///
+/// Idempotent: an already running service is already in the state the caller
+/// wants. Needs the `SERVICE_START` right, so callers must handle access-denied.
+pub(crate) fn start_service() -> anyhow::Result<()> {
+    let manager = open_manager(SC_MANAGER_CONNECT)?;
+    let name = wide(SERVICE_NAME);
+    let service =
+        unsafe { OpenServiceW(manager, name.as_ptr(), SERVICE_START | SERVICE_QUERY_STATUS) };
+    if service.is_null() {
+        let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        unsafe { CloseServiceHandle(manager) };
+        if error == ERROR_SERVICE_DOES_NOT_EXIST {
+            anyhow::bail!("the service is not installed");
+        }
+        anyhow::bail!("opening the service failed (error {error})");
+    }
+
+    let mut status: SERVICE_STATUS = unsafe { std::mem::zeroed() };
+    if unsafe { QueryServiceStatus(service, &mut status) } == 0 {
+        let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        unsafe {
+            CloseServiceHandle(service);
+            CloseServiceHandle(manager);
+        }
+        anyhow::bail!("querying the service failed (error {error})");
+    }
+    if status.dwCurrentState != SERVICE_RUNNING {
+        let started = unsafe { StartServiceW(service, 0, std::ptr::null()) };
+        if started == 0 {
+            let error = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            if error != ERROR_SERVICE_ALREADY_RUNNING {
+                unsafe {
+                    CloseServiceHandle(service);
+                    CloseServiceHandle(manager);
+                }
+                anyhow::bail!("starting the service failed (error {error})");
+            }
+        }
+        let running = wait_for_running(service, std::time::Duration::from_secs(60));
+        if !running {
+            unsafe {
+                CloseServiceHandle(service);
+                CloseServiceHandle(manager);
+            }
+            anyhow::bail!("the service did not report RUNNING within 60s");
+        }
+    }
+    unsafe {
+        CloseServiceHandle(service);
+        CloseServiceHandle(manager);
+    }
+    tracing::info!("service started");
+    Ok(())
+}
+
 /// Stop the running service and wait for it to report `STOPPED`.
 ///
 /// Idempotent: a service that is not running (or not installed at all) is already
-/// in the state the caller wants. Used by the tray's Quit, which in client mode
-/// means "stop the server". Needs the `SERVICE_STOP` right, so callers must
+/// in the state the caller wants. Needs the `SERVICE_STOP` right, so callers must
 /// handle access-denied instead of assuming it.
-#[cfg(feature = "tray")]
 pub(crate) fn stop_service() -> anyhow::Result<()> {
     let manager = open_manager(SC_MANAGER_CONNECT)?;
     let name = wide(SERVICE_NAME);
@@ -764,17 +818,30 @@ pub(crate) fn stop_service() -> anyhow::Result<()> {
 
 /// Wait for the service to report `STOPPED`. `false` means it did not.
 fn wait_for_stopped(service: SC_HANDLE, timeout: std::time::Duration) -> bool {
+    wait_for_state(service, SERVICE_STOPPED, timeout)
+}
+
+/// Wait for the service to report `RUNNING`. `false` means it did not.
+fn wait_for_running(service: SC_HANDLE, timeout: std::time::Duration) -> bool {
+    wait_for_state(service, SERVICE_RUNNING, timeout)
+}
+
+fn wait_for_state(
+    service: SC_HANDLE,
+    wanted: SERVICE_STATUS_CURRENT_STATE,
+    timeout: std::time::Duration,
+) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     loop {
         let mut status: SERVICE_STATUS = unsafe { std::mem::zeroed() };
         if unsafe { QueryServiceStatus(service, &mut status) } == 0 {
             return false;
         }
-        if status.dwCurrentState == SERVICE_STOPPED {
+        if status.dwCurrentState == wanted {
             return true;
         }
         if std::time::Instant::now() >= deadline {
-            tracing::warn!("the service did not report STOPPED within {timeout:?}");
+            tracing::warn!("the service did not report state {wanted} within {timeout:?}");
             return false;
         }
         std::thread::sleep(std::time::Duration::from_millis(200));

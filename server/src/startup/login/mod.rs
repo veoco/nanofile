@@ -32,6 +32,8 @@ pub(crate) use platform::LoginManager as PlatformLogin;
 pub(crate) struct LoginState {
     /// A registration exists under our name.
     pub present: bool,
+    /// It could be read back as an `(executable, config)` pair.
+    pub readable: bool,
     /// It launches *this* installation (same executable).
     pub ours: bool,
     /// The location it names no longer exists.
@@ -85,6 +87,7 @@ pub(crate) trait LoginEntry {
         let recorded = self.recorded();
         LoginState {
             present: recorded.is_some() || self.is_enabled(),
+            readable: recorded.is_some(),
             ours: recorded
                 .as_ref()
                 .is_some_and(|(exe, _)| entry::same_path(exe, self.exe())),

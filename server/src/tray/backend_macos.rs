@@ -17,11 +17,11 @@ pub(super) fn run(
     let _tray = match super::create_tray(ctx, quit_tx, client_mode) {
         Ok(tray) => tray,
         Err(e) => {
-            tracing::error!("Tray unavailable, running headless: {e:#}");
-            super::park_forever()
+            tracing::error!("Tray unavailable: {e:#}");
+            super::tray_failed(client_mode)
         }
     };
-    super::notify::started(client_mode);
+    super::notify::started();
 
     let mtm = MainThreadMarker::new().expect("tray event loop must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
