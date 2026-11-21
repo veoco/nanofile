@@ -23,6 +23,7 @@ mod repo_size_test;
 mod repo_trash_test;
 mod trash_restore_test;
 mod upload_link_test;
+mod upload_matrix_test;
 mod webdav_test;
 mod win_reserved_name_test;
 mod zip_download_test;
