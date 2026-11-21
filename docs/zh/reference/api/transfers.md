@@ -36,12 +36,12 @@
 
 `POST /upload-api/{token}`
 
-把文件上传到 `parent_dir` 指定的目录（令牌里的目录只作为旧链接的默认值）。请求体是 `multipart/form-data`：
+把文件上传到 `parent_dir` 指定的目录；省略时用令牌绑定的目录。请求体是 `multipart/form-data`：
 
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
 | `file` | 是 | 文件内容；段里的 filename 是条目名。多文件时重复该段。 |
-| `parent_dir` | 是 | 目标目录；不存在时在资料库根下创建。 |
+| `parent_dir` | 否 | 目标目录；默认是令牌的目录（无令牌的表单里是资料库根）。不存在时在资料库根下创建。 |
 | `relative_path` | 否 | 目标目录下的子路径；不能以 `/` 开头。`parent_dir` 中出现 `//` 会被拒绝。 |
 | `replace` | 否 | `1`/`true` 替换已有文件；该路径是目录时返回 `409`。 |
 | `last_modify` | 否 | 单文件的 RFC 3339 mtime。 |
@@ -65,7 +65,7 @@
 
 `POST /upload-aj/`
 
-同一 handler 的无令牌变体，用浏览器会话认证，通过 `repo_id` 字段指明资料库。
+同一 handler 的无令牌变体，用浏览器会话认证，通过 `repo_id` 字段指明资料库。没有 minted 令牌就没有绑定目录，所以省略 `parent_dir` 时是资料库根。
 
 ## 更新文件 {#post-update-api-token}
 
@@ -161,4 +161,4 @@
 
 流式返回压缩包并消耗令牌。使用令牌时会重新核对条目列表与用户权限，因此被吊销的用户无法下载之前生成的包。一个令牌只能下载一次。
 
-**Seafile** —— 传输流程与字段名与 seahub 相同。差异：返回的上传/更新 URL 是 `/upload-api/<token>` 与 `/update-api/<token>`，而不是 `/seafhttp/upload-api/<token>`（客户端原样使用返回的 URL）；`POST /api2/repos/{repo_id}/file/` 还接受直接的 multipart 上传，官方参考没有记录；仅有会话的 `/upload-aj/`、`/update-aj/`、`/update-api/` 是 Nanofile 扩展；更新请求里的 `head` 会被接受，但提交串行发生在当前 HEAD 上；`replace` 另外接受 `true`。
+**Seafile** —— 传输流程与字段名与 seahub 相同。差异：返回的上传/更新 URL 是 `/upload-api/<token>` 与 `/update-api/<token>`，而不是 `/seafhttp/upload-api/<token>`（客户端原样使用返回的 URL）；`POST /api2/repos/{repo_id}/file/` 还接受直接的 multipart 上传，官方参考没有记录；仅有会话的 `/upload-aj/`、`/update-aj/`、`/update-api/` 是 Nanofile 扩展；省略 `parent_dir` 时回退到令牌绑定的目录，fileserver 则直接拒绝；更新请求里的 `head` 会被接受，但提交串行发生在当前 HEAD 上；`replace` 另外接受 `true`。

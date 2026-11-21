@@ -740,9 +740,10 @@ pub async fn upload_aj(
     let repo_id = fields
         .get("repo_id")
         .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?;
-    let parent_dir = fields
-        .get("parent_dir")
-        .ok_or_else(|| AppError::BadRequest("No parent_dir given".into()))?;
+    // A missing `parent_dir` keeps this endpoint's long-standing default of the
+    // library root: the session form only ever came from the web UI, but a body
+    // without the field must not start answering 400.
+    let parent_dir = fields.get("parent_dir").map(String::as_str).unwrap_or("/");
     let relative_path = fields
         .get("relative_path")
         .map(|s| s.as_str())
@@ -1570,9 +1571,14 @@ pub async fn upload_aj_token(
         }
     }
 
+    // The public upload page posts only the `file` part and relies on the minted
+    // token for the directory, so a body without `parent_dir` keeps that default
+    // instead of answering 400. The token's directory is still clamped, never
+    // widened.
     let parent_dir = fields
         .get("parent_dir")
-        .ok_or_else(|| AppError::BadRequest("No parent_dir given".into()))?;
+        .map(String::as_str)
+        .unwrap_or(&info.parent_dir);
     let relative_path = fields
         .get("relative_path")
         .map(|s| s.as_str())
@@ -1767,9 +1773,12 @@ pub async fn upload_api(
         }
     }
 
+    // Like the `-aj` token form, a missing `parent_dir` means the directory the
+    // link was minted for; the desktop client sends it, older bodies may not.
     let parent_dir = fields
         .get("parent_dir")
-        .ok_or_else(|| AppError::BadRequest("No parent_dir given".into()))?;
+        .map(String::as_str)
+        .unwrap_or(&info.parent_dir);
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
     validate_upload_paths(parent_dir, &relative_path)?;
     let target_dir = compute_scoped_target_dir(&info, parent_dir, &relative_path)?;
