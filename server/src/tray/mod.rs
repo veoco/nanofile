@@ -361,7 +361,14 @@ fn create_tray(
     let item_status = MenuItem::new("", false, None);
     let item_action = MenuItem::with_id(ID_SERVICE_ACTION, "", true, None);
     let item_warning = MenuItem::new("", false, None);
-    let item_quit = MenuItem::with_id(ID_QUIT, t.tr("tray.quit"), true, None);
+    // In client mode the item only closes the UI; say so, so it does not suggest
+    // that the service stops with it. In serving mode Quit does stop the server.
+    let quit_key = if serving {
+        "tray.quit"
+    } else {
+        "tray.close_tray"
+    };
+    let item_quit = MenuItem::with_id(ID_QUIT, t.tr(quit_key), true, None);
 
     let menu = Menu::new();
     menu.append(&item_open_web)

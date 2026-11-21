@@ -1000,6 +1000,7 @@ tray.launch_at_login = "登录启动"
 tray.service_autostart = "开机启动（管理员）"
 tray.open_config = "打开配置文件"
 tray.quit = "退出"
+tray.close_tray = "关闭托盘"
 
 tray.server_running_self = "服务器：运行中（本程序）"
 tray.server_running_service = "服务器：运行中（Windows 服务）"

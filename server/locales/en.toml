@@ -1005,6 +1005,7 @@ tray.launch_at_login = "Start at login"
 tray.service_autostart = "Start at boot (admin)"
 tray.open_config = "Open Config File"
 tray.quit = "Quit"
+tray.close_tray = "Close tray"
 
 tray.server_running_self = "Server: running (this app)"
 tray.server_running_service = "Server: running (Windows service)"

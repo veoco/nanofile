@@ -15,7 +15,7 @@ Binaries built with `--features tray` carry a system tray menu:
   login for the account that enables it; described below.
 - open the web UI,
 - open the config file,
-- quit.
+- quit (in a client-mode tray the item is **Close tray**; the service keeps running).
 
 ## Start at boot (admin)
 
@@ -107,8 +107,8 @@ both before replacing the file:
 1. In the tray, use **Stop Windows service (admin)** and wait until the status row
    says the service is stopped. Without a tray, run `nanofile service stop` from an
    elevated prompt (add `--config` if you installed with a custom path).
-2. **Quit** the tray. The service is already stopped; Quit now only closes the tray.
-   (In a client-mode tray, Quit never stops the service.)
+2. **Close the tray.** The service is already stopped; in a client-mode tray the
+   menu item is **Close tray**, and it never stops the service.
 3. Replace the binary at the same path. Leave the config file and data directories
    alone. Make sure no `nanofile` process is left (the service, the tray and their
    extract workers all run this file); otherwise the copy fails with "file in use".
@@ -131,7 +131,7 @@ down from the stop until the service is started again.
 ## While the service runs
 
 Starting the tray by hand gives you a "client mode" tray: it brings up no second
-server, shows who serves the address, and **Quit only closes the tray** — the
+server, shows who serves the address, and **Close tray** only closes the tray — the
 service keeps running. Use "Stop Windows service" (administrator) to stop the
 server; it starts again at the next boot, or from "Start Windows service".
 

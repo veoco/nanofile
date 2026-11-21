@@ -477,6 +477,7 @@ mod tests {
             "tray.service_autostart",
             "tray.open_config",
             "tray.quit",
+            "tray.close_tray",
             "tray.server_running_self",
             "tray.server_running_service",
             "tray.server_running_other_service",
@@ -536,6 +537,8 @@ mod tests {
         }
         assert_eq!(I18n::get(Some("zh-CN")).tr("tray.quit"), "退出");
         assert_eq!(I18n::get(Some("en")).tr("tray.quit"), "Quit");
+        assert_eq!(I18n::get(Some("zh-CN")).tr("tray.close_tray"), "关闭托盘");
+        assert_eq!(I18n::get(Some("en")).tr("tray.close_tray"), "Close tray");
         // The elevated-account dialog substitutes the username.
         assert!(
             I18n::get(Some("zh"))
