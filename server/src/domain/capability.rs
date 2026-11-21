@@ -782,11 +782,6 @@ const ROUTES: &[RouteEntry] = &[
     ),
     (
         "GET",
-        "/api2/repos/{repo_id}/file-uploaded-bytes/",
-        RouteAccess::Capability(Capability::FileWrite),
-    ),
-    (
-        "GET",
         "/api/v2.1/repos/{repo_id}/file-uploaded-bytes/",
         RouteAccess::Capability(Capability::FileWrite),
     ),

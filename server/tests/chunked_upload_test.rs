@@ -39,8 +39,8 @@ async fn test_update_blks_link_returns_url() {
 
     let body: String = resp.json().await.unwrap();
     assert!(
-        body.contains("upload-blks-api/"),
-        "update-blks-link must point at the one block endpoint, got: {body}"
+        body.contains("update-blks-api/"),
+        "update-blks-link must keep seahub's /update-blks-api/ URL shape, got: {body}"
     );
     assert!(
         body.starts_with("http://"),
@@ -48,24 +48,34 @@ async fn test_update_blks_link_returns_url() {
     );
 }
 
-/// The URL `update-blks-link` hands out used to name `/update-blks-api/{token}`,
-/// which no route served. The block endpoint accepts the `update-blks` op, so the
-/// minted URL must reach it and a zero-byte commit must succeed.
+/// The URL `update-blks-link` hands out used to have no route. Upstream's
+/// update contract names the target with `target_file`, requires `commitonly`
+/// in the query, and always replaces the existing file.
 #[tokio::test]
 async fn test_update_blks_link_url_is_routable() {
     let f = TestFixture::new().await;
 
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "updated.txt", b"original")
+        .await;
+    assert_eq!(resp.status(), 200, "seeding the file failed");
+
     let resp = f.client.update_blks_link(&f.api_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let url: String = resp.json().await.unwrap();
+    assert!(url.contains("/update-blks-api/"), "bad url: {url}");
 
+    // `commitonly` in the query and `target_file` in the body: seahub's
+    // `UpdateBlksLinkView` contract (the C fileserver reads the query too).
     let form = reqwest::multipart::Form::new()
-        .text("commitonly", "1")
-        .text("parent_dir", "/")
-        .text("file_name", "updated.txt")
+        .text("target_file", "/updated.txt")
         .text("blockids", "[]")
         .text("file_size", "0");
-    let resp = f.client.post_multipart_url(&url, form).await;
+    let resp = f
+        .client
+        .post_multipart_url(&format!("{url}?commitonly=true"), form)
+        .await;
     assert_eq!(
         resp.status(),
         200,
@@ -77,12 +87,43 @@ async fn test_update_blks_link_url_is_routable() {
         infra::common::EMPTY_SHA1,
         "a zero-byte block commit answers the empty-file sentinel id"
     );
+
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/updated.txt")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.bytes().await.unwrap().is_empty(),
+        "update-blks must replace the target in place"
+    );
 }
 
-/// `replace=true` is the documented spelling (see the transfer docs); the block
-/// commit must honour it instead of silently creating `name (1).ext`.
+/// Upstream answers 441 (`SEAF_HTTP_RES_NOT_EXISTS`) when an update's
+/// `target_file` does not exist, rather than creating the file.
 #[tokio::test]
-async fn test_upload_blks_commit_honours_replace_true() {
+async fn test_update_blks_commit_requires_existing_target() {
+    let f = TestFixture::new().await;
+
+    let resp = f.client.update_blks_link(&f.api_token, &f.repo_id).await;
+    assert_eq!(resp.status(), 200);
+    let url: String = resp.json().await.unwrap();
+
+    let form = reqwest::multipart::Form::new()
+        .text("target_file", "/missing.txt")
+        .text("blockids", "[]")
+        .text("file_size", "0");
+    let resp = f
+        .client
+        .post_multipart_url(&format!("{url}?commitonly=true"), form)
+        .await;
+    assert_eq!(resp.status(), 441);
+}
+
+/// `replace=1` (the upstream spelling) is honoured by the upload path, and
+/// `commitonly` may sit in the query as seahub mints it.
+#[tokio::test]
+async fn test_upload_blks_commit_honours_replace() {
     let f = TestFixture::new().await;
 
     let resp = f
@@ -91,19 +132,21 @@ async fn test_upload_blks_commit_honours_replace_true() {
         .await;
     assert_eq!(resp.status(), 200, "seeding the file failed");
 
-    let resp = f.client.update_blks_link(&f.api_token, &f.repo_id).await;
+    let resp = f.client.upload_blks_link(&f.api_token, &f.repo_id).await;
     assert_eq!(resp.status(), 200);
     let url: String = resp.json().await.unwrap();
 
     let form = reqwest::multipart::Form::new()
-        .text("commitonly", "1")
         .text("parent_dir", "/")
         .text("file_name", "replace-me.txt")
         .text("blockids", "[]")
         .text("file_size", "0")
-        .text("replace", "true");
-    let resp = f.client.post_multipart_url(&url, form).await;
-    assert_eq!(resp.status(), 200, "replace=true commit failed");
+        .text("replace", "1");
+    let resp = f
+        .client
+        .post_multipart_url(&format!("{url}?commitonly=true"), form)
+        .await;
+    assert_eq!(resp.status(), 200, "replace=1 commit failed");
 
     let resp = f
         .client
@@ -113,7 +156,7 @@ async fn test_upload_blks_commit_honours_replace_true() {
     let body = resp.bytes().await.unwrap();
     assert!(
         body.is_empty(),
-        "replace=true must overwrite the target in place, got {} bytes",
+        "replace=1 must overwrite the target in place, got {} bytes",
         body.len()
     );
 }
@@ -148,28 +191,6 @@ async fn test_file_uploaded_bytes_stub() {
     let resp = f
         .client
         .file_uploaded_bytes(&f.api_token, &f.repo_id, "test.txt", "/")
-        .await;
-    assert_eq!(resp.status(), 200);
-
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["uploadedBytes"].as_i64(), Some(0));
-}
-
-/// The legacy `/api2/` alias documented next to the v2.1 route: it was documented
-/// and in the capability table but had no route (a 404 for old clients).
-#[tokio::test]
-async fn test_file_uploaded_bytes_legacy_path_is_served() {
-    let f = TestFixture::new().await;
-
-    let resp = f
-        .client
-        .get(
-            &format!(
-                "/api2/repos/{}/file-uploaded-bytes/?file_name=test.txt&parent_dir=/",
-                f.repo_id
-            ),
-            Some(&f.api_token),
-        )
         .await;
     assert_eq!(resp.status(), 200);
 

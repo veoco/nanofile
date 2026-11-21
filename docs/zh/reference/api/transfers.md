@@ -96,13 +96,21 @@
 
 `POST /upload-blks-api/{token}`
 
-移动端的块级上传，由上传块或更新块链接签发。
+移动端的块级上传，由上传块链接签发。
 
 没有 `commitonly` 时，每个 `file` 段是一个块：段里的 filename 是块 id，必须等于 `sha1(内容)`，否则返回 `400`。每个块写入时即计入配额（超限返回 `443`）。
 
 带 `commitonly` 时，请求是表单：`parent_dir`、`file_name`、`blockids`（JSON 数组）、`file_size` 与可选 `replace`；服务器用已上传的块组装文件。`blockids` 只有在零字节文件时才能为空。成功时默认返回纯文本文件 id；带 `ret-json` 时返回 `[{"id": "…", "name": "…", "size": 0}]`。`replace=1` 时，`file_name` 指向已有目录会返回 `409`：文件不会替换目录。
 
 加密资料库会被拒绝：该接口用明文 SHA-1 命名块，在服务端加密下不成立。
+
+## 更新块 {#post-update-blks-api-token}
+
+`POST /update-blks-api/{token}`
+
+对应的更新入口，由更新块链接（`GET /api2/repos/{repo_id}/update-blks-link/`）签发。请求体是提交表单：`target_file`（已存在文件的绝对路径）、`blockids`（JSON 数组）与 `file_size`；`commitonly` 放在查询串里。服务器原地替换该文件。目标不存在返回 `441`（`SEAF_HTTP_RES_NOT_EXISTS`），目标是目录返回 `409`。
+
+块必须已经在存储中（先通过 `/upload-blks-api/{token}` 的块上传阶段写入）。加密资料库会被拒绝，原因同上。
 
 ## 已上传字节 {#get-api-v2-1-repos-repo-id-file-uploaded-bytes}
 
@@ -113,12 +121,6 @@
 **响应 `200`** —— `{"uploadedBytes": 1048576}`，带 `Accept-Ranges: bytes`。
 
 需要 `file.write`。
-
-### 已上传字节（旧路径） {#get-api2-repos-repo-id-file-uploaded-bytes}
-
-`GET /api2/repos/{repo_id}/file-uploaded-bytes/`
-
-与上面的 v2.1 接口相同，查询参数与响应一致。
 
 ## 上传进度 {#get-upload-progress}
 

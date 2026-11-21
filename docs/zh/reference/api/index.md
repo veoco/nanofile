@@ -13,7 +13,7 @@
 | `/seafhttp/` | 客户端守护进程与服务器之间的同步协议，见 [同步协议](/zh/reference/api/sync)。 |
 | `/dav/{repo_id}/` | WebDAV，见 [WebDAV](/zh/reference/api/webdav)。 |
 | `/notification` | 客户端订阅资料库更新的 WebSocket，见 [通知 WebSocket](/zh/reference/api/notification)。 |
-| `/upload-aj/`、`/upload-api/`、`/update-aj/`、`/update-api/`、`/download-api/`、`/blks/`、`/zip/`、`/repos/{repo_id}/files/` | 传输接口。API 返回这些 URL，网页界面也直接调用；见 [上传与下载](/zh/reference/api/transfers)。 |
+| `/upload-aj/`、`/upload-api/`、`/upload-blks-api/`、`/update-aj/`、`/update-api/`、`/update-blks-api/`、`/download-api/`、`/blks/`、`/zip/`、`/repos/{repo_id}/files/` | 传输接口。API 返回这些 URL，网页界面也直接调用；见 [上传与下载](/zh/reference/api/transfers)。 |
 | `/health` | 运行状态探针，返回 `200` 与进程代号头。不属于 API。 |
 
 `GET /api2/server-info/` 返回本服务器对外声明的 Seafile 版本（`server.version`，默认 `8.0.0`）。客户端据此裁剪功能；本参考描述实际存在的路由，而不只是该版本号隐含的能力。

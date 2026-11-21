@@ -257,15 +257,17 @@ as for the upload link. Requires write permission and `file.write`.
 `GET /api2/repos/{repo_id}/upload-blks-link/?p=<dir>`
 
 Returns the URL for the chunked block upload endpoints used by the mobile
-clients. Encrypted libraries refuse it. Requires write permission and
-`file.write`.
+clients (`/upload-blks-api/<token>`). Encrypted libraries refuse it. Requires
+write permission and `file.write`.
 
 ## Update blocks link {#get-api2-repos-repo-id-update-blks-link}
 
 `GET /api2/repos/{repo_id}/update-blks-link/?p=<dir>`
 
 The update counterpart of the upload-blocks link, for updating an existing file
-block by block. Requires write permission and `file.write`.
+block by block. Returns a URL on `/update-blks-api/<token>`, whose commit body
+names the target with `target_file`. Requires write permission and
+`file.write`.
 
 ## Block download link {#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link}
 

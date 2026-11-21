@@ -213,13 +213,13 @@ seahub 的主资料库查询。
 
 `GET /api2/repos/{repo_id}/upload-blks-link/?p=<dir>`
 
-返回移动端使用的分块上传接口 URL。加密资料库拒绝。需要写权限与 `file.write`。
+返回移动端使用的分块上传接口 URL（`/upload-blks-api/<token>`）。加密资料库拒绝。需要写权限与 `file.write`。
 
 ## 更新块链接 {#get-api2-repos-repo-id-update-blks-link}
 
 `GET /api2/repos/{repo_id}/update-blks-link/?p=<dir>`
 
-更新块上传。需要写权限与 `file.write`。
+更新块上传。返回 `/update-blks-api/<token>` 形式的 URL，提交时用 `target_file` 指定目标文件。需要写权限与 `file.write`。
 
 ## 块下载链接 {#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link}
 

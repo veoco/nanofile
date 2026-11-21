@@ -42,10 +42,6 @@ pub fn file_routes() -> Router<Arc<AppState>> {
                 .put(lock_file_via_api_handler)
                 .delete(delete_file),
         )
-        .route(
-            "/{repo_id}/file-uploaded-bytes/",
-            axum::routing::get(file_uploaded_bytes),
-        )
         .route("/{repo_id}/file/rename/", axum::routing::post(rename_file))
         .route("/{repo_id}/file/move/", axum::routing::post(move_file))
         .route("/{repo_id}/file/detail/", axum::routing::get(file_detail))

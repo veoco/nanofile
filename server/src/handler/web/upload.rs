@@ -1974,20 +1974,17 @@ pub async fn upload_blks_api(
         }
     }
 
-    if fields.contains_key("commitonly") {
-        let parent_dir = fields
-            .get("parent_dir")
-            .map(|s| s.as_str())
-            .unwrap_or(&info.parent_dir);
-        let file_name = fields
-            .get("file_name")
-            .ok_or_else(|| AppError::BadRequest("file_name required for commit".into()))?;
-        // Align with seafile's should_ignore_file: reject empty names, path
-        // separators, NUL, "." / "..", and over-long names. Deliberately not the
-        // strict character blacklist, so quotes, brackets etc. remain uploadable.
-        if !is_valid_upload_filename(file_name) {
-            return Err(AppError::BadRequest("invalid file_name".into()));
-        }
+    let commit_only = fields.contains_key("commitonly") || query.contains_key("commitonly");
+    // Upstream's update handler requires the commit phase; a block-only request
+    // there would otherwise look like an upload and answer success without
+    // touching the target.
+    if info.op == "update-blks" && !commit_only {
+        return Err(AppError::BadRequest(
+            "Only commit supported for update-blks-api".into(),
+        ));
+    }
+
+    if commit_only {
         let blockids_str = fields
             .get("blockids")
             .ok_or_else(|| AppError::BadRequest("blockids required for commit".into()))?;
@@ -1995,15 +1992,6 @@ pub async fn upload_blks_api(
             .get("file_size")
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| AppError::BadRequest("file_size required for commit".into()))?;
-        // Link tokens cannot reach this operation today, but keep the add-only
-        // rule here too so a future token type cannot inherit overwrite.
-        let replace = scoped_replace(
-            parse_replace_arg(
-                query.get("replace").map(String::as_str),
-                fields.get("replace").map(String::as_str),
-            )?,
-            info.upload_link_id,
-        );
 
         let block_ids: Vec<String> = serde_json::from_str(blockids_str)
             .map_err(|_| AppError::BadRequest("invalid blockids JSON array".into()))?;
@@ -2056,15 +2044,72 @@ pub async fn upload_blks_api(
             ));
         }
 
-        // Resolve the target directory **before** writing the file object, via
-        // the upload-link-aware helper: an `upload_link_id` token is scoped to
-        // the link's directory and must not commit outside it. Rejecting an
-        // invalid path here also avoids leaving an orphan fs_object behind.
-        let relative_path = fields
-            .get("relative_path")
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        let target_dir = compute_scoped_target_dir(&info, parent_dir, relative_path)?;
+        // Resolve the target **before** writing the file object, via the
+        // upload-link-aware helper: an `upload_link_id` token is scoped to the
+        // link's directory and must not commit outside it. Rejecting an invalid
+        // path here also avoids leaving an orphan fs_object behind.
+        //
+        // An `update-blks` token names the target with `target_file`, like
+        // upstream's `update_blks_api_cb`, and always replaces it (441 when the
+        // file is gone). An `upload-blks` token keeps the upload contract:
+        // `parent_dir` + `relative_path` + `file_name`, optional `replace`.
+        let (target_dir, file_name, replace, ensure_dir) = if info.op == "update-blks" {
+            let target_file = fields
+                .get("target_file")
+                .ok_or_else(|| AppError::BadRequest("target_file required for update".into()))?;
+            let (raw_parent, raw_name) = target_file
+                .rsplit_once('/')
+                .unwrap_or(("", target_file.as_str()));
+            let parent = if raw_parent.is_empty() {
+                "/"
+            } else {
+                raw_parent
+            };
+            if !is_valid_upload_filename(raw_name) {
+                return Err(AppError::BadRequest("invalid target_file".into()));
+            }
+            require_target_exists(&state, &info.repo_id, parent, raw_name).await?;
+            (
+                compute_scoped_target_dir(&info, parent, "")?,
+                raw_name.to_string(),
+                true,
+                false,
+            )
+        } else {
+            let parent_dir = fields
+                .get("parent_dir")
+                .map(|s| s.as_str())
+                .unwrap_or(&info.parent_dir);
+            let file_name = fields
+                .get("file_name")
+                .ok_or_else(|| AppError::BadRequest("file_name required for commit".into()))?;
+            // Align with seafile's should_ignore_file: reject empty names, path
+            // separators, NUL, "." / "..", and over-long names. Deliberately not
+            // the strict character blacklist, so quotes, brackets etc. remain
+            // uploadable.
+            if !is_valid_upload_filename(file_name) {
+                return Err(AppError::BadRequest("invalid file_name".into()));
+            }
+            let relative_path = fields
+                .get("relative_path")
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            // Link tokens cannot reach this operation today, but keep the add-only
+            // rule here too so a future token type cannot inherit overwrite.
+            let replace = scoped_replace(
+                parse_replace_arg(
+                    query.get("replace").map(String::as_str),
+                    fields.get("replace").map(String::as_str),
+                )?,
+                info.upload_link_id,
+            );
+            (
+                compute_scoped_target_dir(&info, parent_dir, relative_path)?,
+                file_name.to_string(),
+                replace,
+                true,
+            )
+        };
 
         // Commit through the same service as every other upload entry point, so
         // the directory-replace guard, filename validation, unique naming, quota
@@ -2076,14 +2121,14 @@ pub async fn upload_blks_api(
             .upload_file_committed_stream(
                 &info.repo_id,
                 &target_dir,
-                file_name,
+                &file_name,
                 block_ids.clone(),
                 file_size,
                 &info.username,
                 uid,
-                // Like the other upload endpoints, create any missing parent
-                // directories named by `relative_path`.
-                true,
+                // Upload tokens create missing parents named by `relative_path`;
+                // an update token targets an existing file, so its parent exists.
+                ensure_dir,
                 replace,
                 new_block_ids.clone(),
             )

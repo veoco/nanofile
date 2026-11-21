@@ -34,6 +34,7 @@ const TOKEN_PATH_PREFIXES: &[&str] = &[
     "update-api",
     "update-aj",
     "upload-blks-api",
+    "update-blks-api",
     "upload-raw-blks-api",
     "client-sso",
     "client-login",
@@ -334,6 +335,10 @@ mod tests {
         assert_eq!(
             redact_request_path("/blks/abc123/file-id/block-id"),
             "/blks/{token}/file-id/block-id"
+        );
+        assert_eq!(
+            redact_request_path("/update-blks-api/abc123"),
+            "/update-blks-api/{token}"
         );
         assert_eq!(
             redact_request_path("/api/v2.1/share-links/abc123/"),

@@ -73,11 +73,11 @@ pub async fn update_blks_link(
         parent_dir,
     );
 
-    // Both links point at the one block endpoint: `upload_blks_api` accepts the
-    // `upload-blks` and `update-blks` token ops alike, and the token itself names
-    // the directory and the operation. Minting a second path here (`update-blks-api`)
-    // produced a URL no route serves.
-    let url = build_blks_op_url(&state, "upload-blks-api", &token, &headers);
+    // Upstream seahub mints `/update-blks-api/{token}` for this link
+    // (`UpdateBlksLinkView`), and the write target comes from the request's
+    // `target_file`, not from this token. Keep the path shape compatible; the
+    // shared block handler branches on the `update-blks` op for update semantics.
+    let url = build_blks_op_url(&state, "update-blks-api", &token, &headers);
 
     Ok(Json(url))
 }

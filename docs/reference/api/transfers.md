@@ -135,8 +135,7 @@ web interface uses; same fields and response as `/update-api/{token}`.
 
 `POST /upload-blks-api/{token}`
 
-The mobile clients' block-level upload, minted by the upload-blocks or
-update-blocks link.
+The mobile clients' block-level upload, minted by the upload-blocks link.
 
 Without `commitonly`, each `file` part is one block: the part's filename is the
 block id and must equal `sha1(contents)`; a mismatch is a `400`. Every block is
@@ -153,6 +152,22 @@ for a zero-byte file. The success body is the file id as plain text — or
 Encrypted libraries are refused: this API names blocks by the plaintext SHA-1,
 which cannot hold for server-side encryption.
 
+## Update blocks {#post-update-blks-api-token}
+
+`POST /update-blks-api/{token}`
+
+The update counterpart, minted by the update-blocks link (`GET
+/api2/repos/{repo_id}/update-blks-link/`). The body is the commit form:
+`target_file` (the existing file's absolute path), `blockids` (a JSON array)
+and `file_size`; `commitonly` goes in the query string. The server replaces
+that file in place. A missing target answers `441`
+(`SEAF_HTTP_RES_NOT_EXISTS`), and a target that is a directory is refused with
+`409`.
+
+The block ids must already be in the store (upload them through the
+`/upload-blks-api/{token}` block phase first). Encrypted libraries are refused
+for the same reason as the upload form.
+
 ## Uploaded bytes {#get-api-v2-1-repos-repo-id-file-uploaded-bytes}
 
 `GET /api/v2.1/repos/{repo_id}/file-uploaded-bytes/?file_name=<name>&parent_dir=<dir>&blockids=<json>`
@@ -164,13 +179,6 @@ A staged temp file's offset wins over the count of uploaded blocks.
 `Accept-Ranges: bytes`.
 
 Requires `file.write`.
-
-### Uploaded bytes (legacy path) {#get-api2-repos-repo-id-file-uploaded-bytes}
-
-`GET /api2/repos/{repo_id}/file-uploaded-bytes/`
-
-Identical to the v2.1 endpoint above, with the same query parameters and
-response.
 
 ## Upload progress {#get-upload-progress}
 

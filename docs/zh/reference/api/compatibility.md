@@ -687,7 +687,6 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 | `GET /api2/repos/{repo_id}/file/index-text/` | [docs](/zh/reference/api/metadata#get-api2-repos-repo-id-file-index-text) |
 | `POST /api2/repos/{repo_id}/file/reindex/` | [docs](/zh/reference/api/metadata#post-api2-repos-repo-id-file-reindex) |
 | `GET /api2/repos/{repo_id}/thumbnail/` | [docs](/zh/reference/api/files#get-api2-repos-repo-id-thumbnail) |
-| `GET /api2/repos/{repo_id}/file-uploaded-bytes/` | [docs](/zh/reference/api/transfers#get-api2-repos-repo-id-file-uploaded-bytes) |
 | `GET /api/v2.1/repos/{repo_id}/file-uploaded-bytes/` | [docs](/zh/reference/api/transfers#get-api-v2-1-repos-repo-id-file-uploaded-bytes) |
 | `GET /repos/{repo_id}/files/{*path}` | [docs](/zh/reference/api/transfers#get-repos-repo-id-files-path) |
 | `GET /api2/repos/{repo_id}/upload-blks-link/` | [docs](/zh/reference/api/libraries#get-api2-repos-repo-id-upload-blks-link) |

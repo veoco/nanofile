@@ -73,7 +73,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET",    "/api2/repos/{repo_id}/file/index-text/"),
     ("POST",   "/api2/repos/{repo_id}/file/reindex/"),
     ("GET",    "/api2/repos/{repo_id}/thumbnail/"),
-    ("GET",    "/api2/repos/{repo_id}/file-uploaded-bytes/"),
     ("GET",    "/api/v2.1/repos/{repo_id}/file-uploaded-bytes/"),
     ("POST",   "/api/v2.1/repos/{repo_id}/zip-task/"),
     ("GET",    "/api2/repos/{repo_id}/upload-link/"),

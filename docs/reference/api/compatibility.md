@@ -691,7 +691,6 @@ These routes are served but are not an operation in the official reference. Most
 | `GET /api2/repos/{repo_id}/file/index-text/` | [docs](/reference/api/metadata#get-api2-repos-repo-id-file-index-text) |
 | `POST /api2/repos/{repo_id}/file/reindex/` | [docs](/reference/api/metadata#post-api2-repos-repo-id-file-reindex) |
 | `GET /api2/repos/{repo_id}/thumbnail/` | [docs](/reference/api/files#get-api2-repos-repo-id-thumbnail) |
-| `GET /api2/repos/{repo_id}/file-uploaded-bytes/` | [docs](/reference/api/transfers#get-api2-repos-repo-id-file-uploaded-bytes) |
 | `GET /api/v2.1/repos/{repo_id}/file-uploaded-bytes/` | [docs](/reference/api/transfers#get-api-v2-1-repos-repo-id-file-uploaded-bytes) |
 | `GET /repos/{repo_id}/files/{*path}` | [docs](/reference/api/transfers#get-repos-repo-id-files-path) |
 | `GET /api2/repos/{repo_id}/upload-blks-link/` | [docs](/reference/api/libraries#get-api2-repos-repo-id-upload-blks-link) |

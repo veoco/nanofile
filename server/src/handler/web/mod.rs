@@ -66,6 +66,9 @@ pub fn web_api_routes() -> Router<Arc<AppState>> {
             get(download::block_download),
         )
         .route("/upload-blks-api/{token}", post(upload::upload_blks_api))
+        // Upstream seahub's `update-blks-link/` mints this path; the token op
+        // (`update-blks`) makes the shared handler replace an existing file.
+        .route("/update-blks-api/{token}", post(upload::upload_blks_api))
         .route("/update-aj/", post(upload::update_aj))
         .route("/update-aj/{token}", post(upload::update_aj_token))
         .route("/update-api/", post(upload::update_api))
