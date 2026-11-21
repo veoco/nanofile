@@ -120,6 +120,35 @@ server; it starts again at the next boot, or from "Start Windows service".
 The menu also installs or removes the service, and opens the web UI and the config
 file.
 
+## Notifications and dialogs
+
+The tray posts one desktop notification each time it starts (so once per login
+when Start at login is enabled; Windows toast, Linux notification service; macOS
+builds do not post notifications). It is informational only and has no switch.
+
+Dialogs are reserved for decisions and failures; an action never stacks two
+confirmations, and a failure never stacks two error dialogs:
+
+- **Start at boot**: one confirmation lists the consequences, any preflight
+  advisories, and — when the tray is elevated — the Windows account whose login
+  entry will be registered; then the UAC prompt, then one success dialog. On a
+  failure, one dialog carries the technical reason.
+- **Start/stop Windows service**: no confirmation beyond UAC. Success is shown by
+  the status row; only a failure opens a dialog.
+- **Start at login**: normally silent. A failed write is reported by a
+  notification (Windows/Linux; only the log on macOS).
+- **Fatal startup errors**: a configuration error, a first-run setup timeout, a
+  start refused because the service owns the address, a server failure after
+  startup, or a tray that cannot be created opens a dialog where a desktop
+  exists: a message box on Windows, an alert via `osascript` on macOS, and
+  `zenity`/`kdialog` (or `notify-send`) on Linux.
+- The status row and tooltip are re-probed every five seconds on Windows and
+  Linux. macOS refreshes when the tray icon is clicked, so a panel may show the
+  previous state for that one open.
+
+The full reason is always in `nanofile.log` next to the executable; dialogs show a
+shortened form.
+
 ## Logs
 
 A service has no desktop, so there is no tray icon; logs go to `nanofile.log` next

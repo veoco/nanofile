@@ -15,10 +15,12 @@ use super::TrayContext;
 use super::actions::TrayAction;
 
 /// Work for the tray thread: a menu click, translated on the D-Bus thread but not
-/// run there, or a change of the desktop's colour scheme.
+/// run there, a change of the desktop's colour scheme, or a periodic status
+/// refresh (the row and tooltip are snapshots).
 enum Wake {
     Menu(TrayAction),
     Theme,
+    Refresh,
 }
 
 static WAKE: OnceLock<Sender<Wake>> = OnceLock::new();
@@ -57,11 +59,27 @@ pub(super) fn run(
         Ok(tray) => tray,
         Err(e) => {
             tracing::error!("Tray unavailable: {e:#}");
-            super::tray_failed(client_mode)
+            super::tray_failed(client_mode, &e)
         }
     };
     super::notify::started();
     super::theme::watch();
+
+    // Re-probe on a timer so a service started or stopped outside the menu does
+    // not leave the row and tooltip stale; the ksni menu watcher mirrors the
+    // resulting item changes.
+    if std::thread::Builder::new()
+        .name("tray-refresh".into())
+        .spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                wake(Wake::Refresh);
+            }
+        })
+        .is_err()
+    {
+        tracing::warn!("could not start the tray status refresh timer");
+    }
 
     // The scheme the icon was last rendered for, so an unrelated `SettingChanged`
     // does not rewrite it.
@@ -69,6 +87,7 @@ pub(super) fn run(
     while let Ok(event) = receiver.recv() {
         match event {
             Wake::Menu(action) => action.run(),
+            Wake::Refresh => super::actions::sync(),
             Wake::Theme => {
                 let now = super::theme::is_dark();
                 if dark == Some(now) {

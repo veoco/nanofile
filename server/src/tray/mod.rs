@@ -121,16 +121,27 @@ thread_local! {
     static TRAY: RefCell<Option<Rc<TrayIcon>>> = const { RefCell::new(None) };
     /// The last state `sync` rendered, for the one-shot startup notification.
     static STATUS: Cell<Option<ServerStatus>> = const { Cell::new(None) };
+    /// The tooltip currently set, so the periodic refresh does not rewrite it.
+    static LAST_TOOLTIP: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 fn set_tooltip(text: &str) {
-    TRAY.with(|slot| {
-        if let Some(tray) = slot.borrow().as_ref()
-            && let Err(e) = tray.set_tooltip(Some(text))
-        {
-            tracing::debug!("Failed to update the tray tooltip: {e}");
+    // Before `builder.build()` there is no icon yet; do not record the text as set.
+    let Some(tray) = TRAY.with(|slot| slot.borrow().clone()) else {
+        return;
+    };
+    let changed = LAST_TOOLTIP.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.as_deref() == Some(text) {
+            false
+        } else {
+            *slot = Some(text.to_string());
+            true
         }
     });
+    if changed && let Err(e) = tray.set_tooltip(Some(text)) {
+        tracing::debug!("Failed to update the tray tooltip: {e}");
+    }
 }
 
 fn remember_status(status: ServerStatus) {
@@ -248,17 +259,13 @@ pub fn run(
     backend::run(&ctx, quit_tx, client_mode);
 }
 
-/// A fatal server exit in a GUI build: without this the tray icon would simply
+/// A fatal server exit in a desktop build: without this the tray icon would simply
 /// disappear, with the reason only in the log file.
 fn report_server_failure(detail: &str) {
-    #[cfg(target_os = "windows")]
-    {
-        let t = lang();
-        let text = t.trf("tray.server_failed_body", &[("detail", detail)]);
-        crate::logging::show_message_box(t.tr("tray.notify_title"), &text);
-    }
-    #[cfg(not(target_os = "windows"))]
-    let _ = detail;
+    let t = lang();
+    let detail = crate::logging::dialog_text(detail, 2000);
+    let text = t.trf("tray.server_failed_body", &[("detail", detail.as_str())]);
+    crate::logging::show_message_box(t.tr("tray.notify_title"), &text);
 }
 
 /// The snapshot the menu is rendered from: both registrations, this process'
@@ -280,9 +287,13 @@ pub(super) fn park_forever() -> ! {
     }
 }
 
-/// A tray that could not be created: keep the server (if this process is it), or
-/// end a client tray that has nothing left to show.
-pub(super) fn tray_failed(client_mode: bool) -> ! {
+/// A tray that could not be created: explain it where a desktop exists, then keep
+/// the server (if this process is it) or end a client tray that has nothing to show.
+pub(super) fn tray_failed(client_mode: bool, error: &anyhow::Error) -> ! {
+    let t = lang();
+    let detail = crate::logging::dialog_text(&format!("{error:#}"), 2000);
+    let text = t.trf("tray.tray_unavailable", &[("detail", detail.as_str())]);
+    crate::logging::show_message_box(t.tr("tray.notify_title"), &text);
     if client_mode {
         std::process::exit(1);
     }
@@ -389,6 +400,8 @@ fn create_tray(
         busy: Cell::new(false),
         #[cfg(target_os = "windows")]
         login_write_consented: Cell::new(false),
+        #[cfg(target_os = "windows")]
+        service_error_file: RefCell::new(None),
         serving,
         quit_tx,
     });
@@ -420,6 +433,27 @@ fn create_tray(
 
     // Render the live snapshot over the placeholders above.
     actions::sync();
+
+    // macOS has no timer hook on the NSApplication run loop, so refresh on the
+    // interaction that precedes opening the menu. Best effort: if the menu is
+    // already built by the time this runs, the next open has the fresh status.
+    #[cfg(target_os = "macos")]
+    {
+        use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+        TrayIconEvent::set_event_handler(Some(|event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Right,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+            ) {
+                actions::sync();
+            }
+        }));
+    }
+
     Ok(tray)
 }
 

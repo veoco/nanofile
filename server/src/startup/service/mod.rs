@@ -36,8 +36,8 @@ pub(crate) const EXIT_FAILED: i32 = 1;
 /// check failed.
 #[cfg(target_os = "windows")]
 pub(crate) const EXIT_REFUSED: i32 = 2;
-/// Failed, and the reason was already shown in a dialog by the helper itself:
-/// the tray must not add a second, vaguer one.
+/// Failed; the reason is in the error file the tray reads (or was shown in the
+/// helper's own dialog when it ran by hand).
 #[cfg(target_os = "windows")]
 pub(crate) const EXIT_REPORTED: i32 = 3;
 
@@ -187,7 +187,7 @@ pub(crate) use cli::run_cli;
 #[cfg(all(target_os = "windows", feature = "tray"))]
 pub(crate) use preflight::{Input as PreflightInput, run as run_preflight};
 #[cfg(target_os = "windows")]
-pub(crate) use windows::probe as probe_service;
+pub(crate) use windows::{probe as probe_service, set_error_file, write_startup_error};
 
 /// No Service Control Manager outside Windows: the login entry is the only
 /// automatic start there.

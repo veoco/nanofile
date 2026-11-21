@@ -42,6 +42,10 @@ struct Cli {
     /// Diagnostics only: a session server can keep the service from binding.
     #[arg(long, hide = true, global = true)]
     allow_session_server: bool,
+    /// Where an elevated service helper writes its failure reason for the tray.
+    #[cfg(target_os = "windows")]
+    #[arg(long, hide = true, global = true)]
+    error_file: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -234,6 +238,13 @@ fn notification_key_is_weak(key: &str) -> bool {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // The elevated service helper suppresses its own dialog when the tray gave it
+    // a file to write the reason to; the tray then shows one localized dialog.
+    #[cfg(target_os = "windows")]
+    if let Some(path) = &cli.error_file {
+        startup::service::set_error_file(path.clone());
+    }
+
     let command = cli.command.unwrap_or(Command::Server);
 
     // The extraction worker runs first: a child process with no state that must not
@@ -320,10 +331,19 @@ fn main() -> anyhow::Result<()> {
     let (loaded, resolved_config) = match Config::load_for_start_with_path(cli.config.as_deref()) {
         Ok(loaded) => loaded,
         Err(e) => {
-            logging::report_startup_failure(&e, !service_run);
-            // The helper already showed this in a dialog: the tray stays silent.
+            // Only a tray-launched helper (which carries the error file) suppresses
+            // the dialog here; a manual start keeps it.
+            #[cfg(target_os = "windows")]
+            let helper_has_error_file = service_helper && cli.error_file.is_some();
+            #[cfg(not(target_os = "windows"))]
+            let helper_has_error_file = false;
+            let show_dialog = !service_run && !helper_has_error_file;
+            logging::report_startup_failure(&e, show_dialog);
+            // The helper writes the reason where the tray reads it; the tray then
+            // shows the single localized dialog.
             #[cfg(target_os = "windows")]
             if service_helper {
+                startup::service::write_startup_error(&e);
                 std::process::exit(startup::service::EXIT_REPORTED);
             }
             return Err(e);
@@ -639,12 +659,31 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
-                let message = "this installation's Windows service is registered, so this start \
-                     will not bind the configured address; start the service instead, or pass \
-                     --allow-session-server for a diagnostic session server";
-                tracing::error!("{message}");
                 #[cfg(all(target_os = "windows", feature = "tray"))]
-                logging::show_message_box("Nanofile", message);
+                let (title, message) = {
+                    let t = tray::language(&config);
+                    (
+                        t.tr("tray.notify_title"),
+                        t.trf(
+                            "tray.refuse_service_registered",
+                            &[("url", config.server.site_url.trim_end_matches('/'))],
+                        ),
+                    )
+                };
+                #[cfg(not(all(target_os = "windows", feature = "tray")))]
+                let (title, message) = (
+                    "Nanofile",
+                    "this installation's Windows service is registered, so this start will \
+                     not bind the configured address; start the service instead"
+                        .to_string(),
+                );
+                tracing::error!("{title}: {message}");
+                // Diagnostic escape hatch, not part of the user-facing message.
+                tracing::info!(
+                    "pass --allow-session-server to start a diagnostic session server anyway"
+                );
+                #[cfg(all(target_os = "windows", feature = "tray"))]
+                logging::show_message_box(title, &message);
                 anyhow::bail!("{message}");
             }
             // With the tray feature compiled in and a desktop session present, the tray
@@ -661,16 +700,16 @@ fn main() -> anyhow::Result<()> {
             }
 
             let rt = tokio::runtime::Runtime::new()?;
-            // A tray build with the tray disabled is still a GUI-subsystem binary:
-            // the language is resolved here because `config` moves into the server.
-            #[cfg(all(target_os = "windows", feature = "tray"))]
+            // A tray build can still run headless (`server.tray = false`): resolve
+            // the language here because `config` moves into the server.
+            #[cfg(feature = "tray")]
             let headless_lang = tray::language(&config);
             let result = rt.block_on(run_server_flow(config, env_keys, None, setup_listener));
             // A fatal server error would otherwise only reach the log file, and the
             // user would just see the icon (or window) disappear.
-            #[cfg(all(target_os = "windows", feature = "tray"))]
+            #[cfg(feature = "tray")]
             if let Err(e) = &result {
-                let detail = format!("{e:#}");
+                let detail = logging::dialog_text(&format!("{e:#}"), 2000);
                 let text =
                     headless_lang.trf("tray.server_failed_body", &[("detail", detail.as_str())]);
                 logging::show_message_box(headless_lang.tr("tray.notify_title"), &text);
@@ -854,8 +893,8 @@ fn main() -> anyhow::Result<()> {
             let is_run = matches!(&action, startup::service::ServiceAction::Run);
             match startup::service::run_cli(action, &config, &config_path, env_keys) {
                 Ok(()) => Ok(()),
-                // `run_cli` already showed the specific reason in a dialog; the
-                // dedicated code keeps the tray from adding a second, generic one.
+                // `run_cli` wrote the reason to the tray's error file (or showed it
+                // when run by hand); mark the failure for the waiting tray.
                 Err(_) if !is_run => std::process::exit(startup::service::EXIT_REPORTED),
                 Err(e) => Err(e),
             }

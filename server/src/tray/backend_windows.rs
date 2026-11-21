@@ -14,8 +14,8 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP,
-    WM_SETTINGCHANGE,
+    DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, SetTimer, TranslateMessage, WM_APP,
+    WM_SETTINGCHANGE, WM_TIMER,
 };
 
 use super::TrayContext;
@@ -60,10 +60,17 @@ pub(super) fn run(
         Ok(tray) => tray,
         Err(e) => {
             tracing::error!("Tray unavailable: {e:#}");
-            super::tray_failed(client_mode)
+            super::tray_failed(client_mode, &e)
         }
     };
     super::notify::started();
+
+    // Status is a snapshot: re-probe on a timer so a service started or stopped
+    // outside the menu does not leave the row and tooltip stale. `WM_TIMER` goes
+    // to this thread's queue (the window handle is null).
+    if unsafe { SetTimer(std::ptr::null_mut(), 0, 5_000, None) } == 0 {
+        tracing::warn!("could not start the tray status refresh timer");
+    }
 
     unsafe {
         let mut msg: MSG = std::mem::zeroed();
@@ -71,6 +78,10 @@ pub(super) fn run(
             // Thread messages (hwnd == NULL) never reach a window procedure.
             if msg.hwnd.is_null() {
                 match msg.message {
+                    WM_TIMER => {
+                        super::actions::sync();
+                        continue;
+                    }
                     WM_APP_TRAY_ACTION => {
                         super::actions::drain();
                         continue;

@@ -40,7 +40,7 @@ use super::{ID_AUTOSTART, ID_OPEN_CONFIG, ID_OPEN_WEB, ID_QUIT, TrayContext, lan
 #[cfg(target_os = "windows")]
 use super::{ID_SERVICE, ID_SERVICE_ACTION};
 #[cfg(target_os = "windows")]
-use crate::startup::service::{EXIT_REFUSED, EXIT_REPORTED, probe_service};
+use crate::startup::service::{EXIT_REFUSED, probe_service};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_CANCELLED, GetLastError, HANDLE, STILL_ACTIVE,
@@ -89,6 +89,10 @@ pub(super) struct MenuState {
     /// consent to write that account's login entry; no second dialog.
     #[cfg(target_os = "windows")]
     pub(super) login_write_consented: Cell<bool>,
+    /// File next to the executable the elevated helper writes its failure reason
+    /// to, so the tray can show one localized dialog with the detail.
+    #[cfg(target_os = "windows")]
+    pub(super) service_error_file: RefCell<Option<PathBuf>>,
     /// This process brought up the server (so Quit stops it).
     pub(super) serving: bool,
     pub(super) quit_tx: UnboundedSender<TrayCommand>,
@@ -127,20 +131,20 @@ fn sync_state(state: &MenuState) {
     let t = lang();
     let busy = state.busy.get();
 
-    state.open_web_item.set_enabled(plan.web_enabled);
-    state.login_item.set_checked(plan.login_checked);
-    state.login_item.set_enabled(plan.login_enabled && !busy);
+    set_enabled(&state.open_web_item, plan.web_enabled);
+    set_check(
+        &state.login_item,
+        plan.login_checked,
+        plan.login_enabled && !busy,
+    );
     #[cfg(target_os = "windows")]
-    {
-        state.service_item.set_checked(plan.service_checked);
-        state.service_item.set_enabled(!busy);
-    }
-    state.status_item.set_text(t.tr(plan.status.key()));
+    set_check(&state.service_item, plan.service_checked, !busy);
+    set_text(&state.status_item, t.tr(plan.status.key()));
 
     match plan.action {
         Some(kind) => {
-            state.action_item.set_text(t.tr(kind.key()));
-            state.action_item.set_enabled(!busy);
+            set_text(&state.action_item, t.tr(kind.key()));
+            set_enabled(&state.action_item, !busy);
             if !state.action_attached.get() {
                 let _ = state.menu.insert(&state.action_item, ACTION_POSITION);
                 state.action_attached.set(true);
@@ -160,7 +164,7 @@ fn sync_state(state: &MenuState) {
             state.warning_attached.set(false);
         }
     } else {
-        state.warning_item.set_text(join_warnings(&plan.warnings));
+        set_text(&state.warning_item, &join_warnings(&plan.warnings));
         if !state.warning_attached.get() {
             let position = ACTION_POSITION + usize::from(state.action_attached.get());
             let _ = state.menu.insert(&state.warning_item, position);
@@ -170,6 +174,29 @@ fn sync_state(state: &MenuState) {
 
     super::set_tooltip(t.tr(plan.status.tooltip_key()));
     super::remember_status(plan.status);
+}
+
+/// Only touch muda items whose value actually changed: the periodic refresh must
+/// not make the Linux menu watcher rebuild the menu every few seconds.
+fn set_text(item: &MenuItem, text: &str) {
+    if item.text().as_str() != text {
+        item.set_text(text);
+    }
+}
+
+fn set_enabled(item: &MenuItem, enabled: bool) {
+    if item.is_enabled() != enabled {
+        item.set_enabled(enabled);
+    }
+}
+
+fn set_check(item: &CheckMenuItem, checked: bool, enabled: bool) {
+    if item.is_checked() != checked {
+        item.set_checked(checked);
+    }
+    if item.is_enabled() != enabled {
+        item.set_enabled(enabled);
+    }
 }
 
 fn join_warnings(warnings: &[policy::Warning]) -> String {
@@ -306,6 +333,8 @@ fn perform_login_toggle(login: PlatformLogin) {
     };
     if let Err(e) = result {
         tracing::error!("Failed to update launch-at-login: {e:#}");
+        let detail = crate::logging::dialog_text(&format!("{e:#}"), 1000);
+        super::notify::login_failed(&detail);
     }
     sync();
 }
@@ -552,11 +581,23 @@ fn service_action() {
 /// helper works. The wait thread posts [`ServiceOutcome`] back to the event loop.
 #[cfg(target_os = "windows")]
 fn launch_helper(exe: &Path, config_display: &str, outcome: ServiceOutcome) {
+    // The helper runs elevated and must not show its own (English, technical)
+    // dialog: it writes the reason here and the tray shows one localized dialog.
+    // The file lives next to the executable so it also works when elevation uses
+    // another account (whose temp directory is not this process').
+    let error_file = exe
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!("nanofile-service-{}.log", std::process::id()));
+    let _ = std::fs::remove_file(&error_file);
+    let error_display = error_file.to_string_lossy();
     let parameters = format!(
-        "service {} --config {}",
+        "service {} --config {} --error-file {}",
         outcome.verb(),
-        crate::startup::cmdline::win_cmd_quote(config_display)
+        crate::startup::cmdline::win_cmd_quote(config_display),
+        crate::startup::cmdline::win_cmd_quote(error_display.as_ref())
     );
+    with_state(|state| *state.service_error_file.borrow_mut() = Some(error_file));
     set_busy(true);
     match launch_elevated(exe, &parameters) {
         Ok(process) => {
@@ -579,12 +620,22 @@ fn launch_helper(exe: &Path, config_display: &str, outcome: ServiceOutcome) {
         Err(LaunchError::Cancelled) => {
             // The user dismissed the elevation prompt: they know, so no dialog.
             tracing::info!("the elevation prompt was dismissed; nothing was changed");
-            with_state(|state| state.login_write_consented.set(false));
+            with_state(|state| {
+                if let Some(path) = state.service_error_file.borrow_mut().take() {
+                    let _ = std::fs::remove_file(path);
+                }
+                state.login_write_consented.set(false);
+            });
             set_busy(false);
         }
         Err(LaunchError::Failed(error)) => {
             tracing::error!("failed to start the elevated helper: {error}");
-            with_state(|state| state.login_write_consented.set(false));
+            with_state(|state| {
+                if let Some(path) = state.service_error_file.borrow_mut().take() {
+                    let _ = std::fs::remove_file(path);
+                }
+                state.login_write_consented.set(false);
+            });
             set_busy(false);
             let t = lang();
             let text = format!("{}\n\n{error}", t.tr("tray.service_launch_failed"));
@@ -601,19 +652,22 @@ fn launch_helper(exe: &Path, config_display: &str, outcome: ServiceOutcome) {
 #[cfg(target_os = "windows")]
 pub(super) fn service_finished(outcome: ServiceOutcome, exit_code: u32) {
     with_state(|state| state.busy.set(false));
+    // The helper writes its failure reason here instead of opening its own dialog.
+    let error_file = with_state(|state| state.service_error_file.borrow_mut().take()).flatten();
+    let helper_detail = error_file.as_ref().and_then(|path| {
+        std::fs::read_to_string(path)
+            .ok()
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty())
+    });
+    if let Some(path) = &error_file {
+        let _ = std::fs::remove_file(path);
+    }
     // The install confirmation may have covered the login entry; consume it on
     // every path so a later operation cannot reuse it.
     let login_consented =
         with_state(|state| state.login_write_consented.replace(false)).unwrap_or(false);
     let t = lang();
-
-    // The helper already showed the specific reason in its own dialog; a second,
-    // generic one would only repeat it in vaguer words.
-    if exit_code == EXIT_REPORTED as u32 {
-        tracing::warn!("the elevated helper reported the failure; showing no second dialog");
-        sync();
-        return;
-    }
 
     // The helper refused before changing anything (its own preflight): the reason
     // is in the log.
@@ -623,17 +677,24 @@ pub(super) fn service_finished(outcome: ServiceOutcome, exit_code: u32) {
         return;
     }
 
-    // `STILL_ACTIVE`: the helper is still running after five minutes. Its own
-    // dialog owns any error, so only the menu state is refreshed.
+    // `STILL_ACTIVE`: the helper is still running after five minutes. Only the
+    // menu state is refreshed; the helper may still be working.
     if exit_code != 0 && exit_code != STILL_ACTIVE as u32 {
-        tracing::error!(
-            exit_code,
-            "the elevated helper failed without reporting a reason"
-        );
+        tracing::error!(exit_code, "the elevated helper failed");
         sync();
+        let text = match helper_detail.as_deref() {
+            Some(detail) => {
+                let detail = crate::logging::dialog_text(detail, 1600);
+                t.trf(
+                    "tray.service_failed_detail",
+                    &[("details", detail.as_str())],
+                )
+            }
+            None => t.tr("tray.service_failed").to_string(),
+        };
         show_message(
             t.tr("tray.notify_title"),
-            t.tr("tray.service_failed"),
+            &text,
             MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
         );
         return;
@@ -659,10 +720,13 @@ pub(super) fn service_finished(outcome: ServiceOutcome, exit_code: u32) {
                 );
             }
             ServiceOutcome::Uninstalled => {
-                retire_login_entry();
+                let key = match retire_login_entry() {
+                    LoginCleanup::Removed => "tray.service_removed",
+                    LoginCleanup::Kept => "tray.service_removed_login_kept",
+                };
                 show_message(
                     t.tr("tray.notify_title"),
-                    t.tr("tray.service_removed"),
+                    t.tr(key),
                     MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
                 );
             }
@@ -708,12 +772,30 @@ fn login_tray_active(login: &PlatformLogin) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn retire_login_entry() {
+enum LoginCleanup {
+    Removed,
+    Kept,
+}
+
+#[cfg(target_os = "windows")]
+fn retire_login_entry() -> LoginCleanup {
     let Some(login) = with_state(|state| state.login.clone()) else {
-        return;
+        return LoginCleanup::Kept;
     };
-    if let Err(e) = login.retire_ours() {
-        tracing::warn!("could not remove the start-at-login entry: {e:#}");
+    let state = login.state();
+    if !state.present {
+        return LoginCleanup::Removed;
+    }
+    if !state.ours {
+        return LoginCleanup::Kept;
+    }
+    match login.retire_ours() {
+        Ok(true) => LoginCleanup::Removed,
+        Ok(false) => LoginCleanup::Kept,
+        Err(e) => {
+            tracing::warn!("could not remove the start-at-login entry: {e:#}");
+            LoginCleanup::Kept
+        }
     }
 }
 
@@ -742,7 +824,8 @@ fn preflight_for_install(t: &server::i18n::I18n) -> InstallPreflight {
     report.log();
 
     if report.has(Severity::Fail) {
-        let details = report.lines_at_least(Severity::Fail).join("\n");
+        let details =
+            crate::logging::dialog_text(&report.lines_at_least(Severity::Fail).join("\n"), 1200);
         let text = t.trf(
             "tray.service_preflight_failed",
             &[("details", details.as_str())],
@@ -754,9 +837,9 @@ fn preflight_for_install(t: &server::i18n::I18n) -> InstallPreflight {
         );
         return InstallPreflight::Refused;
     }
-    let advisories = report
-        .has(Severity::Warn)
-        .then(|| report.lines_at_least(Severity::Warn).join("\n"));
+    let advisories = report.has(Severity::Warn).then(|| {
+        crate::logging::dialog_text(&report.lines_at_least(Severity::Warn).join("\n"), 1200)
+    });
     InstallPreflight::Proceed { advisories }
 }
 

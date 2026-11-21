@@ -18,7 +18,7 @@ pub(super) fn run(
         Ok(tray) => tray,
         Err(e) => {
             tracing::error!("Tray unavailable: {e:#}");
-            super::tray_failed(client_mode)
+            super::tray_failed(client_mode, &e)
         }
     };
     super::notify::started();

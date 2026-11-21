@@ -39,9 +39,64 @@ pub(crate) fn message_box(title: &str, text: &str, flags: u32) -> i32 {
     unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), flags) }
 }
 
-/// Report a failure the way a GUI-subsystem process can: a message box plus the log file.
+/// Where a tray-launched helper writes its failure reason instead of showing its
+/// own dialog; the tray then shows one localized dialog with the detail.
+static ERROR_FILE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// The tray asked for the helper's own dialog to be suppressed, even if the path
+/// it provided was rejected; the tray then shows the one dialog itself.
+static SUPPRESS_DIALOG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Accept only a file next to this executable: the helper runs elevated, so an
+/// unrestricted path would let a crafted command line write anywhere with
+/// administrator rights. This also works when elevation uses a different account,
+/// whose temp directory is not the tray's.
+pub(crate) fn set_error_file(path: PathBuf) {
+    SUPPRESS_DIALOG.store(true, std::sync::atomic::Ordering::Relaxed);
+    let parent = path.parent().and_then(|parent| parent.canonicalize().ok());
+    let expected = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().and_then(|parent| parent.canonicalize().ok()));
+    let name_ok = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("nanofile-service-"));
+    if parent.is_some() && parent == expected && name_ok {
+        if let Ok(mut slot) = ERROR_FILE.lock() {
+            *slot = Some(path);
+        }
+    } else {
+        tracing::warn!(path = %path.display(), "ignoring an unsafe service error-file path");
+    }
+}
+
+fn error_file() -> Option<PathBuf> {
+    ERROR_FILE.lock().ok().and_then(|slot| slot.clone())
+}
+
+/// The reason a service helper failed, written where the tray reads it instead of
+/// opening a dialog in the elevated process.
+pub(crate) fn write_startup_error(error: &anyhow::Error) {
+    if let Some(path) = error_file()
+        && let Err(e) = std::fs::write(&path, format!("{error:#}"))
+    {
+        tracing::warn!(path = %path.display(), "could not write the service error file: {e}");
+    }
+}
+
+/// Report a failure the way a GUI-subsystem process can: the tray's error file
+/// when one was provided, otherwise a message box, plus the log file.
 pub(super) fn report_failure(context: &str, error: &anyhow::Error) {
     tracing::error!("{context}: {error:#}");
+    if SUPPRESS_DIALOG.load(std::sync::atomic::Ordering::Relaxed) {
+        if let Some(path) = error_file() {
+            let body = format!("{context}\n\n{error:#}");
+            if let Err(e) = std::fs::write(&path, body) {
+                tracing::warn!(path = %path.display(), "could not write the service error file: {e}");
+            }
+        }
+        return;
+    }
     let title = "Nanofile";
     let body = format!("{context}.\n\n{error:#}");
     message_box(title, &body, MB_OK | MB_ICONERROR | MB_SETFOREGROUND);

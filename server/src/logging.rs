@@ -43,18 +43,15 @@ pub fn install_panic_hook() {
 /// nowhere to print: a service has no session and a tray build no console. The
 /// reason goes to the default log file (`nanofile.log` next to the binary, then the
 /// working directory — the configured path is unknown, because reading the
-/// configuration is what failed) and, when `show_dialog` allows, to a message box.
+/// configuration is what failed) and, when `show_dialog` allows, to a native dialog.
 pub fn report_startup_failure(error: &anyhow::Error, show_dialog: bool) {
     let message = format!("{error:#}");
     eprintln!("[nanofile] {message}");
     append_to_default_log(&message);
 
-    #[cfg(target_os = "windows")]
     if show_dialog {
-        startup_message_box("Nanofile", &message);
+        show_message_box("Nanofile", &dialog_text(&message, 2000));
     }
-    #[cfg(not(target_os = "windows"))]
-    let _ = show_dialog;
 }
 
 /// Append one line to the first writable default log location.
@@ -100,14 +97,83 @@ fn startup_message_box(title: &str, text: &str) {
     };
 }
 
-/// Show an error box to the person at the machine, where there is one: a
-/// GUI-subsystem Windows build has no console, and this is the only way first-run
-/// setup can report a page nobody completed. A no-op on platforms with a console.
+/// Keep a dialog readable; the full text stays in the log file.
+pub fn dialog_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut clipped: String = text.chars().take(max_chars).collect();
+    clipped.push('…');
+    clipped
+}
+
+/// Show a native, best-effort dialog to the person at the machine: a Windows
+/// message box, a macOS alert, or a Linux dialog helper. Used where a GUI build
+/// has no console (fatal startup errors, tray failures) and for the first-run
+/// setup timeout. Without a desktop session only the log receives the message.
 pub fn show_message_box(title: &str, text: &str) {
     #[cfg(target_os = "windows")]
     startup_message_box(title, text);
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    macos_alert(title, text);
+    #[cfg(target_os = "linux")]
+    linux_dialog(title, text);
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     let _ = (title, text);
+}
+
+#[cfg(target_os = "macos")]
+fn macos_alert(title: &str, text: &str) {
+    if !server::desktop::has_desktop_session() {
+        return;
+    }
+    let script = format!(
+        "display alert {} message {} as critical",
+        applescript_string(title),
+        applescript_string(text)
+    );
+    match std::process::Command::new("osascript")
+        .args(["-e", script.as_str()])
+        .status()
+    {
+        Ok(_) => {}
+        Err(e) => tracing::warn!("could not show the macOS alert: {e}"),
+    }
+}
+
+/// One AppleScript string literal per line, joined with `return`, so a message
+/// can contain newlines without embedding them in the script.
+#[cfg(target_os = "macos")]
+fn applescript_string(text: &str) -> String {
+    text.split('\n')
+        .map(|line| format!("\"{}\"", line.replace('\\', "\\\\").replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join(" & return & ")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_dialog(title: &str, text: &str) {
+    if !server::desktop::has_desktop_session() {
+        return;
+    }
+    let attempts: [(&str, Vec<&str>); 2] = [
+        ("zenity", vec!["--error", "--title", title, "--text", text]),
+        ("kdialog", vec!["--title", title, "--error", text]),
+    ];
+    for (program, args) in attempts {
+        match std::process::Command::new(program).args(&args).status() {
+            Ok(_) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                tracing::warn!("{program} failed: {e}");
+                return;
+            }
+        }
+    }
+    // Not a dialog, but the best remaining desktop channel without zenity/kdialog.
+    let _ = std::process::Command::new("notify-send")
+        .args(["--urgency=critical", title, text])
+        .status();
 }
 
 /// Initialize the global tracing subscriber.
