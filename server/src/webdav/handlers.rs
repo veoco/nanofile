@@ -134,16 +134,9 @@ async fn get_handler(
     // them, so the id is the plaintext object's and no key is passed.
     let etag = format!("\"{fs_id}\"");
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
-    // RFC 9110 §13.1.2: `If-None-Match` is evaluated before `Range`, so a matching
-    // validator answers 304 even when the request also asks for a range.
-    if crate::fs::core::download::if_none_match(headers, &etag) {
-        let mut resp = StatusCode::NOT_MODIFIED.into_response();
-        if let Ok(value) = HeaderValue::from_str(&etag) {
-            resp.headers_mut().insert(header::ETAG, value);
-        }
-        return resp;
-    }
 
+    // The response builder evaluates `If-None-Match` before `Range` (RFC 9110
+    // §13.1.2), matching seafdav.
     crate::fs::core::download::file_download_response(
         crate::fs::core::download::FileDownloadParams {
             repo_id: auth.repo_id.clone(),
@@ -156,7 +149,9 @@ async fn get_handler(
             range_header: range_header.map(str::to_string),
             etag: Some(etag),
             head_only: is_head,
+            cache: crate::fs::core::download::CachePolicy::PrivateNoCache,
         },
+        headers,
     )
 }
 

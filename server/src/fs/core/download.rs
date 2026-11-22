@@ -384,6 +384,27 @@ pub fn content_disposition(filename: &str, attachment: bool) -> String {
 }
 
 /// Parameters for building a file-download HTTP response with Range support.
+/// How long a file response may be cached. Stable URLs (`/repos/...`,
+/// share pages) must revalidate so an edit is visible immediately; capability
+/// URLs are unique per request and can be cached briefly.
+#[derive(Clone, Copy)]
+pub enum CachePolicy {
+    PrivateNoCache,
+    PublicNoCache,
+    MaxAge(u32),
+}
+
+impl CachePolicy {
+    fn value(self) -> HeaderValue {
+        match self {
+            CachePolicy::PrivateNoCache => HeaderValue::from_static("private, no-cache"),
+            CachePolicy::PublicNoCache => HeaderValue::from_static("public, no-cache"),
+            CachePolicy::MaxAge(secs) => HeaderValue::from_str(&format!("max-age={secs}"))
+                .expect("max-age header value must be valid ASCII"),
+        }
+    }
+}
+
 pub struct FileDownloadParams {
     /// Repository the blocks belong to: the per-repository block layout means
     /// every read must name the library it is allowed to read from.
@@ -401,6 +422,9 @@ pub struct FileDownloadParams {
     /// Answer a `HEAD`: the status and every header a `GET` would carry, with no body and no
     /// block reads. WebDAV clients compare `HEAD` against `GET`, so the two must agree.
     pub head_only: bool,
+    /// `Cache-Control` for the body. Stable URLs use a no-cache policy so an
+    /// edited file is revalidated instead of served stale from the browser cache.
+    pub cache: CachePolicy,
 }
 
 /// Strong validator for a file body: identical content always yields the same ETag.
@@ -436,19 +460,30 @@ pub fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {
 /// Build a streaming file response honoring a single `Range` request: a satisfiable
 /// range yields `206` with `Content-Range`, otherwise the full body with `200`. Both
 /// advertise `Accept-Ranges: bytes` and `Content-Length` so downloads can resume.
-pub fn file_download_response(p: FileDownloadParams) -> Response {
+///
+/// `If-None-Match` is evaluated first (RFC 9110 §13.1.2, and seafile-server's
+/// `accessV2CB`): a matching validator answers `304` even when the request also
+/// carries a `Range`, so the caller never builds a validator check of its own.
+pub fn file_download_response(p: FileDownloadParams, request_headers: &HeaderMap) -> Response {
+    if let Some(etag) = p.etag.as_deref()
+        && if_none_match(request_headers, etag)
+    {
+        let mut response = StatusCode::NOT_MODIFIED.into_response();
+        if let Ok(value) = HeaderValue::from_str(etag) {
+            response.headers_mut().insert(header::ETAG, value);
+        }
+        return response;
+    }
+
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static(p.content_type),
     );
     headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-    // Content is immutable for a given set of block IDs, so a long private cache
-    // window plus a strong ETag lets browsers skip re-downloading large originals.
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("private, max-age=604800"),
-    );
+    // The policy is per endpoint: a stable URL revalidates, a capability URL can
+    // be cached for its short lifetime.
+    headers.insert(header::CACHE_CONTROL, p.cache.value());
     if let Some(etag) = p.etag.as_ref()
         && let Ok(v) = HeaderValue::from_str(etag)
     {
@@ -517,9 +552,10 @@ pub fn file_download_response(p: FileDownloadParams) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        FileDownloadParams, content_disposition, file_download_response, parse_range, range_stream,
+        CachePolicy, FileDownloadParams, content_disposition, file_download_response, parse_range,
+        range_stream,
     };
-    use axum::http::HeaderValue;
+    use axum::http::{HeaderMap, HeaderValue};
     use futures::StreamExt;
     use infra::storage::{BlockStorageBackend, DynBlockStorage};
     use std::collections::HashMap;
@@ -783,18 +819,22 @@ mod tests {
         let content: Vec<u8> = plaintexts.concat();
         let start = plaintexts[..3].iter().map(|d| d.len() as u64).sum::<u64>();
 
-        let resp = file_download_response(FileDownloadParams {
-            repo_id: "test-repo".to_string(),
-            block_ids: ids,
-            block_store: store,
-            enc_key: None,
-            total_size: content.len() as u64,
-            content_type: "application/octet-stream",
-            content_disposition: None,
-            range_header: Some(format!("bytes={start}-")),
-            etag: None,
-            head_only: false,
-        });
+        let resp = file_download_response(
+            FileDownloadParams {
+                repo_id: "test-repo".to_string(),
+                block_ids: ids,
+                block_store: store,
+                enc_key: None,
+                total_size: content.len() as u64,
+                content_type: "application/octet-stream",
+                content_disposition: None,
+                range_header: Some(format!("bytes={start}-")),
+                etag: None,
+                head_only: false,
+                cache: CachePolicy::PrivateNoCache,
+            },
+            &HeaderMap::new(),
+        );
         assert_eq!(resp.status(), axum::http::StatusCode::PARTIAL_CONTENT);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await

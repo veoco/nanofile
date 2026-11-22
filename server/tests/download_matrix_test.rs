@@ -354,6 +354,27 @@ async fn test_webdav_get_and_head() {
         resp.bytes().await.unwrap().is_empty(),
         "HEAD must not send a body"
     );
+
+    let resp = http
+        .get(&url)
+        .basic_auth(&f.email, Some(&key))
+        .send()
+        .await
+        .unwrap();
+    let etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .expect("WebDAV GET must carry an ETag")
+        .to_string();
+    let resp = http
+        .get(&url)
+        .basic_auth(&f.email, Some(&key))
+        .header("if-none-match", &etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 304);
 }
 
 /// History revisions stream the old bytes under `/api/v2.1/.../file/revision/`.
@@ -449,4 +470,130 @@ async fn test_download_info_fields() {
     }
     assert_eq!(body["repo_id"].as_str(), Some(f.repo_id.as_str()));
     assert!(!body["token"].as_str().unwrap_or_default().is_empty());
+}
+
+fn raw() -> reqwest::Client {
+    reqwest::Client::builder().no_proxy().build().unwrap()
+}
+
+/// A stable content URL revalidates: `If-None-Match` is evaluated before `Range`.
+#[tokio::test]
+async fn test_stable_url_revalidates_before_range() {
+    let f = TestFixture::new().await;
+    let data: Vec<u8> = (0..32u8).collect();
+    upload(&f, "/", "cond.bin", &data).await;
+
+    let http = raw();
+    let url = format!("{}/repos/{}/files/cond.bin", f.server.base_url, f.repo_id);
+    let resp = http
+        .get(&url)
+        .bearer_auth(&f.api_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("private, no-cache"),
+        "a stable URL must revalidate"
+    );
+    let etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .expect("ETag missing")
+        .to_string();
+
+    let resp = http
+        .get(&url)
+        .bearer_auth(&f.api_token)
+        .header("if-none-match", &etag)
+        .header("range", "bytes=0-4")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        304,
+        "If-None-Match must be evaluated before Range"
+    );
+    assert_eq!(
+        resp.headers().get("etag").and_then(|v| v.to_str().ok()),
+        Some(etag.as_str())
+    );
+    assert!(resp.bytes().await.unwrap().is_empty());
+}
+
+/// The token URL carries a short cache window and answers conditional requests.
+#[tokio::test]
+async fn test_download_api_revalidates() {
+    let f = TestFixture::new().await;
+    upload(&f, "/", "cond2.bin", &(0..64u8).collect::<Vec<u8>>()).await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/file/?p=/cond2.bin&op=download", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    let url: String = resp.json().await.unwrap();
+    let etag = {
+        let resp = raw().get(&url).send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("cache-control")
+                .and_then(|v| v.to_str().ok()),
+            Some("max-age=3600")
+        );
+        resp.headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .expect("ETag missing")
+            .to_string()
+    };
+
+    let resp = raw()
+        .get(&url)
+        .header("if-none-match", &etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 304);
+    assert!(resp.bytes().await.unwrap().is_empty());
+}
+
+/// Share downloads are stable URLs too: they expose a validator and revalidate.
+#[tokio::test]
+async fn test_share_download_revalidates() {
+    let f = TestFixture::new().await;
+    upload(&f, "/", "shared-c.bin", b"share validator").await;
+    let token = share_link(&f, "/shared-c.bin").await;
+
+    let url = format!("{}/f/{token}/?dl=1", f.server.base_url);
+    let resp = raw().get(&url).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("public, no-cache")
+    );
+    let etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .expect("share downloads must carry a validator")
+        .to_string();
+
+    let resp = raw()
+        .get(&url)
+        .header("if-none-match", &etag)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 304);
 }

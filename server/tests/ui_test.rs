@@ -618,8 +618,8 @@ async fn test_download_file_returns_content() {
         resp.headers()
             .get("cache-control")
             .and_then(|v| v.to_str().ok()),
-        Some("private, max-age=604800"),
-        "content endpoint should advertise a cache window"
+        Some("private, no-cache"),
+        "stable content URLs must revalidate instead of caching for a week"
     );
     let etag = resp
         .headers()

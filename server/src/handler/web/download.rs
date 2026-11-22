@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
@@ -169,21 +169,11 @@ pub async fn repo_file_download(
         .to_string();
 
     // Strong ETag: the block ids are content-addressed, so identical content
-    // always yields the same validator and any edit changes it.
+    // always yields the same validator and any edit changes it. The response
+    // builder evaluates `If-None-Match` before `Range` and answers 304 itself.
     let etag = crate::fs::core::download::blocks_etag(&block_ids);
 
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
-
-    // A matching validator with no Range means 304, skipping the block reads. The response still
-    // carries the validator the client matched, as RFC 9110 asks, so it can reuse the stored body
-    // without a second conditional request.
-    if range_header.is_none() && crate::fs::core::download::if_none_match(&headers, &etag) {
-        let mut response = StatusCode::NOT_MODIFIED.into_response();
-        if let Ok(value) = HeaderValue::from_str(&etag) {
-            response.headers_mut().insert(header::ETAG, value);
-        }
-        return Ok(response);
-    }
 
     // seahub's `accessV2CB` distinguishes `op=view` (inline) from `op=download`
     // (attachment), and the official frontend's download button sends the latter.
@@ -223,7 +213,9 @@ pub async fn repo_file_download(
             range_header: range_header.map(|s| s.to_string()),
             etag: Some(etag),
             head_only: false,
+            cache: crate::fs::core::download::CachePolicy::PrivateNoCache,
         },
+        &headers,
     ))
 }
 
@@ -273,12 +265,15 @@ pub async fn download_api(
             block_store: state.block_store.clone(),
             enc_key: dec_key,
             total_size: file_data.size.max(0) as u64,
-            content_type: "application/octet-stream",
+            content_type: crate::ui::files::mime_guess(&filename),
             content_disposition: Some(disposition),
             range_header: range_header.map(|s| s.to_string()),
             etag: Some(etag),
             head_only: false,
+            // The token is unique per request, so the URL can be cached briefly.
+            cache: crate::fs::core::download::CachePolicy::MaxAge(3600),
         },
+        &headers,
     ))
 }
 

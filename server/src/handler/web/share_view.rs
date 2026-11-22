@@ -236,6 +236,7 @@ pub async fn shared_file_view(
 
         let disposition = crate::fs::core::download::content_disposition(&filename, true);
         let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+        let etag = crate::fs::core::download::blocks_etag(&block_ids);
         return Ok(crate::fs::core::download::file_download_response(
             crate::fs::core::download::FileDownloadParams {
                 repo_id: link.repo_id.clone(),
@@ -243,12 +244,15 @@ pub async fn shared_file_view(
                 block_store: state.block_store.clone(),
                 enc_key: None,
                 total_size: file_data.size.max(0) as u64,
-                content_type: "application/octet-stream",
+                content_type: crate::ui::files::mime_guess(&filename),
                 content_disposition: Some(disposition),
                 range_header: range_header.map(|s| s.to_string()),
-                etag: None,
+                etag: Some(etag),
                 head_only: false,
+                // The share URL is stable: revalidate so a new version shows up.
+                cache: crate::fs::core::download::CachePolicy::PublicNoCache,
             },
+            &headers,
         ));
     }
 
@@ -719,6 +723,7 @@ pub async fn shared_dir_file_view(
         .unwrap_or_else(|| full_path.clone());
     let disposition = crate::fs::core::download::content_disposition(&filename, true);
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let etag = crate::fs::core::download::blocks_etag(&block_ids);
     Ok(crate::fs::core::download::file_download_response(
         crate::fs::core::download::FileDownloadParams {
             repo_id: link.repo_id.clone(),
@@ -726,12 +731,14 @@ pub async fn shared_dir_file_view(
             block_store: state.block_store.clone(),
             enc_key: None,
             total_size: file_data.size.max(0) as u64,
-            content_type: "application/octet-stream",
+            content_type: crate::ui::files::mime_guess(&filename),
             content_disposition: Some(disposition),
             range_header: range_header.map(|s| s.to_string()),
-            etag: None,
+            etag: Some(etag),
             head_only: false,
+            cache: crate::fs::core::download::CachePolicy::PublicNoCache,
         },
+        &headers,
     ))
 }
 
