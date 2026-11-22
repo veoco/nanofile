@@ -195,6 +195,9 @@ sys-locale = { version = "0.3", optional = true }
 # macOS is excluded — an unsigned, non-bundled CLI binary cannot reliably post
 # notifications there.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
+# Held at 4.18: 4.19's default `z` feature moves to zbus 6, which would put a second
+# D-Bus stack next to the zbus 5 that the tray's ksni backend pins. Revisit together
+# with the zbus entry below (same file, Linux section).
 notify-rust = { version = "4", optional = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 # Not optional: the login entry (`HKCU\…\Run`) is read and written by every
@@ -252,9 +255,11 @@ objc2-app-kit = { version = "0.3", optional = true, features = [
 # The desktop's colour preference for the tray icon: the freedesktop portal's
 # Settings interface (`org.freedesktop.appearance` / `color-scheme`), with the GTK
 # theme name as the fallback (see `server/src/tray/theme.rs`). zbus is already in
-# this build through notify-rust — same major version, same async-io runtime — so
-# listing it here adds nothing to the graph; the blocking API keeps theme detection
-# on a plain thread instead of a second async runtime.
+# this build through notify-rust and through tray-icon's ksni backend — same major
+# version, same async-io runtime — so listing it here adds nothing to the graph;
+# the blocking API keeps theme detection on a plain thread instead of a second
+# async runtime. zbus 6 dropped that blocking API, so the probe would have to move
+# onto `zbus::block_on`, and ksni still pins 5: this bump waits until both do.
 zbus = { version = "5", optional = true, default-features = false, features = [
     "async-io",
     "blocking-api",
@@ -298,8 +303,8 @@ path = "src/main.rs"
 # raster cannot change with the fonts installed on the build machine. `resvg`
 # stopped re-exporting `usvg` in 0.46, so the SVG tree type is its own entry —
 # with the same `default-features = false` resvg itself asks for.
-resvg = { version = "0.49", optional = true, default-features = false }
-usvg = { version = "0.49", optional = true, default-features = false }
+resvg = { version = "0.50", optional = true, default-features = false }
+usvg = { version = "0.50", optional = true, default-features = false }
 tiny-skia = { version = "0.12", optional = true }
 winresource = { version = "0.1", optional = true }
 
