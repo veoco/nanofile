@@ -11,7 +11,6 @@ use crate::fs::core::upload_activity;
 use crate::handler::{MAX_BLOCK_UPLOAD_BYTES, read_body_limited};
 use crate::middleware::auth::SyncAuth;
 use base::error::AppError;
-use infra::crypto::fs_id::sha1_hex;
 
 pub fn block_routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -82,24 +81,8 @@ pub async fn check_blocks(
         validate_block_id(id)?;
     }
 
-    let block_store = state.block_store.clone();
-
-    let missing: Vec<String> = stream::iter(block_ids)
-        .map(move |block_id| {
-            let store = block_store.clone();
-            let repo_id = repo_id.clone();
-            async move {
-                if !store.has_block(&repo_id, &block_id).await {
-                    Some(block_id)
-                } else {
-                    None
-                }
-            }
-        })
-        .buffered(16)
-        .filter_map(|x| async move { x })
-        .collect()
-        .await;
+    let missing =
+        crate::handler::block::missing_blocks(state.block_store.clone(), &repo_id, block_ids).await;
 
     Ok(Json(missing))
 }
@@ -160,45 +143,12 @@ pub async fn put_block(
 
     let data = read_body_limited(body, MAX_BLOCK_UPLOAD_BYTES).await?;
 
-    // Verify the hash: the seaf-daemon sends PUT with block_id = SHA1 of the data.
-    let computed = sha1_hex(&data);
-    if computed != block_id {
-        return Err(AppError::BadRequest(format!(
-            "block_id mismatch: expected {} got {}",
-            block_id, computed
-        )));
-    }
-
-    // Charge the block against the user's quota as an **uncommitted** write: content
-    // addressing means writing a block never changes any repo's `size`, so comparing
-    // committed usage alone let `put_block` + never-commit accumulate blocks without
-    // bound. The reservation is released when the branch update commits the blocks.
-    crate::service::fs::quota::reserve_block_bytes_for_owner(
-        &state.repos,
-        owner,
-        &repo_id,
-        &block_id,
-        data.len() as i64,
-        state.config().storage.default_user_quota_bytes,
-    )
-    .await?;
-
-    let block_store = state.block_store.clone();
-    match block_store
-        .write_block_with_id_tracked(&repo_id, &block_id, &data)
-        .await
-    {
-        Ok((_, true)) => {}
-        Ok((_, false)) => {
-            // The block already existed (a retry or a concurrent upload); it is
-            // already paid for, so release the reservation just taken.
-            crate::service::fs::quota::release_block_bytes(&state.repos, &repo_id, &block_id).await;
-        }
-        Err(e) => {
-            crate::service::fs::quota::release_block_bytes(&state.repos, &repo_id, &block_id).await;
-            return Err(AppError::internal(e.to_string()));
-        }
-    }
+    // Verify the hash and store the block, charging the owner's quota as an
+    // **uncommitted** write: content addressing means writing a block never
+    // changes any repo's `size`, so comparing committed usage alone let
+    // `put_block` + never-commit accumulate blocks without bound. The reservation
+    // is released when the branch update commits the blocks.
+    crate::handler::block::write_client_block(&state, &repo_id, owner, &block_id, &data).await?;
 
     Ok(StatusCode::OK)
 }

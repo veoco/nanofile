@@ -157,6 +157,7 @@ pub mod api_key;
 pub mod async_batch;
 pub mod avatar;
 pub mod batch;
+pub mod block;
 pub mod chunked_upload;
 pub mod client_login;
 pub mod credential;

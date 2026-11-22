@@ -3,7 +3,6 @@ use axum::{
     extract::{Query, State},
     http::HeaderMap,
 };
-use futures::stream::{self, StreamExt};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -101,23 +100,8 @@ pub async fn upload_blks_link_post(
         return Err(AppError::BadRequest(format!("invalid block id: {bad}")));
     }
 
-    let store = state.block_store.clone();
-    let missing: Vec<String> = stream::iter(requested)
-        .map(|id| {
-            let store = store.clone();
-            let repo_id = repo_id.clone();
-            async move {
-                if store.has_block(&repo_id, &id).await {
-                    None
-                } else {
-                    Some(id)
-                }
-            }
-        })
-        .buffered(16)
-        .filter_map(|id| async move { id })
-        .collect()
-        .await;
+    let missing =
+        crate::handler::block::missing_blocks(state.block_store.clone(), repo_id, requested).await;
 
     let token = state.token_manager.generate(
         repo_id,

@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Multipart, Path, State},
+    extract::{Path, State},
     http::HeaderMap,
     response::IntoResponse,
 };
@@ -9,9 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::handler::{
-    MAX_BLOCK_UPLOAD_BYTES, MAX_SMALL_BODY_BYTES, ok_json, read_multipart_field_limited,
-};
+use crate::handler::{MAX_BLOCK_UPLOAD_BYTES, MAX_SMALL_BODY_BYTES, ok_json};
 use crate::service::sharing::link as upload_link_service;
 use crate::ui::auth_extractor::WebUser;
 use base::error::AppError;
@@ -147,8 +145,8 @@ struct AuthContext {
 }
 
 impl AuthContext {
-    /// Validate a short-lived upload/update token: token → op → write permission
-    /// → library key, in that order.
+    /// Validate a short-lived upload/update token: token 鈫?op 鈫?write permission
+    /// 鈫?library key, in that order.
     async fn from_token(state: &AppState, raw: &str, kind: TokenKind) -> Result<Self, AppError> {
         let token = state.token_manager.validate(raw).ok_or_else(|| {
             AppError::BadRequest(format!("invalid or expired {} token", kind.op()))
@@ -184,7 +182,7 @@ impl AuthContext {
         })
     }
 
-    /// A browser session: CSRF → write permission → library key. The handler
+    /// A browser session: CSRF 鈫?write permission 鈫?library key. The handler
     /// calls this only after its own field checks, so their 400s keep winning.
     async fn from_session(
         state: &AppState,
@@ -257,7 +255,7 @@ pub(crate) fn parse_replace_arg(query: Option<&str>, form: Option<&str>) -> Resu
     }
 }
 
-/// Collect a URL's query parameters into a map (missing/unparsable → empty).
+/// Collect a URL's query parameters into a map (missing/unparsable 鈫?empty).
 fn query_params(uri: &axum::http::Uri) -> HashMap<String, String> {
     uri.query()
         .and_then(|q| serde_urlencoded::from_str(q).ok())
@@ -291,7 +289,7 @@ async fn require_target_exists(
 /// How an endpoint frames a successful upload/update body.
 ///
 /// The `-aj` endpoints always answer the JSON array (`isAjax=true`); the `-api`
-/// endpoints answer the plain-text file id unless `ret-json` was requested — the
+/// endpoints answer the plain-text file id unless `ret-json` was requested 鈥?the
 /// official Android and desktop clients store that body verbatim, so a JSON array
 /// there corrupts their state (`server/fileserver/fileop.go:1859-1884`).
 #[derive(Clone, Copy)]
@@ -319,7 +317,7 @@ struct CommittedFile {
 /// Render a committed upload (one or more files).
 ///
 /// The `-aj` endpoints answer a JSON array. The `-api` endpoints answer one id
-/// per file separated by `\t`, or the JSON array with `ret-json` — matching
+/// per file separated by `\t`, or the JSON array with `ret-json` 鈥?matching
 /// `postMultiFiles` in `server/fileserver/fileop.go:1944-1970`.
 fn reply_committed(style: ReplyStyle, files: &[CommittedFile]) -> axum::response::Response {
     use axum::response::IntoResponse;
@@ -731,7 +729,7 @@ async fn try_handle_chunked(
 ///
 /// Used instead of axum's `Multipart` extractor, which fails with 400 on the Qt
 /// desktop client's uploads.
-/// `POST /upload-aj/` — AJAX file upload from the Seahub web UI (no token),
+/// `POST /upload-aj/` 鈥?AJAX file upload from the Seahub web UI (no token),
 /// taking `file`, `repo_id`, `parent_dir` and optional `relative_path` fields.
 pub async fn upload_aj(
     user: WebUser,
@@ -1117,6 +1115,8 @@ enum IntakeMode {
     /// `Content-Range`: exactly one chunk, buffered because the resumable path
     /// needs it whole.
     Chunk { max_chunk_bytes: u64 },
+    /// Block upload: every file part is one block whose filename is its SHA-1.
+    Blocks { repo_id: String, owner: i32 },
 }
 
 /// A parsed multipart request.
@@ -1125,6 +1125,10 @@ struct Parts {
     files: Vec<PartFile>,
     /// The single chunk of a `Content-Range` request.
     chunked: Option<(String, Vec<u8>)>,
+    /// Blocks written by a `Blocks` intake (their pre-charge is released here).
+    blocks: Vec<String>,
+    /// Whether a `Blocks` request carried a file part at all.
+    has_file: bool,
 }
 
 /// Read the multipart body in one of the three intake modes.
@@ -1147,6 +1151,8 @@ async fn read_parts(
         fields: HashMap::new(),
         files: Vec::new(),
         chunked: None,
+        blocks: Vec::new(),
+        has_file: false,
     };
     while let Some(mut field) = multipart
         .next_field()
@@ -1155,13 +1161,19 @@ async fn read_parts(
     {
         let name = field.name().unwrap_or("").to_string();
         if name != "file" {
-            parts.fields.insert(
-                name,
+            // The block endpoint used to cap field values at 1 MiB and answer 400
+            // for non-UTF-8; keep that shape, which `field.text()` would not.
+            let value = if matches!(&mode, IntakeMode::Blocks { .. }) {
+                let raw = read_field_limited(&mut field, MAX_SMALL_BODY_BYTES).await?;
+                String::from_utf8(raw)
+                    .map_err(|_| AppError::BadRequest("invalid utf-8 field value".into()))?
+            } else {
                 field
                     .text()
                     .await
-                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
-            );
+                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?
+            };
+            parts.fields.insert(name, value);
             continue;
         }
         let seen = parts.files.len() + usize::from(parts.chunked.is_some());
@@ -1193,9 +1205,52 @@ async fn read_parts(
                     mtime: None,
                 }));
             }
+            IntakeMode::Blocks { repo_id, owner } => {
+                parts.has_file = true;
+                let block_id = field.file_name().unwrap_or("").to_string();
+                let data = read_field_limited(&mut field, MAX_BLOCK_UPLOAD_BYTES).await?;
+                if !block_id.is_empty()
+                    && !data.is_empty()
+                    && crate::handler::block::write_client_block(
+                        state, repo_id, *owner, &block_id, &data,
+                    )
+                    .await?
+                {
+                    parts.blocks.push(block_id);
+                }
+            }
         }
     }
     Ok(parts)
+}
+
+/// Buffer one multipart field under a byte cap, rejecting an oversized part from
+/// its Content-Length or from the bytes actually read.
+async fn read_field_limited(
+    field: &mut multer::Field<'_>,
+    limit: usize,
+) -> Result<Vec<u8>, AppError> {
+    if let Some(len) = field
+        .headers()
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok())
+        && len > limit
+    {
+        return Err(AppError::ContentTooLarge);
+    }
+    let mut out = Vec::with_capacity(limit.min(1 << 20));
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|e| AppError::Internal(format!("multipart field read error: {e}")))?
+    {
+        if out.len() + chunk.len() > limit {
+            return Err(AppError::ContentTooLarge);
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
 }
 
 /// A byte stream fed to the CDC chunker.
@@ -1494,7 +1549,7 @@ async fn commit_uploads(
     Ok(committed)
 }
 
-/// `POST /update-api/` — update an existing file from the web UI (no token),
+/// `POST /update-api/` 鈥?update an existing file from the web UI (no token),
 /// taking `file`, `repo_id`, and `p` / `path` (the full target path).
 pub async fn update_api(
     user: WebUser,
@@ -1508,19 +1563,16 @@ pub async fn update_api(
     // `upload_file_committed_stream` applies the correct delta instead.
     let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     // An update carries exactly one file part.
-    let Parts {
-        fields,
-        files,
-        chunked,
-    } = read_update_body(&state, None, body, &headers).await?;
+    let parts = read_update_body(&state, None, body, &headers).await?;
 
-    let repo_id = fields.get("repo_id").cloned().unwrap_or_default();
-    let file_path = fields
+    let repo_id = parts.fields.get("repo_id").cloned().unwrap_or_default();
+    let file_path = parts
+        .fields
         .get("p")
-        .or_else(|| fields.get("path"))
+        .or_else(|| parts.fields.get("path"))
         .cloned()
         .unwrap_or_default();
-    let csrf_token = fields.get("csrf_token").cloned();
+    let csrf_token = parts.fields.get("csrf_token").cloned();
 
     if file_path.is_empty() {
         return Err(AppError::BadRequest("Path is missing.".into()));
@@ -1534,23 +1586,12 @@ pub async fn update_api(
     let target = resolve_existing_target(None, &file_path, "")?;
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
-    finish_existing(
-        &state,
-        &auth,
-        Parts {
-            fields,
-            files,
-            chunked,
-        },
-        &target,
-        range,
-        ReplyStyle::Array,
-    )
-    .await
-    .map(|finished| finished.response)
+    finish_existing(&state, &auth, parts, &target, range, ReplyStyle::Array)
+        .await
+        .map(|finished| finished.response)
 }
 
-/// `POST /update-aj/` — AJAX file update from the Seahub web UI (no token),
+/// `POST /update-aj/` 鈥?AJAX file update from the Seahub web UI (no token),
 /// taking `file`, `repo_id` and `target_file` (the full target path).
 pub async fn update_aj(
     user: WebUser,
@@ -1562,16 +1603,14 @@ pub async fn update_aj(
     // size delta is a correct quota check.
     let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     // An update carries exactly one file part.
-    let Parts {
-        fields,
-        files,
-        chunked,
-    } = read_update_body(&state, None, body, &headers).await?;
+    let parts = read_update_body(&state, None, body, &headers).await?;
 
-    let repo_id = fields
+    let repo_id = parts
+        .fields
         .get("repo_id")
         .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?;
-    let target_file = fields
+    let target_file = parts
+        .fields
         .get("target_file")
         .ok_or_else(|| AppError::BadRequest("target_file required".into()))?;
 
@@ -1579,30 +1618,19 @@ pub async fn update_aj(
         &state,
         &user,
         repo_id,
-        fields.get("csrf_token").map(|s| s.as_str()),
+        parts.fields.get("csrf_token").map(|s| s.as_str()),
     )
     .await?;
 
     let target = resolve_existing_target(None, target_file, "")?;
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
-    finish_existing(
-        &state,
-        &auth,
-        Parts {
-            fields,
-            files,
-            chunked,
-        },
-        &target,
-        range,
-        ReplyStyle::Array,
-    )
-    .await
-    .map(|finished| finished.response)
+    finish_existing(&state, &auth, parts, &target, range, ReplyStyle::Array)
+        .await
+        .map(|finished| finished.response)
 }
 
-/// `POST /upload-aj/{token}` — upload with an upload-link token, as sent by the
+/// `POST /upload-aj/{token}` 鈥?upload with an upload-link token, as sent by the
 /// Seahub React frontend after `/api2/repos/{id}/upload-link/?from=web`.
 pub async fn upload_aj_token(
     State(state): State<Arc<AppState>>,
@@ -1618,32 +1646,16 @@ pub async fn upload_aj_token(
     // This matches `/upload-aj/` and `/upload-api/`; the commit removes the
     // blocks it wrote when the delta does not fit.
     let range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let Parts {
-        fields,
-        files,
-        chunked,
-    } = read_upload_body(&state, Some(&auth), body, &headers).await?;
+    let parts = read_upload_body(&state, Some(&auth), body, &headers).await?;
 
     // The public upload page posts only the `file` part and relies on the minted
     // token for the directory, so a body without `parent_dir` keeps that default
     // instead of answering 400. The token's directory is still clamped, never
     // widened.
     let query = query_params(&uri);
-    let target = create_target(Some(auth.token()), &fields, &query)?;
+    let target = create_target(Some(auth.token()), &parts.fields, &query)?;
 
-    let finished = finish_create(
-        &state,
-        &auth,
-        Parts {
-            fields,
-            files,
-            chunked,
-        },
-        &target,
-        range,
-        ReplyStyle::Array,
-    )
-    .await?;
+    let finished = finish_create(&state, &auth, parts, &target, range, ReplyStyle::Array).await?;
 
     // The view counter only fires for a whole-file commit: the chunked branch
     // returned before it before the tail was shared.
@@ -1656,7 +1668,7 @@ pub async fn upload_aj_token(
     Ok(finished.response)
 }
 
-/// `POST /upload-api/{token}` — token-authenticated upload for the desktop
+/// `POST /upload-api/{token}` 鈥?token-authenticated upload for the desktop
 /// client, which sends a quoted multipart boundary that axum's extractor rejects.
 pub async fn upload_api(
     State(state): State<Arc<AppState>>,
@@ -1692,7 +1704,7 @@ pub async fn upload_api(
     .map(|finished| finished.response)
 }
 
-/// `POST /update-api/{token}` — token-authenticated file overwrite for the
+/// `POST /update-api/{token}` 鈥?token-authenticated file overwrite for the
 /// desktop client. `target_file`, or `parent_dir` + `relative_path`, names the
 /// existing file; the update always overwrites in place.
 pub async fn update_api_handler(
@@ -1710,18 +1722,19 @@ pub async fn update_api_handler(
     // commit-time delta is the only correct quota check.
     let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     // An update carries exactly one file part.
-    let Parts {
-        fields,
-        files,
-        chunked,
-    } = read_update_body(&state, Some(&auth), body, &headers).await?;
+    let parts = read_update_body(&state, Some(&auth), body, &headers).await?;
 
-    let target_file = fields
+    let target_file = parts
+        .fields
         .get("target_file")
         .ok_or_else(|| AppError::BadRequest("No target_file given.".into()))?;
-    let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
+    let relative_path = parts
+        .fields
+        .get("relative_path")
+        .cloned()
+        .unwrap_or_default();
     // `/update-api` honours `ret-json`; without it the body is a plain id.
-    let ret_json = wants_ret_json(&query, &fields);
+    let ret_json = wants_ret_json(&query, &parts.fields);
 
     // Scoped for consistency: an update token never carries `upload_link_id`
     // today, but this keeps the link-directory clamp if one ever does.
@@ -1731,11 +1744,7 @@ pub async fn update_api_handler(
     finish_existing(
         &state,
         &auth,
-        Parts {
-            fields,
-            files,
-            chunked,
-        },
+        parts,
         &target,
         range,
         ReplyStyle::PlainOrJson { ret_json },
@@ -1744,7 +1753,7 @@ pub async fn update_api_handler(
     .map(|finished| finished.response)
 }
 
-/// `POST /update-aj/{token}` — token-based AJAX file update from the Seahub web
+/// `POST /update-aj/{token}` 鈥?token-based AJAX file update from the Seahub web
 /// frontend, taking `file`, `target_file` and optional `relative_path`.
 pub async fn update_aj_token(
     State(state): State<Arc<AppState>>,
@@ -1756,39 +1765,29 @@ pub async fn update_aj_token(
 
     let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     // An update carries exactly one file part.
-    let Parts {
-        fields,
-        files,
-        chunked,
-    } = read_update_body(&state, Some(&auth), body, &headers).await?;
+    let parts = read_update_body(&state, Some(&auth), body, &headers).await?;
 
-    let target_file = fields
+    let target_file = parts
+        .fields
         .get("target_file")
         .ok_or_else(|| AppError::BadRequest("No target_file given.".into()))?;
-    let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
+    let relative_path = parts
+        .fields
+        .get("relative_path")
+        .cloned()
+        .unwrap_or_default();
     // Scoped like every other token upload: an update token never carries
     // `upload_link_id` today, but this keeps the link-directory clamp if one
     // ever does (and matches `update_api_handler`).
     let target = resolve_existing_target(Some(auth.token()), target_file, &relative_path)?;
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
-    finish_existing(
-        &state,
-        &auth,
-        Parts {
-            fields,
-            files,
-            chunked,
-        },
-        &target,
-        range,
-        ReplyStyle::Array,
-    )
-    .await
-    .map(|finished| finished.response)
+    finish_existing(&state, &auth, parts, &target, range, ReplyStyle::Array)
+        .await
+        .map(|finished| finished.response)
 }
 
-/// `POST /upload-blks-api/{token}` — block upload and commit.
+/// `POST /upload-blks-api/{token}` 鈥?block upload and commit.
 ///
 /// Without `commitonly`, each `file` part is one block whose filename is its
 /// SHA-1, verified before storing. With `commitonly`, the `parent_dir`,
@@ -1796,12 +1795,47 @@ pub async fn update_aj_token(
 /// fields assemble the file; the commit goes through the same service as every
 /// other upload endpoint, and the body is the file id as plain text (or a JSON
 /// array with `ret-json`).
+/// The commit-phase fields of a block upload.
+struct BlockCommitForm {
+    block_ids: Vec<String>,
+    file_size: i64,
+}
+
+impl BlockCommitForm {
+    /// Parse and sanity-check `blockids` / `file_size`: both are required, the
+    /// list must be a JSON array, and only a zero-byte file may have no blocks.
+    fn parse(fields: &HashMap<String, String>) -> Result<Self, AppError> {
+        let blockids_str = fields
+            .get("blockids")
+            .ok_or_else(|| AppError::BadRequest("blockids required for commit".into()))?;
+        let file_size: i64 = fields
+            .get("file_size")
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| AppError::BadRequest("file_size required for commit".into()))?;
+        let block_ids: Vec<String> = serde_json::from_str(blockids_str)
+            .map_err(|_| AppError::BadRequest("invalid blockids JSON array".into()))?;
+        // An empty list is the zero-byte file the other upload endpoints accept;
+        // a declared size with no blocks is a client error.
+        if block_ids.is_empty() && file_size != 0 {
+            return Err(AppError::BadRequest(
+                "blockids cannot be empty for a non-empty file".into(),
+            ));
+        }
+        Ok(Self {
+            block_ids,
+            file_size,
+        })
+    }
+}
+
 pub async fn upload_blks_api(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
-    uri: axum::http::Uri,
-    mut multipart: Multipart,
+    req: axum::http::Request<axum::body::Body>,
 ) -> Result<axum::response::Response, AppError> {
+    let (request, body) = req.into_parts();
+    let headers = request.headers;
+    let query = query_params(&request.uri);
     let info = state
         .token_manager
         .validate(&token)
@@ -1845,78 +1879,22 @@ pub async fn upload_blks_api(
     }
 
     let uid = Some(info.user_id);
-    let query = query_params(&uri);
-    let mut fields: HashMap<String, String> = HashMap::new();
-    let mut new_block_ids: Vec<String> = Vec::new();
-    let mut has_file = false;
-
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
-    {
-        let name = field.name().unwrap_or("").to_string();
-        if name == "file" {
-            has_file = true;
-            let block_id = field.file_name().unwrap_or("").to_string();
-            let data = read_multipart_field_limited(&mut field, MAX_BLOCK_UPLOAD_BYTES).await?;
-            if !block_id.is_empty() && !data.is_empty() {
-                // Verify the SHA-1 and write immediately, so one request cannot
-                // buffer every block in memory at once.
-                let computed = infra::crypto::fs_id::sha1_hex(&data);
-                if computed != block_id {
-                    return Err(AppError::BadRequest(format!(
-                        "block ID mismatch: expected {block_id}, computed {computed}"
-                    )));
-                }
-                // Charge the block before writing it, so a loop that only uploads
-                // blocks (never a commit) cannot fill the disk while committed
-                // usage stays at zero. 443 is what the Qt client and seaf-daemon
-                // map to "out of quota".
-                crate::service::fs::quota::reserve_block_bytes_for_owner(
-                    &state.repos,
-                    owner,
-                    &info.repo_id,
-                    &block_id,
-                    data.len() as i64,
-                    state.config().storage.default_user_quota_bytes,
-                )
-                .await?;
-                match state
-                    .block_store
-                    .write_block_with_id_tracked(&info.repo_id, &block_id, &data)
-                    .await
-                {
-                    Ok((_, true)) => new_block_ids.push(block_id),
-                    Ok((_, false)) => {
-                        // Already present (retry/concurrent upload): already paid for.
-                        crate::service::fs::quota::release_block_bytes(
-                            &state.repos,
-                            &info.repo_id,
-                            &block_id,
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        crate::service::fs::quota::release_block_bytes(
-                            &state.repos,
-                            &info.repo_id,
-                            &block_id,
-                        )
-                        .await;
-                        return Err(AppError::Internal(format!(
-                            "failed to write block {block_id}: {e}"
-                        )));
-                    }
-                }
-            }
-        } else {
-            let raw = read_multipart_field_limited(&mut field, MAX_SMALL_BODY_BYTES).await?;
-            let text = String::from_utf8(raw)
-                .map_err(|_| AppError::BadRequest("invalid utf-8 field value".into()))?;
-            fields.insert(name, text);
-        }
-    }
+    let Parts {
+        fields,
+        blocks: new_block_ids,
+        has_file,
+        ..
+    } = read_parts(
+        &state,
+        IntakeMode::Blocks {
+            repo_id: info.repo_id.clone(),
+            owner,
+        },
+        body,
+        &headers,
+        usize::MAX,
+    )
+    .await?;
 
     let commit_only = fields.contains_key("commitonly") || query.contains_key("commitonly");
     if !commit_only && !has_file {
@@ -1932,26 +1910,12 @@ pub async fn upload_blks_api(
     }
 
     if commit_only {
-        let blockids_str = fields
-            .get("blockids")
-            .ok_or_else(|| AppError::BadRequest("blockids required for commit".into()))?;
-        let file_size: i64 = fields
-            .get("file_size")
-            .and_then(|s| s.parse().ok())
-            .ok_or_else(|| AppError::BadRequest("file_size required for commit".into()))?;
+        let BlockCommitForm {
+            block_ids,
+            file_size,
+        } = BlockCommitForm::parse(&fields)?;
 
-        let block_ids: Vec<String> = serde_json::from_str(blockids_str)
-            .map_err(|_| AppError::BadRequest("invalid blockids JSON array".into()))?;
-
-        // An empty list is the zero-byte file the other upload endpoints accept;
-        // a declared size with no blocks is a client error.
-        if block_ids.is_empty() && file_size != 0 {
-            return Err(AppError::BadRequest(
-                "blockids cannot be empty for a non-empty file".into(),
-            ));
-        }
-
-        // Reject malformed / path-traversal ids outright — a valid block id is
+        // Reject malformed / path-traversal ids outright 鈥?a valid block id is
         // exactly 40 lowercase hex chars (content-addressed SHA-1). The sync block
         // PUT shares this predicate, so an id cannot pass one endpoint and fail
         // to resolve in the store behind the other.
