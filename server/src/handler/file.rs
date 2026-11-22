@@ -1,4 +1,4 @@
-use axum::{
+﻿use axum::{
     Json, Router,
     body::Body,
     extract::{Path, Query, State},
@@ -157,11 +157,11 @@ pub async fn file_post_handler(
 ) -> Result<Response, AppError> {
     let repo_id = &access.repo_id;
 
-    let (parts, body) = req.into_parts();
+    let (request, body) = req.into_parts();
     // Resumable chunks are only implemented by the token upload endpoints; this
     // one would commit a chunk as the whole file.
-    crate::handler::web::upload::reject_content_range(&parts.headers)?;
-    let content_type = parts
+    crate::handler::web::upload::reject_content_range(&request.headers)?;
+    let content_type = request
         .headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
@@ -172,23 +172,13 @@ pub async fn file_post_handler(
 
     if content_type.starts_with("multipart/form-data") {
         // Stream the multipart body: `file` chunks go to blocks on the fly and the
-        // small fields are collected as text.
-        // A multipart request without a boundary is malformed, not a server
-        // fault: answer 400 like the shared `extract_multipart_boundary` does.
-        let boundary = multer::parse_boundary(&content_type)
-            .map_err(|e| AppError::BadRequest(format!("invalid multipart boundary: {e}")))?;
-        let mut mp = multer::Multipart::new(body.into_data_stream(), boundary);
-
-        let mut fields: HashMap<String, String> = HashMap::new();
-        let mut file_name = String::new();
-        let mut file_block_ids: Vec<String> = Vec::new();
-        let mut file_new_block_ids: Vec<String> = Vec::new();
-        let mut file_total_size: i64 = 0;
-        let mut has_file = false;
-
-        // Encrypted libraries need the password-equivalent block key before any block
-        // is written, so the bytes are stored as ciphertext (matching
-        // `common/fs-mgr.c:707-721`); `repo_id` comes from the path, so this fails fast.
+        // small fields are collected as text. A request without a boundary is
+        // malformed, not a server fault: `read_parts` answers 400.
+        //
+        // Encrypted libraries need the password-equivalent block key before any
+        // block is written, so the bytes are stored as ciphertext (matching
+        // `common/fs-mgr.c:707-721`); `repo_id` comes from the path, so this fails
+        // fast.
         let enc_key = crate::handler::web::download::upload_block_key(
             &state,
             repo_id,
@@ -196,39 +186,27 @@ pub async fn file_post_handler(
             false,
         )
         .await?;
-        let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
-
-        while let Some(field) = mp
-            .next_field()
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?
-        {
-            let field_name = field.name().unwrap_or_default().to_string();
-            match field_name.as_str() {
-                "file" => {
-                    file_name = field.file_name().unwrap_or_default().to_string();
-                    let (block_ids, total_size, new_block_ids) =
-                        crate::handler::web::upload::stream_file_into_blocks(
-                            state.block_store.clone(),
-                            &access.repo_id,
-                            field,
-                            enc_key_ref,
-                        )
-                        .await?;
-                    file_block_ids = block_ids;
-                    file_new_block_ids = new_block_ids;
-                    file_total_size = total_size;
-                    has_file = true;
-                }
-                name => {
-                    let text = field
-                        .text()
-                        .await
-                        .map_err(|e| AppError::Internal(e.to_string()))?;
-                    fields.insert(name.to_string(), text);
-                }
-            }
-        }
+        let uploaded = crate::handler::web::upload::read_parts(
+            &state,
+            crate::handler::web::upload::IntakeMode::Stream {
+                repo_id: repo_id.clone(),
+                enc_key,
+                default_name: "",
+            },
+            body,
+            &request.headers,
+            usize::MAX,
+        )
+        .await?;
+        let fields = uploaded.fields;
+        let Some(file) = uploaded
+            .files
+            .into_iter()
+            .last()
+            .and_then(crate::handler::web::upload::PartFile::into_ingested)
+        else {
+            return Err(AppError::BadRequest("missing file field".into()));
+        };
 
         if fields.get("operation").map(String::as_str) == Some("rename") {
             let newname = fields
@@ -268,10 +246,6 @@ pub async fn file_post_handler(
             return Ok(Json(serde_json::Value::String("success".to_string())).into_response());
         }
 
-        if !has_file {
-            return Err(AppError::BadRequest("missing file field".into()));
-        }
-
         let parent_dir = fields
             .get("parent_dir")
             .cloned()
@@ -287,14 +261,14 @@ pub async fn file_post_handler(
         svc.upload_file_committed_stream(
             repo_id,
             &parent_dir,
-            &file_name,
-            file_block_ids,
-            file_total_size,
+            &file.filename,
+            file.block_ids,
+            file.total_size,
             &access.user.email,
             Some(access.user.user_id),
             false,
             replace,
-            file_new_block_ids,
+            file.new_block_ids,
         )
         .await?;
         if reload_requested(query.reloaddir.as_deref()) {
@@ -518,7 +492,7 @@ pub struct FileIndexTextQuery {
     pub p: Option<String>,
 }
 
-/// GET /api2/repos/{repo_id}/file/index-text/?p=/path — the stored full-text index
+/// GET /api2/repos/{repo_id}/file/index-text/?p=/path 鈥?the stored full-text index
 /// content, or null when the file is not indexed.
 pub async fn file_index_text(
     access: RepoPathRead,
@@ -546,7 +520,7 @@ pub struct ReindexFileRequest {
     pub p: Option<String>,
 }
 
-/// POST /api2/repos/{repo_id}/file/reindex/ — re-index one file from block storage;
+/// POST /api2/repos/{repo_id}/file/reindex/ 鈥?re-index one file from block storage;
 /// body `{"p": "/dir/file.txt"}`.
 pub async fn reindex_file_handler(
     access: RepoPathWrite,
