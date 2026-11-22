@@ -499,28 +499,42 @@ async fn finish_resumable(
     }
 }
 
+/// One `Content-Range` chunk, addressed at a target the handler already resolved.
+struct ChunkUpload<'a> {
+    dir: &'a str,
+    name: &'a str,
+    data: bytes::Bytes,
+    range: Option<&'a str>,
+    replace: bool,
+    mtime: Option<i64>,
+}
+
 /// Handle a chunked (resumable) upload when a `Content-Range` header is present.
 ///
 /// `Ok(None)` means not chunked (the caller handles it as a regular upload);
 /// `Intermediate` means a chunk was stored; `Committed` means the final chunk was
 /// assembled and committed, and the caller frames the body for its endpoint.
 async fn try_handle_chunked(
-    temp_mgr: &crate::handler::web::temp_file::TempFileManager,
     state: &AppState,
-    repo_id: &str,
-    target_dir: &str,
-    file_name: &str,
-    file_data: bytes::Bytes,
-    content_range: Option<&str>,
-    modifier: &str,
-    user_id: Option<i32>,
-    enc_key: Option<(&[u8], &[u8])>,
-    replace: bool,
-    mtime: Option<i64>,
+    auth: &AuthContext,
+    upload: ChunkUpload<'_>,
 ) -> Result<Option<ChunkResult>, AppError> {
-    let Some(range_header) = content_range else {
+    let ChunkUpload {
+        dir: target_dir,
+        name: file_name,
+        data: file_data,
+        range,
+        replace,
+        mtime,
+    } = upload;
+    let Some(range_header) = range else {
         return Ok(None); // not a chunked upload
     };
+    let temp_mgr = &state.temp_file_manager;
+    let repo_id = auth.repo_id.as_str();
+    let modifier = auth.modifier.as_str();
+    let user_id = Some(auth.user_id);
+    let enc_key = auth.enc_key_ref();
 
     let (start, end, file_size) = parse_content_range(range_header)?;
 
@@ -789,18 +803,16 @@ pub async fn upload_aj(
         }
         let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
         if let Some(result) = try_handle_chunked(
-            &state.temp_file_manager,
             &state,
-            repo_id,
-            &target.dir,
-            &filename,
-            bytes::Bytes::from(file_data),
-            content_range,
-            &auth.modifier,
-            Some(auth.user_id),
-            auth.enc_key_ref(),
-            target.replace,
-            mtime,
+            &auth,
+            ChunkUpload {
+                dir: &target.dir,
+                name: &filename,
+                data: bytes::Bytes::from(file_data),
+                range: content_range,
+                replace: target.replace,
+                mtime,
+            },
         )
         .await?
         {
@@ -1364,18 +1376,16 @@ pub async fn update_api(
         }
         let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
         if let Some(result) = try_handle_chunked(
-            &state.temp_file_manager,
             &state,
-            &repo_id,
-            &target.dir,
-            &target.name,
-            bytes::Bytes::from(file_data),
-            content_range,
-            &auth.modifier,
-            Some(auth.user_id),
-            auth.enc_key_ref(),
-            true,
-            mtime,
+            &auth,
+            ChunkUpload {
+                dir: &target.dir,
+                name: &target.name,
+                data: bytes::Bytes::from(file_data),
+                range: content_range,
+                replace: true,
+                mtime,
+            },
         )
         .await?
         {
@@ -1469,19 +1479,17 @@ pub async fn update_aj(
             return Err(AppError::BadRequest("No file in multipart form".into()));
         }
         if let Some(result) = try_handle_chunked(
-            &state.temp_file_manager,
             &state,
-            repo_id,
-            &target.dir,
-            &target.name,
-            file_data,
-            content_range,
-            &auth.modifier,
-            Some(auth.user_id),
-            auth.enc_key_ref(),
-            // The update endpoints always replace the target in place.
-            true,
-            parse_mtime(fields.get("file_mtime").map(String::as_str)),
+            &auth,
+            ChunkUpload {
+                dir: &target.dir,
+                name: &target.name,
+                data: file_data,
+                range: content_range,
+                // The update endpoints always replace the target in place.
+                replace: true,
+                mtime: parse_mtime(fields.get("file_mtime").map(String::as_str)),
+            },
         )
         .await?
         {
@@ -1582,19 +1590,16 @@ pub async fn upload_aj_token(
         }
         let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
         if let Some(result) = try_handle_chunked(
-            &state.temp_file_manager,
             &state,
-            &auth.repo_id,
-            &target.dir,
-            &filename,
-            bytes::Bytes::from(file_data),
-            content_range,
-            &auth.modifier,
-            // Upload-link chunked uploads count against the owner's quota.
-            Some(auth.user_id),
-            auth.enc_key_ref(),
-            target.replace,
-            mtime,
+            &auth,
+            ChunkUpload {
+                dir: &target.dir,
+                name: &filename,
+                data: bytes::Bytes::from(file_data),
+                range: content_range,
+                replace: target.replace,
+                mtime,
+            },
         )
         .await?
         {
@@ -1708,18 +1713,16 @@ pub async fn upload_api(
         }
         let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
         if let Some(result) = try_handle_chunked(
-            &state.temp_file_manager,
             &state,
-            &auth.repo_id,
-            &target.dir,
-            &filename,
-            bytes::Bytes::from(file_data),
-            content_range.as_deref(),
-            &auth.modifier,
-            Some(auth.user_id),
-            auth.enc_key_ref(),
-            target.replace,
-            mtime,
+            &auth,
+            ChunkUpload {
+                dir: &target.dir,
+                name: &filename,
+                data: bytes::Bytes::from(file_data),
+                range: content_range.as_deref(),
+                replace: target.replace,
+                mtime,
+            },
         )
         .await?
         {
@@ -1820,18 +1823,16 @@ pub async fn update_api_handler(
         }
         let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
         if let Some(result) = try_handle_chunked(
-            &state.temp_file_manager,
             &state,
-            &auth.repo_id,
-            &target.dir,
-            &target.name,
-            bytes::Bytes::from(data),
-            content_range.as_deref(),
-            &auth.modifier,
-            Some(auth.user_id),
-            auth.enc_key_ref(),
-            true,
-            mtime,
+            &auth,
+            ChunkUpload {
+                dir: &target.dir,
+                name: &target.name,
+                data: bytes::Bytes::from(data),
+                range: content_range.as_deref(),
+                replace: true,
+                mtime,
+            },
         )
         .await?
         {
@@ -1913,18 +1914,16 @@ pub async fn update_aj_token(
         }
         let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
         if let Some(result) = try_handle_chunked(
-            &state.temp_file_manager,
             &state,
-            &auth.repo_id,
-            &target.dir,
-            &target.name,
-            bytes::Bytes::from(data),
-            content_range,
-            &auth.modifier,
-            Some(auth.user_id),
-            auth.enc_key_ref(),
-            true,
-            mtime,
+            &auth,
+            ChunkUpload {
+                dir: &target.dir,
+                name: &target.name,
+                data: bytes::Bytes::from(data),
+                range: content_range,
+                replace: true,
+                mtime,
+            },
         )
         .await?
         {
