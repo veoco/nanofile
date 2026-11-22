@@ -1,8 +1,8 @@
-//! Upload endpoints: multipart intake, CDC ingest, commit and reply framing.
+﻿//! Upload endpoints: multipart intake, CDC ingest, commit and reply framing.
 //!
 //! The pipeline is `read_parts` (streaming, staged, chunked or block intake)
-//! → target resolution (`resolve_create_target` / `resolve_existing_target`)
-//! → `AuthContext` (the token or session prelude) → `finish_request` (chunk
+//! 鈫?target resolution (`resolve_create_target` / `resolve_existing_target`)
+//! 鈫?`AuthContext` (the token or session prelude) 鈫?`finish_request` (chunk
 //! assembly or whole-file commit, then the endpoint's reply shape).
 
 use axum::{
@@ -152,8 +152,8 @@ struct AuthContext {
 }
 
 impl AuthContext {
-    /// Validate a short-lived upload/update token: token → op → write permission
-    /// → library key, in that order.
+    /// Validate a short-lived upload/update token: token 鈫?op 鈫?write permission
+    /// 鈫?library key, in that order.
     async fn from_token(state: &AppState, raw: &str, kind: TokenKind) -> Result<Self, AppError> {
         let token = state.token_manager.validate(raw).ok_or_else(|| {
             AppError::BadRequest(format!("invalid or expired {} token", kind.op()))
@@ -189,7 +189,7 @@ impl AuthContext {
         })
     }
 
-    /// A browser session: CSRF → write permission → library key. The handler
+    /// A browser session: CSRF 鈫?write permission 鈫?library key. The handler
     /// calls this only after its own field checks, so their 400s keep winning.
     async fn from_session(
         state: &AppState,
@@ -262,7 +262,7 @@ pub(crate) fn parse_replace_arg(query: Option<&str>, form: Option<&str>) -> Resu
     }
 }
 
-/// Collect a URL's query parameters into a map (missing/unparsable → empty).
+/// Collect a URL's query parameters into a map (missing/unparsable 鈫?empty).
 fn query_params(uri: &axum::http::Uri) -> HashMap<String, String> {
     uri.query()
         .and_then(|q| serde_urlencoded::from_str(q).ok())
@@ -296,7 +296,7 @@ async fn require_target_exists(
 /// How an endpoint frames a successful upload/update body.
 ///
 /// The `-aj` endpoints always answer the JSON array (`isAjax=true`); the `-api`
-/// endpoints answer the plain-text file id unless `ret-json` was requested — the
+/// endpoints answer the plain-text file id unless `ret-json` was requested 鈥?the
 /// official Android and desktop clients store that body verbatim, so a JSON array
 /// there corrupts their state (`server/fileserver/fileop.go:1859-1884`).
 #[derive(Clone, Copy)]
@@ -324,7 +324,7 @@ struct CommittedFile {
 /// Render a committed upload (one or more files).
 ///
 /// The `-aj` endpoints answer a JSON array. The `-api` endpoints answer one id
-/// per file separated by `\t`, or the JSON array with `ret-json` — matching
+/// per file separated by `\t`, or the JSON array with `ret-json` 鈥?matching
 /// `postMultiFiles` in `server/fileserver/fileop.go:1944-1970`.
 fn reply_committed(style: ReplyStyle, files: &[CommittedFile]) -> axum::response::Response {
     use axum::response::IntoResponse;
@@ -736,7 +736,7 @@ async fn try_handle_chunked(
 ///
 /// Used instead of axum's `Multipart` extractor, which fails with 400 on the Qt
 /// desktop client's uploads.
-/// `POST /upload-aj/` — AJAX file upload from the Seahub web UI (no token),
+/// `POST /upload-aj/` 鈥?AJAX file upload from the Seahub web UI (no token),
 /// taking `file`, `repo_id`, `parent_dir` and optional `relative_path` fields.
 pub async fn upload_aj(
     user: WebUser,
@@ -1282,54 +1282,9 @@ async fn read_field_limited(
 /// A byte stream fed to the CDC chunker.
 type ChunkStream<'a> = futures::stream::BoxStream<'a, Result<bytes::Bytes, AppError>>;
 
-/// CDC a byte stream straight into content-defined blocks in the block store, so
-/// a file is never fully buffered in memory; `Chunker::new(0)` uses seafile's
-/// fixed 8 MiB avg / 6 MiB min / 10 MiB max sizes.
-///
-/// `enc_key` is the library block key for an encrypted repository (see
-/// `upload_block_key`); when set, each block is encrypted before it is stored
-/// and its id becomes `sha1(ciphertext)`, the Seafile convention
-/// (`common/fs-mgr.c:707-721` hashes the encrypted buffer).
-async fn ingest(
-    store: infra::storage::DynBlockStorage,
-    repo_id: &str,
-    enc_key: Option<(&[u8], &[u8])>,
-    mut stream: ChunkStream<'_>,
-) -> Result<(Vec<String>, i64, Vec<String>), AppError> {
-    use futures::StreamExt;
-
-    crate::fs::core::FileOps::stream_blocks_pipelined(
-        &store,
-        repo_id,
-        enc_key,
-        move |tx| async move {
-            let mut chunker = infra::storage::cdc::Chunker::new(0);
-            let mut total_size = 0i64;
-            let mut idx = 0usize;
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                for block in chunker.feed(&chunk) {
-                    total_size += block.len() as i64;
-                    tx.send((idx, block))
-                        .await
-                        .map_err(|_| AppError::Internal("block writer stopped".into()))?;
-                    idx += 1;
-                }
-            }
-            let last = chunker.finish();
-            if !last.is_empty() {
-                total_size += last.len() as i64;
-                tx.send((idx, last))
-                    .await
-                    .map_err(|_| AppError::Internal("block writer stopped".into()))?;
-            }
-            Ok(total_size)
-        },
-    )
-    .await
-}
-
-/// The block-streaming half of [`ingest`], for one multipart file part.
+/// The block-streaming half for one multipart file part: the shared CDC ingest
+/// (seafile's fixed 8 MiB avg / 6 MiB min / 10 MiB max sizes), with errors
+/// already mapped to `AppError` so a cancelled field keeps its 4xx.
 async fn stream_file_into_blocks(
     store: infra::storage::DynBlockStorage,
     repo_id: &str,
@@ -1341,7 +1296,7 @@ async fn stream_file_into_blocks(
     let stream: ChunkStream<'_> = Box::pin(
         field.map(|chunk| chunk.map_err(|e| AppError::Internal(format!("file read error: {e}")))),
     );
-    ingest(store, repo_id, enc_key, stream).await
+    crate::fs::core::FileOps::ingest_chunk_stream(&store, repo_id, stream, enc_key).await
 }
 
 /// CDC a staged file into the block store (called only after authorization).
@@ -1360,7 +1315,7 @@ async fn ingest_staged_file(
         tokio_util::io::ReaderStream::new(file)
             .map(|chunk| chunk.map_err(|e| AppError::Internal(format!("read staged file: {e}")))),
     );
-    ingest(store, repo_id, enc_key, stream).await
+    crate::fs::core::FileOps::ingest_chunk_stream(&store, repo_id, stream, enc_key).await
 }
 
 /// A multipart file staged on disk before authorization.
@@ -1574,7 +1529,7 @@ async fn commit_uploads(
     Ok(committed)
 }
 
-/// `POST /update-api/` — update an existing file from the web UI (no token),
+/// `POST /update-api/` 鈥?update an existing file from the web UI (no token),
 /// taking `file`, `repo_id`, and `p` / `path` (the full target path).
 pub async fn update_api(
     user: WebUser,
@@ -1616,7 +1571,7 @@ pub async fn update_api(
         .map(|finished| finished.response)
 }
 
-/// `POST /update-aj/` — AJAX file update from the Seahub web UI (no token),
+/// `POST /update-aj/` 鈥?AJAX file update from the Seahub web UI (no token),
 /// taking `file`, `repo_id` and `target_file` (the full target path).
 pub async fn update_aj(
     user: WebUser,
@@ -1655,7 +1610,7 @@ pub async fn update_aj(
         .map(|finished| finished.response)
 }
 
-/// `POST /upload-aj/{token}` — upload with an upload-link token, as sent by the
+/// `POST /upload-aj/{token}` 鈥?upload with an upload-link token, as sent by the
 /// Seahub React frontend after `/api2/repos/{id}/upload-link/?from=web`.
 pub async fn upload_aj_token(
     State(state): State<Arc<AppState>>,
@@ -1693,7 +1648,7 @@ pub async fn upload_aj_token(
     Ok(finished.response)
 }
 
-/// `POST /upload-api/{token}` — token-authenticated upload for the desktop
+/// `POST /upload-api/{token}` 鈥?token-authenticated upload for the desktop
 /// client, which sends a quoted multipart boundary that axum's extractor rejects.
 pub async fn upload_api(
     State(state): State<Arc<AppState>>,
@@ -1709,7 +1664,7 @@ pub async fn upload_api(
     // Resumable uploads reach this endpoint: the Qt desktop client fetches
     // `api2/repos/{id}/upload-link/` and chunks files over 100 MB
     // (`ReliablePostFileTask`). A chunk must go through the temp-file / assembly
-    // path — streaming it straight into blocks would commit it as a whole file,
+    // path 鈥?streaming it straight into blocks would commit it as a whole file,
     // and that path is also where the declared size is reserved against quota.
     let parts = read_upload_body(&state, Some(&auth), body, &headers).await?;
 
@@ -1732,7 +1687,7 @@ pub async fn upload_api(
     .map(|finished| finished.response)
 }
 
-/// `POST /update-api/{token}` — token-authenticated file overwrite for the
+/// `POST /update-api/{token}` 鈥?token-authenticated file overwrite for the
 /// desktop client. `target_file`, or `parent_dir` + `relative_path`, names the
 /// existing file; the update always overwrites in place.
 pub async fn update_api_handler(
@@ -1781,7 +1736,7 @@ pub async fn update_api_handler(
     .map(|finished| finished.response)
 }
 
-/// `POST /update-aj/{token}` — token-based AJAX file update from the Seahub web
+/// `POST /update-aj/{token}` 鈥?token-based AJAX file update from the Seahub web
 /// frontend, taking `file`, `target_file` and optional `relative_path`.
 pub async fn update_aj_token(
     State(state): State<Arc<AppState>>,
@@ -1860,7 +1815,7 @@ async fn commit_blocks(
     new_block_ids: Vec<String>,
 ) -> Result<axum::response::Response, AppError> {
     let uid = Some(info.user_id);
-    // Reject malformed / path-traversal ids outright — a valid block id is
+    // Reject malformed / path-traversal ids outright 鈥?a valid block id is
     // exactly 40 lowercase hex chars (content-addressed SHA-1). The sync block
     // PUT shares this predicate, so an id cannot pass one endpoint and fail
     // to resolve in the store behind the other.
@@ -2065,7 +2020,7 @@ async fn block_auth(
     Ok((info, owner))
 }
 
-/// `POST /upload-blks-api/{token}` — block upload and commit.
+/// `POST /upload-blks-api/{token}` 鈥?block upload and commit.
 ///
 /// Without `commitonly`, each `file` part is one block whose filename is its
 /// SHA-1, verified before storing. With `commitonly`, the `parent_dir`,
@@ -2160,7 +2115,7 @@ mod tests {
         let mut multipart = multer::Multipart::new(stream, "HDRBOUND");
         let mut field = multipart.next_field().await.unwrap().unwrap();
 
-        // Declared chunk is 4096 bytes, cap is 1024 — rejected from the header.
+        // Declared chunk is 4096 bytes, cap is 1024 鈥?rejected from the header.
         let err = read_chunked_field(&mut field, Some("bytes 0-4095/4096"), 1024)
             .await
             .unwrap_err();

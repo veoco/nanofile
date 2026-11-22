@@ -145,14 +145,47 @@ impl FileOps {
     where
         S: futures::Stream<Item = std::io::Result<bytes::Bytes>> + Unpin,
     {
+        Self::feed_cdc(store, repo_id, file_size, enc_key, stream).await
+    }
+
+    /// CDC a byte stream whose errors are already [`AppError`]s (multipart fields,
+    /// staged files): the same chunk-feed loop as [`Self::write_stream_blocks`],
+    /// with seafile's fixed block sizes.
+    pub async fn ingest_chunk_stream<S>(
+        store: &DynBlockStorage,
+        repo_id: &str,
+        stream: S,
+        enc_key: Option<(&[u8], &[u8])>,
+    ) -> Result<(Vec<String>, i64, Vec<String>), AppError>
+    where
+        S: futures::Stream<Item = Result<bytes::Bytes, AppError>> + Unpin,
+    {
+        Self::feed_cdc(store, repo_id, 0, enc_key, stream).await
+    }
+
+    /// Feed `stream` through the CDC chunker into the block writer pipeline.
+    ///
+    /// `Chunker::new` ignores its `file_size` argument (the boundary scan only
+    /// needs the rolling window), so the callers' `file_size`/0 split is
+    /// behaviourally identical; the parameter is kept for API symmetry.
+    async fn feed_cdc<S, E>(
+        store: &DynBlockStorage,
+        repo_id: &str,
+        chunker_size: usize,
+        enc_key: Option<(&[u8], &[u8])>,
+        stream: S,
+    ) -> Result<(Vec<String>, i64, Vec<String>), AppError>
+    where
+        S: futures::Stream<Item = Result<bytes::Bytes, E>> + Unpin,
+        E: Into<AppError>,
+    {
         let mut stream = stream;
         Self::stream_blocks_pipelined(store, repo_id, enc_key, move |tx| async move {
-            let mut chunker = infra::storage::cdc::Chunker::new(file_size);
+            let mut chunker = infra::storage::cdc::Chunker::new(chunker_size);
             let mut total_size: i64 = 0;
             let mut idx = 0usize;
             while let Some(chunk) = stream.next().await {
-                let chunk =
-                    chunk.map_err(|e| AppError::Internal(format!("stream read failed: {e}")))?;
+                let chunk: bytes::Bytes = chunk.map_err(Into::into)?;
                 for blk in chunker.feed(chunk.as_ref()) {
                     total_size += blk.len() as i64;
                     tx.send((idx, blk))
@@ -1040,5 +1073,35 @@ mod tests {
         ]);
         let result = FileOps::write_stream_blocks(&store, REPO, 10, stream, None).await;
         assert!(result.is_err(), "stream error must propagate");
+    }
+
+    /// The multipart/staged-file ingest and the WebDAV/temp-file path must
+    /// produce identical block ids for the same bytes: both feed one CDC loop.
+    #[tokio::test]
+    async fn test_ingest_chunk_stream_matches_write_stream_blocks() {
+        let (_dir, store) = temp_store();
+        let data = pseudo_data(12 * 1024 * 1024 + 77);
+
+        let io_stream = bytes_stream(data.clone(), 65536);
+        let (io_ids, io_total, _) =
+            FileOps::write_stream_blocks(&store, REPO, data.len(), io_stream, None)
+                .await
+                .unwrap();
+
+        let items: Vec<Result<bytes::Bytes, AppError>> = data
+            .chunks(4096)
+            .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
+            .collect();
+        let app_stream = futures::stream::iter(items);
+        let (app_ids, app_total, _) = FileOps::ingest_chunk_stream(&store, REPO, app_stream, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            io_ids, app_ids,
+            "both CDC entry points must chunk identically"
+        );
+        assert_eq!(io_total, app_total);
+        assert_eq!(io_total as usize, data.len());
     }
 }
