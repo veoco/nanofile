@@ -196,6 +196,18 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
+    /// Host-aware base for absolute capability URLs.
+    ///
+    /// `site_url` wins when it was configured; otherwise a valid request `Host`
+    /// may be echoed under the documented `trust_request_host`/`allowed_hosts`
+    /// rules (see [`infra::config::ServerConfig::download_url_base`]).
+    pub fn download_base(&self, headers: &axum::http::HeaderMap) -> String {
+        let host = headers
+            .get(axum::http::header::HOST)
+            .and_then(|value| value.to_str().ok());
+        self.config().server.download_url_base(host)
+    }
+
     /// Build from a configuration that is already fully resolved: the config file is
     /// then the only layer, which is what the test harness and callers with no
     /// settings table have.

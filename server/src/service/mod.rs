@@ -14,4 +14,5 @@ pub mod mail;
 pub mod repo;
 pub mod sharing;
 pub mod sync;
+pub mod urls;
 pub mod user;

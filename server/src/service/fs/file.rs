@@ -538,30 +538,16 @@ impl FileService {
             filename,
         );
 
-        let url = self.build_download_url(&download_token, host_header);
+        let url = crate::service::urls::capability(
+            self.config
+                .get()
+                .server
+                .download_url_base(host_header)
+                .as_str(),
+            "download-api",
+            &download_token,
+        );
         Ok((file_fs_id, url))
-    }
-
-    /// URL base for download / block links (see `ServerConfig::download_url_base`).
-    fn build_url_base(&self, host_header: Option<&str>) -> String {
-        self.config.get().server.download_url_base(host_header)
-    }
-
-    fn build_download_url(&self, token: &str, host_header: Option<&str>) -> String {
-        format!("{}/download-api/{token}", self.build_url_base(host_header))
-    }
-
-    fn build_block_download_url(
-        &self,
-        token: &str,
-        file_id: &str,
-        block_id: &str,
-        host_header: Option<&str>,
-    ) -> String {
-        format!(
-            "{}/blks/{token}/{file_id}/{block_id}",
-            self.build_url_base(host_header)
-        )
     }
 
     pub async fn get_block_download_link(
@@ -577,7 +563,13 @@ impl FileService {
         let token =
             self.token_manager
                 .generate(repo_id, user_id, email, "downloadblks", parent_dir);
-        Ok(self.build_block_download_url(&token, file_id, block_id, host_header))
+        let base = self.config.get().server.download_url_base(host_header);
+        Ok(crate::service::urls::capability_rest(
+            &base,
+            "blks",
+            &token,
+            &format!("{file_id}/{block_id}"),
+        ))
     }
 
     /// Commit a file whose blocks are already in the block store (e.g. from a streaming uploader):

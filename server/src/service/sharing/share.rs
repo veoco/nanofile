@@ -68,12 +68,7 @@ pub struct ShareLinkInfo {
 
 /// Absolute share-link URL matching seahub's `gen_shared_link()`; clients copy the `link` field verbatim.
 fn share_link_url(s_type: &str, token: &str, base_url: &str) -> String {
-    let base = base_url.trim_end_matches('/');
-    if s_type == "d" {
-        format!("{base}/d/{token}/")
-    } else {
-        format!("{base}/f/{token}/")
-    }
+    crate::service::urls::share_page(base_url, token, s_type == "d")
 }
 
 fn share_link_info_from_model(l: &share_link::Model, base_url: &str) -> ShareLinkInfo {

@@ -172,7 +172,5 @@ async fn ensure_not_encrypted(state: &AppState, repo_id: &str) -> Result<(), App
 /// Build a block-upload URL on the Host-aware external base, so a LAN client that
 /// reached the server by address is not told to upload to loopback.
 fn build_blks_op_url(state: &AppState, op: &str, token: &str, headers: &HeaderMap) -> String {
-    let host = headers.get("host").and_then(|v| v.to_str().ok());
-    let base = state.config().server.download_url_base(host);
-    format!("{}/{}/{}", base.trim_end_matches('/'), op, token)
+    crate::service::urls::capability(&state.download_base(headers), op, token)
 }

@@ -18,10 +18,10 @@ pub struct UploadLinkInfo {
     pub created_at: i64,
 }
 
-/// Absolute upload-link URL, matching seahub's `gen_shared_upload_link()` (`{service_url}/u/d/{token}/`).
+/// Absolute upload-link URL. nanofile serves `/u/{token}/`; the seahub
+/// `/u/d/{token}/` shape is deliberately not used (see compatibility.md).
 fn upload_link_url(token: &str, base_url: &str) -> String {
-    let base = base_url.trim_end_matches('/');
-    format!("{base}/u/{token}/")
+    crate::service::urls::upload_page(base_url, token)
 }
 
 /// v2.1 list-item JSON for an upload link (no repo name / obj_name).

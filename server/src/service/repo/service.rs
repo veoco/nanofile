@@ -318,11 +318,6 @@ impl RepoCrypto {
     }
 }
 
-fn build_op_url(site_url: &str, op: &str, token: &str) -> String {
-    let base = site_url.trim_end_matches('/');
-    format!("{}/{}/{}", base, op, token)
-}
-
 /// One library the caller can access, with the caller-specific membership
 /// permission and owner identity resolved once.
 pub(crate) struct RepoAccess {
@@ -1096,7 +1091,7 @@ impl RepoService {
 
         let is_web = from == Some("web");
         let op = if is_web { "upload-aj" } else { "upload-api" };
-        let mut url = build_op_url(base_url, op, &token);
+        let mut url = crate::service::urls::capability(base_url, op, &token);
 
         if !is_web && replace == Some("1") {
             url.push_str("?replace=1");
@@ -1140,7 +1135,7 @@ impl RepoService {
         } else {
             "update-api"
         };
-        let url = build_op_url(base_url, op, &token);
+        let url = crate::service::urls::capability(base_url, op, &token);
 
         Ok(url)
     }
