@@ -122,7 +122,7 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 anyhow = { workspace = true }
 totp-rs = { version = "6", features = ["gen_secret", "otpauth"] }
-qrcode = "0.14"
+qrcode = "0.15"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
 # Face-tag and OCR inference, compiled into every build. `tract` loads the
 # embedded ONNX graphs and runs them on its CPU runtime: pure Rust, no ONNX
