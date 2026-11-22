@@ -117,42 +117,28 @@ impl SyncService {
         user_id: i32,
         repo_scope: &crate::domain::permission::RepoScope,
     ) -> Result<Vec<AccessibleRepo>, AppError> {
-        let memberships = self.repos.member.find_by_user_id(user_id).await?;
+        // The shared loader needs the caller's email for the owner fields of owned
+        // libraries; the v1/v2.1 list handlers already have it in `AuthUser`.
+        let email = self
+            .repos
+            .user
+            .find_by_id(user_id)
+            .await?
+            .map(|u| u.email)
+            .unwrap_or_default();
+        let rows = crate::service::repo::service::RepoService::load_repo_access(
+            &self.repos,
+            user_id,
+            &email,
+        )
+        .await?;
 
-        // Distinct repo ids in scope, with the caller's membership permission for
-        // each, so no library can appear twice in one response.
-        let mut repo_ids: Vec<String> = Vec::with_capacity(memberships.len());
-        let mut permissions: HashMap<&str, &str> = HashMap::with_capacity(memberships.len());
-        for m in &memberships {
-            if repo_scope.allows(&m.repo_id) && !permissions.contains_key(m.repo_id.as_str()) {
-                permissions.insert(m.repo_id.as_str(), m.permission.as_str());
-                repo_ids.push(m.repo_id.clone());
-            }
-        }
-
-        let repos = self.repos.repo.find_by_ids(&repo_ids).await?;
-        let repo_by_id: HashMap<&str, &infra::entity::repo::Model> =
-            repos.iter().map(|r| (r.id.as_str(), r)).collect();
-
-        let mut owner_ids: Vec<i32> = Vec::new();
-        let mut owner_seen: HashSet<i32> = HashSet::new();
-        for r in &repos {
-            if owner_seen.insert(r.owner_id) {
-                owner_ids.push(r.owner_id);
-            }
-        }
-        let owners = self.repos.user.find_by_ids(&owner_ids).await?;
-        let owner_email: HashMap<i32, String> =
-            owners.iter().map(|u| (u.id, u.email.clone())).collect();
-
-        let mut result = Vec::with_capacity(repos.len());
-        for repo_id in &repo_ids {
-            let Some(r) = repo_by_id.get(repo_id.as_str()) else {
-                continue; // repo deleted → skip, matching the previous behavior
-            };
-            let Some(permission) = permissions.get(repo_id.as_str()) else {
+        let mut result = Vec::with_capacity(rows.len());
+        for row in rows {
+            if !repo_scope.allows(&row.repo.id) {
                 continue;
-            };
+            }
+            let r = row.repo;
             result.push(AccessibleRepo {
                 version: r.repo_version,
                 id: r.id.clone(),
@@ -162,16 +148,17 @@ impl SyncService {
                     .filter(|head| *head != EMPTY_SHA1)
                     .unwrap_or(EMPTY_SHA1)
                     .to_string(),
-                name: r.name.clone(),
+                name: r.name,
                 mtime: r.updated_at,
-                permission: (*permission).to_string(),
+                permission: row.permission,
                 type_: if r.owner_id == user_id {
                     "repo"
                 } else {
                     "srepo"
                 }
                 .to_string(),
-                owner: owner_email.get(&r.owner_id).cloned().unwrap_or_default(),
+                // seafile-server lowercases shared owners (`sync_api.go:377`).
+                owner: row.owner_email.to_lowercase(),
             });
         }
         Ok(result)

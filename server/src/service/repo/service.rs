@@ -143,6 +143,10 @@ pub struct V21RepoInfo {
     pub owner_email: String,
     pub owner_name: String,
     pub owner_contact_email: String,
+    /// Per-library salt for `enc_version >= 3` libraries, matching the v2.1 list.
+    /// Android stores it in `RepoModel.salt` for local decryption.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub salt: Option<String>,
     /// nanofile does not model group-owned repos; always null.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group_id: Option<i32>,
@@ -319,20 +323,24 @@ fn build_op_url(site_url: &str, op: &str, token: &str) -> String {
     format!("{}/{}/{}", base, op, token)
 }
 
-/// Build the `RepoInfo` wire shape of one library the caller can access.
+/// One library the caller can access, with the caller-specific membership
+/// permission and owner identity resolved once.
+pub(crate) struct RepoAccess {
+    pub repo: repo::Model,
+    pub permission: String,
+    pub owner_email: String,
+    pub owner_name: String,
+}
+
+/// Build the `RepoInfo` wire shape from a resolved access row.
 ///
 /// `user_id` decides `type` (`repo` for the owner, `srepo` for a member) and
 /// `permission` is that caller's membership row. Encryption fields are echoed from
 /// the stored row, so a library read here cannot disagree with a later `get`. The
 /// per-caller extras (`token`, `email`, duplicated ids) stay empty: only endpoints
 /// that hand the caller a credential of its own fill them (`create_repo`).
-fn build_repo_info_from_model(
-    r: &repo::Model,
-    owner_email: &str,
-    owner_name: &str,
-    permission: &str,
-    user_id: i32,
-) -> RepoInfo {
+fn build_repo_info_from_access(a: &RepoAccess, user_id: i32, root: Option<String>) -> RepoInfo {
+    let r = &a.repo;
     let encrypted = r.encrypted != 0;
     let crypto = RepoCrypto::from_model(r);
     let type_ = if r.owner_id == user_id {
@@ -344,8 +352,8 @@ fn build_repo_info_from_model(
         id: r.id.clone(),
         name: r.name.clone(),
         desc: r.description.clone(),
-        owner: owner_email.to_string(),
-        owner_name: owner_name.to_string(),
+        owner: a.owner_email.clone(),
+        owner_name: a.owner_name.clone(),
         groupid: None,
         encrypted,
         enc_version: if encrypted {
@@ -355,11 +363,11 @@ fn build_repo_info_from_model(
         },
         size: r.size,
         mtime: r.updated_at,
-        permission: permission.to_string(),
+        permission: a.permission.clone(),
         head_commit_id: r.head_commit_id.clone(),
         type_,
         virtual_: false,
-        root: None,
+        root,
         salt: if encrypted && r.enc_version >= 3 {
             Some(r.salt.clone())
         } else {
@@ -380,16 +388,58 @@ fn build_repo_info_from_model(
     }
 }
 
+/// Build the v2.1 wire shape from a resolved access row.
+fn build_repo_info_v21_from_access(a: &RepoAccess, user_id: i32) -> V21RepoInfo {
+    let r = &a.repo;
+    let encrypted = r.encrypted != 0;
+    let type_ = if r.owner_id == user_id {
+        "mine"
+    } else {
+        "shared"
+    };
+    V21RepoInfo {
+        repo_id: r.id.clone(),
+        repo_name: r.name.clone(),
+        repo_desc: r.description.clone(),
+        permission: a.permission.clone(),
+        encrypted,
+        type_: type_.to_string(),
+        size: r.size,
+        last_modified: timestamp_rfc3339(r.updated_at),
+        mtime: r.updated_at,
+        owner_email: a.owner_email.clone(),
+        owner_name: a.owner_name.clone(),
+        owner_contact_email: a.owner_email.clone(),
+        salt: if encrypted && r.enc_version >= 3 {
+            Some(r.salt.clone())
+        } else {
+            None
+        },
+        group_id: None,
+        group_name: None,
+    }
+}
+
 impl RepoService {
-    /// List all repos accessible to the given user (v2 API).
-    pub async fn list_repos(
+    /// Load every library the caller is a member of, with the membership
+    /// permission and owner identity resolved in three batched queries.
+    ///
+    /// This is the one loader behind the v1 list, the v2.1 list, the web UI list
+    /// and the sync accessible-repos response; each caller only serializes.
+    pub(crate) async fn load_repo_access(
         repos: &Repositories,
         user_id: i32,
         email: &str,
-    ) -> Result<Vec<RepoInfo>, AppError> {
+    ) -> Result<Vec<RepoAccess>, AppError> {
         let memberships = repos.member.find_by_user_id(user_id).await?;
 
-        let repo_ids: Vec<String> = memberships.iter().map(|m| m.repo_id.clone()).collect();
+        let mut seen = HashSet::with_capacity(memberships.len());
+        let repo_ids: Vec<String> = memberships
+            .iter()
+            .filter(|m| seen.insert(m.repo_id.clone()))
+            .map(|m| m.repo_id.clone())
+            .collect();
+
         let repos_map: HashMap<String, repo::Model> = repos
             .repo
             .find_by_ids(&repo_ids)
@@ -398,7 +448,8 @@ impl RepoService {
             .map(|r| (r.id.clone(), r))
             .collect();
 
-        // Batch-load the owners of non-owned repos (not the requester) for owner fields.
+        // Batch-load the owners of non-owned repos (not the requester) for the
+        // owner fields.
         let owner_ids: Vec<i32> = repos_map
             .values()
             .filter(|r| r.owner_id != user_id)
@@ -412,23 +463,76 @@ impl RepoService {
             .map(|u| (u.id, u))
             .collect();
 
-        let mut result = Vec::new();
-        for m in memberships {
+        let mut result = Vec::with_capacity(memberships.len());
+        let mut emitted = HashSet::with_capacity(memberships.len());
+        for m in &memberships {
+            if !emitted.insert(m.repo_id.as_str()) {
+                continue;
+            }
             let Some(r) = repos_map.get(&m.repo_id) else {
                 continue;
             };
             let is_owner = r.owner_id == user_id;
             let (owner_email, owner_name) = resolve_owner(r.owner_id, email, is_owner, &owners);
-            result.push(build_repo_info_from_model(
-                r,
-                &owner_email,
-                &owner_name,
-                &m.permission,
-                user_id,
-            ));
+            result.push(RepoAccess {
+                repo: r.clone(),
+                permission: m.permission.clone(),
+                owner_email,
+                owner_name,
+            });
         }
 
         Ok(result)
+    }
+
+    /// Load one library with the caller's membership permission and owner.
+    pub(crate) async fn load_repo_access_one(
+        repos: &Repositories,
+        repo_id: &str,
+        user_id: i32,
+        email: &str,
+    ) -> Result<RepoAccess, AppError> {
+        let repo = repos
+            .repo
+            .find_by_id(repo_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+        let membership = repos
+            .member
+            .find_by_repo_and_user(repo_id, user_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+        let is_owner = repo.owner_id == user_id;
+        let owners: HashMap<i32, user::Model> = if is_owner {
+            HashMap::new()
+        } else {
+            let mut m = HashMap::new();
+            if let Some(u) = repos.user.find_by_id(repo.owner_id).await? {
+                m.insert(u.id, u);
+            }
+            m
+        };
+        let (owner_email, owner_name) = resolve_owner(repo.owner_id, email, is_owner, &owners);
+
+        Ok(RepoAccess {
+            repo,
+            permission: membership.permission,
+            owner_email,
+            owner_name,
+        })
+    }
+    /// List all repos accessible to the given user (v2 API).
+    pub async fn list_repos(
+        repos: &Repositories,
+        user_id: i32,
+        email: &str,
+    ) -> Result<Vec<RepoInfo>, AppError> {
+        let rows = Self::load_repo_access(repos, user_id, email).await?;
+        Ok(rows
+            .iter()
+            .map(|row| build_repo_info_from_access(row, user_id, None))
+            .collect())
     }
 
     /// Create a new repo.
@@ -712,86 +816,19 @@ impl RepoService {
         user_id: i32,
         email: &str,
     ) -> Result<RepoInfo, AppError> {
-        let r = repos
-            .repo
-            .find_by_id(repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-
-        let membership = repos
-            .member
-            .find_by_repo_and_user(repo_id, user_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-        let permission = membership.permission;
-
-        let root = if let Some(ref cmmt_id) = r.head_commit_id {
-            repos
-                .commit
-                .find_by_repo_and_commit_id(&r.id, cmmt_id)
-                .await?
-                .map(|c| c.root_id)
+        let access = Self::load_repo_access_one(repos, repo_id, user_id, email).await?;
+        let head = crate::fs::core::repo_head(repos, repo_id).await?;
+        let root = if head.head_commit_id.is_some() {
+            Some(head.root_id)
         } else {
             None
         };
-
-        let encrypted = r.encrypted != 0;
-        let crypto = RepoCrypto::from_model(&r);
-        let type_ = if r.owner_id == user_id {
-            "repo"
-        } else {
-            "srepo"
-        };
-        let enc_version = crypto.enc_version;
-        let salt = if encrypted && r.enc_version >= 3 {
-            Some(r.salt.clone())
-        } else {
-            None
-        };
-        let magic = crypto.magic.clone();
-        let random_key = crypto.key.clone();
-
-        let owner_name = if r.owner_id == user_id {
-            email.split('@').next().unwrap_or("").to_string()
-        } else {
-            repos
-                .user
-                .find_by_id(r.owner_id)
-                .await?
-                .map(|u| u.nickname())
-                .unwrap_or_default()
-        };
-
-        Ok(RepoInfo {
-            id: r.id.clone(),
-            name: r.name.clone(),
-            desc: r.description.clone(),
-            owner: email.to_string(),
-            owner_name,
-            groupid: None,
-            encrypted,
-            enc_version,
-            size: r.size,
-            mtime: r.updated_at,
-            permission,
-            head_commit_id: r.head_commit_id.clone(),
-            type_: type_.to_string(),
-            virtual_: false,
-            root,
-            salt,
-            magic,
-            random_key,
-            pwd_hash: crypto.pwd_hash.clone(),
-            pwd_hash_algo: crypto.pwd_hash_algo.clone(),
-            pwd_hash_params: crypto.pwd_hash_params.clone(),
-            repo_version: r.repo_version,
-            version: r.repo_version,
-            lib_need_decrypt: if encrypted { Some(true) } else { None },
-            repo_id_dup: None,
-            repo_name_dup: None,
-            token: None,
-            email: None,
-        })
+        let mut info = build_repo_info_from_access(&access, user_id, root);
+        // The v1 single-endpoint has historically reported the *caller's* email
+        // in `owner` (the list reports the owner's). Keep that shape; it is
+        // pinned by the surface matrix and documented as a seahub divergence.
+        info.owner = email.to_string();
+        Ok(info)
     }
 
     /// Rename a repo. Only the owner can rename.
@@ -1159,58 +1196,13 @@ impl RepoService {
         user_id: i32,
         email: &str,
     ) -> Result<V21RepoListResponse, AppError> {
-        let memberships = repos.member.find_by_user_id(user_id).await?;
-
-        // Batch-load member repos, then non-owned owners' profiles: two queries.
-        let repo_ids: Vec<String> = memberships.iter().map(|m| m.repo_id.clone()).collect();
-        let repos_map: HashMap<String, repo::Model> = repos
-            .repo
-            .find_by_ids(&repo_ids)
-            .await?
-            .into_iter()
-            .map(|r| (r.id.clone(), r))
-            .collect();
-        let owner_ids: Vec<i32> = repos_map
-            .values()
-            .filter(|r| r.owner_id != user_id)
-            .map(|r| r.owner_id)
-            .collect();
-        let owners: HashMap<i32, user::Model> = repos
-            .user
-            .find_by_ids(&owner_ids)
-            .await?
-            .into_iter()
-            .map(|u| (u.id, u))
-            .collect();
-
-        let mut repos_list = Vec::new();
-        for m in &memberships {
-            let Some(r) = repos_map.get(&m.repo_id) else {
-                continue;
-            };
-            let is_owner = r.owner_id == user_id;
-            let repo_type = if is_owner { "mine" } else { "shared" };
-            let (owner_email, owner_name) = resolve_owner(r.owner_id, email, is_owner, &owners);
-
-            repos_list.push(V21RepoInfo {
-                repo_id: r.id.clone(),
-                repo_name: r.name.clone(),
-                repo_desc: r.description.clone(),
-                permission: m.permission.clone(),
-                encrypted: r.encrypted != 0,
-                type_: repo_type.to_string(),
-                size: r.size,
-                last_modified: timestamp_rfc3339(r.updated_at),
-                mtime: r.updated_at,
-                owner_contact_email: owner_email.clone(),
-                owner_email,
-                owner_name,
-                group_id: None,
-                group_name: None,
-            });
-        }
-
-        Ok(V21RepoListResponse { repos: repos_list })
+        let rows = Self::load_repo_access(repos, user_id, email).await?;
+        Ok(V21RepoListResponse {
+            repos: rows
+                .iter()
+                .map(|row| build_repo_info_v21_from_access(row, user_id))
+                .collect(),
+        })
     }
 
     /// Get a single repo with v2.1 response format.
@@ -1220,47 +1212,8 @@ impl RepoService {
         user_id: i32,
         email: &str,
     ) -> Result<V21RepoInfo, AppError> {
-        let membership = repos
-            .member
-            .find_by_repo_and_user(repo_id, user_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-
-        let r = repos
-            .repo
-            .find_by_id(repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-
-        let is_owner = r.owner_id == user_id;
-        let repo_type = if is_owner { "mine" } else { "shared" };
-        let owners: HashMap<i32, user::Model> = if is_owner {
-            HashMap::new()
-        } else {
-            let mut m = HashMap::new();
-            if let Some(u) = repos.user.find_by_id(r.owner_id).await? {
-                m.insert(u.id, u);
-            }
-            m
-        };
-        let (owner_email, owner_name) = resolve_owner(r.owner_id, email, is_owner, &owners);
-
-        Ok(V21RepoInfo {
-            repo_id: r.id,
-            repo_name: r.name,
-            repo_desc: r.description,
-            permission: membership.permission,
-            encrypted: r.encrypted != 0,
-            type_: repo_type.to_string(),
-            size: r.size,
-            last_modified: timestamp_rfc3339(r.updated_at),
-            mtime: r.updated_at,
-            owner_contact_email: owner_email.clone(),
-            owner_email,
-            owner_name,
-            group_id: None,
-            group_name: None,
-        })
+        let access = Self::load_repo_access_one(repos, repo_id, user_id, email).await?;
+        Ok(build_repo_info_v21_from_access(&access, user_id))
     }
 
     /// The user's default (primary) library: nanofile does not persist a per-user

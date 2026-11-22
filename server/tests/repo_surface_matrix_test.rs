@@ -8,7 +8,10 @@
 
 use crate::common;
 
-use common::{TestFixture, add_repo_member, create_test_repo, create_test_user};
+use common::TestFixture;
+use common::client::EncRepoCreate;
+use common::{add_repo_member, create_test_repo, create_test_user};
+use infra::crypto::key_derivation;
 use serde_json::Value;
 
 async fn upload(f: &TestFixture, name: &str) {
@@ -173,6 +176,10 @@ async fn test_v21_repo_list_and_get_fields() {
     let last_modified = repo["last_modified"].as_str().unwrap();
     chrono::DateTime::parse_from_rfc3339(last_modified)
         .expect("last_modified must be RFC 3339 for Android's parser");
+    assert!(
+        repo.get("salt").is_none(),
+        "an unencrypted library has no salt"
+    );
 
     let resp = f
         .client
@@ -256,6 +263,48 @@ async fn test_sync_accessible_repos_fields() {
         Some("0000000000000000000000000000000000000000"),
         "a headless library keeps the all-zero sentinel"
     );
+}
+
+/// Android stores `RepoModel.salt` from the v2.1 list; a v4 library must carry
+/// the per-library salt it was created with (seahub sends it for enc_version>=3).
+#[tokio::test]
+async fn test_v21_encrypted_repo_exposes_salt() {
+    let f = TestFixture::new().await;
+    let repo_id = uuid::Uuid::new_v4().to_string();
+    let salt = key_derivation::generate_repo_salt();
+    let magic = key_derivation::generate_magic(&repo_id, "pw", 4, &salt).unwrap();
+    let random_key = key_derivation::generate_random_key_for_repo("pw", 4, &salt).unwrap();
+    let resp = f
+        .client
+        .create_encrypted_repo_with_params(
+            &f.api_token,
+            &EncRepoCreate {
+                name: "v4-lib",
+                repo_id: &repo_id,
+                magic: &magic,
+                random_key: &random_key,
+                enc_version: 4,
+                salt: Some(&salt),
+            },
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "create v4 library failed");
+
+    let body: Value = f
+        .client
+        .get("/api/v2.1/repos/", Some(&f.api_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let repo = body["repos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["repo_id"] == repo_id)
+        .expect("created library missing from the list");
+    assert_eq!(repo["encrypted"], serde_json::json!(true));
+    assert_eq!(repo["salt"], serde_json::json!(salt));
 }
 
 /// The web UI lists both owned and shared libraries, from one page.
