@@ -438,6 +438,77 @@ async fn test_file_revision_v21_downloads_old_version() {
     assert_eq!(bytes.as_ref(), b"first-content");
 }
 
+/// A revision is served by the shared response builder: Range, ETag and 304.
+#[tokio::test]
+async fn test_file_revision_v21_supports_ranges_and_validators() {
+    let f = TestFixture::new().await;
+    upload_hist_version(&f, b"first-content").await;
+    upload_hist_version(&f, b"second-content").await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/file/history/?p=/hist.txt", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let commit = body["data"][1]["commit_id"].as_str().unwrap().to_string();
+
+    let url = format!(
+        "{}/api/v2.1/repos/{}/file/revision/?p=/hist.txt&commit_id={commit}",
+        f.server.base_url, f.repo_id
+    );
+    let http = reqwest::Client::builder().no_proxy().build().unwrap();
+
+    let resp = http
+        .get(&url)
+        .bearer_auth(&f.api_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok()),
+        Some("13"),
+        "revision responses must advertise their length"
+    );
+    let etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .expect("revision ETag missing")
+        .to_string();
+
+    let resp = http
+        .get(&url)
+        .bearer_auth(&f.api_token)
+        .header("range", "bytes=0-4")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 206);
+    assert_eq!(
+        resp.headers()
+            .get("content-range")
+            .and_then(|v| v.to_str().ok()),
+        Some("bytes 0-4/13")
+    );
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"first");
+
+    let resp = http
+        .get(&url)
+        .bearer_auth(&f.api_token)
+        .header("if-none-match", &etag)
+        .header("range", "bytes=0-4")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 304);
+}
+
 #[tokio::test]
 async fn test_file_revision_v21_invalid_commit() {
     let f = TestFixture::new().await;

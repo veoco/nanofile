@@ -1,9 +1,8 @@
 use axum::{
     Json, Router,
-    body::Body,
     extract::{Query, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
-    response::{IntoResponse, Response},
+    http::{HeaderMap, header},
+    response::Response,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -79,6 +78,7 @@ pub struct RevisionQuery {
 pub async fn get_file_revision_v21(
     path: RepoPathRead,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(query): Query<RevisionQuery>,
 ) -> Result<Response, AppError> {
     let repo_id = path.repo_id;
@@ -98,28 +98,32 @@ pub async fn get_file_revision_v21(
         path.user.user_id,
     )
     .await?;
-    let stream = crate::fs::core::download::stream_blocks(
-        repo_id.clone(),
-        file_data.block_ids,
-        state.block_store.clone(),
-        dec_key,
-    );
-
     let filename = p.rsplit_once('/').map(|(_, n)| n).unwrap_or("download");
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/octet-stream"),
-    );
-    headers.insert(
-        header::CONTENT_DISPOSITION,
-        HeaderValue::from_str(&crate::fs::core::download::content_disposition(
-            filename, true,
-        ))
-        .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
-    );
-
-    Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response())
+    let block_ids = file_data.block_ids;
+    let total_size = file_data.size.max(0) as u64;
+    let etag = crate::fs::core::download::blocks_etag(&block_ids);
+    Ok(crate::fs::core::download::file_download_response(
+        crate::fs::core::download::FileDownloadParams {
+            repo_id,
+            block_ids,
+            block_store: state.block_store.clone(),
+            enc_key: dec_key,
+            total_size,
+            content_type: crate::ui::files::mime_guess(filename),
+            content_disposition: Some(crate::fs::core::download::content_disposition(
+                filename, true,
+            )),
+            range_header: headers
+                .get(header::RANGE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string),
+            etag: Some(etag),
+            head_only: false,
+            // The URL names a commit, so its bytes never change.
+            cache: crate::fs::core::download::CachePolicy::MaxAge(3600),
+        },
+        &headers,
+    ))
 }
 
 #[derive(Deserialize)]
