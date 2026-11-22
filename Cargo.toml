@@ -87,6 +87,17 @@ unsafe_code = "deny"
 [workspace.lints.clippy]
 all = "deny"
 
+# Tests execute the embedded OCR/face models in-process, and with unoptimized
+# kernels the OCR cases spent minutes of CPU per run (dozens of text-line
+# recognition passes on the sample page alone). Optimizing only the two hot packages brings
+# the OCR cases back to seconds without touching the debug binary
+# (`cargo build`) or the release profiles.
+[profile.test.package.server]
+opt-level = 2
+
+[profile.test.package.matrixmultiply]
+opt-level = 3
+
 [profile.release]
 lto = true
 codegen-units = 1

@@ -747,13 +747,11 @@ jobs:
           if-no-files-found: ignore
 
   # ── OCR tests, beside the main suite ───────────────────────────────
-  # The PP-OCR graphs are the slowest tests in the suite: two to four minutes of
-  # CPU per platform. Keeping them in every main row made that row's CPU the
-  # wall clock, so they run here, in parallel with it. The model is pure Rust,
-  # but the OCR profile runs through the platform's sandbox (AppContainer,
-  # Seatbelt, Landlock), so every OS we ship runs this job; linux-arm64 shares
-  # the aarch64 model path with macOS but not a sandbox implementation, and its
-  # main row still covers the non-OCR sandbox cases.
+  # The OCR cases run the model profiles through each platform's sandbox
+  # (AppContainer, Seatbelt, Landlock) on the three architectures that ship the
+  # model, so they keep their own row instead of lengthening every main row.
+  # The test profile optimizes the inference kernels (see the root Cargo.toml),
+  # which keeps this job bounded by the build rather than by the model passes.
   ocr-tests:
     name: Ocr tests (${{ matrix.label }})
     runs-on: ${{ matrix.os }}

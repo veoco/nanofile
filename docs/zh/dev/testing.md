@@ -11,8 +11,10 @@ cargo nextest run --workspace
 进程级沙箱状态不会影响另一个。`cargo test --workspace` 仍会跑同一套测试，但
 合并后的集成测试 group 每个 target 共享一个进程，所以全量套件的隔离契约以
 nextest 为准，而不是 libtest。nextest 不跑文档测试，另外用
-`cargo test --workspace --doc` 跑。OCR 用例最慢，单独放在 `ocr-tests` job 里跑
-（linux-amd64、macos-arm64 与 windows-amd64），与主套件并行。
+`cargo test --workspace --doc` 跑。OCR 用例单独放在 `ocr-tests` job 里跑
+（linux-amd64、macos-arm64 与 windows-amd64），与主套件并行，用来覆盖各平台的
+沙箱模型 profile；test profile 会给推理内核开优化（见根 `Cargo.toml`），所以这个
+job 的耗时由构建而不是模型前向决定。
 
 它会跑单元测试与 `server/tests/` 下的集成测试；文档测试用上面的
 `cargo test --workspace --doc`。workspace 套件是主门禁。`server/tests/docs_api_reference_test.rs` 把 API 参考与路由表、被链接的显式锚点钉在一起，见 [API 参考](/zh/reference/api/)。docs workflow 还会跑 `npm run --prefix docs check`，比较中英页面集合、指南标题层级、内部链接与锚点，以及 sidebar 覆盖，见[文档](/zh/dev/documentation)。

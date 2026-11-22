@@ -12,9 +12,11 @@ every test its own process, so one test's process-global sandbox state cannot
 reach another. `cargo test --workspace` still runs the same tests, but the
 grouped integration targets share one process per target, so the full-suite
 isolation contract is nextest's, not libtest's. nextest does not run doctests,
-so run `cargo test --workspace --doc` too. The OCR cases are the slowest in the
-suite and run in their own `ocr-tests` job on linux-amd64, macos-arm64 and
-windows-amd64, in parallel with the main rows.
+so run `cargo test --workspace --doc` too. The OCR cases run in their own
+`ocr-tests` job on linux-amd64, macos-arm64 and windows-amd64, in parallel with
+the main rows: they exercise each platform's sandboxed model profile. The test
+profile optimizes the inference kernels (see the root `Cargo.toml`), so the job
+is build-bound rather than model-bound.
 
 This runs the unit tests and the integration tests under `server/tests/`; the
 doctest command above covers the documentation tests. The workspace suite is the main gate. `server/tests/docs_api_reference_test.rs`

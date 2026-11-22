@@ -20,7 +20,9 @@ path = "junit.xml"
 
 # The in-process OCR gate in `index_test` is per test process, which under
 # nextest means per test. Cap the group here so two model passes run at a time,
-# the concurrency the server itself admits.
+# the concurrency the server itself admits. The cap is resource control, not a
+# slow-test workaround: the test profile optimizes the inference kernels (root
+# Cargo.toml), so a full OCR-filtered run is seconds, not minutes.
 [test-groups]
 ocr = { max-threads = 2 }
 
