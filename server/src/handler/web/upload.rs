@@ -717,102 +717,6 @@ async fn try_handle_chunked(
 ///
 /// Used instead of axum's `Multipart` extractor, which fails with 400 on the Qt
 /// desktop client's uploads.
-#[cfg(test)]
-fn parse_multipart(data: &[u8], boundary: &str) -> MultipartResult {
-    let boundary_str = format!("--{}", boundary);
-    let btag = boundary_str.as_bytes();
-    let crlf_btag = format!("\r\n--{}", boundary);
-    let crlf_btag_bytes = crlf_btag.as_bytes();
-
-    let mut result = MultipartResult {
-        fields: std::collections::HashMap::new(),
-        file_name: None,
-        file_data: None,
-    };
-
-    let mut pos = 0;
-
-    loop {
-        // The first boundary has no leading CRLF.
-        let boundary_start = if pos == 0 && data[pos..].starts_with(btag) {
-            pos
-        } else if let Some(off) = data[pos..]
-            .windows(crlf_btag_bytes.len())
-            .position(|w| w == crlf_btag_bytes)
-        {
-            pos + off
-        } else {
-            break;
-        };
-
-        let mut boundary_end = boundary_start + btag.len();
-        if boundary_end + 2 <= data.len() && &data[boundary_end..boundary_end + 2] == b"--" {
-            break; // closing boundary
-        }
-        if boundary_end + 2 <= data.len() && &data[boundary_end..boundary_end + 2] == b"\r\n" {
-            boundary_end += 2;
-        }
-        pos = boundary_end;
-
-        if let Some(hdr_end) = data[pos..].windows(4).position(|w| w == b"\r\n\r\n") {
-            let hdr = String::from_utf8_lossy(&data[pos..pos + hdr_end]);
-            pos += hdr_end + 4;
-
-            let body_end = if let Some(next_off) = data[pos..]
-                .windows(crlf_btag_bytes.len())
-                .position(|w| w == crlf_btag_bytes)
-            {
-                next_off
-            } else {
-                data.len() - pos
-            };
-            let body = &data[pos..pos + body_end];
-            pos += body_end;
-
-            // Trim the trailing CRLF that belongs to the boundary.
-            let body = body
-                .strip_suffix(b"\r\n")
-                .or_else(|| body.strip_suffix(b"\n"))
-                .unwrap_or(body);
-
-            let field_name = hdr
-                .split(';')
-                .find_map(|s| s.trim().strip_prefix("name=\"")?.split('"').next())
-                .unwrap_or("");
-
-            // Extract filename — handle both single-line and multi-line headers.
-            // Qt sends `filename="value"\r\nContent-Type: ...`, so split on `"`
-            // rather than using strip_suffix('"').
-            if let Some(fname) = hdr.split(';').find_map(|s| {
-                let s = s.trim();
-                s.strip_prefix("filename=\"")
-                    .and_then(|rest| rest.split('"').next())
-                    .map(|s| s.to_string())
-            }) {
-                result.file_name = Some(fname.to_string());
-                result.file_data = Some(body.to_vec());
-                result
-                    .fields
-                    .insert(field_name.to_string(), fname.to_string());
-            } else {
-                result.fields.insert(
-                    field_name.to_string(),
-                    String::from_utf8_lossy(body).to_string(),
-                );
-            }
-        }
-    }
-
-    result
-}
-
-#[cfg(test)]
-struct MultipartResult {
-    fields: std::collections::HashMap<String, String>,
-    file_name: Option<String>,
-    file_data: Option<Vec<u8>>,
-}
-
 /// `POST /upload-aj/` — AJAX file upload from the Seahub web UI (no token),
 /// taking `file`, `repo_id`, `parent_dir` and optional `relative_path` fields.
 pub async fn upload_aj(
@@ -827,58 +731,26 @@ pub async fn upload_aj(
     // A full-size precheck would reject a legitimate same-size overwrite near the
     // quota; the commit-time delta check is authoritative and failure cleanup
     // removes any blocks this request created.
-    let boundary = extract_multipart_boundary(&headers)?;
-    // Multer's Multipart consumes the raw body stream, so the file part can be
-    // read incrementally via `field.chunk()` (axum's extractor offers only
-    // whole-field `bytes()`).
-    let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
-
-    let mut fields: HashMap<String, String> = HashMap::new();
-    // Resumable uploads need the whole chunk in hand, so they keep the buffered read.
+    //
+    // Non-chunked uploads are staged on disk here and only ingested after the
+    // session checks below pass; a `Content-Range` chunk is buffered instead.
+    let is_chunked = headers.contains_key("content-range");
     let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let is_chunked = content_range.is_some();
-    let mut chunked_file: Option<(String, Vec<u8>)> = None;
-    // Non-chunked uploads are staged on disk, ingested only after authorization.
-    let mut staged_files: Vec<StagedFile> = Vec::new();
-    let staging_dir = upload_staging_dir(&state);
-
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
-    {
-        let name = field.name().unwrap_or("").to_string();
-        if name == "file" {
-            let filename = field.file_name().unwrap_or("unknown").to_string();
-            if is_chunked {
-                if chunked_file.is_some() {
-                    return Err(AppError::BadRequest("More files in one request".into()));
-                }
-                let data = read_chunked_field(
-                    &mut field,
-                    content_range,
-                    state.config().server.max_chunk_size_mb * 1024 * 1024,
-                )
-                .await?;
-                chunked_file = Some((filename, data));
-            } else {
-                let (path, _size) =
-                    stage_file_field(&mut field, &staging_dir, max_upload_bytes(&state)).await?;
-                staged_files.push(StagedFile {
-                    filename,
-                    staged: StagedUpload(Some(path)),
-                });
-            }
-        } else {
-            fields.insert(
-                name,
-                field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
-            );
+    let mode = if is_chunked {
+        IntakeMode::Chunk {
+            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
         }
-    }
+    } else {
+        IntakeMode::Stage {
+            dir: upload_staging_dir(&state),
+            max_bytes: max_upload_bytes(&state),
+        }
+    };
+    let Parts {
+        fields,
+        files: staged_files,
+        chunked,
+    } = read_parts(&state, mode, body, &headers, usize::MAX).await?;
 
     let repo_id = fields
         .get("repo_id")
@@ -911,7 +783,7 @@ pub async fn upload_aj(
 
     if is_chunked {
         let (filename, file_data) =
-            chunked_file.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
         if file_data.is_empty() {
             return Err(AppError::BadRequest("No file in multipart form".into()));
         }
@@ -945,27 +817,13 @@ pub async fn upload_aj(
 
     // Ingest the staged bytes now that the caller is authorized; each guard
     // removes its staging file on every exit path.
-    let mut files = Vec::with_capacity(staged_files.len());
-    for staged in staged_files {
-        let Some(path) = staged.path() else {
-            continue;
-        };
-        let (block_ids, total_size, new_block_ids) = ingest_staged_file(
-            state.block_store.clone(),
-            repo_id,
-            path.to_path_buf(),
-            auth.enc_key_ref(),
-        )
-        .await?;
-        files.push(UploadedFile {
-            filename: staged.filename.clone(),
-            block_ids,
-            total_size,
-            new_block_ids,
-            mtime: None,
-        });
-        // `staged` drops here, removing the staging file.
-    }
+    let mut files = ingest_parts(
+        staged_files,
+        state.block_store.clone(),
+        repo_id,
+        auth.enc_key_ref(),
+    )
+    .await?;
     assign_mtimes(&mut files, &fields);
     if !target.replace && duplicate_file_names(&files) {
         return Err(AppError::BadRequest("Too many files with same name".into()));
@@ -998,20 +856,178 @@ fn extract_multipart_boundary(headers: &HeaderMap) -> Result<String, AppError> {
         .ok_or_else(|| AppError::BadRequest("missing multipart boundary".into()))
 }
 
-/// Stream a multipart file field straight into content-defined blocks in the
-/// block store, so the file is never fully buffered in memory; `Chunker::new(0)`
-/// uses seafile's fixed 8 MiB avg / 6 MiB min / 10 MiB max sizes.
+/// A file part as it came off the wire.
+///
+/// Token endpoints authenticate before the body, so their parts are already
+/// ingested into blocks; session endpoints carry `repo_id` in the body, so their
+/// bytes wait in a staging file until authorization passes.
+enum PartFile {
+    Ingested(UploadedFile),
+    Staged {
+        filename: String,
+        staged: StagedUpload,
+    },
+}
+
+impl PartFile {
+    /// Turn a part into an ingested file, running the CDC pass for a staged one.
+    async fn into_uploaded(
+        self,
+        store: infra::storage::DynBlockStorage,
+        repo_id: &str,
+        enc_key: Option<(&[u8], &[u8])>,
+    ) -> Result<UploadedFile, AppError> {
+        match self {
+            PartFile::Ingested(file) => Ok(file),
+            PartFile::Staged { filename, staged } => {
+                let Some(path) = staged.path() else {
+                    return Err(AppError::BadRequest("No file in multipart form".into()));
+                };
+                let (block_ids, total_size, new_block_ids) =
+                    ingest_staged_file(store, repo_id, path.to_path_buf(), enc_key).await?;
+                Ok(UploadedFile {
+                    filename,
+                    block_ids,
+                    total_size,
+                    new_block_ids,
+                    mtime: None,
+                })
+            }
+        }
+    }
+}
+
+/// Turn every part of a parsed request into an ingested file.
+async fn ingest_parts(
+    parts: Vec<PartFile>,
+    store: infra::storage::DynBlockStorage,
+    repo_id: &str,
+    enc_key: Option<(&[u8], &[u8])>,
+) -> Result<Vec<UploadedFile>, AppError> {
+    let mut files = Vec::with_capacity(parts.len());
+    for part in parts {
+        files.push(part.into_uploaded(store.clone(), repo_id, enc_key).await?);
+    }
+    Ok(files)
+}
+
+/// How a multipart body is taken in.
+enum IntakeMode {
+    /// Token endpoints: the repository is known before the body, so each file
+    /// part streams straight into the block store.
+    Stream {
+        repo_id: String,
+        enc_key: Option<(Vec<u8>, Vec<u8>)>,
+    },
+    /// Session endpoints: `repo_id` is in the body, so bytes go to a staging file
+    /// until authorization passes.
+    Stage {
+        dir: std::path::PathBuf,
+        max_bytes: u64,
+    },
+    /// `Content-Range`: exactly one chunk, buffered because the resumable path
+    /// needs it whole.
+    Chunk { max_chunk_bytes: u64 },
+}
+
+/// A parsed multipart request.
+struct Parts {
+    fields: HashMap<String, String>,
+    files: Vec<PartFile>,
+    /// The single chunk of a `Content-Range` request.
+    chunked: Option<(String, Vec<u8>)>,
+}
+
+/// Read the multipart body in one of the three intake modes.
+///
+/// `max_files` is 1 for the update endpoints (a second part answers
+/// `More files in one request`) and unbounded for the upload ones; a chunked
+/// request is always exactly one file.
+async fn read_parts(
+    state: &AppState,
+    mode: IntakeMode,
+    body: axum::body::Body,
+    headers: &HeaderMap,
+    max_files: usize,
+) -> Result<Parts, AppError> {
+    let boundary = extract_multipart_boundary(headers)?;
+    let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
+    let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
+
+    let mut parts = Parts {
+        fields: HashMap::new(),
+        files: Vec::new(),
+        chunked: None,
+    };
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name != "file" {
+            parts.fields.insert(
+                name,
+                field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
+            );
+            continue;
+        }
+        let seen = parts.files.len() + usize::from(parts.chunked.is_some());
+        if seen >= max_files {
+            return Err(AppError::BadRequest("More files in one request".into()));
+        }
+        let filename = field.file_name().unwrap_or("unknown").to_string();
+        match &mode {
+            IntakeMode::Chunk { max_chunk_bytes } => {
+                let data = read_chunked_field(&mut field, content_range, *max_chunk_bytes).await?;
+                parts.chunked = Some((filename, data));
+            }
+            IntakeMode::Stage { dir, max_bytes } => {
+                let (path, _) = stage_file_field(&mut field, dir, *max_bytes).await?;
+                parts.files.push(PartFile::Staged {
+                    filename,
+                    staged: StagedUpload(Some(path)),
+                });
+            }
+            IntakeMode::Stream { repo_id, enc_key } => {
+                let key = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+                let (block_ids, total_size, new_block_ids) =
+                    stream_file_into_blocks(state.block_store.clone(), repo_id, field, key).await?;
+                parts.files.push(PartFile::Ingested(UploadedFile {
+                    filename,
+                    block_ids,
+                    total_size,
+                    new_block_ids,
+                    mtime: None,
+                }));
+            }
+        }
+    }
+    Ok(parts)
+}
+
+/// A byte stream fed to the CDC chunker.
+type ChunkStream<'a> = futures::stream::BoxStream<'a, Result<bytes::Bytes, AppError>>;
+
+/// CDC a byte stream straight into content-defined blocks in the block store, so
+/// a file is never fully buffered in memory; `Chunker::new(0)` uses seafile's
+/// fixed 8 MiB avg / 6 MiB min / 10 MiB max sizes.
 ///
 /// `enc_key` is the library block key for an encrypted repository (see
 /// `upload_block_key`); when set, each block is encrypted before it is stored
 /// and its id becomes `sha1(ciphertext)`, the Seafile convention
 /// (`common/fs-mgr.c:707-721` hashes the encrypted buffer).
-pub(crate) async fn stream_file_into_blocks(
+async fn ingest(
     store: infra::storage::DynBlockStorage,
     repo_id: &str,
-    field: &mut multer::Field<'_>,
     enc_key: Option<(&[u8], &[u8])>,
+    mut stream: ChunkStream<'_>,
 ) -> Result<(Vec<String>, i64, Vec<String>), AppError> {
+    use futures::StreamExt;
+
     crate::fs::core::FileOps::stream_blocks_pipelined(
         &store,
         repo_id,
@@ -1020,12 +1036,9 @@ pub(crate) async fn stream_file_into_blocks(
             let mut chunker = infra::storage::cdc::Chunker::new(0);
             let mut total_size = 0i64;
             let mut idx = 0usize;
-            while let Some(c) = field
-                .chunk()
-                .await
-                .map_err(|e| AppError::Internal(format!("file read error: {e}")))?
-            {
-                for block in chunker.feed(&c) {
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                for block in chunker.feed(&chunk) {
                     total_size += block.len() as i64;
                     tx.send((idx, block))
                         .await
@@ -1044,6 +1057,41 @@ pub(crate) async fn stream_file_into_blocks(
         },
     )
     .await
+}
+
+/// The block-streaming half of [`ingest`], for a multipart file part. Still
+/// `pub(crate)`: `/api2/repos/{id}/file/` streams its one part the same way.
+pub(crate) async fn stream_file_into_blocks(
+    store: infra::storage::DynBlockStorage,
+    repo_id: &str,
+    field: multer::Field<'_>,
+    enc_key: Option<(&[u8], &[u8])>,
+) -> Result<(Vec<String>, i64, Vec<String>), AppError> {
+    use futures::StreamExt;
+
+    let stream: ChunkStream<'_> = Box::pin(
+        field.map(|chunk| chunk.map_err(|e| AppError::Internal(format!("file read error: {e}")))),
+    );
+    ingest(store, repo_id, enc_key, stream).await
+}
+
+/// CDC a staged file into the block store (called only after authorization).
+async fn ingest_staged_file(
+    store: infra::storage::DynBlockStorage,
+    repo_id: &str,
+    path: std::path::PathBuf,
+    enc_key: Option<(&[u8], &[u8])>,
+) -> Result<(Vec<String>, i64, Vec<String>), AppError> {
+    use futures::StreamExt;
+
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| AppError::Internal(format!("open staged file: {e}")))?;
+    let stream: ChunkStream<'_> = Box::pin(
+        tokio_util::io::ReaderStream::new(file)
+            .map(|chunk| chunk.map_err(|e| AppError::Internal(format!("read staged file: {e}")))),
+    );
+    ingest(store, repo_id, enc_key, stream).await
 }
 
 /// A multipart file staged on disk before authorization.
@@ -1105,58 +1153,6 @@ async fn stage_file_field(
     Ok((path, size))
 }
 
-/// CDC a staged file into the block store (called only after authorization).
-///
-/// `enc_key` behaves exactly as in [`stream_file_into_blocks`].
-async fn ingest_staged_file(
-    store: infra::storage::DynBlockStorage,
-    repo_id: &str,
-    path: std::path::PathBuf,
-    enc_key: Option<(&[u8], &[u8])>,
-) -> Result<(Vec<String>, i64, Vec<String>), AppError> {
-    use tokio::io::AsyncReadExt;
-
-    crate::fs::core::FileOps::stream_blocks_pipelined(
-        &store,
-        repo_id,
-        enc_key,
-        move |tx| async move {
-            let mut file = tokio::fs::File::open(&path)
-                .await
-                .map_err(|e| AppError::Internal(format!("open staged file: {e}")))?;
-            let mut chunker = infra::storage::cdc::Chunker::new(0);
-            let mut total_size = 0i64;
-            let mut idx = 0usize;
-            let mut buf = vec![0u8; 64 * 1024];
-            loop {
-                let n = file
-                    .read(&mut buf)
-                    .await
-                    .map_err(|e| AppError::Internal(format!("read staged file: {e}")))?;
-                if n == 0 {
-                    break;
-                }
-                for block in chunker.feed(&buf[..n]) {
-                    total_size += block.len() as i64;
-                    tx.send((idx, block))
-                        .await
-                        .map_err(|_| AppError::Internal("block writer stopped".into()))?;
-                    idx += 1;
-                }
-            }
-            let last = chunker.finish();
-            if !last.is_empty() {
-                total_size += last.len() as i64;
-                tx.send((idx, last))
-                    .await
-                    .map_err(|_| AppError::Internal("block writer stopped".into()))?;
-            }
-            Ok(total_size)
-        },
-    )
-    .await
-}
-
 /// Staging directory for uploads whose authorization happens after parsing.
 fn upload_staging_dir(state: &AppState) -> std::path::PathBuf {
     state.config().storage.temp_dir.join("staging")
@@ -1174,19 +1170,6 @@ struct UploadedFile {
     total_size: i64,
     new_block_ids: Vec<String>,
     mtime: Option<i64>,
-}
-
-/// One file staged on disk before authorization (session endpoints).
-struct StagedFile {
-    filename: String,
-    /// Removes the staging file on drop.
-    staged: StagedUpload,
-}
-
-impl StagedFile {
-    fn path(&self) -> Option<&std::path::Path> {
-        self.staged.path()
-    }
 }
 
 /// Reject `parent_dir`/`relative_path` shapes the Go fileserver rejects:
@@ -1334,65 +1317,32 @@ pub async fn update_api(
     // of the budget. A Content-Length precheck cannot know that delta and used to
     // reject a same-size replacement near the quota; the commit-time check in
     // `upload_file_committed_stream` applies the correct delta instead.
-    let boundary = extract_multipart_boundary(&headers)?;
-    let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
+    let is_chunked = headers.contains_key("content-range");
     let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let is_chunked = content_range.is_some();
-
-    let mut repo_id = String::new();
-    let mut file_path = String::new();
-    let mut csrf_token: Option<String> = None;
-    let mut fields: HashMap<String, String> = HashMap::new();
-    // Stage the bytes on disk; authorization happens after parsing.
-    let mut staged: Option<StagedFile> = None;
-    let mut chunked_file: Option<Vec<u8>> = None;
-    let staging_dir = upload_staging_dir(&state);
-
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
-    {
-        let name = field.name().unwrap_or("").to_string();
-        if name == "file" {
-            if is_chunked {
-                if chunked_file.is_some() {
-                    return Err(AppError::BadRequest("More files in one request".into()));
-                }
-                chunked_file = Some(
-                    read_chunked_field(
-                        &mut field,
-                        content_range,
-                        state.config().server.max_chunk_size_mb * 1024 * 1024,
-                    )
-                    .await?,
-                );
-            } else {
-                if staged.is_some() {
-                    return Err(AppError::BadRequest("More files in one request".into()));
-                }
-                let (path, _size) =
-                    stage_file_field(&mut field, &staging_dir, max_upload_bytes(&state)).await?;
-                staged = Some(StagedFile {
-                    filename: field.file_name().unwrap_or("unknown").to_string(),
-                    staged: StagedUpload(Some(path)),
-                });
-            }
-        } else {
-            let val = field
-                .text()
-                .await
-                .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?;
-            if name == "repo_id" {
-                repo_id = val.clone();
-            } else if name == "csrf_token" {
-                csrf_token = Some(val.clone());
-            } else if name == "p" || name == "path" {
-                file_path = val.clone();
-            }
-            fields.insert(name, val);
+    let mode = if is_chunked {
+        IntakeMode::Chunk {
+            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
         }
-    }
+    } else {
+        IntakeMode::Stage {
+            dir: upload_staging_dir(&state),
+            max_bytes: max_upload_bytes(&state),
+        }
+    };
+    // An update carries exactly one file part.
+    let Parts {
+        fields,
+        files,
+        chunked,
+    } = read_parts(&state, mode, body, &headers, 1).await?;
+
+    let repo_id = fields.get("repo_id").cloned().unwrap_or_default();
+    let file_path = fields
+        .get("p")
+        .or_else(|| fields.get("path"))
+        .cloned()
+        .unwrap_or_default();
+    let csrf_token = fields.get("csrf_token").cloned();
 
     if file_path.is_empty() {
         return Err(AppError::BadRequest("Path is missing.".into()));
@@ -1407,8 +1357,8 @@ pub async fn update_api(
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
     if is_chunked {
-        let file_data =
-            chunked_file.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+        let (_, file_data) =
+            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
         if file_data.is_empty() {
             return Err(AppError::BadRequest("No file in multipart form".into()));
         }
@@ -1436,19 +1386,12 @@ pub async fn update_api(
         ));
     }
 
-    let Some(staged) = staged else {
+    let Some(part) = files.into_iter().next() else {
         return Err(AppError::BadRequest("No file in multipart form".into()));
     };
-    let Some(path) = staged.path() else {
-        return Err(AppError::BadRequest("No file in multipart form".into()));
-    };
-    let (block_ids, total_size, new_block_ids) = ingest_staged_file(
-        state.block_store.clone(),
-        &repo_id,
-        path.to_path_buf(),
-        auth.enc_key_ref(),
-    )
-    .await?;
+    let file = part
+        .into_uploaded(state.block_store.clone(), &repo_id, auth.enc_key_ref())
+        .await?;
     let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
     // Update semantics: overwrite in place, and commit zero-byte files too.
     let committed = commit_file(
@@ -1457,13 +1400,13 @@ pub async fn update_api(
             repo_id: &repo_id,
             dir: &target.dir,
             name: &target.name,
-            block_ids,
-            total_size,
+            block_ids: file.block_ids,
+            total_size: file.total_size,
             modifier: &auth.modifier,
             user_id: Some(auth.user_id),
             ensure_dir: true,
             replace: true,
-            new_block_ids,
+            new_block_ids: file.new_block_ids,
             mtime,
         },
     )
@@ -1481,53 +1424,24 @@ pub async fn update_aj(
 ) -> Result<axum::response::Response, AppError> {
     // See `update_api`: an update replaces the file, so only the commit-time
     // size delta is a correct quota check.
-    let boundary = extract_multipart_boundary(&headers)?;
-    let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
-
-    let mut fields: HashMap<String, String> = HashMap::new();
+    let is_chunked = headers.contains_key("content-range");
     let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let is_chunked = content_range.is_some();
-    let mut chunked_file_data: Option<Vec<u8>> = None;
-    // Non-chunked uploads are staged on disk until authorization passes.
-    let mut staged_path: Option<std::path::PathBuf> = None;
-    let mut file_seen = false;
-    let staging_dir = upload_staging_dir(&state);
-
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
-    {
-        let name = field.name().unwrap_or("").to_string();
-        if name == "file" {
-            if file_seen {
-                return Err(AppError::BadRequest("More files in one request".into()));
-            }
-            file_seen = true;
-            if is_chunked {
-                chunked_file_data = Some(
-                    read_chunked_field(
-                        &mut field,
-                        content_range,
-                        state.config().server.max_chunk_size_mb * 1024 * 1024,
-                    )
-                    .await?,
-                );
-            } else {
-                let (path, _size) =
-                    stage_file_field(&mut field, &staging_dir, max_upload_bytes(&state)).await?;
-                staged_path = Some(path);
-            }
-        } else {
-            fields.insert(
-                name,
-                field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
-            );
+    let mode = if is_chunked {
+        IntakeMode::Chunk {
+            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
         }
-    }
+    } else {
+        IntakeMode::Stage {
+            dir: upload_staging_dir(&state),
+            max_bytes: max_upload_bytes(&state),
+        }
+    };
+    // An update carries exactly one file part.
+    let Parts {
+        fields,
+        files,
+        chunked,
+    } = read_parts(&state, mode, body, &headers, 1).await?;
 
     let repo_id = fields
         .get("repo_id")
@@ -1548,7 +1462,9 @@ pub async fn update_aj(
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
     if is_chunked {
-        let file_data = bytes::Bytes::from(chunked_file_data.unwrap_or_default());
+        let (_, file_data) =
+            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+        let file_data = bytes::Bytes::from(file_data);
         if file_data.is_empty() {
             return Err(AppError::BadRequest("No file in multipart form".into()));
         }
@@ -1576,18 +1492,12 @@ pub async fn update_aj(
         ));
     }
 
-    let staged = StagedUpload(staged_path);
-    let Some(path) = staged.path() else {
+    let Some(part) = files.into_iter().next() else {
         return Err(AppError::BadRequest("No file in multipart form".into()));
     };
-    let ingested = ingest_staged_file(
-        state.block_store.clone(),
-        repo_id,
-        path.to_path_buf(),
-        auth.enc_key_ref(),
-    )
-    .await;
-    let (block_ids, total_size, new_block_ids) = ingested?;
+    let file = part
+        .into_uploaded(state.block_store.clone(), repo_id, auth.enc_key_ref())
+        .await?;
     let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
     // Update semantics: overwrite in place, and commit zero-byte files too.
     let committed = commit_file(
@@ -1596,13 +1506,13 @@ pub async fn update_aj(
             repo_id,
             dir: &target.dir,
             name: &target.name,
-            block_ids,
-            total_size,
+            block_ids: file.block_ids,
+            total_size: file.total_size,
             modifier: &auth.modifier,
             user_id: Some(auth.user_id),
             ensure_dir: true,
             replace: true,
-            new_block_ids,
+            new_block_ids: file.new_block_ids,
             mtime,
         },
     )
@@ -1625,60 +1535,25 @@ pub async fn upload_aj_token(
     // replace an existing file, so only the commit-time size delta is correct.
     // This matches `/upload-aj/` and `/upload-api/`; the commit removes the
     // blocks it wrote when the delta does not fit.
-    let boundary = extract_multipart_boundary(&headers)?;
-    let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
-
-    let mut fields: HashMap<String, String> = HashMap::new();
+    let is_chunked = headers.contains_key("content-range");
     let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let is_chunked = content_range.is_some();
-    let mut chunked_file: Option<(String, Vec<u8>)> = None;
-    let mut files: Vec<UploadedFile> = Vec::new();
-
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
-    {
-        let name = field.name().unwrap_or("").to_string();
-        if name == "file" {
-            let filename = field.file_name().unwrap_or("unknown").to_string();
-            if is_chunked {
-                if chunked_file.is_some() {
-                    return Err(AppError::BadRequest("More files in one request".into()));
-                }
-                let data = read_chunked_field(
-                    &mut field,
-                    content_range,
-                    state.config().server.max_chunk_size_mb * 1024 * 1024,
-                )
-                .await?;
-                chunked_file = Some((filename, data));
-            } else {
-                let (block_ids, total_size, new_block_ids) = stream_file_into_blocks(
-                    state.block_store.clone(),
-                    &auth.repo_id,
-                    &mut field,
-                    auth.enc_key_ref(),
-                )
-                .await?;
-                files.push(UploadedFile {
-                    filename,
-                    block_ids,
-                    total_size,
-                    new_block_ids,
-                    mtime: None,
-                });
-            }
-        } else {
-            fields.insert(
-                name,
-                field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
-            );
+    let mode = if is_chunked {
+        IntakeMode::Chunk {
+            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
         }
-    }
+    } else {
+        // The token already names the repository, so bytes stream straight to
+        // blocks instead of waiting in a staging file.
+        IntakeMode::Stream {
+            repo_id: auth.repo_id.clone(),
+            enc_key: auth.enc_key.clone(),
+        }
+    };
+    let Parts {
+        fields,
+        files,
+        chunked,
+    } = read_parts(&state, mode, body, &headers, usize::MAX).await?;
 
     // The public upload page posts only the `file` part and relies on the minted
     // token for the directory, so a body without `parent_dir` keeps that default
@@ -1701,7 +1576,7 @@ pub async fn upload_aj_token(
 
     if is_chunked {
         let (filename, file_data) =
-            chunked_file.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
         if file_data.is_empty() {
             return Err(AppError::BadRequest("No file in multipart form".into()));
         }
@@ -1733,6 +1608,13 @@ pub async fn upload_aj_token(
     if files.is_empty() {
         return Err(AppError::BadRequest("No file in multipart form".into()));
     }
+    let mut files = ingest_parts(
+        files,
+        state.block_store.clone(),
+        &auth.repo_id,
+        auth.enc_key_ref(),
+    )
+    .await?;
     assign_mtimes(&mut files, &fields);
     if !target.replace && duplicate_file_names(&files) {
         return Err(AppError::BadRequest("Too many files with same name".into()));
@@ -1763,90 +1645,44 @@ pub async fn upload_api(
     Path(token): Path<String>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Result<axum::response::Response, AppError> {
-    let ct = req
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_owned())
-        .unwrap_or_default();
+    let (parts, body) = req.into_parts();
+    let headers = parts.headers;
+    // The query has to be captured before the request body is consumed.
+    let query = query_params(&parts.uri);
     // Resumable uploads reach this endpoint: the Qt desktop client fetches
     // `api2/repos/{id}/upload-link/` and chunks files over 100 MB
     // (`ReliablePostFileTask`). A chunk must go through the temp-file / assembly
     // path — streaming it straight into blocks would commit it as a whole file,
     // and that path is also where the declared size is reserved against quota.
-    let content_range = req
-        .headers()
+    let is_chunked = headers.contains_key("content-range");
+    let content_range = headers
         .get("content-range")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_owned());
+        .map(str::to_owned);
     let auth = AuthContext::from_token(&state, &token, TokenKind::Upload).await?;
 
     // This token can name a replacement, so a full Content-Length precheck would
     // reject a same-size overwrite near the quota. The commit-time delta check is
     // authoritative.
-
+    //
     // Qt's QHttpMultiPart sends a quoted boundary (`boundary="_.Seafile._UUID"`)
-    // while the body uses the unquoted form, so strip surrounding quotes. The
-    // body is consumed as a stream so the file is never buffered.
-    let boundary = ct
-        .split("boundary=")
-        .nth(1)
-        .map(|s| s.trim().trim_matches('"').to_string())
-        .ok_or_else(|| AppError::BadRequest("missing boundary".into()))?;
-    // The query has to be captured before the request body is consumed.
-    let query = query_params(req.uri());
-    let mut multipart = multer::Multipart::new(req.into_body().into_data_stream(), boundary);
-
-    let mut fields: HashMap<String, String> = HashMap::new();
-    let mut chunked_file: Option<(String, Vec<u8>)> = None;
-    let mut files: Vec<UploadedFile> = Vec::new();
-    let is_chunked = content_range.is_some();
-
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
-    {
-        let name = field.name().unwrap_or("").to_string();
-        if name == "file" {
-            let filename = field.file_name().unwrap_or("unknown").to_string();
-            if is_chunked {
-                if chunked_file.is_some() {
-                    return Err(AppError::BadRequest("More files in one request".into()));
-                }
-                let data = read_chunked_field(
-                    &mut field,
-                    content_range.as_deref(),
-                    state.config().server.max_chunk_size_mb * 1024 * 1024,
-                )
-                .await?;
-                chunked_file = Some((filename, data));
-            } else {
-                let (block_ids, total_size, new_block_ids) = stream_file_into_blocks(
-                    state.block_store.clone(),
-                    &auth.repo_id,
-                    &mut field,
-                    auth.enc_key_ref(),
-                )
-                .await?;
-                files.push(UploadedFile {
-                    filename,
-                    block_ids,
-                    total_size,
-                    new_block_ids,
-                    mtime: None,
-                });
-            }
-        } else {
-            fields.insert(
-                name,
-                field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
-            );
+    // while the body uses the unquoted form; `extract_multipart_boundary` strips
+    // the quotes. The body is consumed as a stream so the file is never buffered.
+    let mode = if is_chunked {
+        IntakeMode::Chunk {
+            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
         }
-    }
+    } else {
+        IntakeMode::Stream {
+            repo_id: auth.repo_id.clone(),
+            enc_key: auth.enc_key.clone(),
+        }
+    };
+    let Parts {
+        fields,
+        files,
+        chunked,
+    } = read_parts(&state, mode, body, &headers, usize::MAX).await?;
 
     // Like the `-aj` token form, a missing `parent_dir` means the directory the
     // link was minted for; the desktop client sends it, older bodies may not.
@@ -1866,7 +1702,7 @@ pub async fn upload_api(
 
     if is_chunked {
         let (filename, file_data) =
-            chunked_file.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
         if file_data.is_empty() {
             return Err(AppError::BadRequest("No file in multipart form".into()));
         }
@@ -1897,6 +1733,13 @@ pub async fn upload_api(
     if files.is_empty() {
         return Err(AppError::BadRequest("No file in multipart form".into()));
     }
+    let mut files = ingest_parts(
+        files,
+        state.block_store.clone(),
+        &auth.repo_id,
+        auth.enc_key_ref(),
+    )
+    .await?;
     assign_mtimes(&mut files, &fields);
     if !target.replace && duplicate_file_names(&files) {
         return Err(AppError::BadRequest("Too many files with same name".into()));
@@ -1926,84 +1769,36 @@ pub async fn update_api_handler(
     Path(token): Path<String>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Result<axum::response::Response, AppError> {
-    let ct = req
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_owned())
-        .unwrap_or_default();
-
+    let (parts, body) = req.into_parts();
+    let headers = parts.headers;
+    // The query has to be captured before the request body is consumed.
+    let query = query_params(&parts.uri);
     let auth = AuthContext::from_token(&state, &token, TokenKind::Update).await?;
 
     // See `update_api`: this endpoint only replaces an existing file, so the
     // commit-time delta is the only correct quota check.
-    let content_range = req
-        .headers()
+    let is_chunked = headers.contains_key("content-range");
+    let content_range = headers
         .get("content-range")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_owned());
-    let is_chunked = content_range.is_some();
+        .map(str::to_owned);
 
-    let boundary = ct
-        .split("boundary=")
-        .nth(1)
-        .map(|s| s.trim().trim_matches('"').to_string())
-        .ok_or_else(|| AppError::BadRequest("missing boundary".into()))?;
-    // The query has to be captured before the request body is consumed.
-    let query = query_params(req.uri());
-    let mut multipart = multer::Multipart::new(req.into_body().into_data_stream(), boundary);
-
-    let mut fields: HashMap<String, String> = HashMap::new();
-    let mut file_seen = false;
-    let mut file: Option<UploadedFile> = None;
-    let mut chunked_file: Option<(String, Vec<u8>)> = None;
-
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
-    {
-        let name = field.name().unwrap_or("").to_string();
-        if name == "file" {
-            if file_seen {
-                return Err(AppError::BadRequest("More files in one request".into()));
-            }
-            file_seen = true;
-            let filename = field.file_name().unwrap_or("unknown").to_string();
-            if is_chunked {
-                let data = read_chunked_field(
-                    &mut field,
-                    content_range.as_deref(),
-                    state.config().server.max_chunk_size_mb * 1024 * 1024,
-                )
-                .await?;
-                chunked_file = Some((filename, data));
-            } else {
-                let (block_ids, total_size, new_block_ids) = stream_file_into_blocks(
-                    state.block_store.clone(),
-                    &auth.repo_id,
-                    &mut field,
-                    auth.enc_key_ref(),
-                )
-                .await?;
-                file = Some(UploadedFile {
-                    filename,
-                    block_ids,
-                    total_size,
-                    new_block_ids,
-                    mtime: None,
-                });
-            }
-        } else {
-            fields.insert(
-                name,
-                field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
-            );
+    let mode = if is_chunked {
+        IntakeMode::Chunk {
+            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
         }
-    }
+    } else {
+        IntakeMode::Stream {
+            repo_id: auth.repo_id.clone(),
+            enc_key: auth.enc_key.clone(),
+        }
+    };
+    // An update carries exactly one file part.
+    let Parts {
+        fields,
+        files,
+        chunked,
+    } = read_parts(&state, mode, body, &headers, 1).await?;
 
     let target_file = fields
         .get("target_file")
@@ -2019,7 +1814,7 @@ pub async fn update_api_handler(
 
     if is_chunked {
         let (_filename, data) =
-            chunked_file.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
         if data.is_empty() {
             return Err(AppError::BadRequest("No file in multipart form".into()));
         }
@@ -2047,9 +1842,12 @@ pub async fn update_api_handler(
         ));
     }
 
-    let Some(mut file) = file else {
+    let Some(part) = files.into_iter().next() else {
         return Err(AppError::BadRequest("No file in multipart form".into()));
     };
+    let mut file = part
+        .into_uploaded(state.block_store.clone(), &auth.repo_id, auth.enc_key_ref())
+        .await?;
     file.mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
     let committed = commit_uploads(
         &state,
@@ -2078,63 +1876,24 @@ pub async fn update_aj_token(
 ) -> Result<axum::response::Response, AppError> {
     let auth = AuthContext::from_token(&state, &token, TokenKind::Update).await?;
 
+    let is_chunked = headers.contains_key("content-range");
     let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let is_chunked = content_range.is_some();
-
-    let boundary = extract_multipart_boundary(&headers)?;
-    let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
-
-    let mut fields: HashMap<String, String> = HashMap::new();
-    let mut file_seen = false;
-    let mut file: Option<UploadedFile> = None;
-    let mut chunked_file: Option<(String, Vec<u8>)> = None;
-
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| AppError::Internal(format!("multipart error: {e}")))?
-    {
-        let name = field.name().unwrap_or("").to_string();
-        if name == "file" {
-            if file_seen {
-                return Err(AppError::BadRequest("More files in one request".into()));
-            }
-            file_seen = true;
-            let filename = field.file_name().unwrap_or("unknown").to_string();
-            if is_chunked {
-                let data = read_chunked_field(
-                    &mut field,
-                    content_range,
-                    state.config().server.max_chunk_size_mb * 1024 * 1024,
-                )
-                .await?;
-                chunked_file = Some((filename, data));
-            } else {
-                let (block_ids, total_size, new_block_ids) = stream_file_into_blocks(
-                    state.block_store.clone(),
-                    &auth.repo_id,
-                    &mut field,
-                    auth.enc_key_ref(),
-                )
-                .await?;
-                file = Some(UploadedFile {
-                    filename,
-                    block_ids,
-                    total_size,
-                    new_block_ids,
-                    mtime: None,
-                });
-            }
-        } else {
-            fields.insert(
-                name,
-                field
-                    .text()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("multipart field error: {e}")))?,
-            );
+    let mode = if is_chunked {
+        IntakeMode::Chunk {
+            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
         }
-    }
+    } else {
+        IntakeMode::Stream {
+            repo_id: auth.repo_id.clone(),
+            enc_key: auth.enc_key.clone(),
+        }
+    };
+    // An update carries exactly one file part.
+    let Parts {
+        fields,
+        files,
+        chunked,
+    } = read_parts(&state, mode, body, &headers, 1).await?;
 
     let target_file = fields
         .get("target_file")
@@ -2148,7 +1907,7 @@ pub async fn update_aj_token(
 
     if is_chunked {
         let (_filename, data) =
-            chunked_file.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
         if data.is_empty() {
             return Err(AppError::BadRequest("No file in multipart form".into()));
         }
@@ -2176,9 +1935,12 @@ pub async fn update_aj_token(
         ));
     }
 
-    let Some(mut file) = file else {
+    let Some(part) = files.into_iter().next() else {
         return Err(AppError::BadRequest("No file in multipart form".into()));
     };
+    let mut file = part
+        .into_uploaded(state.block_store.clone(), &auth.repo_id, auth.enc_key_ref())
+        .await?;
     file.mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
     let committed = commit_uploads(
         &state,
@@ -2515,172 +2277,4 @@ pub async fn upload_blks_api(
     }
 
     Ok(ok_json().into_response())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// OkHttp (used by the Android client) adds Content-Length to each part, so
-    /// field-name extraction must not assume Content-Disposition is the only
-    /// header: splitting on `"` instead of strip_suffix('"') keeps the name.
-    #[test]
-    fn test_parse_multipart_with_content_length() {
-        let boundary = "testboundary";
-        let body = format!(
-            "\
-            --{boundary}\r\n\
-            Content-Disposition: form-data; name=\"parent_dir\"\r\n\
-            Content-Length: 1\r\n\
-            \r\n\
-            /\r\n\
-            --{boundary}\r\n\
-            Content-Disposition: form-data; name=\"relative_path\"\r\n\
-            Content-Length: 16\r\n\
-            \r\n\
-            My Photos/Camera/\r\n\
-            --{boundary}--\r\n"
-        );
-
-        let result = parse_multipart(body.as_bytes(), boundary);
-        assert_eq!(
-            result.fields.get("parent_dir").map(|s| s.as_str()),
-            Some("/")
-        );
-        assert_eq!(
-            result.fields.get("relative_path").map(|s| s.as_str()),
-            Some("My Photos/Camera/")
-        );
-    }
-
-    #[test]
-    fn test_parse_multipart_simple() {
-        let boundary = "simple";
-        let body = format!(
-            "\
-            --{boundary}\r\n\
-            Content-Disposition: form-data; name=\"field1\"\r\n\
-            \r\n\
-            value1\r\n\
-            --{boundary}\r\n\
-            Content-Disposition: form-data; name=\"field2\"\r\n\
-            \r\n\
-            value2\r\n\
-            --{boundary}--\r\n"
-        );
-
-        let result = parse_multipart(body.as_bytes(), boundary);
-        assert_eq!(
-            result.fields.get("field1").map(|s| s.as_str()),
-            Some("value1")
-        );
-        assert_eq!(
-            result.fields.get("field2").map(|s| s.as_str()),
-            Some("value2")
-        );
-    }
-
-    #[test]
-    fn test_parse_multipart_with_file_and_content_type() {
-        let boundary = "filebound";
-        let body = format!(
-            "\
-            --{boundary}\r\n\
-            Content-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\n\
-            Content-Type: image/jpeg\r\n\
-            Content-Length: 10\r\n\
-            \r\n\
-            filedata\r\n\
-            --{boundary}--\r\n"
-        );
-
-        let result = parse_multipart(body.as_bytes(), boundary);
-        assert_eq!(result.file_name.as_deref(), Some("photo.jpg"));
-        assert_eq!(result.file_data.as_deref(), Some(&b"filedata"[..]));
-    }
-
-    /// Build a single-part multipart body carrying `data` as the `file` field.
-    fn multipart_body(boundary: &str, data: &[u8]) -> String {
-        format!(
-            "--{boundary}\r\n\
-             Content-Disposition: form-data; name=\"file\"; filename=\"f.bin\"\r\n\
-             Content-Type: application/octet-stream\r\n\r\n\
-             {}\r\n\
-             --{boundary}--\r\n",
-            String::from_utf8_lossy(data)
-        )
-    }
-
-    /// A chunk declaring more than the per-chunk cap is rejected from the header.
-    #[tokio::test]
-    async fn test_read_chunked_field_rejects_oversized_header() {
-        let body = multipart_body("HDRBOUND", b"hi");
-        let stream = futures_util::stream::once(async move {
-            Result::<bytes::Bytes, std::convert::Infallible>::Ok(bytes::Bytes::from(
-                body.into_bytes(),
-            ))
-        });
-        let mut multipart = multer::Multipart::new(stream, "HDRBOUND");
-        let mut field = multipart.next_field().await.unwrap().unwrap();
-
-        // Declared chunk is 4096 bytes, cap is 1024 — rejected from the header.
-        let err = read_chunked_field(&mut field, Some("bytes 0-4095/4096"), 1024)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, AppError::BadRequest(_)));
-    }
-
-    /// A client that lies about the header is cut off at the actual-bytes cap.
-    #[tokio::test]
-    async fn test_read_chunked_field_rejects_oversized_body() {
-        let body = multipart_body("BODYBOUND", b"01234567890123456789");
-        let stream = futures_util::stream::once(async move {
-            Result::<bytes::Bytes, std::convert::Infallible>::Ok(bytes::Bytes::from(
-                body.into_bytes(),
-            ))
-        });
-        let mut multipart = multer::Multipart::new(stream, "BODYBOUND");
-        let mut field = multipart.next_field().await.unwrap().unwrap();
-
-        // Header says 10 bytes (within the cap) but the actual body is 20.
-        let err = read_chunked_field(&mut field, Some("bytes 0-9/100"), 10)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, AppError::BadRequest(_)));
-    }
-
-    #[tokio::test]
-    async fn test_read_chunked_field_reads_valid_chunk() {
-        let body = multipart_body("OKBOUND", b"hello");
-        let stream = futures_util::stream::once(async move {
-            Result::<bytes::Bytes, std::convert::Infallible>::Ok(bytes::Bytes::from(
-                body.into_bytes(),
-            ))
-        });
-        let mut multipart = multer::Multipart::new(stream, "OKBOUND");
-        let mut field = multipart.next_field().await.unwrap().unwrap();
-
-        let data = read_chunked_field(&mut field, Some("bytes 0-4/100"), 1024)
-            .await
-            .unwrap();
-        assert_eq!(data, b"hello");
-    }
-
-    /// An unparsable Content-Range is rejected instead of reading unbounded.
-    #[tokio::test]
-    async fn test_read_chunked_field_without_range_rejects() {
-        let body = multipart_body("NORANGE", b"fullbody");
-        let stream = futures_util::stream::once(async move {
-            Result::<bytes::Bytes, std::convert::Infallible>::Ok(bytes::Bytes::from(
-                body.into_bytes(),
-            ))
-        });
-        let mut multipart = multer::Multipart::new(stream, "NORANGE");
-        let mut field = multipart.next_field().await.unwrap().unwrap();
-
-        let err = read_chunked_field(&mut field, None, 1024)
-            .await
-            .unwrap_err();
-        assert!(matches!(err, AppError::BadRequest(_)));
-    }
 }

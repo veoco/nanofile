@@ -198,7 +198,7 @@ pub async fn file_post_handler(
         .await?;
         let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
 
-        while let Some(mut field) = mp
+        while let Some(field) = mp
             .next_field()
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?
@@ -211,7 +211,7 @@ pub async fn file_post_handler(
                         crate::handler::web::upload::stream_file_into_blocks(
                             state.block_store.clone(),
                             &access.repo_id,
-                            &mut field,
+                            field,
                             enc_key_ref,
                         )
                         .await?;
