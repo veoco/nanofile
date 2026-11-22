@@ -236,8 +236,8 @@ pub(crate) const fn profile_wall_seconds(profile: Profile) -> u64 {
 /// scheduled. The value is process-wide CPU, summed across the child's threads, so a
 /// multi-threaded profile reaches it much sooner than the wall clock: a 15 s cap killed ffmpeg
 /// about four seconds into a 35 s media budget. It therefore follows the profile's own budget,
-/// with a little slack for the hard limit. The model profiles are single-threaded now (tract's
-/// CPU runtime does not enable its Rayon-backed matrix multiply), so CPU tracks wall clock.
+/// with a little slack for the hard limit. The model profiles are single-threaded: the inference
+/// runtime executes one forward pass on one thread, so CPU tracks wall clock.
 const fn cpu_limit_seconds(profile: Profile) -> (u64, u64) {
     let wall = profile_wall_seconds(profile);
     (wall, wall + 5)

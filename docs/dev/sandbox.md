@@ -61,14 +61,12 @@ every platform starts one by copying the process first. What bounds the helper i
 the files layer and the parent's timeout.
 
 `faces` and `ocr` are the profiles that run models. Faces has a 90 s wall clock and
-can split a large photo into nine forward passes; OCR has 180 s, loads four
-graphs, prepares fixed 224×224 and 160×80 orientation plans, a detection plan
-for the picture's size and recognition plans for the widths it meets, then runs
-one recognition per text line. tract's CPU runtime does not enable its multithreaded
-matrix multiply by default, so CPU tracks wall clock (with 5 s of hard-limit
-slack); the wall timeout is still the real bound. Neither starts a program or
-reads a file: HEIC/HEIF/AVIF frames are decoded by the media profile first, and
-only the decoded still is handed to them.
+can split a large photo into nine forward passes; OCR has 180 s, loads four models
+once and runs one forward pass for page orientation, detection and each text line.
+The inference runtime is single-threaded, so CPU tracks wall clock (with 5 s of
+hard-limit slack); the wall timeout is still the real bound. Neither starts a
+program or reads a file: HEIC/HEIF/AVIF frames are decoded by the media profile
+first, and only the decoded still is handed to them.
 
 ## Platform notes
 

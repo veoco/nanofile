@@ -28,7 +28,7 @@ pub struct DetectionSummary {
 /// The count is what becomes the `人物`/`单人`/`合影` tags. Nothing from this
 /// function is persisted except the count and the best score.
 pub fn detect(image: &DynamicImage, options: DetectOptions) -> Result<DetectionSummary, String> {
-    let model = YuNet::load()?;
+    let mut model = YuNet::load()?;
     let (width, height) = (image.width(), image.height());
     if width == 0 || height == 0 {
         return Ok(DetectionSummary::default());

@@ -1,4 +1,4 @@
-//! Automatic "people" tags from YuNet face detection, via tract.
+//! Automatic "people" tags from YuNet face detection, on the fixed-model runtime.
 //!
 //! This module is deliberately small: it detects faces and counts them. It does
 //! not produce embeddings, face crops or identities, so no biometric template is

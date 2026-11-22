@@ -1,4 +1,4 @@
-//! YuNet 2023mar, run as the published ONNX graph through tract.
+//! YuNet 2023mar, run as the published ONNX graph on the fixed-model runtime.
 //!
 //! The graph is tiny: a Conv/ReLU/MaxPool backbone, a three-level FPN, and four
 //! heads per level. The ONNX export already flattens each head to
@@ -6,15 +6,12 @@
 //! decodes the boxes. The landmarks are not read because the tag pipeline needs
 //! only boxes and scores.
 //!
-//! The published graph has a dynamic input shape; the caller letterboxes to
-//! 640x640, so this module prepares one plan for that one shape.
+//! The published graph declares a dynamic input shape; the caller letterboxes to
+//! 640x640, which is the only shape this module runs.
 
-use crate::inference;
+use crate::inference::{self, ModelKind};
 
 use super::preprocess::{INPUT_SIZE, Prepared};
-
-/// Embedded MIT-licensed YuNet weights, the upstream ONNX file unchanged.
-pub const WEIGHTS: &[u8] = include_bytes!("../../models/yunet.onnx");
 
 const STRIDES: [usize; 3] = [8, 16, 32];
 /// Number of outputs the published graph declares.
@@ -31,25 +28,26 @@ pub struct Face {
 }
 
 pub struct YuNet {
-    plan: tract::Runnable,
+    model: inference::Model,
+    outputs: Vec<inference::Tensor>,
 }
 
 impl YuNet {
     pub fn load() -> Result<Self, String> {
-        let model = inference::OnnxModel::load(WEIGHTS)?;
-        let spec = format!("1,3,{INPUT_SIZE},{INPUT_SIZE},f32");
-        let plan = model.plan(&spec)?;
-        Ok(Self { plan })
+        Ok(Self {
+            model: inference::Model::load(ModelKind::YuNet)?,
+            outputs: Vec::new(),
+        })
     }
 
     /// Run the detector on a prepared 640x640 BGR input.
-    pub fn forward(&self, prepared: &Prepared) -> Result<Vec<Face>, String> {
+    pub fn forward(&mut self, prepared: &Prepared) -> Result<Vec<Face>, String> {
         let dims = [1, 3, INPUT_SIZE as usize, INPUT_SIZE as usize];
-        let outputs = inference::run(&self.plan, &dims, &prepared.data)?;
-        if outputs.len() < OUTPUT_COUNT {
+        self.model.run(&dims, &prepared.data, &mut self.outputs)?;
+        if self.outputs.len() < OUTPUT_COUNT {
             return Err(format!(
                 "the YuNet graph returned {} outputs, expected {OUTPUT_COUNT}",
-                outputs.len()
+                self.outputs.len()
             ));
         }
 
@@ -58,9 +56,9 @@ impl YuNet {
         let mut faces = Vec::new();
         for (level, stride) in STRIDES.iter().enumerate() {
             decode_level(
-                &outputs[level],
-                &outputs[3 + level],
-                &outputs[6 + level],
+                &self.outputs[level],
+                &self.outputs[3 + level],
+                &self.outputs[6 + level],
                 *stride,
                 &mut faces,
             )?;
@@ -75,9 +73,9 @@ impl YuNet {
 /// The ONNX export already applied sigmoid to cls and obj and left the bbox
 /// channels raw, so the width/height are exponentiated here.
 fn decode_level(
-    cls: &tract::Tensor,
-    obj: &tract::Tensor,
-    bbox: &tract::Tensor,
+    cls: &inference::Tensor,
+    obj: &inference::Tensor,
+    bbox: &inference::Tensor,
     stride: usize,
     faces: &mut Vec<Face>,
 ) -> Result<(), String> {
@@ -183,7 +181,7 @@ mod tests {
         let bytes = include_bytes!("../../tests/fixtures/face_tags/portrait.jpg");
         let image = image::load_from_memory(bytes).expect("fixture");
         let prepared = super::super::preprocess::prepare(&image).expect("prepared");
-        let model = YuNet::load().expect("model");
+        let mut model = YuNet::load().expect("model");
         let faces = model.forward(&prepared).expect("forward");
         let best = faces
             .iter()

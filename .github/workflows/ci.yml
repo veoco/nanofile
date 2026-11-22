@@ -200,10 +200,15 @@ jobs:
           # `cargo tree` failing must fail the step too, so its output is taken
           # with an assignment rather than piped straight into `grep`.
           tree="$(cargo tree --workspace --prefix none)"
-          if printf '%s\n' "$tree" | grep -E '^(aws-lc-rs|aws-lc-sys|rav1e|ravif|zstd-sys|jieba-rs|tract-cuda|tract-metal|tract-wgpu|ort|ort-sys|onnxruntime|onnxruntime-sys|openblas-src|accelerate-src) v'; then
+          if printf '%s\n' "$tree" | grep -E '^(aws-lc-rs|aws-lc-sys|rav1e|ravif|zstd-sys|jieba-rs|tract(-[a-z0-9-]+)?|ort|ort-sys|onnxruntime|onnxruntime-sys|openblas-src|accelerate-src) v'; then
             echo "::error::A default feature pulled back in a dependency this project avoids; see the notes in server/Cargo.toml."
             exit 1
           fi
+      # The inference runtime is hand-written against plans generated from the
+      # unchanged ONNX files; the committed plans and the model bytes must not
+      # drift apart.
+      - name: Generated inference plans are current
+        run: python3 tools/models/export_plan.py --check
 
   # ── Linting off Linux ───────────────────────────────────────────────
   # `#[cfg(windows)]` and `#[cfg(target_os = "macos")]` code is not compiled on

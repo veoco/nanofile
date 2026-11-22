@@ -53,9 +53,10 @@ glyphs. The target is raster scan pages.
 ## Models
 
 PP-OCRv6 tiny (detection and recognition) and the PP-LCNet page and text-line
-orientation classifiers run through the pure-Rust `tract` runtime in the confined OCR
-worker. The models are compiled into the binary and never downloaded at runtime. They
-are Apache-2.0; sources, revisions and limits are in `server/models/MODEL_CARD.md`.
+orientation classifiers run on the server's own fixed-model runtime in the confined
+OCR worker. The ONNX files are embedded unchanged and their operator plans are
+generated at development time; nothing is downloaded at runtime. The models are
+Apache-2.0; sources, revisions and limits are in `server/models/MODEL_CARD.md`.
 
 PDF scan pages are rasterized by `hayro`, a pure-Rust renderer (Apache-2.0 OR MIT); the
 PDF text layer is still read by `lopdf`.

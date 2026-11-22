@@ -1,15 +1,21 @@
 //! Compliance checks for every embedded model. These do not exercise the
 //! pipelines; they make a missing/renamed model, an unreviewed licence, a
-//! changed hash or a graph tract cannot load a test failure rather than a
-//! runtime surprise.
+//! changed hash, or a stale generated inference plan a test failure rather than
+//! a runtime surprise.
 
 use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
-use tract::prelude::*;
 
 fn models_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models")
+}
+
+fn generated_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("inference")
+        .join("generated")
 }
 
 fn manifest() -> serde_json::Value {
@@ -23,6 +29,30 @@ fn model(name: &str) -> (serde_json::Value, Vec<u8>) {
     let entry = manifest["models"][name].clone();
     let bytes = std::fs::read(dir.join(entry["file"].as_str().expect("file"))).expect("model");
     (entry, bytes)
+}
+
+fn digest(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Pull `("/models/<file>")` and `source_sha256: "<digest>"` out of one
+/// generated plan module. The generated files are plain data; reading them here
+/// keeps the check independent of the private inference module.
+fn plan_provenance(text: &str) -> (String, String) {
+    let marker = "\"/models/";
+    let start = text.find(marker).expect("include_bytes model path") + marker.len();
+    let rest = &text[start..];
+    let end = rest.find('"').expect("closing quote");
+    let file = rest[..end].to_string();
+
+    let marker = "source_sha256: \"";
+    let start = text.find(marker).expect("source digest") + marker.len();
+    let rest = &text[start..];
+    let end = rest.find('"').expect("closing digest quote");
+    (file, rest[..end].to_string())
 }
 
 #[test]
@@ -39,11 +69,11 @@ fn every_embedded_model_matches_the_manifest() {
             entry["bytes"].as_u64().expect("bytes"),
             "{name}: manifest size"
         );
-        let digest: String = Sha256::digest(&bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        assert_eq!(digest, entry["sha256"].as_str().expect("sha256"), "{name}");
+        assert_eq!(
+            digest(&bytes),
+            entry["sha256"].as_str().expect("sha256"),
+            "{name}"
+        );
 
         let license =
             std::fs::read_to_string(dir.join(entry["license_file"].as_str().expect("license")))
@@ -60,6 +90,60 @@ fn every_embedded_model_matches_the_manifest() {
             other => panic!("{name}: unrecognised licence {other}"),
         }
     }
+}
+
+/// The exporter reads the ONNX files at development time and commits a plan per
+/// model. This pins the plan to the model bytes: if a model is refreshed without
+/// rerunning `tools/models/export_plan.py`, the test fails here instead of the
+/// binary silently loading weights at the wrong offsets.
+#[test]
+fn the_generated_plans_match_the_embedded_models() {
+    let dir = generated_dir();
+    let manifest = manifest();
+    let mut plan_files = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("generated directory") {
+        let path = entry.expect("entry").path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs")
+            || path.file_name().and_then(|name| name.to_str()) == Some("mod.rs")
+        {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("generated plan");
+        assert!(text.contains("static OPS: &[Op]"), "{}", path.display());
+        assert!(
+            text.contains("static WEIGHTS: &[WeightRef]"),
+            "{}",
+            path.display()
+        );
+        assert!(
+            text.contains("static OUTPUTS: &[u16]"),
+            "{}",
+            path.display()
+        );
+        let (file, recorded) = plan_provenance(&text);
+        let model_path = models_dir().join(&file);
+        let bytes = std::fs::read(&model_path)
+            .unwrap_or_else(|error| panic!("{}: {error}", model_path.display()));
+        assert_eq!(
+            recorded,
+            digest(&bytes),
+            "{file}: the plan was generated from different model bytes; \
+             rerun `python3 tools/models/export_plan.py`"
+        );
+        plan_files.push(file);
+    }
+    assert_eq!(plan_files.len(), 5, "one plan per embedded ONNX graph");
+
+    let mut expected: Vec<String> = manifest["models"]
+        .as_object()
+        .expect("models object")
+        .values()
+        .map(|entry| entry["file"].as_str().expect("file").to_string())
+        .filter(|file| file.ends_with(".onnx"))
+        .collect();
+    expected.sort();
+    plan_files.sort();
+    assert_eq!(plan_files, expected, "the manifest and the plans disagree");
 }
 
 #[test]
@@ -80,98 +164,4 @@ fn the_ocr_dictionary_has_one_character_per_line_and_the_models_classes() {
     unique.sort_unstable();
     unique.dedup();
     assert_eq!(unique.len(), characters.len(), "duplicate dictionary entry");
-}
-
-fn load_plan(bytes: &[u8], input: &str) -> tract::Runnable {
-    let mut model = tract::onnx()
-        .expect("onnx framework")
-        .load_buffer_with_options(bytes, OnnxOptions::new().ignore_value_info(true))
-        .expect("load the ONNX graph");
-    model.set_input_fact(0, input).expect("input fact");
-    let outputs = model.output_count().expect("output count");
-    for output in 0..outputs {
-        model.set_output_fact(output, ()).expect("output fact");
-    }
-    let typed = model.into_model().expect("typed model");
-    tract::runtime_for_name("cpu")
-        .expect("cpu runtime")
-        .prepare(typed)
-        .expect("prepare")
-}
-
-fn run_zeros(plan: &tract::Runnable, dims: &[usize]) -> Vec<tract::Tensor> {
-    let values = vec![0f32; dims.iter().product()];
-    let input = tract::Tensor::from_slice(dims, &values).expect("input tensor");
-    plan.run([input]).expect("run")
-}
-
-#[test]
-fn the_yunet_graph_loads_and_declares_its_twelve_heads() {
-    let (_, bytes) = model("yunet");
-    let plan = load_plan(&bytes, "1,3,640,640,f32");
-    let outputs = run_zeros(&plan, &[1, 3, 640, 640]);
-    assert_eq!(outputs.len(), 12, "cls/obj/bbox/kps x three strides");
-    let shapes: Vec<Vec<usize>> = outputs
-        .iter()
-        .map(|tensor| tensor.shape().expect("shape").to_vec())
-        .collect();
-    // cls and obj: [1, anchors, 1]; bbox: [1, anchors, 4]; kps: [1, anchors, 10].
-    for (level, anchors) in [6400usize, 1600, 400].into_iter().enumerate() {
-        assert_eq!(shapes[level], vec![1, anchors, 1], "cls {level}");
-        assert_eq!(shapes[3 + level], vec![1, anchors, 1], "obj {level}");
-        assert_eq!(shapes[6 + level], vec![1, anchors, 4], "bbox {level}");
-        assert_eq!(shapes[9 + level], vec![1, anchors, 10], "kps {level}");
-    }
-}
-
-#[test]
-fn the_ocr_detection_graph_loads_and_returns_a_probability_map() {
-    let (_, bytes) = model("ppocr_v6_tiny_det");
-    let plan = load_plan(&bytes, "1,3,64,64,f32");
-    let outputs = run_zeros(&plan, &[1, 3, 64, 64]);
-    assert_eq!(outputs.len(), 1);
-    assert_eq!(
-        outputs[0].shape().expect("shape").to_vec(),
-        vec![1, 1, 64, 64],
-        "DB output is one probability map"
-    );
-}
-
-#[test]
-fn the_ocr_orientation_graph_loads_and_returns_four_classes() {
-    let (_, bytes) = model("pp_lcnet_x1_0_doc_ori");
-    let plan = load_plan(&bytes, "1,3,224,224,f32");
-    let outputs = run_zeros(&plan, &[1, 3, 224, 224]);
-    assert_eq!(outputs.len(), 1);
-    assert_eq!(
-        outputs[0].shape().expect("shape").to_vec(),
-        vec![1, 4],
-        "the orientation head has one score per quarter turn"
-    );
-}
-
-#[test]
-fn the_ocr_textline_orientation_graph_loads_and_returns_two_classes() {
-    let (_, bytes) = model("pp_lcnet_x0_25_textline_ori");
-    let plan = load_plan(&bytes, "1,3,80,160,f32");
-    let outputs = run_zeros(&plan, &[1, 3, 80, 160]);
-    assert_eq!(outputs.len(), 1);
-    assert_eq!(
-        outputs[0].shape().expect("shape").to_vec(),
-        vec![1, 2],
-        "the text line head has upright and upside-down scores"
-    );
-}
-
-#[test]
-fn the_ocr_recognition_graph_loads_and_returns_ctc_classes() {
-    let (_, bytes) = model("ppocr_v6_tiny_rec");
-    let plan = load_plan(&bytes, "1,3,48,320,f32");
-    let outputs = run_zeros(&plan, &[1, 3, 48, 320]);
-    assert_eq!(outputs.len(), 1);
-    let shape = outputs[0].shape().expect("shape");
-    assert_eq!(shape.len(), 3, "{shape:?}");
-    assert_eq!(shape[0], 1);
-    assert!(shape[1] > 0);
-    assert_eq!(shape[2], 6906, "CTC blank + dictionary + space");
 }

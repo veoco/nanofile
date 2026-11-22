@@ -71,9 +71,10 @@ cargo build --release -p server --features tray
 ## 嵌入推理（人物标签与 OCR）
 
 所有构建都会编译 YuNet 检测器、PP-OCRv6 tiny 的 OCR 图、PP-LCNet 页面与文本行
-方向分类器和自动人物标签流水线，没有需要开启的 Cargo feature。纯 Rust 的
-`tract` CPU runtime 与 ONNX 模型（合计约 14.3 MB）始终在二进制里，而两个
-扫描器仍要等 `[face_tags] enabled` 或 `[ocr] enabled` 打开后才运行。正常构建即可：
+方向分类器和自动人物标签流水线，没有需要开启的 Cargo feature。服务端使用自己的
+小型定模型运行时（`server/src/inference/`）：ONNX 模型（合计约 14.3 MB）作为权重
+来源原样编进二进制，每张图另有一份提前生成并签入的 Rust 计划；两个扫描器仍要等
+`[face_tags] enabled` 或 `[ocr] enabled` 打开后才运行。正常构建即可：
 
 ```bash
 cargo build --release -p server
@@ -81,10 +82,14 @@ cargo build --release -p server
 
 模型就是上游 ONNX 原件：YuNet 为 MIT，PaddleOCR 的模型为 Apache-2.0，已签入
 `server/models/`，同目录有模型卡、许可证和 SHA-256。`tools/models/fetch_models.py`
-下载固定 revision、校验哈希并抽取识别字典。构建期和运行期都没有权重转换、
-ONNX Runtime、Python 或 BLAS。CI 默认的 `cargo clippy`/`cargo test` 与
-release/nightly 构建都会包含它；发布探针会跑
-`extract-worker --probe --profile faces` 和 `--profile ocr`。
+下载固定 revision、校验哈希并抽取识别字典。唯一需要在开发期运行的工具是
+`tools/models/export_plan.py`：只用 Python 标准库，读取未改动的 ONNX、折叠其中的
+静态 shape 子图、分配工作区槽位并重写已签入的 `server/src/inference/generated/`。
+最终二进制里没有 ONNX 解析器、ONNX Runtime 或 BLAS。单测会用每个 ONNX 文件的
+SHA-256 钉住对应计划，模型更新后忘记重新生成计划会在测试里失败，而不是在运行时
+按错误偏移读权重。CI 默认的 `cargo clippy`/`cargo test` 与 release/nightly 构建都会
+包含它；发布探针会跑 `extract-worker --probe --profile faces` 和
+`--profile ocr`。
 
 两个功能都与 `tray` 互相独立；发布版托盘变体使用 `--features tray`。
 

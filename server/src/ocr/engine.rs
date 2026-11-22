@@ -1,11 +1,8 @@
 //! The OCR pipeline for one image.
 //!
-//! The orientation graphs have fixed inputs (224×224 for the page, 160×80 for a
-//! line), so their plans are prepared once. Detection varies with the picture
-//! and each text line has its own width. The recognition widths are bucketed by
-//! `rec::BUCKETS`, so one child prepares at most five rec plans.
-
-use std::collections::HashMap;
+//! Every graph runs on the fixed-model runtime. The four models stay loaded for
+//! the lifetime of the engine; the detection and recognition shapes only affect
+//! tensor sizes, not the loaded model, so there is no per-shape setup.
 
 use image::DynamicImage;
 
@@ -30,11 +27,6 @@ pub const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_LINES: usize = 300;
 /// Most text stored in the index, shared with the document extractor.
 const MAX_TEXT_BYTES: usize = crate::indexer::extract::MAX_INDEXED_CONTENT_BYTES;
-
-const DETECTION: &[u8] = include_bytes!("../../models/ppocr_v6_tiny_det.onnx");
-const RECOGNITION: &[u8] = include_bytes!("../../models/ppocr_v6_tiny_rec.onnx");
-const ORIENTATION: &[u8] = include_bytes!("../../models/pp_lcnet_x1_0_doc_ori.onnx");
-const LINE_ORIENTATION: &[u8] = include_bytes!("../../models/pp_lcnet_x0_25_textline_ori.onnx");
 
 /// Where the bytes of an image can be decoded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,106 +84,99 @@ pub fn is_image(path: &str) -> bool {
 }
 
 struct Engine {
-    detection: inference::OnnxModel,
-    recognition: inference::OnnxModel,
-    orientation_plan: tract::Runnable,
-    line_orientation_plan: tract::Runnable,
-    detection_plans: HashMap<(usize, usize), tract::Runnable>,
-    recognition_plans: HashMap<usize, tract::Runnable>,
+    detection: inference::Model,
+    recognition: inference::Model,
+    orientation: inference::Model,
+    line_orientation: inference::Model,
+    outputs: Vec<inference::Tensor>,
 }
 
 impl Engine {
     fn new() -> Result<Self, String> {
-        let orientation = inference::OnnxModel::load(ORIENTATION)?;
-        let line_orientation = inference::OnnxModel::load(LINE_ORIENTATION)?;
         Ok(Self {
-            detection: inference::OnnxModel::load(DETECTION)?,
-            recognition: inference::OnnxModel::load(RECOGNITION)?,
-            orientation_plan: orientation.plan("1,3,224,224,f32")?,
-            line_orientation_plan: line_orientation.plan("1,3,80,160,f32")?,
-            detection_plans: HashMap::new(),
-            recognition_plans: HashMap::new(),
+            detection: inference::Model::load(inference::ModelKind::OcrDet)?,
+            recognition: inference::Model::load(inference::ModelKind::OcrRec)?,
+            orientation: inference::Model::load(inference::ModelKind::DocOri)?,
+            line_orientation: inference::Model::load(inference::ModelKind::TextlineOri)?,
+            outputs: Vec::new(),
         })
     }
 
-    fn classify_orientation(&self, tensor: &[f32]) -> Result<(orientation::Rotation, f32), String> {
-        let outputs = inference::run(
-            &self.orientation_plan,
+    fn classify_orientation(
+        &mut self,
+        tensor: &[f32],
+    ) -> Result<(orientation::Rotation, f32), String> {
+        self.orientation.run(
             &[1, 3, orientation::SIZE, orientation::SIZE],
             tensor,
+            &mut self.outputs,
         )?;
-        if outputs.len() != 1 {
+        if self.outputs.len() != 1 {
             return Err(format!(
                 "the OCR orientation graph returned {} outputs, expected 1",
-                outputs.len()
+                self.outputs.len()
             ));
         }
-        let shape = inference::shape(&outputs[0])?;
+        let shape = inference::shape(&self.outputs[0])?;
         if shape != vec![1, orientation::CLASSES] {
             return Err(format!(
                 "the OCR orientation output has shape {shape:?}, expected [1, {}]",
                 orientation::CLASSES
             ));
         }
-        let probabilities = inference::values(&outputs[0])?;
+        let probabilities = inference::values(&self.outputs[0])?;
         orientation::decode(probabilities)
             .ok_or_else(|| "the OCR orientation graph returned four unreadable scores".to_string())
     }
 
     fn classify_line_orientation(
-        &self,
+        &mut self,
         tensor: &[f32],
     ) -> Result<(line_orientation::Turn, f32), String> {
-        let outputs = inference::run(
-            &self.line_orientation_plan,
+        self.line_orientation.run(
             &[1, 3, line_orientation::HEIGHT, line_orientation::WIDTH],
             tensor,
+            &mut self.outputs,
         )?;
-        if outputs.len() != 1 {
+        if self.outputs.len() != 1 {
             return Err(format!(
                 "the OCR line orientation graph returned {} outputs, expected 1",
-                outputs.len()
+                self.outputs.len()
             ));
         }
-        let shape = inference::shape(&outputs[0])?;
+        let shape = inference::shape(&self.outputs[0])?;
         if shape != vec![1, line_orientation::CLASSES] {
             return Err(format!(
                 "the OCR line orientation output has shape {shape:?}, expected [1, {}]",
                 line_orientation::CLASSES
             ));
         }
-        let probabilities = inference::values(&outputs[0])?;
+        let probabilities = inference::values(&self.outputs[0])?;
         line_orientation::decode(probabilities).ok_or_else(|| {
             "the OCR line orientation graph returned two unreadable scores".to_string()
         })
     }
 
     fn detect(&mut self, tensor: &[f32], geometry: Geometry) -> Result<Vec<TextBox>, String> {
-        let key = (geometry.height, geometry.width);
-        if !self.detection_plans.contains_key(&key) {
-            let spec = format!("1,3,{},{},f32", geometry.height, geometry.width);
-            let plan = self.detection.plan(&spec)?;
-            self.detection_plans.insert(key, plan);
-        }
-        let plan = self
-            .detection_plans
-            .get(&key)
-            .ok_or_else(|| "the detection plan disappeared".to_string())?;
-        let outputs = inference::run(plan, &[1, 3, geometry.height, geometry.width], tensor)?;
-        if outputs.len() != 1 {
+        self.detection.run(
+            &[1, 3, geometry.height, geometry.width],
+            tensor,
+            &mut self.outputs,
+        )?;
+        if self.outputs.len() != 1 {
             return Err(format!(
                 "the OCR detection graph returned {} outputs, expected 1",
-                outputs.len()
+                self.outputs.len()
             ));
         }
-        let shape = inference::shape(&outputs[0])?;
+        let shape = inference::shape(&self.outputs[0])?;
         if shape != vec![1, 1, geometry.height, geometry.width] {
             return Err(format!(
                 "the OCR detection output has shape {shape:?}, expected [1, 1, {}, {}]",
                 geometry.height, geometry.width
             ));
         }
-        let probability = inference::values(&outputs[0])?;
+        let probability = inference::values(&self.outputs[0])?;
         Ok(det::postprocess(
             probability,
             geometry.width,
@@ -203,39 +188,31 @@ impl Engine {
 
     fn recognize(&mut self, crop: &Crop, min_score: f32) -> Result<Option<rec::Decoded>, String> {
         let bucket = rec::bucket_for(rec::target_width(crop));
-        if !self.recognition_plans.contains_key(&bucket) {
-            let spec = format!("1,3,48,{bucket},f32");
-            let plan = self.recognition.plan(&spec)?;
-            self.recognition_plans.insert(bucket, plan);
-        }
-        let plan = self
-            .recognition_plans
-            .get(&bucket)
-            .ok_or_else(|| "the recognition plan disappeared".to_string())?;
         let tensor = rec::tensor(crop, bucket);
-        let outputs = inference::run(plan, &[1, 3, rec::HEIGHT, bucket], &tensor)?;
-        if outputs.len() != 1 {
+        self.recognition
+            .run(&[1, 3, rec::HEIGHT, bucket], &tensor, &mut self.outputs)?;
+        if self.outputs.len() != 1 {
             return Err(format!(
                 "the OCR recognition graph returned {} outputs, expected 1",
-                outputs.len()
+                self.outputs.len()
             ));
         }
-        let shape = inference::shape(&outputs[0])?;
+        let shape = inference::shape(&self.outputs[0])?;
         if shape.len() != 3 || shape[0] != 1 || shape[2] != keys::CLASSES {
             return Err(format!(
                 "the OCR recognition output has shape {shape:?}, expected [1, T, {}]",
                 keys::CLASSES
             ));
         }
-        let logits = inference::values(&outputs[0])?;
+        let logits = inference::values(&self.outputs[0])?;
         Ok(rec::decode(logits, shape[1], shape[2], min_score))
     }
 }
 
-/// The loaded models and their cached plans, reusable across images.
+/// The loaded models, reusable across images.
 ///
 /// A multi-page PDF must create this once and call [`Self::recognize`] per page:
-/// `Engine::new` loads four graphs and prepares their plans, which dominates the
+/// `Engine::new` loads four models and copies their weights, which dominates the
 /// cost of a small page. The image path can keep using [`recognize`] below.
 pub struct Recognizer {
     engine: Engine,
@@ -397,7 +374,7 @@ mod tests {
 
     #[test]
     fn the_orientation_model_classifies_every_quarter_turn() {
-        let engine = Engine::new().expect("engine");
+        let mut engine = Engine::new().expect("engine");
         let page = sample_page().to_rgb8();
         for (quarter_turns, expected) in [
             (0, orientation::Rotation::Upright),

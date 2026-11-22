@@ -11,8 +11,7 @@
 //!    survivors by the DB unclip distance.
 //!
 //! This is a Rust implementation of the published algorithm; the steps follow
-//! PaddleOCR's `DBPostProcess` and tract's PP-OCRv6 example. PP-OCRv6 is
-//! Apache-2.0.
+//! PaddleOCR's `DBPostProcess`. PP-OCRv6 is Apache-2.0.
 
 use std::collections::HashMap;
 

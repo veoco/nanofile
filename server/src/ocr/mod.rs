@@ -1,9 +1,9 @@
 //! Optical character recognition for the full-text index.
 //!
 //! PP-OCRv6 tiny detection and recognition, and the PP-LCNet page and text-line
-//! orientation classifiers, run in the confined `Profile::Ocr` child through
-//! tract. The parent only ever receives the recognised text; images, pixel
-//! buffers and model plans stay on the far side of the process boundary.
+//! orientation classifiers, run in the confined `Profile::Ocr` child on the
+//! fixed-model inference runtime. The parent only ever receives the recognised
+//! text; images and pixel buffers stay on the far side of the process boundary.
 //!
 //! This module owns the whole pipeline in Rust:
 //!

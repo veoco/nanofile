@@ -106,10 +106,10 @@ names and permissions are unchanged.
 
 ## Models and licence
 
-PP-OCRv6 tiny and the PP-LCNet orientation classifiers run through the pure-Rust
-`tract` runtime in the confined OCR worker. They are compiled into the binary and
-never downloaded at runtime. The models are Apache-2.0; sources, revisions and limits
-are in [OCR internals](/dev/ocr).
+PP-OCRv6 tiny and the PP-LCNet orientation classifiers run on the server's own
+runtime in the confined OCR worker. They are compiled into the binary and never
+downloaded at runtime. The models are Apache-2.0; sources, revisions and limits are
+in [OCR internals](/dev/ocr).
 
 ## Not the Seafile OCR endpoints
 

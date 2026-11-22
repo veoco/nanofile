@@ -30,7 +30,7 @@ description: Nanofile 如何判定 PDF 页面、渲染扫描页并运行 OCR 模
 
 ## 模型
 
-PP-OCRv6 tiny（检测与识别）与 PP-LCNet 页面、文本行方向分类器在受限的 OCR worker 中通过纯 Rust 的 `tract` 运行时执行。模型编译进二进制，运行时不下载。模型为 Apache-2.0；来源、revision 与限制见 `server/models/MODEL_CARD.md`。
+PP-OCRv6 tiny（检测与识别）与 PP-LCNet 页面、文本行方向分类器在受限的 OCR worker 中由服务端自带的定模型运行时执行。ONNX 模型原样编进二进制，算子计划在开发期生成，运行时不下载。模型为 Apache-2.0；来源、revision 与限制见 `server/models/MODEL_CARD.md`。
 
 PDF 扫描页由 `hayro` 渲染，它是纯 Rust 的 PDF 栅格化器（Apache-2.0 OR MIT）；PDF 文本层仍由 `lopdf` 读取。
 

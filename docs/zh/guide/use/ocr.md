@@ -61,7 +61,7 @@ max_side = 960
 
 ## 模型与许可
 
-PP-OCRv6 tiny 与 PP-LCNet 方向分类器在受限的 OCR worker 中通过纯 Rust 的 `tract` 运行时执行。模型编译进二进制，运行时不下载。模型为 Apache-2.0；来源、revision 和限制见 [OCR 内部](/zh/dev/ocr)。
+PP-OCRv6 tiny 与 PP-LCNet 方向分类器在受限的 OCR worker 中由服务端自带的运行时执行。模型编译进二进制，运行时不下载。模型为 Apache-2.0；来源、revision 和限制见 [OCR 内部](/zh/dev/ocr)。
 
 ## 不是 Seafile 的 OCR 接口
 

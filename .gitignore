@@ -34,3 +34,4 @@ AGENTS.local.md
 # The once-committed migration/Cargo.lock was a stale dead artifact; ignore it
 # so it can never be re-added.
 migration/Cargo.lock
+__pycache__/
