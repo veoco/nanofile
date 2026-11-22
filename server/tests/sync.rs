@@ -9,6 +9,7 @@ mod common;
 mod sync_aux_test;
 mod sync_flow_test;
 mod sync_merge_test;
+mod sync_permission_matrix_test;
 mod sync_quota_test;
 mod sync_test;
 mod sync_token_device_test;

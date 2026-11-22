@@ -11,6 +11,7 @@ mod groups_compat_test;
 mod history_settings_test;
 mod notification_test;
 mod share_link_test;
+mod share_surface_matrix_test;
 mod starred_test;
 mod tags_test;
 mod task_load_test;
