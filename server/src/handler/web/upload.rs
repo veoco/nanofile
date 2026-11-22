@@ -1,8 +1,7 @@
 //! Upload endpoints: multipart intake, CDC ingest, commit and reply framing.
 //!
-//! The pipeline is `read_parts` (streaming, staged or block intake) → target
-//! resolution (`resolve_create_target` / `resolve_existing_target`) →
-//! `AuthContext` (the token or session prelude) → `finish_request` (chunk
+//! The pipeline is `read_parts` (streaming, staged or block intake) 閳?target
+//! resolution (`resolve_create_target` / `resolve_existing_target`) 閳?//! `AuthContext` (the token or session prelude) 閳?`finish_request` (chunk
 //! assembly or whole-file commit, then the endpoint's reply shape).
 
 use axum::{
@@ -152,8 +151,8 @@ struct AuthContext {
 }
 
 impl AuthContext {
-    /// Validate a short-lived upload/update token: token 闁?op 闁?write permission
-    /// 闁?library key, in that order.
+    /// Validate a short-lived upload/update token: token 闂?op 闂?write permission
+    /// 闂?library key, in that order.
     async fn from_token(state: &AppState, raw: &str, kind: TokenKind) -> Result<Self, AppError> {
         let token = state.token_manager.validate(raw).ok_or_else(|| {
             AppError::BadRequest(format!("invalid or expired {} token", kind.op()))
@@ -189,7 +188,7 @@ impl AuthContext {
         })
     }
 
-    /// A browser session: CSRF 闁?write permission 闁?library key. The handler
+    /// A browser session: CSRF 闂?write permission 闂?library key. The handler
     /// calls this only after its own field checks, so their 400s keep winning.
     async fn from_session(
         state: &AppState,
@@ -262,7 +261,7 @@ pub(crate) fn parse_replace_arg(query: Option<&str>, form: Option<&str>) -> Resu
     }
 }
 
-/// Collect a URL's query parameters into a map (missing/unparsable 闁?empty).
+/// Collect a URL's query parameters into a map (missing/unparsable 闂?empty).
 fn query_params(uri: &axum::http::Uri) -> HashMap<String, String> {
     uri.query()
         .and_then(|q| serde_urlencoded::from_str(q).ok())
@@ -296,7 +295,7 @@ async fn require_target_exists(
 /// How an endpoint frames a successful upload/update body.
 ///
 /// The `-aj` endpoints always answer the JSON array (`isAjax=true`); the `-api`
-/// endpoints answer the plain-text file id unless `ret-json` was requested 闁?the
+/// endpoints answer the plain-text file id unless `ret-json` was requested 闂?the
 /// official Android and desktop clients store that body verbatim, so a JSON array
 /// there corrupts their state (`server/fileserver/fileop.go:1859-1884`).
 #[derive(Clone, Copy)]
@@ -324,7 +323,7 @@ struct CommittedFile {
 /// Render a committed upload (one or more files).
 ///
 /// The `-aj` endpoints answer a JSON array. The `-api` endpoints answer one id
-/// per file separated by `\t`, or the JSON array with `ret-json` 闁?matching
+/// per file separated by `\t`, or the JSON array with `ret-json` 闂?matching
 /// `postMultiFiles` in `server/fileserver/fileop.go:1944-1970`.
 fn reply_committed(style: ReplyStyle, files: &[CommittedFile]) -> axum::response::Response {
     use axum::response::IntoResponse;
@@ -736,7 +735,7 @@ async fn try_handle_chunked(
 ///
 /// Used instead of axum's `Multipart` extractor, which fails with 400 on the Qt
 /// desktop client's uploads.
-/// `POST /upload-aj/` 闁?AJAX file upload from the Seahub web UI (no token),
+/// `POST /upload-aj/` 闂?AJAX file upload from the Seahub web UI (no token),
 /// taking `file`, `repo_id`, `parent_dir` and optional `relative_path` fields.
 pub async fn upload_aj(
     user: WebUser,
@@ -1573,7 +1572,7 @@ async fn commit_uploads(
     Ok(committed)
 }
 
-/// `POST /update-api/` 闁?update an existing file from the web UI (no token),
+/// `POST /update-api/` 闂?update an existing file from the web UI (no token),
 /// taking `file`, `repo_id`, and `p` / `path` (the full target path).
 pub async fn update_api(
     user: WebUser,
@@ -1615,7 +1614,7 @@ pub async fn update_api(
         .map(|finished| finished.response)
 }
 
-/// `POST /update-aj/` 闁?AJAX file update from the Seahub web UI (no token),
+/// `POST /update-aj/` 闂?AJAX file update from the Seahub web UI (no token),
 /// taking `file`, `repo_id` and `target_file` (the full target path).
 pub async fn update_aj(
     user: WebUser,
@@ -1654,7 +1653,7 @@ pub async fn update_aj(
         .map(|finished| finished.response)
 }
 
-/// `POST /upload-aj/{token}` 闁?upload with an upload-link token, as sent by the
+/// `POST /upload-aj/{token}` 闂?upload with an upload-link token, as sent by the
 /// Seahub React frontend after `/api2/repos/{id}/upload-link/?from=web`.
 pub async fn upload_aj_token(
     State(state): State<Arc<AppState>>,
@@ -1692,7 +1691,7 @@ pub async fn upload_aj_token(
     Ok(finished.response)
 }
 
-/// `POST /upload-api/{token}` 闁?token-authenticated upload for the desktop
+/// `POST /upload-api/{token}` 闂?token-authenticated upload for the desktop
 /// client, which sends a quoted multipart boundary that axum's extractor rejects.
 pub async fn upload_api(
     State(state): State<Arc<AppState>>,
@@ -1728,7 +1727,7 @@ pub async fn upload_api(
     .map(|finished| finished.response)
 }
 
-/// `POST /update-api/{token}` 闁?token-authenticated file overwrite for the
+/// `POST /update-api/{token}` 闂?token-authenticated file overwrite for the
 /// desktop client. `target_file`, or `parent_dir` + `relative_path`, names the
 /// existing file; the update always overwrites in place.
 pub async fn update_api_handler(
@@ -1777,7 +1776,7 @@ pub async fn update_api_handler(
     .map(|finished| finished.response)
 }
 
-/// `POST /update-aj/{token}` 闁?token-based AJAX file update from the Seahub web
+/// `POST /update-aj/{token}` 闂?token-based AJAX file update from the Seahub web
 /// frontend, taking `file`, `target_file` and optional `relative_path`.
 pub async fn update_aj_token(
     State(state): State<Arc<AppState>>,
@@ -1811,14 +1810,6 @@ pub async fn update_aj_token(
         .map(|finished| finished.response)
 }
 
-/// `POST /upload-blks-api/{token}` 闁?block upload and commit.
-///
-/// Without `commitonly`, each `file` part is one block whose filename is its
-/// SHA-1, verified before storing. With `commitonly`, the `parent_dir`,
-/// `file_name`, `blockids` (JSON array), `file_size` and optional `replace`
-/// fields assemble the file; the commit goes through the same service as every
-/// other upload endpoint, and the body is the file id as plain text (or a JSON
-/// array with `ret-json`).
 /// The commit-phase fields of a block upload.
 struct BlockCommitForm {
     block_ids: Vec<String>,
@@ -1852,17 +1843,189 @@ impl BlockCommitForm {
     }
 }
 
-pub async fn upload_blks_api(
-    State(state): State<Arc<AppState>>,
-    Path(token): Path<String>,
-    req: axum::http::Request<axum::body::Body>,
+/// Commit a block upload: validate the ids, verify the declared size, resolve
+/// the target, write the file object and release the block reservations.
+async fn commit_blocks(
+    state: &AppState,
+    info: &crate::service::auth::access_token::AccessToken,
+    fields: &HashMap<String, String>,
+    query: &HashMap<String, String>,
+    block_ids: Vec<String>,
+    file_size: i64,
+    new_block_ids: Vec<String>,
 ) -> Result<axum::response::Response, AppError> {
-    let (request, body) = req.into_parts();
-    let headers = request.headers;
-    let query = query_params(&request.uri);
+    let uid = Some(info.user_id);
+    // Reject malformed / path-traversal ids outright 鈥?a valid block id is
+    // exactly 40 lowercase hex chars (content-addressed SHA-1). The sync block
+    // PUT shares this predicate, so an id cannot pass one endpoint and fail
+    // to resolve in the store behind the other.
+    if let Some(bad) = block_ids
+        .iter()
+        .find(|bid| !crate::handler::is_valid_block_id(bid))
+    {
+        return Err(AppError::BadRequest(format!("invalid block id: {bad}")));
+    }
+    // Stat the blocks concurrently; order does not matter for a sum.
+    use futures::StreamExt;
+    let owner_repo_id = info.repo_id.clone();
+    let sizes: Vec<Result<i64, AppError>> = futures::stream::iter(block_ids.iter().cloned())
+        .map(|bid| {
+            let store = state.block_store.clone();
+            let repo_id = owner_repo_id.clone();
+            async move {
+                store
+                    .block_size(&repo_id, &bid)
+                    .await
+                    .map_err(|_| AppError::BadRequest(format!("block not found: {bid}")))
+            }
+        })
+        .buffered(8)
+        .collect()
+        .await;
+    let mut real_size: i64 = 0;
+    for sz in sizes {
+        real_size += sz?;
+    }
+
+    // The declared size must match the real block bytes, so a client
+    // can't low-ball `file_size` to dodge the quota check.
+    if real_size != file_size {
+        return Err(AppError::BadRequest(
+            "file_size does not match the uploaded blocks".into(),
+        ));
+    }
+
+    // Resolve the target **before** writing the file object, via the
+    // upload-link-aware helper: an `upload_link_id` token is scoped to the
+    // link's directory and must not commit outside it. Rejecting an invalid
+    // path here also avoids leaving an orphan fs_object behind.
+    //
+    // An `update-blks` token names the target with `target_file`, like
+    // upstream's `update_blks_api_cb`, and always replaces it (441 when the
+    // file is gone). An `upload-blks` token keeps the upload contract:
+    // `parent_dir` + `relative_path` + `file_name`, optional `replace`. It
+    // skips the regular upload path checks (`//` in `parent_dir`), matching
+    // the Go fileserver's block commit.
+    let (target_dir, file_name, replace, ensure_dir) = if info.op == "update-blks" {
+        let target_file = fields
+            .get("target_file")
+            .ok_or_else(|| AppError::BadRequest("target_file required for update".into()))?;
+        let name = target_file
+            .rsplit_once('/')
+            .map(|(_, n)| n)
+            .unwrap_or(target_file);
+        if !is_valid_upload_filename(name) {
+            return Err(AppError::BadRequest("invalid target_file".into()));
+        }
+        let target = resolve_existing_target(Some(info), target_file, "")?;
+        require_target_exists(state, &info.repo_id, &target.dir, &target.name).await?;
+        (target.dir, target.name, true, false)
+    } else {
+        let parent_dir = fields
+            .get("parent_dir")
+            .map(|s| s.as_str())
+            .unwrap_or(&info.parent_dir);
+        let file_name = fields
+            .get("file_name")
+            .ok_or_else(|| AppError::BadRequest("file_name required for commit".into()))?;
+        // Align with seafile's should_ignore_file: reject empty names, path
+        // separators, NUL, "." / "..", and over-long names. Deliberately not
+        // the strict character blacklist, so quotes, brackets etc. remain
+        // uploadable.
+        if !is_valid_upload_filename(file_name) {
+            return Err(AppError::BadRequest("invalid file_name".into()));
+        }
+        let relative_path = fields
+            .get("relative_path")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        // Link tokens cannot reach this operation today, but keep the add-only
+        // rule here too so a future token type cannot inherit overwrite.
+        let replace = scoped_replace(
+            parse_replace_arg(
+                query.get("replace").map(String::as_str),
+                fields.get("replace").map(String::as_str),
+            )?,
+            info.upload_link_id,
+        );
+        (
+            compute_scoped_target_dir(info, parent_dir, relative_path)?,
+            file_name.to_string(),
+            replace,
+            true,
+        )
+    };
+
+    // Commit through the same service as every other upload entry point, so
+    // the directory-replace guard, filename validation, unique naming, quota
+    // accounting, activity log and index scheduling are the shared ones. The
+    // blocks were written and quota-reserved by the upload loop above; they
+    // are released from the reservation table once the commit references them.
+    let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
+    let committed = commit_file(
+        state,
+        CommitRequest {
+            repo_id: &info.repo_id,
+            dir: &target_dir,
+            name: &file_name,
+            block_ids: block_ids.clone(),
+            total_size: file_size,
+            modifier: &info.username,
+            user_id: uid,
+            // Upload tokens create missing parents named by `relative_path`;
+            // an update token targets an existing file, so its parent exists.
+            ensure_dir,
+            replace,
+            new_block_ids: new_block_ids.clone(),
+            mtime,
+        },
+    )
+    .await;
+
+    let committed = match committed {
+        Ok(v) => v,
+        Err(e) => {
+            if matches!(e, AppError::QuotaExceeded) {
+                // The service removed the blocks this request created; drop
+                // their pre-charge as well.
+                for id in &new_block_ids {
+                    crate::service::fs::quota::release_block_bytes(&state.repos, &info.repo_id, id)
+                        .await;
+                }
+            }
+            return Err(e);
+        }
+    };
+
+    // The blocks are referenced by HEAD now; their uncommitted reservations end.
+    crate::service::fs::quota::release_blocks(&state.repos, &info.repo_id, &block_ids).await;
+
+    Ok(reply_committed(
+        ReplyStyle::PlainOrJson {
+            ret_json: wants_ret_json(query, fields),
+        },
+        &[committed],
+    ))
+}
+
+/// Validate an `upload-blks` / `update-blks` token: op, active account, write
+/// permission (which also names the quota owner) and the encryption refusal.
+///
+/// Block-level uploads name their own blocks (`filename` = block id, which must
+/// equal `sha1(plaintext)`) and are committed by replaying that same
+/// client-supplied id list. Server-side encryption would have to store the block
+/// under `sha1(ciphertext)` instead, so the ids the client later commits would
+/// not resolve. Upstream only ever used this API for encrypted libraries with
+/// *client-side* encryption (a path the current iOS client no longer calls), so
+/// encrypted libraries are refused here rather than silently storing plaintext
+/// under a mismatched id.
+async fn block_auth(
+    state: &AppState,
+    token: &str,
+) -> Result<(crate::service::auth::access_token::AccessToken, i32), AppError> {
     let info = state
         .token_manager
-        .validate(&token)
+        .validate(token)
         .ok_or_else(|| AppError::BadRequest("invalid or expired upload token".into()))?;
 
     if info.op != "upload-blks" && info.op != "update-blks" {
@@ -1873,12 +2036,12 @@ pub async fn upload_blks_api(
 
     // A capability URL must stop working when the account is deactivated, like
     // every other token consumer (`/download-api`, `/upload-api`, `/zip`).
-    super::download::ensure_token_user_active(&state, info.user_id).await?;
+    super::download::ensure_token_user_active(state, info.user_id).await?;
 
     // Re-check write permission: the token was issued against the caller's
     // membership, but that may have been revoked since (matches download). The
-    // owner comes back from the same row so the per-block quota reservation below
-    // does not look it up again.
+    // owner comes back from the same row so the per-block quota reservation does
+    // not look it up again.
     let owner = crate::domain::permission::repo_write_owner(
         state.repos.member.as_ref(),
         &info.repo_id,
@@ -1886,14 +2049,6 @@ pub async fn upload_blks_api(
     )
     .await?;
 
-    // Block-level uploads name their own blocks (`filename` = block id, which
-    // must equal `sha1(plaintext)` below) and are committed by replaying that
-    // same client-supplied id list. Server-side encryption would have to store
-    // the block under `sha1(ciphertext)` instead, so the ids the client later
-    // commits would not resolve. Upstream only ever used this API for encrypted
-    // libraries with *client-side* encryption (a path the current iOS client no
-    // longer calls), so encrypted libraries are refused here rather than
-    // silently storing plaintext under a mismatched id.
     if let Some(repo_model) = state.repos.repo.find_by_id(&info.repo_id).await?
         && repo_model.encrypted != 0
     {
@@ -1902,7 +2057,27 @@ pub async fn upload_blks_api(
         ));
     }
 
-    let uid = Some(info.user_id);
+    Ok((info, owner))
+}
+
+/// `POST /upload-blks-api/{token}` — block upload and commit.
+///
+/// Without `commitonly`, each `file` part is one block whose filename is its
+/// SHA-1, verified before storing. With `commitonly`, the `parent_dir`,
+/// `file_name`, `blockids` (JSON array), `file_size` and optional `replace`
+/// fields assemble the file; `update-blks` only accepts the commit phase,
+/// because upstream's update handler requires it and a block-only request would
+/// otherwise look like an upload and answer success without touching the target.
+pub async fn upload_blks_api(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+    req: axum::http::Request<axum::body::Body>,
+) -> Result<axum::response::Response, AppError> {
+    let (request, body) = req.into_parts();
+    let headers = request.headers;
+    let query = query_params(&request.uri);
+    let (info, owner) = block_auth(&state, &token).await?;
+
     let Parts {
         fields,
         blocks: new_block_ids,
@@ -1924,9 +2099,7 @@ pub async fn upload_blks_api(
     if !commit_only && !has_file {
         return Err(AppError::BadRequest("No file in multipart form".into()));
     }
-    // Upstream's update handler requires the commit phase; a block-only request
-    // there would otherwise look like an upload and answer success without
-    // touching the target.
+    // Upstream's update handler requires the commit phase.
     if info.op == "update-blks" && !commit_only {
         return Err(AppError::BadRequest(
             "Only commit supported for update-blks-api".into(),
@@ -1939,161 +2112,16 @@ pub async fn upload_blks_api(
             file_size,
         } = BlockCommitForm::parse(&fields)?;
 
-        // Reject malformed / path-traversal ids outright 闁?a valid block id is
-        // exactly 40 lowercase hex chars (content-addressed SHA-1). The sync block
-        // PUT shares this predicate, so an id cannot pass one endpoint and fail
-        // to resolve in the store behind the other.
-        if let Some(bad) = block_ids
-            .iter()
-            .find(|bid| !crate::handler::is_valid_block_id(bid))
-        {
-            return Err(AppError::BadRequest(format!("invalid block id: {bad}")));
-        }
-        // Stat the blocks concurrently; order does not matter for a sum.
-        use futures::StreamExt;
-        let owner_repo_id = info.repo_id.clone();
-        let sizes: Vec<Result<i64, AppError>> = futures::stream::iter(block_ids.iter().cloned())
-            .map(|bid| {
-                let store = state.block_store.clone();
-                let repo_id = owner_repo_id.clone();
-                async move {
-                    store
-                        .block_size(&repo_id, &bid)
-                        .await
-                        .map_err(|_| AppError::BadRequest(format!("block not found: {bid}")))
-                }
-            })
-            .buffered(8)
-            .collect()
-            .await;
-        let mut real_size: i64 = 0;
-        for sz in sizes {
-            real_size += sz?;
-        }
-
-        // The declared size must match the real block bytes, so a client
-        // can't low-ball `file_size` to dodge the quota check.
-        if real_size != file_size {
-            return Err(AppError::BadRequest(
-                "file_size does not match the uploaded blocks".into(),
-            ));
-        }
-
-        // Resolve the target **before** writing the file object, via the
-        // upload-link-aware helper: an `upload_link_id` token is scoped to the
-        // link's directory and must not commit outside it. Rejecting an invalid
-        // path here also avoids leaving an orphan fs_object behind.
-        //
-        // An `update-blks` token names the target with `target_file`, like
-        // upstream's `update_blks_api_cb`, and always replaces it (441 when the
-        // file is gone). An `upload-blks` token keeps the upload contract:
-        // `parent_dir` + `relative_path` + `file_name`, optional `replace`. It
-        // skips the regular upload path checks (`//` in `parent_dir`), matching
-        // the Go fileserver's block commit.
-        let (target_dir, file_name, replace, ensure_dir) = if info.op == "update-blks" {
-            let target_file = fields
-                .get("target_file")
-                .ok_or_else(|| AppError::BadRequest("target_file required for update".into()))?;
-            let name = target_file
-                .rsplit_once('/')
-                .map(|(_, n)| n)
-                .unwrap_or(target_file);
-            if !is_valid_upload_filename(name) {
-                return Err(AppError::BadRequest("invalid target_file".into()));
-            }
-            let target = resolve_existing_target(Some(&info), target_file, "")?;
-            require_target_exists(&state, &info.repo_id, &target.dir, &target.name).await?;
-            (target.dir, target.name, true, false)
-        } else {
-            let parent_dir = fields
-                .get("parent_dir")
-                .map(|s| s.as_str())
-                .unwrap_or(&info.parent_dir);
-            let file_name = fields
-                .get("file_name")
-                .ok_or_else(|| AppError::BadRequest("file_name required for commit".into()))?;
-            // Align with seafile's should_ignore_file: reject empty names, path
-            // separators, NUL, "." / "..", and over-long names. Deliberately not
-            // the strict character blacklist, so quotes, brackets etc. remain
-            // uploadable.
-            if !is_valid_upload_filename(file_name) {
-                return Err(AppError::BadRequest("invalid file_name".into()));
-            }
-            let relative_path = fields
-                .get("relative_path")
-                .map(|s| s.as_str())
-                .unwrap_or("");
-            // Link tokens cannot reach this operation today, but keep the add-only
-            // rule here too so a future token type cannot inherit overwrite.
-            let replace = scoped_replace(
-                parse_replace_arg(
-                    query.get("replace").map(String::as_str),
-                    fields.get("replace").map(String::as_str),
-                )?,
-                info.upload_link_id,
-            );
-            (
-                compute_scoped_target_dir(&info, parent_dir, relative_path)?,
-                file_name.to_string(),
-                replace,
-                true,
-            )
-        };
-
-        // Commit through the same service as every other upload entry point, so
-        // the directory-replace guard, filename validation, unique naming, quota
-        // accounting, activity log and index scheduling are the shared ones. The
-        // blocks were written and quota-reserved by the upload loop above; they
-        // are released from the reservation table once the commit references them.
-        let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
-        let committed = commit_file(
+        return commit_blocks(
             &state,
-            CommitRequest {
-                repo_id: &info.repo_id,
-                dir: &target_dir,
-                name: &file_name,
-                block_ids: block_ids.clone(),
-                total_size: file_size,
-                modifier: &info.username,
-                user_id: uid,
-                // Upload tokens create missing parents named by `relative_path`;
-                // an update token targets an existing file, so its parent exists.
-                ensure_dir,
-                replace,
-                new_block_ids: new_block_ids.clone(),
-                mtime,
-            },
+            &info,
+            &fields,
+            &query,
+            block_ids,
+            file_size,
+            new_block_ids,
         )
         .await;
-
-        let committed = match committed {
-            Ok(v) => v,
-            Err(e) => {
-                if matches!(e, AppError::QuotaExceeded) {
-                    // The service removed the blocks this request created; drop
-                    // their pre-charge as well.
-                    for id in &new_block_ids {
-                        crate::service::fs::quota::release_block_bytes(
-                            &state.repos,
-                            &info.repo_id,
-                            id,
-                        )
-                        .await;
-                    }
-                }
-                return Err(e);
-            }
-        };
-
-        // The blocks are referenced by HEAD now; their uncommitted reservations end.
-        crate::service::fs::quota::release_blocks(&state.repos, &info.repo_id, &block_ids).await;
-
-        return Ok(reply_committed(
-            ReplyStyle::PlainOrJson {
-                ret_json: wants_ret_json(&query, &fields),
-            },
-            &[committed],
-        ));
     }
 
     Ok(ok_json().into_response())
