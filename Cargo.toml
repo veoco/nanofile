@@ -63,13 +63,18 @@ unused = "deny"
 # Denying the group in the manifest is what keeps that row as strict as the
 # separate clippy step it replaced: `clippy::all` covers clippy, this covers
 # rustc's `deprecated`, naming and `private_interfaces` family.
-warnings = "deny"
+#
+# The two levels below are priority-annotated because Cargo ignores the order of
+# this table: a lint set at the same priority as a group containing it does not
+# override that group, and `clippy::lint_groups_priority` (implied by
+# `clippy::all`) rejects the ambiguity.
+warnings = { level = "deny", priority = -1 }
 # The four cross builds link with zig, and linker output reaches rustc through
 # this lint. Nothing here has ever denied it (`-D warnings` only ran on
 # non-linking check builds), so the level stays where it was instead of turning
 # a linker notice into a failed cross row. rustc 1.100 classifies the known
 # benign notices as `linker_info`, which is allow-by-default anyway.
-linker_messages = "allow"
+linker_messages = { level = "allow", priority = 1 }
 # `unsafe` lives only in the platform/FFI modules whose file header carries
 # `#![allow(unsafe_code)]`. A handler, service or repository that grows one
 # stops compiling everywhere, including the targets with no clippy runner.
