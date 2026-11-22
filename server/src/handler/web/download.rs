@@ -12,6 +12,17 @@ use crate::middleware::auth::AuthUser;
 use base::common::FsFileData;
 use base::error::AppError;
 
+/// Whether a capability token's owner is still an active, verified account.
+pub(crate) async fn token_user_active(state: &AppState, user_id: i32) -> Result<bool, AppError> {
+    let user = state
+        .repos
+        .user
+        .find_by_id(user_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    Ok(user.is_active && user.email_verified)
+}
+
 /// Reject a capability token whose owner is no longer an active account.
 ///
 /// The `/download-api/{token}`, `/blks/{token}/…` and `/upload-api/{token}`
@@ -22,16 +33,76 @@ pub(crate) async fn ensure_token_user_active(
     state: &AppState,
     user_id: i32,
 ) -> Result<(), AppError> {
-    let user = state
-        .repos
-        .user
-        .find_by_id(user_id)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-    if !user.is_active || !user.email_verified {
+    if !token_user_active(state, user_id).await? {
         return Err(AppError::Forbidden);
     }
     Ok(())
+}
+
+/// Which capability a download token carries, with the messages each endpoint
+/// has always answered.
+#[derive(Clone, Copy)]
+pub(crate) enum DownloadTokenKind {
+    File,
+    Blocks,
+}
+
+impl DownloadTokenKind {
+    fn op(self) -> &'static str {
+        match self {
+            DownloadTokenKind::File => "download",
+            DownloadTokenKind::Blocks => "downloadblks",
+        }
+    }
+
+    fn invalid_message(self) -> &'static str {
+        match self {
+            DownloadTokenKind::File => "invalid or expired download token",
+            DownloadTokenKind::Blocks => "invalid or expired token",
+        }
+    }
+
+    fn wrong_op_message(self) -> &'static str {
+        match self {
+            DownloadTokenKind::File => "token not valid for download",
+            DownloadTokenKind::Blocks => "token not valid for block download",
+        }
+    }
+}
+
+/// A validated download capability: token, operation and a fresh membership check.
+pub(crate) struct DownloadAuth {
+    pub(crate) repo_id: String,
+    pub(crate) user_id: i32,
+    pub(crate) token: crate::service::auth::access_token::AccessToken,
+}
+
+impl DownloadAuth {
+    pub(crate) async fn from_token(
+        state: &AppState,
+        raw: &str,
+        kind: DownloadTokenKind,
+    ) -> Result<Self, AppError> {
+        let token = state
+            .token_manager
+            .validate(raw)
+            .ok_or_else(|| AppError::BadRequest(kind.invalid_message().into()))?;
+        if token.op != kind.op() {
+            return Err(AppError::BadRequest(kind.wrong_op_message().into()));
+        }
+        // Permissions may have been revoked between token issuance and use.
+        crate::domain::permission::check_repo_read_permission(
+            state.repos.member.as_ref(),
+            &token.repo_id,
+            token.user_id,
+        )
+        .await?;
+        Ok(Self {
+            repo_id: token.repo_id.clone(),
+            user_id: token.user_id,
+            token,
+        })
+    }
 }
 
 /// Decryption key for an encrypted repo: `None` when unencrypted, the cached
@@ -226,28 +297,17 @@ pub async fn download_api(
     Path(token): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let info = state
-        .token_manager
-        .validate(&token)
-        .ok_or_else(|| AppError::BadRequest("invalid or expired download token".into()))?;
+    let auth = DownloadAuth::from_token(&state, &token, DownloadTokenKind::File).await?;
 
-    if info.op != "download" {
-        return Err(AppError::BadRequest("token not valid for download".into()));
-    }
+    let repo_id = auth.repo_id.clone();
+    let path = auth.token.parent_dir.clone();
+    let filename = auth
+        .token
+        .file_name
+        .clone()
+        .unwrap_or_else(|| "download".to_string());
 
-    // Permissions may have been revoked between token issuance and use.
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        &info.repo_id,
-        info.user_id,
-    )
-    .await?;
-
-    let repo_id = info.repo_id.clone();
-    let path = info.parent_dir.clone();
-    let filename = info.file_name.as_deref().unwrap_or("download").to_string();
-
-    let dec_key = get_decryption_key_for_repo(&state, &repo_id, info.user_id).await?;
+    let dec_key = get_decryption_key_for_repo(&state, &repo_id, auth.user_id).await?;
 
     let (file_data, block_ids) = Downloader::resolve_blocks(&state.repos, &repo_id, &path)
         .await
@@ -286,32 +346,13 @@ pub async fn block_download(
     State(state): State<Arc<AppState>>,
     Path((token, file_id, block_id)): Path<(String, String, String)>,
 ) -> Result<Response, AppError> {
-    // Validate the downloadblks token.
-    let info = state
-        .token_manager
-        .validate(&token)
-        .ok_or_else(|| AppError::BadRequest("invalid or expired token".into()))?;
-
-    if info.op != "downloadblks" {
-        return Err(AppError::BadRequest(
-            "token not valid for block download".into(),
-        ));
-    }
+    let auth = DownloadAuth::from_token(&state, &token, DownloadTokenKind::Blocks).await?;
 
     // A capability URL must stop working when the account is deactivated, like
     // the other token consumers (`/download-api`, `/upload-api`, `/zip`).
-    ensure_token_user_active(&state, info.user_id).await?;
+    ensure_token_user_active(&state, auth.user_id).await?;
 
-    let repo_id = &info.repo_id;
-
-    // Re-check read permission: the token outlives membership, so a user
-    // removed from the repo must not keep reading blocks.
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        repo_id,
-        info.user_id,
-    )
-    .await?;
+    let repo_id = &auth.repo_id;
 
     // Look up the file by its fs_id in the fs_objects table.
     let file_obj = state
@@ -339,7 +380,11 @@ pub async fn block_download(
 
     Ok((
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/octet-stream")],
+        [
+            (header::CONTENT_TYPE, "application/octet-stream"),
+            // seafile-server's `accessBlksCB` sets this; blocks are immutable.
+            (header::CACHE_CONTROL, "max-age=3600"),
+        ],
         block_data,
     )
         .into_response())

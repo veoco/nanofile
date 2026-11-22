@@ -177,7 +177,32 @@ async fn test_block_download_link_serves_block() {
 
     let resp = f.client.get(path_of(&url, "/blks/"), None).await;
     assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("max-age=3600"),
+        "blocks are immutable and briefly cacheable"
+    );
     assert_eq!(resp.bytes().await.unwrap().as_ref(), data);
+
+    // A block token must not unlock the whole-file endpoint.
+    let block_token = url
+        .split("/blks/")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .expect("block token");
+    let resp = f
+        .client
+        .get(&format!("/download-api/{block_token}"), None)
+        .await;
+    assert_eq!(resp.status(), 400);
+    assert!(
+        resp.text()
+            .await
+            .unwrap()
+            .contains("not valid for download")
+    );
 }
 
 /// The token URL supports resumable ranges and reports an unsatisfiable range.
