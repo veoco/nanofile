@@ -118,30 +118,25 @@ async fn require_target_exists(
     Ok(())
 }
 
-/// Frame a committed upload's success body: `-aj` endpoints always answer the
-/// JSON array (`isAjax=true`), while `-api` endpoints answer the plain-text file
-/// id unless `ret-json` was requested — the official Android and desktop clients
-/// store that body verbatim, so a JSON array there corrupts their state
-/// (`server/fileserver/fileop.go:1859-1884`).
-fn upload_commit_response(
-    ret_json: bool,
-    id: &str,
-    name: &str,
-    size: i64,
-) -> axum::response::Response {
-    use axum::response::IntoResponse;
+/// How an endpoint frames a successful upload/update body.
+///
+/// The `-aj` endpoints always answer the JSON array (`isAjax=true`); the `-api`
+/// endpoints answer the plain-text file id unless `ret-json` was requested — the
+/// official Android and desktop clients store that body verbatim, so a JSON array
+/// there corrupts their state (`server/fileserver/fileop.go:1859-1884`).
+#[derive(Clone, Copy)]
+enum ReplyStyle {
+    Array,
+    PlainOrJson { ret_json: bool },
+}
 
-    if ret_json {
-        return Json(json!([{ "id": id, "name": name, "size": size }])).into_response();
+impl ReplyStyle {
+    fn answers_json(self) -> bool {
+        match self {
+            ReplyStyle::Array => true,
+            ReplyStyle::PlainOrJson { ret_json } => ret_json,
+        }
     }
-    (
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "text/plain; charset=utf-8",
-        )],
-        id.to_string(),
-    )
-        .into_response()
 }
 
 /// One committed file of a (possibly multi-file) upload.
@@ -156,17 +151,10 @@ struct CommittedFile {
 /// The `-aj` endpoints answer a JSON array. The `-api` endpoints answer one id
 /// per file separated by `\t`, or the JSON array with `ret-json` — matching
 /// `postMultiFiles` in `server/fileserver/fileop.go:1944-1970`.
-fn upload_files_response(
-    style: UploadFilesReply,
-    files: &[CommittedFile],
-) -> axum::response::Response {
+fn reply_committed(style: ReplyStyle, files: &[CommittedFile]) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    let as_json = match style {
-        UploadFilesReply::JsonArray => true,
-        UploadFilesReply::PlainOrJson { ret_json } => ret_json,
-    };
-    if as_json {
+    if style.answers_json() {
         let items: Vec<serde_json::Value> = files
             .iter()
             .map(|f| json!({ "id": f.id, "name": f.name, "size": f.size }))
@@ -184,12 +172,6 @@ fn upload_files_response(
         .into_response()
 }
 
-#[derive(Clone, Copy)]
-enum UploadFilesReply {
-    JsonArray,
-    PlainOrJson { ret_json: bool },
-}
-
 /// Outcome of a resumable (`Content-Range`) chunk request.
 enum ChunkResult {
     /// Not the final chunk: upstream always answers `{"success": true}`.
@@ -201,26 +183,15 @@ enum ChunkResult {
     },
 }
 
-/// Render a resumable-upload answer for an `-aj` endpoint.
-fn chunk_result_json(result: ChunkResult) -> Json<serde_json::Value> {
-    match result {
-        ChunkResult::Intermediate => Json(json!({ "success": true })),
-        ChunkResult::Committed { id, name, size } => {
-            Json(json!([{ "id": id, "name": name, "size": size }]))
-        }
-    }
-}
-
-/// Render a resumable-upload answer for an `-api` endpoint: the intermediate
-/// body is always `{"success": true}`, the final one follows the endpoint's
-/// plain/JSON framing.
-fn chunk_result_response(ret_json: bool, result: ChunkResult) -> axum::response::Response {
+/// Render a resumable-upload answer: an intermediate chunk is always
+/// `{"success": true}`, a final one follows the endpoint's committed framing.
+fn reply_chunk(style: ReplyStyle, result: ChunkResult) -> axum::response::Response {
     use axum::response::IntoResponse;
 
     match result {
         ChunkResult::Intermediate => Json(json!({ "success": true })).into_response(),
         ChunkResult::Committed { id, name, size } => {
-            upload_commit_response(ret_json, &id, &name, size)
+            reply_committed(style, &[CommittedFile { id, name, size }])
         }
     }
 }
@@ -462,23 +433,24 @@ async fn try_handle_chunked(
         .take_streamed_blocks(&state.block_store, repo_id, &file_path, file_size)
         .await
     {
-        let committed = state
-            .file_service()
-            .upload_file_committed_stream_at(
+        let committed = commit_file(
+            state,
+            CommitRequest {
                 repo_id,
-                target_dir,
-                file_name,
+                dir: target_dir,
+                name: file_name,
                 block_ids,
                 total_size,
                 modifier,
                 user_id,
-                true,
+                ensure_dir: true,
                 replace,
                 new_block_ids,
                 mtime,
-            )
-            .await;
-        let (fs_id, effective_name) = match committed {
+            },
+        )
+        .await;
+        let committed = match committed {
             Ok(v) => v,
             Err(e) => {
                 if matches!(e, AppError::QuotaExceeded) {
@@ -491,9 +463,9 @@ async fn try_handle_chunked(
         };
         finish_resumable(temp_mgr, state, repo_id, &file_path).await;
         return Ok(Some(ChunkResult::Committed {
-            id: fs_id,
-            name: effective_name,
-            size: total_size,
+            id: committed.id,
+            name: committed.name,
+            size: committed.size,
         }));
     }
 
@@ -532,23 +504,24 @@ async fn try_handle_chunked(
         )));
     }
 
-    let committed = state
-        .file_service()
-        .upload_file_committed_stream_at(
+    let committed = commit_file(
+        state,
+        CommitRequest {
             repo_id,
-            target_dir,
-            file_name,
+            dir: target_dir,
+            name: file_name,
             block_ids,
             total_size,
             modifier,
             user_id,
-            true,
+            ensure_dir: true,
             replace,
             new_block_ids,
             mtime,
-        )
-        .await;
-    let (fs_id, effective_name) = match committed {
+        },
+    )
+    .await;
+    let committed = match committed {
         Ok(v) => v,
         Err(e) => {
             if matches!(e, AppError::QuotaExceeded) {
@@ -563,9 +536,9 @@ async fn try_handle_chunked(
     finish_resumable(temp_mgr, state, repo_id, &file_path).await;
 
     Ok(Some(ChunkResult::Committed {
-        id: fs_id,
-        name: effective_name,
-        size: total_size,
+        id: committed.id,
+        name: committed.name,
+        size: committed.size,
     }))
 }
 
@@ -802,7 +775,7 @@ pub async fn upload_aj(
         )
         .await?
         {
-            return Ok(chunk_result_json(result).into_response());
+            return Ok(reply_chunk(ReplyStyle::Array, result));
         }
         return Err(AppError::Internal(
             "chunked upload produced no outcome".into(),
@@ -853,10 +826,7 @@ pub async fn upload_aj(
         replace,
     )
     .await?;
-    Ok(upload_files_response(
-        UploadFilesReply::JsonArray,
-        &committed,
-    ))
+    Ok(reply_committed(ReplyStyle::Array, &committed))
 }
 
 /// Extract the multipart `boundary` from the Content-Type header.
@@ -1102,6 +1072,63 @@ fn duplicate_file_names(files: &[UploadedFile]) -> bool {
     files.iter().any(|f| !seen.insert(f.filename.as_str()))
 }
 
+/// One file to commit: the bytes are already ingested, only the commit is left.
+struct CommitRequest<'a> {
+    repo_id: &'a str,
+    dir: &'a str,
+    name: &'a str,
+    block_ids: Vec<String>,
+    total_size: i64,
+    modifier: &'a str,
+    user_id: Option<i32>,
+    ensure_dir: bool,
+    replace: bool,
+    new_block_ids: Vec<String>,
+    mtime: Option<i64>,
+}
+
+/// Commit one ingested file through the service that owns replace/unique-name,
+/// quota accounting, activity logging and index scheduling.
+async fn commit_file(
+    state: &AppState,
+    request: CommitRequest<'_>,
+) -> Result<CommittedFile, AppError> {
+    let CommitRequest {
+        repo_id,
+        dir,
+        name,
+        block_ids,
+        total_size,
+        modifier,
+        user_id,
+        ensure_dir,
+        replace,
+        new_block_ids,
+        mtime,
+    } = request;
+    let (id, name) = state
+        .file_service()
+        .upload_file_committed_stream_at(
+            repo_id,
+            dir,
+            name,
+            block_ids,
+            total_size,
+            modifier,
+            user_id,
+            ensure_dir,
+            replace,
+            new_block_ids,
+            mtime,
+        )
+        .await?;
+    Ok(CommittedFile {
+        id,
+        name,
+        size: total_size,
+    })
+}
+
 /// Commit one or more already-ingested files, in request order.
 async fn commit_uploads(
     state: &AppState,
@@ -1115,27 +1142,25 @@ async fn commit_uploads(
 ) -> Result<Vec<CommittedFile>, AppError> {
     let mut committed = Vec::with_capacity(files.len());
     for file in files {
-        let (id, name) = state
-            .file_service()
-            .upload_file_committed_stream_at(
-                repo_id,
-                target_dir,
-                &file.filename,
-                file.block_ids,
-                file.total_size,
-                modifier,
-                user_id,
-                ensure_dir,
-                replace,
-                file.new_block_ids,
-                file.mtime,
+        committed.push(
+            commit_file(
+                state,
+                CommitRequest {
+                    repo_id,
+                    dir: target_dir,
+                    name: &file.filename,
+                    block_ids: file.block_ids,
+                    total_size: file.total_size,
+                    modifier,
+                    user_id,
+                    ensure_dir,
+                    replace,
+                    new_block_ids: file.new_block_ids,
+                    mtime: file.mtime,
+                },
             )
-            .await?;
-        committed.push(CommittedFile {
-            id,
-            name,
-            size: file.total_size,
-        });
+            .await?,
+        );
     }
     Ok(committed)
 }
@@ -1147,7 +1172,7 @@ pub async fn update_api(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     body: axum::body::Body,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     // An update always replaces an existing file, so the bytes it frees are part
     // of the budget. A Content-Length precheck cannot know that delta and used to
     // reject a same-size replacement near the quota; the commit-time check in
@@ -1272,7 +1297,7 @@ pub async fn update_api(
         )
         .await?
         {
-            return Ok(chunk_result_json(result));
+            return Ok(reply_chunk(ReplyStyle::Array, result));
         }
         return Err(AppError::Internal(
             "chunked upload produced no outcome".into(),
@@ -1294,25 +1319,24 @@ pub async fn update_api(
     .await?;
     let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
     // Update semantics: overwrite in place, and commit zero-byte files too.
-    let (fs_id, effective_name) = state
-        .file_service()
-        .upload_file_committed_stream_at(
-            &repo_id,
-            parent,
+    let committed = commit_file(
+        &state,
+        CommitRequest {
+            repo_id: &repo_id,
+            dir: parent,
             name,
             block_ids,
             total_size,
-            &user.email,
-            Some(user.user_id),
-            true,
-            true,
+            modifier: &user.email,
+            user_id: Some(user.user_id),
+            ensure_dir: true,
+            replace: true,
             new_block_ids,
             mtime,
-        )
-        .await?;
-    Ok(Json(
-        json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
-    ))
+        },
+    )
+    .await?;
+    Ok(reply_committed(ReplyStyle::Array, &[committed]))
 }
 
 /// `POST /update-aj/` — AJAX file update from the Seahub web UI (no token),
@@ -1322,7 +1346,7 @@ pub async fn update_aj(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     body: axum::body::Body,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     // See `update_api`: an update replaces the file, so only the commit-time
     // size delta is a correct quota check.
     let boundary = extract_multipart_boundary(&headers)?;
@@ -1431,7 +1455,7 @@ pub async fn update_aj(
         )
         .await?
         {
-            return Ok(chunk_result_json(result));
+            return Ok(reply_chunk(ReplyStyle::Array, result));
         }
         return Err(AppError::Internal(
             "chunked upload produced no outcome".into(),
@@ -1452,25 +1476,24 @@ pub async fn update_aj(
     let (block_ids, total_size, new_block_ids) = ingested?;
     let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
     // Update semantics: overwrite in place, and commit zero-byte files too.
-    let (fs_id, effective_name) = state
-        .file_service()
-        .upload_file_committed_stream_at(
+    let committed = commit_file(
+        &state,
+        CommitRequest {
             repo_id,
-            parent,
+            dir: parent,
             name,
             block_ids,
             total_size,
-            &user.email,
-            Some(user.user_id),
-            true,
-            true,
+            modifier: &user.email,
+            user_id: Some(user.user_id),
+            ensure_dir: true,
+            replace: true,
             new_block_ids,
             mtime,
-        )
-        .await?;
-    Ok(Json(
-        json!([{"id": fs_id, "name": effective_name, "size": total_size}]),
-    ))
+        },
+    )
+    .await?;
+    Ok(reply_committed(ReplyStyle::Array, &[committed]))
 }
 
 /// `POST /upload-aj/{token}` — upload with an upload-link token, as sent by the
@@ -1618,7 +1641,7 @@ pub async fn upload_aj_token(
         )
         .await?
         {
-            return Ok(chunk_result_json(result).into_response());
+            return Ok(reply_chunk(ReplyStyle::Array, result));
         }
         return Err(AppError::Internal(
             "chunked upload produced no outcome".into(),
@@ -1648,10 +1671,7 @@ pub async fn upload_aj_token(
         upload_link_service::increment_upload_view_cnt(state.repos.clone(), link_id);
     }
 
-    Ok(upload_files_response(
-        UploadFilesReply::JsonArray,
-        &committed,
-    ))
+    Ok(reply_committed(ReplyStyle::Array, &committed))
 }
 
 /// `POST /upload-api/{token}` — token-authenticated upload for the desktop
@@ -1816,7 +1836,7 @@ pub async fn upload_api(
         )
         .await?
         {
-            return Ok(chunk_result_response(ret_json, result));
+            return Ok(reply_chunk(ReplyStyle::PlainOrJson { ret_json }, result));
         }
         return Err(AppError::Internal(
             "chunked upload produced no outcome".into(),
@@ -1841,8 +1861,8 @@ pub async fn upload_api(
         replace,
     )
     .await?;
-    Ok(upload_files_response(
-        UploadFilesReply::PlainOrJson { ret_json },
+    Ok(reply_committed(
+        ReplyStyle::PlainOrJson { ret_json },
         &committed,
     ))
 }
@@ -2006,7 +2026,7 @@ pub async fn update_api_handler(
         )
         .await?
         {
-            return Ok(chunk_result_response(ret_json, result));
+            return Ok(reply_chunk(ReplyStyle::PlainOrJson { ret_json }, result));
         }
         return Err(AppError::Internal(
             "chunked upload produced no outcome".into(),
@@ -2028,8 +2048,8 @@ pub async fn update_api_handler(
         true,
     )
     .await?;
-    Ok(upload_files_response(
-        UploadFilesReply::PlainOrJson { ret_json },
+    Ok(reply_committed(
+        ReplyStyle::PlainOrJson { ret_json },
         &committed,
     ))
 }
@@ -2173,7 +2193,7 @@ pub async fn update_aj_token(
         )
         .await?
         {
-            return Ok(chunk_result_json(result).into_response());
+            return Ok(reply_chunk(ReplyStyle::Array, result));
         }
         return Err(AppError::Internal(
             "chunked upload produced no outcome".into(),
@@ -2195,10 +2215,7 @@ pub async fn update_aj_token(
         true,
     )
     .await?;
-    Ok(upload_files_response(
-        UploadFilesReply::JsonArray,
-        &committed,
-    ))
+    Ok(reply_committed(ReplyStyle::Array, &committed))
 }
 
 /// `POST /upload-blks-api/{token}` — block upload and commit.
@@ -2477,26 +2494,27 @@ pub async fn upload_blks_api(
         // blocks were written and quota-reserved by the upload loop above; they
         // are released from the reservation table once the commit references them.
         let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
-        let committed = state
-            .file_service()
-            .upload_file_committed_stream_at(
-                &info.repo_id,
-                &target_dir,
-                &file_name,
-                block_ids.clone(),
-                file_size,
-                &info.username,
-                uid,
+        let committed = commit_file(
+            &state,
+            CommitRequest {
+                repo_id: &info.repo_id,
+                dir: &target_dir,
+                name: &file_name,
+                block_ids: block_ids.clone(),
+                total_size: file_size,
+                modifier: &info.username,
+                user_id: uid,
                 // Upload tokens create missing parents named by `relative_path`;
                 // an update token targets an existing file, so its parent exists.
                 ensure_dir,
                 replace,
-                new_block_ids.clone(),
+                new_block_ids: new_block_ids.clone(),
                 mtime,
-            )
-            .await;
+            },
+        )
+        .await;
 
-        let (file_fs_id, effective_name) = match committed {
+        let committed = match committed {
             Ok(v) => v,
             Err(e) => {
                 if matches!(e, AppError::QuotaExceeded) {
@@ -2518,11 +2536,11 @@ pub async fn upload_blks_api(
         // The blocks are referenced by HEAD now; their uncommitted reservations end.
         crate::service::fs::quota::release_blocks(&state.repos, &info.repo_id, &block_ids).await;
 
-        return Ok(upload_commit_response(
-            wants_ret_json(&query, &fields),
-            &file_fs_id,
-            &effective_name,
-            file_size,
+        return Ok(reply_committed(
+            ReplyStyle::PlainOrJson {
+                ret_json: wants_ret_json(&query, &fields),
+            },
+            &[committed],
         ));
     }
 
