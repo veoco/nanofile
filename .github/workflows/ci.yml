@@ -119,14 +119,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
-      # The two Rust cache families, and the one rule that keeps them useful:
-      # `nanofile-v2` holds check-only artifacts (clippy and rustdoc, nothing
-      # linked) and `nanofile-build-v2` holds linked dev/test codegen. A GitHub
-      # cache entry is immutable — the first job to save a key defines it for
-      # every later run — so a job must use the family that matches what it
-      # writes. A check-only entry under a build job's key makes that job
-      # recompile the whole dependency graph on every run: that is ~380 crates,
-      # 4-6 minutes on macOS and Windows.
+      # The three Rust cache families, and the one rule that keeps them useful:
+      # `nanofile-v2` holds host check-only artifacts (clippy and rustdoc,
+      # nothing linked), `nanofile-cross` holds the cross-target check units the
+      # `cross-check` rows write, and `nanofile-build-v2` holds linked dev/test
+      # codegen. A GitHub cache entry is immutable — the first job to save a key
+      # defines it for every later run — so a job must use the family that
+      # matches what it writes. A check-only entry under a build job's key makes
+      # that job recompile the whole dependency graph on every run: that is ~380
+      # crates, 4-6 minutes on macOS and Windows.
       #
       # The check family was bumped from `nanofile` when the tray rustdoc step
       # moved here: the metadata that step produces only reaches later runs if
@@ -475,7 +476,13 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: "nanofile-v2"
+          # Its own family, not the lint rows' `nanofile-v2`: this row compiles
+          # for a cross target, so what it writes is `target/<triple>/` units a
+          # host check job cannot reuse. Sharing one key meant whichever row
+          # saved first defined it for the other — a cross row winning left the
+          # host `Lint` row with nothing (measured: 155s of clippy against 59s
+          # on a host-warm entry).
+          shared-key: "nanofile-cross"
       - name: Install Tailwind CSS
         run: npm ci
       # `cargo check` cannot do this: its C compiler is `cc`, which hands zig the
