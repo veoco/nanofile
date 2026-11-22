@@ -42,16 +42,8 @@ pub async fn get_thumbnail(
     let (data, etag, format) = svc.get_thumbnail(&repo_id, &path, size).await?;
 
     // Conditional request: a matching validator short-circuits to 304 without
-    // re-sending the body (mirrors the download endpoint).
-    let if_none_match = headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok());
-    let matches = match if_none_match {
-        Some("*") => true,
-        Some(v) => v.split(',').any(|t| t.trim() == etag),
-        None => false,
-    };
-    if matches {
+    // re-sending the body (same comparison as the download endpoint).
+    if crate::fs::core::download::if_none_match(&headers, &etag) {
         // 304 carries the same cache headers as the 200 so the client can keep
         // revalidating without a full refetch.
         return Ok((

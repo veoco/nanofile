@@ -144,7 +144,9 @@ match its content is rejected with `400`.
 
 Body: a JSON array of block ids (or a URL-encoded `block_ids` form).
 **Response `200`** — the ids the server does not have, as a JSON array.
-Requires write permission, because the answer is a block-existence oracle.
+Requires read permission: seafile-server classifies this as a download
+endpoint (`sync_api.go`), and the client only uses it to skip blocks it
+already has.
 
 ## Get a block {#get-seafhttp-repo-repo-id-block-block-id}
 

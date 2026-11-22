@@ -3,10 +3,9 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::handler::ok_json;
+use crate::handler::{ensure_same_batch_repo, normalize_batch_dir, ok_json};
 use crate::middleware::auth::AuthUser;
 use base::error::AppError;
-use base::sanitize::safe_normalize_path;
 
 #[derive(Deserialize)]
 pub struct BatchMoveRequest {
@@ -22,9 +21,7 @@ pub async fn batch_move_items(
     State(state): State<Arc<AppState>>,
     mut req: Json<BatchMoveRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if req.src_repo_id != req.dst_repo_id {
-        return Err(AppError::BadRequest("cross-repo move not supported".into()));
-    }
+    ensure_same_batch_repo(&req.src_repo_id, &req.dst_repo_id, "move")?;
 
     crate::handler::sanitize_dirent_list(&mut req.src_dirents)?;
 
@@ -46,10 +43,8 @@ pub async fn batch_move_items(
 
     let svc = state.fileops_service();
 
-    let src_dir = safe_normalize_path(&req.src_parent_dir)
-        .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
-    let dst_dir = safe_normalize_path(&req.dst_parent_dir)
-        .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
+    let src_dir = normalize_batch_dir(&req.src_parent_dir, "source path")?;
+    let dst_dir = normalize_batch_dir(&req.dst_parent_dir, "destination path")?;
 
     svc.batch_move(
         repo_id,
@@ -78,9 +73,7 @@ pub async fn sync_batch_copy_item(
     State(state): State<Arc<AppState>>,
     mut body: Json<SyncBatchCopyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if body.src_repo_id != body.dst_repo_id {
-        return Err(AppError::BadRequest("cross-repo copy not supported".into()));
-    }
+    ensure_same_batch_repo(&body.src_repo_id, &body.dst_repo_id, "copy")?;
 
     crate::handler::sanitize_dirent_list(&mut body.src_dirents)?;
 
@@ -98,10 +91,8 @@ pub async fn sync_batch_copy_item(
 
     let svc = state.fileops_service();
 
-    let src_parent_dir = safe_normalize_path(&body.src_parent_dir)
-        .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
-    let dst_parent_dir = safe_normalize_path(&body.dst_parent_dir)
-        .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
+    let src_parent_dir = normalize_batch_dir(&body.src_parent_dir, "source path")?;
+    let dst_parent_dir = normalize_batch_dir(&body.dst_parent_dir, "destination path")?;
 
     let _results = svc
         .batch_copy(
@@ -147,8 +138,7 @@ pub async fn batch_delete_item(
     // The repo id comes from the body, so the path-based key guard never sees it.
     auth.ensure_repo_allowed(repo_id, true)?;
 
-    let parent_dir = safe_normalize_path(&body.parent_dir)
-        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
+    let parent_dir = normalize_batch_dir(&body.parent_dir, "path")?;
 
     let svc = state.fileops_service();
 

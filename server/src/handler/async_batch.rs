@@ -11,12 +11,12 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::{ensure_same_batch_repo, normalize_batch_dir};
 use crate::middleware::auth::AuthUser;
 use crate::tasks::compat::copy_move_progress;
 use crate::tasks::run::Viewer;
 use crate::tasks::spec::JobKey;
 use base::error::AppError;
-use base::sanitize::safe_normalize_path;
 
 pub async fn async_batch_copy_item(
     auth: AuthUser,
@@ -26,9 +26,7 @@ pub async fn async_batch_copy_item(
     // The task below only carries one repo id, so a cross-repo copy would run
     // against the source library with the destination path and silently copy to
     // the wrong place. Fail closed exactly like the synchronous endpoint.
-    if body.src_repo_id != body.dst_repo_id {
-        return Err(AppError::BadRequest("cross-repo copy not supported".into()));
-    }
+    ensure_same_batch_repo(&body.src_repo_id, &body.dst_repo_id, "copy")?;
 
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
@@ -48,10 +46,8 @@ pub async fn async_batch_copy_item(
         return Err(AppError::BadRequest("no dirents specified".into()));
     }
 
-    let src_dir = safe_normalize_path(&body.src_parent_dir)
-        .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
-    let dst_dir = safe_normalize_path(&body.dst_parent_dir)
-        .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
+    let src_dir = normalize_batch_dir(&body.src_parent_dir, "source path")?;
+    let dst_dir = normalize_batch_dir(&body.dst_parent_dir, "destination path")?;
 
     let description = describe("Copy", &body.src_dirents);
     let total = body.src_dirents.len() as u64;
@@ -84,9 +80,7 @@ pub async fn async_batch_move_item(
     // `src_repo_id`, so accepting it would move the entries within the source
     // library to `dst_parent_dir` (or fail there) instead of moving them to the
     // destination library. Reject it the same way the synchronous endpoint does.
-    if body.src_repo_id != body.dst_repo_id {
-        return Err(AppError::BadRequest("cross-repo move not supported".into()));
-    }
+    ensure_same_batch_repo(&body.src_repo_id, &body.dst_repo_id, "move")?;
 
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
@@ -102,10 +96,8 @@ pub async fn async_batch_move_item(
         return Err(AppError::BadRequest("no dirents specified".into()));
     }
 
-    let src_dir = safe_normalize_path(&body.src_parent_dir)
-        .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
-    let dst_dir = safe_normalize_path(&body.dst_parent_dir)
-        .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
+    let src_dir = normalize_batch_dir(&body.src_parent_dir, "source path")?;
+    let dst_dir = normalize_batch_dir(&body.dst_parent_dir, "destination path")?;
 
     let description = describe("Move", &body.src_dirents);
     let total = body.src_dirents.len() as u64;
@@ -147,11 +139,7 @@ pub async fn copy_move_task(
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Like the two batch endpoints: the submitted task has one repo id, so a
     // cross-library request must be rejected instead of running in the source.
-    if body.src_repo_id != body.dst_repo_id {
-        return Err(AppError::BadRequest(
-            "cross-repo copy or move not supported".into(),
-        ));
-    }
+    ensure_same_batch_repo(&body.src_repo_id, &body.dst_repo_id, "copy or move")?;
 
     crate::domain::permission::check_repo_write_permission(
         state.repos.member.as_ref(),
@@ -162,10 +150,8 @@ pub async fn copy_move_task(
 
     auth.ensure_repo_allowed(&body.src_repo_id, true)?;
 
-    let src_dir = safe_normalize_path(&body.src_parent_dir)
-        .map_err(|e| AppError::BadRequest(format!("Invalid source path: {e}")))?;
-    let dst_dir = safe_normalize_path(&body.dst_parent_dir)
-        .map_err(|e| AppError::BadRequest(format!("Invalid destination path: {e}")))?;
+    let src_dir = normalize_batch_dir(&body.src_parent_dir, "source path")?;
+    let dst_dir = normalize_batch_dir(&body.dst_parent_dir, "destination path")?;
 
     let operation = body.operation.as_deref().unwrap_or("copy");
     let key = match operation {

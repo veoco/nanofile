@@ -339,14 +339,11 @@ async fn parse_repo_id_body(req: Request<Body>) -> Result<String, AppError> {
     let (_, body) = req.into_parts();
     let bytes = read_body_limited(body, MAX_SMALL_BODY_BYTES).await?;
 
-    if let Ok(parsed) = serde_json::from_slice::<RestoreDeletedRepoBody>(&bytes)
-        && !parsed.repo_id.is_empty()
-    {
-        return Ok(parsed.repo_id);
+    let parsed: RestoreDeletedRepoBody =
+        crate::handler::json_or_form::parse_json_or_form(&bytes)
+            .map_err(|_| AppError::BadRequest("repo_id can not be empty.".into()))?;
+    if parsed.repo_id.is_empty() {
+        return Err(AppError::BadRequest("repo_id can not be empty.".into()));
     }
-
-    match serde_urlencoded::from_bytes::<RestoreDeletedRepoBody>(&bytes) {
-        Ok(parsed) if !parsed.repo_id.is_empty() => Ok(parsed.repo_id),
-        _ => Err(AppError::BadRequest("repo_id can not be empty.".into())),
-    }
+    Ok(parsed.repo_id)
 }

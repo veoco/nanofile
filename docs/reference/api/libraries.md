@@ -143,7 +143,9 @@ The v2.1 shape used by the mobile clients and the web interface.
 ```
 
 `last_modified` is RFC 3339; `mtime` is the same instant as Unix seconds.
-Requires `library.read`.
+An encrypted library with `enc_version` 3 or 4 also carries `salt`, the
+per-library salt the client needs to derive its key; the key is omitted for
+other libraries. Requires `library.read`.
 
 ## Get a library (v2.1) {#get-api-v2-1-repos-repo-id}
 

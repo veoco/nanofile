@@ -1,15 +1,13 @@
 use axum::{
     Json,
-    body::to_bytes,
-    extract::{FromRequest, Path, Query, Request, State},
-    http::header,
+    extract::{Path, Query, State},
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
+use crate::handler::json_or_form::JsonOrForm;
 use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use crate::service::sharing::{link, share};
@@ -35,40 +33,6 @@ pub struct CreateLinkRequest {
     #[serde(default)]
     pub expiration_time: Option<String>,
     pub description: Option<String>,
-}
-
-/// Accept a JSON object or an `application/x-www-form-urlencoded` body; the
-/// desktop client posts form-encoded link data while web/Android send JSON.
-pub struct JsonOrForm(serde_json::Value);
-
-impl<S> FromRequest<S> for JsonOrForm
-where
-    S: Send + Sync,
-{
-    type Rejection = AppError;
-
-    async fn from_request(req: Request, _state: &S) -> Result<Self, Self::Rejection> {
-        let content_type = req
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-
-        let bytes = to_bytes(req.into_body(), 8 * 1024 * 1024)
-            .await
-            .map_err(|e| AppError::BadRequest(format!("failed to read body: {e}")))?;
-
-        if content_type.starts_with("application/x-www-form-urlencoded") {
-            let map = serde_urlencoded::from_bytes::<HashMap<String, String>>(&bytes)
-                .map_err(|e| AppError::BadRequest(format!("invalid form body: {e}")))?;
-            Ok(JsonOrForm(serde_json::to_value(map).unwrap_or_default()))
-        } else {
-            serde_json::from_slice::<serde_json::Value>(&bytes)
-                .map(JsonOrForm)
-                .map_err(|e| AppError::BadRequest(format!("invalid JSON body: {e}")))
-        }
-    }
 }
 
 fn parse_link_request(v: &serde_json::Value) -> Result<CreateLinkRequest, AppError> {

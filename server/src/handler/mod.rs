@@ -54,6 +54,25 @@ pub fn sanitize_dirent_list(names: &mut Vec<String>) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Reject a cross-library batch request: the submitted task (or synchronous
+/// operation) carries one repo id, so running it against the source library
+/// with the destination's paths would act on the wrong library.
+pub fn ensure_same_batch_repo(src: &str, dst: &str, operation: &str) -> Result<(), AppError> {
+    if src != dst {
+        return Err(AppError::BadRequest(format!(
+            "cross-repo {operation} not supported"
+        )));
+    }
+    Ok(())
+}
+
+/// Normalize a batch parent path with the field-specific message the clients
+/// already see (`"Invalid source path: …"`, `"Invalid path: …"`).
+pub fn normalize_batch_dir(path: &str, label: &str) -> Result<String, AppError> {
+    base::sanitize::safe_normalize_path(path)
+        .map_err(|e| AppError::BadRequest(format!("Invalid {label}: {e}")))
+}
+
 /// Whether a failed body read is the peer giving up on its upload.
 ///
 /// hyper surfaces a connection that ends before the declared `Content-Length` as a
@@ -170,6 +189,7 @@ pub mod fileops;
 pub mod groups;
 pub mod history;
 pub mod invitations;
+pub mod json_or_form;
 pub mod links;
 pub mod login;
 pub mod metadata;

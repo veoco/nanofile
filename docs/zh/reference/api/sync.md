@@ -106,7 +106,7 @@
 
 `POST /seafhttp/repo/{repo_id}/check-blocks/`
 
-请求体：块 id 的 JSON 数组（或 URL 编码的 `block_ids` 表单）。**响应 `200`** —— 服务器没有的 id 数组。需要写权限，因为这个答案是一个块存在性探针。
+请求体：块 id 的 JSON 数组（或 URL 编码的 `block_ids` 表单）。**响应 `200`** —— 服务器没有的 id 数组。需要读权限：seafile-server 把它归为下载类端点（`sync_api.go`），客户端只用它跳过本地已有的块。
 
 ## 获取块 {#get-seafhttp-repo-repo-id-block-block-id}
 

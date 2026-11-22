@@ -116,7 +116,7 @@ Seafile 重载了这个路径，查询参数 `op` 选择操作：
 }
 ```
 
-`last_modified` 是 RFC 3339；`mtime` 是同一时刻的 Unix 秒。需要 `library.read`。
+`last_modified` 是 RFC 3339；`mtime` 是同一时刻的 Unix 秒。`enc_version` 为 3 或 4 的加密资料库还会带 `salt`，客户端用它派生密钥；其他资料库不含这个键。需要 `library.read`。
 
 ## 获取资料库（v2.1） {#get-api-v2-1-repos-repo-id}
 
