@@ -64,7 +64,7 @@
 
 `GET /api/v2.1/repos/{repo_id}/file/revision/?p=<path>&commit_id=<id>`
 
-以 `Content-Disposition: attachment` 流式返回该提交中的文件字节。需要 `history.read`。
+以 `Content-Disposition: attachment` 流式返回该提交中的文件字节。支持 `Range`、`Content-Length` 与 `If-None-Match`（验证器匹配时在判断 `Range` 之前返回 `304`）。需要 `history.read`。
 
 **Seafile** —— 官方参考把该操作记录在旧版 `/api2/repos/{repo_id}/file/revision/`；Nanofile 提供在 `/api/v2.1/` 下（网页界面使用的路径）。字节与查询参数相同。
 

@@ -35,7 +35,10 @@ or API key). `dl=1` forces `Content-Disposition: attachment`; the default is
 inline, which is what the preview uses.
 
 Supports `Range` (single range; `416` carries `Content-Range: bytes */<size>`)
-and `If-None-Match` against the file's FS object id. Requires `file.read`.
+and `If-None-Match` against a hash of the file's block list. A matching
+validator answers `304` before `Range` is considered. Because the URL is stable,
+the response is `Cache-Control: private, no-cache`: an edit is revalidated, never
+served from a week-old cache. Requires `file.read`.
 
 ## Download a file by link {#get-download-api-token}
 
@@ -45,12 +48,16 @@ Streams the file named when the token was minted. Same `Range` and
 `If-None-Match` handling as above. The token's permission is re-checked on every
 request; an invalid or expired token is a `400`.
 
+The token URL is unique per issuance, so it is cacheable for an hour
+(`Cache-Control: max-age=3600`).
+
 ## Download one block {#get-blks-token-file-id-block-id}
 
 `GET /blks/{token}/{file_id}/{block_id}`
 
-Serves one block of a file, for clients that decrypt block by block. The token
-is minted by [`GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/`](/reference/api/libraries#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link)
+Serves one block of a file, for clients that decrypt block by block. Blocks are
+content-addressed and immutable, so they carry `Cache-Control: max-age=3600`.
+The token is minted by [`GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/`](/reference/api/libraries#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link)
 and is bound to the library and caller, not to a single block: while it is valid
 it can serve any block of any file the caller may read in that library. The
 endpoint still checks that the requested block belongs to the file named in the

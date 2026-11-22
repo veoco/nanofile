@@ -298,6 +298,9 @@ that download blocks individually.
 **Response `200`** — the URL as a JSON string. Requires read permission and the
 `file.write` capability (the minted link is a transfer credential).
 
+Unlike seahub, the link is issued even when the account is over its storage
+quota; quota is enforced on the write paths only.
+
 ## Set an encrypted library's password {#post-api-v2-1-repos-repo-id-set-password}
 
 `POST /api/v2.1/repos/{repo_id}/set-password/`

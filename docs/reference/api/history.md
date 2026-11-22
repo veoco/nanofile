@@ -74,7 +74,9 @@ Commits that did not change the file's content are skipped. Requires
 `GET /api/v2.1/repos/{repo_id}/file/revision/?p=<path>&commit_id=<id>`
 
 Streams the file's bytes as they were in that commit, with
-`Content-Disposition: attachment`. Requires `history.read`.
+`Content-Disposition: attachment`. Supports `Range`, `Content-Length`, and
+`If-None-Match` (a matching validator answers `304` before `Range` is
+considered). Requires `history.read`.
 
 **Seafile** — the official reference documents this operation under the legacy
 `/api2/repos/{repo_id}/file/revision/`; Nanofile serves it under `/api/v2.1/`

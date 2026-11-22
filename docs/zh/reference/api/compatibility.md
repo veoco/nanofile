@@ -199,7 +199,7 @@ Nanofile 没有评论功能。
 | [Create/Rename/Move/Copy/Revert a file](https://seafile-api.readme.io/reference/post_api-v2-1-repos-repo-id-file)<br>`POST /api/v2.1/repos/{repo_id}/file/` | 有差异 | [本地接口](/zh/reference/api/files#post-api-v2-1-repos-repo-id-file) | 只支持 `create` 与 `rename`；移动走旧版 `/api2/.../file/` 表单，复制用 `fileops`，回退用版本恢复。 |
 | [Lock/Unlock file](https://seafile-api.readme.io/reference/put_api-v2-1-repos-repo-id-file)<br>`PUT /api/v2.1/repos/{repo_id}/file/` | 有差异 | [本地接口](/zh/reference/api/files#put-api2-repos-repo-id-file) | 加锁/解锁在旧版 `/api2/repos/{repo_id}/file/` 的 PUT，`operation=lock\|unlock`。 |
 | [Delete file](https://seafile-api.readme.io/reference/delete_api-v2-1-repos-repo-id-file)<br>`DELETE /api/v2.1/repos/{repo_id}/file/` | 一致 | [本地接口](/zh/reference/api/files#delete-api-v2-1-repos-repo-id-file) |  |
-| [Download file](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-file)<br>`GET /api2/repos/{repo_id}/file/` | 一致 | [本地接口](/zh/reference/api/files#get-api2-repos-repo-id-file) |  |
+| [Download file](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-file)<br>`GET /api2/repos/{repo_id}/file/` | 有差异 | [本地接口](/zh/reference/api/files#get-api2-repos-repo-id-file) | `p` 必填，`reuse` 只接受 `0`/`1`；未实现 `op=sharelink`（请用 `/api/v2.1/share-links/`）。 |
 | [Get file detail](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-file-detail)<br>`GET /api2/repos/{repo_id}/file/detail/` | 一致 | [本地接口](/zh/reference/api/files#get-api2-repos-repo-id-file-detail) |  |
 | [Get smart link for a file](https://seafile-api.readme.io/reference/get_api-v2-1-smart-link)<br>`GET /api/v2.1/smart-link/` | 有差异 | [本地接口](/zh/reference/api/sharing#get-api-v2-1-smart-link) | 返回指向文件接口的 `{url}`；不产出官方的 `smart_link`/`smart_link_token`/`name` 结构。 |
 

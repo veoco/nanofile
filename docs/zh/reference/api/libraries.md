@@ -245,6 +245,8 @@ iOS 大文件流程。请求是表单，字段 `blklist` 为逗号分隔的块 i
 
 **响应 `200`** —— URL 的 JSON 字符串。需要读权限与 `file.write` 能力（生成的链接是传输凭据）。
 
+与 seahub 不同，账号超出存储配额时也能取得该链接；配额只在上传/写入路径强制。
+
 ## 设置加密资料库密码 {#post-api-v2-1-repos-repo-id-set-password}
 
 `POST /api/v2.1/repos/{repo_id}/set-password/`

@@ -18,7 +18,7 @@
 
 用调用者自己的凭据（账号令牌、会话或 API 密钥）流式返回文件字节。`dl=1` 强制 `Content-Disposition: attachment`；默认内联，供预览使用。
 
-支持 `Range`（单个区间；`416` 带 `Content-Range: bytes */<size>`）与针对文件 FS 对象 id 的 `If-None-Match`。需要 `file.read`。
+支持 `Range`（单个区间；`416` 带 `Content-Range: bytes */<size>`）与针对文件块列表哈希的 `If-None-Match`；验证器匹配时，在判断 `Range` 之前返回 `304`。URL 稳定，所以响应带 `Cache-Control: private, no-cache`：文件修改后会重新验证，不会从一周前的缓存里取出。需要 `file.read`。
 
 ## 通过链接下载 {#get-download-api-token}
 
@@ -26,11 +26,13 @@
 
 流式返回签发令牌时指定的文件。`Range` 与 `If-None-Match` 处理同上。每次请求都会重新核对令牌权限；无效或过期令牌返回 `400`。
 
+令牌 URL 每次签发都不同，可缓存一小时（`Cache-Control: max-age=3600`）。
+
 ## 下载单个块 {#get-blks-token-file-id-block-id}
 
 `GET /blks/{token}/{file_id}/{block_id}`
 
-返回文件的一个块，供逐块解密的客户端使用。令牌由 [`GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/`](/zh/reference/api/libraries#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link) 签发，绑定的是资料库与调用者而不是单个块：在有效期内，调用者能读取该库中任意文件的任意块；接口仍会校验所请求的块属于路径里给出的 `file_id`。
+返回文件的一个块，供逐块解密的客户端使用。块按内容寻址且不可变，因此带 `Cache-Control: max-age=3600`。令牌由 [`GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/`](/zh/reference/api/libraries#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link) 签发，绑定的是资料库与调用者而不是单个块：在有效期内，调用者能读取该库中任意文件的任意块；接口仍会校验所请求的块属于路径里给出的 `file_id`。
 
 ## 上传文件 {#post-upload-api-token}
 
