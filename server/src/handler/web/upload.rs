@@ -740,123 +740,300 @@ pub async fn upload_aj(
     headers: HeaderMap,
     body: axum::body::Body,
 ) -> Result<axum::response::Response, AppError> {
-    // No Content-Length precheck here: this endpoint can replace an existing
-    // file, and the old size is only known after the multipart fields are parsed.
-    // A full-size precheck would reject a legitimate same-size overwrite near the
-    // quota; the commit-time delta check is authoritative and failure cleanup
-    // removes any blocks this request created.
-    //
-    // Non-chunked uploads are staged on disk here and only ingested after the
-    // session checks below pass; a `Content-Range` chunk is buffered instead.
-    let is_chunked = headers.contains_key("content-range");
-    let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let mode = if is_chunked {
-        IntakeMode::Chunk {
-            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
-        }
-    } else {
-        IntakeMode::Stage {
-            dir: upload_staging_dir(&state),
-            max_bytes: max_upload_bytes(&state),
-        }
-    };
-    let Parts {
-        fields,
-        files: staged_files,
-        chunked,
-    } = read_parts(&state, mode, body, &headers, usize::MAX).await?;
-
-    let repo_id = fields
+    // No Content-Length precheck: the old size is only known after parsing, so
+    // only the commit-time size delta is a correct quota check.
+    let range = headers.get("content-range").and_then(|v| v.to_str().ok());
+    let parts = read_upload_body(&state, None, body, &headers).await?;
+    let repo_id = parts
+        .fields
         .get("repo_id")
+        .cloned()
         .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?;
-    let relative_path = fields
-        .get("relative_path")
-        .map(|s| s.as_str())
-        .unwrap_or("");
     let query = query_params(&uri);
-    // A missing `parent_dir` keeps this endpoint's long-standing default of the
-    // library root: the session form only ever came from the web UI, but a body
-    // without the field must not start answering 400.
-    let target = resolve_create_target(
-        None,
-        fields.get("parent_dir").map(String::as_str),
-        relative_path,
-        parse_replace_arg(
-            query.get("replace").map(String::as_str),
-            fields.get("replace").map(String::as_str),
-        )?,
-    )?;
-
+    let target = create_target(None, &parts.fields, &query)?;
     let auth = AuthContext::from_session(
         &state,
         &user,
-        repo_id,
-        fields.get("csrf_token").map(String::as_str),
+        &repo_id,
+        parts.fields.get("csrf_token").map(String::as_str),
     )
     .await?;
+    finish_create(&state, &auth, parts, &target, range, ReplyStyle::Array)
+        .await
+        .map(|finished| finished.response)
+}
 
-    if is_chunked {
-        let (filename, file_data) =
-            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
-        if file_data.is_empty() {
+/// How the final commit names files: uploads take names from the parts, updates
+/// commit the single part under the resolved target name.
+enum CommitTarget<'a> {
+    Create,
+    Existing(&'a str),
+}
+
+/// Everything after target resolution, shared by the upload and update families.
+struct FinishRequest<'a> {
+    dir: &'a str,
+    target: CommitTarget<'a>,
+    replace: bool,
+    /// `Content-Range`, when the request is a chunk.
+    range: Option<&'a str>,
+    style: ReplyStyle,
+}
+
+/// The framed reply plus how it was produced, for the one caller that needs to
+/// tell a chunked commit from a whole-file one (the upload-link view counter).
+struct Finished {
+    response: axum::response::Response,
+    chunked: bool,
+}
+
+/// Run the shared tail: chunk handling, CDC ingest, commit and reply framing.
+async fn finish_request(
+    state: &AppState,
+    auth: &AuthContext,
+    parts: Parts,
+    req: FinishRequest<'_>,
+) -> Result<Finished, AppError> {
+    let FinishRequest {
+        dir,
+        target,
+        replace,
+        range,
+        style,
+    } = req;
+
+    if let Some((filename, data)) = parts.chunked {
+        if data.is_empty() {
             return Err(AppError::BadRequest("No file in multipart form".into()));
         }
-        let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
+        let name = match target {
+            CommitTarget::Create => filename,
+            CommitTarget::Existing(name) => name.to_string(),
+        };
+        let mtime = parse_mtime(parts.fields.get("file_mtime").map(String::as_str));
         if let Some(result) = try_handle_chunked(
-            &state,
-            &auth,
+            state,
+            auth,
             ChunkUpload {
-                dir: &target.dir,
-                name: &filename,
-                data: bytes::Bytes::from(file_data),
-                range: content_range,
-                replace: target.replace,
+                dir,
+                name: &name,
+                data: bytes::Bytes::from(data),
+                range,
+                replace,
                 mtime,
             },
         )
         .await?
         {
-            return Ok(reply_chunk(ReplyStyle::Array, result));
+            return Ok(Finished {
+                response: reply_chunk(style, result),
+                chunked: true,
+            });
         }
         return Err(AppError::Internal(
             "chunked upload produced no outcome".into(),
         ));
     }
 
-    if staged_files.is_empty() {
+    if parts.files.is_empty() {
         return Err(AppError::BadRequest("No file in multipart form".into()));
     }
-
-    // Ingest the staged bytes now that the caller is authorized; each guard
-    // removes its staging file on every exit path.
     let mut files = ingest_parts(
-        staged_files,
+        parts.files,
         state.block_store.clone(),
-        repo_id,
+        &auth.repo_id,
         auth.enc_key_ref(),
     )
     .await?;
-    assign_mtimes(&mut files, &fields);
-    if !target.replace && duplicate_file_names(&files) {
-        return Err(AppError::BadRequest("Too many files with same name".into()));
+
+    match target {
+        CommitTarget::Existing(name) => {
+            let mut file = files
+                .into_iter()
+                .next()
+                .ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
+            file.mtime = parse_mtime(parts.fields.get("last_modify").map(String::as_str));
+            let committed = commit_file(
+                state,
+                CommitRequest {
+                    repo_id: &auth.repo_id,
+                    dir,
+                    name,
+                    block_ids: file.block_ids,
+                    total_size: file.total_size,
+                    modifier: &auth.modifier,
+                    user_id: Some(auth.user_id),
+                    ensure_dir: false,
+                    replace: true,
+                    new_block_ids: file.new_block_ids,
+                    mtime: file.mtime,
+                },
+            )
+            .await?;
+            Ok(Finished {
+                response: reply_committed(style, &[committed]),
+                chunked: false,
+            })
+        }
+        CommitTarget::Create => {
+            assign_mtimes(&mut files, &parts.fields);
+            if !replace && duplicate_file_names(&files) {
+                return Err(AppError::BadRequest("Too many files with same name".into()));
+            }
+            let committed = commit_uploads(
+                state,
+                &auth.repo_id,
+                dir,
+                files,
+                &auth.modifier,
+                Some(auth.user_id),
+                true,
+                replace,
+            )
+            .await?;
+            Ok(Finished {
+                response: reply_committed(style, &committed),
+                chunked: false,
+            })
+        }
     }
-    // Zero-byte files are committed too: seafile gives them the `EMPTY_SHA1`
-    // sentinel id but still creates the dirent (`server/fileserver/fileop.go:3699-3702`).
-    let committed = commit_uploads(
-        &state,
-        repo_id,
-        &target.dir,
-        files,
-        &auth.modifier,
-        Some(auth.user_id),
-        true,
-        target.replace,
+}
+
+/// Resolve the create target of an upload from its fields and query.
+///
+/// A missing `parent_dir` means the token's directory for token uploads and the
+/// library root for session uploads; the target is always clamped, never widened.
+fn create_target(
+    token: Option<&crate::service::auth::access_token::AccessToken>,
+    fields: &HashMap<String, String>,
+    query: &HashMap<String, String>,
+) -> Result<CreateTarget, AppError> {
+    let relative_path = fields
+        .get("relative_path")
+        .map(String::as_str)
+        .unwrap_or("");
+    resolve_create_target(
+        token,
+        fields.get("parent_dir").map(String::as_str),
+        relative_path,
+        parse_replace_arg(
+            query.get("replace").map(String::as_str),
+            fields.get("replace").map(String::as_str),
+        )?,
     )
-    .await?;
-    Ok(reply_committed(ReplyStyle::Array, &committed))
+}
+
+/// Finish an upload: names come from the parts, `replace` from the target.
+async fn finish_create(
+    state: &AppState,
+    auth: &AuthContext,
+    parts: Parts,
+    target: &CreateTarget,
+    range: Option<&str>,
+    style: ReplyStyle,
+) -> Result<Finished, AppError> {
+    finish_request(
+        state,
+        auth,
+        parts,
+        FinishRequest {
+            dir: &target.dir,
+            target: CommitTarget::Create,
+            replace: target.replace,
+            range,
+            style,
+        },
+    )
+    .await
+}
+
+/// Finish an update: the single part is committed under the target's name.
+async fn finish_existing(
+    state: &AppState,
+    auth: &AuthContext,
+    parts: Parts,
+    target: &ExistingTarget,
+    range: Option<&str>,
+    style: ReplyStyle,
+) -> Result<Finished, AppError> {
+    finish_request(
+        state,
+        auth,
+        parts,
+        FinishRequest {
+            dir: &target.dir,
+            target: CommitTarget::Existing(&target.name),
+            replace: true,
+            range,
+            style,
+        },
+    )
+    .await
+}
+
+/// Intake mode for the token endpoints, where the repository is already known.
+fn token_mode(state: &AppState, chunked: bool, auth: &AuthContext) -> IntakeMode {
+    if chunked {
+        IntakeMode::Chunk {
+            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
+        }
+    } else {
+        IntakeMode::Stream {
+            repo_id: auth.repo_id.clone(),
+            enc_key: auth.enc_key.clone(),
+        }
+    }
+}
+
+/// Intake mode for the session endpoints, which learn the repository from the body.
+fn session_mode(state: &AppState, chunked: bool) -> IntakeMode {
+    if chunked {
+        IntakeMode::Chunk {
+            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
+        }
+    } else {
+        IntakeMode::Stage {
+            dir: upload_staging_dir(state),
+            max_bytes: max_upload_bytes(state),
+        }
+    }
+}
+
+/// Read an upload's parts: many files, streamed for a token caller and staged
+/// for a session caller.
+async fn read_upload_body(
+    state: &AppState,
+    auth: Option<&AuthContext>,
+    body: axum::body::Body,
+    headers: &HeaderMap,
+) -> Result<Parts, AppError> {
+    let chunked = headers.contains_key("content-range");
+    let mode = match auth {
+        Some(auth) => token_mode(state, chunked, auth),
+        None => session_mode(state, chunked),
+    };
+    read_parts(state, mode, body, headers, usize::MAX).await
+}
+
+/// Read an update's parts: exactly one file.
+async fn read_update_body(
+    state: &AppState,
+    auth: Option<&AuthContext>,
+    body: axum::body::Body,
+    headers: &HeaderMap,
+) -> Result<Parts, AppError> {
+    let chunked = headers.contains_key("content-range");
+    let mode = match auth {
+        Some(auth) => token_mode(state, chunked, auth),
+        None => session_mode(state, chunked),
+    };
+    read_parts(state, mode, body, headers, 1).await
 }
 
 /// Extract the multipart `boundary` from the Content-Type header.
+///
+/// Qt's QHttpMultiPart sends a quoted boundary (`boundary="_.Seafile._UUID"`)
+/// while the body uses the unquoted form, so surrounding quotes are stripped.
 fn extract_multipart_boundary(headers: &HeaderMap) -> Result<String, AppError> {
     let ct = headers
         .get(axum::http::header::CONTENT_TYPE)
@@ -1329,24 +1506,13 @@ pub async fn update_api(
     // of the budget. A Content-Length precheck cannot know that delta and used to
     // reject a same-size replacement near the quota; the commit-time check in
     // `upload_file_committed_stream` applies the correct delta instead.
-    let is_chunked = headers.contains_key("content-range");
-    let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let mode = if is_chunked {
-        IntakeMode::Chunk {
-            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
-        }
-    } else {
-        IntakeMode::Stage {
-            dir: upload_staging_dir(&state),
-            max_bytes: max_upload_bytes(&state),
-        }
-    };
+    let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     // An update carries exactly one file part.
     let Parts {
         fields,
         files,
         chunked,
-    } = read_parts(&state, mode, body, &headers, 1).await?;
+    } = read_update_body(&state, None, body, &headers).await?;
 
     let repo_id = fields.get("repo_id").cloned().unwrap_or_default();
     let file_path = fields
@@ -1368,60 +1534,20 @@ pub async fn update_api(
     let target = resolve_existing_target(None, &file_path, "")?;
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
-    if is_chunked {
-        let (_, file_data) =
-            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
-        if file_data.is_empty() {
-            return Err(AppError::BadRequest("No file in multipart form".into()));
-        }
-        let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
-        if let Some(result) = try_handle_chunked(
-            &state,
-            &auth,
-            ChunkUpload {
-                dir: &target.dir,
-                name: &target.name,
-                data: bytes::Bytes::from(file_data),
-                range: content_range,
-                replace: true,
-                mtime,
-            },
-        )
-        .await?
-        {
-            return Ok(reply_chunk(ReplyStyle::Array, result));
-        }
-        return Err(AppError::Internal(
-            "chunked upload produced no outcome".into(),
-        ));
-    }
-
-    let Some(part) = files.into_iter().next() else {
-        return Err(AppError::BadRequest("No file in multipart form".into()));
-    };
-    let file = part
-        .into_uploaded(state.block_store.clone(), &repo_id, auth.enc_key_ref())
-        .await?;
-    let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
-    // Update semantics: overwrite in place, and commit zero-byte files too.
-    let committed = commit_file(
+    finish_existing(
         &state,
-        CommitRequest {
-            repo_id: &repo_id,
-            dir: &target.dir,
-            name: &target.name,
-            block_ids: file.block_ids,
-            total_size: file.total_size,
-            modifier: &auth.modifier,
-            user_id: Some(auth.user_id),
-            ensure_dir: true,
-            replace: true,
-            new_block_ids: file.new_block_ids,
-            mtime,
+        &auth,
+        Parts {
+            fields,
+            files,
+            chunked,
         },
+        &target,
+        range,
+        ReplyStyle::Array,
     )
-    .await?;
-    Ok(reply_committed(ReplyStyle::Array, &[committed]))
+    .await
+    .map(|finished| finished.response)
 }
 
 /// `POST /update-aj/` — AJAX file update from the Seahub web UI (no token),
@@ -1434,24 +1560,13 @@ pub async fn update_aj(
 ) -> Result<axum::response::Response, AppError> {
     // See `update_api`: an update replaces the file, so only the commit-time
     // size delta is a correct quota check.
-    let is_chunked = headers.contains_key("content-range");
-    let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let mode = if is_chunked {
-        IntakeMode::Chunk {
-            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
-        }
-    } else {
-        IntakeMode::Stage {
-            dir: upload_staging_dir(&state),
-            max_bytes: max_upload_bytes(&state),
-        }
-    };
+    let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     // An update carries exactly one file part.
     let Parts {
         fields,
         files,
         chunked,
-    } = read_parts(&state, mode, body, &headers, 1).await?;
+    } = read_update_body(&state, None, body, &headers).await?;
 
     let repo_id = fields
         .get("repo_id")
@@ -1471,61 +1586,20 @@ pub async fn update_aj(
     let target = resolve_existing_target(None, target_file, "")?;
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
-    if is_chunked {
-        let (_, file_data) =
-            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
-        let file_data = bytes::Bytes::from(file_data);
-        if file_data.is_empty() {
-            return Err(AppError::BadRequest("No file in multipart form".into()));
-        }
-        if let Some(result) = try_handle_chunked(
-            &state,
-            &auth,
-            ChunkUpload {
-                dir: &target.dir,
-                name: &target.name,
-                data: file_data,
-                range: content_range,
-                // The update endpoints always replace the target in place.
-                replace: true,
-                mtime: parse_mtime(fields.get("file_mtime").map(String::as_str)),
-            },
-        )
-        .await?
-        {
-            return Ok(reply_chunk(ReplyStyle::Array, result));
-        }
-        return Err(AppError::Internal(
-            "chunked upload produced no outcome".into(),
-        ));
-    }
-
-    let Some(part) = files.into_iter().next() else {
-        return Err(AppError::BadRequest("No file in multipart form".into()));
-    };
-    let file = part
-        .into_uploaded(state.block_store.clone(), repo_id, auth.enc_key_ref())
-        .await?;
-    let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
-    // Update semantics: overwrite in place, and commit zero-byte files too.
-    let committed = commit_file(
+    finish_existing(
         &state,
-        CommitRequest {
-            repo_id,
-            dir: &target.dir,
-            name: &target.name,
-            block_ids: file.block_ids,
-            total_size: file.total_size,
-            modifier: &auth.modifier,
-            user_id: Some(auth.user_id),
-            ensure_dir: true,
-            replace: true,
-            new_block_ids: file.new_block_ids,
-            mtime,
+        &auth,
+        Parts {
+            fields,
+            files,
+            chunked,
         },
+        &target,
+        range,
+        ReplyStyle::Array,
     )
-    .await?;
-    Ok(reply_committed(ReplyStyle::Array, &[committed]))
+    .await
+    .map(|finished| finished.response)
 }
 
 /// `POST /upload-aj/{token}` — upload with an upload-link token, as sent by the
@@ -1543,104 +1617,43 @@ pub async fn upload_aj_token(
     // replace an existing file, so only the commit-time size delta is correct.
     // This matches `/upload-aj/` and `/upload-api/`; the commit removes the
     // blocks it wrote when the delta does not fit.
-    let is_chunked = headers.contains_key("content-range");
-    let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let mode = if is_chunked {
-        IntakeMode::Chunk {
-            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
-        }
-    } else {
-        // The token already names the repository, so bytes stream straight to
-        // blocks instead of waiting in a staging file.
-        IntakeMode::Stream {
-            repo_id: auth.repo_id.clone(),
-            enc_key: auth.enc_key.clone(),
-        }
-    };
+    let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let Parts {
         fields,
         files,
         chunked,
-    } = read_parts(&state, mode, body, &headers, usize::MAX).await?;
+    } = read_upload_body(&state, Some(&auth), body, &headers).await?;
 
     // The public upload page posts only the `file` part and relies on the minted
     // token for the directory, so a body without `parent_dir` keeps that default
     // instead of answering 400. The token's directory is still clamped, never
     // widened.
-    let relative_path = fields
-        .get("relative_path")
-        .map(|s| s.as_str())
-        .unwrap_or("");
     let query = query_params(&uri);
-    let target = resolve_create_target(
-        Some(auth.token()),
-        fields.get("parent_dir").map(String::as_str),
-        relative_path,
-        parse_replace_arg(
-            query.get("replace").map(String::as_str),
-            fields.get("replace").map(String::as_str),
-        )?,
-    )?;
+    let target = create_target(Some(auth.token()), &fields, &query)?;
 
-    if is_chunked {
-        let (filename, file_data) =
-            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
-        if file_data.is_empty() {
-            return Err(AppError::BadRequest("No file in multipart form".into()));
-        }
-        let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
-        if let Some(result) = try_handle_chunked(
-            &state,
-            &auth,
-            ChunkUpload {
-                dir: &target.dir,
-                name: &filename,
-                data: bytes::Bytes::from(file_data),
-                range: content_range,
-                replace: target.replace,
-                mtime,
-            },
-        )
-        .await?
-        {
-            return Ok(reply_chunk(ReplyStyle::Array, result));
-        }
-        return Err(AppError::Internal(
-            "chunked upload produced no outcome".into(),
-        ));
-    }
-
-    if files.is_empty() {
-        return Err(AppError::BadRequest("No file in multipart form".into()));
-    }
-    let mut files = ingest_parts(
-        files,
-        state.block_store.clone(),
-        &auth.repo_id,
-        auth.enc_key_ref(),
-    )
-    .await?;
-    assign_mtimes(&mut files, &fields);
-    if !target.replace && duplicate_file_names(&files) {
-        return Err(AppError::BadRequest("Too many files with same name".into()));
-    }
-    let committed = commit_uploads(
+    let finished = finish_create(
         &state,
-        &auth.repo_id,
-        &target.dir,
-        files,
-        &auth.modifier,
-        Some(auth.user_id),
-        true,
-        target.replace,
+        &auth,
+        Parts {
+            fields,
+            files,
+            chunked,
+        },
+        &target,
+        range,
+        ReplyStyle::Array,
     )
     .await?;
 
+    // The view counter only fires for a whole-file commit: the chunked branch
+    // returned before it before the tail was shared.
+    if finished.chunked {
+        return Ok(finished.response);
+    }
     if let Some(link_id) = auth.token().upload_link_id {
         upload_link_service::increment_upload_view_cnt(state.repos.clone(), link_id);
     }
-
-    Ok(reply_committed(ReplyStyle::Array, &committed))
+    Ok(finished.response)
 }
 
 /// `POST /upload-api/{token}` — token-authenticated upload for the desktop
@@ -1650,118 +1663,33 @@ pub async fn upload_api(
     Path(token): Path<String>,
     req: axum::http::Request<axum::body::Body>,
 ) -> Result<axum::response::Response, AppError> {
-    let (parts, body) = req.into_parts();
-    let headers = parts.headers;
+    let (request, body) = req.into_parts();
+    let headers = request.headers;
     // The query has to be captured before the request body is consumed.
-    let query = query_params(&parts.uri);
-    // Resumable uploads reach this endpoint: the Qt desktop client fetches
-    // `api2/repos/{id}/upload-link/` and chunks files over 100 MB
-    // (`ReliablePostFileTask`). A chunk must go through the temp-file / assembly
-    // path — streaming it straight into blocks would commit it as a whole file,
-    // and that path is also where the declared size is reserved against quota.
-    let is_chunked = headers.contains_key("content-range");
-    let content_range = headers
-        .get("content-range")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
+    let query = query_params(&request.uri);
+    let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let auth = AuthContext::from_token(&state, &token, TokenKind::Upload).await?;
-
-    // This token can name a replacement, so a full Content-Length precheck would
-    // reject a same-size overwrite near the quota. The commit-time delta check is
-    // authoritative.
-    //
-    // Qt's QHttpMultiPart sends a quoted boundary (`boundary="_.Seafile._UUID"`)
-    // while the body uses the unquoted form; `extract_multipart_boundary` strips
-    // the quotes. The body is consumed as a stream so the file is never buffered.
-    let mode = if is_chunked {
-        IntakeMode::Chunk {
-            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
-        }
-    } else {
-        IntakeMode::Stream {
-            repo_id: auth.repo_id.clone(),
-            enc_key: auth.enc_key.clone(),
-        }
-    };
-    let Parts {
-        fields,
-        files,
-        chunked,
-    } = read_parts(&state, mode, body, &headers, usize::MAX).await?;
+    // A resumable chunk must go through the temp-file / assembly path, so a
+    // `Content-Range` body is buffered instead of streamed into blocks.
+    let parts = read_upload_body(&state, Some(&auth), body, &headers).await?;
 
     // Like the `-aj` token form, a missing `parent_dir` means the directory the
     // link was minted for; the desktop client sends it, older bodies may not.
-    let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
-    let target = resolve_create_target(
-        Some(auth.token()),
-        fields.get("parent_dir").map(String::as_str),
-        &relative_path,
-        parse_replace_arg(
-            query.get("replace").map(String::as_str),
-            fields.get("replace").map(String::as_str),
-        )?,
-    )?;
+    let target = create_target(Some(auth.token()), &parts.fields, &query)?;
     // Only `/upload-api` honours `ret-json`; official Android/desktop clients
     // read the plain-text body as the file id, so the default stays plain text.
-    let ret_json = wants_ret_json(&query, &fields);
+    let ret_json = wants_ret_json(&query, &parts.fields);
 
-    if is_chunked {
-        let (filename, file_data) =
-            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
-        if file_data.is_empty() {
-            return Err(AppError::BadRequest("No file in multipart form".into()));
-        }
-        let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
-        if let Some(result) = try_handle_chunked(
-            &state,
-            &auth,
-            ChunkUpload {
-                dir: &target.dir,
-                name: &filename,
-                data: bytes::Bytes::from(file_data),
-                range: content_range.as_deref(),
-                replace: target.replace,
-                mtime,
-            },
-        )
-        .await?
-        {
-            return Ok(reply_chunk(ReplyStyle::PlainOrJson { ret_json }, result));
-        }
-        return Err(AppError::Internal(
-            "chunked upload produced no outcome".into(),
-        ));
-    }
-
-    if files.is_empty() {
-        return Err(AppError::BadRequest("No file in multipart form".into()));
-    }
-    let mut files = ingest_parts(
-        files,
-        state.block_store.clone(),
-        &auth.repo_id,
-        auth.enc_key_ref(),
-    )
-    .await?;
-    assign_mtimes(&mut files, &fields);
-    if !target.replace && duplicate_file_names(&files) {
-        return Err(AppError::BadRequest("Too many files with same name".into()));
-    }
-    let committed = commit_uploads(
+    finish_create(
         &state,
-        &auth.repo_id,
-        &target.dir,
-        files,
-        &auth.modifier,
-        Some(auth.user_id),
-        true,
-        target.replace,
-    )
-    .await?;
-    Ok(reply_committed(
+        &auth,
+        parts,
+        &target,
+        range,
         ReplyStyle::PlainOrJson { ret_json },
-        &committed,
-    ))
+    )
+    .await
+    .map(|finished| finished.response)
 }
 
 /// `POST /update-api/{token}` — token-authenticated file overwrite for the
@@ -1780,28 +1708,13 @@ pub async fn update_api_handler(
 
     // See `update_api`: this endpoint only replaces an existing file, so the
     // commit-time delta is the only correct quota check.
-    let is_chunked = headers.contains_key("content-range");
-    let content_range = headers
-        .get("content-range")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-
-    let mode = if is_chunked {
-        IntakeMode::Chunk {
-            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
-        }
-    } else {
-        IntakeMode::Stream {
-            repo_id: auth.repo_id.clone(),
-            enc_key: auth.enc_key.clone(),
-        }
-    };
+    let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     // An update carries exactly one file part.
     let Parts {
         fields,
         files,
         chunked,
-    } = read_parts(&state, mode, body, &headers, 1).await?;
+    } = read_update_body(&state, Some(&auth), body, &headers).await?;
 
     let target_file = fields
         .get("target_file")
@@ -1815,56 +1728,20 @@ pub async fn update_api_handler(
     let target = resolve_existing_target(Some(auth.token()), target_file, &relative_path)?;
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
-    if is_chunked {
-        let (_filename, data) =
-            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
-        if data.is_empty() {
-            return Err(AppError::BadRequest("No file in multipart form".into()));
-        }
-        let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
-        if let Some(result) = try_handle_chunked(
-            &state,
-            &auth,
-            ChunkUpload {
-                dir: &target.dir,
-                name: &target.name,
-                data: bytes::Bytes::from(data),
-                range: content_range.as_deref(),
-                replace: true,
-                mtime,
-            },
-        )
-        .await?
-        {
-            return Ok(reply_chunk(ReplyStyle::PlainOrJson { ret_json }, result));
-        }
-        return Err(AppError::Internal(
-            "chunked upload produced no outcome".into(),
-        ));
-    }
-
-    let Some(part) = files.into_iter().next() else {
-        return Err(AppError::BadRequest("No file in multipart form".into()));
-    };
-    let mut file = part
-        .into_uploaded(state.block_store.clone(), &auth.repo_id, auth.enc_key_ref())
-        .await?;
-    file.mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
-    let committed = commit_uploads(
+    finish_existing(
         &state,
-        &auth.repo_id,
-        &target.dir,
-        vec![file],
-        &auth.modifier,
-        Some(auth.user_id),
-        false,
-        true,
-    )
-    .await?;
-    Ok(reply_committed(
+        &auth,
+        Parts {
+            fields,
+            files,
+            chunked,
+        },
+        &target,
+        range,
         ReplyStyle::PlainOrJson { ret_json },
-        &committed,
-    ))
+    )
+    .await
+    .map(|finished| finished.response)
 }
 
 /// `POST /update-aj/{token}` — token-based AJAX file update from the Seahub web
@@ -1877,24 +1754,13 @@ pub async fn update_aj_token(
 ) -> Result<axum::response::Response, AppError> {
     let auth = AuthContext::from_token(&state, &token, TokenKind::Update).await?;
 
-    let is_chunked = headers.contains_key("content-range");
-    let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let mode = if is_chunked {
-        IntakeMode::Chunk {
-            max_chunk_bytes: state.config().server.max_chunk_size_mb * 1024 * 1024,
-        }
-    } else {
-        IntakeMode::Stream {
-            repo_id: auth.repo_id.clone(),
-            enc_key: auth.enc_key.clone(),
-        }
-    };
+    let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     // An update carries exactly one file part.
     let Parts {
         fields,
         files,
         chunked,
-    } = read_parts(&state, mode, body, &headers, 1).await?;
+    } = read_update_body(&state, Some(&auth), body, &headers).await?;
 
     let target_file = fields
         .get("target_file")
@@ -1906,53 +1772,20 @@ pub async fn update_aj_token(
     let target = resolve_existing_target(Some(auth.token()), target_file, &relative_path)?;
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
-    if is_chunked {
-        let (_filename, data) =
-            chunked.ok_or_else(|| AppError::BadRequest("No file in multipart form".into()))?;
-        if data.is_empty() {
-            return Err(AppError::BadRequest("No file in multipart form".into()));
-        }
-        let mtime = parse_mtime(fields.get("file_mtime").map(String::as_str));
-        if let Some(result) = try_handle_chunked(
-            &state,
-            &auth,
-            ChunkUpload {
-                dir: &target.dir,
-                name: &target.name,
-                data: bytes::Bytes::from(data),
-                range: content_range,
-                replace: true,
-                mtime,
-            },
-        )
-        .await?
-        {
-            return Ok(reply_chunk(ReplyStyle::Array, result));
-        }
-        return Err(AppError::Internal(
-            "chunked upload produced no outcome".into(),
-        ));
-    }
-
-    let Some(part) = files.into_iter().next() else {
-        return Err(AppError::BadRequest("No file in multipart form".into()));
-    };
-    let mut file = part
-        .into_uploaded(state.block_store.clone(), &auth.repo_id, auth.enc_key_ref())
-        .await?;
-    file.mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
-    let committed = commit_uploads(
+    finish_existing(
         &state,
-        &auth.repo_id,
-        &target.dir,
-        vec![file],
-        &auth.modifier,
-        Some(auth.user_id),
-        false,
-        true,
+        &auth,
+        Parts {
+            fields,
+            files,
+            chunked,
+        },
+        &target,
+        range,
+        ReplyStyle::Array,
     )
-    .await?;
-    Ok(reply_committed(ReplyStyle::Array, &committed))
+    .await
+    .map(|finished| finished.response)
 }
 
 /// `POST /upload-blks-api/{token}` — block upload and commit.
