@@ -68,6 +68,70 @@ fn scoped_replace(requested: bool, upload_link_id: Option<i32>) -> bool {
     requested && upload_link_id.is_none()
 }
 
+/// Target directory and write policy shared by every file of a create request.
+struct CreateTarget {
+    dir: String,
+    replace: bool,
+}
+
+/// Resolve a create-style target: `parent_dir` (default: the token's directory,
+/// or the library root without one) plus `relative_path`. Link tokens are clamped
+/// to their directory and may only add.
+fn resolve_create_target(
+    token: Option<&crate::service::auth::access_token::AccessToken>,
+    parent_dir: Option<&str>,
+    relative_path: &str,
+    replace_requested: bool,
+) -> Result<CreateTarget, AppError> {
+    let parent_dir = parent_dir
+        .or_else(|| token.map(|info| info.parent_dir.as_str()))
+        .unwrap_or("/");
+    validate_upload_paths(parent_dir, relative_path)?;
+    let dir = match token {
+        Some(info) => compute_scoped_target_dir(info, parent_dir, relative_path)?,
+        None => compute_target_dir(parent_dir, relative_path)?,
+    };
+    Ok(CreateTarget {
+        dir,
+        replace: scoped_replace(
+            replace_requested,
+            token.and_then(|info| info.upload_link_id),
+        ),
+    })
+}
+
+/// Directory and name of an existing entry named by an absolute path.
+struct ExistingTarget {
+    dir: String,
+    name: String,
+}
+
+/// Resolve an update target. `path` is absolute (`target_file`, or the session
+/// form's `p`); `relative_path` is applied under the path's directory.
+fn resolve_existing_target(
+    token: Option<&crate::service::auth::access_token::AccessToken>,
+    path: &str,
+    relative_path: &str,
+) -> Result<ExistingTarget, AppError> {
+    if relative_path.starts_with('/') {
+        return Err(AppError::BadRequest("Invalid relative path".into()));
+    }
+    let (raw_parent, name) = path.rsplit_once('/').unwrap_or(("/", path));
+    let parent = if raw_parent.is_empty() {
+        "/"
+    } else {
+        raw_parent
+    };
+    let dir = match token {
+        Some(info) => compute_scoped_target_dir(info, parent, relative_path)?,
+        None => compute_target_dir(parent, relative_path)?,
+    };
+    Ok(ExistingTarget {
+        dir,
+        name: name.to_string(),
+    })
+}
+
 /// Parse seafile's `replace` argument from the URL query (the `upload-link`
 /// endpoint appends `?replace=1`) or a multipart form field, as upstream's
 /// `r.FormValue("replace")` does. Absent, `0` or `false` keeps both (the new
@@ -713,20 +777,22 @@ pub async fn upload_aj(
     let repo_id = fields
         .get("repo_id")
         .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?;
-    // A missing `parent_dir` keeps this endpoint's long-standing default of the
-    // library root: the session form only ever came from the web UI, but a body
-    // without the field must not start answering 400.
-    let parent_dir = fields.get("parent_dir").map(String::as_str).unwrap_or("/");
     let relative_path = fields
         .get("relative_path")
         .map(|s| s.as_str())
         .unwrap_or("");
-    validate_upload_paths(parent_dir, relative_path)?;
-    let target_dir = compute_target_dir(parent_dir, relative_path)?;
     let query = query_params(&uri);
-    let replace = parse_replace_arg(
-        query.get("replace").map(String::as_str),
-        fields.get("replace").map(String::as_str),
+    // A missing `parent_dir` keeps this endpoint's long-standing default of the
+    // library root: the session form only ever came from the web UI, but a body
+    // without the field must not start answering 400.
+    let target = resolve_create_target(
+        None,
+        fields.get("parent_dir").map(String::as_str),
+        relative_path,
+        parse_replace_arg(
+            query.get("replace").map(String::as_str),
+            fields.get("replace").map(String::as_str),
+        )?,
     )?;
 
     // CSRF: this endpoint authenticates via the session cookie, so a
@@ -763,14 +829,14 @@ pub async fn upload_aj(
             &state.temp_file_manager,
             &state,
             repo_id,
-            &target_dir,
+            &target.dir,
             &filename,
             bytes::Bytes::from(file_data),
             content_range,
             &user.email,
             Some(user.user_id),
             enc_key_ref,
-            replace,
+            target.replace,
             mtime,
         )
         .await?
@@ -810,7 +876,7 @@ pub async fn upload_aj(
         // `staged` drops here, removing the staging file.
     }
     assign_mtimes(&mut files, &fields);
-    if !replace && duplicate_file_names(&files) {
+    if !target.replace && duplicate_file_names(&files) {
         return Err(AppError::BadRequest("Too many files with same name".into()));
     }
     // Zero-byte files are committed too: seafile gives them the `EMPTY_SHA1`
@@ -818,12 +884,12 @@ pub async fn upload_aj(
     let committed = commit_uploads(
         &state,
         repo_id,
-        &target_dir,
+        &target.dir,
         files,
         &user.email,
         Some(user.user_id),
         true,
-        replace,
+        target.replace,
     )
     .await?;
     Ok(reply_committed(ReplyStyle::Array, &committed))
@@ -1264,15 +1330,8 @@ pub async fn update_api(
     let enc_key = super::download::upload_block_key(&state, &repo_id, user.user_id, false).await?;
     let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
 
-    let parent = file_path
-        .rsplit_once('/')
-        .map(|(p, _)| if p.is_empty() { "/" } else { p })
-        .unwrap_or("/");
-    let name = file_path
-        .rsplit_once('/')
-        .map(|(_, n)| n)
-        .unwrap_or(&file_path);
-    require_target_exists(&state, &repo_id, parent, name).await?;
+    let target = resolve_existing_target(None, &file_path, "")?;
+    require_target_exists(&state, &repo_id, &target.dir, &target.name).await?;
 
     if is_chunked {
         let file_data =
@@ -1285,8 +1344,8 @@ pub async fn update_api(
             &state.temp_file_manager,
             &state,
             &repo_id,
-            parent,
-            name,
+            &target.dir,
+            &target.name,
             bytes::Bytes::from(file_data),
             content_range,
             &user.email,
@@ -1323,8 +1382,8 @@ pub async fn update_api(
         &state,
         CommitRequest {
             repo_id: &repo_id,
-            dir: parent,
-            name,
+            dir: &target.dir,
+            name: &target.name,
             block_ids,
             total_size,
             modifier: &user.email,
@@ -1423,15 +1482,8 @@ pub async fn update_aj(
     let enc_key = super::download::upload_block_key(&state, repo_id, user.user_id, false).await?;
     let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
 
-    let parent = target_file
-        .rsplit_once('/')
-        .map(|(p, _)| if p.is_empty() { "/" } else { p })
-        .unwrap_or("/");
-    let name = target_file
-        .rsplit_once('/')
-        .map(|(_, n)| n)
-        .unwrap_or(target_file);
-    require_target_exists(&state, repo_id, parent, name).await?;
+    let target = resolve_existing_target(None, target_file, "")?;
+    require_target_exists(&state, repo_id, &target.dir, &target.name).await?;
 
     if is_chunked {
         let file_data = bytes::Bytes::from(chunked_file_data.unwrap_or_default());
@@ -1442,8 +1494,8 @@ pub async fn update_aj(
             &state.temp_file_manager,
             &state,
             repo_id,
-            parent,
-            name,
+            &target.dir,
+            &target.name,
             file_data,
             content_range,
             &user.email,
@@ -1480,8 +1532,8 @@ pub async fn update_aj(
         &state,
         CommitRequest {
             repo_id,
-            dir: parent,
-            name,
+            dir: &target.dir,
+            name: &target.name,
             block_ids,
             total_size,
             modifier: &user.email,
@@ -1598,24 +1650,20 @@ pub async fn upload_aj_token(
     // token for the directory, so a body without `parent_dir` keeps that default
     // instead of answering 400. The token's directory is still clamped, never
     // widened.
-    let parent_dir = fields
-        .get("parent_dir")
-        .map(String::as_str)
-        .unwrap_or(&info.parent_dir);
     let relative_path = fields
         .get("relative_path")
         .map(|s| s.as_str())
         .unwrap_or("");
-    validate_upload_paths(parent_dir, relative_path)?;
-    let target_dir = compute_scoped_target_dir(&info, parent_dir, relative_path)?;
     let query = query_params(&uri);
-    let replace = scoped_replace(
+    let target = resolve_create_target(
+        Some(&info),
+        fields.get("parent_dir").map(String::as_str),
+        relative_path,
         parse_replace_arg(
             query.get("replace").map(String::as_str),
             fields.get("replace").map(String::as_str),
         )?,
-        info.upload_link_id,
-    );
+    )?;
 
     if is_chunked {
         let (filename, file_data) =
@@ -1628,7 +1676,7 @@ pub async fn upload_aj_token(
             &state.temp_file_manager,
             &state,
             &info.repo_id,
-            &target_dir,
+            &target.dir,
             &filename,
             bytes::Bytes::from(file_data),
             content_range,
@@ -1636,7 +1684,7 @@ pub async fn upload_aj_token(
             // Upload-link chunked uploads count against the owner's quota.
             Some(info.user_id),
             enc_key_ref,
-            replace,
+            target.replace,
             mtime,
         )
         .await?
@@ -1652,18 +1700,18 @@ pub async fn upload_aj_token(
         return Err(AppError::BadRequest("No file in multipart form".into()));
     }
     assign_mtimes(&mut files, &fields);
-    if !replace && duplicate_file_names(&files) {
+    if !target.replace && duplicate_file_names(&files) {
         return Err(AppError::BadRequest("Too many files with same name".into()));
     }
     let committed = commit_uploads(
         &state,
         &info.repo_id,
-        &target_dir,
+        &target.dir,
         files,
         &info.username,
         Some(info.user_id),
         true,
-        replace,
+        target.replace,
     )
     .await?;
 
@@ -1795,20 +1843,16 @@ pub async fn upload_api(
 
     // Like the `-aj` token form, a missing `parent_dir` means the directory the
     // link was minted for; the desktop client sends it, older bodies may not.
-    let parent_dir = fields
-        .get("parent_dir")
-        .map(String::as_str)
-        .unwrap_or(&info.parent_dir);
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
-    validate_upload_paths(parent_dir, &relative_path)?;
-    let target_dir = compute_scoped_target_dir(&info, parent_dir, &relative_path)?;
-    let replace = scoped_replace(
+    let target = resolve_create_target(
+        Some(&info),
+        fields.get("parent_dir").map(String::as_str),
+        &relative_path,
         parse_replace_arg(
             query.get("replace").map(String::as_str),
             fields.get("replace").map(String::as_str),
         )?,
-        info.upload_link_id,
-    );
+    )?;
     // Only `/upload-api` honours `ret-json`; official Android/desktop clients
     // read the plain-text body as the file id, so the default stays plain text.
     let ret_json = wants_ret_json(&query, &fields);
@@ -1824,14 +1868,14 @@ pub async fn upload_api(
             &state.temp_file_manager,
             &state,
             &info.repo_id,
-            &target_dir,
+            &target.dir,
             &filename,
             bytes::Bytes::from(file_data),
             content_range.as_deref(),
             &info.username,
             Some(info.user_id),
             enc_key_ref,
-            replace,
+            target.replace,
             mtime,
         )
         .await?
@@ -1847,18 +1891,18 @@ pub async fn upload_api(
         return Err(AppError::BadRequest("No file in multipart form".into()));
     }
     assign_mtimes(&mut files, &fields);
-    if !replace && duplicate_file_names(&files) {
+    if !target.replace && duplicate_file_names(&files) {
         return Err(AppError::BadRequest("Too many files with same name".into()));
     }
     let committed = commit_uploads(
         &state,
         &info.repo_id,
-        &target_dir,
+        &target.dir,
         files,
         &info.username,
         Some(info.user_id),
         true,
-        replace,
+        target.replace,
     )
     .await?;
     Ok(reply_committed(
@@ -1985,23 +2029,13 @@ pub async fn update_api_handler(
         .get("target_file")
         .ok_or_else(|| AppError::BadRequest("No target_file given.".into()))?;
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
-    if relative_path.starts_with('/') {
-        return Err(AppError::BadRequest("Invalid relative path".into()));
-    }
     // `/update-api` honours `ret-json`; without it the body is a plain id.
     let ret_json = wants_ret_json(&query, &fields);
 
-    let (raw_parent, raw_name) = target_file.rsplit_once('/').unwrap_or(("/", target_file));
-    let parent = if raw_parent.is_empty() {
-        "/"
-    } else {
-        raw_parent
-    };
     // Scoped for consistency: an update token never carries `upload_link_id`
     // today, but this keeps the link-directory clamp if one ever does.
-    let target_dir = compute_scoped_target_dir(&info, parent, &relative_path)?;
-    let name = raw_name.to_string();
-    require_target_exists(&state, &info.repo_id, &target_dir, &name).await?;
+    let target = resolve_existing_target(Some(&info), target_file, &relative_path)?;
+    require_target_exists(&state, &info.repo_id, &target.dir, &target.name).await?;
 
     if is_chunked {
         let (_filename, data) =
@@ -2014,8 +2048,8 @@ pub async fn update_api_handler(
             &state.temp_file_manager,
             &state,
             &info.repo_id,
-            &target_dir,
-            &name,
+            &target.dir,
+            &target.name,
             bytes::Bytes::from(data),
             content_range.as_deref(),
             &info.username,
@@ -2040,7 +2074,7 @@ pub async fn update_api_handler(
     let committed = commit_uploads(
         &state,
         &info.repo_id,
-        &target_dir,
+        &target.dir,
         vec![file],
         &info.username,
         Some(info.user_id),
@@ -2153,22 +2187,11 @@ pub async fn update_aj_token(
         .get("target_file")
         .ok_or_else(|| AppError::BadRequest("No target_file given.".into()))?;
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
-    if relative_path.starts_with('/') {
-        return Err(AppError::BadRequest("Invalid relative path".into()));
-    }
-
-    let (raw_parent, raw_name) = target_file.rsplit_once('/').unwrap_or(("/", target_file));
-    let parent = if raw_parent.is_empty() {
-        "/"
-    } else {
-        raw_parent
-    };
     // Scoped like every other token upload: an update token never carries
     // `upload_link_id` today, but this keeps the link-directory clamp if one
     // ever does (and matches `update_api_handler`).
-    let target_dir = compute_scoped_target_dir(&info, parent, &relative_path)?;
-    let name = raw_name.to_string();
-    require_target_exists(&state, &info.repo_id, &target_dir, &name).await?;
+    let target = resolve_existing_target(Some(&info), target_file, &relative_path)?;
+    require_target_exists(&state, &info.repo_id, &target.dir, &target.name).await?;
 
     if is_chunked {
         let (_filename, data) =
@@ -2181,8 +2204,8 @@ pub async fn update_aj_token(
             &state.temp_file_manager,
             &state,
             &info.repo_id,
-            &target_dir,
-            &name,
+            &target.dir,
+            &target.name,
             bytes::Bytes::from(data),
             content_range,
             &info.username,
@@ -2207,7 +2230,7 @@ pub async fn update_aj_token(
     let committed = commit_uploads(
         &state,
         &info.repo_id,
-        &target_dir,
+        &target.dir,
         vec![file],
         &info.username,
         Some(info.user_id),
@@ -2429,29 +2452,23 @@ pub async fn upload_blks_api(
         // An `update-blks` token names the target with `target_file`, like
         // upstream's `update_blks_api_cb`, and always replaces it (441 when the
         // file is gone). An `upload-blks` token keeps the upload contract:
-        // `parent_dir` + `relative_path` + `file_name`, optional `replace`.
+        // `parent_dir` + `relative_path` + `file_name`, optional `replace`. It
+        // skips the regular upload path checks (`//` in `parent_dir`), matching
+        // the Go fileserver's block commit.
         let (target_dir, file_name, replace, ensure_dir) = if info.op == "update-blks" {
             let target_file = fields
                 .get("target_file")
                 .ok_or_else(|| AppError::BadRequest("target_file required for update".into()))?;
-            let (raw_parent, raw_name) = target_file
+            let name = target_file
                 .rsplit_once('/')
-                .unwrap_or(("", target_file.as_str()));
-            let parent = if raw_parent.is_empty() {
-                "/"
-            } else {
-                raw_parent
-            };
-            if !is_valid_upload_filename(raw_name) {
+                .map(|(_, n)| n)
+                .unwrap_or(target_file);
+            if !is_valid_upload_filename(name) {
                 return Err(AppError::BadRequest("invalid target_file".into()));
             }
-            require_target_exists(&state, &info.repo_id, parent, raw_name).await?;
-            (
-                compute_scoped_target_dir(&info, parent, "")?,
-                raw_name.to_string(),
-                true,
-                false,
-            )
+            let target = resolve_existing_target(Some(&info), target_file, "")?;
+            require_target_exists(&state, &info.repo_id, &target.dir, &target.name).await?;
+            (target.dir, target.name, true, false)
         } else {
             let parent_dir = fields
                 .get("parent_dir")
