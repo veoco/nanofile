@@ -132,6 +132,112 @@ fn resolve_existing_target(
     })
 }
 
+/// Credentials resolved before the body is read (token) or after it (session).
+///
+/// The two constructors own the order the clients observe: a token endpoint
+/// answers invalid-token before it looks at the body; a session endpoint parses
+/// the body first (repo_id lives there) and only then checks CSRF and access.
+struct AuthContext {
+    /// The minted token; `None` for a session caller.
+    token: Option<crate::service::auth::access_token::AccessToken>,
+    repo_id: String,
+    user_id: i32,
+    modifier: String,
+    enc_key: Option<(Vec<u8>, Vec<u8>)>,
+}
+
+impl AuthContext {
+    /// Validate a short-lived upload/update token: token → op → write permission
+    /// → library key, in that order.
+    async fn from_token(state: &AppState, raw: &str, kind: TokenKind) -> Result<Self, AppError> {
+        let token = state.token_manager.validate(raw).ok_or_else(|| {
+            AppError::BadRequest(format!("invalid or expired {} token", kind.op()))
+        })?;
+        if token.op != kind.op() {
+            return Err(AppError::BadRequest(format!(
+                "token not valid for {}",
+                kind.op()
+            )));
+        }
+        crate::domain::permission::check_repo_write_permission(
+            state.repos.member.as_ref(),
+            &token.repo_id,
+            token.user_id,
+        )
+        .await?;
+        // A shareable upload link has no password cache to draw on, so an
+        // encrypted library is refused outright; every other caller must have
+        // warmed the server-side library key (440 otherwise).
+        let enc_key = super::download::upload_block_key(
+            state,
+            &token.repo_id,
+            token.user_id,
+            token.upload_link_id.is_some(),
+        )
+        .await?;
+        Ok(Self {
+            repo_id: token.repo_id.clone(),
+            user_id: token.user_id,
+            modifier: token.username.clone(),
+            token: Some(token),
+            enc_key,
+        })
+    }
+
+    /// A browser session: CSRF → write permission → library key. The handler
+    /// calls this only after its own field checks, so their 400s keep winning.
+    async fn from_session(
+        state: &AppState,
+        user: &WebUser,
+        repo_id: &str,
+        csrf: Option<&str>,
+    ) -> Result<Self, AppError> {
+        crate::service::auth::csrf::check_form_csrf(state, &user.session_token, csrf)?;
+        crate::domain::permission::check_repo_write_permission(
+            state.repos.member.as_ref(),
+            repo_id,
+            user.user_id,
+        )
+        .await?;
+        let enc_key =
+            super::download::upload_block_key(state, repo_id, user.user_id, false).await?;
+        Ok(Self {
+            repo_id: repo_id.to_string(),
+            user_id: user.user_id,
+            modifier: user.email.clone(),
+            token: None,
+            enc_key,
+        })
+    }
+
+    fn enc_key_ref(&self) -> Option<(&[u8], &[u8])> {
+        self.enc_key
+            .as_ref()
+            .map(|(key, iv)| (key.as_slice(), iv.as_slice()))
+    }
+
+    /// The minted token; only token-authenticated endpoints call this.
+    fn token(&self) -> &crate::service::auth::access_token::AccessToken {
+        self.token.as_ref().expect("token-authenticated endpoint")
+    }
+}
+
+/// Which token operation an endpoint accepts; the words also appear in its 400s.
+#[derive(Clone, Copy)]
+enum TokenKind {
+    Upload,
+    Update,
+}
+
+impl TokenKind {
+    fn op(self) -> &'static str {
+        match self {
+            TokenKind::Upload => "upload",
+            TokenKind::Update => "update",
+        }
+    }
+}
+
 /// Parse seafile's `replace` argument from the URL query (the `upload-link`
 /// endpoint appends `?replace=1`) or a multipart form field, as upstream's
 /// `r.FormValue("replace")` does. Absent, `0` or `false` keeps both (the new
@@ -795,28 +901,13 @@ pub async fn upload_aj(
         )?,
     )?;
 
-    // CSRF: this endpoint authenticates via the session cookie, so a
-    // cross-site form POST must be rejected.
-    crate::service::auth::csrf::check_form_csrf(
+    let auth = AuthContext::from_session(
         &state,
-        &user.session_token,
-        fields.get("csrf_token").map(|s| s.as_str()),
-    )?;
-
-    // Authorization: this endpoint trusts the client-supplied repo_id, so the
-    // caller must actually be a member with write access to the repo.
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
+        &user,
         repo_id,
-        user.user_id,
+        fields.get("csrf_token").map(String::as_str),
     )
     .await?;
-
-    // Encrypted libraries require the password-equivalent key before anything
-    // reaches the block store; staged bytes are plaintext in the staging area,
-    // which is not part of the library.
-    let enc_key = super::download::upload_block_key(&state, repo_id, user.user_id, false).await?;
-    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
 
     if is_chunked {
         let (filename, file_data) =
@@ -833,9 +924,9 @@ pub async fn upload_aj(
             &filename,
             bytes::Bytes::from(file_data),
             content_range,
-            &user.email,
-            Some(user.user_id),
-            enc_key_ref,
+            &auth.modifier,
+            Some(auth.user_id),
+            auth.enc_key_ref(),
             target.replace,
             mtime,
         )
@@ -863,7 +954,7 @@ pub async fn upload_aj(
             state.block_store.clone(),
             repo_id,
             path.to_path_buf(),
-            enc_key_ref,
+            auth.enc_key_ref(),
         )
         .await?;
         files.push(UploadedFile {
@@ -886,8 +977,8 @@ pub async fn upload_aj(
         repo_id,
         &target.dir,
         files,
-        &user.email,
-        Some(user.user_id),
+        &auth.modifier,
+        Some(auth.user_id),
         true,
         target.replace,
     )
@@ -1310,28 +1401,10 @@ pub async fn update_api(
         return Err(AppError::BadRequest("Path is missing or invalid.".into()));
     }
 
-    // CSRF: these no-token endpoints authenticate via the session cookie,
-    // so a cross-site form POST must be rejected.
-    crate::service::auth::csrf::check_form_csrf(
-        &state,
-        &user.session_token,
-        csrf_token.as_deref(),
-    )?;
-
-    // Authorization: repo_id is client-supplied, so require write access.
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        user.user_id,
-    )
-    .await?;
-
-    // Encrypted libraries need the cached key before blocks are written.
-    let enc_key = super::download::upload_block_key(&state, &repo_id, user.user_id, false).await?;
-    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+    let auth = AuthContext::from_session(&state, &user, &repo_id, csrf_token.as_deref()).await?;
 
     let target = resolve_existing_target(None, &file_path, "")?;
-    require_target_exists(&state, &repo_id, &target.dir, &target.name).await?;
+    require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
     if is_chunked {
         let file_data =
@@ -1348,9 +1421,9 @@ pub async fn update_api(
             &target.name,
             bytes::Bytes::from(file_data),
             content_range,
-            &user.email,
-            Some(user.user_id),
-            enc_key_ref,
+            &auth.modifier,
+            Some(auth.user_id),
+            auth.enc_key_ref(),
             true,
             mtime,
         )
@@ -1373,7 +1446,7 @@ pub async fn update_api(
         state.block_store.clone(),
         &repo_id,
         path.to_path_buf(),
-        enc_key_ref,
+        auth.enc_key_ref(),
     )
     .await?;
     let mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
@@ -1386,8 +1459,8 @@ pub async fn update_api(
             name: &target.name,
             block_ids,
             total_size,
-            modifier: &user.email,
-            user_id: Some(user.user_id),
+            modifier: &auth.modifier,
+            user_id: Some(auth.user_id),
             ensure_dir: true,
             replace: true,
             new_block_ids,
@@ -1463,27 +1536,16 @@ pub async fn update_aj(
         .get("target_file")
         .ok_or_else(|| AppError::BadRequest("target_file required".into()))?;
 
-    // CSRF: session-cookie auth requires the double-submit token.
-    crate::service::auth::csrf::check_form_csrf(
+    let auth = AuthContext::from_session(
         &state,
-        &user.session_token,
-        fields.get("csrf_token").map(|s| s.as_str()),
-    )?;
-
-    // Authorization: the repo_id is client-supplied, so require write access.
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
+        &user,
         repo_id,
-        user.user_id,
+        fields.get("csrf_token").map(|s| s.as_str()),
     )
     .await?;
 
-    // Encrypted libraries need the cached key before blocks are written.
-    let enc_key = super::download::upload_block_key(&state, repo_id, user.user_id, false).await?;
-    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
-
     let target = resolve_existing_target(None, target_file, "")?;
-    require_target_exists(&state, repo_id, &target.dir, &target.name).await?;
+    require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
     if is_chunked {
         let file_data = bytes::Bytes::from(chunked_file_data.unwrap_or_default());
@@ -1498,9 +1560,9 @@ pub async fn update_aj(
             &target.name,
             file_data,
             content_range,
-            &user.email,
-            Some(user.user_id),
-            enc_key_ref,
+            &auth.modifier,
+            Some(auth.user_id),
+            auth.enc_key_ref(),
             // The update endpoints always replace the target in place.
             true,
             parse_mtime(fields.get("file_mtime").map(String::as_str)),
@@ -1522,7 +1584,7 @@ pub async fn update_aj(
         state.block_store.clone(),
         repo_id,
         path.to_path_buf(),
-        enc_key_ref,
+        auth.enc_key_ref(),
     )
     .await;
     let (block_ids, total_size, new_block_ids) = ingested?;
@@ -1536,8 +1598,8 @@ pub async fn update_aj(
             name: &target.name,
             block_ids,
             total_size,
-            modifier: &user.email,
-            user_id: Some(user.user_id),
+            modifier: &auth.modifier,
+            user_id: Some(auth.user_id),
             ensure_dir: true,
             replace: true,
             new_block_ids,
@@ -1557,35 +1619,7 @@ pub async fn upload_aj_token(
     headers: HeaderMap,
     body: axum::body::Body,
 ) -> Result<axum::response::Response, AppError> {
-    let info = state
-        .token_manager
-        .validate(&token)
-        .ok_or_else(|| AppError::BadRequest("invalid or expired upload token".into()))?;
-
-    if info.op != "upload" {
-        return Err(AppError::BadRequest("token not valid for upload".into()));
-    }
-
-    // Re-check write permission: the token was issued against the caller's
-    // membership, but that may have been revoked since (matches download).
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &info.repo_id,
-        info.user_id,
-    )
-    .await?;
-
-    // A shareable upload link has no password cache to draw on, so an encrypted
-    // library is refused outright; every other caller must have warmed the
-    // server-side library key (440 otherwise).
-    let enc_key = super::download::upload_block_key(
-        &state,
-        &info.repo_id,
-        info.user_id,
-        info.upload_link_id.is_some(),
-    )
-    .await?;
-    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+    let auth = AuthContext::from_token(&state, &token, TokenKind::Upload).await?;
 
     // No Content-Length quota pre-check: a normal (non-link) upload token can
     // replace an existing file, so only the commit-time size delta is correct.
@@ -1622,9 +1656,9 @@ pub async fn upload_aj_token(
             } else {
                 let (block_ids, total_size, new_block_ids) = stream_file_into_blocks(
                     state.block_store.clone(),
-                    &info.repo_id,
+                    &auth.repo_id,
                     &mut field,
-                    enc_key_ref,
+                    auth.enc_key_ref(),
                 )
                 .await?;
                 files.push(UploadedFile {
@@ -1656,7 +1690,7 @@ pub async fn upload_aj_token(
         .unwrap_or("");
     let query = query_params(&uri);
     let target = resolve_create_target(
-        Some(&info),
+        Some(auth.token()),
         fields.get("parent_dir").map(String::as_str),
         relative_path,
         parse_replace_arg(
@@ -1675,15 +1709,15 @@ pub async fn upload_aj_token(
         if let Some(result) = try_handle_chunked(
             &state.temp_file_manager,
             &state,
-            &info.repo_id,
+            &auth.repo_id,
             &target.dir,
             &filename,
             bytes::Bytes::from(file_data),
             content_range,
-            &info.username,
+            &auth.modifier,
             // Upload-link chunked uploads count against the owner's quota.
-            Some(info.user_id),
-            enc_key_ref,
+            Some(auth.user_id),
+            auth.enc_key_ref(),
             target.replace,
             mtime,
         )
@@ -1705,17 +1739,17 @@ pub async fn upload_aj_token(
     }
     let committed = commit_uploads(
         &state,
-        &info.repo_id,
+        &auth.repo_id,
         &target.dir,
         files,
-        &info.username,
-        Some(info.user_id),
+        &auth.modifier,
+        Some(auth.user_id),
         true,
         target.replace,
     )
     .await?;
 
-    if let Some(link_id) = info.upload_link_id {
+    if let Some(link_id) = auth.token().upload_link_id {
         upload_link_service::increment_upload_view_cnt(state.repos.clone(), link_id);
     }
 
@@ -1745,34 +1779,7 @@ pub async fn upload_api(
         .get("content-range")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_owned());
-    let info = state
-        .token_manager
-        .validate(&token)
-        .ok_or_else(|| AppError::BadRequest("invalid or expired upload token".into()))?;
-
-    if info.op != "upload" {
-        return Err(AppError::BadRequest("token not valid for upload".into()));
-    }
-
-    // Re-check write permission: the token was issued against the caller's
-    // membership, but that may have been revoked since (matches download).
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &info.repo_id,
-        info.user_id,
-    )
-    .await?;
-
-    // Encrypted libraries need the cached library key before blocks are
-    // written; a shareable upload link is refused (see `upload_block_key`).
-    let enc_key = super::download::upload_block_key(
-        &state,
-        &info.repo_id,
-        info.user_id,
-        info.upload_link_id.is_some(),
-    )
-    .await?;
-    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+    let auth = AuthContext::from_token(&state, &token, TokenKind::Upload).await?;
 
     // This token can name a replacement, so a full Content-Length precheck would
     // reject a same-size overwrite near the quota. The commit-time delta check is
@@ -1817,9 +1824,9 @@ pub async fn upload_api(
             } else {
                 let (block_ids, total_size, new_block_ids) = stream_file_into_blocks(
                     state.block_store.clone(),
-                    &info.repo_id,
+                    &auth.repo_id,
                     &mut field,
-                    enc_key_ref,
+                    auth.enc_key_ref(),
                 )
                 .await?;
                 files.push(UploadedFile {
@@ -1845,7 +1852,7 @@ pub async fn upload_api(
     // link was minted for; the desktop client sends it, older bodies may not.
     let relative_path = fields.get("relative_path").cloned().unwrap_or_default();
     let target = resolve_create_target(
-        Some(&info),
+        Some(auth.token()),
         fields.get("parent_dir").map(String::as_str),
         &relative_path,
         parse_replace_arg(
@@ -1867,14 +1874,14 @@ pub async fn upload_api(
         if let Some(result) = try_handle_chunked(
             &state.temp_file_manager,
             &state,
-            &info.repo_id,
+            &auth.repo_id,
             &target.dir,
             &filename,
             bytes::Bytes::from(file_data),
             content_range.as_deref(),
-            &info.username,
-            Some(info.user_id),
-            enc_key_ref,
+            &auth.modifier,
+            Some(auth.user_id),
+            auth.enc_key_ref(),
             target.replace,
             mtime,
         )
@@ -1896,11 +1903,11 @@ pub async fn upload_api(
     }
     let committed = commit_uploads(
         &state,
-        &info.repo_id,
+        &auth.repo_id,
         &target.dir,
         files,
-        &info.username,
-        Some(info.user_id),
+        &auth.modifier,
+        Some(auth.user_id),
         true,
         target.replace,
     )
@@ -1926,34 +1933,7 @@ pub async fn update_api_handler(
         .map(|s| s.to_owned())
         .unwrap_or_default();
 
-    let info = state
-        .token_manager
-        .validate(&token)
-        .ok_or_else(|| AppError::BadRequest("invalid or expired update token".into()))?;
-
-    if info.op != "update" {
-        return Err(AppError::BadRequest("token not valid for update".into()));
-    }
-
-    // Re-check write permission: the token was issued against the caller's
-    // membership, but that may have been revoked since (matches download).
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &info.repo_id,
-        info.user_id,
-    )
-    .await?;
-
-    // Encrypted libraries need the cached library key before blocks are
-    // written; a shareable upload link is refused (see `upload_block_key`).
-    let enc_key = super::download::upload_block_key(
-        &state,
-        &info.repo_id,
-        info.user_id,
-        info.upload_link_id.is_some(),
-    )
-    .await?;
-    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+    let auth = AuthContext::from_token(&state, &token, TokenKind::Update).await?;
 
     // See `update_api`: this endpoint only replaces an existing file, so the
     // commit-time delta is the only correct quota check.
@@ -2001,9 +1981,9 @@ pub async fn update_api_handler(
             } else {
                 let (block_ids, total_size, new_block_ids) = stream_file_into_blocks(
                     state.block_store.clone(),
-                    &info.repo_id,
+                    &auth.repo_id,
                     &mut field,
-                    enc_key_ref,
+                    auth.enc_key_ref(),
                 )
                 .await?;
                 file = Some(UploadedFile {
@@ -2034,8 +2014,8 @@ pub async fn update_api_handler(
 
     // Scoped for consistency: an update token never carries `upload_link_id`
     // today, but this keeps the link-directory clamp if one ever does.
-    let target = resolve_existing_target(Some(&info), target_file, &relative_path)?;
-    require_target_exists(&state, &info.repo_id, &target.dir, &target.name).await?;
+    let target = resolve_existing_target(Some(auth.token()), target_file, &relative_path)?;
+    require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
     if is_chunked {
         let (_filename, data) =
@@ -2047,14 +2027,14 @@ pub async fn update_api_handler(
         if let Some(result) = try_handle_chunked(
             &state.temp_file_manager,
             &state,
-            &info.repo_id,
+            &auth.repo_id,
             &target.dir,
             &target.name,
             bytes::Bytes::from(data),
             content_range.as_deref(),
-            &info.username,
-            Some(info.user_id),
-            enc_key_ref,
+            &auth.modifier,
+            Some(auth.user_id),
+            auth.enc_key_ref(),
             true,
             mtime,
         )
@@ -2073,11 +2053,11 @@ pub async fn update_api_handler(
     file.mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
     let committed = commit_uploads(
         &state,
-        &info.repo_id,
+        &auth.repo_id,
         &target.dir,
         vec![file],
-        &info.username,
-        Some(info.user_id),
+        &auth.modifier,
+        Some(auth.user_id),
         false,
         true,
     )
@@ -2096,34 +2076,7 @@ pub async fn update_aj_token(
     headers: HeaderMap,
     body: axum::body::Body,
 ) -> Result<axum::response::Response, AppError> {
-    let info = state
-        .token_manager
-        .validate(&token)
-        .ok_or_else(|| AppError::BadRequest("invalid or expired update token".into()))?;
-
-    if info.op != "update" {
-        return Err(AppError::BadRequest("token not valid for update".into()));
-    }
-
-    // Re-check write permission: the token was issued against the caller's
-    // membership, but that may have been revoked since (matches download).
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &info.repo_id,
-        info.user_id,
-    )
-    .await?;
-
-    // Encrypted libraries need the cached library key before blocks are
-    // written; a shareable upload link is refused (see `upload_block_key`).
-    let enc_key = super::download::upload_block_key(
-        &state,
-        &info.repo_id,
-        info.user_id,
-        info.upload_link_id.is_some(),
-    )
-    .await?;
-    let enc_key_ref = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
+    let auth = AuthContext::from_token(&state, &token, TokenKind::Update).await?;
 
     let content_range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let is_chunked = content_range.is_some();
@@ -2159,9 +2112,9 @@ pub async fn update_aj_token(
             } else {
                 let (block_ids, total_size, new_block_ids) = stream_file_into_blocks(
                     state.block_store.clone(),
-                    &info.repo_id,
+                    &auth.repo_id,
                     &mut field,
-                    enc_key_ref,
+                    auth.enc_key_ref(),
                 )
                 .await?;
                 file = Some(UploadedFile {
@@ -2190,8 +2143,8 @@ pub async fn update_aj_token(
     // Scoped like every other token upload: an update token never carries
     // `upload_link_id` today, but this keeps the link-directory clamp if one
     // ever does (and matches `update_api_handler`).
-    let target = resolve_existing_target(Some(&info), target_file, &relative_path)?;
-    require_target_exists(&state, &info.repo_id, &target.dir, &target.name).await?;
+    let target = resolve_existing_target(Some(auth.token()), target_file, &relative_path)?;
+    require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
     if is_chunked {
         let (_filename, data) =
@@ -2203,14 +2156,14 @@ pub async fn update_aj_token(
         if let Some(result) = try_handle_chunked(
             &state.temp_file_manager,
             &state,
-            &info.repo_id,
+            &auth.repo_id,
             &target.dir,
             &target.name,
             bytes::Bytes::from(data),
             content_range,
-            &info.username,
-            Some(info.user_id),
-            enc_key_ref,
+            &auth.modifier,
+            Some(auth.user_id),
+            auth.enc_key_ref(),
             true,
             mtime,
         )
@@ -2229,11 +2182,11 @@ pub async fn update_aj_token(
     file.mtime = parse_mtime(fields.get("last_modify").map(String::as_str));
     let committed = commit_uploads(
         &state,
-        &info.repo_id,
+        &auth.repo_id,
         &target.dir,
         vec![file],
-        &info.username,
-        Some(info.user_id),
+        &auth.modifier,
+        Some(auth.user_id),
         false,
         true,
     )
