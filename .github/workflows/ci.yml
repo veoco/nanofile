@@ -145,6 +145,12 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --workspace --bins --no-deps --document-private-items
+      # The `tray` feature's rustdoc, beside the check pass that warms the
+      # metadata it resolves dependencies through (see `lint-platforms`).
+      - name: Check tray rustdoc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc -p server --features tray --bins --no-deps --document-private-items
       # Comments must explain the invariant, not cite an external audit item
       # number: those references are meaningless to a reader who does not have
       # the report, and they go stale as soon as the code moves.
@@ -235,6 +241,16 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --workspace --bins --no-deps --document-private-items
+      # Rustdoc for the `tray` feature runs beside the lint rows (here and in
+      # `lint`), not in `tray-check`: a doc unit resolves its dependencies
+      # through check-mode metadata, which the clippy step just produced in this
+      # same target directory. Behind a codegen build (what the tray row runs)
+      # the same command re-checks ~370 dependencies: measured 152s there,
+      # against 57s when a check pass ran first.
+      - name: Check tray rustdoc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc -p server --features tray --bins --no-deps --document-private-items
 
   # ── Optional tray feature (compiled out by default; keep it healthy) ──
   # One definition and three runners: the tray unit tests sit behind a feature
@@ -247,7 +263,9 @@ jobs:
   # so the pass that links the test binary also runs the lints. The separate
   # `cargo clippy --bin` pass compiled the same graph a second time, and it
   # never saw the `#[cfg(test)]` modules the tray tests live in, so what it did
-  # lint was strictly less code than this build covers.
+  # lint was strictly less code than this build covers. Rustdoc for this feature
+  # runs in the lint rows instead, beside the check pass that warms the metadata
+  # a doc build needs (see the note there).
   tray-check:
     name: Tray feature (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
@@ -317,10 +335,6 @@ jobs:
         env:
           RUSTC_WORKSPACE_WRAPPER: clippy-driver
         run: cargo nextest run -p server --features tray --bin nanofile --profile ci
-      - name: Check tray rustdoc
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc -p server --features tray --bins --no-deps --document-private-items
 
   # ── Frontend tests (pure JS, no npm deps) ──────────────────────────
   frontend-test:
