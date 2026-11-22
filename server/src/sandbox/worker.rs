@@ -1747,7 +1747,9 @@ fn spawn_child(
     // copies holding the pipes. Parser profiles deny the fork.
     #[cfg(unix)]
     command.process_group(0);
-    command.spawn().map(Child::Standard)
+    // A refusal to create (the desktop heap or a job's quota on a loaded host)
+    // is retried; a child that started is never run twice.
+    crate::sandbox::spawn_with_retry(|| command.spawn()).map(Child::Standard)
 }
 
 /// Start the child in its container, job and restricted token, or in the job and
@@ -1767,13 +1769,15 @@ fn spawn_child(
     if selftest {
         args.push(OsString::from("--selftest"));
     }
-    match start {
+    // A refusal to create (the desktop heap or a job's quota on a loaded host)
+    // is retried here too; a child that started is never run twice.
+    crate::sandbox::spawn_with_retry(|| match start {
         Start::Confined => sandbox::spawn(&invocation.program, &args, profile, grants),
         Start::Plain => sandbox::spawn_token_only(&invocation.program, &args, profile, grants),
         Start::Unrestricted => {
             sandbox::spawn_unrestricted(&invocation.program, &args, profile, grants)
         }
-    }
+    })
     .map(Child::Windows)
 }
 

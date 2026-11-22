@@ -48,6 +48,53 @@ mod windows;
 #[cfg(target_os = "windows")]
 pub(super) use windows::{Child as WindowsChild, spawn, spawn_token_only, spawn_unrestricted};
 
+/// How often a refused process creation is attempted, and the first pause
+/// between attempts (each retry doubles it).
+const SPAWN_ATTEMPTS: u32 = 3;
+const SPAWN_BACKOFF: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Whether the OS refused to create a process for a reason that clears on its
+/// own: `ERROR_NOT_ENOUGH_QUOTA` is the desktop heap or a job's quota being
+/// momentarily full, which a loaded Windows host returns to a real request too.
+fn is_transient_spawn_failure(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(1816))
+}
+
+fn spawn_with_retry_at<T, F>(mut spawn: F, backoff: std::time::Duration) -> std::io::Result<T>
+where
+    F: FnMut() -> std::io::Result<T>,
+{
+    let mut attempt = 1;
+    loop {
+        match spawn() {
+            Ok(value) => return Ok(value),
+            Err(e) if attempt < SPAWN_ATTEMPTS && is_transient_spawn_failure(&e) => {
+                tracing::warn!(
+                    "process creation refused ({e}); retrying ({attempt}/{SPAWN_ATTEMPTS})"
+                );
+                std::thread::sleep(backoff * 2u32.pow(attempt - 1));
+                attempt += 1;
+            }
+            // Everything else is the caller's answer, including a refusal that
+            // already used its attempts.
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Spawn a process, retrying a *refusal* that clears on its own.
+///
+/// The closure performs one creation call; only it is retried, never a process
+/// that started. The callers are the synchronous creation paths (the media
+/// helper and the sandbox worker), so the pause only ever lands on a thread
+/// that is about to block in `CreateProcess`/`fork` anyway.
+pub(crate) fn spawn_with_retry<T, F>(spawn: F) -> std::io::Result<T>
+where
+    F: FnMut() -> std::io::Result<T>,
+{
+    spawn_with_retry_at(spawn, SPAWN_BACKOFF)
+}
+
 /// Whether the child runs in a less privileged container, where the platform
 /// has one.
 ///
@@ -2481,5 +2528,72 @@ mod tests {
             seen, known,
             "the fold's vocabulary is exactly what this list says it is"
         );
+    }
+
+    /// A creation the OS refused for want of quota is attempted again; a process
+    /// that started is never run twice, which is why only the spawn is retried.
+    #[test]
+    fn a_refused_process_creation_is_retried() {
+        let mut calls = 0;
+        let result = spawn_with_retry_at(
+            || {
+                calls += 1;
+                if calls < SPAWN_ATTEMPTS as i32 {
+                    Err(std::io::Error::from_raw_os_error(1816))
+                } else {
+                    Ok(())
+                }
+            },
+            std::time::Duration::ZERO,
+        );
+        assert!(result.is_ok(), "the last attempt is the one that runs");
+        assert_eq!(calls, SPAWN_ATTEMPTS as i32);
+    }
+
+    /// Any other error is the answer: retrying a missing program or a denied one
+    /// only delays the report.
+    #[test]
+    fn a_permanent_creation_error_is_not_retried() {
+        for code in [2, 5, 267] {
+            let mut calls = 0;
+            let result = spawn_with_retry_at(
+                || {
+                    calls += 1;
+                    Err::<(), _>(std::io::Error::from_raw_os_error(code))
+                },
+                std::time::Duration::ZERO,
+            );
+            assert!(result.is_err(), "error {code} is returned");
+            assert_eq!(calls, 1, "error {code} is not retried");
+        }
+    }
+
+    /// A host with no room gives up after its attempts instead of waiting
+    /// forever; the caller still sees the refusal.
+    #[test]
+    fn a_quota_refusal_that_never_clears_gives_up() {
+        let mut calls = 0;
+        let result = spawn_with_retry_at(
+            || {
+                calls += 1;
+                Err::<(), _>(std::io::Error::from_raw_os_error(1816))
+            },
+            std::time::Duration::ZERO,
+        );
+        assert!(result.is_err());
+        assert_eq!(calls, SPAWN_ATTEMPTS as i32);
+    }
+
+    #[test]
+    fn only_a_quota_refusal_is_transient() {
+        assert!(is_transient_spawn_failure(
+            &std::io::Error::from_raw_os_error(1816)
+        ));
+        assert!(!is_transient_spawn_failure(
+            &std::io::Error::from_raw_os_error(2)
+        ));
+        assert!(!is_transient_spawn_failure(&std::io::Error::other(
+            "no os code"
+        )));
     }
 }

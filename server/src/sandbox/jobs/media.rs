@@ -518,7 +518,10 @@ fn helper_command(helper: &Path) -> Command {
 /// Run the helper with its streams on pipes and stdin closed: `Command::output` would set
 /// stdin to the null device a confinement layer may refuse.
 fn run_helper(command: &mut Command) -> std::io::Result<std::process::Output> {
-    let mut child = command.spawn()?;
+    // A loaded host can refuse the creation itself (`ERROR_NOT_ENOUGH_QUOTA`,
+    // the desktop heap or a job's quota); the helper is retried, the process is
+    // not.
+    let mut child = crate::sandbox::spawn_with_retry(|| command.spawn())?;
     drop(child.stdin.take());
     child.wait_with_output()
 }
