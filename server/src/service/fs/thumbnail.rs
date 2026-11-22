@@ -86,25 +86,14 @@ impl ThumbnailService {
             format!("/{path}")
         };
 
-        let repo_model = self
-            .repos
-            .repo
-            .find_by_id(repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Repository not found".into()))?;
-        let head_commit_id = repo_model
-            .head_commit_id
-            .ok_or_else(|| AppError::NotFound("No commits yet".into()))?;
-        let head_commit = self
-            .repos
-            .commit
-            .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
+        let head = crate::fs::core::repo_head(&self.repos, repo_id).await?;
+        if head.head_commit_id.is_none() {
+            return Err(AppError::NotFound("No commits yet".into()));
+        }
 
         // Resolve fs_id and mtime in one tree walk; the mtime comes from the final hop's dirent.
         let (file_fs_id, current_mtime) =
-            resolve_file_entry(&self.repos, repo_id, &head_commit.root_id, &normalized_path)
+            resolve_file_entry(&self.repos, repo_id, &head.root_id, &normalized_path)
                 .await
                 .map_err(|_| AppError::NotFound("file not found".into()))?;
 

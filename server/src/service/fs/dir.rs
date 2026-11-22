@@ -170,22 +170,10 @@ pub(crate) async fn list_dir_from_fs_tree(
     repo_id: &str,
     path: &str,
 ) -> Result<(String, Vec<DirEntry>), AppError> {
-    let repo_record = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Repository not found".into()))?;
-
-    let head_commit_id = match repo_record.head_commit_id {
-        Some(id) => id,
-        None => return Ok((String::new(), vec![])),
-    };
-
-    let head = repos
-        .commit
-        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
+    let head = crate::fs::core::repo_head(repos, repo_id).await?;
+    if head.head_commit_id.is_none() {
+        return Ok((String::new(), vec![]));
+    }
 
     list_dir_from_root(repos, repo_id, &head.root_id, path).await
 }
@@ -250,22 +238,10 @@ pub(crate) async fn list_dir_recursive_from_fs_tree(
     repo_id: &str,
     path: &str,
 ) -> Result<(String, Vec<DirEntry>), AppError> {
-    let repo_record = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Repository not found".into()))?;
-
-    let head_commit_id = match repo_record.head_commit_id {
-        Some(id) => id,
-        None => return Ok((String::new(), vec![])),
-    };
-
-    let head = repos
-        .commit
-        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Head commit not found".into()))?;
+    let head = crate::fs::core::repo_head(repos, repo_id).await?;
+    if head.head_commit_id.is_none() {
+        return Ok((String::new(), vec![]));
+    }
 
     let (dir_id, entries, _truncated) =
         list_dir_recursive_from_root(repos, repo_id, &head.root_id, path, true, None).await?;
@@ -862,24 +838,13 @@ impl DirService {
         let name = basename(path);
         let parent_path = parent_path_from(path);
 
-        let repo_model = self
-            .repos
-            .repo
-            .find_by_id(repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-        let head_commit_id = repo_model
-            .head_commit_id
-            .ok_or_else(|| AppError::NotFound("no commits".into()))?;
-        let head_commit = self
-            .repos
-            .commit
-            .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
+        let head = crate::fs::core::repo_head(&self.repos, repo_id).await?;
+        if head.head_commit_id.is_none() {
+            return Err(AppError::NotFound("no commits".into()));
+        }
 
         let parent_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_commit.root_id, parent_path)
+            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head.root_id, parent_path)
                 .await
                 .map_err(|e| {
                     crate::service::fs::resolve_parent_error(e, "resolve parent failed")
@@ -917,7 +882,7 @@ impl DirService {
                 &entry.id,
                 &entry.name,
                 entry.size,
-                &head_commit_id,
+                head.head_commit_id.as_deref().unwrap_or_default(),
                 email,
             )
             .await
@@ -932,7 +897,7 @@ impl DirService {
             db,
             &self.repos,
             repo_id,
-            &head_commit.root_id,
+            &head.root_id,
             parent_path,
             &parent_fs_id,
             email,
@@ -1097,21 +1062,10 @@ impl DirService {
         path: &str,
         permission: &'static str,
     ) -> Result<serde_json::Value, AppError> {
-        let repo_record = self
-            .repos
-            .repo
-            .find_by_id(repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Library not found".into()))?;
-        let head_commit_id = repo_record
-            .head_commit_id
-            .ok_or_else(|| AppError::NotFound("no commits".into()))?;
-        let head_commit = self
-            .repos
-            .commit
-            .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
+        let head = crate::fs::core::repo_head(&self.repos, repo_id).await?;
+        if head.head_commit_id.is_none() {
+            return Err(AppError::NotFound("no commits".into()));
+        }
 
         let dir_name = path
             .trim_end_matches('/')
@@ -1122,7 +1076,7 @@ impl DirService {
         // One tree walk to the parent's dirent yields the mtime, without re-resolving the parent
         // path separately.
         let (_, mtime) =
-            crate::fs::core::resolve_file_entry(&self.repos, repo_id, &head_commit.root_id, path)
+            crate::fs::core::resolve_file_entry(&self.repos, repo_id, &head.root_id, path)
                 .await
                 .map_err(|_| AppError::NotFound("Folder not found.".into()))?;
 

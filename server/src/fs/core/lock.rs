@@ -121,17 +121,18 @@ pub async fn prune_stale_file_locks(
         return Ok(0);
     }
 
-    let head_root = match repos.repo.find_by_id(repo_id).await? {
-        // The library is gone; its rows go with the FK cascade.
-        None => None,
-        Some(repo) => match repo.head_commit_id.as_deref().filter(|h| *h != EMPTY_SHA1) {
-            None => None,
-            Some(head) => repos
-                .commit
-                .find_by_repo_and_commit_id(repo_id, head)
-                .await?
-                .map(|commit| commit.root_id),
-        },
+    let head_root = match crate::fs::core::repo_head(repos, repo_id).await {
+        // A missing or damaged library has no reachable head; locks are pruned
+        // as if the tree were empty.
+        Ok(head) => {
+            if head.head_commit_id.is_some() {
+                Some(head.root_id)
+            } else {
+                None
+            }
+        }
+        Err(AppError::NotFound(_)) => None,
+        Err(e) => return Err(e),
     };
 
     let mut removed = 0u64;

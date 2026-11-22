@@ -30,8 +30,8 @@ pub use lock::{
 pub use size::{compute_repo_size, compute_tree_size, entry_exists, get_entry_total_size};
 pub use store::{store_fs_dir_object, store_fs_file_object};
 pub use tree::{
-    read_fs_dir_data, read_fs_dir_data_batch, read_fs_file_data, read_fs_file_data_batch,
-    resolve_dir_fs_id, resolve_file_entry, resolve_file_entry_with_head, resolve_fs_id,
+    RepoHead, read_fs_dir_data, read_fs_dir_data_batch, read_fs_file_data, read_fs_file_data_batch,
+    repo_head, resolve_dir_fs_id, resolve_file_entry, resolve_file_entry_with_head, resolve_fs_id,
     resolve_fs_ids_batch,
 };
 pub use tree_diff::diff_trees;

@@ -7,6 +7,53 @@ use infra::common::EMPTY_SHA1;
 use infra::entity::fs_object;
 use infra::serialization::S_IFDIR;
 
+/// The library's current head, resolved in one place: the row, the head commit
+/// id (`None` for an empty library, and the all-zero sentinel is normalised to
+/// `None`) and the root fs id (`EMPTY_SHA1` for an empty library).
+pub struct RepoHead {
+    pub repo: infra::entity::repo::Model,
+    pub head_commit_id: Option<String>,
+    pub root_id: String,
+}
+
+/// Resolve a library's head in one round trip pair.
+///
+/// Every `Repositories`-based caller used to hand-roll
+/// `find_by_id` → `head_commit_id` → `find_by_repo_and_commit_id` → `root_id`;
+/// the error shape here is the common one: a missing library and a dangling
+/// head are 404s, while an empty library is not an error.
+pub async fn repo_head(repos: &Repositories, repo_id: &str) -> Result<RepoHead, AppError> {
+    let repo = repos
+        .repo
+        .find_by_id(repo_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
+
+    let Some(head_commit_id) = repo
+        .head_commit_id
+        .clone()
+        .filter(|id| id.as_str() != EMPTY_SHA1)
+    else {
+        return Ok(RepoHead {
+            repo,
+            head_commit_id: None,
+            root_id: EMPTY_SHA1.to_string(),
+        });
+    };
+
+    let head = repos
+        .commit
+        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
+
+    Ok(RepoHead {
+        repo,
+        head_commit_id: Some(head_commit_id),
+        root_id: head.root_id,
+    })
+}
+
 /// `S_IFMT` / `S_IFDIR` type bits, used like C's `S_ISDIR()`. The bare
 /// `infra::serialization::S_IFDIR` cannot mask a dirent that also carries permission bits.
 const S_IFMT: i32 = 0o170000;

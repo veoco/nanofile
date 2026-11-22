@@ -117,21 +117,11 @@ impl Downloader {
         repo_id: &str,
         path: &str,
     ) -> Result<(FsFileData, Vec<String>), AppError> {
-        let repo_model = repos
-            .repo
-            .find_by_id(repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-        let head_commit_id = repo_model
-            .head_commit_id
-            .ok_or_else(|| AppError::NotFound("repo has no commits".into()))?;
-        let head_commit = repos
-            .commit
-            .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
-
-        Self::resolve_blocks_from_root(repos, repo_id, &head_commit.root_id, path).await
+        let head = crate::fs::core::repo_head(repos, repo_id).await?;
+        if head.head_commit_id.is_none() {
+            return Err(AppError::NotFound("repo has no commits".into()));
+        }
+        Self::resolve_blocks_from_root(repos, repo_id, &head.root_id, path).await
     }
 
     /// Resolve block IDs from an already-resolved root fs_id; callers like WebDAV reuse

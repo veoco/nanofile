@@ -473,20 +473,11 @@ impl FileOps {
 
     /// Find the root fs_id via the repo's head commit.
     async fn resolve_root_fs_id(repos: &Repositories, repo_id: &str) -> Result<String, AppError> {
-        let repo_model = repos
-            .repo
-            .find_by_id(repo_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-        let head_commit_id = repo_model
-            .head_commit_id
-            .ok_or_else(|| AppError::NotFound("repo has no head commit".into()))?;
-        let commit_ent = repos
-            .commit
-            .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
-        Ok(commit_ent.root_id)
+        let head = crate::fs::core::repo_head(repos, repo_id).await?;
+        if head.head_commit_id.is_none() {
+            return Err(AppError::NotFound("repo has no head commit".into()));
+        }
+        Ok(head.root_id)
     }
 
     /// Resolve a path to its fs_id by walking the FS tree from root.
@@ -495,10 +486,10 @@ impl FileOps {
         repo_id: &str,
         path: &str,
     ) -> Result<String, AppError> {
-        if path == "/" {
-            return Self::resolve_root_fs_id(repos, repo_id).await;
-        }
         let root_fs_id = Self::resolve_root_fs_id(repos, repo_id).await?;
+        if path == "/" {
+            return Ok(root_fs_id);
+        }
         crate::fs::core::resolve_fs_id(repos, repo_id, &root_fs_id, path).await
     }
 

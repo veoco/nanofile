@@ -9,23 +9,10 @@ use crate::fs::core::{read_fs_dir_data, read_fs_dir_data_batch, resolve_fs_id};
 /// Compute the total size of all files in the repo's HEAD tree. Returns 0 when
 /// there is no commit or the tree is empty.
 pub async fn compute_repo_size(repos: &Repositories, repo_id: &str) -> Result<i64, AppError> {
-    let repo_record = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-
-    let head_commit_id = match repo_record.head_commit_id {
-        Some(id) => id,
-        None => return Ok(0),
-    };
-
-    let head = repos
-        .commit
-        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
-
+    let head = crate::fs::core::repo_head(repos, repo_id).await?;
+    if head.head_commit_id.is_none() {
+        return Ok(0);
+    }
     compute_tree_size(repos, repo_id, &head.root_id).await
 }
 
@@ -89,19 +76,10 @@ async fn resolve_dirent(
     };
     let name = basename(path);
 
-    let repo_record = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-    let head_commit_id = repo_record
-        .head_commit_id
-        .ok_or_else(|| AppError::NotFound("no commits yet".into()))?;
-    let head = repos
-        .commit
-        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("head commit not found".into()))?;
+    let head = crate::fs::core::repo_head(repos, repo_id).await?;
+    if head.head_commit_id.is_none() {
+        return Err(AppError::NotFound("no commits yet".into()));
+    }
 
     let parent_fs_id = resolve_fs_id(repos, repo_id, &head.root_id, parent_path)
         .await

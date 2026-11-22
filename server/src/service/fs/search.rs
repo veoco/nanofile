@@ -158,24 +158,10 @@ impl SearchService {
                 if matching.is_empty() {
                     continue;
                 }
-                let repo_record = match self.repos.repo.find_by_id(found_repo_id).await {
-                    Ok(Some(repo)) => repo,
+                let head = match crate::fs::core::repo_head(&self.repos, found_repo_id).await {
+                    Ok(head) if head.head_commit_id.is_some() && head.root_id != EMPTY_SHA1 => head,
                     _ => continue,
                 };
-                let head = match repo_record.head_commit_id.as_deref() {
-                    Some(head_id) => self
-                        .repos
-                        .commit
-                        .find_by_repo_and_commit_id(found_repo_id, head_id)
-                        .await
-                        .ok()
-                        .flatten(),
-                    None => None,
-                };
-                let Some(head) = head else { continue };
-                if head.root_id == EMPTY_SHA1 {
-                    continue;
-                }
                 for tag in matching {
                     if all_results.len() >= MAX_SEARCH_RESULTS {
                         break;
@@ -203,7 +189,7 @@ impl SearchService {
                     let metas = self
                         .resolve_file_metadata_batch(
                             found_repo_id,
-                            &repo_record.name,
+                            &head.repo.name,
                             &head.root_id,
                             &paths,
                             &highlights,
@@ -242,26 +228,16 @@ impl SearchService {
                     }
 
                     for (found_repo_id, indices) in by_repo {
-                        let repo_record = match self.repos.repo.find_by_id(&found_repo_id).await {
-                            Ok(Some(r)) => r,
-                            _ => continue,
-                        };
-                        let head_commit_id = match &repo_record.head_commit_id {
-                            Some(id) => id.clone(),
-                            None => continue,
-                        };
-                        let head = match self
-                            .repos
-                            .commit
-                            .find_by_repo_and_commit_id(&found_repo_id, &head_commit_id)
+                        let head = match crate::fs::core::repo_head(&self.repos, &found_repo_id)
                             .await
                         {
-                            Ok(Some(h)) => h,
+                            Ok(head)
+                                if head.head_commit_id.is_some() && head.root_id != EMPTY_SHA1 =>
+                            {
+                                head
+                            }
                             _ => continue,
                         };
-                        if head.root_id == EMPTY_SHA1 {
-                            continue;
-                        }
 
                         let fullpaths: Vec<String> = indices
                             .iter()
@@ -274,7 +250,7 @@ impl SearchService {
                         let metas = self
                             .resolve_file_metadata_batch(
                                 &found_repo_id,
-                                &repo_record.name,
+                                &head.repo.name,
                                 &head.root_id,
                                 &fullpaths,
                                 &highlights,

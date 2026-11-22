@@ -19,26 +19,17 @@ pub async fn resolve_entry_type_raw(
         return Ok("d".to_string());
     }
 
-    let repo_model = repos
-        .repo
-        .find_by_id(repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-    let head_commit_id = repo_model
-        .head_commit_id
-        .ok_or_else(|| AppError::BadRequest("repo has no commits".into()))?;
-    let head_commit = repos
-        .commit
-        .find_by_repo_and_commit_id(repo_id, &head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::Internal("head commit not found".into()))?;
+    let head = crate::fs::core::repo_head(repos, repo_id).await?;
+    if head.head_commit_id.is_none() {
+        return Err(AppError::BadRequest("repo has no commits".into()));
+    }
 
     let (parent_path, entry_name) = path.rsplit_once('/').unwrap_or(("/", path));
 
     let parent_fs_id = if parent_path.is_empty() {
-        head_commit.root_id.clone()
+        head.root_id.clone()
     } else {
-        resolve_fs_id(repos, repo_id, &head_commit.root_id, parent_path)
+        resolve_fs_id(repos, repo_id, &head.root_id, parent_path)
             .await
             .map_err(|_| AppError::NotFound("path not found".into()))?
     };

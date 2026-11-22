@@ -452,21 +452,15 @@ pub async fn shared_dir_view(
         return Ok(Html(html).into_response());
     }
 
-    let repo_model = state
-        .repos
-        .repo
-        .find_by_id(&link.repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Repo not found".into()))?;
-    let head_commit_id = repo_model
-        .head_commit_id
-        .ok_or_else(|| AppError::BadRequest("Repo has no commits".into()))?;
-    let head_commit = state
-        .repos
-        .commit
-        .find_by_repo_and_commit_id(&link.repo_id, &head_commit_id)
-        .await?
-        .ok_or_else(|| AppError::Internal("Head commit not found".into()))?;
+    let head = crate::fs::core::repo_head(&state.repos, &link.repo_id)
+        .await
+        .map_err(|e| match e {
+            AppError::NotFound(_) => AppError::NotFound("Repo not found".into()),
+            other => other,
+        })?;
+    if head.head_commit_id.is_none() {
+        return Err(AppError::BadRequest("Repo has no commits".into()));
+    }
 
     if params.get("dl").map(|s| s.as_str()) == Some("1") {
         check_share_download_rate(&state, &addr, &headers)?;
@@ -487,7 +481,7 @@ pub async fn shared_dir_view(
         let files = collect_dir_entries(
             &state.repos,
             &link.repo_id,
-            &head_commit.root_id,
+            &head.root_id,
             &link.path,
             &dir_name,
             ZipLimits {
@@ -528,14 +522,9 @@ pub async fn shared_dir_view(
     let sub_path = params.get("p").map(|s| s.as_str()).unwrap_or("/");
     let current_path = resolve_share_subpath(&link, sub_path)?;
 
-    let dir_id = resolve_fs_id(
-        &state.repos,
-        &link.repo_id,
-        &head_commit.root_id,
-        &current_path,
-    )
-    .await
-    .map_err(|_| AppError::NotFound("Directory not found".into()))?;
+    let dir_id = resolve_fs_id(&state.repos, &link.repo_id, &head.root_id, &current_path)
+        .await
+        .map_err(|_| AppError::NotFound("Directory not found".into()))?;
 
     let dir_data = read_fs_dir_data(&state.repos, &link.repo_id, &dir_id)
         .await

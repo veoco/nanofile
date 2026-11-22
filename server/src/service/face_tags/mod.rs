@@ -235,28 +235,17 @@ impl FaceTagService {
         // Most callers already know the content id; a manual batch may not.
         let resolved_fs_id;
         let fs_id = if fs_id.is_empty() {
-            let Some(repo) = self.repos.repo.find_by_id(repo_id).await? else {
-                return Ok(ScanCounts {
-                    failed: 1,
-                    ..Default::default()
-                });
-            };
-            let Some(head_id) = repo.head_commit_id.as_deref() else {
-                return Ok(ScanCounts {
-                    failed: 1,
-                    ..Default::default()
-                });
-            };
-            let Some(head) = self
-                .repos
-                .commit
-                .find_by_repo_and_commit_id(repo_id, head_id)
-                .await?
-            else {
-                return Ok(ScanCounts {
-                    failed: 1,
-                    ..Default::default()
-                });
+            let head = match crate::fs::core::repo_head(&self.repos, repo_id).await {
+                Ok(head) if head.head_commit_id.is_some() => head,
+                // Empty library or a dangling head: count this entry as failed,
+                // matching the pre-helper behaviour.
+                Ok(_) | Err(AppError::NotFound(_)) => {
+                    return Ok(ScanCounts {
+                        failed: 1,
+                        ..Default::default()
+                    });
+                }
+                Err(e) => return Err(e),
             };
             resolved_fs_id =
                 crate::fs::core::tree::resolve_fs_id(&self.repos, repo_id, &head.root_id, path)
