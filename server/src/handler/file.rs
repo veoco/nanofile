@@ -1,4 +1,4 @@
-﻿use axum::{
+use axum::{
     Json, Router,
     body::Body,
     extract::{Path, Query, State},
@@ -492,7 +492,7 @@ pub struct FileIndexTextQuery {
     pub p: Option<String>,
 }
 
-/// GET /api2/repos/{repo_id}/file/index-text/?p=/path 鈥?the stored full-text index
+/// GET /api2/repos/{repo_id}/file/index-text/?p=/path — the stored full-text index
 /// content, or null when the file is not indexed.
 pub async fn file_index_text(
     access: RepoPathRead,
@@ -520,7 +520,7 @@ pub struct ReindexFileRequest {
     pub p: Option<String>,
 }
 
-/// POST /api2/repos/{repo_id}/file/reindex/ 鈥?re-index one file from block storage;
+/// POST /api2/repos/{repo_id}/file/reindex/ — re-index one file from block storage;
 /// body `{"p": "/dir/file.txt"}`.
 pub async fn reindex_file_handler(
     access: RepoPathWrite,

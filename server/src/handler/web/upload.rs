@@ -1,7 +1,8 @@
 //! Upload endpoints: multipart intake, CDC ingest, commit and reply framing.
 //!
-//! The pipeline is `read_parts` (streaming, staged or block intake) 閳?target
-//! resolution (`resolve_create_target` / `resolve_existing_target`) 閳?//! `AuthContext` (the token or session prelude) 閳?`finish_request` (chunk
+//! The pipeline is `read_parts` (streaming, staged, chunked or block intake)
+//! → target resolution (`resolve_create_target` / `resolve_existing_target`)
+//! → `AuthContext` (the token or session prelude) → `finish_request` (chunk
 //! assembly or whole-file commit, then the endpoint's reply shape).
 
 use axum::{
@@ -151,8 +152,8 @@ struct AuthContext {
 }
 
 impl AuthContext {
-    /// Validate a short-lived upload/update token: token 闂?op 闂?write permission
-    /// 闂?library key, in that order.
+    /// Validate a short-lived upload/update token: token → op → write permission
+    /// → library key, in that order.
     async fn from_token(state: &AppState, raw: &str, kind: TokenKind) -> Result<Self, AppError> {
         let token = state.token_manager.validate(raw).ok_or_else(|| {
             AppError::BadRequest(format!("invalid or expired {} token", kind.op()))
@@ -188,7 +189,7 @@ impl AuthContext {
         })
     }
 
-    /// A browser session: CSRF 闂?write permission 闂?library key. The handler
+    /// A browser session: CSRF → write permission → library key. The handler
     /// calls this only after its own field checks, so their 400s keep winning.
     async fn from_session(
         state: &AppState,
@@ -261,7 +262,7 @@ pub(crate) fn parse_replace_arg(query: Option<&str>, form: Option<&str>) -> Resu
     }
 }
 
-/// Collect a URL's query parameters into a map (missing/unparsable 闂?empty).
+/// Collect a URL's query parameters into a map (missing/unparsable → empty).
 fn query_params(uri: &axum::http::Uri) -> HashMap<String, String> {
     uri.query()
         .and_then(|q| serde_urlencoded::from_str(q).ok())
@@ -295,7 +296,7 @@ async fn require_target_exists(
 /// How an endpoint frames a successful upload/update body.
 ///
 /// The `-aj` endpoints always answer the JSON array (`isAjax=true`); the `-api`
-/// endpoints answer the plain-text file id unless `ret-json` was requested 闂?the
+/// endpoints answer the plain-text file id unless `ret-json` was requested — the
 /// official Android and desktop clients store that body verbatim, so a JSON array
 /// there corrupts their state (`server/fileserver/fileop.go:1859-1884`).
 #[derive(Clone, Copy)]
@@ -323,7 +324,7 @@ struct CommittedFile {
 /// Render a committed upload (one or more files).
 ///
 /// The `-aj` endpoints answer a JSON array. The `-api` endpoints answer one id
-/// per file separated by `\t`, or the JSON array with `ret-json` 闂?matching
+/// per file separated by `\t`, or the JSON array with `ret-json` — matching
 /// `postMultiFiles` in `server/fileserver/fileop.go:1944-1970`.
 fn reply_committed(style: ReplyStyle, files: &[CommittedFile]) -> axum::response::Response {
     use axum::response::IntoResponse;
@@ -735,7 +736,7 @@ async fn try_handle_chunked(
 ///
 /// Used instead of axum's `Multipart` extractor, which fails with 400 on the Qt
 /// desktop client's uploads.
-/// `POST /upload-aj/` 闂?AJAX file upload from the Seahub web UI (no token),
+/// `POST /upload-aj/` — AJAX file upload from the Seahub web UI (no token),
 /// taking `file`, `repo_id`, `parent_dir` and optional `relative_path` fields.
 pub async fn upload_aj(
     user: WebUser,
@@ -906,7 +907,8 @@ async fn finish_request(
 /// Resolve the create target of an upload from its fields and query.
 ///
 /// A missing `parent_dir` means the token's directory for token uploads and the
-/// library root for session uploads; the target is always clamped, never widened.
+/// library root for session uploads. Link tokens stay clamped to the directory
+/// the link was minted for; nothing here can widen them.
 fn create_target(
     token: Option<&crate::service::auth::access_token::AccessToken>,
     fields: &HashMap<String, String>,
@@ -1142,13 +1144,14 @@ pub(crate) struct Parts {
     pub(crate) files: Vec<PartFile>,
     /// The single chunk of a `Content-Range` request.
     chunked: Option<(String, Vec<u8>)>,
-    /// Blocks written by a `Blocks` intake (their pre-charge is released here).
+    /// Blocks written by a `Blocks` intake, for the quota release on a failed
+    /// commit.
     blocks: Vec<String>,
     /// Whether a `Blocks` request carried a file part at all.
     has_file: bool,
 }
 
-/// Read the multipart body in one of the three intake modes.
+/// Read the multipart body in one of the four intake modes.
 ///
 /// `max_files` is 1 for the update endpoints (a second part answers
 /// `More files in one request`) and unbounded for the upload ones; a chunked
@@ -1326,9 +1329,8 @@ async fn ingest(
     .await
 }
 
-/// The block-streaming half of [`ingest`], for a multipart file part. Still
-/// `pub(crate)`: `/api2/repos/{id}/file/` streams its one part the same way.
-pub(crate) async fn stream_file_into_blocks(
+/// The block-streaming half of [`ingest`], for one multipart file part.
+async fn stream_file_into_blocks(
     store: infra::storage::DynBlockStorage,
     repo_id: &str,
     field: multer::Field<'_>,
@@ -1572,7 +1574,7 @@ async fn commit_uploads(
     Ok(committed)
 }
 
-/// `POST /update-api/` 闂?update an existing file from the web UI (no token),
+/// `POST /update-api/` — update an existing file from the web UI (no token),
 /// taking `file`, `repo_id`, and `p` / `path` (the full target path).
 pub async fn update_api(
     user: WebUser,
@@ -1614,7 +1616,7 @@ pub async fn update_api(
         .map(|finished| finished.response)
 }
 
-/// `POST /update-aj/` 闂?AJAX file update from the Seahub web UI (no token),
+/// `POST /update-aj/` — AJAX file update from the Seahub web UI (no token),
 /// taking `file`, `repo_id` and `target_file` (the full target path).
 pub async fn update_aj(
     user: WebUser,
@@ -1653,7 +1655,7 @@ pub async fn update_aj(
         .map(|finished| finished.response)
 }
 
-/// `POST /upload-aj/{token}` 闂?upload with an upload-link token, as sent by the
+/// `POST /upload-aj/{token}` — upload with an upload-link token, as sent by the
 /// Seahub React frontend after `/api2/repos/{id}/upload-link/?from=web`.
 pub async fn upload_aj_token(
     State(state): State<Arc<AppState>>,
@@ -1691,7 +1693,7 @@ pub async fn upload_aj_token(
     Ok(finished.response)
 }
 
-/// `POST /upload-api/{token}` 闂?token-authenticated upload for the desktop
+/// `POST /upload-api/{token}` — token-authenticated upload for the desktop
 /// client, which sends a quoted multipart boundary that axum's extractor rejects.
 pub async fn upload_api(
     State(state): State<Arc<AppState>>,
@@ -1704,8 +1706,11 @@ pub async fn upload_api(
     let query = query_params(&request.uri);
     let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let auth = AuthContext::from_token(&state, &token, TokenKind::Upload).await?;
-    // A resumable chunk must go through the temp-file / assembly path, so a
-    // `Content-Range` body is buffered instead of streamed into blocks.
+    // Resumable uploads reach this endpoint: the Qt desktop client fetches
+    // `api2/repos/{id}/upload-link/` and chunks files over 100 MB
+    // (`ReliablePostFileTask`). A chunk must go through the temp-file / assembly
+    // path — streaming it straight into blocks would commit it as a whole file,
+    // and that path is also where the declared size is reserved against quota.
     let parts = read_upload_body(&state, Some(&auth), body, &headers).await?;
 
     // Like the `-aj` token form, a missing `parent_dir` means the directory the
@@ -1727,7 +1732,7 @@ pub async fn upload_api(
     .map(|finished| finished.response)
 }
 
-/// `POST /update-api/{token}` 闂?token-authenticated file overwrite for the
+/// `POST /update-api/{token}` — token-authenticated file overwrite for the
 /// desktop client. `target_file`, or `parent_dir` + `relative_path`, names the
 /// existing file; the update always overwrites in place.
 pub async fn update_api_handler(
@@ -1776,7 +1781,7 @@ pub async fn update_api_handler(
     .map(|finished| finished.response)
 }
 
-/// `POST /update-aj/{token}` 闂?token-based AJAX file update from the Seahub web
+/// `POST /update-aj/{token}` — token-based AJAX file update from the Seahub web
 /// frontend, taking `file`, `target_file` and optional `relative_path`.
 pub async fn update_aj_token(
     State(state): State<Arc<AppState>>,
@@ -1855,7 +1860,7 @@ async fn commit_blocks(
     new_block_ids: Vec<String>,
 ) -> Result<axum::response::Response, AppError> {
     let uid = Some(info.user_id);
-    // Reject malformed / path-traversal ids outright 鈥?a valid block id is
+    // Reject malformed / path-traversal ids outright — a valid block id is
     // exactly 40 lowercase hex chars (content-addressed SHA-1). The sync block
     // PUT shares this predicate, so an id cannot pass one endpoint and fail
     // to resolve in the store behind the other.
@@ -2125,4 +2130,94 @@ pub async fn upload_blks_api(
     }
 
     Ok(ok_json().into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a single-part multipart body carrying `data` as the `file` field.
+    fn multipart_body(boundary: &str, data: &[u8]) -> String {
+        format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"file\"; filename=\"f.bin\"\r\n\
+             Content-Type: application/octet-stream\r\n\r\n\
+             {}\r\n\
+             --{boundary}--\r\n",
+            String::from_utf8_lossy(data)
+        )
+    }
+
+    /// A chunk declaring more than the per-chunk cap is rejected from the header.
+    #[tokio::test]
+    async fn test_read_chunked_field_rejects_oversized_header() {
+        let body = multipart_body("HDRBOUND", b"hi");
+        let stream = futures_util::stream::once(async move {
+            Result::<bytes::Bytes, std::convert::Infallible>::Ok(bytes::Bytes::from(
+                body.into_bytes(),
+            ))
+        });
+        let mut multipart = multer::Multipart::new(stream, "HDRBOUND");
+        let mut field = multipart.next_field().await.unwrap().unwrap();
+
+        // Declared chunk is 4096 bytes, cap is 1024 — rejected from the header.
+        let err = read_chunked_field(&mut field, Some("bytes 0-4095/4096"), 1024)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    /// A client that lies about the header is cut off at the actual-bytes cap.
+    #[tokio::test]
+    async fn test_read_chunked_field_rejects_oversized_body() {
+        let body = multipart_body("BODYBOUND", b"01234567890123456789");
+        let stream = futures_util::stream::once(async move {
+            Result::<bytes::Bytes, std::convert::Infallible>::Ok(bytes::Bytes::from(
+                body.into_bytes(),
+            ))
+        });
+        let mut multipart = multer::Multipart::new(stream, "BODYBOUND");
+        let mut field = multipart.next_field().await.unwrap().unwrap();
+
+        // Header says 10 bytes (within the cap) but the actual body is 20.
+        let err = read_chunked_field(&mut field, Some("bytes 0-9/100"), 10)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn test_read_chunked_field_reads_valid_chunk() {
+        let body = multipart_body("OKBOUND", b"hello");
+        let stream = futures_util::stream::once(async move {
+            Result::<bytes::Bytes, std::convert::Infallible>::Ok(bytes::Bytes::from(
+                body.into_bytes(),
+            ))
+        });
+        let mut multipart = multer::Multipart::new(stream, "OKBOUND");
+        let mut field = multipart.next_field().await.unwrap().unwrap();
+
+        let data = read_chunked_field(&mut field, Some("bytes 0-4/100"), 1024)
+            .await
+            .unwrap();
+        assert_eq!(data, b"hello");
+    }
+
+    /// An unparsable Content-Range is rejected instead of reading unbounded.
+    #[tokio::test]
+    async fn test_read_chunked_field_without_range_rejects() {
+        let body = multipart_body("NORANGE", b"fullbody");
+        let stream = futures_util::stream::once(async move {
+            Result::<bytes::Bytes, std::convert::Infallible>::Ok(bytes::Bytes::from(
+                body.into_bytes(),
+            ))
+        });
+        let mut multipart = multer::Multipart::new(stream, "NORANGE");
+        let mut field = multipart.next_field().await.unwrap().unwrap();
+
+        let err = read_chunked_field(&mut field, None, 1024)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
 }
