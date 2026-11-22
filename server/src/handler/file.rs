@@ -64,8 +64,25 @@ pub async fn download_file(
 ) -> Result<Response, AppError> {
     let repo_id = &access.repo_id;
 
-    let path = safe_normalize_path(&query.p.unwrap_or_else(|| "/".to_string()))
-        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
+    // seahub's `FileView.get` treats `p` as required; defaulting to the root
+    // turned a malformed request into a 404 for a file named "/".
+    let p = query
+        .p
+        .ok_or_else(|| AppError::BadRequest("Path is missing.".into()))?;
+    let path =
+        safe_normalize_path(&p).map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
+
+    // `reuse` selects a one-time vs reusable capability upstream; only the two
+    // documented values are accepted here (tokens stay reusable either way).
+    if let Some(reuse) = query.reuse
+        && reuse != 0
+        && reuse != 1
+    {
+        return Err(AppError::BadRequest(
+            "If you want to reuse file server access token for download file, you should set 'reuse' argument as '1'."
+                .into(),
+        ));
+    }
 
     let svc = state.file_service();
 

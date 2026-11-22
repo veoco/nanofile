@@ -389,6 +389,61 @@ async fn test_file_op_downloadblks_shape() {
 
 /// `reloaddir=true` on mkdir returns the parent listing as a bare array, which
 /// is the only shape the iOS client's `SeafDir.handleData:` accepts.
+/// The v1 download branch requires `p`, like seahub's `FileView.get`.
+#[tokio::test]
+async fn test_v1_download_requires_p() {
+    let f = TestFixture::new().await;
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/file/?op=download", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "a missing p must be a client error");
+}
+
+/// `reuse` accepts only the documented `0`/`1` values.
+#[tokio::test]
+async fn test_v1_download_reuse_validation() {
+    let f = TestFixture::new().await;
+    let up = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "reuse.txt", b"reuse me")
+        .await;
+    assert!(up.status().is_success());
+
+    for reuse in ["0", "1"] {
+        let resp = f
+            .client
+            .get(
+                &format!(
+                    "/api2/repos/{}/file/?p=/reuse.txt&op=download&reuse={reuse}",
+                    f.repo_id
+                ),
+                Some(&f.api_token),
+            )
+            .await;
+        assert_eq!(resp.status(), 200, "reuse={reuse} must be accepted");
+        let url: String = resp.json().await.unwrap();
+        assert!(url.contains("/download-api/"), "got {url}");
+    }
+
+    let resp = f
+        .client
+        .get(
+            &format!(
+                "/api2/repos/{}/file/?p=/reuse.txt&op=download&reuse=2",
+                f.repo_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 400, "reuse=2 must be rejected");
+    let body = resp.text().await.unwrap();
+    assert!(body.contains("reuse"), "error should mention reuse: {body}");
+}
+
 #[tokio::test]
 async fn test_mkdir_reloaddir_returns_bare_listing() {
     let f = TestFixture::new().await;
