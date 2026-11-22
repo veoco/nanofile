@@ -242,6 +242,12 @@ jobs:
   # Windows halves of that code to a release build. No per-OS package step is
   # needed: the Linux tray is served over the session bus, and macOS and Windows
   # link their own toolkits.
+  #
+  # Linting and testing are one build, not two: clippy-driver is a rustc driver,
+  # so the pass that links the test binary also runs the lints. The separate
+  # `cargo clippy --bin` pass compiled the same graph a second time, and it
+  # never saw the `#[cfg(test)]` modules the tray tests live in, so what it did
+  # lint was strictly less code than this build covers.
   tray-check:
     name: Tray feature (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
@@ -269,8 +275,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
-          # `cargo clippy` below needs it, and asking for it is what makes the
-          # step independent of whatever the runner image happens to preinstall.
+          # The `clippy-driver` wrapper below needs it, and asking for it is what
+          # makes the step independent of whatever the runner image preinstalls.
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -301,16 +307,20 @@ jobs:
           cargo nextest --version
       - name: Install Tailwind CSS
         run: npm ci
-      - name: Lint with the tray feature
-        run: cargo clippy -p server --features tray --bin nanofile -- -D warnings
+      - name: Lint and test with the tray feature
+        # One pass for both: the wrapper makes the build below also run the
+        # lints, and `[workspace.lints]` (rust `warnings`, `unused`,
+        # `unsafe_code`; clippy `all`) is what denies them — a `cargo nextest`
+        # command has no place to pass `-- -D warnings`. The tray unit tests are
+        # isolated per process like the rest of the suite; `--profile ci` adds
+        # the retry and timeout policy.
+        env:
+          RUSTC_WORKSPACE_WRAPPER: clippy-driver
+        run: cargo nextest run -p server --features tray --bin nanofile --profile ci
       - name: Check tray rustdoc
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc -p server --features tray --bins --no-deps --document-private-items
-      - name: Test with tray feature
-        # The tray unit tests are isolated per process like the rest of the
-        # suite; `--profile ci` adds the retry and timeout policy.
-        run: cargo nextest run -p server --features tray --bin nanofile --profile ci
 
   # ── Frontend tests (pure JS, no npm deps) ──────────────────────────
   frontend-test:
@@ -494,11 +504,12 @@ jobs:
       # clippy --target` would have to reproduce it, because this graph's bundled
       # SQLite needs a C compiler for the target — cc-rs otherwise stops at
       # `failed to find tool "loongarch64-linux-gnu-gcc"`). What denies the lints
-      # is `[workspace.lints.clippy]` in Cargo.toml; the wrapper is what runs them.
+      # is `[workspace.lints]` in Cargo.toml — `clippy::all` plus rustc's
+      # `warnings` group — and the wrapper is what runs them.
       #
-      # `clippy::all` and not `-D warnings`: zig's `linker stderr: ignoring
-      # deprecated linker optimization setting '1'` arrives through the
-      # `linker_messages` lint and would fail every row.
+      # `linker_messages` stays at allow in that table: the `warnings` group
+      # covers linker output, and this row links through zig, so a linker notice
+      # must not fail it. Nothing here denied linker output before either.
       - name: Build and lint the workspace for the target
         env:
           RUSTC_WORKSPACE_WRAPPER: clippy-driver

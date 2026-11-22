@@ -57,6 +57,19 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # this is what reaches the targets with no runner and the release builds.
 [workspace.lints.rust]
 unused = "deny"
+# The rest of rustc's warnings are denied here rather than by `-D warnings` on
+# the command line, because the tray row lints and tests in one `clippy-driver`
+# build (there is no `cargo nextest` flag that carries extra rustc arguments).
+# Denying the group in the manifest is what keeps that row as strict as the
+# separate clippy step it replaced: `clippy::all` covers clippy, this covers
+# rustc's `deprecated`, naming and `private_interfaces` family.
+warnings = "deny"
+# The four cross builds link with zig, and linker output reaches rustc through
+# this lint. Nothing here has ever denied it (`-D warnings` only ran on
+# non-linking check builds), so the level stays where it was instead of turning
+# a linker notice into a failed cross row. rustc 1.100 classifies the known
+# benign notices as `linker_info`, which is allow-by-default anyway.
+linker_messages = "allow"
 # `unsafe` lives only in the platform/FFI modules whose file header carries
 # `#![allow(unsafe_code)]`. A handler, service or repository that grows one
 # stops compiling everywhere, including the targets with no clippy runner.
