@@ -196,12 +196,29 @@ async fn update_index_on_path_change(
         return;
     }
 
-    // The path changed but the content did not, so the new document carries the same fs_id.
-    // Dropping the old document is cheap; the new one is scheduled off this request.
-    if let Some(indexer) = indexer
-        && let Err(e) = indexer.delete_file_async(repo_id, old_path).await
-    {
-        tracing::warn!("failed to delete old index entry for {old_path}: {e}");
+    // The path changed but the content did not, so the document can move: one
+    // commit rewrites its path and no block is read or tokenized again. A file
+    // the index has no document for was never indexed, and still needs the
+    // extraction the schedule below asks for.
+    let mut needs_extraction = true;
+    if let Some(indexer) = indexer {
+        match indexer
+            .move_paths(repo_id, &[(old_path.to_string(), new_path.to_string())])
+            .await
+        {
+            Ok(missing) => needs_extraction = !missing.is_empty(),
+            Err(e) => {
+                // The move is the only thing that drops the old document, so a
+                // failure puts the delete back on this path.
+                tracing::warn!("failed to move index entry for {old_path}: {e}");
+                if let Err(e) = indexer.delete_file_async(repo_id, old_path).await {
+                    tracing::warn!("failed to delete old index entry for {old_path}: {e}");
+                }
+            }
+        }
+    }
+    if !needs_extraction {
+        return;
     }
     scheduler
         .schedule(

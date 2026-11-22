@@ -504,6 +504,74 @@ async fn test_dir_rename_and_move_update_index() {
     .await;
 }
 
+/// The rename above tolerates a gap: it polls until the document shows up. This
+/// one forbids the gap itself. A rename moves the document (add at the new path
+/// before the delete of the old one, both in one commit), so no sample may find
+/// the file in neither path — the window a delete-then-reindex pair leaves open
+/// for as long as the queued extraction takes.
+#[tokio::test]
+async fn a_dir_rename_never_hides_the_document() {
+    let f = common::TestFixture::new_with_index().await;
+    let token = &f.api_token;
+
+    assert_eq!(
+        f.client
+            .create_dir(token, &f.repo_id, "/docs")
+            .await
+            .status(),
+        201
+    );
+    assert_eq!(
+        f.client
+            .upload_file(token, &f.repo_id, "/docs", "note.txt", b"hidewindowword")
+            .await
+            .status(),
+        200
+    );
+
+    // The upload's document has to be visible first, or the first sample below
+    // would fail for the wrong reason: its debounced commit has not landed yet.
+    let mut visible = false;
+    for _ in 0..100 {
+        visible = search_results(&f, token, "hidewindowword")
+            .await
+            .iter()
+            .any(|h| h["fullpath"] == "/docs/note.txt");
+        if visible {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(visible, "the upload should be searchable before the rename");
+
+    let resp = f
+        .client
+        .post_json(
+            &format!("/api2/repos/{}/dir/rename/", f.repo_id),
+            Some(token),
+            &serde_json::json!({"repo_id": f.repo_id, "p": "/docs", "new_name": "manuals"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "dir rename failed");
+
+    // Sample faster than the debounced commit so a delete that lands before the
+    // add is caught rather than averaged away.
+    for sample in 0..20 {
+        let paths: Vec<String> = search_results(&f, token, "hidewindowword")
+            .await
+            .iter()
+            .filter_map(|h| h["fullpath"].as_str().map(str::to_string))
+            .collect();
+        assert!(
+            paths
+                .iter()
+                .any(|p| p == "/docs/note.txt" || p == "/manuals/note.txt"),
+            "sample {sample}: the document is in neither path: {paths:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
 /// A sync client that renames a directory reports it as a single directory
 /// event; the files inside must still move in the index.
 #[tokio::test]

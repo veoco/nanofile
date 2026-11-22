@@ -72,6 +72,10 @@ pub fn policy(key: JobKey) -> JobSpec {
                 no_progress_for_secs: Some(300),
                 max_total_secs: None,
             },
+            // No job-level retry on purpose: a batch keeps going past a file it
+            // cannot read (`failed` in the run detail), and retrying the whole
+            // batch would re-extract files that are permanently unreadable. The
+            // backfill re-examines them on its own pass instead.
             retry: RetryPolicy::Never,
             dedup: Dedup::None,
             visibility: Visibility::OwnerOrAdmin,

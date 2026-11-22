@@ -802,6 +802,165 @@ impl TextIndexer {
         Ok(())
     }
 
+    /// Copy the documents of moved paths to their new location.
+    ///
+    /// A rename or a move changes the path, not the bytes: the stored fields are
+    /// reused, so no block is read and no content is tokenized again. The add is
+    /// queued before the delete and both are committed before this returns, so a
+    /// reader sees the document at its new path before it disappears from the
+    /// old one — never at neither, which is what a delete now + reindex later
+    /// pair leaves behind for as long as the queued extraction takes.
+    ///
+    /// Returns the old paths the index has no document for. A file that was never
+    /// indexed cannot be moved, and the caller schedules it for extraction.
+    pub async fn move_paths(
+        &self,
+        repo_id: &str,
+        moves: &[(String, String)],
+    ) -> Result<Vec<String>, AppError> {
+        if moves.is_empty() {
+            return Ok(Vec::new());
+        }
+        let idx = self.clone();
+        let repo_id = repo_id.to_string();
+        let moves: Vec<(String, String)> = moves.to_vec();
+        let (moved, missing) =
+            tokio::task::spawn_blocking(move || idx.move_paths_inner(&repo_id, &moves))
+                .await
+                .map_err(|e| AppError::internal(format!("index move task failed: {e}")))??;
+
+        if moved > 0 {
+            // Committed here, not on the debounce: the caller's response is what
+            // tells a client its path changed, and a search in between must not
+            // find the file at neither path.
+            self.commit_async().await?;
+        }
+        Ok(missing)
+    }
+
+    fn move_paths_inner(
+        &self,
+        repo_id: &str,
+        moves: &[(String, String)],
+    ) -> Result<(usize, Vec<String>), AppError> {
+        use std::collections::HashMap;
+        use tantivy::query::{BooleanQuery, Occur, TermQuery};
+        use tantivy::schema::IndexRecordOption;
+
+        if let Err(e) = self.reader.reload() {
+            tracing::warn!("move_paths: reload failed: {e}");
+        }
+        let searcher = self.reader.searcher();
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|e| AppError::internal(format!("indexer mutex poisoned: {e}")))?;
+
+        let SchemaFields {
+            repo_id: repo_id_field,
+            fullpath: fullpath_field,
+            filename: filename_field,
+            content: content_field,
+            fs_id: fs_id_field,
+            extractor_version: version_field,
+            status: status_field,
+            attempted_at: attempted_field,
+        } = self.fields;
+
+        let mut missing = Vec::new();
+        let mut moved = 0usize;
+        // Same chunk size as `doc_states`: one query per 256 paths keeps the
+        // `should` clause count sane without a round trip per file.
+        const CHUNK: usize = 256;
+        for chunk in moves.chunks(CHUNK) {
+            let clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = chunk
+                .iter()
+                .map(|(old, _)| {
+                    (
+                        Occur::Should,
+                        Box::new(TermQuery::new(
+                            tantivy::Term::from_field_text(fullpath_field, old),
+                            IndexRecordOption::Basic,
+                        )) as Box<dyn tantivy::query::Query>,
+                    )
+                })
+                .collect();
+            let query = BooleanQuery::new(vec![
+                (
+                    Occur::Must,
+                    Box::new(TermQuery::new(
+                        tantivy::Term::from_field_text(repo_id_field, repo_id),
+                        IndexRecordOption::Basic,
+                    )) as Box<dyn tantivy::query::Query>,
+                ),
+                (
+                    Occur::Must,
+                    Box::new(BooleanQuery::new(clauses)) as Box<dyn tantivy::query::Query>,
+                ),
+            ]);
+            let top_docs = searcher
+                .search(&query, &TopDocs::with_limit(chunk.len()).order_by_score())
+                .map_err(|e| AppError::internal(format!("move_paths search: {e}")))?;
+
+            let mut stored: HashMap<String, TantivyDocument> = HashMap::new();
+            for (_score, doc_address) in top_docs {
+                let doc = searcher
+                    .doc::<TantivyDocument>(doc_address)
+                    .map_err(|e| AppError::internal(format!("move_paths retrieve doc: {e}")))?;
+                let Some(path) = doc.get_first(fullpath_field).and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                stored.insert(path.to_string(), doc);
+            }
+
+            for (old, new) in chunk {
+                if old == new {
+                    // Nothing to move; the document is already where it belongs.
+                    continue;
+                }
+                let Some(doc) = stored.get(old.as_str()) else {
+                    missing.push(old.clone());
+                    continue;
+                };
+                // The basename is what `filename` holds, so it follows the path:
+                // a file rename changes it, a directory move does not.
+                let filename = new.rsplit_once('/').map_or(new.as_str(), |(_, name)| name);
+                let text = |field: tantivy::schema::Field| {
+                    doc.get_first(field)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                let content = text(content_field);
+                let fs_id = text(fs_id_field);
+                let version = text(version_field);
+                let status = text(status_field);
+                let attempted = text(attempted_field);
+                let new_doc = doc!(
+                    repo_id_field => repo_id,
+                    fullpath_field => new.as_str(),
+                    filename_field => filename,
+                    content_field => content.as_str(),
+                    fs_id_field => fs_id.as_str(),
+                    version_field => version.as_str(),
+                    status_field => status.as_str(),
+                    attempted_field => attempted.as_str(),
+                );
+                // Add before delete: if a commit lands between the two writes the
+                // document is briefly at both paths, never at neither.
+                writer
+                    .add_document(new_doc)
+                    .map_err(|e| AppError::internal(format!("index move add doc: {e}")))?;
+                self.delete_docs_inner(&mut writer, repo_id, old)?;
+                moved += 1;
+            }
+        }
+        if moved > 0 {
+            self.pending.fetch_add(moved * 2, Ordering::Relaxed);
+        }
+        Ok((moved, missing))
+    }
+
     /// Whether there are uncommitted index operations since the last commit.
     pub(crate) fn has_pending(&self) -> bool {
         self.pending.load(Ordering::Relaxed) > 0
@@ -2160,5 +2319,74 @@ mod document_state_tests {
             .await
             .unwrap();
         assert!(content.is_none(), "the poisoned index was rebuilt empty");
+    }
+
+    /// A path change moves the document instead of dropping it and re-reading the
+    /// file: the stored content and state ride along, the old path stops
+    /// resolving, and only paths without a document are reported back.
+    #[tokio::test]
+    async fn move_paths_carries_the_document_to_the_new_path() {
+        let (_dir, indexer) = temp_index();
+        indexer
+            .index_file_with_meta(
+                "repo-1",
+                "/docs/note.txt",
+                "note.txt",
+                "dirrenameword",
+                &DocMeta::indexed("fsid-1"),
+            )
+            .unwrap();
+        indexer.commit().unwrap();
+
+        let missing = indexer
+            .move_paths(
+                "repo-1",
+                &[(
+                    "/docs/note.txt".to_string(),
+                    "/manuals/note.txt".to_string(),
+                )],
+            )
+            .await
+            .unwrap();
+        assert!(missing.is_empty(), "the document exists: {missing:?}");
+        indexer.commit().unwrap();
+
+        assert!(
+            indexer
+                .get_indexed_content("repo-1", "/docs/note.txt")
+                .await
+                .unwrap()
+                .is_none(),
+            "the old path must stop resolving"
+        );
+        assert_eq!(
+            indexer
+                .get_indexed_content("repo-1", "/manuals/note.txt")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("dirrenameword"),
+            "the content moves with the document"
+        );
+
+        // The state moves too, so a later explicit pass sees it as current and
+        // skips the extraction instead of re-reading the file.
+        let states = indexer
+            .doc_states("repo-1", &["/manuals/note.txt".to_string()])
+            .unwrap();
+        let state = states.get("/manuals/note.txt").expect("state recorded");
+        assert_eq!(state.fs_id, "fsid-1");
+        assert_eq!(state.status, DocStatus::Indexed);
+        assert!(state.is_current("fsid-1", 0));
+
+        // A path the index never saw cannot be moved; the caller schedules it.
+        let missing = indexer
+            .move_paths(
+                "repo-1",
+                &[("/absent.txt".to_string(), "/moved.txt".to_string())],
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing, vec!["/absent.txt".to_string()]);
     }
 }

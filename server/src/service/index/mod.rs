@@ -400,9 +400,12 @@ impl IndexService {
         let file_data = match crate::fs::core::read_fs_file_data(&self.repos, repo_id, &fs_id).await
         {
             Ok(data) => data,
+            // Not `Gone`: the file exists, its block could not be read. A retry
+            // (the backfill, or another explicit pass) can still index it, and
+            // the count says so.
             Err(e) => {
                 tracing::debug!("indexing {path}: cannot read file object: {e}");
-                return Ok(OneOutcome::Gone);
+                return Ok(OneOutcome::Failed);
             }
         };
 
