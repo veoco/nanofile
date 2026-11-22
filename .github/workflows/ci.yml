@@ -120,7 +120,7 @@ jobs:
         with:
           components: rustfmt, clippy
       # The two Rust cache families, and the one rule that keeps them useful:
-      # `nanofile` holds check-only artifacts (clippy and rustdoc, nothing
+      # `nanofile-v2` holds check-only artifacts (clippy and rustdoc, nothing
       # linked) and `nanofile-build-v2` holds linked dev/test codegen. A GitHub
       # cache entry is immutable — the first job to save a key defines it for
       # every later run — so a job must use the family that matches what it
@@ -128,12 +128,17 @@ jobs:
       # recompile the whole dependency graph on every run: that is ~380 crates,
       # 4-6 minutes on macOS and Windows.
       #
+      # The check family was bumped from `nanofile` when the tray rustdoc step
+      # moved here: the metadata that step produces only reaches later runs if
+      # the entry saved after it was written fresh, and an existing entry is
+      # never rewritten.
+      #
       # The build family has one writer, `tests` (see the note on `tray-check`):
       # the entry is therefore the non-tray feature set the long row needs,
       # instead of whichever of `tests` and `tray-check` happened to save first.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: "nanofile"
+          shared-key: "nanofile-v2"
       - name: Install Tailwind CSS
         run: npm ci
       - run: cargo fmt --check
@@ -217,7 +222,7 @@ jobs:
         include:
           - { os: macos-latest, label: macos-arm64 }
           - { os: windows-latest, label: windows-amd64 }
-    # Check-only, in the same `nanofile` family as the Linux `lint` job: this
+    # Check-only, in the same `nanofile-v2` family as the Linux `lint` job: this
     # job compiles without linking, so its `shared-key` must never be the one
     # `tests` writes. The `CARGO_*` debug values are part of the cache key and
     # not of what clippy emits (a check unit produces no object code); they keep
@@ -232,7 +237,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: "nanofile"
+          shared-key: "nanofile-v2"
       - name: Install Tailwind CSS
         run: npm ci
       - name: Lint the workspace
@@ -470,7 +475,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: "nanofile"
+          shared-key: "nanofile-v2"
       - name: Install Tailwind CSS
         run: npm ci
       # `cargo check` cannot do this: its C compiler is `cc`, which hands zig the
