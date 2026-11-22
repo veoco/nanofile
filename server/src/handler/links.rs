@@ -172,23 +172,7 @@ pub async fn list_share_links_v21(
         links.retain(|link| scope.allows(&link.repo_id));
         links
     };
-    let items: Vec<serde_json::Value> = infos
-        .into_iter()
-        .map(|l| {
-            serde_json::json!({
-                "token": l.token,
-                "link": l.link,
-                "repo_id": l.repo_id,
-                "path": l.path,
-                "created_at": l.created_at,
-                "has_password": l.has_password,
-                "expire_at": l.expire_at,
-                "s_type": l.s_type,
-                "view_cnt": l.view_cnt,
-                "description": l.description,
-            })
-        })
-        .collect();
+    let items: Vec<serde_json::Value> = infos.iter().map(share::share_link_json).collect();
 
     Ok(Json(serde_json::Value::Array(items)))
 }
@@ -215,31 +199,7 @@ pub async fn create_share_link_v21(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({
-        "token": info.token,
-        "link": info.link,
-        "repo_id": info.repo_id,
-        "repo_name": null,
-        "path": info.path,
-        "obj_name": info.path.trim_end_matches('/').rsplit_once('/')
-            .map(|(_, n)| n)
-            .unwrap_or(&info.path),
-        "s_type": info.s_type,
-        "is_dir": info.s_type == "d",
-        "username": null,
-        "view_cnt": 0,
-        "ctime": info.created_at,
-        "expire_date": info.expire_at,
-        "is_expired": info.expire_at.is_some_and(|exp| chrono::Utc::now().timestamp() > exp),
-        "has_password": info.has_password,
-        "permissions": serde_json::json!({
-            "can_edit": false,
-            "can_download": true,
-            "can_upload": false,
-        }),
-        "password": null,
-        "description": info.description,
-    })))
+    Ok(Json(share::share_link_created_json(&info)))
 }
 
 /// GET /api/v2.1/share-links/{token}/
@@ -257,30 +217,7 @@ pub async fn get_share_link_v21(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({
-        "token": info.token,
-        "link": info.link,
-        "repo_id": info.repo_id,
-        "repo_name": null,
-        "path": info.path,
-        "obj_name": info.path.trim_end_matches('/').rsplit_once('/')
-            .map(|(_, n)| n)
-            .unwrap_or(&info.path),
-        "is_dir": info.s_type == "d",
-        "username": null,
-        "view_cnt": info.view_cnt,
-        "ctime": info.created_at,
-        "expire_date": info.expire_at,
-        "is_expired": info.expire_at.is_some_and(|exp| chrono::Utc::now().timestamp() > exp),
-        "has_password": info.has_password,
-        "permissions": serde_json::json!({
-            "can_edit": false,
-            "can_download": true,
-            "can_upload": false,
-        }),
-        "password": null,
-        "description": info.description,
-    })))
+    Ok(Json(share::share_link_detail_json(&info)))
 }
 
 /// POST /api/v2.1/multi-share-links/
@@ -307,31 +244,7 @@ pub async fn create_multi_share_link_v21(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({
-        "token": info.token,
-        "link": info.link,
-        "repo_id": info.repo_id,
-        "repo_name": null,
-        "path": info.path,
-        "obj_name": info.path.trim_end_matches('/').rsplit_once('/')
-            .map(|(_, n)| n)
-            .unwrap_or(&info.path),
-        "s_type": info.s_type,
-        "is_dir": info.s_type == "d",
-        "username": null,
-        "view_cnt": 0,
-        "ctime": info.created_at,
-        "expire_date": info.expire_at,
-        "is_expired": info.expire_at.is_some_and(|exp| chrono::Utc::now().timestamp() > exp),
-        "has_password": info.has_password,
-        "permissions": serde_json::json!({
-            "can_edit": false,
-            "can_download": true,
-            "can_upload": false,
-        }),
-        "password": null,
-        "description": info.description,
-    })))
+    Ok(Json(share::share_link_created_json(&info)))
 }
 
 /// DELETE /api/v2.1/share-links/{token}/
@@ -368,18 +281,7 @@ pub async fn update_share_link_v21(
     )
     .await?;
 
-    Ok(Json(serde_json::json!({
-        "token": info.token,
-        "link": info.link,
-        "repo_id": info.repo_id,
-        "path": info.path,
-        "created_at": info.created_at,
-        "has_password": info.has_password,
-        "expire_at": info.expire_at,
-        "s_type": info.s_type,
-        "view_cnt": info.view_cnt,
-        "description": info.description,
-    })))
+    Ok(Json(share::share_link_json(&info)))
 }
 
 /// GET /api/v2.1/upload-links/
@@ -426,7 +328,6 @@ pub async fn create_upload_link_v21(
     let req = parse_link_request(&v)?;
     let expire_days = resolve_expire_days(&req)?;
     let has_password = req.password.is_some();
-    let path = req.path.clone();
     // An upload link is anonymous write access: a read-ceiling key must not
     // mint one even though it is bound to the library.
     auth.ensure_repo_allowed(&req.repo_id, true)?;
@@ -444,27 +345,7 @@ pub async fn create_upload_link_v21(
     )
     .await?;
 
-    let obj_name = path
-        .trim_end_matches('/')
-        .rsplit_once('/')
-        .map(|(_, n)| n.to_string())
-        .unwrap_or_else(|| path.clone());
-
-    Ok(Json(serde_json::json!({
-        "token": info.token,
-        "link": info.link,
-        "repo_id": info.repo_id,
-        "path": info.path,
-        "ctime": info.created_at,
-        "username": null,
-        "expire_date": null,
-        "is_expired": false,
-        "has_password": has_password,
-        "password": null,
-        "description": null,
-        "view_cnt": 0,
-        "obj_name": obj_name,
-    })))
+    Ok(Json(link::upload_link_created_json(&info, has_password)))
 }
 
 /// DELETE /api/v2.1/upload-links/clean-invalid/

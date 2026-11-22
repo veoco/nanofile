@@ -71,6 +71,64 @@ fn share_link_url(s_type: &str, token: &str, base_url: &str) -> String {
     crate::service::urls::share_page(base_url, token, s_type == "d")
 }
 
+/// Final path segment (`obj_name` on the wire); `"/"` keeps the whole path.
+fn share_link_obj_name(path: &str) -> &str {
+    path.trim_end_matches('/')
+        .rsplit_once('/')
+        .map(|(_, n)| n)
+        .unwrap_or(path)
+}
+
+/// v2.1 list item and update response for a share link.
+pub fn share_link_json(info: &ShareLinkInfo) -> serde_json::Value {
+    serde_json::json!({
+        "token": info.token,
+        "link": info.link,
+        "repo_id": info.repo_id,
+        "path": info.path,
+        "created_at": info.created_at,
+        "has_password": info.has_password,
+        "expire_at": info.expire_at,
+        "s_type": info.s_type,
+        "view_cnt": info.view_cnt,
+        "description": info.description,
+    })
+}
+
+/// v2.1 single-link response (`GET`/`POST` share-links).
+pub fn share_link_detail_json(info: &ShareLinkInfo) -> serde_json::Value {
+    serde_json::json!({
+        "token": info.token,
+        "link": info.link,
+        "repo_id": info.repo_id,
+        "repo_name": null,
+        "path": info.path,
+        "obj_name": share_link_obj_name(&info.path),
+        "is_dir": info.s_type == "d",
+        "username": null,
+        "view_cnt": info.view_cnt,
+        "ctime": info.created_at,
+        "expire_date": info.expire_at,
+        "is_expired": info.expire_at.is_some_and(|exp| chrono::Utc::now().timestamp() > exp),
+        "has_password": info.has_password,
+        "permissions": serde_json::json!({
+            "can_edit": false,
+            "can_download": true,
+            "can_upload": false,
+        }),
+        "password": null,
+        "description": info.description,
+    })
+}
+
+/// v2.1 create response: the detail shape plus `s_type` (seahub's create
+/// serializer always includes it, the get one does not).
+pub fn share_link_created_json(info: &ShareLinkInfo) -> serde_json::Value {
+    let mut value = share_link_detail_json(info);
+    value["s_type"] = serde_json::json!(info.s_type);
+    value
+}
+
 fn share_link_info_from_model(l: &share_link::Model, base_url: &str) -> ShareLinkInfo {
     ShareLinkInfo {
         token: l.token.clone(),

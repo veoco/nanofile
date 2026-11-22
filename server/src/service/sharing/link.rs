@@ -49,6 +49,27 @@ fn upload_link_obj_name(path: &str) -> String {
     }
 }
 
+/// v2.1 create response for an upload link. `has_password` is the request's
+/// intent (the stored hash is never echoed), and an upload link has no expiry
+/// in this serializer — seahub's create response keeps `expire_date: null`.
+pub fn upload_link_created_json(info: &UploadLinkInfo, has_password: bool) -> serde_json::Value {
+    serde_json::json!({
+        "token": info.token.clone(),
+        "link": info.link.clone(),
+        "repo_id": info.repo_id.clone(),
+        "path": info.path.clone(),
+        "ctime": info.created_at,
+        "username": null,
+        "expire_date": null,
+        "is_expired": false,
+        "has_password": has_password,
+        "password": null,
+        "description": null,
+        "view_cnt": 0,
+        "obj_name": upload_link_obj_name(&info.path),
+    })
+}
+
 pub async fn list_upload_links(
     repos: &Repositories,
     base_url: &str,
