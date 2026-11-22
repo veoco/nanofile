@@ -15,4 +15,15 @@
 # Delete this entry once a sqlx release allows `libsqlite3-sys` 0.39.0: every other
 # advisory still fails the audit step, and so does this one as soon as it leaves the
 # ignore list.
-ignore = ["RUSTSEC-2026-0459"]
+#
+# RUSTSEC-2026-0592: `url` 2.5.8 can overflow its stack in `Url::origin()` for a
+# deeply nested `blob:` URL. Nothing here calls `origin()` — the one `blob:` string
+# in the tree is the image-source directive of the CSP header, never parsed as a URL.
+#
+# The patch (2.5.9) is not taken because it also changes how `sqlite://` URLs with a
+# Windows path are parsed: sqlx then refuses `sqlite://C:\...`, so the migration
+# tests cannot connect, and an operator who spelled the path that way could not
+# start. Not a trade to make for a code path the server never takes.
+#
+# Delete this entry once a `url` release parses those URLs again.
+ignore = ["RUSTSEC-2026-0459", "RUSTSEC-2026-0592"]
