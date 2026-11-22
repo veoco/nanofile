@@ -381,19 +381,33 @@ jobs:
     if: needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Compiling the tool cost ~156s on every push and the binary was thrown
+      # away with the runner. Detection freshness comes from the RustSec
+      # advisory database, which `cargo audit` still fetches on every run; only
+      # this binary is pinned. Bump the version below together with the key.
+      - name: Cache cargo-audit
+        id: audit-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-audit*
+          key: cargo-audit-0.23.0-${{ runner.os }}-${{ runner.arch }}
       - name: Install cargo-audit
+        if: steps.audit-cache.outputs.cache-hit != 'true'
         # Same reason as cargo-machete: crates.io with retries instead of the
         # release CDN, which has been answering 504.
         shell: bash
         run: |
           for attempt in 1 2 3; do
-            if cargo install cargo-audit --force; then
+            if cargo install cargo-audit --version 0.23.0 --locked --force; then
               break
             fi
             echo "cargo install failed (attempt $attempt); retrying"
             sleep 10
           done
-          cargo-audit --version
+      - name: Check cargo-audit is usable
+        # Runs on a cache hit too: a truncated archive would otherwise surface
+        # as a confusing failure inside the audit itself.
+        run: cargo-audit --version
       # Fails on vulnerabilities only; unmaintained/unsound crates are reported
       # as warnings. Four are expected: `zvariant`, `zvariant_derive` and
       # `zbus_names` (zbus 5, which `ksni` and `notify-rust` pin) and
@@ -447,11 +461,20 @@ jobs:
           echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz" | sha256sum -c -
           tar xf /tmp/zig.tar.xz -C /tmp
           echo "/tmp/zig-x86_64-linux-0.16.0" >> $GITHUB_PATH
-      # crates.io with retries instead of the release CDN: the latter has
-      # answered 504 often enough to fail a cross row. The compile is small next
-      # to the cross build it enables. 0.24.1 drops rustc 1.100's
-      # `-Wl,--no-rosegment` for LoongArch, which `zig cc` rejects.
+      # The compile is small next to the cross build it enables, but it was paid
+      # on all four rows of every run; the binary is one file and the version is
+      # already pinned, so the archive is cached instead.
+      - name: Cache cargo-zigbuild
+        id: zigbuild-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-zigbuild*
+          key: cargo-zigbuild-0.24.1-${{ runner.os }}-${{ runner.arch }}
       - name: Install cargo-zigbuild
+        if: steps.zigbuild-cache.outputs.cache-hit != 'true'
+        # crates.io with retries instead of the release CDN: the latter has
+        # answered 504 often enough to fail a cross row. 0.24.1 drops rustc
+        # 1.100's `-Wl,--no-rosegment` for LoongArch, which `zig cc` rejects.
         shell: bash
         run: |
           for attempt in 1 2 3; do
@@ -461,7 +484,10 @@ jobs:
             echo "cargo install failed (attempt $attempt); retrying"
             sleep 10
           done
-          cargo-zigbuild --version
+      - name: Check cargo-zigbuild is usable
+        # Runs on a cache hit too: a truncated archive would otherwise surface
+        # as a broken cross build on all four rows.
+        run: cargo-zigbuild --version
       # clippy-driver as the workspace wrapper runs clippy's lints inside the same
       # `cargo zigbuild` pass: no second compile, and the zig CC/linker wiring
       # cargo-zigbuild already sets up is reused instead of re-derived (`cargo

@@ -36,6 +36,11 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Same values as `ci.yml`'s `tests` row: rust-cache hashes them into the key,
+    # and a different profile would also produce artifacts this job cannot reuse.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -48,7 +53,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: "docs"
+          # Reader only: `tests (linux-amd64)` in ci.yml is this family's single
+          # writer, and this job runs the same `-p server --test api` test
+          # binary. Owning a separate `docs` entry cost 0.8GB to compile one
+          # test on every docs change.
+          shared-key: "nanofile-build-v2"
+          save-if: false
       - name: Install Tailwind CSS and esbuild
         run: npm ci
       - name: Test the API reference
