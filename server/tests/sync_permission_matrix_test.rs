@@ -85,15 +85,10 @@ async fn test_readonly_member_read_endpoints_allowed() {
         .await;
     assert_eq!(resp.status(), 200, "quota-check is a read endpoint");
 
-    // Pre-fix behavior: check-blocks requires write permission here, while
-    // upstream (`sync_api.go:532`) requires only download. The extractor phase
-    // flips this assertion to 200.
+    // Upstream classifies check-blocks as a *download* endpoint
+    // (`sync_api.go:532`), so a read-only member may probe block existence.
     let resp = f.client.check_blocks(&token, &f.repo_id, &[EMPTY]).await;
-    assert_eq!(
-        resp.status(),
-        403,
-        "pre-fix matrix: check-blocks is write-gated today"
-    );
+    assert_eq!(resp.status(), 200, "check-blocks is a read endpoint");
 }
 
 /// Write endpoints must stay forbidden to a read-only member.

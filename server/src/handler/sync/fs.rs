@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::middleware::auth::SyncAuth;
+use crate::middleware::auth::{SyncRepoRead, SyncRepoWrite};
 use base::common::EMPTY_SHA1;
 use base::error::AppError;
 use infra::serialization::pack_fs;
@@ -85,20 +85,10 @@ pub fn fs_routes() -> Router<Arc<AppState>> {
 
 pub async fn fs_id_list(
     State(state): State<Arc<AppState>>,
-    auth: SyncAuth,
+    _auth: SyncRepoRead,
     Path(repo_id): Path<String>,
     Query(query): Query<FsIdListQuery>,
 ) -> Result<Json<Vec<String>>, AppError> {
-    // Defense in depth: `SyncAuth` already fails closed when the URL repo does not
-    // match the token's; every read path re-checks membership so a future gap cannot
-    // leak data.
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
-
     let server_head = query
         .server_head
         .ok_or_else(|| AppError::BadRequest("missing server-head parameter".into()))?;
@@ -157,18 +147,10 @@ pub async fn fs_id_list(
 
 pub async fn pack_fs_handler(
     State(state): State<Arc<AppState>>,
-    auth: SyncAuth,
+    _auth: SyncRepoRead,
     Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<axum::response::Response, AppError> {
-    // Membership check before the body is read (see `fs_id_list`).
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
-
     let body_data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(crate::handler::body_read_error)?;
@@ -223,18 +205,10 @@ pub async fn pack_fs_handler(
 
 pub async fn check_fs(
     State(state): State<Arc<AppState>>,
-    auth: SyncAuth,
+    _auth: SyncRepoRead,
     Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<Json<Vec<String>>, AppError> {
-    // Membership check before the body is read (see `fs_id_list`).
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
-
     let body_data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(crate::handler::body_read_error)?;
@@ -260,18 +234,10 @@ pub async fn check_fs(
 
 pub async fn recv_fs(
     State(state): State<Arc<AppState>>,
-    auth: SyncAuth,
+    _auth: SyncRepoWrite,
     Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
-    // A read-only member must not inject fs objects; checked before the body is read.
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
-
     let data = axum::body::to_bytes(body, MAX_FS_PACK_BYTES)
         .await
         .map_err(crate::handler::body_read_error)?;

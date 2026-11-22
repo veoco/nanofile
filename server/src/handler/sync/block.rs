@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::fs::core::upload_activity;
 use crate::handler::{MAX_BLOCK_UPLOAD_BYTES, read_body_limited};
-use crate::middleware::auth::SyncAuth;
+use crate::middleware::auth::{SyncAuth, SyncRepoRead};
 use base::error::AppError;
 
 pub fn block_routes() -> Router<Arc<AppState>> {
@@ -41,21 +41,10 @@ fn validate_block_id(block_id: &str) -> Result<(), AppError> {
 
 pub async fn check_blocks(
     State(state): State<Arc<AppState>>,
-    auth: SyncAuth,
+    _auth: SyncRepoRead,
     Path(repo_id): Path<String>,
     body: axum::body::Body,
 ) -> Result<Json<Vec<String>>, AppError> {
-    // `SyncAuth` only proves the token was issued for this repo, not that the user is
-    // still a member, so without this a removed member's year-long token kept a
-    // block-existence oracle. The client calls this with write intent only, so write
-    // permission is the right bar.
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
-
     let data = axum::body::to_bytes(body, 10 * 1024 * 1024)
         .await
         .map_err(crate::handler::body_read_error)?;
@@ -89,19 +78,10 @@ pub async fn check_blocks(
 
 pub async fn get_block(
     State(state): State<Arc<AppState>>,
-    auth: SyncAuth,
+    _auth: SyncRepoRead,
     Path((repo_id, block_id)): Path<(String, String)>,
 ) -> Result<Vec<u8>, AppError> {
     validate_block_id(&block_id)?;
-
-    // Defense in depth: the block store is global and content-addressed, so without a
-    // membership check a token bound to repo A could read any block whose id it knows.
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
 
     let block_store = state.block_store.clone();
 
@@ -155,17 +135,9 @@ pub async fn put_block(
 
 pub async fn get_block_map(
     State(state): State<Arc<AppState>>,
-    auth: SyncAuth,
+    _auth: SyncRepoRead,
     Path((repo_id, file_id)): Path<(String, String)>,
 ) -> Result<Json<Vec<i64>>, AppError> {
-    // Membership check (see `get_block`).
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
-
     let fs_obj = state
         .repos
         .fs_object

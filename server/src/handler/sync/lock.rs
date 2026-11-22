@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::middleware::auth::SyncAuth;
+use crate::middleware::auth::SyncRepoWrite;
 use base::error::AppError;
 
 #[derive(Deserialize)]
@@ -43,7 +43,7 @@ pub struct LockedFilesRes {
 
 /// `POST /seafhttp/repo/{repo_id}/lock-file?p=path`
 pub async fn lock_file(
-    _auth: SyncAuth,
+    _auth: SyncRepoWrite,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Query(query): Query<LockQuery>,
@@ -52,14 +52,6 @@ pub async fn lock_file(
         .p
         .as_deref()
         .ok_or_else(|| AppError::BadRequest("path required".into()))?;
-
-    // Locking modifies repo state → requires write permission.
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        _auth.user_id,
-    )
-    .await?;
 
     state
         .file_service()
@@ -71,7 +63,7 @@ pub async fn lock_file(
 
 /// `POST /seafhttp/repo/{repo_id}/unlock-file?p=path`
 pub async fn unlock_file(
-    _auth: SyncAuth,
+    _auth: SyncRepoWrite,
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
     Query(query): Query<LockQuery>,
@@ -80,14 +72,6 @@ pub async fn unlock_file(
         .p
         .as_deref()
         .ok_or_else(|| AppError::BadRequest("path required".into()))?;
-
-    // Unlocking modifies repo state → requires write permission.
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        _auth.user_id,
-    )
-    .await?;
 
     state
         .file_service()

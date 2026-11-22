@@ -7,7 +7,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::middleware::auth::SyncAuth;
+use crate::middleware::auth::SyncRepoRead;
 use base::error::AppError;
 
 /// GET /seafhttp/repo/{repo_id}/quota-check/?delta={delta}
@@ -25,18 +25,10 @@ pub struct QuotaCheckQuery {
 
 async fn check_quota(
     State(state): State<Arc<AppState>>,
-    auth: SyncAuth,
+    _auth: SyncRepoRead,
     Path(repo_id): Path<String>,
     Query(query): Query<QuotaCheckQuery>,
 ) -> Result<StatusCode, AppError> {
-    // Quota is a property of the repo owner, so only members may probe it.
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
-
     // A missing delta is a client error, not an implicit zero
     // (`fileserver/sync_api.go:702-712`).
     let delta = query

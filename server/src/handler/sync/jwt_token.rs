@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::middleware::auth::SyncAuth;
+use crate::middleware::auth::SyncRepoRead;
 use base::error::AppError;
 
 /// Seafile format: `{"jwt_token": "..."}`
@@ -22,7 +22,7 @@ pub struct JwtTokenResponse {
 /// calls this before connecting to the notification WebSocket.
 pub async fn get_jwt_token(
     State(state): State<Arc<AppState>>,
-    auth: SyncAuth,
+    auth: SyncRepoRead,
     Path(repo_id): Path<String>,
 ) -> Result<Json<JwtTokenResponse>, AppError> {
     if state.notification_manager.is_none() {
@@ -35,15 +35,6 @@ pub async fn get_jwt_token(
             "notification private key not configured".into(),
         ));
     }
-
-    // The JWT grants access to this repo's notification stream, so it must only be
-    // issued to a member (defense in depth on the `SyncAuth` path/repo binding).
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
 
     let user = state
         .repos

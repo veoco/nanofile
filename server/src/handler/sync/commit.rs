@@ -7,7 +7,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::middleware::auth::SyncAuth;
+use crate::middleware::auth::{SyncAuth, SyncRepoRead, SyncRepoWrite};
 use crate::service::repo::service::RepoCrypto;
 use base::common::EMPTY_SHA1;
 use base::error::AppError;
@@ -74,17 +74,9 @@ pub async fn get_head_commit(
 
 pub async fn get_commit(
     State(state): State<Arc<AppState>>,
-    auth: SyncAuth,
+    _auth: SyncRepoRead,
     Path((repo_id, commit_id)): Path<(String, String)>,
 ) -> Result<Vec<u8>, AppError> {
-    // Membership check: the commit body carries repo metadata, so no cross-repo reads.
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
-
     let svc = state.sync_service();
     let repo_model = svc
         .find_repo(&repo_id)
@@ -177,18 +169,10 @@ pub async fn get_commit(
 
 pub async fn put_commit(
     State(state): State<Arc<AppState>>,
-    auth: SyncAuth,
+    _auth: SyncRepoWrite,
     Path((repo_id, commit_id)): Path<(String, String)>,
     body: axum::body::Body,
 ) -> Result<StatusCode, AppError> {
-    // A read-only member must not inject commit objects; checked before the body is read.
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
-
     let data = axum::body::to_bytes(body, MAX_COMMIT_BYTES)
         .await
         .map_err(|e| AppError::BadRequest(format!("cannot read the commit body: {e}")))?;
@@ -242,7 +226,7 @@ fn validate_commit_id(
 
 pub async fn update_branch(
     State(state): State<Arc<AppState>>,
-    _auth: SyncAuth,
+    _auth: SyncRepoWrite,
     Path(repo_id): Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<StatusCode, AppError> {
@@ -253,13 +237,6 @@ pub async fn update_branch(
     if new_head.len() != 40 || !new_head.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(AppError::BadRequest("invalid commit id".into()));
     }
-
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        _auth.user_id,
-    )
-    .await?;
 
     let svc = state.sync_service();
     let new_commit = svc

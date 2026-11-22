@@ -64,6 +64,80 @@ impl SyncAuth {
     }
 }
 
+/// Resolve the sync credential and the caller's membership permission for
+/// `auth.repo_id` in one extractor. The sync protocol classifies every endpoint
+/// as read (`checkPermission(..., "download")`) or write (`upload`), so handlers
+/// that spell this prelude out by hand can silently miss a check.
+async fn sync_auth_with_permission(
+    parts: &mut Parts,
+    state: &std::sync::Arc<AppState>,
+    write: bool,
+) -> Result<SyncAuth, AppError> {
+    let auth = SyncAuth::from_request_parts(parts, state).await?;
+    if write {
+        crate::domain::permission::check_repo_write_permission(
+            state.repos.member.as_ref(),
+            &auth.repo_id,
+            auth.user_id,
+        )
+        .await?;
+    } else {
+        crate::domain::permission::check_repo_read_permission(
+            state.repos.member.as_ref(),
+            &auth.repo_id,
+            auth.user_id,
+        )
+        .await?;
+    }
+    Ok(auth)
+}
+
+/// A sync request whose caller may read the library.
+#[derive(Debug, Clone)]
+pub struct SyncRepoRead(pub SyncAuth);
+
+impl std::ops::Deref for SyncRepoRead {
+    type Target = SyncAuth;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl FromRequestParts<std::sync::Arc<AppState>> for SyncRepoRead {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &std::sync::Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Self(sync_auth_with_permission(parts, state, false).await?))
+    }
+}
+
+/// A sync request whose caller may write the library.
+#[derive(Debug, Clone)]
+pub struct SyncRepoWrite(pub SyncAuth);
+
+impl std::ops::Deref for SyncRepoWrite {
+    type Target = SyncAuth;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl FromRequestParts<std::sync::Arc<AppState>> for SyncRepoWrite {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &std::sync::Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Self(sync_auth_with_permission(parts, state, true).await?))
+    }
+}
+
 impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
     type Rejection = base::error::AppError;
 
