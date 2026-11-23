@@ -4,7 +4,7 @@
 //! because a wire format is pinned.
 //!
 //! The cases that need the child to *serve* are unix-only: on Windows the bound is a Job
-//! Object the parent names, and a self-started worker reports `job=limits-missing` — the
+//! Object the parent names, and a self-started worker reports `job=limits-missing` 鈥?the
 //! arrangement, not the bound, is what differs. The malformed-request surface is covered
 //! by `sandbox_probe_test` and the request-path tests, which start it as the server does.
 #![cfg(unix)]
@@ -85,7 +85,42 @@ impl Answer {
 }
 
 fn run_worker(args: &[&str], request: &[u8]) -> Answer {
-    let mut child = spawn(args);
+    run_child(spawn(args), request)
+}
+
+/// Run a media child the way the server does.
+///
+/// On macOS the file and network layers come from the `sandbox-exec` wrapper the
+/// parent adds, and the child's own report measures them through probes: a bare
+/// child would correctly refuse the media profile before it reads the request.
+/// Wrap it with the same runner the server uses, so this exercises the request
+/// authorization rather than the host's willingness to confine.
+fn run_media_worker(args: &[&str], grants: server::sandbox::Grants<'_>, request: &[u8]) -> Answer {
+    #[cfg(target_os = "macos")]
+    {
+        let exe = std::path::Path::new(env!("CARGO_BIN_EXE_nanofile"));
+        let exe = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+        if let Some(runner) = server::sandbox::runner(&exe, server::sandbox::Profile::Media, grants)
+        {
+            let mut command = Command::new(runner.program);
+            command.args(runner.args);
+            command
+                .arg(&exe)
+                .arg("extract-worker")
+                .args(args)
+                .arg("--seatbelt")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let child = command.spawn().expect("the wrapped worker binary starts");
+            return run_child(child, request);
+        }
+    }
+    let _ = grants;
+    run_worker(args, request)
+}
+
+fn run_child(mut child: Child, request: &[u8]) -> Answer {
     let mut stdin = child.stdin.take().expect("a stdin pipe");
     let request = request.to_vec();
     let writer = std::thread::spawn(move || {
@@ -251,7 +286,7 @@ fn the_child_refuses_to_serve_with_the_sandbox_off() {
 /// documents arriving the way the server sends them, plan tag and bytes, with
 /// the fixtures the parsers are tested against. A parser that stopped early, or
 /// a limit that cut the text short, still contains the words these fixtures are
-/// made of — the whole text is what says the request path is intact.
+/// made of 鈥?the whole text is what says the request path is intact.
 #[test]
 fn the_child_returns_the_whole_text_of_a_real_document() {
     let args = ["--profile", "documents"];
@@ -385,7 +420,7 @@ fn a_face_request_answers_a_count_or_is_refused() {
     let args = ["--profile", "faces"];
 
     // The positive control: a real PNG is decoded and run through the detector,
-    // and the reply is the summary — a count, never pixels.
+    // and the reply is the summary 鈥?a count, never pixels.
     let answer = run_worker(&args, &image_request(b'D', 0, &a_png_of(32, 16)));
     answer.finished("a face request");
     let (tag, body) = answer.frame();
@@ -417,19 +452,15 @@ fn a_face_request_answers_a_count_or_is_refused() {
 /// says.
 #[test]
 fn a_media_request_cannot_name_its_own_source() {
-    // This test starts the worker directly, without the parent. On macOS the
-    // file and network layers come from the `sandbox-exec` wrapper the parent
-    // adds, so a bare child would refuse the media profile before it reads the
-    // request: tell it the wrapper was applied, as the parent's invocation does.
-    // What the host actually confines is measured by the probe tests.
-    #[cfg(target_os = "macos")]
-    const RUNNER_FLAG: &[&str] = &["--seatbelt"];
-    #[cfg(not(target_os = "macos"))]
-    const RUNNER_FLAG: &[&str] = &[];
+    use server::sandbox::Grants;
 
     let helper = env!("CARGO_BIN_EXE_nanofile");
     let granted = std::env::temp_dir().join("nanofile-protocol-granted.bin");
-    let mut args = vec![
+    let all_grants = Grants {
+        helper: Some(std::path::Path::new(helper)),
+        source: Some(granted.as_path()),
+    };
+    let args = [
         "--profile",
         "media",
         "--ffmpeg",
@@ -437,14 +468,14 @@ fn a_media_request_cannot_name_its_own_source() {
         "--src",
         granted.to_str().expect("a UTF-8 path"),
     ];
-    args.extend_from_slice(RUNNER_FLAG);
 
     // The positive control for the comparison below: a request naming the
     // granted path passes the authorization step, whatever the helper then
     // does with the arguments it is given. Without this, a child that refused
     // every media request would satisfy the assertions below.
-    let answer = run_worker(
+    let answer = run_media_worker(
         &args,
+        all_grants,
         &media_request(b'V', 48, granted.as_os_str().as_encoded_bytes()),
     );
     answer.finished("a media request naming the grant");
@@ -461,8 +492,9 @@ fn a_media_request_cannot_name_its_own_source() {
     }
 
     // The same shape, naming a path the parent did not grant.
-    let answer = run_worker(
+    let answer = run_media_worker(
         &args,
+        all_grants,
         &media_request(b'V', 48, b"/tmp/nanofile-not-granted.bin"),
     );
     answer.finished("a media request naming another file");
@@ -471,17 +503,9 @@ fn a_media_request_cannot_name_its_own_source() {
         "the request names a source this profile was not granted"
     );
 
-    let mut unknown_kind_args = vec![
-        "--profile",
-        "media",
-        "--ffmpeg",
-        helper,
-        "--src",
-        granted.to_str().expect("a UTF-8 path"),
-    ];
-    unknown_kind_args.extend_from_slice(RUNNER_FLAG);
-    let answer = run_worker(
-        &unknown_kind_args,
+    let answer = run_media_worker(
+        &args,
+        all_grants,
         &media_request(b'?', 48, granted.as_os_str().as_encoded_bytes()),
     );
     answer.finished("an unknown media kind");
@@ -490,38 +514,41 @@ fn a_media_request_cannot_name_its_own_source() {
     // A path length the child will not read: refused before any path byte is
     // consumed, which is why the request here is the head alone.
     for path_len in [0u16, 4097] {
-        let answer = run_worker(&args, &media_head(b'V', 48, path_len));
+        let answer = run_media_worker(&args, all_grants, &media_head(b'V', 48, path_len));
         answer.finished("a bad path length");
         assert_eq!(answer.refusal(), "bad media source path length");
     }
 
     // No source grant at all: nothing can be read, so nothing is decoded.
-    let mut no_source_args = vec!["--profile", "media", "--ffmpeg", helper];
-    no_source_args.extend_from_slice(RUNNER_FLAG);
-    let answer = run_worker(
-        &no_source_args,
+    let answer = run_media_worker(
+        &["--profile", "media", "--ffmpeg", helper],
+        Grants {
+            helper: Some(std::path::Path::new(helper)),
+            source: None,
+        },
         &media_request(b'V', 48, b"/tmp/anything.bin"),
     );
     answer.finished("a media request with no source grant");
     assert_eq!(answer.refusal(), "the media profile has no source grant");
 
     // No helper grant: the profile has nothing to run.
-    let mut no_helper_args = vec![
-        "--profile",
-        "media",
-        "--src",
-        granted.to_str().expect("a UTF-8 path"),
-    ];
-    no_helper_args.extend_from_slice(RUNNER_FLAG);
-    let answer = run_worker(
-        &no_helper_args,
+    let answer = run_media_worker(
+        &[
+            "--profile",
+            "media",
+            "--src",
+            granted.to_str().expect("a UTF-8 path"),
+        ],
+        Grants {
+            helper: None,
+            source: Some(granted.as_path()),
+        },
         &media_request(b'V', 48, granted.as_os_str().as_encoded_bytes()),
     );
     answer.finished("a media request with no helper grant");
     assert_eq!(answer.refusal(), "the media profile has no helper grant");
 }
-
-/// A PNG of `width`×`height` pixels: small enough that no size limit is what
+/// A PNG of `width`脳`height` pixels: small enough that no size limit is what
 /// refuses it.
 fn a_png_of(width: u32, height: u32) -> Vec<u8> {
     let mut image = image::RgbImage::new(width, height);
