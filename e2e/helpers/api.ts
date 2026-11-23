@@ -239,3 +239,27 @@ export async function createUser(
   });
   if (!res.ok) throw new Error(`create user ${email} failed: ${res.status} ${await res.text()}`);
 }
+
+/**
+ * Create an account through the admin user API and return nothing.
+ *
+ * Specs that change account-wide security state (enabling 2FA revokes the
+ * account's other credentials) need their own account: the shared admin token
+ * that every parallel worker uses must survive the whole run.
+ */
+export async function createAdminUser(
+  baseURL: string,
+  adminToken: string,
+  email: string,
+  password: string,
+): Promise<void> {
+  const res = await fetch(`${baseURL}/api2/admin/users/`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${adminToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ email, password, is_admin: false, is_active: true }),
+  });
+  if (!res.ok) throw new Error(`create admin user ${email} failed: ${res.status} ${await res.text()}`);
+}

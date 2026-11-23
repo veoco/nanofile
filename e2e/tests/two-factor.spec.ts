@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import crypto from "node:crypto";
-import { loginViaUI, readState } from "../helpers/api";
-import { ADMIN_EMAIL, ADMIN_PASSWORD, BASE_URL } from "../helpers/server";
+import { createAdminUser, loginViaUI, readState } from "../helpers/api";
+import { BASE_URL } from "../helpers/server";
 
 const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
@@ -25,7 +25,7 @@ function base32Decode(secret: string): Buffer {
   return Buffer.from(bytes);
 }
 
-/** RFC 6238 TOTP — SHA1, 6 digits, 30s period (matches the server's totp-rs). */
+/** RFC 6238 TOTP 鈥?SHA1, 6 digits, 30s period (matches the server's totp-rs). */
 function totp(secret: string): string {
   const counter = Math.floor(Date.now() / 1000 / 30);
   const buf = Buffer.alloc(8);
@@ -70,7 +70,14 @@ test("enable 2FA, log in with a backup code, then disable it", async ({ browser 
       });
     });
 
-    await loginViaUI(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    // This spec enables 2FA, which revokes the account's other credentials: use
+    // a throw-away account so the shared admin token every parallel worker uses
+    // survives the run.
+    const state = readState();
+    const email = `twofa-${Date.now()}-${Math.floor(Math.random() * 1000)}@test.local`;
+    const password = "password123";
+    await createAdminUser(BASE_URL, state.adminToken, email, password);
+    await loginViaUI(page, email, password);
 
     // GET is read-only now (no side effects): start setup via the POST form,
     // then read the pending secret it renders.
@@ -101,8 +108,8 @@ test("enable 2FA, log in with a backup code, then disable it", async ({ browser 
 
     await page.goto("/accounts/logout/");
     await page.goto("/accounts/login/");
-    await page.fill('input[name="email"]', ADMIN_EMAIL);
-    await page.fill('input[name="password"]', ADMIN_PASSWORD);
+    await page.fill('input[name="email"]', email);
+    await page.fill('input[name="password"]', password);
     await page.locator('button[type="submit"]').click();
     await page.waitForURL(/\/accounts\/two-factor-auth\//);
 
@@ -113,7 +120,7 @@ test("enable 2FA, log in with a backup code, then disable it", async ({ browser 
     await page.waitForURL(/\/libraries\//);
 
     await page.goto("/settings/two-factor/");
-    await page.locator('form[action="/settings/two-factor/disable/"] #password').fill(ADMIN_PASSWORD);
+    await page.locator('form[action="/settings/two-factor/disable/"] #password').fill(password);
     await page.locator('form[action="/settings/two-factor/disable/"] button[type="submit"]').click();
     await page.waitForURL(/\/settings\/$/);
     // The overview's security row carries the status; the sidebar shows the
