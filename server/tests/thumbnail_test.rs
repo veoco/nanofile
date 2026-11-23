@@ -1,6 +1,7 @@
 use crate::common;
 
 use common::TestFixture;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 #[tokio::test]
 async fn test_thumbnail_not_found() {
@@ -66,6 +67,61 @@ async fn test_thumbnail_oversized_size_rejected() {
         )
         .await;
     assert_eq!(resp.status(), 400);
+}
+
+/// The requested size is snapped to the retained set after the oversize check: a
+/// caller cannot create one cache entry (and one decode or worker child) per
+/// integer, and only the sizes the UI requests are ever materialised. Zero gets the
+/// smallest entry rather than a zero-pixel image.
+#[tokio::test]
+async fn test_thumbnail_size_is_snapped_to_the_retained_set() {
+    let f = TestFixture::new().await;
+
+    // Large enough that both retained sizes are visible in the reply's dimensions.
+    let png = png_bytes(&image::DynamicImage::ImageRgb8(
+        image::RgbImage::from_pixel(800, 800, image::Rgb([20, 40, 60])),
+    ));
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "big.png", &png)
+        .await;
+    assert!(resp.status().is_success());
+
+    // Requested → the retained size that is generated and served.
+    for (requested, retained) in [(0, 48), (100, 640), (1024, 640)] {
+        let resp = f
+            .client
+            .get(
+                &format!(
+                    "/api2/repos/{}/thumbnail/?p=/big.png&size={requested}",
+                    f.repo_id
+                ),
+                Some(&f.api_token),
+            )
+            .await;
+        assert_eq!(resp.status(), 200, "size={requested}");
+        let data = resp.bytes().await.expect("bytes");
+        let decoded = image::load_from_memory(&data).expect("the reply is an image");
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (retained, retained),
+            "size={requested} must be served as the {retained} entry"
+        );
+    }
+
+    // The cache holds the retained sizes and no row for the requested numbers.
+    let db = &*f.server.db;
+    let mut sizes: Vec<i32> = infra::entity::thumbnail::Entity::find()
+        .filter(infra::entity::thumbnail::Column::RepoId.eq(&f.repo_id))
+        .filter(infra::entity::thumbnail::Column::Path.eq("/big.png"))
+        .all(db)
+        .await
+        .expect("thumbnail rows")
+        .into_iter()
+        .map(|row| row.size)
+        .collect();
+    sizes.sort_unstable();
+    assert_eq!(sizes, vec![48, 640], "only retained sizes may be cached");
 }
 
 /// TIFF (the newly added in-process image format) thumbnails are served as

@@ -109,6 +109,7 @@ migrations!(
     m20261102_000001_create_face_tags,
     m20261113_000001_create_activity_items,
     m20261117_000001_create_pending_blocks,
+    m20261123_000001_purge_nonretained_thumbnails,
 );
 
 #[cfg(test)]

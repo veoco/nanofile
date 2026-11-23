@@ -37,6 +37,10 @@ pub async fn get_thumbnail(
             crate::thumbnail_util::MAX_THUMBNAIL_SIZE
         )));
     }
+    // The size is snapped *after* the cap: the cap is what bounds an allocation, the
+    // snap is what keeps the cache to the sizes the UI requests. A request for 100
+    // gets the 640 entry, so the same pixels are not re-encoded per integer.
+    let size = crate::thumbnail_util::canonical_thumbnail_size(size);
 
     let svc = state.thumbnail_service();
     let (data, etag, format) = svc.get_thumbnail(&repo_id, &path, size).await?;

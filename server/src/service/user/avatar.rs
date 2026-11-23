@@ -1,6 +1,7 @@
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::repository::Repositories;
 use base::error::AppError;
@@ -10,6 +11,13 @@ static DEFAULT_AVATAR: &[u8] = include_bytes!("../../../static/img/default-avata
 
 pub const MAX_AVATAR_SIZE: usize = 1024 * 1024; // 1 MB
 const ALLOWED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif"];
+
+/// How long a failed generation is remembered for one size.
+///
+/// The image route is unauthenticated, so an avatar the worker cannot decode would
+/// otherwise start a confined child on every request for it. An hour keeps a broken
+/// avatar from being an amplification vector while still retrying reasonably soon.
+const AVATAR_FAILURE_TTL: Duration = Duration::from_secs(60 * 60);
 
 pub fn default_avatar_bytes() -> &'static [u8] {
     DEFAULT_AVATAR
@@ -91,6 +99,12 @@ impl AvatarService {
             )));
         }
 
+        // A new original invalidates everything generated from the previous one: the
+        // materialised sizes, and any failure marker, which described bytes that no
+        // longer exist. Both would otherwise be served (or trusted) for the new
+        // avatar.
+        clear_generated_files(&storage_dir).await;
+
         let original_path = storage_dir.join(format!("original.{}", ext));
         tokio::fs::write(&original_path, &data)
             .await
@@ -138,12 +152,21 @@ impl AvatarService {
         let size = crate::thumbnail_util::canonical_avatar_size(size);
         let storage_dir = self.avatar_storage_dir(&avatar.email);
         let thumbnail_path = storage_dir.join(format!("{}.png", size));
+        let failed_path = storage_dir.join(format!("{}.failed", size));
 
         if thumbnail_path.exists() {
             return tokio::fs::read(&thumbnail_path)
                 .await
                 .ok()
                 .map(|data| (data, "image/png"));
+        }
+
+        // Negative cache: a size the worker could not produce is remembered for an
+        // hour, so a broken avatar cannot start a confined child on every request to
+        // this unauthenticated route. The original is served instead, exactly as on
+        // the failure below.
+        if failed_recently(&failed_path).await {
+            return original_bytes(&storage_dir).await;
         }
 
         // A miss starts a confined child that may work for the whole image timeout, so it queues on
@@ -162,8 +185,7 @@ impl AvatarService {
 
         // Thumbnail miss: load the original and have the sandbox worker generate one. The decode is
         // the same hostile-image path as a file thumbnail, in the same confined child.
-        let original_path = find_original_path(&storage_dir)?;
-        let content = tokio::fs::read(original_path).await.ok()?;
+        let (content, mime) = original_bytes(&storage_dir).await?;
 
         let worker_input = content.clone();
         let squared = tokio::task::spawn_blocking(move || {
@@ -177,12 +199,63 @@ impl AvatarService {
                 // Persist for future requests (non-fatal if it fails)
                 let _ = tokio::fs::create_dir_all(&storage_dir).await;
                 let _ = tokio::fs::write(&thumbnail_path, &thumbnail_data).await;
+                // The failure this marker remembered is over.
+                let _ = tokio::fs::remove_file(&failed_path).await;
                 Some((thumbnail_data, "image/png"))
             }
             Err(_) => {
-                let mime = resolve_mime_from_path(&storage_dir);
+                // Remember the failure so the next request does not pay for the same
+                // child. Non-fatal: the original below is still the answer.
+                let _ = tokio::fs::write(&failed_path, b"failed\n").await;
                 Some((content, mime))
             }
+        }
+    }
+}
+
+/// Bytes and content type of the uploaded original, if there is one.
+async fn original_bytes(storage_dir: &std::path::Path) -> Option<(Vec<u8>, &'static str)> {
+    let original_path = find_original_path(storage_dir)?;
+    let content = tokio::fs::read(original_path).await.ok()?;
+    Some((content, resolve_mime_from_path(storage_dir)))
+}
+
+/// Whether a generation failure was recorded for this size recently.
+///
+/// A marker whose mtime cannot be read, or lies in the future, counts as recent: the
+/// alternative is a child per request until the clock catches up, which is the
+/// amplification the marker exists to stop.
+async fn failed_recently(path: &std::path::Path) -> bool {
+    let Ok(metadata) = tokio::fs::metadata(path).await else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return true;
+    };
+    modified
+        .elapsed()
+        .map(|age| age < AVATAR_FAILURE_TTL)
+        .unwrap_or(true)
+}
+
+/// Remove everything in this directory that belongs to the previous avatar: its
+/// original (possibly under another extension), the materialised sizes
+/// (`{size}.png`) and the failure markers (`{size}.failed`).
+///
+/// Called before a new original is written, so nothing derived from the previous
+/// avatar outlives it — including an `original.png` that would otherwise shadow a
+/// new `original.jpg` in [`find_original_path`].
+async fn clear_generated_files(storage_dir: &std::path::Path) {
+    let Ok(mut entries) = tokio::fs::read_dir(storage_dir).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.starts_with("original.") || name.ends_with(".png") || name.ends_with(".failed") {
+            let _ = tokio::fs::remove_file(entry.path()).await;
         }
     }
 }

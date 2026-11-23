@@ -37,6 +37,23 @@ pub const THUMBNAIL_SIZE_SMALL: u32 = 48;
 pub const THUMBNAIL_SIZE_LARGE: u32 = 640;
 pub const RETAINED_THUMBNAIL_SIZES: [u32; 2] = [THUMBNAIL_SIZE_SMALL, THUMBNAIL_SIZE_LARGE];
 
+/// The smallest retained size at least `requested`, the largest when the request is
+/// above them all, and the smallest for a request of `0`.
+///
+/// The route accepts any size a client names, but only [`RETAINED_THUMBNAIL_SIZES`]
+/// is generated: without this snap a caller could walk the range and force one cache
+/// entry (and one image or worker child) per integer, and every size outside the set
+/// is unreachable from the UI anyway. The handler refuses absurd sizes first; this is
+/// the snap, and the service applies it again for callers that do not come through
+/// the handler.
+pub fn canonical_thumbnail_size(requested: u32) -> u32 {
+    RETAINED_THUMBNAIL_SIZES
+        .iter()
+        .copied()
+        .find(|size| *size >= requested)
+        .unwrap_or(RETAINED_THUMBNAIL_SIZES[RETAINED_THUMBNAIL_SIZES.len() - 1])
+}
+
 /// The avatar sizes the server materialises and caches.
 ///
 /// The request may name any size — the Seafile clients do — but only these are
@@ -269,6 +286,28 @@ mod tests {
 
     fn encode_png_bytes(img: image::RgbaImage) -> Vec<u8> {
         encode_png(&image::DynamicImage::ImageRgba8(img)).expect("PNG encode failed")
+    }
+
+    /// A requested size snaps to the retained set: the smallest at least the
+    /// request, the largest above it, and the smallest for zero.
+    #[test]
+    fn a_requested_thumbnail_size_snaps_to_the_retained_set() {
+        for (requested, expected) in [
+            (0, THUMBNAIL_SIZE_SMALL),
+            (1, THUMBNAIL_SIZE_SMALL),
+            (47, THUMBNAIL_SIZE_SMALL),
+            (48, THUMBNAIL_SIZE_SMALL),
+            (49, THUMBNAIL_SIZE_LARGE),
+            (256, THUMBNAIL_SIZE_LARGE),
+            (640, THUMBNAIL_SIZE_LARGE),
+            (1024, THUMBNAIL_SIZE_LARGE),
+        ] {
+            assert_eq!(
+                canonical_thumbnail_size(requested),
+                expected,
+                "size={requested}"
+            );
+        }
     }
 
     /// A tiny JPEG whose SOF0 declares 65535×65535 is rejected without panicking

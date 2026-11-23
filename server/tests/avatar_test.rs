@@ -1,6 +1,50 @@
 use crate::common;
 
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
 use common::TestFixture;
+
+/// A small opaque PNG.
+fn png_bytes(width: u32, height: u32, pixel: [u8; 3]) -> Vec<u8> {
+    let mut img = image::RgbImage::new(width, height);
+    for p in img.pixels_mut() {
+        *p = image::Rgb(pixel);
+    }
+    let mut bytes = Vec::new();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut bytes),
+        image::ImageFormat::Png,
+    )
+    .expect("PNG encode failed");
+    bytes
+}
+
+async fn upload_avatar(f: &TestFixture, name: &str, bytes: Vec<u8>) -> reqwest::Response {
+    let form = reqwest::multipart::Form::new().part(
+        "avatar",
+        reqwest::multipart::Part::bytes(bytes).file_name(name.to_string()),
+    );
+    f.client
+        .post_multipart("/api/v2.1/user-avatar/", Some(&f.api_token), form)
+        .await
+}
+
+async fn get_avatar_image(f: &TestFixture, size: u32) -> reqwest::Response {
+    f.client
+        .get(&format!("/avatars/user/{}/resized/{size}/", f.email), None)
+        .await
+}
+
+/// The one avatar storage directory of the fixture's only user.
+fn avatar_storage_dir(avatar_dir: &Path) -> PathBuf {
+    let mut entries = std::fs::read_dir(avatar_dir)
+        .expect("the avatar directory exists")
+        .flatten();
+    let entry = entries.next().expect("one avatar storage directory");
+    assert!(entries.next().is_none(), "one user, one avatar directory");
+    entry.path()
+}
 
 /// B.5.1 — GET /api2/avatars/user/{email}/resized/{size}/
 #[tokio::test]
@@ -125,4 +169,160 @@ async fn test_avatar_upload_size_limited() {
         .flatten()
         .any(|entry| entry.path().join("256.png").exists());
     assert!(wrote_256, "the sandbox worker wrote no 256 avatar");
+}
+
+/// The image route is unauthenticated, so a resize the worker cannot produce is
+/// remembered for an hour in a `{size}.failed` marker instead of starting a confined
+/// child on every request. A fresh marker serves the original; once it expires the
+/// next request tries again, and success clears it.
+#[tokio::test]
+async fn test_avatar_failed_thumbnail_is_negative_cached() {
+    let f = TestFixture::new().await;
+
+    // A valid avatar: the upload materialises the 256 entry, so 48 is generated on
+    // demand.
+    let resp = upload_avatar(&f, "me.png", png_bytes(64, 32, [10, 20, 30])).await;
+    assert_eq!(resp.status(), 200, "avatar upload should succeed");
+
+    let avatar_dir = f.server.state.config().storage.avatar_dir.clone();
+    let storage = avatar_storage_dir(&avatar_dir);
+    let thumbnail = storage.join("48.png");
+    let marker = storage.join("48.failed");
+    assert!(storage.join("256.png").exists(), "the upload writes 256");
+    assert!(!thumbnail.exists(), "the 48 entry is generated on demand");
+
+    // A marker written now stands in for a generation the worker failed earlier.
+    std::fs::write(&marker, b"failed\n").expect("write the marker");
+    let resp = get_avatar_image(&f, 48).await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.bytes().await.expect("bytes");
+    let decoded = image::load_from_memory(&body).expect("the original is an image");
+    assert_eq!(
+        (decoded.width(), decoded.height()),
+        (64, 32),
+        "the original is served while the marker holds"
+    );
+    assert!(
+        !thumbnail.exists(),
+        "a fresh marker must answer without starting a generation"
+    );
+
+    // An expired marker lets the request try again: generation runs, succeeds, and
+    // the marker and a fresh 48 entry are written instead.
+    let stale = SystemTime::now() - Duration::from_secs(2 * 60 * 60);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&marker)
+        .expect("open the marker")
+        .set_modified(stale)
+        .expect("backdate the marker");
+    let resp = get_avatar_image(&f, 48).await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.bytes().await.expect("bytes");
+    let decoded = image::load_from_memory(&body).expect("the thumbnail is an image");
+    assert_eq!(
+        (decoded.width(), decoded.height()),
+        (48, 48),
+        "an expired marker must allow the resize again"
+    );
+    assert!(thumbnail.exists(), "the successful resize is cached");
+    assert!(!marker.exists(), "success clears the failure marker");
+}
+
+/// A resize that fails is remembered, and the original keeps being served: the
+/// route answers with the uploaded bytes rather than a default or an error.
+#[tokio::test]
+async fn test_avatar_failed_generation_writes_the_marker_and_serves_the_original() {
+    let f = TestFixture::new().await;
+
+    // The upload accepts the file (extension and size only); the decode fails.
+    let corrupt = b"this is not a PNG".to_vec();
+    let resp = upload_avatar(&f, "broken.png", corrupt.clone()).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "the upload only fails on the resize, which is non-fatal"
+    );
+
+    let avatar_dir = f.server.state.config().storage.avatar_dir.clone();
+    let storage = avatar_storage_dir(&avatar_dir);
+    let marker = storage.join("48.failed");
+    assert!(
+        !marker.exists(),
+        "the upload records nothing for a size it never generated"
+    );
+
+    let resp = get_avatar_image(&f, 48).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("image/png"),
+        "the original's own type, resolved from its extension"
+    );
+    let body = resp.bytes().await.expect("bytes");
+    assert_eq!(
+        body.as_ref(),
+        corrupt.as_slice(),
+        "the uploaded bytes are what a failed resize serves"
+    );
+    let age = std::fs::metadata(&marker)
+        .expect("the failure marker was written")
+        .modified()
+        .expect("the marker carries an mtime")
+        .elapsed()
+        .expect("the marker is in the past");
+    assert!(
+        age < Duration::from_secs(60),
+        "the failure marker must be fresh, not {age:?} old"
+    );
+    assert!(!storage.join("48.png").exists(), "no thumbnail was written");
+
+    // The next request is answered from the marker: same original, no new marker
+    // needed, and still no thumbnail.
+    let resp = get_avatar_image(&f, 48).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.bytes().await.expect("bytes").as_ref(),
+        corrupt.as_slice()
+    );
+    assert!(!storage.join("48.png").exists());
+}
+
+/// A new upload throws away everything derived from the previous avatar — the
+/// materialised sizes and any failure marker — before the new original is written,
+/// so none of it can be served for the new picture.
+#[tokio::test]
+async fn test_avatar_upload_replaces_generated_files() {
+    let f = TestFixture::new().await;
+
+    let resp = upload_avatar(&f, "old.png", png_bytes(32, 32, [1, 2, 3])).await;
+    assert_eq!(resp.status(), 200);
+
+    let avatar_dir = f.server.state.config().storage.avatar_dir.clone();
+    let storage = avatar_storage_dir(&avatar_dir);
+    let stale_size = storage.join("48.png");
+    let stale_marker = storage.join("48.failed");
+    std::fs::write(&stale_size, b"stale size").expect("write a stale size");
+    std::fs::write(&stale_marker, b"failed\n").expect("write a stale marker");
+
+    let new_bytes = png_bytes(8, 8, [9, 9, 9]);
+    let resp = upload_avatar(&f, "new.png", new_bytes.clone()).await;
+    assert_eq!(resp.status(), 200);
+
+    assert!(!stale_size.exists(), "a generated size outlived the upload");
+    assert!(
+        !stale_marker.exists(),
+        "a failure marker outlived the upload"
+    );
+    let original = std::fs::read(storage.join("original.png")).expect("the new original");
+    assert_eq!(
+        original, new_bytes,
+        "the new original is the one that was uploaded"
+    );
+    assert!(
+        storage.join("256.png").exists(),
+        "the new avatar's 256 entry is generated after the cleanup"
+    );
 }

@@ -78,6 +78,17 @@ impl ThumbnailService {
         path: &str,
         size: u32,
     ) -> Result<(Vec<u8>, String, ThumbFormat), AppError> {
+        // Defence in depth: the handler has already refused an oversized request and
+        // snapped the size, but the service is the layer that owns the cache. A size
+        // outside the retained set would write an entry nothing can request again,
+        // and a zero would ask a generator for a zero-pixel image.
+        let size = crate::thumbnail_util::canonical_thumbnail_size(size);
+        if size == 0 {
+            return Err(AppError::BadRequest(
+                "thumbnail size must be positive".into(),
+            ));
+        }
+
         let normalized_path = if path.is_empty() || path == "/" {
             "/".to_string()
         } else if path.starts_with('/') {
@@ -410,19 +421,22 @@ impl ThumbnailService {
     }
 }
 
-/// Marker file recording that the legacy-size purge has run for the current retained sizes.
+/// Marker file recording that the legacy-size purge has run for the current cache
+/// scheme and retained sizes.
 ///
-/// Its presence makes the purge one-shot; deleting it re-arms it. The name carries the size set
-/// (`.legacy_sizes_purged_48_640`) on purpose: when a UI change drops a size, a new marker name
-/// re-runs the purge by itself instead of leaving those files as permanent dead weight. (The
-/// database rows need a new migration for the same reason — a migration is frozen once shipped —
-/// which is `m20260918_000002_purge_legacy_thumbnail_sizes`.)
+/// Its presence makes the purge one-shot; deleting it re-arms it. The name carries a
+/// scheme version and the size set (`.legacy_sizes_purged_v2_48_640`) on purpose: when
+/// the UI drops a size, or the server changes which sizes it materialises, a new
+/// marker name re-runs the purge by itself instead of leaving those files as permanent
+/// dead weight. (The database rows need a new migration for the same reason — a
+/// migration is frozen once shipped — which is
+/// `m20261123_000001_purge_nonretained_thumbnails`.)
 pub fn legacy_purge_marker() -> String {
     let sizes: Vec<String> = crate::thumbnail_util::RETAINED_THUMBNAIL_SIZES
         .iter()
         .map(|size| size.to_string())
         .collect();
-    format!(".legacy_sizes_purged_{}", sizes.join("_"))
+    format!(".legacy_sizes_purged_v2_{}", sizes.join("_"))
 }
 
 /// What one pass of the purge did, for the startup log.
@@ -927,11 +941,11 @@ mod purge_tests {
         assert_eq!(cache_file_size(&legacy_purge_marker()), None);
     }
 
-    /// The marker names the retained size set, so changing that set re-arms the purge without a
-    /// version bump.
+    /// The marker names the scheme version and the retained size set, so changing
+    /// either re-arms the purge without a further code change.
     #[test]
-    fn marker_names_the_retained_sizes() {
-        assert_eq!(legacy_purge_marker(), ".legacy_sizes_purged_48_640");
+    fn marker_names_the_scheme_and_the_retained_sizes() {
+        assert_eq!(legacy_purge_marker(), ".legacy_sizes_purged_v2_48_640");
     }
 
     fn write(dir: &Path, name: &str, bytes: usize) {
