@@ -83,6 +83,21 @@ fn resolve_expire_days(req: &CreateLinkRequest) -> Result<Option<i64>, AppError>
     }
 }
 
+/// Enforce the caller's per-library write ceiling for a link token.
+///
+/// A link token names its library only in the database, so the route-table
+/// ceiling check never sees it: creating/updating/deleting a share or upload
+/// link must be a write on that library (`r` ceilings stay read-only). A token
+/// outside the caller's library scope is deliberately left to the service,
+/// which answers `NotFound`; returning `Forbidden` there would confirm that the
+/// token exists, so this only narrows a scope that already allows the library.
+fn ensure_link_write_ceiling(auth: &AuthUser, repo_id: &str) -> Result<(), AppError> {
+    if auth.repo_scope().allows(repo_id) {
+        auth.ensure_repo_allowed(repo_id, true)?;
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub struct ListShareLinksQuery {
     pub repo_id: Option<String>,
@@ -150,6 +165,9 @@ pub async fn create_share_link_v21(
     crate::middleware::ensure_share_download_enabled(&state)?;
     let req = parse_link_request(&v)?;
     let expire_days = resolve_expire_days(&req)?;
+    // A share link is a capability URL granting anonymous read access, so a
+    // read-ceiling key must not mint one for its library.
+    auth.ensure_repo_allowed(&req.repo_id, true)?;
     let info = share::create_share_link_v21(
         &state.repos,
         &state.config(),
@@ -195,6 +213,9 @@ pub async fn create_multi_share_link_v21(
     crate::middleware::ensure_share_download_enabled(&state)?;
     let req = parse_link_request(&v)?;
     let expire_days = resolve_expire_days(&req)?;
+    // Same capability URL as POST /share-links/: the caller needs write access
+    // to the library, not merely its read ceiling.
+    auth.ensure_repo_allowed(&req.repo_id, true)?;
     let info = share::create_share_link_v21(
         &state.repos,
         &state.config(),
@@ -217,6 +238,11 @@ pub async fn delete_share_link_v21(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // The token names its library only in the database; revoking a capability
+    // URL is a write on that library.
+    if let Some(link) = state.repos.share_link.find_by_token(&token).await? {
+        ensure_link_write_ceiling(&auth, &link.repo_id)?;
+    }
     let found =
         share::delete_share_link_v21(&state.repos, &token, auth.user_id, &auth.repo_scope())
             .await?;
@@ -233,6 +259,9 @@ pub async fn update_share_link_v21(
     Path(token): Path<String>,
     Json(req): Json<UpdateLinkRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    if let Some(link) = state.repos.share_link.find_by_token(&token).await? {
+        ensure_link_write_ceiling(&auth, &link.repo_id)?;
+    }
     let info = share::update_share_link_v21(
         &state.config(),
         &state.repos,
@@ -317,9 +346,14 @@ pub async fn clean_invalid_upload_links_v21(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let scope = auth.repo_scope();
+    // Cleaning is a write on the links' libraries, so a read-ceiling key must
+    // not delete them — the service skips links the closure refuses.
     let count =
-        link::clean_invalid_upload_links_v21(&state.repos, auth.user_id, &auth.repo_scope())
-            .await?;
+        link::clean_invalid_upload_links_v21(&state.repos, auth.user_id, &scope, |repo_id| {
+            auth.ensure_repo_allowed(repo_id, true).is_ok()
+        })
+        .await?;
     Ok(Json(serde_json::json!({"success": true, "deleted": count})))
 }
 
@@ -347,6 +381,10 @@ pub async fn update_upload_link_v21(
     Path(token): Path<String>,
     Json(req): Json<UpdateLinkRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let existing = state.repos.upload_link.find_by_token(&token).await?;
+    if let Some(link) = &existing {
+        ensure_link_write_ceiling(&auth, &link.repo_id)?;
+    }
     let updated = link::update_upload_link_v21(
         &state.repos,
         &state.config(),
@@ -362,6 +400,19 @@ pub async fn update_upload_link_v21(
     if !updated {
         return Err(AppError::NotFound("upload link not found".into()));
     }
+    // The link's password and expiry gate the anonymous upload tokens already
+    // minted from it; a successful update must invalidate them, or a visitor
+    // holding a one-hour token keeps uploading under the terms just changed.
+    if let Some(link) = existing {
+        let revoked = state.token_manager.revoke_upload_link(link.id);
+        if revoked > 0 {
+            tracing::debug!(
+                link_id = link.id,
+                revoked,
+                "revoked upload-link tokens after link update"
+            );
+        }
+    }
     Ok(ok_json())
 }
 
@@ -373,6 +424,10 @@ pub async fn delete_upload_link_v21(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Revoking an anonymous write capability is a write on its library.
+    if let Some(link) = state.repos.upload_link.find_by_token(&token).await? {
+        ensure_link_write_ceiling(&auth, &link.repo_id)?;
+    }
     let found = link::delete_upload_link_v21_by_token(
         &state.repos,
         &token,
@@ -418,10 +473,13 @@ pub async fn get_upload_link_upload_url_v21(
 
     // Password-protected links need the `visited_ufs_{token}` session flag set
     // by the web password form (matching seahub), or the password is bypassed.
+    // The signature covers the link's current password version, so a cookie
+    // issued before a password change no longer mints an upload token.
     if link.password.is_some()
         && !crate::service::auth::csrf::has_valid_upload_link_cookie(
             headers.get("cookie").and_then(|v| v.to_str().ok()),
             &token,
+            link.password.as_deref().unwrap_or(""),
             &state.csrf_secret,
         )
     {
@@ -473,10 +531,12 @@ pub async fn get_upload_link_upload_url_v21(
         &link.path,
     );
 
-    // Link the upload token back to the upload link so we can count uploads
+    // Link the upload token back to the upload link so we can count uploads, and
+    // carry the link's own expiry: the token's one-hour lifetime must not outlive
+    // a link that expires in five minutes.
     state
         .token_manager
-        .set_upload_link_id(&upload_token, link.id);
+        .set_upload_link(&upload_token, link.id, link.expires_at);
 
     let upload_url = format!("/upload-aj/{}", upload_token);
 

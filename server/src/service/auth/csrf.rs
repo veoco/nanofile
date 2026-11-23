@@ -97,16 +97,40 @@ pub fn share_link_cookie_name(token: &str) -> String {
     format!("visited_sl_{token}")
 }
 
+/// HMAC that marks a browser as having passed a link's password gate.
+///
+/// `password_version` is the link's *stored* password value (the hash, or `""`
+/// once the password is cleared). Mixing it into the signed message is what
+/// makes changing or clearing the password invalidate every unlock cookie
+/// issued while the old password was in force. The `\0` separator keeps the
+/// two fields unambiguous, so `("ab", "c")` and `("a", "bc")` sign differently.
+fn link_unlock_signature(secret: &[u8], token: &str, password_version: &str) -> String {
+    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC key should be valid");
+    mac.update(token.as_bytes());
+    mac.update(b"\0");
+    mac.update(password_version.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+fn validate_link_unlock(secret: &[u8], token: &str, password_version: &str, value: &str) -> bool {
+    let expected = link_unlock_signature(secret, token, password_version);
+    // Constant-time comparison, as for the CSRF token.
+    expected.as_bytes().ct_eq(value.as_bytes()).into()
+}
+
 /// Check whether a Cookie header carries a valid password-unlock cookie.
 ///
-/// The value is an HMAC signature over the link token (see [`generate_csrf_token`]),
-/// proving the password was verified by the web form. A plaintext `=1` value is
+/// The value is an HMAC signature over the link token and the link's current
+/// password version (see [`link_unlock_signature`]), proving the password was
+/// verified by the web form for *this* password. A plaintext `=1` value is
 /// rejected — that is what stops a client that never entered the password from
-/// minting the cookie itself.
+/// minting the cookie itself — and a cookie minted before a password change no
+/// longer matches the current version.
 pub fn has_link_unlock_cookie(
     cookie_header: Option<&str>,
     cookie_name: &str,
     token: &str,
+    password_version: &str,
     secret: &[u8],
 ) -> bool {
     let prefix = format!("{cookie_name}=");
@@ -121,15 +145,23 @@ pub fn has_link_unlock_cookie(
     else {
         return false;
     };
-    validate_csrf_token(secret, token, value)
+    validate_link_unlock(secret, token, password_version, value)
 }
 
 /// `Set-Cookie` value that unlocks a password-protected link for this browser.
 ///
 /// Passing the password through a signed cookie instead of the URL keeps it out
-/// of page links, browser history and request logs.
-pub fn link_unlock_cookie(cookie_name: &str, token: &str, secret: &[u8], secure: bool) -> String {
-    let sig = generate_csrf_token(secret, token);
+/// of page links, browser history and request logs. The signature covers the
+/// link's current password version, so it stops validating if the password is
+/// changed or cleared.
+pub fn link_unlock_cookie(
+    cookie_name: &str,
+    token: &str,
+    password_version: &str,
+    secret: &[u8],
+    secure: bool,
+) -> String {
+    let sig = link_unlock_signature(secret, token, password_version);
     let mut cookie = format!("{cookie_name}={sig}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax");
     if secure {
         cookie.push_str("; Secure");
@@ -138,16 +170,19 @@ pub fn link_unlock_cookie(cookie_name: &str, token: &str, secret: &[u8], secure:
 }
 
 /// Check for a valid `visited_ufs_{token}` upload-link unlock cookie; the HMAC
-/// value cannot be forged by a client that never entered the password.
+/// value cannot be forged by a client that never entered the password, and it
+/// stops validating once the link's password changes.
 pub fn has_valid_upload_link_cookie(
     cookie_header: Option<&str>,
     token: &str,
+    password_version: &str,
     secret: &[u8],
 ) -> bool {
     has_link_unlock_cookie(
         cookie_header,
         &upload_link_cookie_name(token),
         token,
+        password_version,
         secret,
     )
 }
@@ -295,8 +330,8 @@ mod tests {
             share_link_cookie_name("tok"),
             upload_link_cookie_name("tok"),
         ] {
-            let plain = link_unlock_cookie(&cookie_name, "tok", secret, false);
-            let secure = link_unlock_cookie(&cookie_name, "tok", secret, true);
+            let plain = link_unlock_cookie(&cookie_name, "tok", "pw-hash", secret, false);
+            let secure = link_unlock_cookie(&cookie_name, "tok", "pw-hash", secret, true);
             assert!(
                 !plain.contains("Secure"),
                 "plain-HTTP link cookie must not carry Secure: {plain}"
@@ -314,6 +349,58 @@ mod tests {
         assert_ne!(
             share_link_cookie_name("tok"),
             upload_link_cookie_name("tok")
+        );
+    }
+
+    /// A password change mutates the link's stored hash, which is the version
+    /// mixed into the signature: the cookie issued for the old password must stop
+    /// unlocking the link, and a forged plaintext cookie must never unlock it.
+    #[test]
+    fn a_password_change_invalidates_the_link_unlock_cookie() {
+        let secret = b"test-secret-key-12345678";
+        let token = "link-token";
+        let cookie_name = share_link_cookie_name(token);
+        let old_cookie = link_unlock_cookie(&cookie_name, token, "old-hash", secret, false);
+
+        assert!(has_link_unlock_cookie(
+            Some(&old_cookie),
+            &cookie_name,
+            token,
+            "old-hash",
+            secret
+        ));
+        assert!(
+            !has_link_unlock_cookie(Some(&old_cookie), &cookie_name, token, "new-hash", secret),
+            "a cookie minted before the password change must not unlock the link"
+        );
+        assert!(
+            !has_link_unlock_cookie(
+                Some(&format!("{cookie_name}=1")),
+                &cookie_name,
+                token,
+                "old-hash",
+                secret
+            ),
+            "a plaintext cookie value must be rejected"
+        );
+        assert!(
+            !has_link_unlock_cookie(None, &cookie_name, token, "old-hash", secret),
+            "a missing Cookie header has no unlock"
+        );
+    }
+
+    /// The two HMAC inputs are length-prefixed by a NUL so distinct
+    /// `(token, password_version)` pairs cannot collide by concatenation.
+    #[test]
+    fn link_unlock_signature_separates_the_token_from_the_password_version() {
+        let secret = b"test-secret-key-12345678";
+        assert_ne!(
+            link_unlock_signature(secret, "ab", "c"),
+            link_unlock_signature(secret, "a", "bc")
+        );
+        assert_ne!(
+            link_unlock_signature(secret, "tok", ""),
+            link_unlock_signature(secret, "tok", "x")
         );
     }
 

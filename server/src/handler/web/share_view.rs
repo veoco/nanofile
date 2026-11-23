@@ -115,11 +115,14 @@ pub(super) fn record_link_password_failure(
 /// Accepts the password itself (via the `X-Seafile-Sharelink-Password` header or
 /// `?password=`, both of which predate the cookie) or the signed unlock cookie
 /// issued after a successful password POST, which keeps the password out of links.
+/// `password_version` is the link's stored password value, so a cookie minted
+/// before a password change no longer unlocks the link.
 fn share_link_unlocked(
     state: &Arc<AppState>,
     token: &str,
     headers: &HeaderMap,
     password_ok: bool,
+    password_version: &str,
 ) -> bool {
     if password_ok {
         return true;
@@ -129,6 +132,7 @@ fn share_link_unlocked(
         headers.get("cookie").and_then(|v| v.to_str().ok()),
         &cookie_name,
         token,
+        password_version,
         &state.csrf_secret,
     )
 }
@@ -201,7 +205,13 @@ pub async fn shared_file_view(
     )
     .await?;
 
-    let unlocked = share_link_unlocked(&state, &token, &headers, pw_ok);
+    let unlocked = share_link_unlocked(
+        &state,
+        &token,
+        &headers,
+        pw_ok,
+        link.password.as_deref().unwrap_or(""),
+    );
     if link.password.is_some() && !unlocked {
         // Only count genuine failures: a request without a password is the first render.
         if provided_pwd.is_some() {
@@ -356,6 +366,7 @@ pub async fn shared_file_view_post(
     let cookie = crate::service::auth::csrf::link_unlock_cookie(
         &crate::service::auth::csrf::share_link_cookie_name(&token),
         &token,
+        link.password.as_deref().unwrap_or(""),
         &state.csrf_secret,
         state.config().server.secure_cookies(),
     );
@@ -433,7 +444,13 @@ pub async fn shared_dir_view(
     )
     .await?;
 
-    let unlocked = share_link_unlocked(&state, &token, &headers, pw_ok);
+    let unlocked = share_link_unlocked(
+        &state,
+        &token,
+        &headers,
+        pw_ok,
+        link.password.as_deref().unwrap_or(""),
+    );
     if link.password.is_some() && !unlocked {
         // Count only genuine failures: a request without a password is the first render.
         if provided_pwd.is_some() {
@@ -684,7 +701,13 @@ pub async fn shared_dir_file_view(
         state.config().auth.password_hash_iterations,
     )
     .await?;
-    let unlocked = share_link_unlocked(&state, &token, &headers, pw_ok);
+    let unlocked = share_link_unlocked(
+        &state,
+        &token,
+        &headers,
+        pw_ok,
+        link.password.as_deref().unwrap_or(""),
+    );
     if link.password.is_some() && !unlocked {
         if provided_pwd.is_some() {
             record_link_password_failure(&state, &token)?;
@@ -791,6 +814,7 @@ pub async fn shared_dir_view_post(
     let cookie = crate::service::auth::csrf::link_unlock_cookie(
         &crate::service::auth::csrf::share_link_cookie_name(&token),
         &token,
+        link.password.as_deref().unwrap_or(""),
         &state.csrf_secret,
         state.config().server.secure_cookies(),
     );

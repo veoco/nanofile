@@ -426,7 +426,9 @@ pub async fn dir_shared_items(
     let path = safe_normalize_path(&query.p.unwrap_or_else(|| "/".to_string()))
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
     let svc = state.dir_service();
-    let items = svc.get_dir_shared_items(repo_id, &path).await?;
+    let items = svc
+        .get_dir_shared_items(repo_id, &path, access.user.user_id)
+        .await?;
 
     Ok(Json(DirSharedItemsResponse {
         shared_items: items,

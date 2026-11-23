@@ -731,7 +731,7 @@ impl SyncAuth {
 }
 
 /// Check if a token has expired: `expires_at` set and in the past.
-fn is_token_expired(expires_at: Option<i64>) -> bool {
+pub(crate) fn is_token_expired(expires_at: Option<i64>) -> bool {
     matches!(expires_at, Some(exp) if chrono::Utc::now().timestamp() > exp)
 }
 

@@ -43,7 +43,23 @@ pub async fn starred_page(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
-    let entries = state.repos.starred.find_by_user_id(user.user_id).await?;
+    // Starred rows outlive membership: a row for a library the user was removed
+    // from must not be rendered (its name, paths or mtime would leak). Intersect
+    // with the libraries the user can still access, like the starred API does.
+    let accessible = crate::domain::permission::accessible_repo_ids(
+        &state.repos,
+        user.user_id,
+        &crate::domain::permission::RepoScope::all(),
+    )
+    .await?;
+    let entries: Vec<_> = state
+        .repos
+        .starred
+        .find_by_user_id(user.user_id)
+        .await?
+        .into_iter()
+        .filter(|entry| accessible.contains(&entry.repo_id))
+        .collect();
 
     // Cache repo lookups to avoid N+1
     let mut repo_cache: std::collections::HashMap<String, Option<repo::Model>> =

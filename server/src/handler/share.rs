@@ -48,6 +48,9 @@ pub async fn create_share_link(
     Json(req): Json<CreateShareLinkRequest>,
 ) -> Result<Json<share::ShareLinkInfo>, AppError> {
     crate::middleware::ensure_share_download_enabled(&state)?;
+    // The library arrives in the body, so the route-table ceiling never sees it;
+    // a read-ceiling key must not mint an anonymous read capability here.
+    auth.ensure_repo_allowed(&req.repo_id, true)?;
     let info = share::create_share_link(
         &state.repos,
         &state.config(),

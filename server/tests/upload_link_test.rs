@@ -1035,3 +1035,142 @@ async fn upload_link_replace_does_not_overwrite_existing_file() {
         "the new upload should get a unique name: {listing}"
     );
 }
+
+/// POST a multipart upload through a minted `/upload-aj/{token}` URL.
+async fn post_upload_via_token(f: &TestFixture, upload_url: &str) -> reqwest::Response {
+    let file_part = reqwest::multipart::Part::bytes(b"probe".to_vec())
+        .file_name("probe.txt".to_string())
+        .mime_str("text/plain")
+        .unwrap();
+    let form = reqwest::multipart::Form::new()
+        .part("file", file_part)
+        .text("parent_dir", "/");
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("{}{}", f.server.base_url, upload_url))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap()
+}
+
+/// The upload token minted from a link outlives the link's own gates for up to an
+/// hour. A password change must revoke it, or a visitor who already exchanged the
+/// link for a token keeps uploading under the password that was changed.
+#[tokio::test]
+async fn test_upload_link_password_update_revokes_minted_upload_token() {
+    let f = TestFixture::new().await;
+
+    let created = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "path": "/",
+                "password": "uploadpass",
+            }),
+        )
+        .await;
+    assert_eq!(created.status(), 200);
+    let token = created.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Pass the password form, then mint the upload URL the way the public page does.
+    let browser = common::client::TestClient::new_with_cookies(&f.server.base_url);
+    let unlocked = browser
+        .post_ui_form(&format!("/u/{}/", token), &[("password", "uploadpass")])
+        .await;
+    assert!(
+        unlocked.status().is_redirection() || unlocked.status().is_success(),
+        "password POST should redirect or succeed, got {}",
+        unlocked.status()
+    );
+    let url_resp = browser
+        .get(&format!("/api/v2.1/upload-links/{}/upload/", token), None)
+        .await;
+    assert_eq!(url_resp.status(), 200, "the unlock cookie grants a URL");
+    let upload_url = url_resp.json::<serde_json::Value>().await.unwrap()["upload_link"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let before = post_upload_via_token(&f, &upload_url).await;
+    assert_eq!(before.status(), 200, "a fresh upload token must work");
+
+    let upd = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/upload-links/{}/", token),
+            Some(&f.api_token),
+            &serde_json::json!({"password": "newpass"}),
+        )
+        .await;
+    assert_eq!(upd.status(), 200, "update password should succeed");
+
+    let after = post_upload_via_token(&f, &upload_url).await;
+    assert!(
+        matches!(after.status().as_u16(), 400 | 403),
+        "a token minted under the old password must be revoked, got {}",
+        after.status()
+    );
+}
+
+/// The same for the link's expiry: shortening it must invalidate tokens minted
+/// while the longer deadline was in force.
+#[tokio::test]
+async fn test_upload_link_expiry_update_revokes_minted_upload_token() {
+    let f = TestFixture::new().await;
+
+    let created = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({"repo_id": f.repo_id, "path": "/"}),
+        )
+        .await;
+    assert_eq!(created.status(), 200);
+    let token = created.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let url_resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/upload-links/{}/upload/", token),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(url_resp.status(), 200);
+    let upload_url = url_resp.json::<serde_json::Value>().await.unwrap()["upload_link"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let before = post_upload_via_token(&f, &upload_url).await;
+    assert_eq!(before.status(), 200, "a fresh upload token must work");
+
+    let upd = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/upload-links/{}/", token),
+            Some(&f.api_token),
+            &serde_json::json!({"expire_days": -1}),
+        )
+        .await;
+    assert_eq!(upd.status(), 200, "update expiry should succeed");
+
+    let after = post_upload_via_token(&f, &upload_url).await;
+    assert!(
+        matches!(after.status().as_u16(), 400 | 403),
+        "a token minted before the expiry changed must be revoked, got {}",
+        after.status()
+    );
+}

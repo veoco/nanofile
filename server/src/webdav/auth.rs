@@ -169,6 +169,11 @@ impl WebDavAuth {
             .await
             .map_err(|_| WebDavAuthError::Unauthorized)?
             .ok_or(WebDavAuthError::Unauthorized)?;
+        // WebDAV never went through the route table's expiry check, so an
+        // expired key kept working here after every other surface refused it.
+        if crate::middleware::auth::is_token_expired(lookup.key.expires_at) {
+            return Err(WebDavAuthError::Unauthorized);
+        }
         if lookup.key.user_id != user.id {
             return Err(WebDavAuthError::Unauthorized);
         }

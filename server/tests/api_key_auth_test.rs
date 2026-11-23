@@ -900,3 +900,210 @@ async fn a_read_ceiling_cannot_mint_upload_links() {
         assert_eq!(resp.status(), 403, "{path} must honour the read ceiling");
     }
 }
+
+/// Link management is a write on the library: creating, editing or revoking a
+/// share/upload link changes what third parties can reach, so an `r` binding must
+/// refuse it even though the account's membership would allow it. Tokens outside
+/// the key's library scope keep answering 404, so the ceiling never confirms that
+/// another library's link exists.
+#[tokio::test]
+async fn a_read_ceiling_cannot_manage_share_and_upload_links() {
+    let f = TestFixture::new().await;
+    let key = create_key(
+        &f,
+        &key_body(
+            &[
+                "library.read",
+                "file.read",
+                "share_link.read",
+                "share_link.write",
+                "upload_link.read",
+                "upload_link.write",
+            ],
+            false,
+            &[(&f.repo_id, "r")],
+        ),
+    )
+    .await;
+
+    // Create: every spelling takes `repo_id` in the body, so the route-table
+    // ceiling check cannot see it.
+    for path in [
+        "/api/v2.1/share-links/",
+        "/api/v2.1/multi-share-links/",
+        "/api2/shared-links",
+    ] {
+        let resp = f
+            .client
+            .post_json(
+                path,
+                Some(&key),
+                &json!({"repo_id": f.repo_id, "path": "/"}),
+            )
+            .await;
+        assert_eq!(resp.status(), 403, "{path} must honour the read ceiling");
+    }
+
+    // Seed one link of each kind as the owner, so update/delete have a target.
+    let share: Value = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &json!({"repo_id": f.repo_id, "path": "/"}),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    let share_token = share["token"].as_str().unwrap().to_string();
+    let upload: Value = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &json!({"repo_id": f.repo_id, "path": "/"}),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    let upload_token = upload["token"].as_str().unwrap().to_string();
+
+    let share_path = format!("/api/v2.1/share-links/{share_token}/");
+    let resp = f
+        .client
+        .put_json(&share_path, Some(&key), &json!({"description": "x"}))
+        .await;
+    assert_eq!(resp.status(), 403, "update share link");
+    let resp = f.client.delete(&share_path, Some(&key)).await;
+    assert_eq!(resp.status(), 403, "delete share link");
+
+    let upload_path = format!("/api/v2.1/upload-links/{upload_token}/");
+    let resp = f
+        .client
+        .put_json(&upload_path, Some(&key), &json!({"description": "x"}))
+        .await;
+    assert_eq!(resp.status(), 403, "update upload link");
+    let resp = f.client.delete(&upload_path, Some(&key)).await;
+    assert_eq!(resp.status(), 403, "delete upload link");
+
+    // A refused mutation must not have touched the links.
+    assert_eq!(
+        f.client.get(&share_path, Some(&f.api_token)).await.status(),
+        200
+    );
+    assert_eq!(
+        f.client
+            .get(&upload_path, Some(&f.api_token))
+            .await
+            .status(),
+        200
+    );
+
+    // Cleaning invalid links is a delete too: the key's clean-invalid leaves the
+    // owner's expired link in place.
+    let expired: Value = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &json!({"repo_id": f.repo_id, "path": "/", "expire_days": -1}),
+        )
+        .await
+        .json()
+        .await
+        .unwrap();
+    let expired_token = expired["token"].as_str().unwrap().to_string();
+    let resp = f
+        .client
+        .delete("/api/v2.1/upload-links/clean-invalid/", Some(&key))
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["deleted"].as_i64(),
+        Some(0),
+        "a read-ceiling key must not clean invalid links"
+    );
+    assert_eq!(
+        f.client
+            .get(
+                &format!("/api/v2.1/upload-links/{expired_token}/"),
+                Some(&f.api_token)
+            )
+            .await
+            .status(),
+        200,
+        "the expired link must still be there"
+    );
+}
+
+/// WebDAV authenticates its own Basic-auth keys, outside the route table's token
+/// expiry check. An expired key must be refused here too (401 with the challenge),
+/// instead of keeping a full read/write window on the library.
+#[tokio::test]
+async fn webdav_rejects_an_expired_key() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .post_json(
+            "/api2/api-keys/",
+            Some(&f.api_token),
+            &json!({
+                "name": "webdav-expired",
+                "capabilities": ["webdav.read", "webdav.write"],
+                "repo_permissions": [{"repo_id": f.repo_id, "permission": "rw"}],
+                "expires_in_days": 7,
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "webdav key creation failed");
+    let body: Value = resp.json().await.unwrap();
+    let key = body["key"].as_str().unwrap().to_string();
+    let key_id = body["id"].as_i64().unwrap();
+
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let url = format!("{}/dav/{}/", f.server.base_url, f.repo_id);
+    let propfind = |client: &reqwest::Client| {
+        client
+            .request(
+                reqwest::Method::from_bytes(b"PROPFIND").unwrap(),
+                url.clone(),
+            )
+            .basic_auth(&f.email, Some(key.clone()))
+    };
+    let resp = propfind(&client).send().await.unwrap();
+    assert_eq!(resp.status(), 207, "a live key authenticates over WebDAV");
+
+    // Expire it directly: the API refuses to mint an already-expired key.
+    f.server
+        .repos
+        .api_key
+        .update_metadata(
+            key_id as i32,
+            f.user_id,
+            UpdateApiKeyParams {
+                expires_at: Some(Some(chrono::Utc::now().timestamp() - 1)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("expire the key");
+
+    let resp = propfind(&client).send().await.unwrap();
+    assert_eq!(
+        resp.status(),
+        401,
+        "an expired key is not a WebDAV credential"
+    );
+    assert!(
+        resp.headers()
+            .get("www-authenticate")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .contains("Basic"),
+        "a WebDAV 401 must carry the Basic challenge"
+    );
+}

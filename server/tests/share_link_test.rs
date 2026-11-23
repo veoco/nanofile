@@ -1424,3 +1424,153 @@ async fn test_links_are_revoked_when_the_creator_is_deactivated() {
         "a deactivated account's links must stop resolving"
     );
 }
+
+/// The unlock cookie proves the link password was entered, not that the visitor
+/// knows the *current* one: after a password change the cookie must stop
+/// unlocking the link, or changing the password would not evict anyone.
+#[tokio::test]
+async fn test_share_link_password_change_invalidates_unlock_cookie() {
+    let f = TestFixture::new().await;
+
+    let up = f
+        .client
+        .upload_file(
+            &f.api_token,
+            &f.repo_id,
+            "/",
+            "pw-cookie.txt",
+            b"secret data",
+        )
+        .await;
+    assert!(up.status().is_success(), "upload failed");
+
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "path": "/pw-cookie.txt",
+                "password": "oldpass",
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let token = resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Pass the password form once: the 302 hands the browser the unlock cookie.
+    let browser = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let post = browser
+        .post(format!("{}/f/{}/", f.server.base_url, token))
+        .form(&[("password", "oldpass")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(post.status(), 302, "successful password POST redirects");
+    assert!(
+        post.headers().get(reqwest::header::SET_COOKIE).is_some(),
+        "the unlock must be handed over as a cookie"
+    );
+
+    let unlocked = browser
+        .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unlocked.status(), 200, "the cookie must unlock the link");
+    assert_eq!(&unlocked.bytes().await.unwrap()[..], b"secret data");
+
+    let upd = f
+        .client
+        .put_json(
+            &format!("/api/v2.1/share-links/{}/", token),
+            Some(&f.api_token),
+            &serde_json::json!({"password": "newpass"}),
+        )
+        .await;
+    assert_eq!(upd.status(), 200, "update password should succeed");
+
+    let stale = browser
+        .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), 200);
+    let stale_body = stale.text().await.unwrap();
+    assert!(
+        stale_body.contains("Password Required"),
+        "the old unlock cookie must not survive a password change"
+    );
+    assert!(
+        !stale_body.contains("secret data"),
+        "the old cookie must not reveal the shared content"
+    );
+
+    // The new password still works; the change only revoked the old unlock.
+    let raw = reqwest::Client::builder().no_proxy().build().unwrap();
+    let ok = raw
+        .get(format!("{}/f/{}/?dl=1", f.server.base_url, token))
+        .header("X-Seafile-Sharelink-Password", "newpass")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200, "the new password must unlock the link");
+    assert_eq!(&ok.bytes().await.unwrap()[..], b"secret data");
+}
+
+/// `dir/shared_items/` lists share tokens, which are capability URLs: a member
+/// must only see their own links, never another member's token for a path they
+/// can read.
+#[tokio::test]
+async fn test_dir_shared_items_hides_other_users_links() {
+    let f = TestFixture::new().await;
+    let db = &*f.server.db;
+
+    let created = f
+        .client
+        .post_json(
+            "/api/v2.1/share-links/",
+            Some(&f.api_token),
+            &serde_json::json!({"repo_id": f.repo_id, "path": "/"}),
+        )
+        .await;
+    assert_eq!(created.status(), 200);
+
+    let member_id = create_test_user(db, "shared-items@test.com", "password2").await;
+    common::add_repo_member(db, &f.repo_id, member_id, "rw").await;
+    let login = f.client.login("shared-items@test.com", "password2").await;
+    assert_eq!(login.status(), 200);
+    let member_token = login.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let url = format!("/api2/repos/{}/dir/shared_items/?p=/", f.repo_id);
+    let resp = f.client.get(&url, Some(&member_token)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["shared_items"].as_array().unwrap().len(),
+        0,
+        "another member's share token must not be listed"
+    );
+
+    // The owner still sees the link they created.
+    let resp = f.client.get(&url, Some(&f.api_token)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["shared_items"].as_array().unwrap().len(),
+        1,
+        "the owner sees their own share link"
+    );
+}

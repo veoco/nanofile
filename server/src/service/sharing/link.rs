@@ -447,10 +447,16 @@ pub async fn list_upload_links_for_repo_v21(
     Ok(items)
 }
 
+/// Delete the caller's invalid (expired or dangling) upload links.
+///
+/// `allowed` narrows the deletion further than the library `scope`: deleting a
+/// link is a write on its library, so a caller whose credential only allows reads
+/// there (a read-ceiling API key) must not clean it even though the row is its own.
 pub async fn clean_invalid_upload_links_v21(
     repos: &Repositories,
     user_id: i32,
     scope: &RepoScope,
+    allowed: impl Fn(&str) -> bool,
 ) -> Result<i32, AppError> {
     let links = repos.upload_link.find_by_creator_id(user_id).await?;
 
@@ -463,7 +469,7 @@ pub async fn clean_invalid_upload_links_v21(
     let mut deleted = 0i32;
 
     for link in &links {
-        if !scope.allows(&link.repo_id) {
+        if !scope.allows(&link.repo_id) || !allowed(&link.repo_id) {
             continue;
         }
         let mut should_delete = false;

@@ -23,5 +23,6 @@ mod error_test;
 mod i18n_test;
 mod metadata_test;
 mod server_info_test;
+mod starred_ui_test;
 mod ui_test;
 mod web_access_test;
