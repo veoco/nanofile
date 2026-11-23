@@ -711,9 +711,11 @@ pub async fn file_uploaded_bytes(
     if let (Some(parent_dir), Some(file_name)) = (&query.parent_dir, &query.file_name) {
         let file_path = base::sanitize::safe_join_path(parent_dir, file_name)
             .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
+        // Session callers share one scope per user, matching the upload endpoint.
+        let scope = format!("user:{}", access.user.user_id);
         if let Some(bytes) = state
             .temp_file_manager
-            .get_uploaded_bytes(repo_id, &file_path)
+            .get_uploaded_bytes(&scope, repo_id, &file_path)
             .await
             && bytes > uploaded_bytes as u64
         {

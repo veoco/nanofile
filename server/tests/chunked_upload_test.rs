@@ -576,14 +576,18 @@ fn chunked_upload_form(repo_id: &str, bytes: Vec<u8>) -> reqwest::multipart::For
         .text("relative_path", "")
 }
 
-/// Mint a short-lived upload-aj token for the fixture's repo via the Seahub
-/// upload-link endpoint (`GET /api2/repos/{repo}/upload-link/?from=web`).
-async fn get_upload_token(f: &TestFixture) -> String {
-    let resp = f
-        .client
+/// Mint a short-lived upload-aj token for `repo_id` as the user owning
+/// `api_token` via the Seahub upload-link endpoint
+/// (`GET /api2/repos/{repo}/upload-link/?from=web`).
+async fn upload_token_for(
+    client: &common::client::TestClient,
+    api_token: &str,
+    repo_id: &str,
+) -> String {
+    let resp = client
         .get(
-            &format!("/api2/repos/{}/upload-link/?from=web", f.repo_id),
-            Some(&f.api_token),
+            &format!("/api2/repos/{repo_id}/upload-link/?from=web"),
+            Some(api_token),
         )
         .await;
     assert_eq!(resp.status(), 200, "upload-link request failed");
@@ -593,6 +597,184 @@ async fn get_upload_token(f: &TestFixture) -> String {
         .next()
         .unwrap()
         .to_string()
+}
+
+/// Mint a short-lived upload-aj token for the fixture's repo.
+async fn get_upload_token(f: &TestFixture) -> String {
+    upload_token_for(&f.client, &f.api_token, &f.repo_id).await
+}
+
+/// Create an upload link on the fixture repo root and mint one upload token from
+/// it — the exact exchange a public upload-link visitor performs.
+async fn get_upload_link_visitor_token(f: &TestFixture) -> String {
+    let resp = f
+        .client
+        .post_json(
+            "/api/v2.1/upload-links/",
+            Some(&f.api_token),
+            &serde_json::json!({"repo_id": f.repo_id, "path": "/"}),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "create upload link failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let link_token = body["token"].as_str().unwrap().to_string();
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/upload-links/{link_token}/upload/"),
+            None,
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "minting the upload token failed");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let url = body["upload_link"].as_str().unwrap().to_string();
+    url.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+/// POST one `Content-Range` chunk to an upload-aj token and return the JSON body.
+#[allow(clippy::too_many_arguments)] // a test helper mirroring the chunk header fields
+async fn post_chunk(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    repo_id: &str,
+    start: usize,
+    end: usize,
+    total: usize,
+    data: &[u8],
+) -> serde_json::Value {
+    let resp = client
+        .post(format!("{base_url}/upload-aj/{token}"))
+        .header("content-range", format!("bytes {start}-{end}/{total}"))
+        .multipart(chunked_upload_form(repo_id, data.to_vec()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "chunk {start}-{end} failed");
+    resp.json().await.unwrap()
+}
+
+/// Upload two same-size payloads to the same repo/file path through two
+/// credentials, interleaving their chunks, and assert each commits its own bytes.
+///
+/// Before the temp-upload key was scoped by credential, the second caller was
+/// handed the first caller's temp file: the interleaved writes mixed the two
+/// payloads and the committed files were corrupted.
+async fn assert_interleaved_uploads_are_isolated(f: &TestFixture, token_a: &str, token_b: &str) {
+    let base = f.server.base_url.clone();
+    let repo_id = f.repo_id.clone();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+
+    let a: &[u8] = b"hello world!";
+    let b: &[u8] = b"HELLO THERE!";
+    assert_eq!(a.len(), b.len());
+    let split = 6;
+
+    // Interleave the first (intermediate) chunks for the same target path.
+    let reply = post_chunk(
+        &client,
+        &base,
+        token_a,
+        &repo_id,
+        0,
+        split - 1,
+        a.len(),
+        &a[..split],
+    )
+    .await;
+    assert_eq!(reply["success"], true, "first intermediate chunk: {reply}");
+    let reply = post_chunk(
+        &client,
+        &base,
+        token_b,
+        &repo_id,
+        0,
+        split - 1,
+        b.len(),
+        &b[..split],
+    )
+    .await;
+    assert_eq!(reply["success"], true, "second intermediate chunk: {reply}");
+
+    // Final chunks: each upload must assemble and commit exactly its own bytes.
+    let mut committed = Vec::new();
+    for (token, data) in [(token_a, a), (token_b, b)] {
+        let body = post_chunk(
+            &client,
+            &base,
+            token,
+            &repo_id,
+            split,
+            data.len() - 1,
+            data.len(),
+            &data[split..],
+        )
+        .await;
+        assert!(
+            body.is_array(),
+            "final chunk should return the file list: {body}"
+        );
+        assert_eq!(body[0]["size"], data.len() as i64);
+        committed.push((body[0]["name"].as_str().unwrap().to_string(), data.to_vec()));
+    }
+
+    // Both uploads created the same target path, so the second keep-both commit
+    // is renamed; the point is that each file carries its uploader's bytes.
+    assert_eq!(committed[0].0, "big.txt");
+    assert_ne!(
+        committed[1].0, "big.txt",
+        "the second commit of the same path must be renamed"
+    );
+    for (name, expected) in committed {
+        let resp = f
+            .client
+            .download_file(&f.api_token, &repo_id, &format!("/{name}"))
+            .await;
+        assert_eq!(resp.status(), 200, "download of /{name} failed");
+        assert_eq!(
+            resp.bytes().await.unwrap().as_ref(),
+            expected.as_slice(),
+            "/{name} contains the wrong uploader's bytes"
+        );
+    }
+}
+
+/// Two upload-link visitors minted from two different links are different
+/// credentials: their resumable uploads to the same repo/path must not share
+/// temp state.
+#[tokio::test]
+async fn test_chunked_upload_isolated_between_upload_link_visitors() {
+    let f = TestFixture::new().await;
+    let token_a = get_upload_link_visitor_token(&f).await;
+    let token_b = get_upload_link_visitor_token(&f).await;
+    assert_interleaved_uploads_are_isolated(&f, &token_a, &token_b).await;
+}
+
+/// Two different users writing to the same library/target are different scopes
+/// too: interleaved resumable chunks must not overwrite each other's temp file.
+#[tokio::test]
+async fn test_chunked_upload_isolated_between_users() {
+    let f = TestFixture::new().await;
+
+    let other_id =
+        common::create_test_user(f.server.db.as_ref(), "other@example.com", "password").await;
+    common::add_repo_member(f.server.db.as_ref(), &f.repo_id, other_id, "rw").await;
+    let other_client = f.server.client();
+    let resp = other_client.login("other@example.com", "password").await;
+    assert_eq!(resp.status(), 200, "second user login failed");
+    let other_token: String = resp.json::<serde_json::Value>().await.unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let token_a = get_upload_token(&f).await;
+    let token_b = upload_token_for(&other_client, &other_token, &f.repo_id).await;
+    assert_interleaved_uploads_are_isolated(&f, &token_a, &token_b).await;
 }
 
 /// End-to-end Content-Range chunked upload: an intermediate chunk returns

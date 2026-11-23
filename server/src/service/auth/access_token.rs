@@ -7,6 +7,33 @@ use tracing::debug;
 
 const TOKEN_EXPIRE_SECS: i64 = 3600; // 1 hour, matching seafile
 
+/// Cap on live capability tokens. Minting is a side effect of ordinary
+/// authenticated GETs (`upload-link`, `download-link`, block links), so an
+/// account can create tokens as fast as it can make requests; without a cap the
+/// table would grow with request count rather than with active uploads. At the
+/// cap, expired entries are dropped first and a still-full table is cleared:
+/// outstanding one-hour URLs stop working, which is the same fail-closed answer
+/// the token cache already gives and costs a client one re-fetch.
+const MAX_TOKENS: usize = 100_000;
+
+/// Make room for one more token at [`MAX_TOKENS`]: drop expired entries first,
+/// and clear the table if a live flood still fills it (fail-closed: the next
+/// request mints a new token).
+fn make_room(tokens: &mut HashMap<String, AccessToken>) {
+    if tokens.len() < MAX_TOKENS {
+        return;
+    }
+    let now = chrono::Utc::now().timestamp();
+    tokens.retain(|_, token| token.expires_at > now);
+    if tokens.len() >= MAX_TOKENS {
+        tracing::warn!(
+            "capability token table reached its cap ({MAX_TOKENS}); clearing it so \
+             outstanding capability URLs are invalidated instead of unbounded growth"
+        );
+        tokens.clear();
+    }
+}
+
 /// Above this size `validate` purges under the write lock; below it validation is read-lock only.
 const CLEANUP_THRESHOLD: usize = 10_000;
 
@@ -27,6 +54,11 @@ pub struct AccessToken {
     pub file_name: Option<String>,
     /// Upload link database ID (set for upload-link tokens, used to count uploads).
     pub upload_link_id: Option<i32>,
+    /// Expiry of the upload link this token was minted from, when it is a link
+    /// token. The token itself lives one hour, but a link can expire sooner;
+    /// carrying the link's own deadline makes that effective immediately instead
+    /// of only at the next mint.
+    pub upload_link_expires_at: Option<i64>,
     pub created_at: i64,
     pub expires_at: i64,
 }
@@ -72,12 +104,14 @@ impl AccessTokenManager {
             file_fs_id: None,
             file_name: None,
             upload_link_id: None,
+            upload_link_expires_at: None,
             created_at: now,
             expires_at: now + TOKEN_EXPIRE_SECS,
         };
 
         match self.tokens.write() {
             Ok(mut guard) => {
+                make_room(&mut guard);
                 let prev_len = guard.len();
                 guard.insert(token.clone(), entry);
                 debug!(repo_id = %repo_id, prev_len, new_len = guard.len(), "access token stored");
@@ -85,6 +119,7 @@ impl AccessTokenManager {
             Err(poisoned) => {
                 eprintln!("[access_token] WRITE LOCK POISONED! recovering...");
                 let mut guard = poisoned.into_inner();
+                make_room(&mut guard);
                 guard.insert(token.clone(), entry);
                 debug!(repo_id = %repo_id, "access token stored (after poison recovery)");
             }
@@ -117,18 +152,22 @@ impl AccessTokenManager {
             file_fs_id: Some(file_fs_id.to_string()),
             file_name: Some(file_name.to_string()),
             upload_link_id: None,
+            upload_link_expires_at: None,
             created_at: now,
             expires_at: now + TOKEN_EXPIRE_SECS,
         };
 
         match self.tokens.write() {
             Ok(mut guard) => {
+                make_room(&mut guard);
                 guard.insert(token.clone(), entry);
                 debug!(repo_id = %repo_id, len = guard.len(), "download token stored");
             }
             Err(poisoned) => {
                 eprintln!("[access_token] WRITE LOCK POISONED! recovering...");
-                poisoned.into_inner().insert(token.clone(), entry);
+                let mut guard = poisoned.into_inner();
+                make_room(&mut guard);
+                guard.insert(token.clone(), entry);
             }
         }
 
@@ -169,11 +208,21 @@ impl AccessTokenManager {
         }
     }
 
+    /// Bind an upload token to its upload link. Kept for callers that only know
+    /// the link id; [`Self::set_upload_link`] additionally carries the link's
+    /// expiry.
     pub fn set_upload_link_id(&self, token: &str, link_id: i32) {
+        self.set_upload_link(token, link_id, None);
+    }
+
+    /// Bind an upload token to the link it was minted from and carry the link's
+    /// own expiry. `None` keeps the token's one-hour lifetime.
+    pub fn set_upload_link(&self, token: &str, link_id: i32, expires_at: Option<i64>) {
         if let Ok(mut guard) = self.tokens.write()
             && let Some(entry) = guard.get_mut(token)
         {
             entry.upload_link_id = Some(link_id);
+            entry.upload_link_expires_at = expires_at;
         }
     }
 
@@ -253,5 +302,43 @@ mod tests {
             entry.expires_at = 0;
         }
         assert!(mgr.validate(&token).is_none());
+    }
+
+    /// Minting is reachable from ordinary authenticated GETs, so the map must not
+    /// grow with request count. At the cap, expired entries are dropped before a
+    /// new token is inserted.
+    #[test]
+    fn the_token_table_drops_expired_entries_at_its_cap() {
+        let mgr = AccessTokenManager::new();
+        {
+            let mut guard = mgr.tokens.write().unwrap();
+            for i in 0..MAX_TOKENS {
+                guard.insert(
+                    format!("stale-{i}"),
+                    AccessToken {
+                        token: format!("stale-{i}"),
+                        repo_id: "repo".into(),
+                        user_id: 1,
+                        username: "u@t".into(),
+                        op: "upload".into(),
+                        parent_dir: "/".into(),
+                        file_fs_id: None,
+                        file_name: None,
+                        upload_link_id: None,
+                        upload_link_expires_at: None,
+                        created_at: 0,
+                        expires_at: 0,
+                    },
+                );
+            }
+        }
+        let fresh = mgr.generate("repo1", 1, "u@t.com", "upload", "/");
+        let guard = mgr.tokens.read().unwrap();
+        assert_eq!(
+            guard.len(),
+            1,
+            "the expired entries must be swept instead of growing the table"
+        );
+        assert!(guard.contains_key(&fresh));
     }
 }

@@ -41,10 +41,14 @@ pub struct FileOps;
 
 impl FileOps {
     /// Stream bytes through the CDC chunker, write each block to the
-    /// content-addressed store, and return `(block_ids, total_size,
-    /// new_block_ids)` — the blocks **newly written** by this call, so a caller
-    /// whose quota check fails can clean up only its own blocks (deduped blocks
-    /// are excluded) without holding the file in memory.
+    /// content-addressed store, and return `(block_ids, total_size)`.
+    ///
+    /// `new_block_ids` receives every block this call **newly wrote** (deduped
+    /// blocks are excluded) as soon as its write completes, including when the
+    /// call fails. That is what lets an upload handler delete the blocks of a
+    /// request that died before validation or commit: the error return alone
+    /// cannot carry them, and leaving them to the garbage collector would let a
+    /// caller with no quota charge hold disk for the pending-block TTL.
     ///
     /// `enc_key` encrypts each block with a deterministic IV (matching
     /// `create_file`), yielding `block_id == sha1(encrypted_block)` so Seafile
@@ -57,8 +61,9 @@ impl FileOps {
         store: &DynBlockStorage,
         repo_id: &str,
         enc_key: Option<(&[u8], &[u8])>,
+        new_block_ids: &mut Vec<String>,
         producer: F,
-    ) -> Result<(Vec<String>, i64, Vec<String>), AppError>
+    ) -> Result<(Vec<String>, i64), AppError>
     where
         F: FnOnce(tokio::sync::mpsc::Sender<(usize, Vec<u8>)>) -> Fut,
         Fut: futures::Future<Output = Result<i64, AppError>>,
@@ -115,24 +120,46 @@ impl FileOps {
             .await
         });
 
-        let total_size = producer(tx).await?;
+        let producer_result = producer(tx).await;
 
         let results: Vec<Result<(usize, String, bool), AppError>> = writer
             .await
             .map_err(|e| AppError::Internal(format!("block writer join failed: {e}")))?;
 
         let mut block_ids = Vec::with_capacity(results.len());
-        let mut new_block_ids = Vec::with_capacity(results.len());
+        let mut newly_written = Vec::with_capacity(results.len());
+        let mut writer_error: Option<AppError> = None;
         for r in results {
-            let (idx, block_id, was_new) = r?;
+            let (idx, block_id, was_new) = match r {
+                Ok(v) => v,
+                Err(e) => {
+                    // A later block failed to write; the blocks that did land are
+                    // still reported to the caller below so it can remove them.
+                    if writer_error.is_none() {
+                        writer_error = Some(e);
+                    }
+                    continue;
+                }
+            };
+            if writer_error.is_some() {
+                continue;
+            }
             debug_assert_eq!(idx, block_ids.len(), "buffered preserves input order");
             if was_new {
-                new_block_ids.push(block_id.clone());
+                newly_written.push(block_id.clone());
             }
             block_ids.push(block_id);
         }
 
-        Ok((block_ids, total_size, new_block_ids))
+        // Hand the caller every block this call created, even when it is about to
+        // return an error. This is the request-scoped cleanup list.
+        new_block_ids.extend(newly_written);
+
+        if let Some(error) = writer_error {
+            return Err(error);
+        }
+        let total_size = producer_result?;
+        Ok((block_ids, total_size))
     }
 
     pub async fn write_stream_blocks<S>(
@@ -141,11 +168,12 @@ impl FileOps {
         file_size: usize,
         stream: S,
         enc_key: Option<(&[u8], &[u8])>,
-    ) -> Result<(Vec<String>, i64, Vec<String>), AppError>
+        new_block_ids: &mut Vec<String>,
+    ) -> Result<(Vec<String>, i64), AppError>
     where
         S: futures::Stream<Item = std::io::Result<bytes::Bytes>> + Unpin,
     {
-        Self::feed_cdc(store, repo_id, file_size, enc_key, stream).await
+        Self::feed_cdc(store, repo_id, file_size, enc_key, new_block_ids, stream).await
     }
 
     /// CDC a byte stream whose errors are already [`AppError`]s (multipart fields,
@@ -156,11 +184,12 @@ impl FileOps {
         repo_id: &str,
         stream: S,
         enc_key: Option<(&[u8], &[u8])>,
-    ) -> Result<(Vec<String>, i64, Vec<String>), AppError>
+        new_block_ids: &mut Vec<String>,
+    ) -> Result<(Vec<String>, i64), AppError>
     where
         S: futures::Stream<Item = Result<bytes::Bytes, AppError>> + Unpin,
     {
-        Self::feed_cdc(store, repo_id, 0, enc_key, stream).await
+        Self::feed_cdc(store, repo_id, 0, enc_key, new_block_ids, stream).await
     }
 
     /// Feed `stream` through the CDC chunker into the block writer pipeline.
@@ -173,36 +202,43 @@ impl FileOps {
         repo_id: &str,
         chunker_size: usize,
         enc_key: Option<(&[u8], &[u8])>,
+        new_block_ids: &mut Vec<String>,
         stream: S,
-    ) -> Result<(Vec<String>, i64, Vec<String>), AppError>
+    ) -> Result<(Vec<String>, i64), AppError>
     where
         S: futures::Stream<Item = Result<bytes::Bytes, E>> + Unpin,
         E: Into<AppError>,
     {
         let mut stream = stream;
-        Self::stream_blocks_pipelined(store, repo_id, enc_key, move |tx| async move {
-            let mut chunker = infra::storage::cdc::Chunker::new(chunker_size);
-            let mut total_size: i64 = 0;
-            let mut idx = 0usize;
-            while let Some(chunk) = stream.next().await {
-                let chunk: bytes::Bytes = chunk.map_err(Into::into)?;
-                for blk in chunker.feed(chunk.as_ref()) {
-                    total_size += blk.len() as i64;
-                    tx.send((idx, blk))
+        Self::stream_blocks_pipelined(
+            store,
+            repo_id,
+            enc_key,
+            new_block_ids,
+            move |tx| async move {
+                let mut chunker = infra::storage::cdc::Chunker::new(chunker_size);
+                let mut total_size: i64 = 0;
+                let mut idx = 0usize;
+                while let Some(chunk) = stream.next().await {
+                    let chunk: bytes::Bytes = chunk.map_err(Into::into)?;
+                    for blk in chunker.feed(chunk.as_ref()) {
+                        total_size += blk.len() as i64;
+                        tx.send((idx, blk))
+                            .await
+                            .map_err(|_| AppError::Internal("block writer stopped".into()))?;
+                        idx += 1;
+                    }
+                }
+                let tail = chunker.finish();
+                if !tail.is_empty() {
+                    total_size += tail.len() as i64;
+                    tx.send((idx, tail))
                         .await
                         .map_err(|_| AppError::Internal("block writer stopped".into()))?;
-                    idx += 1;
                 }
-            }
-            let tail = chunker.finish();
-            if !tail.is_empty() {
-                total_size += tail.len() as i64;
-                tx.send((idx, tail))
-                    .await
-                    .map_err(|_| AppError::Internal("block writer stopped".into()))?;
-            }
-            Ok(total_size)
-        })
+                Ok(total_size)
+            },
+        )
         .await
     }
 
@@ -1028,12 +1064,16 @@ mod tests {
         }
 
         let stream = bytes_stream(data.clone(), 8192);
-        let (ids, total, _new_ids) =
-            FileOps::write_stream_blocks(&store, REPO, data.len(), stream, None)
+        let mut new_ids = Vec::new();
+        let (ids, total) =
+            FileOps::write_stream_blocks(&store, REPO, data.len(), stream, None, &mut new_ids)
                 .await
                 .unwrap();
         assert_eq!(ids, expected_ids);
         assert_eq!(total as usize, data.len());
+        // The reference pass above already stored every block, so the streaming
+        // pass deduplicates all of them and reports no newly written ids.
+        assert!(new_ids.is_empty());
     }
 
     /// More blocks than the channel capacity plus the in-flight window (8 + 4),
@@ -1041,17 +1081,23 @@ mod tests {
     #[tokio::test]
     async fn test_stream_blocks_pipelined_many_blocks_in_order() {
         let (_dir, store) = temp_store();
-        let (ids, total, new_ids) =
-            FileOps::stream_blocks_pipelined(&store, REPO, None, move |tx| async move {
+        let mut new_ids = Vec::new();
+        let (ids, total) = FileOps::stream_blocks_pipelined(
+            &store,
+            REPO,
+            None,
+            &mut new_ids,
+            move |tx| async move {
                 for i in 0..12u8 {
                     tx.send((i as usize, vec![i; 128]))
                         .await
                         .map_err(|_| AppError::Internal("block writer stopped".into()))?;
                 }
                 Ok(12i64 * 128)
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(ids.len(), 12);
         assert_eq!(total, 12 * 128);
         assert_eq!(new_ids.len(), 12);
@@ -1071,8 +1117,47 @@ mod tests {
             Ok(bytes::Bytes::from_static(b"hello")),
             Err(std::io::Error::other("boom")),
         ]);
-        let result = FileOps::write_stream_blocks(&store, REPO, 10, stream, None).await;
+        let mut new_ids = Vec::new();
+        let result =
+            FileOps::write_stream_blocks(&store, REPO, 10, stream, None, &mut new_ids).await;
         assert!(result.is_err(), "stream error must propagate");
+    }
+
+    /// A failure after a block has landed must still report that block's id, or
+    /// the handler has no way to delete it (the bug this out-parameter fixes).
+    #[tokio::test]
+    async fn test_a_failed_stream_reports_the_blocks_it_already_wrote() {
+        let (_dir, store) = temp_store();
+        // More than one CDC maximum block, so the chunker emits a finished block
+        // before the producer fails.
+        let data = pseudo_data(11 * 1024 * 1024);
+        let mut new_ids = Vec::new();
+        let result = FileOps::stream_blocks_pipelined(
+            &store,
+            REPO,
+            None,
+            &mut new_ids,
+            move |tx| async move {
+                tx.send((0usize, data))
+                    .await
+                    .map_err(|_| AppError::Internal("block writer stopped".into()))?;
+                Err(AppError::Internal(
+                    "producer failed after a full block".into(),
+                ))
+            },
+        )
+        .await;
+        assert!(result.is_err(), "the producer error must propagate");
+        assert!(
+            !new_ids.is_empty(),
+            "blocks written before the failure must be reported for cleanup"
+        );
+        for id in &new_ids {
+            assert!(
+                store.has_block(REPO, id).await,
+                "reported block {id} must exist so cleanup can delete it"
+            );
+        }
     }
 
     /// The multipart/staged-file ingest and the WebDAV/temp-file path must
@@ -1083,19 +1168,28 @@ mod tests {
         let data = pseudo_data(12 * 1024 * 1024 + 77);
 
         let io_stream = bytes_stream(data.clone(), 65536);
-        let (io_ids, io_total, _) =
-            FileOps::write_stream_blocks(&store, REPO, data.len(), io_stream, None)
-                .await
-                .unwrap();
+        let mut io_new_ids = Vec::new();
+        let (io_ids, io_total) = FileOps::write_stream_blocks(
+            &store,
+            REPO,
+            data.len(),
+            io_stream,
+            None,
+            &mut io_new_ids,
+        )
+        .await
+        .unwrap();
 
         let items: Vec<Result<bytes::Bytes, AppError>> = data
             .chunks(4096)
             .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
             .collect();
         let app_stream = futures::stream::iter(items);
-        let (app_ids, app_total, _) = FileOps::ingest_chunk_stream(&store, REPO, app_stream, None)
-            .await
-            .unwrap();
+        let mut app_new_ids = Vec::new();
+        let (app_ids, app_total) =
+            FileOps::ingest_chunk_stream(&store, REPO, app_stream, None, &mut app_new_ids)
+                .await
+                .unwrap();
 
         assert_eq!(
             io_ids, app_ids,
@@ -1103,5 +1197,13 @@ mod tests {
         );
         assert_eq!(io_total, app_total);
         assert_eq!(io_total as usize, data.len());
+        // Deduplicated blocks are not "new" on the second pass: the first ingest
+        // wrote every block, so the second reports none and yet both see the same
+        // content ids.
+        assert_eq!(io_new_ids.len(), io_ids.len());
+        assert!(
+            app_new_ids.is_empty(),
+            "both passes store the same bytes, so the second writes nothing new"
+        );
     }
 }

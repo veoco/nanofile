@@ -947,3 +947,76 @@ async fn v1_file_upload_streams_and_rejects_chunks() {
         .unwrap();
     assert_eq!(resp.status(), 400, "a missing boundary must be a 400");
 }
+
+/// Number of block files stored for one repository (the repo marker excluded).
+///
+/// The upload guard deletes a failed request's blocks asynchronously, so tests
+/// poll this until the count settles.
+fn block_file_count(block_root: &std::path::Path, repo_id: &str) -> usize {
+    fn count(dir: &std::path::Path) -> usize {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        let mut files = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files += count(&path);
+            } else if entry.file_name() != ".repo_id" {
+                files += 1;
+            }
+        }
+        files
+    }
+    let repo_dir = block_root
+        .join(infra::storage::block_store::REPOS_DIR)
+        .join(infra::crypto::fs_id::sha1_hex(repo_id.as_bytes()));
+    count(&repo_dir)
+}
+
+/// A request rejected *after* its file part was streamed into the block store
+/// (here: a `relative_path` that escapes the library) must not leave those
+/// blocks behind. They used to stay unreferenced until the 48-hour pending-block
+/// sweep, so an upload-link holder could fill the data disk with requests that
+/// never commit.
+#[tokio::test]
+async fn a_rejected_target_does_not_leave_streamed_blocks() {
+    let f = TestFixture::new().await;
+    let url = upload_link(&f, "/", false).await;
+    let before = block_file_count(&f.server.block_dir, &f.repo_id);
+
+    // Long enough to produce at least one CDC block, so the guard has something
+    // real to delete.
+    let payload = vec![0xA5u8; 2 * 1024 * 1024];
+    let resp = f
+        .client
+        .post_multipart_url(
+            &url,
+            form(
+                &[("parent_dir", "/"), ("relative_path", "../../escape")],
+                &[("escape.bin", &payload)],
+            ),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "an escaping relative_path must be rejected"
+    );
+
+    // Cleanup runs in a spawned task after the response; give it a moment to
+    // finish rather than sleeping a fixed time.
+    let mut after = block_file_count(&f.server.block_dir, &f.repo_id);
+    for _ in 0..60 {
+        if after <= before {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        after = block_file_count(&f.server.block_dir, &f.repo_id);
+    }
+    assert!(
+        after <= before,
+        "a failed upload left {} unreferenced block(s) behind",
+        after - before
+    );
+}

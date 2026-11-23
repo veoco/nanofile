@@ -1,4 +1,4 @@
-﻿//! Upload endpoints: multipart intake, CDC ingest, commit and reply framing.
+//! Upload endpoints: multipart intake, CDC ingest, commit and reply framing.
 //!
 //! The pipeline is `read_parts` (streaming, staged, chunked or block intake)
 //! 鈫?target resolution (`resolve_create_target` / `resolve_existing_target`)
@@ -20,6 +20,99 @@ use crate::handler::{MAX_BLOCK_UPLOAD_BYTES, MAX_SMALL_BODY_BYTES, ok_json};
 use crate::service::sharing::link as upload_link_service;
 use crate::ui::auth_extractor::WebUser;
 use base::error::AppError;
+
+/// Delete blocks an upload request wrote but never committed, and drop any quota
+/// reservation the request took for them.
+///
+/// `cleanup_uncommitted_blocks` re-checks whether a live file references each id,
+/// so a block committed by a concurrent identical upload survives. Blocks are
+/// content-addressed, so deleting an id that a *concurrent* upload wrote but has
+/// not committed yet can only make that upload retry (446) — never corrupt data.
+pub(crate) async fn cleanup_block_ids(
+    state: &AppState,
+    repo_id: &str,
+    ids: &[String],
+    release_reservations: bool,
+) {
+    if ids.is_empty() {
+        return;
+    }
+    if release_reservations {
+        crate::service::fs::quota::release_blocks(&state.repos, repo_id, ids).await;
+    }
+    state
+        .file_service()
+        .cleanup_uncommitted_blocks(repo_id, ids)
+        .await;
+}
+
+/// Request-scoped cleanup for blocks an upload wrote before its target was
+/// validated or committed.
+///
+/// The upload pipeline streams file parts into the block store before the target
+/// path/name is known (the token endpoints receive both in the same multipart
+/// body, and a client may send the file part first), and a failure anywhere after
+/// that used to leave the blocks unreferenced until the pending-block TTL — 48
+/// hours by default. An anonymous upload-link holder could therefore fill the
+/// data disk with requests that never commit.
+///
+/// Every upload handler creates this guard right after parsing the body and
+/// disarms it only after a successful commit. Dropping it while still armed
+/// schedules the cleanup; `tokio::spawn` is deliberate, because `Drop` cannot
+/// await. If the runtime is shutting down the spawn may not run, and the durable
+/// pending-block ledger is the backstop it was designed to be.
+pub(crate) struct UncommittedBlocks {
+    state: Arc<AppState>,
+    repo_id: String,
+    ids: Vec<String>,
+    /// Block-API writes reserve quota per block; streamed uploads do not, so the
+    /// guard must not release a reservation it never took (the reservation table
+    /// is keyed by block, and a mismatched release would free another upload's).
+    release_reservations: bool,
+    armed: bool,
+}
+
+impl UncommittedBlocks {
+    pub(crate) fn new(
+        state: Arc<AppState>,
+        repo_id: impl Into<String>,
+        ids: Vec<String>,
+        release_reservations: bool,
+    ) -> Self {
+        Self {
+            state,
+            repo_id: repo_id.into(),
+            ids,
+            release_reservations,
+            armed: true,
+        }
+    }
+
+    /// Add blocks written by a later stage of the same request.
+    fn extend(&mut self, ids: impl IntoIterator<Item = String>) {
+        self.ids.extend(ids);
+    }
+
+    /// The request committed; its blocks are referenced by HEAD now.
+    pub(crate) fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for UncommittedBlocks {
+    fn drop(&mut self) {
+        if !self.armed || self.ids.is_empty() {
+            return;
+        }
+        let state = self.state.clone();
+        let repo_id = std::mem::take(&mut self.repo_id);
+        let ids = std::mem::take(&mut self.ids);
+        let release_reservations = self.release_reservations;
+        tokio::spawn(async move {
+            cleanup_block_ids(&state, &repo_id, &ids, release_reservations).await;
+        });
+    }
+}
 
 /// Compute the actual target directory from the base `parent_dir` and an
 /// optional `relative_path` (e.g. `"myfolder/sub/"` from a folder upload).
@@ -164,6 +257,15 @@ impl AuthContext {
                 kind.op()
             )));
         }
+        // An upload-link token must not outlive the link it was minted from: the
+        // token's own TTL is one hour, while the link may expire (or have been
+        // shortened) before that. The deadline is captured at mint time, so this
+        // needs no extra query on the upload path.
+        if let Some(expires_at) = token.upload_link_expires_at
+            && chrono::Utc::now().timestamp() > expires_at
+        {
+            return Err(AppError::BadRequest("upload link has expired".into()));
+        }
         crate::domain::permission::check_repo_write_permission(
             state.repos.member.as_ref(),
             &token.repo_id,
@@ -219,6 +321,25 @@ impl AuthContext {
         self.enc_key
             .as_ref()
             .map(|(key, iv)| (key.as_slice(), iv.as_slice()))
+    }
+
+    /// Scope that isolates this caller's resumable-upload temp files.
+    ///
+    /// An upload-link token is its own scope: the token id alone would let two
+    /// visitors of the same link (or a re-minted token) collide on one temp file,
+    /// so the raw token is folded in through a short SHA-1 prefix. Every other
+    /// credential (regular token or browser session) collapses to its user, which
+    /// is what makes a resumed upload find its own earlier chunks.
+    pub(crate) fn temp_scope(&self) -> String {
+        if let Some(token) = &self.token
+            && let Some(link_id) = token.upload_link_id
+        {
+            return format!(
+                "link:{link_id}:{}",
+                &infra::crypto::fs_id::sha1_hex(token.token.as_bytes())[..16]
+            );
+        }
+        format!("user:{}", self.user_id)
     }
 
     /// The minted token; only token-authenticated endpoints call this.
@@ -489,10 +610,11 @@ fn map_temp_error(e: std::io::Error) -> AppError {
 async fn finish_resumable(
     temp_mgr: &crate::handler::web::temp_file::TempFileManager,
     state: &AppState,
+    scope: &str,
     repo_id: &str,
     file_path: &str,
 ) {
-    if let Some((owner, upload_id)) = temp_mgr.finish(repo_id, file_path).await
+    if let Some((owner, upload_id)) = temp_mgr.finish(scope, repo_id, file_path).await
         && let Some(uid) = owner
     {
         crate::service::fs::quota::release_upload(
@@ -537,6 +659,9 @@ async fn try_handle_chunked(
     };
     let temp_mgr = &state.temp_file_manager;
     let repo_id = auth.repo_id.as_str();
+    // Every temp-file operation of this request uses the same credential scope,
+    // so two callers targeting the same repo/path never touch each other's upload.
+    let scope = auth.temp_scope();
     let modifier = auth.modifier.as_str();
     let user_id = Some(auth.user_id);
     let enc_key = auth.enc_key_ref();
@@ -572,11 +697,11 @@ async fn try_handle_chunked(
         .map_err(|e| AppError::BadRequest(format!("invalid path: {e}")))?;
 
     temp_mgr
-        .get_or_create(repo_id, &file_path, file_size)
+        .get_or_create(&scope, repo_id, &file_path, file_size)
         .await
         .map_err(map_temp_error)?;
     if let Some(uid) = user_id {
-        temp_mgr.bind_owner(repo_id, &file_path, uid).await;
+        temp_mgr.bind_owner(&scope, repo_id, &file_path, uid).await;
     }
 
     // Reserve (not just compare) the declared size so an upload abandoned before
@@ -584,7 +709,7 @@ async fn try_handle_chunked(
     // a retried first chunk idempotent; the reservation is released on commit,
     // abort, or stale reaping.
     if start == 0 && user_id.is_some() {
-        let Some(upload_id) = temp_mgr.upload_id(repo_id, &file_path).await else {
+        let Some(upload_id) = temp_mgr.upload_id(&scope, repo_id, &file_path).await else {
             return Err(AppError::Internal("temp upload disappeared".into()));
         };
         crate::service::fs::quota::reserve_upload_bytes(
@@ -598,7 +723,7 @@ async fn try_handle_chunked(
     }
 
     temp_mgr
-        .write_chunk(repo_id, &file_path, start, file_data.clone())
+        .write_chunk(&scope, repo_id, &file_path, start, file_data.clone())
         .await
         .map_err(map_temp_error)?;
 
@@ -608,7 +733,14 @@ async fn try_handle_chunked(
     // stream hashes plaintext (`sha1(blk)`), but they must store `sha1(ciphertext)`.
     if enc_key.is_none() {
         let _ = temp_mgr
-            .feed_stream(&state.block_store, repo_id, &file_path, start, &file_data)
+            .feed_stream(
+                &state.block_store,
+                &scope,
+                repo_id,
+                &file_path,
+                start,
+                &file_data,
+            )
             .await;
     }
 
@@ -619,7 +751,7 @@ async fn try_handle_chunked(
     // Fast path: a fully in-order upload already has its block ids persisted,
     // so commit directly and skip the temp-file re-read.
     if let Some((block_ids, total_size, new_block_ids)) = temp_mgr
-        .take_streamed_blocks(&state.block_store, repo_id, &file_path, file_size)
+        .take_streamed_blocks(&state.block_store, &scope, repo_id, &file_path, file_size)
         .await
     {
         let committed = commit_file(
@@ -642,15 +774,24 @@ async fn try_handle_chunked(
         let committed = match committed {
             Ok(v) => v,
             Err(e) => {
-                if matches!(e, AppError::QuotaExceeded) {
-                    temp_mgr
-                        .abort(&state.repos, repo_id, &file_path, &state.block_store)
-                        .await;
-                }
+                // Any failed commit leaves the temp upload's blocks uncommitted;
+                // abort removes the temp file, deletes the blocks this upload wrote
+                // (referenced ones are kept) and releases its reservation. Doing
+                // this only for quota failures let every other error hold the disk
+                // until the stale-upload reaper.
+                temp_mgr
+                    .abort(
+                        &state.repos,
+                        &scope,
+                        repo_id,
+                        &file_path,
+                        &state.block_store,
+                    )
+                    .await;
                 return Err(e);
             }
         };
-        finish_resumable(temp_mgr, state, repo_id, &file_path).await;
+        finish_resumable(temp_mgr, state, &scope, repo_id, &file_path).await;
         return Ok(Some(ChunkResult::Committed {
             id: committed.id,
             name: committed.name,
@@ -660,33 +801,67 @@ async fn try_handle_chunked(
 
     // Fallback path: stream the temp file through the CDC chunker so the whole
     // file is never buffered in memory, then commit the resulting block ids.
-    let Some(stream) = temp_mgr.read_stream(repo_id, &file_path).await else {
+    let Some(stream) = temp_mgr.read_stream(&scope, repo_id, &file_path).await else {
         temp_mgr
-            .abort(&state.repos, repo_id, &file_path, &state.block_store)
+            .abort(
+                &state.repos,
+                &scope,
+                repo_id,
+                &file_path,
+                &state.block_store,
+            )
             .await;
         return Err(AppError::Internal(
             "failed to open assembled temp file".into(),
         ));
     };
 
-    let (block_ids, total_size, new_block_ids) = crate::fs::core::FileOps::write_stream_blocks(
+    // The out-parameter reports blocks written even when the stream fails, so a
+    // failed assembly can hand them to `abort` instead of leaving them to GC.
+    let mut new_block_ids = Vec::new();
+    let streamed = crate::fs::core::FileOps::write_stream_blocks(
         &state.block_store,
         repo_id,
         file_size as usize,
         stream,
         enc_key,
+        &mut new_block_ids,
     )
-    .await?;
+    .await;
+    let (block_ids, total_size) = match streamed {
+        Ok(v) => v,
+        Err(e) => {
+            temp_mgr
+                .record_new_blocks(&scope, repo_id, &file_path, &new_block_ids)
+                .await;
+            temp_mgr
+                .abort(
+                    &state.repos,
+                    &scope,
+                    repo_id,
+                    &file_path,
+                    &state.block_store,
+                )
+                .await;
+            return Err(e);
+        }
+    };
 
     // Track written blocks so an abort or stale cleanup can delete them.
     temp_mgr
-        .record_new_blocks(repo_id, &file_path, &new_block_ids)
+        .record_new_blocks(&scope, repo_id, &file_path, &new_block_ids)
         .await;
 
     // The streamed total must match the declared file size.
     if total_size as u64 != file_size {
         temp_mgr
-            .abort(&state.repos, repo_id, &file_path, &state.block_store)
+            .abort(
+                &state.repos,
+                &scope,
+                repo_id,
+                &file_path,
+                &state.block_store,
+            )
             .await;
         return Err(AppError::Internal(format!(
             "assembled file size {total_size} does not match expected {file_size}"
@@ -713,16 +888,21 @@ async fn try_handle_chunked(
     let committed = match committed {
         Ok(v) => v,
         Err(e) => {
-            if matches!(e, AppError::QuotaExceeded) {
-                temp_mgr
-                    .abort(&state.repos, repo_id, &file_path, &state.block_store)
-                    .await;
-            }
+            // As in the fast path: every failed commit aborts the temp upload.
+            temp_mgr
+                .abort(
+                    &state.repos,
+                    &scope,
+                    repo_id,
+                    &file_path,
+                    &state.block_store,
+                )
+                .await;
             return Err(e);
         }
     };
 
-    finish_resumable(temp_mgr, state, repo_id, &file_path).await;
+    finish_resumable(temp_mgr, state, &scope, repo_id, &file_path).await;
 
     Ok(Some(ChunkResult::Committed {
         id: committed.id,
@@ -763,9 +943,26 @@ pub async fn upload_aj(
         parts.fields.get("csrf_token").map(String::as_str),
     )
     .await?;
-    finish_create(&state, &auth, parts, &target, range, ReplyStyle::Array)
-        .await
-        .map(|finished| finished.response)
+    // Everything parsed so far is staged, not ingested, but a chunked request
+    // can already have written blocks; the guard is the request's cleanup list.
+    let mut guard = UncommittedBlocks::new(
+        state.clone(),
+        auth.repo_id.clone(),
+        parts.written_block_ids(),
+        false,
+    );
+    let finished = finish_create(
+        &state,
+        &auth,
+        parts,
+        &target,
+        range,
+        ReplyStyle::Array,
+        &mut guard,
+    )
+    .await?;
+    guard.disarm();
+    Ok(finished.response)
 }
 
 /// How the final commit names files: uploads take names from the parts, updates
@@ -793,11 +990,15 @@ struct Finished {
 }
 
 /// Run the shared tail: chunk handling, CDC ingest, commit and reply framing.
+///
+/// `guard` owns the blocks this request wrote before the local validation; the
+/// caller disarms it only when a commit succeeded.
 async fn finish_request(
     state: &AppState,
     auth: &AuthContext,
     parts: Parts,
     req: FinishRequest<'_>,
+    guard: &mut UncommittedBlocks,
 ) -> Result<Finished, AppError> {
     let FinishRequest {
         dir,
@@ -843,13 +1044,8 @@ async fn finish_request(
     if parts.files.is_empty() {
         return Err(AppError::BadRequest("No file in multipart form".into()));
     }
-    let mut files = ingest_parts(
-        parts.files,
-        state.block_store.clone(),
-        &auth.repo_id,
-        auth.enc_key_ref(),
-    )
-    .await?;
+    let mut files =
+        ingest_parts(state, &auth.repo_id, parts.files, auth.enc_key_ref(), guard).await?;
 
     match target {
         CommitTarget::Existing(name) => {
@@ -937,6 +1133,7 @@ async fn finish_create(
     target: &CreateTarget,
     range: Option<&str>,
     style: ReplyStyle,
+    guard: &mut UncommittedBlocks,
 ) -> Result<Finished, AppError> {
     finish_request(
         state,
@@ -949,6 +1146,7 @@ async fn finish_create(
             range,
             style,
         },
+        guard,
     )
     .await
 }
@@ -961,6 +1159,7 @@ async fn finish_existing(
     target: &ExistingTarget,
     range: Option<&str>,
     style: ReplyStyle,
+    guard: &mut UncommittedBlocks,
 ) -> Result<Finished, AppError> {
     finish_request(
         state,
@@ -973,6 +1172,7 @@ async fn finish_existing(
             range,
             style,
         },
+        guard,
     )
     .await
 }
@@ -1075,11 +1275,15 @@ impl PartFile {
     }
 
     /// Turn a part into an ingested file, running the CDC pass for a staged one.
+    ///
+    /// `written` collects the blocks this pass created even when it fails, so the
+    /// caller's request guard can delete them.
     async fn into_uploaded(
         self,
         store: infra::storage::DynBlockStorage,
         repo_id: &str,
         enc_key: Option<(&[u8], &[u8])>,
+        written: &mut Vec<String>,
     ) -> Result<UploadedFile, AppError> {
         match self {
             PartFile::Ingested(file) => Ok(file),
@@ -1087,8 +1291,17 @@ impl PartFile {
                 let Some(path) = staged.path() else {
                     return Err(AppError::BadRequest("No file in multipart form".into()));
                 };
-                let (block_ids, total_size, new_block_ids) =
-                    ingest_staged_file(store, repo_id, path.to_path_buf(), enc_key).await?;
+                let mut new_block_ids = Vec::new();
+                let streamed = ingest_staged_file(
+                    store,
+                    repo_id,
+                    path.to_path_buf(),
+                    enc_key,
+                    &mut new_block_ids,
+                )
+                .await;
+                written.extend(new_block_ids.iter().cloned());
+                let (block_ids, total_size) = streamed?;
                 Ok(UploadedFile {
                     filename,
                     block_ids,
@@ -1102,15 +1315,25 @@ impl PartFile {
 }
 
 /// Turn every part of a parsed request into an ingested file.
+///
+/// A failure halfway through adds the already-written staged blocks to the
+/// request guard before returning, so they are cleaned up like any other.
 async fn ingest_parts(
-    parts: Vec<PartFile>,
-    store: infra::storage::DynBlockStorage,
+    state: &AppState,
     repo_id: &str,
+    parts: Vec<PartFile>,
     enc_key: Option<(&[u8], &[u8])>,
+    guard: &mut UncommittedBlocks,
 ) -> Result<Vec<UploadedFile>, AppError> {
+    let store = state.block_store.clone();
     let mut files = Vec::with_capacity(parts.len());
     for part in parts {
-        files.push(part.into_uploaded(store.clone(), repo_id, enc_key).await?);
+        let mut written = Vec::new();
+        let ingested = part
+            .into_uploaded(store.clone(), repo_id, enc_key, &mut written)
+            .await;
+        guard.extend(written);
+        files.push(ingested?);
     }
     Ok(files)
 }
@@ -1151,6 +1374,23 @@ pub(crate) struct Parts {
     has_file: bool,
 }
 
+impl Parts {
+    /// Every block this request has already written into the store (streamed
+    /// file parts and block-API parts). The chunks and staged modes write nothing
+    /// at parse time; staged parts are ingested later, after authorization.
+    fn written_block_ids(&self) -> Vec<String> {
+        self.files
+            .iter()
+            .filter_map(|part| match part {
+                PartFile::Ingested(file) => Some(file.new_block_ids.iter().cloned()),
+                PartFile::Staged { .. } => None,
+            })
+            .flatten()
+            .chain(self.blocks.iter().cloned())
+            .collect()
+    }
+}
+
 /// Read the multipart body in one of the four intake modes.
 ///
 /// `max_files` is 1 for the update endpoints (a second part answers
@@ -1162,6 +1402,32 @@ pub(crate) async fn read_parts(
     body: axum::body::Body,
     headers: &HeaderMap,
     max_files: usize,
+) -> Result<Parts, AppError> {
+    // Created blocks are tracked here so a body that dies halfway (client
+    // disconnect, invalid field, oversized part) does not leave them to the
+    // pending-block TTL. `Blocks` reservations are released too; the streamed
+    // modes never reserve per block.
+    let repo_id = match &mode {
+        IntakeMode::Stream { repo_id, .. } | IntakeMode::Blocks { repo_id, .. } => repo_id.clone(),
+        IntakeMode::Stage { .. } | IntakeMode::Chunk { .. } => String::new(),
+    };
+    let release_reservations = matches!(&mode, IntakeMode::Blocks { .. });
+    let mut written: Vec<String> = Vec::new();
+
+    let result = read_parts_inner(state, mode, body, headers, max_files, &mut written).await;
+    if result.is_err() {
+        cleanup_block_ids(state, &repo_id, &written, release_reservations).await;
+    }
+    result
+}
+
+async fn read_parts_inner(
+    state: &AppState,
+    mode: IntakeMode,
+    body: axum::body::Body,
+    headers: &HeaderMap,
+    max_files: usize,
+    written: &mut Vec<String>,
 ) -> Result<Parts, AppError> {
     let boundary = extract_multipart_boundary(headers)?;
     let mut multipart = multer::Multipart::new(body.into_data_stream(), boundary);
@@ -1221,8 +1487,18 @@ pub(crate) async fn read_parts(
                 repo_id, enc_key, ..
             } => {
                 let key = enc_key.as_ref().map(|(k, i)| (k.as_slice(), i.as_slice()));
-                let (block_ids, total_size, new_block_ids) =
-                    stream_file_into_blocks(state.block_store.clone(), repo_id, field, key).await?;
+                let mut new_block_ids = Vec::new();
+                let streamed = stream_file_into_blocks(
+                    state.block_store.clone(),
+                    repo_id,
+                    field,
+                    key,
+                    &mut new_block_ids,
+                )
+                .await;
+                // Whatever landed is cleanup material even if the field failed.
+                written.extend(new_block_ids.iter().cloned());
+                let (block_ids, total_size) = streamed?;
                 parts.files.push(PartFile::Ingested(UploadedFile {
                     filename,
                     block_ids,
@@ -1242,6 +1518,7 @@ pub(crate) async fn read_parts(
                     )
                     .await?
                 {
+                    written.push(block_id.clone());
                     parts.blocks.push(block_id);
                 }
             }
@@ -1290,13 +1567,15 @@ async fn stream_file_into_blocks(
     repo_id: &str,
     field: multer::Field<'_>,
     enc_key: Option<(&[u8], &[u8])>,
-) -> Result<(Vec<String>, i64, Vec<String>), AppError> {
+    new_block_ids: &mut Vec<String>,
+) -> Result<(Vec<String>, i64), AppError> {
     use futures::StreamExt;
 
     let stream: ChunkStream<'_> = Box::pin(
         field.map(|chunk| chunk.map_err(|e| AppError::Internal(format!("file read error: {e}")))),
     );
-    crate::fs::core::FileOps::ingest_chunk_stream(&store, repo_id, stream, enc_key).await
+    crate::fs::core::FileOps::ingest_chunk_stream(&store, repo_id, stream, enc_key, new_block_ids)
+        .await
 }
 
 /// CDC a staged file into the block store (called only after authorization).
@@ -1305,7 +1584,8 @@ async fn ingest_staged_file(
     repo_id: &str,
     path: std::path::PathBuf,
     enc_key: Option<(&[u8], &[u8])>,
-) -> Result<(Vec<String>, i64, Vec<String>), AppError> {
+    new_block_ids: &mut Vec<String>,
+) -> Result<(Vec<String>, i64), AppError> {
     use futures::StreamExt;
 
     let file = tokio::fs::File::open(&path)
@@ -1315,7 +1595,8 @@ async fn ingest_staged_file(
         tokio_util::io::ReaderStream::new(file)
             .map(|chunk| chunk.map_err(|e| AppError::Internal(format!("read staged file: {e}")))),
     );
-    crate::fs::core::FileOps::ingest_chunk_stream(&store, repo_id, stream, enc_key).await
+    crate::fs::core::FileOps::ingest_chunk_stream(&store, repo_id, stream, enc_key, new_block_ids)
+        .await
 }
 
 /// A multipart file staged on disk before authorization.
@@ -1566,9 +1847,24 @@ pub async fn update_api(
     let target = resolve_existing_target(None, &file_path, "")?;
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
-    finish_existing(&state, &auth, parts, &target, range, ReplyStyle::Array)
-        .await
-        .map(|finished| finished.response)
+    let mut guard = UncommittedBlocks::new(
+        state.clone(),
+        auth.repo_id.clone(),
+        parts.written_block_ids(),
+        false,
+    );
+    let finished = finish_existing(
+        &state,
+        &auth,
+        parts,
+        &target,
+        range,
+        ReplyStyle::Array,
+        &mut guard,
+    )
+    .await?;
+    guard.disarm();
+    Ok(finished.response)
 }
 
 /// `POST /update-aj/` 鈥?AJAX file update from the Seahub web UI (no token),
@@ -1605,9 +1901,24 @@ pub async fn update_aj(
     let target = resolve_existing_target(None, target_file, "")?;
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
-    finish_existing(&state, &auth, parts, &target, range, ReplyStyle::Array)
-        .await
-        .map(|finished| finished.response)
+    let mut guard = UncommittedBlocks::new(
+        state.clone(),
+        auth.repo_id.clone(),
+        parts.written_block_ids(),
+        false,
+    );
+    let finished = finish_existing(
+        &state,
+        &auth,
+        parts,
+        &target,
+        range,
+        ReplyStyle::Array,
+        &mut guard,
+    )
+    .await?;
+    guard.disarm();
+    Ok(finished.response)
 }
 
 /// `POST /upload-aj/{token}` 鈥?upload with an upload-link token, as sent by the
@@ -1633,9 +1944,27 @@ pub async fn upload_aj_token(
     // instead of answering 400. The token's directory is still clamped, never
     // widened.
     let query = query_params(&uri);
+    // Created before target resolution: a malformed parent_dir or name must not
+    // leave the streamed blocks behind.
+    let mut guard = UncommittedBlocks::new(
+        state.clone(),
+        auth.repo_id.clone(),
+        parts.written_block_ids(),
+        false,
+    );
     let target = create_target(Some(auth.token()), &parts.fields, &query)?;
 
-    let finished = finish_create(&state, &auth, parts, &target, range, ReplyStyle::Array).await?;
+    let finished = finish_create(
+        &state,
+        &auth,
+        parts,
+        &target,
+        range,
+        ReplyStyle::Array,
+        &mut guard,
+    )
+    .await?;
+    guard.disarm();
 
     // The view counter only fires for a whole-file commit: the chunked branch
     // returned before it before the tail was shared.
@@ -1670,21 +1999,29 @@ pub async fn upload_api(
 
     // Like the `-aj` token form, a missing `parent_dir` means the directory the
     // link was minted for; the desktop client sends it, older bodies may not.
+    let mut guard = UncommittedBlocks::new(
+        state.clone(),
+        auth.repo_id.clone(),
+        parts.written_block_ids(),
+        false,
+    );
     let target = create_target(Some(auth.token()), &parts.fields, &query)?;
     // Only `/upload-api` honours `ret-json`; official Android/desktop clients
     // read the plain-text body as the file id, so the default stays plain text.
     let ret_json = wants_ret_json(&query, &parts.fields);
 
-    finish_create(
+    let finished = finish_create(
         &state,
         &auth,
         parts,
         &target,
         range,
         ReplyStyle::PlainOrJson { ret_json },
+        &mut guard,
     )
-    .await
-    .map(|finished| finished.response)
+    .await?;
+    guard.disarm();
+    Ok(finished.response)
 }
 
 /// `POST /update-api/{token}` 鈥?token-authenticated file overwrite for the
@@ -1721,19 +2058,27 @@ pub async fn update_api_handler(
 
     // Scoped for consistency: an update token never carries `upload_link_id`
     // today, but this keeps the link-directory clamp if one ever does.
+    let mut guard = UncommittedBlocks::new(
+        state.clone(),
+        auth.repo_id.clone(),
+        parts.written_block_ids(),
+        false,
+    );
     let target = resolve_existing_target(Some(auth.token()), target_file, &relative_path)?;
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
-    finish_existing(
+    let finished = finish_existing(
         &state,
         &auth,
         parts,
         &target,
         range,
         ReplyStyle::PlainOrJson { ret_json },
+        &mut guard,
     )
-    .await
-    .map(|finished| finished.response)
+    .await?;
+    guard.disarm();
+    Ok(finished.response)
 }
 
 /// `POST /update-aj/{token}` 鈥?token-based AJAX file update from the Seahub web
@@ -1762,12 +2107,27 @@ pub async fn update_aj_token(
     // Scoped like every other token upload: an update token never carries
     // `upload_link_id` today, but this keeps the link-directory clamp if one
     // ever does (and matches `update_api_handler`).
+    let mut guard = UncommittedBlocks::new(
+        state.clone(),
+        auth.repo_id.clone(),
+        parts.written_block_ids(),
+        false,
+    );
     let target = resolve_existing_target(Some(auth.token()), target_file, &relative_path)?;
     require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
 
-    finish_existing(&state, &auth, parts, &target, range, ReplyStyle::Array)
-        .await
-        .map(|finished| finished.response)
+    let finished = finish_existing(
+        &state,
+        &auth,
+        parts,
+        &target,
+        range,
+        ReplyStyle::Array,
+        &mut guard,
+    )
+    .await?;
+    guard.disarm();
+    Ok(finished.response)
 }
 
 /// The commit-phase fields of a block upload.
@@ -2038,12 +2398,7 @@ pub async fn upload_blks_api(
     let query = query_params(&request.uri);
     let (info, owner) = block_auth(&state, &token).await?;
 
-    let Parts {
-        fields,
-        blocks: new_block_ids,
-        has_file,
-        ..
-    } = read_parts(
+    let parts = read_parts(
         &state,
         IntakeMode::Blocks {
             repo_id: info.repo_id.clone(),
@@ -2054,6 +2409,17 @@ pub async fn upload_blks_api(
         usize::MAX,
     )
     .await?;
+    // Block writes reserve quota per block, so the guard releases reservations as
+    // well as deleting blocks when the request fails before a commit references
+    // them.
+    let written = parts.written_block_ids();
+    let mut guard = UncommittedBlocks::new(state.clone(), info.repo_id.clone(), written, true);
+    let Parts {
+        fields,
+        blocks: new_block_ids,
+        has_file,
+        ..
+    } = parts;
 
     let commit_only = fields.contains_key("commitonly") || query.contains_key("commitonly");
     if !commit_only && !has_file {
@@ -2072,7 +2438,7 @@ pub async fn upload_blks_api(
             file_size,
         } = BlockCommitForm::parse(&fields)?;
 
-        return commit_blocks(
+        let response = commit_blocks(
             &state,
             &info,
             &fields,
@@ -2082,8 +2448,16 @@ pub async fn upload_blks_api(
             new_block_ids,
         )
         .await;
+        if response.is_ok() {
+            guard.disarm();
+        }
+        return response;
     }
 
+    // A block-only upload is the first half of a two-request protocol: those
+    // blocks are meant to stay pending for the later `commitonly` request, so the
+    // cleanup guard must not delete them.
+    guard.disarm();
     Ok(ok_json().into_response())
 }
 

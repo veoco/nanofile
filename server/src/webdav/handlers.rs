@@ -207,21 +207,36 @@ async fn put_handler(
         .into_data_stream()
         .map_err(|e| std::io::Error::other(format!("WebDAV PUT body read failed: {e}")));
 
-    let (block_ids, total_size, new_block_ids) = match FileOps::write_stream_blocks(
+    let mut written = Vec::new();
+    let streamed = FileOps::write_stream_blocks(
         &state.block_store,
         &auth.repo_id,
         content_length,
         stream,
         None,
+        &mut written,
     )
-    .await
-    {
+    .await;
+    let (block_ids, total_size) = match streamed {
         Ok(v) => v,
         Err(e) => {
+            // Blocks that landed before the body failed are not referenced by
+            // anything: drop them now instead of leaving them to the
+            // pending-block TTL.
+            crate::handler::web::upload::cleanup_block_ids(state, &auth.repo_id, &written, false)
+                .await;
             tracing::warn!("WebDAV PUT block write failed for {path}: {e}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+    // A failed commit leaves the streamed blocks unreferenced; the guard removes
+    // them when this function returns (it is disarmed only on success).
+    let mut guard = crate::handler::web::upload::UncommittedBlocks::new(
+        state.clone(),
+        auth.repo_id.clone(),
+        written,
+        false,
+    );
 
     match state
         .file_service()
@@ -239,11 +254,12 @@ async fn put_handler(
             // before the commit, so a concurrent create would otherwise turn this
             // PUT into an auto-renamed copy (`name (1).ext`) instead of an overwrite.
             true,
-            new_block_ids,
+            Vec::new(),
         )
         .await
     {
         Ok(_) => {
+            guard.disarm();
             if existed {
                 StatusCode::NO_CONTENT.into_response()
             } else {

@@ -26,7 +26,9 @@ pub struct TempFileManager {
 /// Active temp uploads plus their declared sizes, both under one write lock so
 /// the reserved-bytes quota is enforced atomically with the entry map.
 struct ActiveUploads {
-    entries: HashMap<(String, String), TempFileEntry>,
+    /// Keyed by `(scope, repo_id, file_path)`: two credentials uploading the same
+    /// path in the same library must never share a temp file or an entry.
+    entries: HashMap<(String, String, String), TempFileEntry>,
     reserved_bytes: u64,
 }
 
@@ -99,6 +101,20 @@ pub enum FeedOutcome {
 /// used as a path segment; hashing keeps uploads separated without path semantics.
 fn repo_dir_name(repo_id: &str) -> String {
     infra::crypto::fs_id::sha1_hex(repo_id.as_bytes())
+}
+
+/// Composite key of an in-progress upload: credential scope, repo and path.
+///
+/// The scope keeps two different credentials (two users, or two upload-link
+/// visitors minted from the same link) apart even when they target the same
+/// repo and path; without it the second caller would be handed the first one's
+/// temp file and the two uploads would corrupt each other.
+fn entry_key(scope: &str, repo_id: &str, file_path: &str) -> (String, String, String) {
+    (
+        scope.to_string(),
+        repo_id.to_string(),
+        file_path.to_string(),
+    )
 }
 
 /// Delete blocks an abandoned upload wrote and no commit references.
@@ -176,11 +192,12 @@ impl TempFileManager {
     /// cannot pile up unbounded temp files or entries by starting abandoned uploads.
     pub async fn get_or_create(
         &self,
+        scope: &str,
         repo_id: &str,
         file_path: &str,
         file_size: u64,
     ) -> std::io::Result<PathBuf> {
-        let key = (repo_id.to_string(), file_path.to_string());
+        let key = entry_key(scope, repo_id, file_path);
         let mut guard = self.inner.active.write().await;
 
         if let Some(entry) = guard.entries.get(&key) {
@@ -244,19 +261,25 @@ impl TempFileManager {
         Ok(tmp_path)
     }
 
-    pub async fn bind_owner(&self, repo_id: &str, file_path: &str, user_id: i32) {
-        let key = (repo_id.to_string(), file_path.to_string());
+    pub async fn bind_owner(&self, scope: &str, repo_id: &str, file_path: &str, user_id: i32) {
+        let key = entry_key(scope, repo_id, file_path);
         let mut guard = self.inner.active.write().await;
         if let Some(entry) = guard.entries.get_mut(&key) {
             entry.owner = Some(user_id);
         }
     }
 
-    pub async fn record_new_blocks(&self, repo_id: &str, file_path: &str, ids: &[String]) {
+    pub async fn record_new_blocks(
+        &self,
+        scope: &str,
+        repo_id: &str,
+        file_path: &str,
+        ids: &[String],
+    ) {
         if ids.is_empty() {
             return;
         }
-        let key = (repo_id.to_string(), file_path.to_string());
+        let key = entry_key(scope, repo_id, file_path);
         let mut guard = self.inner.active.write().await;
         if let Some(entry) = guard.entries.get_mut(&key) {
             entry.new_block_ids.extend(ids.iter().cloned());
@@ -271,12 +294,13 @@ impl TempFileManager {
     /// arbitrary offset.
     pub async fn write_chunk(
         &self,
+        scope: &str,
         repo_id: &str,
         file_path: &str,
         offset: u64,
         data: bytes::Bytes,
     ) -> std::io::Result<()> {
-        let key = (repo_id.to_string(), file_path.to_string());
+        let key = entry_key(scope, repo_id, file_path);
         let tmp_path = {
             let guard = self.inner.active.read().await;
             let entry = guard.entries.get(&key).ok_or_else(|| {
@@ -321,6 +345,7 @@ impl TempFileManager {
     pub async fn feed_stream(
         &self,
         store: &DynBlockStorage,
+        scope: &str,
         repo_id: &str,
         file_path: &str,
         offset: u64,
@@ -330,10 +355,7 @@ impl TempFileManager {
         // the long-running stream lock + block writes (no lock nesting).
         let stream_handle = {
             let guard = self.inner.active.read().await;
-            match guard
-                .entries
-                .get(&(repo_id.to_string(), file_path.to_string()))
-            {
+            match guard.entries.get(&entry_key(scope, repo_id, file_path)) {
                 Some(e) => e.stream.clone(),
                 None => return FeedOutcome::Broken,
             }
@@ -396,6 +418,7 @@ impl TempFileManager {
     pub async fn take_streamed_blocks(
         &self,
         store: &DynBlockStorage,
+        scope: &str,
         repo_id: &str,
         file_path: &str,
         expected_size: u64,
@@ -404,7 +427,7 @@ impl TempFileManager {
             let guard = self.inner.active.read().await;
             guard
                 .entries
-                .get(&(repo_id.to_string(), file_path.to_string()))
+                .get(&entry_key(scope, repo_id, file_path))
                 .map(|e| e.stream.clone())?
         };
         let mut stream = stream_handle.lock().await;
@@ -477,8 +500,13 @@ impl TempFileManager {
     }
 
     /// Bytes written to the temp file so far (`None` when no temp file exists).
-    pub async fn get_uploaded_bytes(&self, repo_id: &str, file_path: &str) -> Option<u64> {
-        let key = (repo_id.to_string(), file_path.to_string());
+    pub async fn get_uploaded_bytes(
+        &self,
+        scope: &str,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Option<u64> {
+        let key = entry_key(scope, repo_id, file_path);
         let tmp_path = {
             let guard = self.inner.active.read().await;
             guard.entries.get(&key).map(|e| e.tmp_path.clone())?
@@ -491,8 +519,13 @@ impl TempFileManager {
 
     /// Read the complete temp file into memory; only valid once the last chunk has
     /// been written (the file is fully assembled).
-    pub async fn read_complete(&self, repo_id: &str, file_path: &str) -> Option<Vec<u8>> {
-        let key = (repo_id.to_string(), file_path.to_string());
+    pub async fn read_complete(
+        &self,
+        scope: &str,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Option<Vec<u8>> {
+        let key = entry_key(scope, repo_id, file_path);
         let tmp_path = {
             let guard = self.inner.active.read().await;
             guard.entries.get(&key).map(|e| e.tmp_path.clone())?
@@ -504,10 +537,11 @@ impl TempFileManager {
     /// reads the whole file into memory. `None` when no active temp file exists.
     pub async fn read_stream(
         &self,
+        scope: &str,
         repo_id: &str,
         file_path: &str,
     ) -> Option<futures::stream::BoxStream<'static, std::io::Result<bytes::Bytes>>> {
-        let key = (repo_id.to_string(), file_path.to_string());
+        let key = entry_key(scope, repo_id, file_path);
         let tmp_path = {
             let guard = self.inner.active.read().await;
             guard.entries.get(&key).map(|e| e.tmp_path.clone())?
@@ -531,8 +565,13 @@ impl TempFileManager {
     /// Remove the temp entry and return `(owner, upload_id)` so the caller can
     /// release that upload's quota reservation. The blocks were committed, so the
     /// reservation itself is what must go; the blocks are now counted by `repo.size`.
-    pub async fn finish(&self, repo_id: &str, file_path: &str) -> Option<(Option<i32>, Uuid)> {
-        let key = (repo_id.to_string(), file_path.to_string());
+    pub async fn finish(
+        &self,
+        scope: &str,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Option<(Option<i32>, Uuid)> {
+        let key = entry_key(scope, repo_id, file_path);
         let (tmp_path, reservation) = {
             let mut guard = self.inner.active.write().await;
             let removed = guard.entries.remove(&key);
@@ -551,8 +590,8 @@ impl TempFileManager {
     }
 
     /// The reservation id of an existing temp upload.
-    pub async fn upload_id(&self, repo_id: &str, file_path: &str) -> Option<Uuid> {
-        let key = (repo_id.to_string(), file_path.to_string());
+    pub async fn upload_id(&self, scope: &str, repo_id: &str, file_path: &str) -> Option<Uuid> {
+        let key = entry_key(scope, repo_id, file_path);
         let guard = self.inner.active.read().await;
         guard.entries.get(&key).map(|e| e.upload_id)
     }
@@ -566,11 +605,12 @@ impl TempFileManager {
     pub async fn abort(
         &self,
         repos: &crate::repository::Repositories,
+        scope: &str,
         repo_id: &str,
         file_path: &str,
         store: &DynBlockStorage,
     ) {
-        let key = (repo_id.to_string(), file_path.to_string());
+        let key = entry_key(scope, repo_id, file_path);
         let (tmp_path, owner, upload_id, blocks) = {
             let mut guard = self.inner.active.write().await;
             let removed = guard.entries.remove(&key);
@@ -614,7 +654,7 @@ impl TempFileManager {
             let mut removed = Vec::new();
             // Collect keys first so the closure doesn't borrow `entries` and
             // `reserved_bytes` from `guard` at once.
-            let stale_keys: Vec<(String, String)> = guard
+            let stale_keys: Vec<(String, String, String)> = guard
                 .entries
                 .iter()
                 .filter(|(_, e)| e.created_at < cutoff)
@@ -624,8 +664,9 @@ impl TempFileManager {
                 if let Some(e) = guard.entries.remove(&key) {
                     guard.reserved_bytes -= e.file_size;
                     // The key carries the repo id; the on-disk dir name is only a
-                    // hash of it, so it cannot be recovered from the path.
-                    removed.push((key.0, e.tmp_path, e.owner, e.upload_id, e.new_block_ids));
+                    // hash of it, so it cannot be recovered from the path. The
+                    // scope is not needed once the entry is reaped.
+                    removed.push((key.1, e.tmp_path, e.owner, e.upload_id, e.new_block_ids));
                 }
             }
             removed
@@ -648,8 +689,8 @@ impl TempFileManager {
         dropped
     }
 
-    pub async fn get_file_size(&self, repo_id: &str, file_path: &str) -> Option<u64> {
-        let key = (repo_id.to_string(), file_path.to_string());
+    pub async fn get_file_size(&self, scope: &str, repo_id: &str, file_path: &str) -> Option<u64> {
+        let key = entry_key(scope, repo_id, file_path);
         let guard = self.inner.active.read().await;
         guard.entries.get(&key).map(|e| e.file_size)
     }
@@ -659,6 +700,9 @@ impl TempFileManager {
 mod tests {
     use super::*;
     use tokio::sync::OnceCell;
+
+    /// Default credential scope for unit tests; isolation tests use their own.
+    const SCOPE: &str = "user:1";
 
     static MANAGER: OnceCell<TempFileManager> = OnceCell::const_new();
 
@@ -690,28 +734,28 @@ mod tests {
         let mgr = capped_manager(0, 0).await;
         let repo = "bounds-repo";
         let path = "/f.bin";
-        mgr.get_or_create(repo, path, 10).await.unwrap();
+        mgr.get_or_create(SCOPE, repo, path, 10).await.unwrap();
 
-        let result = mgr.write_chunk(repo, path, 9, chunk(b"xx")).await;
+        let result = mgr.write_chunk(SCOPE, repo, path, 9, chunk(b"xx")).await;
         assert_eq!(
             result.err().map(|e| e.kind()),
             Some(std::io::ErrorKind::InvalidInput)
         );
 
         // Writing exactly up to the declared size is still allowed.
-        mgr.write_chunk(repo, path, 0, chunk(b"0123456789"))
+        mgr.write_chunk(SCOPE, repo, path, 0, chunk(b"0123456789"))
             .await
             .unwrap();
-        mgr.finish(repo, path).await;
+        mgr.finish(SCOPE, repo, path).await;
     }
 
     #[tokio::test]
     async fn get_or_create_rejects_when_upload_count_full() {
         let mgr = capped_manager(1, 0).await;
         let repo = "count-repo";
-        mgr.get_or_create(repo, "/a.txt", 10).await.unwrap();
+        mgr.get_or_create(SCOPE, repo, "/a.txt", 10).await.unwrap();
 
-        let result = mgr.get_or_create(repo, "/b.txt", 10).await;
+        let result = mgr.get_or_create(SCOPE, repo, "/b.txt", 10).await;
         assert_eq!(
             result.err().map(|e| e.kind()),
             Some(std::io::ErrorKind::QuotaExceeded)
@@ -722,9 +766,9 @@ mod tests {
     async fn get_or_create_rejects_when_bytes_quota_full() {
         let mgr = capped_manager(0, 100).await;
         let repo = "bytes-repo";
-        mgr.get_or_create(repo, "/a.txt", 100).await.unwrap();
+        mgr.get_or_create(SCOPE, repo, "/a.txt", 100).await.unwrap();
 
-        let result = mgr.get_or_create(repo, "/b.txt", 1).await;
+        let result = mgr.get_or_create(SCOPE, repo, "/b.txt", 1).await;
         assert_eq!(
             result.err().map(|e| e.kind()),
             Some(std::io::ErrorKind::QuotaExceeded)
@@ -735,11 +779,11 @@ mod tests {
     async fn finish_releases_reserved_bytes() {
         let mgr = capped_manager(0, 100).await;
         let repo = "release-repo";
-        mgr.get_or_create(repo, "/a.txt", 100).await.unwrap();
-        mgr.finish(repo, "/a.txt").await;
+        mgr.get_or_create(SCOPE, repo, "/a.txt", 100).await.unwrap();
+        mgr.finish(SCOPE, repo, "/a.txt").await;
 
-        assert!(mgr.get_or_create(repo, "/b.txt", 100).await.is_ok());
-        mgr.finish(repo, "/b.txt").await;
+        assert!(mgr.get_or_create(SCOPE, repo, "/b.txt", 100).await.is_ok());
+        mgr.finish(SCOPE, repo, "/b.txt").await;
     }
 
     #[tokio::test]
@@ -748,25 +792,25 @@ mod tests {
         let repo = "test-repo-1";
         let path = "/dir/file.txt";
 
-        let tmp = mgr.get_or_create(repo, path, 100).await.unwrap();
+        let tmp = mgr.get_or_create(SCOPE, repo, path, 100).await.unwrap();
         assert!(tmp.exists());
 
-        mgr.write_chunk(repo, path, 0, chunk(b"hello "))
+        mgr.write_chunk(SCOPE, repo, path, 0, chunk(b"hello "))
             .await
             .unwrap();
-        assert_eq!(mgr.get_uploaded_bytes(repo, path).await, Some(6));
+        assert_eq!(mgr.get_uploaded_bytes(SCOPE, repo, path).await, Some(6));
 
-        mgr.write_chunk(repo, path, 6, chunk(b"world"))
+        mgr.write_chunk(SCOPE, repo, path, 6, chunk(b"world"))
             .await
             .unwrap();
-        assert_eq!(mgr.get_uploaded_bytes(repo, path).await, Some(11));
+        assert_eq!(mgr.get_uploaded_bytes(SCOPE, repo, path).await, Some(11));
 
-        let data = mgr.read_complete(repo, path).await.unwrap();
+        let data = mgr.read_complete(SCOPE, repo, path).await.unwrap();
         assert_eq!(&data, b"hello world");
 
-        mgr.finish(repo, path).await;
+        mgr.finish(SCOPE, repo, path).await;
         assert!(!tmp.exists());
-        assert_eq!(mgr.get_uploaded_bytes(repo, path).await, None);
+        assert_eq!(mgr.get_uploaded_bytes(SCOPE, repo, path).await, None);
     }
 
     #[tokio::test]
@@ -775,11 +819,11 @@ mod tests {
         let repo = "test-repo-2";
         let path = "/readme.md";
 
-        let a = mgr.get_or_create(repo, path, 50).await.unwrap();
-        let b = mgr.get_or_create(repo, path, 50).await.unwrap();
+        let a = mgr.get_or_create(SCOPE, repo, path, 50).await.unwrap();
+        let b = mgr.get_or_create(SCOPE, repo, path, 50).await.unwrap();
         assert_eq!(a, b, "second call should return same path");
 
-        mgr.finish(repo, path).await;
+        mgr.finish(SCOPE, repo, path).await;
     }
 
     #[tokio::test]
@@ -788,7 +832,7 @@ mod tests {
         let repo = "test-repo-3";
         let path = "/noexist.dat";
 
-        let result = mgr.write_chunk(repo, path, 0, chunk(b"data")).await;
+        let result = mgr.write_chunk(SCOPE, repo, path, 0, chunk(b"data")).await;
         assert!(result.is_err());
     }
 
@@ -798,15 +842,15 @@ mod tests {
         let repo = "test-repo-4";
         let path = "/cleanup.txt";
 
-        let tmp = mgr.get_or_create(repo, path, 10).await.unwrap();
-        mgr.write_chunk(repo, path, 0, chunk(b"12345"))
+        let tmp = mgr.get_or_create(SCOPE, repo, path, 10).await.unwrap();
+        mgr.write_chunk(SCOPE, repo, path, 0, chunk(b"12345"))
             .await
             .unwrap();
         assert!(tmp.exists());
 
-        mgr.finish(repo, path).await;
+        mgr.finish(SCOPE, repo, path).await;
         assert!(!tmp.exists(), "temp file should be deleted");
-        assert_eq!(mgr.get_uploaded_bytes(repo, path).await, None);
+        assert_eq!(mgr.get_uploaded_bytes(SCOPE, repo, path).await, None);
     }
 
     #[tokio::test]
@@ -815,10 +859,49 @@ mod tests {
         let repo = "test-repo-5";
         let path = "/size_check.iso";
 
-        mgr.get_or_create(repo, path, 999).await.unwrap();
-        assert_eq!(mgr.get_file_size(repo, path).await, Some(999));
+        mgr.get_or_create(SCOPE, repo, path, 999).await.unwrap();
+        assert_eq!(mgr.get_file_size(SCOPE, repo, path).await, Some(999));
 
-        mgr.finish(repo, path).await;
+        mgr.finish(SCOPE, repo, path).await;
+    }
+
+    /// Two credentials uploading the same repo and path get independent temp
+    /// files: neither sees the other's bytes and finishing one leaves the other
+    /// resumable.
+    #[tokio::test]
+    async fn test_scope_isolates_same_repo_and_path() {
+        let mgr = manager().await;
+        let repo = "scope-repo";
+        let path = "/same.bin";
+
+        let a = mgr.get_or_create("user:1", repo, path, 10).await.unwrap();
+        let b = mgr.get_or_create("user:2", repo, path, 10).await.unwrap();
+        assert_ne!(
+            a, b,
+            "different scopes must not share a temp file for the same repo/path"
+        );
+
+        mgr.write_chunk("user:1", repo, path, 0, chunk(b"AAAAA"))
+            .await
+            .unwrap();
+        mgr.write_chunk("user:2", repo, path, 0, chunk(b"BBBBB"))
+            .await
+            .unwrap();
+
+        assert_eq!(mgr.get_uploaded_bytes("user:1", repo, path).await, Some(5));
+        assert_eq!(mgr.get_uploaded_bytes("user:2", repo, path).await, Some(5));
+        let one = mgr.read_complete("user:1", repo, path).await.unwrap();
+        let two = mgr.read_complete("user:2", repo, path).await.unwrap();
+        assert_eq!(&one, b"AAAAA");
+        assert_eq!(&two, b"BBBBB");
+
+        // Finishing one upload must not remove or release the other's entry.
+        assert!(mgr.finish("user:1", repo, path).await.is_some());
+        assert!(mgr.upload_id("user:2", repo, path).await.is_some());
+        assert!(!a.exists(), "the finished scope's temp file should be gone");
+        assert!(b.exists(), "the other scope's temp file must survive");
+        assert!(mgr.finish("user:1", repo, path).await.is_none());
+        mgr.finish("user:2", repo, path).await;
     }
 
     #[tokio::test]
@@ -827,12 +910,12 @@ mod tests {
         let repo = "test-repo-stream";
         let path = "/stream.bin";
 
-        mgr.get_or_create(repo, path, 11).await.unwrap();
-        mgr.write_chunk(repo, path, 0, chunk(b"hello world"))
+        mgr.get_or_create(SCOPE, repo, path, 11).await.unwrap();
+        mgr.write_chunk(SCOPE, repo, path, 0, chunk(b"hello world"))
             .await
             .unwrap();
 
-        let mut stream = mgr.read_stream(repo, path).await.unwrap();
+        let mut stream = mgr.read_stream(SCOPE, repo, path).await.unwrap();
         use futures::stream::StreamExt;
         let mut all = Vec::new();
         while let Some(r) = stream.next().await {
@@ -840,7 +923,7 @@ mod tests {
         }
         assert_eq!(all, b"hello world");
 
-        mgr.finish(repo, path).await;
+        mgr.finish(SCOPE, repo, path).await;
     }
 
     /// Deterministic pseudo-random bytes, matching the `file_ops` test generator.
@@ -893,7 +976,7 @@ mod tests {
         let expected = reference_block_ids(&store, &data).await;
         assert!(expected.len() > 1, "fixture must span multiple blocks");
 
-        mgr.get_or_create(repo, path, data.len() as u64)
+        mgr.get_or_create(SCOPE, repo, path, data.len() as u64)
             .await
             .unwrap();
 
@@ -901,14 +984,14 @@ mod tests {
         while fed < data.len() {
             let end = (fed + 8192).min(data.len());
             let outcome = mgr
-                .feed_stream(&store, repo, path, fed as u64, &data[fed..end])
+                .feed_stream(&store, SCOPE, repo, path, fed as u64, &data[fed..end])
                 .await;
             assert!(matches!(outcome, FeedOutcome::Streamed { .. }));
             fed = end;
         }
 
         let (block_ids, total, _new_ids) = mgr
-            .take_streamed_blocks(&store, repo, path, data.len() as u64)
+            .take_streamed_blocks(&store, SCOPE, repo, path, data.len() as u64)
             .await
             .expect("fully in-order upload should stream");
         assert_eq!(
@@ -917,7 +1000,7 @@ mod tests {
         );
         assert_eq!(total, data.len() as i64);
 
-        mgr.finish(repo, path).await;
+        mgr.finish(SCOPE, repo, path).await;
     }
 
     /// A chunk that skips the prefix disables streaming; assembly falls back to the temp file.
@@ -928,18 +1011,20 @@ mod tests {
         let repo = "stream-repo-oorder";
         let path = "/f.bin";
 
-        mgr.get_or_create(repo, path, 100).await.unwrap();
+        mgr.get_or_create(SCOPE, repo, path, 100).await.unwrap();
 
-        let outcome = mgr.feed_stream(&store, repo, path, 50, b"0123456789").await;
+        let outcome = mgr
+            .feed_stream(&store, SCOPE, repo, path, 50, b"0123456789")
+            .await;
         assert!(matches!(outcome, FeedOutcome::Broken));
         assert!(
-            mgr.take_streamed_blocks(&store, repo, path, 100)
+            mgr.take_streamed_blocks(&store, SCOPE, repo, path, 100)
                 .await
                 .is_none(),
             "out-of-order upload must fall back to the temp file"
         );
 
-        mgr.finish(repo, path).await;
+        mgr.finish(SCOPE, repo, path).await;
     }
 
     /// Re-sending an already-fed offset (a retry) is not contiguous and disables streaming.
@@ -950,20 +1035,24 @@ mod tests {
         let repo = "stream-repo-dup";
         let path = "/f.bin";
 
-        mgr.get_or_create(repo, path, 20).await.unwrap();
+        mgr.get_or_create(SCOPE, repo, path, 20).await.unwrap();
 
-        let first = mgr.feed_stream(&store, repo, path, 0, b"0123456789").await;
+        let first = mgr
+            .feed_stream(&store, SCOPE, repo, path, 0, b"0123456789")
+            .await;
         assert!(matches!(first, FeedOutcome::Streamed { .. }));
 
-        let second = mgr.feed_stream(&store, repo, path, 0, b"0123456789").await;
+        let second = mgr
+            .feed_stream(&store, SCOPE, repo, path, 0, b"0123456789")
+            .await;
         assert!(matches!(second, FeedOutcome::Broken));
         assert!(
-            mgr.take_streamed_blocks(&store, repo, path, 20)
+            mgr.take_streamed_blocks(&store, SCOPE, repo, path, 20)
                 .await
                 .is_none()
         );
 
-        mgr.finish(repo, path).await;
+        mgr.finish(SCOPE, repo, path).await;
     }
 
     /// Once broken, further feeds keep returning `Broken` without panicking.
@@ -974,19 +1063,20 @@ mod tests {
         let repo = "stream-repo-broken";
         let path = "/f.bin";
 
-        mgr.get_or_create(repo, path, 100).await.unwrap();
+        mgr.get_or_create(SCOPE, repo, path, 100).await.unwrap();
         assert!(matches!(
-            mgr.feed_stream(&store, repo, path, 42, b"x").await,
+            mgr.feed_stream(&store, SCOPE, repo, path, 42, b"x").await,
             FeedOutcome::Broken
         ));
 
         for offset in [0u64, 42, 99] {
             assert!(matches!(
-                mgr.feed_stream(&store, repo, path, offset, b"y").await,
+                mgr.feed_stream(&store, SCOPE, repo, path, offset, b"y")
+                    .await,
                 FeedOutcome::Broken
             ));
         }
-        mgr.finish(repo, path).await;
+        mgr.finish(SCOPE, repo, path).await;
     }
 
     /// A block-store write failure disables streaming (the temp file stays the
@@ -1006,20 +1096,20 @@ mod tests {
         // feed emits a block and attempts a write.
         let data = pseudo_data(10 * 1024 * 1024 + 1);
 
-        mgr.get_or_create(repo, path, data.len() as u64)
+        mgr.get_or_create(SCOPE, repo, path, data.len() as u64)
             .await
             .unwrap();
-        let outcome = mgr.feed_stream(&store, repo, path, 0, &data).await;
+        let outcome = mgr.feed_stream(&store, SCOPE, repo, path, 0, &data).await;
         assert!(
             matches!(outcome, FeedOutcome::Broken),
             "block write failure must disable streaming"
         );
         assert!(
-            mgr.take_streamed_blocks(&store, repo, path, data.len() as u64)
+            mgr.take_streamed_blocks(&store, SCOPE, repo, path, data.len() as u64)
                 .await
                 .is_none()
         );
 
-        mgr.finish(repo, path).await;
+        mgr.finish(SCOPE, repo, path).await;
     }
 }
