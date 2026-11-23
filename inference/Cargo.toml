@@ -1,0 +1,18 @@
+[package]
+name = "inference"
+version = "0.1.23"
+edition = "2024"
+description = "Fixed-model inference runtime for the embedded ONNX graphs"
+license = "MIT"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The only external kernels: a pure-Rust GEMM and `libm`'s `erf`. No ONNX
+# parser, no ONNX Runtime, no BLAS (see the module docs in `src/lib.rs`).
+matrixmultiply = "0.3"
+libm = "0.2"
+
+[dev-dependencies]
+sha2 = { workspace = true }

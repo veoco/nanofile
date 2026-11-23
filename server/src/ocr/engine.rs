@@ -6,7 +6,7 @@
 
 use image::DynamicImage;
 
-use crate::inference;
+use inference;
 
 use super::crop::{self, Crop};
 use super::det::{self, Geometry, Postprocess, TextBox};

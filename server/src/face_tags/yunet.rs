@@ -9,7 +9,7 @@
 //! The published graph declares a dynamic input shape; the caller letterboxes to
 //! 640x640, which is the only shape this module runs.
 
-use crate::inference::{self, ModelKind};
+use inference::{self, ModelKind};
 
 use super::preprocess::{INPUT_SIZE, Prepared};
 

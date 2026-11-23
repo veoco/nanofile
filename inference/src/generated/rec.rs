@@ -1,7 +1,7 @@
 //! Generated from `server/models/ppocr_v6_tiny_rec.onnx` by
 //! `tools/models/export_plan.py`; do not edit by hand.
 
-use crate::inference::plan::{AutoPad, ModelPlan, Op, Operand, WeightRef};
+use crate::plan::{AutoPad, ModelPlan, Op, Operand, WeightRef};
 
 #[rustfmt::skip]
 pub(super) static PLAN: ModelPlan = ModelPlan {
@@ -13,7 +13,7 @@ pub(super) static PLAN: ModelPlan = ModelPlan {
     outputs: OUTPUTS,
     weights: WEIGHTS,
     source_sha256: "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6",
-    bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/models/ppocr_v6_tiny_rec.onnx")),
+    bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../server/models/ppocr_v6_tiny_rec.onnx")),
 };
 
 #[rustfmt::skip]

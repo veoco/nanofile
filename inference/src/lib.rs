@@ -1,18 +1,30 @@
-//! Fixed-model inference runtime for the graphs compiled into the binary.
+//! Fixed-model inference runtime for the ONNX graphs embedded in the server.
 //!
-//! The models are frozen, so the runtime is not an ONNX interpreter: the build-
+//! The models are frozen, so this crate is not an ONNX interpreter: the build-
 //! time exporter (`tools/models/export_plan.py`) turns each graph into a static
-//! plan of flat operators and byte ranges of the weights, and this module only
+//! plan of flat operators and byte ranges of the weights, and this crate only
 //! copies the weights and executes the plan. There is no parser, no graph IR and
 //! no dynamic operator registry in the binary.
 //!
-//! The plans live in `generated/` and are regenerated from the unchanged ONNX
-//! files with `python3 tools/models/export_plan.py`; `tests` verifies that each
-//! plan still matches its ONNX file's SHA-256.
+//! The plans live in `src/generated/` and are regenerated from the unchanged
+//! `server/models/*.onnx` files with `python3 tools/models/export_plan.py`;
+//! a test verifies that each plan still matches its ONNX file's SHA-256.
 //!
 //! Execution is single-threaded and synchronous. A [`Model`] owns one workspace
 //! of reusable buffers; callers reuse the same `Vec<Tensor>` for the outputs so
 //! steady-state inference does not allocate.
+//!
+//! The crate is separate from `server` for one practical reason: the kernels are
+//! hand-written loops that only reach their speed when optimized, and
+//! `[profile.test.package.inference]` can only target a whole package. Keeping
+//! the runtime here means the test profile optimizes ~5k lines instead of the
+//! server's ~120k, which is the difference between seconds and minutes of
+//! compilation on a cold CI cache.
+
+// Kernels take the explicit shape/stride/pad set their operator needs; splitting
+// them into one params struct per kernel would hide the arithmetic behind an
+// allocation without making the call sites clearer.
+#![allow(clippy::too_many_arguments)]
 
 mod exec;
 mod generated;
@@ -20,11 +32,11 @@ mod kernels;
 mod plan;
 mod tensor;
 
-pub(crate) use tensor::Tensor;
+pub use tensor::Tensor;
 
 /// One of the models embedded in the binary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ModelKind {
+pub enum ModelKind {
     /// Face detection (YuNet), 1x3x640x640.
     YuNet,
     /// OCR text detection (PP-OCR det), 1x3xHxW with H/W multiples of 32.
@@ -38,7 +50,7 @@ pub(crate) enum ModelKind {
 }
 
 /// One loaded model: its plan, the copied weights, and a reusable workspace.
-pub(crate) struct Model {
+pub struct Model {
     plan: &'static plan::ModelPlan,
     /// The weight tensors concatenated in plan order.
     weights: Vec<f32>,
@@ -51,7 +63,7 @@ impl Model {
     /// Load one embedded model. The ONNX bytes are already in the binary; this
     /// validates the weight ranges and copies the weights into a contiguous
     /// `f32` buffer. It does not parse the graph.
-    pub(crate) fn load(kind: ModelKind) -> Result<Self, String> {
+    pub fn load(kind: ModelKind) -> Result<Self, String> {
         let plan = generated::plan(kind);
         if plan.source_sha256.len() != 64
             || !plan
@@ -100,7 +112,7 @@ impl Model {
     /// `dims` must be the concrete input shape (batch 1, 3 channels); `input` is
     /// tightly packed in NCHW order. The `outputs` vector is resized to the
     /// model's output count and each tensor's buffers are reused.
-    pub(crate) fn run(
+    pub fn run(
         &mut self,
         dims: &[usize],
         input: &[f32],
@@ -150,18 +162,18 @@ impl Model {
 
     /// The static plan, for tests and diagnostics.
     #[cfg(test)]
-    pub(crate) fn plan(&self) -> &'static plan::ModelPlan {
+    fn plan(&self) -> &'static plan::ModelPlan {
         self.plan
     }
 }
 
 /// The shape of one output.
-pub(crate) fn shape(tensor: &Tensor) -> Result<Vec<usize>, String> {
+pub fn shape(tensor: &Tensor) -> Result<Vec<usize>, String> {
     Ok(tensor.dims.clone())
 }
 
 /// The `f32` values of one output.
-pub(crate) fn values(tensor: &Tensor) -> Result<&[f32], String> {
+pub fn values(tensor: &Tensor) -> Result<&[f32], String> {
     Ok(&tensor.data)
 }
 

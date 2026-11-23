@@ -101,7 +101,7 @@ tray itself does is in [Windows service and desktop tray](/guide/deploy/desktop-
 Every build compiles the YuNet detector, the PP-OCRv6 tiny OCR graphs, the
 PP-LCNet page and text-line orientation classifiers and the automatic
 people-tag pipeline: there is no Cargo feature to enable. The server has its own
-small fixed-model runtime (`server/src/inference/`): the ONNX files (about
+small fixed-model runtime (the `inference/` crate): the ONNX files (about
 14.3 MB in total) are embedded unchanged as the weight source, and each graph is
 described by a committed Rust plan generated ahead of time. Both scanners stay
 off until `[face_tags] enabled` or `[ocr] enabled` is set. Build with the normal
@@ -118,7 +118,7 @@ downloads the pinned revisions, verifies every hash and extracts the recognition
 dictionary. `tools/models/export_plan.py` is the only development-time tool: it
 is stdlib-only Python that reads the unchanged ONNX graphs, folds their static
 shape subgraphs, assigns workspace slots and rewrites
-`server/src/inference/generated/`, which is committed. The shipped binary has no
+`inference/src/generated/`, which is committed. The shipped binary has no
 ONNX parser, no ONNX Runtime and no BLAS. A test pins every generated plan to its
 ONNX file's SHA-256, so refreshing a model without regenerating the plan fails
 the tests instead of loading weights at the wrong offsets. CI's default

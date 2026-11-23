@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "base",
     "infra",
+    "inference",
     "server",
     "migration",
 ]
@@ -89,10 +90,12 @@ all = "deny"
 
 # Tests execute the embedded OCR/face models in-process, and with unoptimized
 # kernels the OCR cases spent minutes of CPU per run (dozens of text-line
-# recognition passes on the sample page alone). Optimizing only the two hot packages brings
-# the OCR cases back to seconds without touching the debug binary
-# (`cargo build`) or the release profiles.
-[profile.test.package.server]
+# recognition passes on the sample page alone). The hot code lives in the
+# `inference` crate, so only it and its GEMM are optimized: `server` and the
+# other dependencies keep the profile's default, which keeps a cold test build
+# at minutes instead of ten. The debug binary (`cargo build`) and the release
+# profiles are untouched.
+[profile.test.package.inference]
 opt-level = 2
 
 [profile.test.package.matrixmultiply]

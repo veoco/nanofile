@@ -13,8 +13,9 @@ fn models_dir() -> PathBuf {
 
 fn generated_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
+        .join("..")
         .join("inference")
+        .join("src")
         .join("generated")
 }
 
@@ -38,13 +39,16 @@ fn digest(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// Pull `("/models/<file>")` and `source_sha256: "<digest>"` out of one
-/// generated plan module. The generated files are plain data; reading them here
-/// keeps the check independent of the private inference module.
+/// Pull `("/../server/models/<file>")` and `source_sha256: "<digest>"` out of
+/// one generated plan module. The generated files are plain data; reading them
+/// here keeps the check independent of the inference crate.
 fn plan_provenance(text: &str) -> (String, String) {
-    let marker = "\"/models/";
+    let marker = "include_bytes!";
     let start = text.find(marker).expect("include_bytes model path") + marker.len();
     let rest = &text[start..];
+    let marker = "models/";
+    let offset = rest.find(marker).expect("model path") + marker.len();
+    let rest = &rest[offset..];
     let end = rest.find('"').expect("closing quote");
     let file = rest[..end].to_string();
 

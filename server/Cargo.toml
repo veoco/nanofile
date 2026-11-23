@@ -124,12 +124,11 @@ anyhow = { workspace = true }
 totp-rs = { version = "6", features = ["gen_secret", "otpauth"] }
 qrcode = "0.15"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff"] }
-# Face-tag and OCR inference, compiled into every build. The graphs are fixed, so
-# the inference runtime is hand-written (`src/inference/`) against plans generated
-# from the unchanged ONNX files; the only external kernels are a pure-Rust GEMM
-# and `libm`'s `erf`. No ONNX Runtime, no Python, no BLAS, no system library.
-matrixmultiply = "0.3"
-libm = "0.2"
+# Face-tag and OCR inference, compiled into every build. The runtime is its own
+# crate (`inference/`) against plans generated from the unchanged ONNX files, so
+# the test profile can optimize just those kernels; no ONNX Runtime, no Python,
+# no BLAS, no system library.
+inference = { path = "../inference" }
 kamadak-exif = "0.6"
 percent-encoding = "2.3"
 clap = { version = "4", features = ["derive"] }

@@ -1,7 +1,7 @@
 //! Generated from `server/models/pp_lcnet_x1_0_doc_ori.onnx` by
 //! `tools/models/export_plan.py`; do not edit by hand.
 
-use crate::inference::plan::{AutoPad, ModelPlan, Op, Operand, WeightRef};
+use crate::plan::{AutoPad, ModelPlan, Op, Operand, WeightRef};
 
 #[rustfmt::skip]
 pub(super) static PLAN: ModelPlan = ModelPlan {
@@ -13,7 +13,7 @@ pub(super) static PLAN: ModelPlan = ModelPlan {
     outputs: OUTPUTS,
     weights: WEIGHTS,
     source_sha256: "af9a0a4f317ff0709ce752067807f819cb15d883f8ecad89f28df1c6ee2d9c92",
-    bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/models/pp_lcnet_x1_0_doc_ori.onnx")),
+    bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../server/models/pp_lcnet_x1_0_doc_ori.onnx")),
 };
 
 #[rustfmt::skip]

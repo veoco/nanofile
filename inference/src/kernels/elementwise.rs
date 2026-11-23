@@ -2,7 +2,7 @@
 //! normalisation.
 
 use super::{BinOp, UnaryOp};
-use crate::inference::tensor::broadcast_strides;
+use crate::tensor::broadcast_strides;
 
 pub(crate) fn binary(
     op: BinOp,

@@ -2,11 +2,11 @@
 """Export the embedded ONNX graphs into static Rust inference plans.
 
 The server does not parse ONNX at run time. This tool reads the five unchanged
-`server/models/*.onnx` files and writes `server/src/inference/generated/*.rs`:
+`server/models/*.onnx` files and writes `inference/src/generated/*.rs`:
 a flat, topologically ordered operator list, a workspace-slot assignment, the
 graph outputs, and the byte range of every f32 weight inside the ONNX file.
 
-The runtime (`server/src/inference/`) then only copies the weights and executes
+The runtime (`inference/`) then only copies the weights and executes
 the plan. Nothing here runs during a build or at run time; it is a development
 tool. The generated files are committed, and a unit test checks that the ONNX
 file's SHA-256 still matches the plan, so a model update cannot silently leave a
@@ -31,7 +31,7 @@ from onnx_wire import Model, ParseError  # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SERVER = os.path.join(ROOT, "server")
 MODELS = os.path.join(SERVER, "models")
-OUT_DIR = os.path.join(SERVER, "src", "inference", "generated")
+OUT_DIR = os.path.join(ROOT, "inference", "src", "generated")
 
 PLAN_MODELS = [
     ("YuNet", "yunet", "yunet.onnx"),
@@ -1174,7 +1174,7 @@ class ModelExporter:
         lines.append(f"//! Generated from `server/models/{self.filename}` by")
         lines.append("//! `tools/models/export_plan.py`; do not edit by hand.")
         lines.append("")
-        lines.append("use crate::inference::plan::{AutoPad, ModelPlan, Op, Operand, WeightRef};")
+        lines.append("use crate::plan::{AutoPad, ModelPlan, Op, Operand, WeightRef};")
         lines.append("")
         lines.append("#[rustfmt::skip]")
         lines.append("pub(super) static PLAN: ModelPlan = ModelPlan {")
@@ -1188,7 +1188,7 @@ class ModelExporter:
         lines.append(f"    source_sha256: \"{self.model.sha256}\",")
         lines.append(
             "    bytes: include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), "
-            f"\"/models/{self.filename}\")),"
+            f"\"/../server/models/{self.filename}\")),"
         )
         lines.append("};")
         lines.append("")

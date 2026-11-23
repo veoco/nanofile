@@ -72,7 +72,7 @@ cargo build --release -p server --features tray
 
 所有构建都会编译 YuNet 检测器、PP-OCRv6 tiny 的 OCR 图、PP-LCNet 页面与文本行
 方向分类器和自动人物标签流水线，没有需要开启的 Cargo feature。服务端使用自己的
-小型定模型运行时（`server/src/inference/`）：ONNX 模型（合计约 14.3 MB）作为权重
+小型定模型运行时（`inference/` crate）：ONNX 模型（合计约 14.3 MB）作为权重
 来源原样编进二进制，每张图另有一份提前生成并签入的 Rust 计划；两个扫描器仍要等
 `[face_tags] enabled` 或 `[ocr] enabled` 打开后才运行。正常构建即可：
 
@@ -84,7 +84,7 @@ cargo build --release -p server
 `server/models/`，同目录有模型卡、许可证和 SHA-256。`tools/models/fetch_models.py`
 下载固定 revision、校验哈希并抽取识别字典。唯一需要在开发期运行的工具是
 `tools/models/export_plan.py`：只用 Python 标准库，读取未改动的 ONNX、折叠其中的
-静态 shape 子图、分配工作区槽位并重写已签入的 `server/src/inference/generated/`。
+静态 shape 子图、分配工作区槽位并重写已签入的 `inference/src/generated/`。
 最终二进制里没有 ONNX 解析器、ONNX Runtime 或 BLAS。单测会用每个 ONNX 文件的
 SHA-256 钉住对应计划，模型更新后忘记重新生成计划会在测试里失败，而不是在运行时
 按错误偏移读权重。CI 默认的 `cargo clippy`/`cargo test` 与 release/nightly 构建都会

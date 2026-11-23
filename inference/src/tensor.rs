@@ -3,7 +3,7 @@
 
 /// A dense f32 tensor with its dimensions. Rank is at most 4 in these graphs.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Tensor {
+pub struct Tensor {
     pub(crate) dims: Vec<usize>,
     pub(crate) data: Vec<f32>,
 }

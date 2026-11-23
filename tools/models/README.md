@@ -25,7 +25,7 @@ The script:
 The files are the upstream ONNX graphs unchanged. The server runs them on its own
 fixed-model runtime: `export_plan.py` (also stdlib-only, no `onnx` package needed)
 reads each ONNX file, folds its static shape subgraph, assigns workspace slots and
-rewrites `server/src/inference/generated/`. The generated plans are committed; the
+rewrites `inference/src/generated/`. The generated plans are committed; the
 shipped binary has no ONNX parser. After changing a model, run both scripts and
 commit the regenerated plans:
 

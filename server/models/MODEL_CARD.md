@@ -4,7 +4,7 @@
 processes. Every file is checked in, hash-pinned in `manifest.json` and embedded
 into the binary with `include_bytes!`/`include_str!`; nothing is downloaded at
 runtime and the models run on the server's own fixed-model runtime
-(`server/src/inference/`), not on an ONNX framework. `tools/models/fetch_models.py`
+(`inference/`), not on an ONNX framework. `tools/models/fetch_models.py`
 reproduces the files from their pinned upstream revisions, and
 `tools/models/export_plan.py` regenerates the committed inference plans from
 them; the two must be rerun together when a model changes.

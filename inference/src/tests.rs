@@ -92,9 +92,10 @@ fn recognition_runs_at_every_bucket() {
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].dims.len(), 3);
         assert_eq!(outputs[0].dims[0], 1);
+        // 6906 = CTC blank + 6904 dictionary characters + trailing space; the
+        // dictionary itself is checked by the server's model-asset test.
         assert_eq!(
-            outputs[0].dims[2],
-            crate::ocr::keys::CLASSES,
+            outputs[0].dims[2], 6906,
             "expected the OCR character classes"
         );
     }

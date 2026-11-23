@@ -1,13 +1,15 @@
 # Architecture
 
-Nanofile is a Cargo workspace of four crates. Dependencies flow one way:
-`base → infra → server`; `migration` is consumed by `server`.
+Nanofile is a Cargo workspace of five crates. Dependencies flow one way:
+`base → infra → server`; `migration` and `inference` are consumed by `server`,
+and `inference` itself depends only on its two numeric kernels.
 
 | Crate | Role |
 |---|---|
 | `base` | Pure domain types, `AppError`, path sanitization. No axum or database dependency unless the `with-axum` / `with-sea-orm` feature enables it. |
 | `infra` | Database entities and connections, configuration, crypto, block storage, serialization, permissions, rate limiting, search indexing, the settings catalog and its events. |
 | `server` | HTTP handlers and routes, services, `AppState`, the Seafile sync protocol, WebDAV, the web UI, sandbox, tasks and the optional tray. |
+| `inference` | The embedded models' fixed-plan runtime: operator executor, f32 kernels and the generated plans. No ONNX parser, no server dependency. |
 | `migration` | SeaORM migrations. |
 
 ## Inside `server`

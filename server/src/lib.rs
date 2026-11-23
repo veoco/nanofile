@@ -18,7 +18,6 @@ pub mod fs;
 pub mod handler;
 pub mod i18n;
 pub mod indexer;
-mod inference;
 pub mod middleware;
 pub mod notification;
 pub mod ocr;

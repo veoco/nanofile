@@ -2607,6 +2607,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inference"
+version = "0.1.23"
+dependencies = [
+ "libm",
+ "matrixmultiply",
+ "sha2",
+]
+
+[[package]]
 name = "infra"
 version = "0.1.23"
 dependencies = [
@@ -4718,14 +4727,13 @@ dependencies = [
  "hyper-util",
  "image",
  "include-flate",
+ "inference",
  "infra",
  "ipnet",
  "kamadak-exif",
  "lettre",
  "libc",
- "libm",
  "lopdf",
- "matrixmultiply",
  "migration",
  "multer",
  "notify-rust",

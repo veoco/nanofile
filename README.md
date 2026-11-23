@@ -105,9 +105,10 @@ variant, the first-run caveat and upgrade permissions.
 
 ## Development
 
-The project is a Cargo workspace of four crates: `base` (domain types), `infra`
-(database, storage, crypto, config), `server` (HTTP, sync protocol, WebDAV, web UI)
-and `migration`. Dependencies flow `base → infra → server`.
+The project is a Cargo workspace of five crates: `base` (domain types), `infra`
+(database, storage, crypto, config), `inference` (the embedded models' fixed-plan
+runtime), `server` (HTTP, sync protocol, WebDAV, web UI) and `migration`.
+Dependencies flow `base → infra → server`, with `inference` as a leaf crate.
 
 Requirements: a stable Rust toolchain (edition 2024) and Node.js (CI uses 24) for
 the frontend bundler; `ffmpeg` is optional and enables media thumbnails.

@@ -1,7 +1,7 @@
 //! Generated from `server/models/yunet.onnx` by
 //! `tools/models/export_plan.py`; do not edit by hand.
 
-use crate::inference::plan::{AutoPad, ModelPlan, Op, Operand, WeightRef};
+use crate::plan::{AutoPad, ModelPlan, Op, Operand, WeightRef};
 
 #[rustfmt::skip]
 pub(super) static PLAN: ModelPlan = ModelPlan {
@@ -13,7 +13,7 @@ pub(super) static PLAN: ModelPlan = ModelPlan {
     outputs: OUTPUTS,
     weights: WEIGHTS,
     source_sha256: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
-    bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/models/yunet.onnx")),
+    bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../server/models/yunet.onnx")),
 };
 
 #[rustfmt::skip]

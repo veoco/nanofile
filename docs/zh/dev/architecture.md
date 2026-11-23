@@ -1,12 +1,13 @@
 # 架构
 
-Nanofile 是一个包含四个 crate 的 Cargo workspace。依赖方向是单向的：`base → infra → server`；`migration` 由 `server` 使用。
+Nanofile 是一个包含五个 crate 的 Cargo workspace。依赖方向是单向的：`base → infra → server`；`migration` 与 `inference` 由 `server` 使用，而 `inference` 只依赖两个数值内核库。
 
 | Crate | 职责 |
 |---|---|
 | `base` | 纯领域类型、`AppError`、路径规范化。默认不依赖 axum 或数据库，除非启用 `with-axum` / `with-sea-orm` feature。 |
 | `infra` | 数据库实体与连接、配置、加密、块存储、序列化、权限、限流、搜索索引、设置目录及其事件。 |
 | `server` | HTTP handler 与路由、service、`AppState`、Seafile 同步协议、WebDAV、网页界面、沙盒、任务与可选托盘。 |
+| `inference` | 内嵌模型的定计划推理运行时：算子执行器、f32 内核与生成好的计划。无 ONNX 解析器，不依赖 server。 |
 | `migration` | SeaORM 数据库迁移。 |
 
 ## `server` 内部
