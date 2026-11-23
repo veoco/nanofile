@@ -49,6 +49,69 @@ async fn test_login_rate_limit_not_bypassable_via_xff_spoofing() {
     );
 }
 
+/// Security: the lockout must be enforced *before* the expensive password
+/// verification, not after it. A burst of concurrent wrong-password requests
+/// used to all pass the "am I locked out?" check while PBKDF2 was still running;
+/// only the first few failures were recorded, and every request in the burst got
+/// a guess. The reservation taken by `begin_login_attempt` caps how many can be
+/// in flight at once.
+#[tokio::test]
+async fn concurrent_wrong_passwords_cannot_exceed_the_login_budget() {
+    let server = TestServer::start().await;
+    create_test_user(server.db.as_ref(), "victim@example.com", "secret123").await;
+
+    let raw = reqwest::Client::builder().no_proxy().build().unwrap();
+    let url = format!("{}/api2/auth-token/", server.base_url);
+    const BURST: usize = 24;
+
+    let requests = (0..BURST).map(|_| {
+        let raw = raw.clone();
+        let url = url.clone();
+        async move {
+            let resp = raw
+                .post(&url)
+                .form(&[("username", "victim@example.com"), ("password", "wrong")])
+                .send()
+                .await
+                .unwrap();
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            (status, body)
+        }
+    });
+    let responses = futures::future::join_all(requests).await;
+
+    assert_eq!(responses.len(), BURST);
+    // Both a wrong password and a throttle answer 400 on this API surface; the
+    // error message is what tells them apart.
+    let checked = responses
+        .iter()
+        .filter(|(_, body)| body.contains("Unable to login with provided credentials"))
+        .count();
+    let throttled = responses
+        .iter()
+        .filter(|(_, body)| body.contains("Too many login attempts"))
+        .count();
+    let other: Vec<_> = responses
+        .iter()
+        .filter(|(_status, body)| {
+            !body.contains("Unable to login with provided credentials")
+                && !body.contains("Too many login attempts")
+        })
+        .map(|(status, body)| format!("{status}: {body}"))
+        .collect();
+    assert!(other.is_empty(), "unexpected responses: {other:?}");
+    assert!(
+        checked <= 5,
+        "only the configured budget may reach password verification, got {checked}: {responses:?}"
+    );
+    assert_eq!(
+        checked + throttled,
+        BURST,
+        "every request is either checked or throttled"
+    );
+}
+
 #[tokio::test]
 async fn test_login_success() {
     let server = TestServer::start().await;

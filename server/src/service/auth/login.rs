@@ -85,18 +85,17 @@ impl LoginService {
         // victim out of their own account from an unrelated address.
         let login_keys = LoginKeys::new(client_ip, username);
 
-        if self.login_rate_limiter.is_login_blocked(&login_keys) {
+        // Check the budget and reserve an in-flight attempt in one atomic step.
+        // Without the reservation, a concurrent burst would all pass the check
+        // before the first failure is recorded (PBKDF2 takes long enough), and
+        // each of them would get a password guess.
+        let Some(mut attempt) = self.login_rate_limiter.begin_login_attempt(&login_keys) else {
             return Ok(LoginResult::RateLimited);
-        }
-
-        let record_failure = || {
-            self.login_rate_limiter.record_login_failure(&login_keys);
         };
 
         let user_record = match self.repos.user.find_by_email(username).await? {
             Some(u) => u,
             None => {
-                record_failure();
                 // Run PBKDF2 against a dummy hash so a "user not found" response
                 // takes as long as a wrong-password response, avoiding username
                 // enumeration via response-time side channel.
@@ -106,6 +105,7 @@ impl LoginService {
                     self.password_hash_iterations,
                 )
                 .await;
+                attempt.fail();
                 return Ok(LoginResult::BadCredentials);
             }
         };
@@ -117,12 +117,12 @@ impl LoginService {
         )
         .await
         {
-            record_failure();
+            attempt.fail();
             return Ok(LoginResult::BadCredentials);
         }
 
         if !user_record.is_active {
-            record_failure();
+            attempt.fail();
             return Ok(LoginResult::AccountDisabled);
         }
 
@@ -130,7 +130,7 @@ impl LoginService {
             // The password was right, so this is not a failed guess; do not count
             // it toward the lockout. The API path does not mint a link (the web
             // sign-in does), but it must still refuse to issue a token.
-            self.login_rate_limiter.clear_login_failure(&login_keys);
+            attempt.succeed();
             return Ok(LoginResult::EmailUnverified);
         }
 
@@ -180,7 +180,7 @@ impl LoginService {
                         )
                         .await
                         {
-                            record_failure();
+                            attempt.fail();
                             return Ok(LoginResult::TwoFactorInvalid);
                         }
 
@@ -218,7 +218,11 @@ impl LoginService {
             }
         }
 
-        self.login_rate_limiter.clear_login_failure(&login_keys);
+        // The password (and second factor, when one was required) was correct:
+        // release the reservation and forgive the address/pair counters, exactly
+        // as the pre-reservation code did. The distinct-account spray history is
+        // intentionally kept.
+        attempt.succeed();
 
         // Upgrade the stored hash if its cost predates the configured one.
         // Best-effort: a failed write must not block a correct password.

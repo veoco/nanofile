@@ -2,7 +2,7 @@ pub mod generic;
 pub mod login;
 
 pub use generic::GenericRateLimiter;
-pub use login::{LoginKeys, LoginRateLimiter};
+pub use login::{LoginAttempt, LoginKeys, LoginRateLimiter};
 
 use std::collections::HashMap;
 

@@ -485,6 +485,27 @@ pub async fn login(
         .map(|html| (StatusCode::OK, Html(html)).into_response());
     }
 
+    // Check-and-reserve the login budget in one atomic step. The check at the top
+    // of this handler is only a cheap fast path (it spares a locked-out client the
+    // proof-of-work); this reservation is what actually bounds password
+    // verification, because a concurrent burst would otherwise all pass a plain
+    // check before the first failure is recorded.
+    let Some(mut attempt) = state.auth_limiters.login.begin_login_attempt(&login_keys) else {
+        return render_login_page(
+            &state,
+            &headers,
+            Some(
+                I18n::from_headers(&headers, &state.config().ui.default_language)
+                    .tr("auth.too_many_attempts")
+                    .to_string(),
+            ),
+            &next,
+            None,
+        )
+        .await
+        .map(|html| (StatusCode::TOO_MANY_REQUESTS, Html(html)).into_response());
+    };
+
     let user_record = state.repos.user.find_by_email(&form.email).await?;
 
     // Verify against a cost-matched dummy hash when the row is missing, and check
@@ -514,7 +535,7 @@ pub async fn login(
     // Same generic error for wrong password, disabled account and unknown email,
     // to avoid user enumeration (matching seahub).
     let Some(user_record) = user_record.filter(|u| password_ok && u.is_active) else {
-        state.auth_limiters.login.record_login_failure(&login_keys);
+        attempt.fail();
         return render_login_page(
             &state,
             &headers,
@@ -531,7 +552,7 @@ pub async fn login(
     };
 
     // Success forgives this address/pair but keeps the distinct-account spray history.
-    state.auth_limiters.login.clear_login_failure(&login_keys);
+    attempt.succeed();
 
     // A correct password is not enough for an unverified account: no session is
     // created and no last-login is recorded. Instead, offer a fresh link, but only

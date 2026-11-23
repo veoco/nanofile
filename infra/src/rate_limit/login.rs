@@ -42,8 +42,26 @@ const MAX_SPRAY_IPS: usize = 4096;
 /// trade-off against unbounded memory.
 const MAX_ATTEMPT_KEYS: usize = 50_000;
 
+/// One mutex covering both maps, so "check the budget and reserve an in-flight
+/// attempt" is atomic. Two separate mutexes would let a burst pass the check
+/// before any failure is recorded (the race this type exists to close), and
+/// acquiring them in different orders from the guard's release path could
+/// deadlock.
+#[derive(Default)]
+struct LoginState {
+    /// Recorded failures per key (`ip` and `ip:account`), inside the window.
+    failures: HashMap<String, Vec<i64>>,
+    /// Attempts currently being verified, per key. A reservation bounds how many
+    /// password checks can be in flight at once, which is what closes the
+    /// check-then-verify window: PBKDF2 takes long enough that an unbounded burst
+    /// would otherwise all pass the failure check before the first failure is
+    /// recorded. Reservations are released on success, failure or drop, so a
+    /// successful login still consumes no failure budget.
+    in_flight: HashMap<String, u32>,
+}
+
 pub struct LoginRateLimiter {
-    attempts: Mutex<HashMap<String, Vec<i64>>>,
+    state: Mutex<LoginState>,
     /// `ip -> account -> last failure`; a successful login deliberately does NOT clear
     /// this (see [`LoginRateLimiter::clear_login_failure`]).
     spray: Mutex<HashMap<String, HashMap<String, i64>>>,
@@ -59,7 +77,7 @@ pub struct LoginRateLimiter {
 impl LoginRateLimiter {
     pub fn new(max_attempts: u32, lockout_secs: u64, max_distinct_usernames: u32) -> Self {
         Self {
-            attempts: Mutex::new(HashMap::new()),
+            state: Mutex::new(LoginState::default()),
             spray: Mutex::new(HashMap::new()),
             max_attempts: AtomicU32::new(max_attempts),
             lockout_secs: AtomicI64::new(lockout_secs as i64),
@@ -103,16 +121,16 @@ impl LoginRateLimiter {
             .as_secs() as i64
     }
 
-    /// Acquire the mutex, recovering from poison: the map has no invariant a panic
-    /// elsewhere could violate.
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, Vec<i64>>> {
-        self.attempts.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Acquire the mutex, recovering from poison: neither map has an invariant a
+    /// panic elsewhere could violate.
+    fn lock(&self) -> MutexGuard<'_, LoginState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Evict the least recently active keys once [`MAX_ATTEMPT_KEYS`] is exceeded, so the
     /// common path stays a couple of hash operations.
-    fn shrink_attempts(map: &mut HashMap<String, Vec<i64>>) {
-        super::evict_oldest(map, MAX_ATTEMPT_KEYS);
+    fn shrink_attempts(state: &mut LoginState) {
+        super::evict_oldest(&mut state.failures, MAX_ATTEMPT_KEYS);
     }
 
     /// Record a failed login attempt for the given key.
@@ -122,12 +140,12 @@ impl LoginRateLimiter {
     /// the same policy as "forget that failures happened".
     pub fn record_failure(&self, key: &str) {
         let now = Self::now();
-        let mut map = self.lock();
-        let timestamps = map.entry(key.to_string()).or_default();
+        let mut state = self.lock();
+        let timestamps = state.failures.entry(key.to_string()).or_default();
         timestamps.push(now);
         let cutoff = now - self.window();
         timestamps.retain(|&t| t > cutoff);
-        Self::shrink_attempts(&mut map);
+        Self::shrink_attempts(&mut state);
     }
 
     /// The number of failures currently inside the window for this attempt's
@@ -135,15 +153,16 @@ impl LoginRateLimiter {
     ///
     /// This is the adaptive-captcha trigger. It deliberately reads the same map as
     /// the lockout, so a successful login that clears the pair/address budget also
-    /// clears the trigger.
+    /// clears the trigger. In-flight reservations are not failures and are not
+    /// counted here.
     pub fn failure_count(&self, keys: &LoginKeys) -> u32 {
         let now = Self::now();
         let cutoff = now - self.window();
-        let mut map = self.lock();
+        let mut state = self.lock();
         let mut count = 0;
         let mut stale = Vec::new();
         for key in [&keys.ip_key, &keys.pair_key] {
-            let Some(timestamps) = map.get_mut(key) else {
+            let Some(timestamps) = state.failures.get_mut(key) else {
                 continue;
             };
             timestamps.retain(|&t| t > cutoff);
@@ -154,7 +173,7 @@ impl LoginRateLimiter {
             }
         }
         for key in stale {
-            map.remove(&key);
+            state.failures.remove(&key);
         }
         count
     }
@@ -167,8 +186,8 @@ impl LoginRateLimiter {
         }
         let now = Self::now();
         let cutoff = now - self.window();
-        let mut map = self.lock();
-        let (stale, limited) = match map.get_mut(key) {
+        let mut state = self.lock();
+        let (stale, limited) = match state.failures.get_mut(key) {
             Some(timestamps) => {
                 timestamps.retain(|&t| t > cutoff);
                 (
@@ -180,7 +199,7 @@ impl LoginRateLimiter {
         };
         if stale {
             // All attempts expired: drop the key so it does not accumulate.
-            map.remove(key);
+            state.failures.remove(key);
             false
         } else {
             limited
@@ -195,9 +214,9 @@ impl LoginRateLimiter {
         }
         let now = Self::now();
         let cutoff = now - self.window();
-        let mut map = self.lock();
+        let mut state = self.lock();
         for key in keys {
-            let (stale, limited) = match map.get_mut(*key) {
+            let (stale, limited) = match state.failures.get_mut(*key) {
                 Some(timestamps) => {
                     timestamps.retain(|&t| t > cutoff);
                     (
@@ -208,7 +227,7 @@ impl LoginRateLimiter {
                 None => (false, false),
             };
             if stale {
-                map.remove(*key);
+                state.failures.remove(*key);
             } else if limited {
                 return true;
             }
@@ -223,19 +242,19 @@ impl LoginRateLimiter {
     pub fn record_failures(&self, keys: &[&str]) {
         let now = Self::now();
         let cutoff = now - self.window();
-        let mut map = self.lock();
+        let mut state = self.lock();
         for key in keys {
-            let timestamps = map.entry((*key).to_string()).or_default();
+            let timestamps = state.failures.entry((*key).to_string()).or_default();
             timestamps.push(now);
             timestamps.retain(|&t| t > cutoff);
         }
-        Self::shrink_attempts(&mut map);
+        Self::shrink_attempts(&mut state);
     }
 
     /// Clear all recorded attempts for a key (called on successful login).
     pub fn clear(&self, key: &str) {
-        let mut map = self.lock();
-        map.remove(key);
+        let mut state = self.lock();
+        state.failures.remove(key);
     }
 
     /// Whether this attempt is rejected before credential work: address failures,
@@ -259,6 +278,78 @@ impl LoginRateLimiter {
     pub fn clear_login_failure(&self, keys: &LoginKeys) {
         self.clear(&keys.ip_key);
         self.clear(&keys.pair_key);
+    }
+
+    /// Atomically check the budget and reserve one in-flight attempt, or return
+    /// `None` when this attempt must be refused immediately.
+    ///
+    /// This is the login path's entry point. Doing the check and the reservation
+    /// under one lock is what stops a concurrent burst from passing the failure
+    /// check before the first failure lands: the check and the expensive password
+    /// verification are separated by a lock-acquisition-sized window instead of a
+    /// PBKDF2-sized one.
+    ///
+    /// The reservation itself is not a failure: [`LoginAttempt::succeed`] releases
+    /// it and clears the address/pair counters as before, so a shared NAT is not
+    /// punished for simultaneous successful logins. The in-flight ceiling is
+    /// deliberately wider than the failure budget (`4 x`, clamped to
+    /// `4..=64`), so ordinary simultaneous logins from one address still fit while
+    /// an unbounded burst cannot.
+    pub fn begin_login_attempt(&self, keys: &LoginKeys) -> Option<LoginAttempt<'_>> {
+        let now = Self::now();
+        let cutoff = now - self.window();
+        let mut state = self.lock();
+
+        // Recorded failures: the same check `is_login_blocked` makes, including
+        // pruning keys whose window has emptied.
+        if !self.lockout_disabled() {
+            let limit = self.limit();
+            for key in [&keys.ip_key, &keys.pair_key] {
+                let (limited, stale) = match state.failures.get_mut(key) {
+                    Some(timestamps) => {
+                        timestamps.retain(|&t| t > cutoff);
+                        (timestamps.len() as u32 >= limit, timestamps.is_empty())
+                    }
+                    None => (false, false),
+                };
+                if stale {
+                    state.failures.remove(key);
+                } else if limited {
+                    return None;
+                }
+            }
+        }
+
+        // The spray detector is independent of the lockout switch.
+        if self.is_spraying(&keys.client_ip) {
+            return None;
+        }
+
+        // Reserve against the in-flight caps. The lockout being disabled (`0`)
+        // also disables the in-flight cap: a host that switched the lockout off
+        // asked for no throttling, and the cap exists only to protect the budget.
+        let reserved = if self.lockout_disabled() {
+            false
+        } else {
+            let limit = self.limit();
+            let ip_cap = limit.saturating_mul(4).clamp(4, 64);
+            let pair_cap = limit.max(1);
+            let ip_in_flight = state.in_flight.get(&keys.ip_key).copied().unwrap_or(0);
+            let pair_in_flight = state.in_flight.get(&keys.pair_key).copied().unwrap_or(0);
+            if ip_in_flight >= ip_cap || pair_in_flight >= pair_cap {
+                return None;
+            }
+            *state.in_flight.entry(keys.ip_key.clone()).or_default() += 1;
+            *state.in_flight.entry(keys.pair_key.clone()).or_default() += 1;
+            true
+        };
+
+        Some(LoginAttempt {
+            limiter: self,
+            keys: keys.clone(),
+            reserved,
+            completed: false,
+        })
     }
 
     /// Remember that `username` failed from `ip`, for the spray detector.
@@ -302,6 +393,75 @@ impl LoginRateLimiter {
             return false;
         }
         distinct >= self.distinct_limit()
+    }
+}
+
+/// One login attempt that passed the rate-limit gate and holds an in-flight
+/// reservation.
+///
+/// The caller must end it with [`LoginAttempt::fail`] (credential failure) or
+/// [`LoginAttempt::succeed`] (correct credentials, even if a later step such as
+/// 2FA still stops the login). Dropping it releases the reservation without
+/// recording either outcome, which is what a database error or a client
+/// disconnect should do.
+pub struct LoginAttempt<'a> {
+    limiter: &'a LoginRateLimiter,
+    keys: LoginKeys,
+    /// False when the lockout is disabled: nothing was reserved, so there is
+    /// nothing to release.
+    reserved: bool,
+    completed: bool,
+}
+
+impl LoginAttempt<'_> {
+    /// This attempt used a wrong password (or a wrong second factor): count it
+    /// against the address, the pair and the distinct-account spray detector.
+    pub fn fail(&mut self) {
+        if self.completed {
+            return;
+        }
+        self.completed = true;
+        self.release_reservation();
+        self.limiter
+            .record_failures(&[self.keys.ip_key.as_str(), self.keys.pair_key.as_str()]);
+        self.limiter
+            .record_username_failure(&self.keys.client_ip, &self.keys.username);
+    }
+
+    /// The password was correct: forgive the address/pair counters exactly as the
+    /// pre-reservation code did. The spray history is intentionally kept.
+    pub fn succeed(&mut self) {
+        if self.completed {
+            return;
+        }
+        self.completed = true;
+        self.release_reservation();
+        self.limiter.clear_login_failure(&self.keys);
+    }
+
+    fn release_reservation(&self) {
+        if !self.reserved {
+            return;
+        }
+        let mut state = self.limiter.lock();
+        for key in [&self.keys.ip_key, &self.keys.pair_key] {
+            let Some(count) = state.in_flight.get_mut(key) else {
+                continue;
+            };
+            if *count <= 1 {
+                state.in_flight.remove(key);
+            } else {
+                *count -= 1;
+            }
+        }
+    }
+}
+
+impl Drop for LoginAttempt<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.release_reservation();
+        }
     }
 }
 
@@ -398,12 +558,13 @@ mod tests {
         let limiter = LoginRateLimiter::new(3, 60, 0);
         let old = LoginRateLimiter::now() - 120;
         limiter
-            .attempts
+            .state
             .lock()
             .unwrap()
+            .failures
             .insert("stale".to_string(), vec![old]);
         assert!(!limiter.is_locked("stale"));
-        assert!(!limiter.attempts.lock().unwrap().contains_key("stale"));
+        assert!(!limiter.state.lock().unwrap().failures.contains_key("stale"));
     }
 
     /// Failures from one address only throttle that address for that account.
@@ -504,27 +665,27 @@ mod tests {
     fn failed_attempt_map_is_capped() {
         let limiter = LoginRateLimiter::new(5, 3600, 0);
         {
-            let mut map = limiter.attempts.lock().unwrap();
+            let mut state = limiter.state.lock().unwrap();
             for i in 0..(MAX_ATTEMPT_KEYS + 5) {
-                map.insert(format!("k{i}"), vec![i as i64]);
+                state.failures.insert(format!("k{i}"), vec![i as i64]);
             }
         }
         // The trigger's own timestamp is newest, so the injected keys are evicted first.
         limiter.record_failure("trigger");
 
-        let guard = limiter.attempts.lock().unwrap();
+        let state = limiter.state.lock().unwrap();
         assert!(
-            guard.len() <= MAX_ATTEMPT_KEYS,
+            state.failures.len() <= MAX_ATTEMPT_KEYS,
             "map must stay capped, len={}",
-            guard.len()
+            state.failures.len()
         );
         for i in 0..5 {
             assert!(
-                !guard.contains_key(&format!("k{i}")),
+                !state.failures.contains_key(&format!("k{i}")),
                 "k{i} is the oldest and must be evicted"
             );
         }
-        assert!(guard.contains_key("trigger"));
+        assert!(state.failures.contains_key("trigger"));
     }
 
     /// The adaptive captcha reads failures even when the lockout itself is off.
@@ -563,11 +724,136 @@ mod tests {
 
         let old = LoginRateLimiter::now() - 120;
         {
-            let mut map = limiter.attempts.lock().unwrap();
-            for timestamps in map.values_mut() {
+            let mut state = limiter.state.lock().unwrap();
+            for timestamps in state.failures.values_mut() {
                 timestamps.fill(old);
             }
         }
         assert_eq!(limiter.failure_count(&target), 0);
+    }
+
+    /// A burst that arrives before any failure is recorded must not all reach the
+    /// password verification: the reservation is taken under the same lock as the
+    /// check. Successful attempts hold their reservation until this test releases
+    /// them (the second barrier), so scheduling cannot turn the cap into a race.
+    #[test]
+    fn concurrent_attempts_are_capped_before_any_failure_is_recorded() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Barrier};
+
+        const THREADS: usize = 32;
+        let limiter = Arc::new(LoginRateLimiter::new(5, 60, 0));
+        let keys = LoginKeys::new("203.0.113.9", "victim@example.com");
+        // Two phases: all start together; each holds its guard until every thread
+        // has attempted the reservation, then releases.
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let granted = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let limiter = limiter.clone();
+                let keys = keys.clone();
+                let barrier = barrier.clone();
+                let granted = granted.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let guard = limiter.begin_login_attempt(&keys);
+                    if guard.is_some() {
+                        granted.fetch_add(1, Ordering::SeqCst);
+                    }
+                    barrier.wait();
+                    drop(guard);
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("attempt thread");
+        }
+
+        // The per-pair cap follows the failure budget; the address cap is wider.
+        assert_eq!(
+            granted.load(Ordering::SeqCst),
+            5,
+            "only the failure budget's worth of attempts may be in flight"
+        );
+    }
+
+    /// A successful attempt releases its reservation and clears the failure
+    /// budget, so a working user is never throttled by earlier typos.
+    #[test]
+    fn success_releases_the_reservation_without_recording_a_failure() {
+        let limiter = LoginRateLimiter::new(2, 60, 0);
+        let keys = LoginKeys::new("198.51.100.4", "user@example.com");
+
+        for _ in 0..5 {
+            let mut attempt = limiter
+                .begin_login_attempt(&keys)
+                .expect("a successful attempt must be admitted under the budget");
+            attempt.succeed();
+            assert_eq!(limiter.failure_count(&keys), 0);
+        }
+        assert!(!limiter.is_login_blocked(&keys));
+    }
+
+    /// Dropping an attempt only releases the reservation: a database error or a
+    /// client disconnect is not a credential failure.
+    #[test]
+    fn dropping_an_attempt_records_nothing_and_frees_the_slot() {
+        let limiter = LoginRateLimiter::new(1, 60, 0);
+        let keys = LoginKeys::new("198.51.100.4", "user@example.com");
+
+        drop(limiter.begin_login_attempt(&keys));
+        assert_eq!(limiter.failure_count(&keys), 0);
+        // The single pair slot is free again.
+        let mut attempt = limiter
+            .begin_login_attempt(&keys)
+            .expect("the dropped attempt must not hold the slot");
+        attempt.succeed();
+    }
+
+    /// A failed attempt records against the address and the pair, and holding the
+    /// guard's failure consumes the budget: the next attempt is refused without
+    /// waiting for any window.
+    #[test]
+    fn a_failed_attempt_consumes_the_budget_immediately() {
+        let limiter = LoginRateLimiter::new(2, 60, 0);
+        let keys = LoginKeys::new("198.51.100.4", "user@example.com");
+
+        let mut first = limiter.begin_login_attempt(&keys).expect("first attempt");
+        first.fail();
+        let mut second = limiter.begin_login_attempt(&keys).expect("second attempt");
+        second.fail();
+
+        assert!(limiter.is_login_blocked(&keys));
+        assert!(limiter.begin_login_attempt(&keys).is_none());
+    }
+
+    /// `0 = unlimited` also switches the in-flight cap off: the switch means no
+    /// throttling, not "throttle without recording failures".
+    #[test]
+    fn disabled_lockout_does_not_cap_in_flight_attempts() {
+        let limiter = LoginRateLimiter::new(0, 60, 0);
+        let keys = LoginKeys::new("203.0.113.9", "user@example.com");
+        let mut attempts: Vec<_> = (0..20)
+            .map(|_| {
+                limiter
+                    .begin_login_attempt(&keys)
+                    .expect("lockout disabled means no cap")
+            })
+            .collect();
+        for attempt in &mut attempts {
+            attempt.succeed();
+        }
+    }
+
+    /// A record whose failure budget is already spent refuses the next attempt
+    /// even while no other request is in flight.
+    #[test]
+    fn recorded_failures_are_checked_by_begin() {
+        let limiter = LoginRateLimiter::new(2, 60, 0);
+        let keys = LoginKeys::new("203.0.113.9", "victim@example.com");
+        limiter.record_failures(&[keys.ip_key.as_str(), keys.pair_key.as_str()]);
+        limiter.record_failures(&[keys.ip_key.as_str(), keys.pair_key.as_str()]);
+        assert!(limiter.begin_login_attempt(&keys).is_none());
     }
 }
