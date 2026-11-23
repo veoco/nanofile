@@ -1072,3 +1072,84 @@ async fn upload_adding_a_missing_file_is_446() {
     assert_eq!(resp.status(), 446, "a missing file object must be rejected");
     assert_eq!(head(&f).await, base, "HEAD must not move");
 }
+
+/// The modifier in a conflict name is the stale entry's `modifier` field, which
+/// the client controls. It must not inject path separators, characters Win32
+/// forbids or control characters into the name the server writes into the tree.
+#[tokio::test]
+async fn merge_conflict_name_sanitizes_the_remote_modifier() {
+    let f = TestFixture::new().await;
+
+    let base = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("f.txt", b"v0", REG)],
+        &[],
+        None,
+    )
+    .await;
+    let head_a = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("f.txt", b"winner", REG)],
+        &[],
+        Some(&base),
+    )
+    .await;
+
+    // A stale client uploads f.txt with a hostile modifier: path separators,
+    // Win32-forbidden characters and a control character.
+    let stale_id =
+        common::sync_put_file(&f.client, &f.sync_token, &f.repo_id, b"stale-version").await;
+    let root = FsDirData {
+        dirents: vec![DirEntryData {
+            id: stale_id,
+            mode: REG,
+            modifier: "in/v:a*l?u\"e\n".to_string(),
+            mtime: chrono::Utc::now().timestamp(),
+            name: "f.txt".to_string(),
+            size: b"stale-version".len() as i64,
+        }],
+        obj_type: 3,
+        version: 1,
+    };
+    let resp = upload_root_commit(
+        &f,
+        &root,
+        Some(&base),
+        "stale upload with a hostile modifier",
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "the stale upload must be merged");
+
+    let merged = head(&f).await;
+    assert_ne!(merged, head_a, "the upload must have been merged");
+    assert_eq!(
+        commit_json(&f, &merged).await["conflict"].as_i64().unwrap(),
+        1
+    );
+
+    let entries = listing(&f, "/").await;
+    assert_eq!(entries.len(), 2, "both versions must survive: {entries:?}");
+    let conflict_name = entries
+        .iter()
+        .map(|(name, _, _)| name.clone())
+        .find(|name| name != "f.txt")
+        .expect("a renamed conflict entry");
+    let prefix = "f (SFConflict invalue ";
+    assert!(
+        conflict_name.starts_with(prefix) && conflict_name.ends_with(").txt"),
+        "the modifier must be sanitized into a plain suffix: {conflict_name}"
+    );
+    assert!(
+        base::sanitize::validate_filename(&conflict_name).is_ok(),
+        "the conflict name must be a valid filename: {conflict_name}"
+    );
+    assert_eq!(
+        entry(&f, "/", &conflict_name).await.0,
+        file_fs_id(b"stale-version"),
+        "the stale content must survive under the sanitized name"
+    );
+}

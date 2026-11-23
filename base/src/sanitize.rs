@@ -3,8 +3,30 @@
 //! Defense in depth: tree resolution already keeps paths inside a library;
 //! these checks reject path confusion within a repo before it reaches a client.
 
-const INVALID_FILENAME_CHARS: &[char] = &['\0', '\n', '\r', '\t', '\'', '"', '<', '>', '\\'];
-const MAX_FILENAME_LEN: usize = 255;
+/// Characters that confuse path, JSON or HTTP-header handling everywhere.
+///
+/// This is the set a *stored* path must not contain: `\0`, the newlines and the
+/// tab are control characters; the quotes and angle brackets are shell/HTML
+/// delimiters; a backslash is a separator on Windows. `canonicalize_path` applies
+/// this set when a path is *addressable*, so an existing library whose entries
+/// were created by another Seafile server keeps resolving.
+const PATH_CONFUSING_CHARS: &[char] = &['\0', '\n', '\r', '\t', '\'', '"', '<', '>', '\\'];
+
+/// Characters Win32 forbids in a *new* file name (`< > : " / \ | ? *`, minus the
+/// separators handled separately).
+///
+/// Only [`validate_filename`] applies this set: it runs on the creation boundary
+/// (upload, rename, mkdir, sync object insertion, WebDAV). It is deliberately not
+/// part of path canonicalization, so a name that predates the rule can still be
+/// read and deleted; creating a new one would give Windows clients a path they
+/// cannot materialize.
+const WINDOWS_FORBIDDEN_FILENAME_CHARS: &[char] = &[':', '*', '?', '|'];
+
+/// Longest filename accepted, in UTF-8 bytes: Windows' `MAX_PATH` component
+/// limit is 255 UTF-16 code units, and every SMB/NTFS client nanofile targets
+/// breaks at the same ballpark. Shared with the conflict/uniquify helpers so a
+/// generated name cannot exceed what a stored name may be.
+pub const MAX_FILENAME_LEN: usize = 255;
 const MAX_PATH_LEN: usize = 4096;
 
 /// Windows reserves these device names regardless of extension or trailing
@@ -33,7 +55,47 @@ pub fn validate_filename(name: &str) -> Result<(), &'static str> {
     if name.len() > MAX_FILENAME_LEN {
         return Err("filename too long");
     }
-    if name.contains(INVALID_FILENAME_CHARS) {
+    if name.contains(PATH_CONFUSING_CHARS) || name.contains(WINDOWS_FORBIDDEN_FILENAME_CHARS) {
+        return Err("filename contains invalid characters");
+    }
+    // Beyond the four control characters in `PATH_CONFUSING_CHARS`: no new name
+    // may carry any control character (log/terminal/JSON confusion).
+    if name.chars().any(char::is_control) {
+        return Err("filename contains control characters");
+    }
+    if name.contains('/') {
+        return Err("filename must not contain path separators");
+    }
+    // Win32 silently strips trailing dots and spaces (`CON.`, `report.txt `),
+    // so such an entry exists under one name on Windows and another everywhere
+    // else — a race that makes a synced tree disagree with itself. Reject the
+    // name instead of creating an entry a Windows client cannot address.
+    if name.ends_with('.') || name.ends_with(' ') {
+        return Err("filename must not end with a dot or space");
+    }
+    if is_windows_reserved_name(name) {
+        return Err("filename is reserved by Windows");
+    }
+    Ok(())
+}
+
+/// The filename rule that predates the Windows-only tightening.
+///
+/// A sync client re-sends whole directory objects, and a directory object may
+/// legitimately contain entries named under the old rule (created before the
+/// tightening, by this server or another Seafile server). Rejecting that object
+/// would make the directory un-syncable forever, so the sync ingest keeps
+/// accepting those names. Every interactive creation surface (upload, rename,
+/// mkdir, WebDAV) applies [`validate_filename`] instead, so new entries get the
+/// stricter rule.
+pub fn validate_legacy_filename(name: &str) -> Result<(), &'static str> {
+    if name.is_empty() || name == "." || name == ".." {
+        return Err("invalid filename");
+    }
+    if name.len() > MAX_FILENAME_LEN {
+        return Err("filename too long");
+    }
+    if name.contains(PATH_CONFUSING_CHARS) {
         return Err("filename contains invalid characters");
     }
     if name.contains('/') {
@@ -95,7 +157,7 @@ pub fn canonicalize_path(path: &str) -> Result<String, &'static str> {
                     if name_str == "." || name_str == ".." {
                         return Err("path contains unnormalized components");
                     }
-                    for ch in INVALID_FILENAME_CHARS {
+                    for ch in PATH_CONFUSING_CHARS {
                         if name_str.contains(*ch) {
                             return Err("path contains invalid characters");
                         }
@@ -200,6 +262,77 @@ mod tests {
         assert!(validate_filename("a\\b").is_err());
     }
 
+    /// Win32 forbids `: * ? |` in file names, so syncing such an entry would
+    /// give Windows clients a path they cannot create or open.
+    #[test]
+    fn test_windows_forbidden_characters_rejected() {
+        for n in ["a:b", "a*b", "a?b", "a|b", "C:report.txt", "what?.txt"] {
+            assert!(validate_filename(n).is_err(), "{n} should be rejected");
+        }
+        // Any control character, not just the four in the path-confusion set.
+        for n in ["bad\u{1}name", "x\u{7f}y", "a\u{85}b"] {
+            assert!(validate_filename(n).is_err(), "{n:?} should be rejected");
+        }
+        // Punctuation Win32 accepts stays accepted (parentheses are used by the
+        // conflict renamer, so they must not be caught by this rule).
+        for n in [
+            "a,b.txt", "a;b.txt", "a#b.txt", "a@b.txt", "a!b.txt", "a(b).txt", "a[b].txt",
+            "a=b.txt", "a&b.txt", "a+b.txt", "a%b.txt", "a^b.txt", "a~b.txt",
+        ] {
+            assert!(validate_filename(n).is_ok(), "{n} should be accepted");
+        }
+    }
+
+    /// Win32 strips trailing dots and spaces, so the server refuses to create an
+    /// entry whose name would not round-trip through a Windows client.
+    #[test]
+    fn test_trailing_dot_or_space_rejected() {
+        for n in ["a.", "a ", "report.txt.", "report.txt ", "a. ."] {
+            assert!(validate_filename(n).is_err(), "{n:?} should be rejected");
+        }
+        // A leading dot (dotfile) and embedded dots/spaces are still fine.
+        assert!(validate_filename(".profile").is_ok());
+        assert!(validate_filename(".profile.").is_err());
+        assert!(validate_filename("a.b").is_ok());
+        assert!(validate_filename("a b").is_ok());
+    }
+
+    #[test]
+    fn test_filename_length_boundary() {
+        assert!(validate_filename(&"x".repeat(MAX_FILENAME_LEN)).is_ok());
+        assert!(validate_filename(&"x".repeat(MAX_FILENAME_LEN + 1)).is_err());
+        // The limit is bytes (as stored and as Windows counts the component),
+        // not characters: 84 × 3-byte chars fit in 255 bytes.
+        let multibyte = "文".repeat(84);
+        assert_eq!(multibyte.len(), MAX_FILENAME_LEN - 3);
+        assert!(validate_filename(&multibyte).is_ok());
+        // 85 characters are exactly 255 bytes: still allowed.
+        assert!(validate_filename(&format!("{multibyte}文")).is_ok());
+        // 86 characters are 258 bytes: over the limit, unlike a char count that
+        // would still be far below 255.
+        assert!(validate_filename(&format!("{multibyte}文文")).is_err());
+    }
+
+    /// The sync ingest keeps the pre-tightening rule so a directory object with a
+    /// legacy name can be re-sent; interactive creation uses the stricter rule.
+    #[test]
+    fn test_legacy_filename_rule_stays_permissive_for_sync() {
+        for name in ["a:b", "a*b", "a?b", "a|b", "report.txt "] {
+            assert!(
+                validate_filename(name).is_err(),
+                "{name:?} is refused for a new entry"
+            );
+            assert!(
+                validate_legacy_filename(name).is_ok(),
+                "{name:?} must stay acceptable in a re-sent sync object"
+            );
+        }
+        // The path-confusion rules the sync ingest already enforced still apply.
+        for name in ["a/b", "a\\b", "a\0b", "a\nb", "a'b", "a\"b", "a<b", "a>b"] {
+            assert!(validate_legacy_filename(name).is_err(), "{name:?}");
+        }
+    }
+
     #[test]
     fn test_windows_reserved_names_rejected() {
         for n in [
@@ -246,6 +379,24 @@ mod tests {
         assert!(validate_path("file.txt").is_err());
         assert!(validate_path("/../etc").is_err());
         assert!(validate_path("/foo\0bar").is_err());
+    }
+
+    /// Path components share the *stored-path* rule, not the creation rule: a
+    /// library may still contain entries created by an older Seafile server whose
+    /// names use characters Win32 forbids, and those entries must stay readable
+    /// and deletable. Only creating a new such name is rejected.
+    #[test]
+    fn test_path_component_rules_are_the_stored_path_rules() {
+        for path in ["/foo\0bar", "/foo'bar", "/foo\"bar", "/foo<bar", "/foo>bar"] {
+            assert!(validate_path(path).is_err(), "{path:?} should be rejected");
+        }
+        // A path addresses an existing entry even when a *new* name with these
+        // characters would be refused by `validate_filename`.
+        for path in ["/foo:bar", "/foo*bar", "/foo?bar", "/foo|bar", "/a/b|c"] {
+            assert!(validate_path(path).is_ok(), "{path} must stay addressable");
+        }
+        assert!(validate_filename("foo:bar").is_err());
+        assert!(validate_filename("foo|bar").is_err());
     }
 
     #[test]

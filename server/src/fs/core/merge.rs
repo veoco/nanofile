@@ -19,6 +19,7 @@ use crate::fs::core::tree::read_fs_dir_data;
 use crate::repository::Repositories;
 use base::common::{DirEntryData, FsDirData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
+use base::sanitize::{MAX_FILENAME_LEN, validate_filename};
 
 /// Result of merging one directory tree.
 pub struct MergeOutcome {
@@ -468,23 +469,102 @@ impl MergeCtx<'_> {
     }
 }
 
+/// Marker prefix of a conflict name, before the modifier (see `conflict_path`).
+const CONFLICT_PREFIX: &str = " (SFConflict ";
+
+/// Rename a conflicted entry to `"<stem> (SFConflict <modifier> <timestamp>)<ext>"`.
+///
+/// The modifier is a nickname or email from the library's user table (or the
+/// commit author), i.e. attacker-influenced data. It is stripped of control
+/// characters, path separators and characters Win32 forbids, so the generated
+/// name can neither escape the directory nor carry an entry a Windows client
+/// cannot materialize. The name is bounded to [`MAX_FILENAME_LEN`] bytes by
+/// shortening the stem (extension and marker survive).
+///
+/// If the result is still not a valid filename — the original name itself is
+/// malformed, e.g. it contains `?` — the modifier-free shape is tried, and a
+/// name that cannot be made valid keeps its original name instead of losing the
+/// entry (the merge must not drop data); the failure is logged for the operator.
 fn conflict_path(path: &str, modifier: Option<&str>, timestamp: &str) -> String {
-    match path.rfind('.') {
-        Some(dot) => {
-            let stem = &path[..dot];
-            let extension = &path[dot + 1..];
-            match modifier {
-                Some(modifier) => {
-                    format!("{stem} (SFConflict {modifier} {timestamp}).{extension}")
-                }
-                None => format!("{stem} (SFConflict {timestamp}).{extension}"),
-            }
+    let (stem, extension) = match path.rfind('.') {
+        // The dot belongs to the extension, like the original `format!`: a
+        // dotfile (".bashrc") has an empty stem and keeps its leading dot.
+        Some(dot) => (&path[..dot], Some(&path[dot..])),
+        None => (path, None),
+    };
+    let extension_len = extension.map_or(0, str::len);
+    let timestamp_overhead = CONFLICT_PREFIX.len() + " ".len() + timestamp.len() + ")".len();
+
+    let build = |label: &str| -> String {
+        let tail_len = label.len() + extension_len;
+        let stem_budget = MAX_FILENAME_LEN.saturating_sub(tail_len);
+        let mut name = String::with_capacity(stem_budget + tail_len);
+        name.push_str(truncate_utf8(stem, stem_budget));
+        name.push_str(label);
+        if let Some(extension) = extension {
+            name.push_str(extension);
         }
-        None => match modifier {
-            Some(modifier) => format!("{path} (SFConflict {modifier} {timestamp})"),
-            None => format!("{path} (SFConflict {timestamp})"),
-        },
+        name
+    };
+
+    if let Some(modifier) = modifier {
+        // Reserve room for the marker and the extension; only then take from
+        // the modifier, so a long nickname cannot push the name over the limit.
+        let modifier_budget = MAX_FILENAME_LEN
+            .saturating_sub(timestamp_overhead)
+            .saturating_sub(extension_len);
+        let clean = sanitize_conflict_modifier(modifier, modifier_budget);
+        let candidate = build(&format!("{CONFLICT_PREFIX}{clean} {timestamp})"));
+        if validate_filename(&candidate).is_ok() {
+            return candidate;
+        }
     }
+
+    let candidate = build(&format!("{CONFLICT_PREFIX}{timestamp})"));
+    if validate_filename(&candidate).is_ok() {
+        return candidate;
+    }
+
+    tracing::error!(
+        path,
+        modifier = modifier.unwrap_or_default(),
+        "merge: cannot build a valid conflict filename, keeping the original name"
+    );
+    path.to_string()
+}
+
+/// Strip everything a generated conflict name must not contain from `modifier`.
+///
+/// Removed rather than escaped: the conflict suffix is user-facing, and a name
+/// like `a (SFConflict ../evil 2026-…).txt` would otherwise leak the traversal
+/// attempt into every client's conflict list.
+fn sanitize_conflict_modifier(modifier: &str, max_bytes: usize) -> String {
+    let cleaned: String = modifier
+        .chars()
+        .filter(|ch| {
+            !ch.is_control()
+                && !matches!(
+                    ch,
+                    '/' | '\\' | '\'' | '"' | '<' | '>' | ':' | '*' | '?' | '|'
+                )
+        })
+        .collect();
+    // The modifier sits before " <timestamp>)", so a trailing dot/space does not
+    // end the name; it is still trimmed so repeated separators do not pile up.
+    let cleaned = cleaned.trim_end_matches([' ', '.']);
+    truncate_utf8(cleaned, max_bytes).to_string()
+}
+
+/// Prefix of `s` at most `max_bytes` long, never splitting a UTF-8 character.
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 fn format_local_timestamp(seconds: i64) -> String {
@@ -567,6 +647,70 @@ mod tests {
         assert_eq!(
             conflict_path("a.txt", Some(""), timestamp),
             "a (SFConflict  2026-09-17-10-20-30).txt"
+        );
+    }
+
+    /// The modifier comes from a nickname/email (and the creator name from the
+    /// client), so anything that would break the filename is removed before it
+    /// is embedded.
+    #[test]
+    fn conflict_path_sanitizes_the_modifier() {
+        let timestamp = "2026-09-17-10-20-30";
+        assert_eq!(
+            conflict_path("a.txt", Some("in/v:a*l?u\"e\n"), timestamp),
+            "a (SFConflict invalue 2026-09-17-10-20-30).txt"
+        );
+        assert_eq!(
+            conflict_path("a.txt", Some("../evil\\dir"), timestamp),
+            "a (SFConflict ..evildir 2026-09-17-10-20-30).txt"
+        );
+        // A normal nickname/email keeps the format the desktop clients show.
+        assert_eq!(
+            conflict_path("report.docx", Some("alice@example.com"), timestamp),
+            "report (SFConflict alice@example.com 2026-09-17-10-20-30).docx"
+        );
+    }
+
+    /// No conflict name may exceed the server's own filename limit: a long
+    /// modifier is truncated and a long stem is shortened, keeping the marker
+    /// and the extension.
+    #[test]
+    fn conflict_path_stays_within_the_filename_limit() {
+        let timestamp = "2026-09-17-10-20-30";
+
+        let long_modifier = "m".repeat(1000);
+        let out = conflict_path("a.txt", Some(&long_modifier), timestamp);
+        assert_eq!(out.len(), MAX_FILENAME_LEN);
+        assert!(
+            out.ends_with(").txt"),
+            "marker/extension must survive: {out}"
+        );
+        assert!(validate_filename(&out).is_ok());
+
+        let long_name = format!("{}.txt", "n".repeat(240));
+        let out = conflict_path(&long_name, Some("Alice"), timestamp);
+        assert_eq!(out.len(), MAX_FILENAME_LEN);
+        assert!(out.starts_with(&"n".repeat(200)), "got {out}");
+        assert!(out.ends_with(").txt"), "got {out}");
+        assert!(validate_filename(&out).is_ok());
+    }
+
+    /// A malformed original name cannot be renamed into a valid one; the entry
+    /// must survive under its original name rather than be dropped.
+    #[test]
+    fn conflict_path_falls_back_when_the_name_cannot_be_fixed() {
+        let timestamp = "2026-09-17-10-20-30";
+        // An invalid character in the original name makes every shape invalid.
+        assert_eq!(
+            conflict_path("bad?.txt", Some("Alice"), timestamp),
+            "bad?.txt"
+        );
+        // An extension longer than the whole budget leaves no room for the
+        // marker, so the original name is kept as well.
+        let huge_extension = format!("a.{}", "x".repeat(250));
+        assert_eq!(
+            conflict_path(&huge_extension, None, timestamp),
+            huge_extension
         );
     }
 

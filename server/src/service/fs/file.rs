@@ -1084,6 +1084,31 @@ impl FileService {
         Ok(())
     }
 
+    /// A lock must name an entry that exists in the library's current HEAD.
+    ///
+    /// A lock on a missing path does not protect anything, is swept by the next
+    /// commit, and shows up on clients as a lock on a file they cannot open;
+    /// answer 404 up front instead of creating it.
+    async fn ensure_lock_target_exists(&self, repo_id: &str, path: &str) -> Result<(), AppError> {
+        let head = crate::fs::core::repo_head(&self.repos, repo_id).await?;
+        if head.head_commit_id.is_none() {
+            return Err(AppError::NotFound(format!("path not found: {path}")));
+        }
+        crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head.root_id, path)
+            .await
+            .map_err(|e| match e {
+                AppError::NotFound(_) => AppError::NotFound(format!("path not found: {path}")),
+                other => other,
+            })?;
+        Ok(())
+    }
+
+    /// Lock or unlock a file through the REST surface.
+    ///
+    /// Privileges follow the sync protocol: a lock belongs to its creator, a
+    /// second user cannot re-lock (403 `Locked`, the same body the sync client
+    /// parses) or unlock (403) a file someone else holds, and the owner's own
+    /// repeated lock/unlock is idempotent.
     pub async fn lock_file(
         &self,
         repo_id: &str,
@@ -1104,10 +1129,10 @@ impl FileService {
 
         match operation {
             "lock" => {
-                // Name the row's actual owner in the event: locking an
-                // already-locked file is a no-op here, so claiming the caller
-                // would tell subscribed clients they hold someone else's lock.
-                let mut lock_user = email.to_string();
+                self.ensure_lock_target_exists(repo_id, &path).await?;
+
+                // Name the row's actual owner in the event: only the owner can
+                // reach the notification below, so that is the caller.
                 match self.find_lock(repo_id, &path).await? {
                     None => {
                         self.repos
@@ -1121,14 +1146,13 @@ impl FileService {
                             )
                             .await?;
                     }
+                    Some(record) if record.user_id != user_record.id => {
+                        // Never hand another user's lock to the caller.
+                        return Err(AppError::Locked(path));
+                    }
                     // Migrate a legacy absolute row to the canonical key while
-                    // keeping its original owner.
+                    // keeping its original owner (the caller).
                     Some(record) if record.path != path => {
-                        if record.user_id != user_record.id
-                            && let Some(owner) = self.repos.user.find_by_id(record.user_id).await?
-                        {
-                            lock_user = owner.email;
-                        }
                         self.repos
                             .locked_file
                             .delete_by_repo_and_path(repo_id, &record.path)
@@ -1144,13 +1168,8 @@ impl FileService {
                             )
                             .await?;
                     }
-                    Some(record) => {
-                        if record.user_id != user_record.id
-                            && let Some(owner) = self.repos.user.find_by_id(record.user_id).await?
-                        {
-                            lock_user = owner.email;
-                        }
-                    }
+                    // Same owner, canonical row: idempotent.
+                    Some(_) => {}
                 }
 
                 if let Some(mgr) = &self.notification_manager {
@@ -1158,13 +1177,21 @@ impl FileService {
                         repo_id: repo_id.to_string(),
                         path: path.clone(),
                         change_event: "locked".to_string(),
-                        lock_user,
+                        lock_user: email.to_string(),
                     };
                     mgr.notify(event).await;
                 }
             }
             "unlock" => {
-                self.delete_lock(repo_id, &path).await?;
+                // Only the owner may release a lock; a missing row means the
+                // file is already unlocked, which is the caller's goal too.
+                match self.find_lock(repo_id, &path).await? {
+                    Some(record) if record.user_id != user_record.id => {
+                        return Err(AppError::Forbidden);
+                    }
+                    Some(_) => self.delete_lock(repo_id, &path).await?,
+                    None => {}
+                }
 
                 if let Some(mgr) = &self.notification_manager {
                     let event = FileLockEvent {
@@ -1198,9 +1225,15 @@ impl FileService {
         user_id: i32,
     ) -> Result<(), AppError> {
         let path = crate::fs::core::canonical_lock_path(path)?;
+        self.ensure_lock_target_exists(repo_id, &path).await?;
         let now = chrono::Utc::now().timestamp();
 
         match self.find_lock(repo_id, &path).await? {
+            Some(record) if record.user_id != user_id => {
+                // A lock is exclusive: a different user must unlock first (or
+                // the owner must be edited through the REST endpoint).
+                return Err(AppError::Locked(path));
+            }
             Some(record) if record.path == path => {
                 self.repos
                     .locked_file
@@ -1234,6 +1267,9 @@ impl FileService {
     }
 
     /// Unlock a file via the sync protocol (includes lock timestamp update).
+    ///
+    /// Only the lock owner may unlock it; unlocking an already-unlocked file is
+    /// a no-op so a retried request stays successful.
     pub async fn unlock_file_sync(
         &self,
         repo_id: &str,
@@ -1241,11 +1277,16 @@ impl FileService {
         user_id: i32,
     ) -> Result<(), AppError> {
         let path = crate::fs::core::canonical_lock_path(path)?;
-        self.delete_lock(repo_id, &path).await?;
-
-        crate::fs::core::upsert_lock_timestamp(self.db.as_ref(), repo_id).await?;
-        self.notify_file_lock(repo_id, &path, "unlocked", user_id)
-            .await;
+        match self.find_lock(repo_id, &path).await? {
+            Some(record) if record.user_id != user_id => return Err(AppError::Forbidden),
+            Some(_) => {
+                self.delete_lock(repo_id, &path).await?;
+                crate::fs::core::upsert_lock_timestamp(self.db.as_ref(), repo_id).await?;
+                self.notify_file_lock(repo_id, &path, "unlocked", user_id)
+                    .await;
+            }
+            None => {}
+        }
         Ok(())
     }
 

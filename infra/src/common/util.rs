@@ -220,21 +220,23 @@ pub fn format_size(size: i64) -> String {
 }
 
 /// Append " (N)" before the extension until the name is unused.
+///
+/// The result never exceeds [`base::sanitize::MAX_FILENAME_LEN`] UTF-8 bytes:
+/// when the counter pushes the name past the limit, the stem is shortened on a
+/// UTF-8 character boundary and the extension and the " (N)" marker are kept.
+/// Without this, repeatedly uploading the same long name grew the name past
+/// what the server itself accepts and what a Windows client can store.
 pub fn generate_unique_filename(existing: &[DirEntryData], name: &str) -> String {
-    let base = if let Some(dot) = name.rfind('.') {
-        let (stem, ext) = name.split_at(dot);
-        (stem.to_string(), ext.to_string())
-    } else {
-        (name.to_string(), String::new())
+    let max_len = base::sanitize::MAX_FILENAME_LEN;
+    let (stem, extension) = match name.rfind('.') {
+        Some(dot) => (&name[..dot], &name[dot..]),
+        None => (name, ""),
     };
 
     let mut i = 1;
     loop {
-        let candidate = if base.1.is_empty() {
-            format!("{} ({})", base.0, i)
-        } else {
-            format!("{} ({}){}", base.0, i, base.1)
-        };
+        let suffix = format!(" ({i})");
+        let candidate = fit_unique_name(stem, &suffix, extension, max_len);
         if !existing.iter().any(|d| d.name == candidate) {
             return candidate;
         }
@@ -242,9 +244,40 @@ pub fn generate_unique_filename(existing: &[DirEntryData], name: &str) -> String
     }
 }
 
+/// `stem + suffix + extension`, shortened to at most `max_len` bytes.
+///
+/// The suffix (the " (N)" marker) is always kept intact and the extension is
+/// kept whenever it fits next to it; only the stem shrinks. A genuinely
+/// pathological extension longer than the whole limit is itself truncated, so
+/// the caller still gets a bounded, usable name.
+fn fit_unique_name(stem: &str, suffix: &str, extension: &str, max_len: usize) -> String {
+    let fixed = suffix.len() + extension.len();
+    if fixed < max_len {
+        let stem = truncate_utf8(stem, max_len - fixed);
+        format!("{stem}{suffix}{extension}")
+    } else {
+        let extension = truncate_utf8(extension, max_len.saturating_sub(suffix.len()));
+        format!("{suffix}{extension}")
+    }
+}
+
+/// Prefix of `s` at most `max_bytes` long, never splitting a UTF-8 character.
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 #[cfg(test)]
 mod tests {
-    use super::format_size;
+    use super::{format_size, generate_unique_filename};
+
+    use base::common::DirEntryData;
 
     #[cfg(unix)]
     use super::ensure_private_dir;
@@ -283,5 +316,78 @@ mod tests {
         assert_eq!(format_size(1_000_000), "1.0 MB");
         assert_eq!(format_size(1_000_000_000), "1.0 GB");
         assert_eq!(format_size(1_000_000_000_000), "1.0 TB");
+    }
+
+    fn dirent(name: &str) -> DirEntryData {
+        DirEntryData {
+            id: "0".repeat(40),
+            mode: 0o100644,
+            modifier: "u@example.com".to_string(),
+            mtime: 0,
+            name: name.to_string(),
+            size: 0,
+        }
+    }
+
+    /// The de-dup format other clients and tests rely on: " (N)" before the
+    /// last extension, or at the end for a name without one.
+    #[test]
+    fn generate_unique_filename_keeps_the_existing_format() {
+        assert_eq!(generate_unique_filename(&[], "keep.txt"), "keep (1).txt");
+        assert_eq!(generate_unique_filename(&[], "report"), "report (1)");
+        assert_eq!(generate_unique_filename(&[], ".bashrc"), " (1).bashrc");
+        assert_eq!(
+            generate_unique_filename(&[dirent("keep (1).txt")], "keep.txt"),
+            "keep (2).txt"
+        );
+        assert_eq!(
+            generate_unique_filename(
+                &[dirent("keep (1).txt"), dirent("keep (2).txt")],
+                "keep.txt"
+            ),
+            "keep (3).txt"
+        );
+    }
+
+    /// A long name plus a counter must stay within `MAX_FILENAME_LEN`, keep the
+    /// extension and the counter, and be a name `validate_filename` accepts.
+    #[test]
+    fn generate_unique_filename_truncates_to_the_limit() {
+        let max = base::sanitize::MAX_FILENAME_LEN;
+
+        let name = format!("{}.txt", "x".repeat(max - 5));
+        assert_eq!(name.len(), max - 1);
+        let unique = generate_unique_filename(&[], &name);
+        assert_eq!(unique.len(), max, "the counter fills the budget exactly");
+        assert!(unique.ends_with(".txt"), "extension must survive: {unique}");
+        assert!(unique.contains(" (1)"), "counter must survive: {unique}");
+        assert!(base::sanitize::validate_filename(&unique).is_ok());
+
+        // Even without an extension the bound holds.
+        let long = "y".repeat(max + 100);
+        let unique = generate_unique_filename(&[], &long);
+        assert_eq!(unique.len(), max);
+        assert!(unique.ends_with(" (1)"));
+    }
+
+    /// Truncation must not split a UTF-8 character: 3-byte characters with a
+    /// limit that lands mid-character have to back off to the boundary.
+    #[test]
+    fn generate_unique_filename_truncates_on_a_utf8_boundary() {
+        let name = format!("{}.txt", "文".repeat(83));
+        let unique = generate_unique_filename(&[], &name);
+        assert!(unique.len() <= base::sanitize::MAX_FILENAME_LEN);
+        assert!(unique.is_char_boundary(unique.len()));
+        assert!(unique.starts_with(&"文".repeat(82)), "got {unique}");
+        assert!(unique.ends_with(".txt"), "got {unique}");
+        assert!(base::sanitize::validate_filename(&unique).is_ok());
+
+        // A collision keeps growing the counter; the name stays bounded and
+        // remains a different candidate each round.
+        let existing = vec![dirent(&unique)];
+        let next = generate_unique_filename(&existing, &name);
+        assert!(next.len() <= base::sanitize::MAX_FILENAME_LEN);
+        assert_ne!(next, unique);
+        assert!(next.contains(" (2)"), "got {next}");
     }
 }

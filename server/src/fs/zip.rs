@@ -15,7 +15,29 @@ use crate::fs::core::tree::{
 };
 use crate::repository::Repositories;
 use base::error::AppError;
+use base::sanitize::validate_filename;
 use infra::common::{EMPTY_SHA1, S_IFDIR};
+
+/// Whether a stored dirent name may become a ZIP entry component.
+///
+/// Directory objects are validated when they arrive, but a tree written before
+/// those checks existed (or by an older build) may still hold `a/b`, `..` or a
+/// control character. Embedding such a name in an archive lets the extractor on
+/// the client side write outside the target directory (Zip Slip), so the ZIP
+/// walker re-checks every name it turns into an entry and skips the bad ones.
+///
+/// The check is about archive safety only, not about the stricter new-name rule
+/// (`: * ? |`, trailing dot): an existing entry with such a name predates that
+/// rule, is still addressable, and must be exported rather than silently dropped
+/// from every archive.
+fn is_usable_entry_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\'])
+        && !name.chars().any(char::is_control)
+        && name.len() <= base::sanitize::MAX_FILENAME_LEN
+}
 
 pub struct ZipFileEntry {
     /// Path within the zip archive (e.g. `"myfolder/file.txt"`).
@@ -117,6 +139,18 @@ pub async fn collect_dir_entries(
             };
 
             for dirent in &dir_data.dirents {
+                // Skip a tree entry whose name cannot be a single safe path
+                // component (`../x`, `a/b`, a control character): it must not
+                // reach the archive, neither as a file nor as a directory walk.
+                if !is_usable_entry_name(&dirent.name) {
+                    tracing::warn!(
+                        repo_id,
+                        name = %dirent.name,
+                        "skipping a zip entry whose stored name is invalid"
+                    );
+                    continue;
+                }
+
                 let is_dir = dirent.mode & S_IFDIR != 0;
                 let entry_path = if prefix.is_empty() {
                     dirent.name.clone()
@@ -177,6 +211,17 @@ pub async fn collect_selected_entries(
     let mut pending_files: Vec<(String, String)> = Vec::new();
 
     for name in dirents {
+        // The names in this request are client-supplied and name a *new* selection:
+        // a traversal sequence, a control character or a name the platform cannot
+        // store is a bad request, not a missing entry. (The stored-tree walk below
+        // is more lenient, so legacy entries still export inside a whole-directory
+        // archive.)
+        if validate_filename(name).is_err() {
+            return Err(AppError::BadRequest(format!(
+                "invalid entry name: {name:?}"
+            )));
+        }
+
         let entry = dir_data
             .dirents
             .iter()

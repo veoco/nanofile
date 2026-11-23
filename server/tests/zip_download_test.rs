@@ -11,7 +11,8 @@
 
 use crate::common;
 
-use common::{TestFixture, ZipLimits, create_test_user};
+use base::common::S_IFREG;
+use common::{TestFixture, ZipLimits, create_test_user, sync_commit};
 use std::io::Read;
 
 async fn upload(f: &TestFixture, dir: &str, name: &str, data: &[u8]) {
@@ -328,6 +329,77 @@ async fn test_zip_task_rejects_when_byte_limit_reached() {
     );
 }
 
+/// A requested name that is not a plain filename is a bad request, not a
+/// lookup miss: a traversal sequence or a control character must never reach
+/// the archive, and a name Win32 cannot store is rejected up front too.
+#[tokio::test]
+async fn test_invalid_selected_name_returns_400() {
+    let f = TestFixture::new().await;
+    upload(&f, "/", "file.txt", b"data").await;
+
+    for bad in [
+        "../file.txt",
+        "a/file.txt",
+        "bad\u{1}name.txt",
+        "trailing.",
+        "trailing ",
+        "star*.txt",
+    ] {
+        let resp = f
+            .client
+            .zip_task(&f.api_token, &f.repo_id, "/", &[bad])
+            .await;
+        assert_eq!(resp.status(), 400, "name {bad:?} must be rejected");
+    }
+
+    // A valid but absent name is still a plain 404.
+    let resp = f
+        .client
+        .zip_task(&f.api_token, &f.repo_id, "/", &["missing.txt"])
+        .await;
+    assert_eq!(resp.status(), 404);
+}
+
+/// A stored dirent whose name is not a safe single path component is skipped
+/// instead of being embedded in the archive (Zip Slip): recv-fs rejects such
+/// names today, but a tree written by an older build can still hold one, and
+/// an archive entry is where it would become a path on the client's disk.
+#[tokio::test]
+async fn test_zip_skips_stored_entries_with_invalid_names() {
+    let f = TestFixture::new().await;
+
+    // A control character is not in `validate_filename`'s rejected set (that
+    // check predates the stricter rule), so recv-fs still accepts the object;
+    // it must not survive into a zip entry.
+    sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("root.txt", b"root", S_IFREG)],
+        &[(
+            "d",
+            &[
+                ("good.txt", b"good".as_slice(), S_IFREG),
+                ("evil\u{1}name.txt", b"evil".as_slice(), S_IFREG),
+            ],
+        )],
+        None,
+    )
+    .await;
+
+    let zip_token = request_zip(&f, "/", &["d"]).await;
+    let zip_resp = f.client.zip_download(&zip_token).await;
+    assert_eq!(zip_resp.status(), 200);
+
+    let (names, files) = parse_zip(&zip_resp.bytes().await.unwrap());
+    assert_eq!(
+        names,
+        vec!["d/good.txt"],
+        "the invalid stored name must be skipped, not embedded"
+    );
+    assert_eq!(files["d/good.txt"], b"good");
+}
+
 /// The in-memory token budget is enforced: an archive whose listing cannot fit
 /// the configured byte budget is refused rather than cached, so a flood of
 /// zip-task requests cannot pin an unbounded amount of memory.
@@ -350,5 +422,50 @@ async fn test_zip_task_rejects_when_token_budget_is_too_small() {
         resp.status(),
         429,
         "a listing larger than the whole token budget must be refused"
+    );
+}
+
+/// Names created before the Windows-only tightening must keep working. A sync
+/// client re-sends the whole directory object on every change, so rejecting a
+/// legacy name would wedge that library's sync; the entry must also stay
+/// addressable through the API (path canonicalization keeps the old rule).
+#[tokio::test]
+async fn a_legacy_windows_forbidden_name_still_syncs_and_reads() {
+    let f = TestFixture::new().await;
+    let base = sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[("legacy:name.txt", b"v1", S_IFREG)],
+        &[],
+        None,
+    )
+    .await;
+
+    // The next change re-sends the same directory object, legacy name included.
+    sync_commit(
+        &f.client,
+        &f.sync_token,
+        &f.repo_id,
+        &[
+            ("legacy:name.txt", b"v1", S_IFREG),
+            ("other.txt", b"new", S_IFREG),
+        ],
+        &[],
+        Some(&base),
+    )
+    .await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/file/?p=/legacy:name.txt", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "a stored legacy name must remain addressable"
     );
 }

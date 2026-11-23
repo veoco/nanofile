@@ -381,12 +381,19 @@ async fn test_lock_file_readonly_member_forbidden() {
 
 /// A second account with write access to the fixture's library.
 async fn add_writer(f: &TestFixture, email: &str) -> String {
+    add_writer_tokens(f, email).await.1
+}
+
+/// A second writable account, as `(API token, sync token)` — the two REST/sync
+/// protocol surfaces a desktop client uses.
+async fn add_writer_tokens(f: &TestFixture, email: &str) -> (String, String) {
     let user_id = create_test_user(f.server.db.as_ref(), email, "password").await;
     common::add_repo_member(f.server.db.as_ref(), &f.repo_id, user_id, "rw").await;
     let resp = f.client.login(email, "password").await;
     let body: serde_json::Value = resp.json().await.unwrap();
     let api_token = body["token"].as_str().unwrap().to_string();
-    get_sync_token(&f.client, &api_token, &f.repo_id).await
+    let sync_token = get_sync_token(&f.client, &api_token, &f.repo_id).await;
+    (api_token, sync_token)
 }
 
 async fn lock_via_sync(f: &TestFixture, path: &str, sync_token: &str) {
@@ -531,13 +538,35 @@ async fn test_owner_delete_prunes_the_lock() {
     assert_locked_files_empty(&f).await;
 }
 
-/// A lock on a path that does not exist is meaningless; the commit-time sweep
-/// removes it so it cannot block a later file at the same path.
+/// A lock names an entry that exists: locking a path absent from HEAD is 404
+/// on both protocol surfaces. (A lock row on a missing path would be swept by
+/// the next commit and shows up on clients as a lock on nothing.)
 #[tokio::test]
-async fn test_lock_on_a_missing_path_is_swept_after_a_commit() {
+async fn test_lock_on_a_missing_path_is_404() {
     let f = TestFixture::new().await;
 
-    let base = sync_commit(
+    // Empty library: there is no HEAD to resolve against at all.
+    let resp = f
+        .client
+        .put_sync(
+            &format!("/seafhttp/repo/{}/lock-file?p=ghost.txt", f.repo_id),
+            &f.sync_token,
+            vec![],
+        )
+        .await;
+    assert_eq!(resp.status(), 404, "sync lock on an empty library");
+
+    let resp = f
+        .client
+        .put_form(
+            &format!("/api2/repos/{}/file/?p=/ghost.txt", f.repo_id),
+            Some(&f.api_token),
+            &[("operation", "lock")],
+        )
+        .await;
+    assert_eq!(resp.status(), 404, "REST lock on an empty library");
+
+    let _base = sync_commit(
         &f.client,
         &f.sync_token,
         &f.repo_id,
@@ -546,17 +575,170 @@ async fn test_lock_on_a_missing_path_is_swept_after_a_commit() {
         None,
     )
     .await;
-    lock_via_sync(&f, "ghost.txt", &f.sync_token).await;
 
-    sync_commit(
-        &f.client,
-        &f.sync_token,
-        &f.repo_id,
-        &[("other.txt", b"v1", REG)],
-        &[],
-        Some(&base),
-    )
-    .await;
+    let resp = f
+        .client
+        .put_sync(
+            &format!("/seafhttp/repo/{}/lock-file?p=ghost.txt", f.repo_id),
+            &f.sync_token,
+            vec![],
+        )
+        .await;
+    assert_eq!(resp.status(), 404, "sync lock on a missing path");
 
+    let resp = f
+        .client
+        .put_form(
+            &format!("/api2/repos/{}/file/?p=/ghost.txt", f.repo_id),
+            Some(&f.api_token),
+            &[("operation", "lock")],
+        )
+        .await;
+    assert_eq!(resp.status(), 404, "REST lock on a missing path");
+
+    // Rejected locks must not leave a row behind.
     assert_locked_files_empty(&f).await;
+}
+
+/// A lock is exclusive: another user with write access can neither take it
+/// over nor release it, through either endpoint.
+#[tokio::test]
+async fn test_foreign_lock_cannot_be_relocked_or_unlocked() {
+    let f = TestFixture::new().await;
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "shared.txt", b"data")
+        .await;
+    assert!(resp.status().is_success());
+
+    lock_via_sync(&f, "/shared.txt", &f.sync_token).await;
+    let (writer_api, writer_sync) = add_writer_tokens(&f, "second@example.com").await;
+
+    // Sync re-lock: the same 403 body the daemon's regex parses.
+    let resp = f
+        .client
+        .put_sync(
+            &format!("/seafhttp/repo/{}/lock-file?p=/shared.txt", f.repo_id),
+            &writer_sync,
+            vec![],
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.text().await.unwrap(), "File shared.txt is locked");
+
+    // REST re-lock: same rejection shape.
+    let resp = f
+        .client
+        .put_form(
+            &format!("/api2/repos/{}/file/?p=/shared.txt", f.repo_id),
+            Some(&writer_api),
+            &[("operation", "lock")],
+        )
+        .await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(resp.text().await.unwrap(), "File shared.txt is locked");
+
+    // Neither endpoint lets the other user unlock.
+    let resp = f
+        .client
+        .put_sync(
+            &format!("/seafhttp/repo/{}/unlock-file?p=/shared.txt", f.repo_id),
+            &writer_sync,
+            vec![],
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "a foreign sync unlock must be rejected");
+    let resp = f
+        .client
+        .put_form(
+            &format!("/api2/repos/{}/file/?p=/shared.txt", f.repo_id),
+            Some(&writer_api),
+            &[("operation", "unlock")],
+        )
+        .await;
+    assert_eq!(resp.status(), 403, "a foreign REST unlock must be rejected");
+
+    // The lock is still there and belongs to the original owner.
+    let req_body = serde_json::json!([{
+        "repo_id": f.repo_id,
+        "token": f.sync_token,
+        "ts": 0,
+    }]);
+    let resp = f
+        .client
+        .post_sync_json("/seafhttp/repo/locked-files", &f.sync_token, &req_body)
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        body.as_array().unwrap()[0]["locked_files"][0]["by_me"],
+        1,
+        "the owner's lock must survive the foreign attempts: {body}"
+    );
+
+    // The owner can release it; repeating the unlock is an idempotent no-op.
+    let resp = f
+        .client
+        .put_form(
+            &format!("/api2/repos/{}/file/?p=/shared.txt", f.repo_id),
+            Some(&f.api_token),
+            &[("operation", "unlock")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let resp = f
+        .client
+        .put_sync(
+            &format!("/seafhttp/repo/{}/unlock-file?p=/shared.txt", f.repo_id),
+            &f.sync_token,
+            vec![],
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "an already-unlocked file stays unlocked"
+    );
+    assert_locked_files_empty(&f).await;
+}
+
+/// Locking twice as the owner is a no-op, not an error, and the lock stays.
+#[tokio::test]
+async fn test_owner_relock_is_idempotent() {
+    let f = TestFixture::new().await;
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "mine.txt", b"data")
+        .await;
+    assert!(resp.status().is_success());
+
+    lock_via_sync(&f, "/mine.txt", &f.sync_token).await;
+    lock_via_sync(&f, "/mine.txt", &f.sync_token).await;
+
+    let resp = f
+        .client
+        .put_form(
+            &format!("/api2/repos/{}/file/?p=/mine.txt", f.repo_id),
+            Some(&f.api_token),
+            &[("operation", "lock")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "re-locking through REST is a no-op");
+
+    let req_body = serde_json::json!([{
+        "repo_id": f.repo_id,
+        "token": f.sync_token,
+        "ts": 0,
+    }]);
+    let resp = f
+        .client
+        .post_sync_json("/seafhttp/repo/locked-files", &f.sync_token, &req_body)
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let locked = body.as_array().unwrap()[0]["locked_files"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(locked.len(), 1, "exactly one lock row: {locked:?}");
+    assert_eq!(locked[0]["path"], "mine.txt");
 }
