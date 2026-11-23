@@ -417,9 +417,19 @@ fn a_face_request_answers_a_count_or_is_refused() {
 /// says.
 #[test]
 fn a_media_request_cannot_name_its_own_source() {
+    // This test starts the worker directly, without the parent. On macOS the
+    // file and network layers come from the `sandbox-exec` wrapper the parent
+    // adds, so a bare child would refuse the media profile before it reads the
+    // request: tell it the wrapper was applied, as the parent's invocation does.
+    // What the host actually confines is measured by the probe tests.
+    #[cfg(target_os = "macos")]
+    const RUNNER_FLAG: &[&str] = &["--seatbelt"];
+    #[cfg(not(target_os = "macos"))]
+    const RUNNER_FLAG: &[&str] = &[];
+
     let helper = env!("CARGO_BIN_EXE_nanofile");
     let granted = std::env::temp_dir().join("nanofile-protocol-granted.bin");
-    let args = [
+    let mut args = vec![
         "--profile",
         "media",
         "--ffmpeg",
@@ -427,6 +437,7 @@ fn a_media_request_cannot_name_its_own_source() {
         "--src",
         granted.to_str().expect("a UTF-8 path"),
     ];
+    args.extend_from_slice(RUNNER_FLAG);
 
     // The positive control for the comparison below: a request naming the
     // granted path passes the authorization step, whatever the helper then
@@ -460,15 +471,17 @@ fn a_media_request_cannot_name_its_own_source() {
         "the request names a source this profile was not granted"
     );
 
+    let mut unknown_kind_args = vec![
+        "--profile",
+        "media",
+        "--ffmpeg",
+        helper,
+        "--src",
+        granted.to_str().expect("a UTF-8 path"),
+    ];
+    unknown_kind_args.extend_from_slice(RUNNER_FLAG);
     let answer = run_worker(
-        &[
-            "--profile",
-            "media",
-            "--ffmpeg",
-            helper,
-            "--src",
-            granted.to_str().expect("a UTF-8 path"),
-        ],
+        &unknown_kind_args,
         &media_request(b'?', 48, granted.as_os_str().as_encoded_bytes()),
     );
     answer.finished("an unknown media kind");
@@ -483,21 +496,25 @@ fn a_media_request_cannot_name_its_own_source() {
     }
 
     // No source grant at all: nothing can be read, so nothing is decoded.
+    let mut no_source_args = vec!["--profile", "media", "--ffmpeg", helper];
+    no_source_args.extend_from_slice(RUNNER_FLAG);
     let answer = run_worker(
-        &["--profile", "media", "--ffmpeg", helper],
+        &no_source_args,
         &media_request(b'V', 48, b"/tmp/anything.bin"),
     );
     answer.finished("a media request with no source grant");
     assert_eq!(answer.refusal(), "the media profile has no source grant");
 
     // No helper grant: the profile has nothing to run.
+    let mut no_helper_args = vec![
+        "--profile",
+        "media",
+        "--src",
+        granted.to_str().expect("a UTF-8 path"),
+    ];
+    no_helper_args.extend_from_slice(RUNNER_FLAG);
     let answer = run_worker(
-        &[
-            "--profile",
-            "media",
-            "--src",
-            granted.to_str().expect("a UTF-8 path"),
-        ],
+        &no_helper_args,
         &media_request(b'V', 48, granted.as_os_str().as_encoded_bytes()),
     );
     answer.finished("a media request with no helper grant");
