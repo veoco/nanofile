@@ -735,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "base"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "axum",
  "sea-orm",
@@ -2608,7 +2608,7 @@ dependencies = [
 
 [[package]]
 name = "inference"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "libm",
  "matrixmultiply",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "infra"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "aes",
  "aes-gcm-siv",
@@ -3106,7 +3106,7 @@ dependencies = [
 
 [[package]]
 name = "migration"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "flate2",
  "sea-orm",
@@ -4701,7 +4701,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "aes",
  "anyhow",

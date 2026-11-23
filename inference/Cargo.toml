@@ -1,6 +1,6 @@
 [package]
 name = "inference"
-version = "0.1.23"
+version = "0.1.24"
 edition = "2024"
 description = "Fixed-model inference runtime for the embedded ONNX graphs"
 license = "MIT"
