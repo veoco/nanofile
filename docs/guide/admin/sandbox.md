@@ -20,10 +20,14 @@ established. The server decides from that report, not from what it asked for.
 
 ## What it protects
 
-The resource bound is the one mandatory item. The file, network and process layers are
-defense in depth against a parser bug. What it does not protect is never asserted to
-hold: kernel bugs, and other processes running as the same user. The per-platform
-mechanisms and the probe are in [Sandbox internals](/dev/sandbox).
+The resource bound is the one mandatory item for every profile. For the parser
+profiles the file, network and process layers are defense in depth against a parser
+bug. The media profile is the exception: it starts an external program (`ffmpeg`), so
+it runs only when the file and network layers are both in place — without them media
+thumbnails are disabled while search, image thumbnails and avatars keep working.
+What it does not protect is never asserted to hold: kernel bugs, and other processes
+running as the same user. The per-platform mechanisms and the probe are in
+[Sandbox internals](/dev/sandbox).
 
 ## What it means for you
 
@@ -31,6 +35,13 @@ mechanisms and the probe are in [Sandbox internals](/dev/sandbox).
   re-resolves that grant at once, so the next media request runs the binary you
   just configured. People tags and OCR on HEIC/HEIF/AVIF photos use the same
   helper to decode the image first.
+- **On a host that cannot confine the helper, media thumbnails are off.** The media
+  profile is the only one that executes an external program, so it requires the file
+  and network protections, not just the resource bound. A host that refuses them —
+  typically a locked-down Windows host whose container cannot be created — still
+  runs search, image thumbnails, avatars, people tags and OCR. The Sandbox page's
+  media band shows the missing layer; the uploads themselves are unaffected, they
+  just keep their file-type icon instead of a frame.
 - **With the sandbox off, these features do not run**, and they do not fall back to
   parsing inside the server process. Documents skipped while it was off are
   recorded as retryable and re-indexed once it is back on — so an outage leaves no
@@ -64,6 +75,9 @@ mechanisms and the probe are in [Sandbox internals](/dev/sandbox).
 - Open **System Settings → Sandbox**; the resource bound row is marked required and
   in place.
 - Each enabled profile shows a state badge; a disabled feature points at its switch.
+- If the media band is unavailable, this host cannot give the media profile its file
+  and network protections, so media thumbnails are off; the band's reason names the
+  missing layer. Search, image thumbnails and avatars are unaffected.
 - Upload a document and a thumbnail; both work, or the page names the missing
   mechanism.
 

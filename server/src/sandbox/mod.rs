@@ -654,7 +654,10 @@ impl Requirement {
     ///
     /// Asked by the parent at startup and again by the child before it reads a
     /// request. The switch is the admin's choice; `limits` is the hard invariant, and
-    /// a child without it is refused whatever the configuration says.
+    /// a child without it is refused whatever the configuration says. The media
+    /// profile is the one whose job needs more than a bound: it executes an external
+    /// program, so it also requires the `files` and `network` layers. Every other
+    /// profile runs at whatever layers this host has.
     pub fn accepts(&self, report: &Report) -> Result<(), Refusal> {
         if !self.enabled {
             return Err(Refusal::Disabled);
@@ -665,6 +668,17 @@ impl Requirement {
             .unwrap_or(false)
         {
             return Err(Refusal::Unbounded);
+        }
+        if report.profile.runs_helper() {
+            // The one profile that starts a program: the files layer is what narrows
+            // it to the helper and the source the parent handed it, and a program
+            // without the network layer is a general-purpose one. A host that cannot
+            // establish both runs no helper rather than an unconfined one.
+            for layer in ["files", "network"] {
+                if !report.protections.get(layer).unwrap_or(false) {
+                    return Err(Refusal::Unconfined(layer));
+                }
+            }
         }
         Ok(())
     }
@@ -679,6 +693,9 @@ pub enum Refusal {
     Disabled,
     /// The child established no resource bound at all.
     Unbounded,
+    /// A profile that needs a layer to run its job did not get it. The token names
+    /// the missing item (`files` or `network`) so the log line says which.
+    Unconfined(&'static str),
 }
 
 impl Refusal {
@@ -689,13 +706,24 @@ impl Refusal {
             Refusal::Unbounded => {
                 "this host could not bound the worker's memory and CPU".to_string()
             }
+            Refusal::Unconfined(layer) => format!(
+                "the media profile needs the {layer} layer to run the helper, and this host did \
+                 not establish it"
+            ),
         }
     }
 }
 
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.reason())
+    }
+}
+
 /// Whether a profile's features may run at all on this host: the switch is on, the
-/// child probed ready, and it established its resource bound. A caller with no
-/// unconfined fallback asks this first.
+/// child probed ready, and [`Requirement::accepts`] accepted its report — which for
+/// the media profile also means its file and network layers are in place. A caller
+/// with no unconfined fallback asks this first.
 pub fn available(profile: Profile) -> Result<(), String> {
     match worker::status(profile) {
         worker::Status::Ready(_) => Ok(()),
@@ -1662,12 +1690,15 @@ mod tests {
         );
     }
 
+    /// The switch and the resource bound are the hard rules for every profile; the
+    /// media profile additionally needs the two layers that confine the program it
+    /// starts.
     #[test]
-    fn the_requirement_refuses_the_switch_and_the_unbounded_and_nothing_else() {
-        /// A report whose items are `protections`.
-        fn report_with(protections: Protections) -> Report {
+    fn the_requirement_refuses_the_switch_the_unbounded_and_an_unconfined_media_profile() {
+        /// A report for `profile` whose items are `protections`.
+        fn report_for(profile: Profile, protections: Protections) -> Report {
             Report {
-                profile: Profile::Documents,
+                profile,
                 protections,
                 job: None,
                 detail: String::new(),
@@ -1703,32 +1734,91 @@ mod tests {
             ]
         }
 
-        // The switch refuses whatever the host gives.
+        // The switch refuses whatever the host gives, for either profile.
         for items in host_shapes() {
-            assert_eq!(
-                Requirement::new(false).accepts(&report_with(items)),
-                Err(Refusal::Disabled),
-                "the switch is off at {items:?}"
-            );
+            for profile in [Profile::Documents, Profile::Media] {
+                assert_eq!(
+                    Requirement::new(false).accepts(&report_for(profile, items)),
+                    Err(Refusal::Disabled),
+                    "the switch is off at {profile:?} {items:?}"
+                );
+            }
         }
 
-        // Every shape above the floor is accepted: the layers are what the
-        // platform could add, not a condition of running the feature.
+        // A parser profile is accepted on the resource bound alone: the layers are
+        // what the platform could add, not a condition of running the feature.
         for items in host_shapes() {
             assert!(
-                Requirement::new(true).accepts(&report_with(items)).is_ok(),
-                "a bounded host at {items:?} must be accepted"
+                Requirement::new(true)
+                    .accepts(&report_for(Profile::Documents, items))
+                    .is_ok(),
+                "a bounded parser host at {items:?} must be accepted"
             );
         }
 
-        // The resource bound is the one refusal left: a report with no bound is
-        // refused however many other items it carries.
-        let unbounded = report_with(Protections {
+        // The media profile is the one that starts a program, so it runs only with
+        // the layers that confine it; its process item is the one it can never have
+        // and is never asked for.
+        let media_confined = Protections {
+            limits: true,
             files: true,
             network: true,
-            process: true,
-            ..Protections::default()
-        });
+            process: false,
+        };
+        assert!(
+            Requirement::new(true)
+                .accepts(&report_for(Profile::Media, media_confined))
+                .is_ok(),
+            "a media host with both layers must be accepted"
+        );
+        for missing in ["files", "network"] {
+            let mut items = media_confined;
+            if missing == "files" {
+                items.files = false;
+            } else {
+                items.network = false;
+            }
+            assert_eq!(
+                Requirement::new(true).accepts(&report_for(Profile::Media, items)),
+                Err(Refusal::Unconfined(missing)),
+                "the media profile without its {missing} layer"
+            );
+            let reason = Refusal::Unconfined(missing).reason();
+            assert!(reason.contains(missing), "{reason}");
+            assert_eq!(Refusal::Unconfined(missing).to_string(), reason);
+        }
+        // Without either layer the files one is named first, and the bound is
+        // checked before the layers: no bound is the environment problem.
+        assert_eq!(
+            Requirement::new(true).accepts(&report_for(Profile::Media, host_shapes()[0])),
+            Err(Refusal::Unconfined("files")),
+            "the files layer is the first one the media profile is missing"
+        );
+        assert_eq!(
+            Requirement::new(true).accepts(&report_for(
+                Profile::Media,
+                Protections {
+                    limits: false,
+                    files: true,
+                    network: true,
+                    process: false,
+                },
+            )),
+            Err(Refusal::Unbounded),
+            "the resource bound is the first refusal"
+        );
+
+        // The resource bound is the one refusal a parser profile has: a report with
+        // no bound is refused however many other items it carries.
+        let unbounded = report_for(
+            Profile::Documents,
+            Protections {
+                files: true,
+                network: true,
+                process: true,
+                ..Protections::default()
+            },
+        );
         assert_eq!(
             Requirement::new(true).accepts(&unbounded),
             Err(Refusal::Unbounded),
@@ -1737,12 +1827,15 @@ mod tests {
 
         // A residual in the detail never changes the decision: it is a note on
         // an item, not an item of its own.
-        let mut full = report_with(Protections {
-            limits: true,
-            files: true,
-            network: true,
-            process: true,
-        });
+        let mut full = report_for(
+            Profile::Documents,
+            Protections {
+                limits: true,
+                files: true,
+                network: true,
+                process: true,
+            },
+        );
         assert!(Requirement::default().accepts(&full).is_ok());
         full.detail = "system=readable,fork=open".to_string();
         assert!(Requirement::default().accepts(&full).is_ok());

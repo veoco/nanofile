@@ -83,6 +83,22 @@ fn count(html: &str, needle: &str) -> usize {
     html.matches(needle).count()
 }
 
+/// One profile's rendered band, from its section marker to the next band (or the
+/// raw-report disclosure that follows the bands).
+fn band<'a>(html: &'a str, profile: &str) -> &'a str {
+    let marker = format!("data-sandbox-profile=\"{profile}\"");
+    let start = html
+        .find(&marker)
+        .unwrap_or_else(|| panic!("no {profile} band on the page"))
+        + marker.len();
+    let rest = &html[start..];
+    let end = rest
+        .find("data-sandbox-profile=\"")
+        .or_else(|| rest.find("data-sandbox-detail="))
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
 /// The Sandbox page is the one page whose subject is not a setting: it says what
 /// this host actually gives, one band per profile and one row per protection, and
 /// warns when that is not the whole set. The values come from a confined child's
@@ -187,13 +203,33 @@ async fn the_sandbox_page_shows_the_measured_items_per_profile() {
     // it is the longest on the page, so it stays inside the row's disclosure.
     // Read inside the band being measured: an unmeasured media band has no rows at
     // all, and the sentence belongs to the row rather than to the panel.
+    //
+    // The media profile is also the one whose job starts an external program, so it
+    // runs only where both layers that confine the helper were established. A host
+    // that refuses them still has a measured band — the rows are the host's answer —
+    // but its state is a red one whose reason names the missing layer; that is the
+    // expected shape on a locked-down host, and media thumbnails are simply off
+    // there. Where both layers are in place the band reads running.
     if html.contains("data-sandbox-profile=\"media\" data-sandbox-measured=\"true\"") {
+        let media = band(&html, "media");
+        let t = server::i18n::I18n::get(Some("en"));
+        let unavailable = format!(
+            "data-sandbox-state>{}</span>",
+            t.tr("sandbox.state_unavailable")
+        );
+        if media.contains(&unavailable) {
+            assert!(
+                media.contains("data-sandbox-state-reason")
+                    && (media.contains("files") || media.contains("network")),
+                "a refused media band has to name the layer the host does not establish: {media}"
+            );
+        }
         assert!(
-            html.contains("data-sandbox-media-process"),
+            media.contains("data-sandbox-media-process"),
             "the media row does not say the process item does not apply"
         );
         assert!(
-            html.contains("Not applicable"),
+            media.contains("Not applicable"),
             "no item is marked as not applying to its profile"
         );
     }
@@ -298,35 +334,30 @@ async fn the_faces_band_is_measured_once_people_tags_are_on() {
     assert_eq!(status, 200);
 
     // The band advertises its measurement, not merely its presence.
-    let marker = "data-sandbox-profile=\"faces\" data-sandbox-measured=\"true\"";
-    let start = html
-        .find(marker)
-        .unwrap_or_else(|| panic!("the faces band was not measured: {html}"));
-    let rest = &html[start + marker.len()..];
-    let end = rest
-        .find("data-sandbox-profile=\"")
-        .or_else(|| rest.find("data-sandbox-detail="))
-        .unwrap_or(rest.len());
-    let band = &rest[..end];
+    assert!(
+        html.contains("data-sandbox-profile=\"faces\" data-sandbox-measured=\"true\""),
+        "the faces band was not measured: {html}"
+    );
+    let faces = band(&html, "faces");
     assert_eq!(
-        count(band, "data-sandbox-item=\""),
+        count(faces, "data-sandbox-item=\""),
         4,
-        "a measured faces band carries the whole set: {band}"
+        "a measured faces band carries the whole set: {faces}"
     );
     for item in ["limits", "files", "network", "process"] {
         assert!(
-            band.contains(&format!("data-sandbox-item=\"{item}\"")),
-            "the faces band is missing the {item} item: {band}"
+            faces.contains(&format!("data-sandbox-item=\"{item}\"")),
+            "the faces band is missing the {item} item: {faces}"
         );
     }
 
     let t = server::i18n::I18n::get(Some("en"));
     assert!(
-        band.contains(&format!(
+        faces.contains(&format!(
             "data-sandbox-state>{}</span>",
             t.tr("sandbox.state_running")
         )),
-        "the faces band does not read as running: {band}"
+        "the faces band does not read as running: {faces}"
     );
     // The raw report is the detector's own line, not the documents profile's.
     assert!(

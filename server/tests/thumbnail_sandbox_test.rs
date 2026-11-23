@@ -13,6 +13,37 @@ use common::sandbox::{
     without_ffmpeg,
 };
 use image::GenericImageView;
+use server::sandbox::Profile;
+use server::sandbox::worker::{self, Status};
+
+/// Whether this host runs the media profile, with both layers that confine its
+/// helper.
+///
+/// The media profile executes an external program, so it is the one profile that
+/// needs the files and network layers on top of the resource bound. A host that
+/// cannot establish them (a locked-down Windows host refuses the container) runs no
+/// media thumbnails; the tests below report that and skip instead of failing, because
+/// the answer is the policy working as intended.
+fn media_profile_runs() -> bool {
+    match worker::status(Profile::Media) {
+        Status::Ready(report) => {
+            assert!(
+                report.protections.files && report.protections.network,
+                "an accepted media report has to show both layers: {}",
+                report.detail
+            );
+            true
+        }
+        Status::Unavailable(why) => {
+            assert!(
+                why.contains("files") && why.contains("network"),
+                "the media profile was refused for an unexpected reason: {why}"
+            );
+            eprintln!("the media profile is unavailable on this host: {why}");
+            false
+        }
+    }
+}
 
 /// The media profile confines itself, decodes under the confinement, and starts
 /// the helper it is granted.
@@ -23,11 +54,18 @@ async fn the_media_profile_confines_itself() {
         return;
     }
     let _f = TestFixture::new_with_media_helper(helper()).await;
-    match server::sandbox::worker::status(server::sandbox::Profile::Media) {
-        server::sandbox::worker::Status::Ready(report) => {
+    match worker::status(Profile::Media) {
+        Status::Ready(report) => {
             assert!(
                 report.protections.limits,
                 "the media worker must bound itself: {}",
+                report.detail
+            );
+            // It runs only with the layers that confine the helper, so an accepted
+            // report has them.
+            assert!(
+                report.protections.files && report.protections.network,
+                "the confined media worker must show both layers: {}",
                 report.detail
             );
             assert!(
@@ -65,8 +103,15 @@ async fn the_media_profile_confines_itself() {
                 report.detail
             );
         }
-        server::sandbox::worker::Status::Unavailable(why) => {
-            panic!("the media sandbox is unavailable: {why}")
+        Status::Unavailable(why) => {
+            // The expected shape on a host that cannot give the media profile the
+            // layers its helper needs: no media thumbnails there, and the reason
+            // names the layer.
+            assert!(
+                why.contains("files") && why.contains("network"),
+                "the media sandbox was unavailable for an unexpected reason: {why}"
+            );
+            eprintln!("the media sandbox is unavailable on this host: {why}");
         }
     }
 }
@@ -85,6 +130,29 @@ async fn a_video_thumbnail_is_generated_in_the_sandbox() {
     let bytes = std::fs::read(&clip).expect("read the clip");
 
     let f = TestFixture::new_with_media_helper(helper()).await;
+    if !media_profile_runs() {
+        // The media profile is refused on this host, so media thumbnails are off —
+        // and the request has to answer "no thumbnail" instead of failing the
+        // upload or decoding in the server process.
+        let resp = f
+            .client
+            .upload_file(&f.api_token, &f.repo_id, "/", "clip.mp4", &bytes)
+            .await;
+        assert!(resp.status().is_success(), "upload should succeed");
+        let resp = f
+            .client
+            .get(
+                &format!("/api2/repos/{}/thumbnail/?p=/clip.mp4&size=48", f.repo_id),
+                Some(&f.api_token),
+            )
+            .await;
+        assert_eq!(
+            resp.status(),
+            404,
+            "a refused media profile must answer no thumbnail, not fail"
+        );
+        return;
+    }
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "clip.mp4", &bytes)
@@ -147,6 +215,9 @@ async fn a_tiled_heic_thumbnail_is_the_whole_image() {
     }
 
     let f = TestFixture::new_with_media_helper(helper()).await;
+    if !media_profile_runs() {
+        return;
+    }
     let bytes = std::fs::read(&fixture).expect("read the fixture");
     let resp = f
         .client
@@ -200,6 +271,9 @@ async fn a_large_faststart_video_thumbnail_reads_only_the_head_in_the_sandbox() 
     );
 
     let f = TestFixture::new_with_media_helper(helper()).await;
+    if !media_profile_runs() {
+        return;
+    }
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "large.mov", &bytes)
@@ -245,6 +319,9 @@ async fn a_large_non_faststart_video_thumbnail_falls_back_to_the_whole_file_in_t
     );
 
     let f = TestFixture::new_with_media_helper(helper()).await;
+    if !media_profile_runs() {
+        return;
+    }
     let resp = f
         .client
         .upload_file(&f.api_token, &f.repo_id, "/", "tail.mov", &bytes)

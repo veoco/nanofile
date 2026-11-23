@@ -7,6 +7,37 @@ use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
 use crate::common;
 
+use server::sandbox::Profile;
+use server::sandbox::worker::{self, Status};
+
+/// Whether this host runs the media profile, with both layers that confine its
+/// helper.
+///
+/// HEIC/HEIF/AVIF stills are decoded by that profile before the detector sees them,
+/// so a scan of one can only be measured where the profile runs. A host that cannot
+/// give it the files and network layers has no such decode, and the test reports the
+/// reason and skips.
+fn media_profile_runs() -> bool {
+    match worker::status(Profile::Media) {
+        Status::Ready(report) => {
+            assert!(
+                report.protections.files && report.protections.network,
+                "an accepted media report has to show both layers: {}",
+                report.detail
+            );
+            true
+        }
+        Status::Unavailable(why) => {
+            assert!(
+                why.contains("files") && why.contains("network"),
+                "the media profile was refused for an unexpected reason: {why}"
+            );
+            eprintln!("the media profile is unavailable on this host: {why}");
+            false
+        }
+    }
+}
+
 async fn wait_for<F, Fut>(timeout: Duration, mut predicate: F) -> bool
 where
     F: FnMut() -> Fut,
@@ -191,6 +222,9 @@ async fn an_avif_portrait_is_decoded_and_scanned() {
     // package manager's shim or a PATH entry must not stand in for it.
     let f =
         common::TestFixture::new_with_face_tags_and_media_helper(common::sandbox::helper()).await;
+    if !media_profile_runs() {
+        return;
+    }
     let bytes = include_bytes!("fixtures/face_tags/portrait.avif");
     let resp = f
         .client

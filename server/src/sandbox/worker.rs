@@ -1520,7 +1520,9 @@ fn probe_once(
 /// Decided once, here: a host that cannot give what the settings ask for is an
 /// environment problem the operator sees once at startup with the reason, rather
 /// than one spawn per request ending in exit 125. The child keeps the same check
-/// before it reads a request.
+/// before it reads a request. For the media profile that check also covers the file
+/// and network layers its helper needs, so a host without them reports the missing
+/// layer here and the media features stay off.
 ///
 /// This is the *request path's* judgement; the page asks [`capability`], which
 /// measures with the switch *on*. [`host_verdict`] is the page's half.

@@ -40,7 +40,9 @@ A profile names what the child is allowed to establish:
   when the worker is unavailable.
 
 The parent's `accept` checks the report before treating the child as confined. The
-report carries what the child established, not what the parent asked for.
+report carries what the child established, not what the parent asked for. For the
+`media` profile that check is stricter: it also requires the `files` and `network`
+items, because that profile starts an external program.
 
 ## What each profile establishes
 
@@ -53,8 +55,19 @@ report carries what the child established, not what the parent asked for.
 
 `limits` is the hard invariant. A child that cannot establish it is refused by both
 sides — the parent's `accept` and the child's own check before it reads a request.
-`files`, `network` and `process` are defense in depth: where a platform cannot
-supply one, the feature runs on `limits` alone and the report says so.
+
+The layers above it are what each profile's job needs:
+
+- Every parser profile — `documents`, `images`, `faces`, `ocr` — runs on `limits`
+  alone. `files`, `network` and `process` are defense in depth there: where a
+  platform cannot supply one, the feature runs anyway and the report says so.
+- `media` runs only with **both** `files` and `network` in place. It is the one
+  profile that executes an external program, so without the layers that narrow that
+  program to the helper and its source, and without the network denial that keeps it
+  from being a general-purpose one, the profile is refused rather than run
+  unconfined. Where the host cannot give them (a locked-down Windows host whose
+  container cannot be created) media thumbnails are off; the parser profiles keep
+  working on the resource bound alone.
 
 The media profile cannot have the process item: it exists to start a program, and
 every platform starts one by copying the process first. What bounds the helper is
@@ -81,8 +94,10 @@ first, and only the decoded still is handed to them.
   restricted token and process mitigations. The AppContainer needs a registry
   profile and package access on the worker's own image, and a host that confines
   every command it runs refuses it. In that case the launch reports `files=open`
-  and the container is not asked for again in that process. The Job Object bounds
-  committed memory and CPU time; it has no descriptor or file-size bound.
+  and the container is not asked for again in that process. The parser profiles keep
+  running on the Job Object alone; the media profile is refused, because it requires
+  `files` and `network`, so media thumbnails are off on such a host. The Job Object
+  bounds committed memory and CPU time; it has no descriptor or file-size bound.
 
 The media helper gets its own file grant: the helper and its loader, the libraries
 beside it (one file at a time), the system library directories, and — on macOS,
@@ -110,6 +125,10 @@ The sandbox is tested where it is used, not only where it is described.
   installed.
 - A host where the worker cannot run at all has to refuse an avatar, an EXIF read
   and a thumbnail rather than decode them in the server process.
+- The media profile's extra requirement is tested from both sides: a synthetic
+  report missing `files` or `network` is refused with the layer named, and a host
+  that refuses the layers makes the media tests skip on that reason rather than
+  fail. The parser profiles on the same host are still measured and still run.
 
 The released binary and the published image run the same probe, which is the only
 place the sandbox runs in a `FROM scratch` container. See

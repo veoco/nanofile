@@ -8,15 +8,17 @@
 
 use crate::common;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use server::sandbox::worker::{self, Status};
 use server::sandbox::{Profile, Protections, Requirement};
 
 /// A worker that reports one profile's confinement, records every start, and
-/// answers the media probe with the *documents* report.
-fn script(directory: &Path) -> (common::sandbox::FakeWorker, std::path::PathBuf) {
+/// answers the media probe from the mode file (by default with the *documents*
+/// report, to show a wrong profile is not read as the answer).
+fn script(directory: &Path) -> (common::sandbox::FakeWorker, std::path::PathBuf, PathBuf) {
     let asked = common::sandbox::marker_file(directory, "asked");
+    let mode = directory.join("media-mode");
     let worker = common::sandbox::FakeWorker::install(
         directory,
         "status-worker.sh",
@@ -32,9 +34,19 @@ case "$*" in
     printf '%s\n' "NFS2-sandbox profile=images limits=on files=denied network=open process=open detail=fake"
     ;;
   *--profile\ media*)
-    # The wrong profile on purpose: this probe asked for media and the child
-    # answers for documents.
-    printf '%s\n' "NFS2-sandbox profile=documents limits=on files=denied network=denied process=denied detail=fake"
+    case "$(cat "{mode}" 2>/dev/null)" in
+      media-confined)
+        printf '%s\n' "NFS2-sandbox profile=media limits=on files=denied network=denied process=open detail=fake"
+        ;;
+      media-open)
+        printf '%s\n' "NFS2-sandbox profile=media limits=on files=open network=open process=open detail=fake"
+        ;;
+      *)
+        # The wrong profile on purpose: this probe asked for media and the child
+        # answers for documents.
+        printf '%s\n' "NFS2-sandbox profile=documents limits=on files=denied network=denied process=denied detail=fake"
+        ;;
+    esac
     ;;
   *)
     printf '%s\n' "NFS2-sandbox profile=documents limits=on files=denied network=denied process=denied detail=fake"
@@ -43,13 +55,19 @@ esac
 exit 0
 "#,
             asked = asked.display(),
+            mode = mode.display(),
         ),
     );
-    (worker, asked)
+    (worker, asked, mode)
 }
 
 fn starts(asked: &Path) -> usize {
     common::sandbox::lines(asked)
+}
+
+/// The report the next media probe should produce.
+fn set_media_mode(mode: &Path, value: &str) {
+    std::fs::write(mode, value).expect("write the media mode file");
 }
 
 /// The items one profile's cached answer holds, or `None` when it holds none.
@@ -78,10 +96,21 @@ fn files_confined() -> Protections {
     }
 }
 
+/// The media profile's shape: the bound plus both layers that confine the helper,
+/// never the process item.
+fn media_confined() -> Protections {
+    Protections {
+        limits: true,
+        files: true,
+        network: true,
+        process: false,
+    }
+}
+
 #[test]
 fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
     let directory = tempfile::tempdir().expect("temp dir");
-    let (_worker, asked) = script(directory.path());
+    let (_worker, asked, media_mode) = script(directory.path());
 
     assert_eq!(items(Profile::Documents), Some(every_item()));
     assert_eq!(starts(&asked), 1, "the first call probes");
@@ -144,4 +173,39 @@ fn a_probe_is_asked_once_and_its_answer_is_kept_per_profile() {
     assert_eq!(items(Profile::Images), Some(files_confined()));
     assert_eq!(items(Profile::Documents), Some(every_item()));
     assert_eq!(starts(&asked), 6);
+
+    // The media profile is the one that starts a program, so its report is accepted
+    // only with both layers that confine it. A fresh requirement re-probes it, and
+    // the answer is kept per profile like any other.
+    set_media_mode(&media_mode, "media-confined");
+    worker::configure_requirement(Requirement::new(true));
+    assert_eq!(items(Profile::Media), Some(media_confined()));
+    assert_eq!(starts(&asked), 7, "the media answer is cached per profile");
+    assert_eq!(items(Profile::Media), Some(media_confined()));
+    assert_eq!(
+        starts(&asked),
+        7,
+        "a second media call is the cached answer"
+    );
+
+    // The same report without its layers is refused: a refusal of the requirement,
+    // not of the probe, and the retry window then holds instead of re-probing.
+    set_media_mode(&media_mode, "media-open");
+    worker::configure_requirement(Requirement::new(true));
+    let Status::Unavailable(why) = worker::status(Profile::Media) else {
+        panic!("a media profile without its file and network layers must be refused");
+    };
+    assert!(
+        why.contains("files") && why.contains("network"),
+        "the reason has to name the layers the host did not establish: {why}"
+    );
+    assert_eq!(starts(&asked), 8);
+    let Status::Unavailable(why) = worker::status(Profile::Media) else {
+        panic!("the retry window must answer unavailable");
+    };
+    assert!(
+        why.contains("probe is pending"),
+        "the window is what waits, and it says so: {why}"
+    );
+    assert_eq!(starts(&asked), 8);
 }

@@ -171,6 +171,27 @@ fn the_ocr_report_shows_models_that_still_run() {
     the_platform_answer(Profile::Ocr, &report);
 }
 
+/// Run the `--probe` half in a child process and parse its line, like
+/// [`common::sandbox::probe`], but hand the refusal back instead of panicking: the
+/// media profile is refused on a host that cannot give it the layers that confine
+/// its helper, and that refusal is an answer this file accepts and skips on.
+fn probe_or_refusal(profile: Profile, helper: Option<&str>) -> Result<(Report, String), String> {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_nanofile"));
+    command.args(["extract-worker", "--probe", "--profile", profile.as_str()]);
+    if let Some(helper) = helper {
+        command.args(["--ffmpeg", helper]);
+    }
+    let output = command.output().expect("the worker binary runs");
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.lines().next().unwrap_or_default().to_string();
+    println!("{line}");
+    let report = Report::parse(&line).unwrap_or_else(|| panic!("unreadable report: {line}"));
+    Ok((report, line))
+}
+
 #[test]
 fn the_media_report_shows_a_helper_that_still_decodes() {
     if !helper_runs() {
@@ -184,14 +205,35 @@ fn the_media_report_shows_a_helper_that_still_decodes() {
     let helper = helper();
     #[cfg(windows)]
     let started = Instant::now();
-    let (report, line) = with_requirement(configure_media_probe_requirement(), || {
-        probe(Profile::Media, Some(helper))
+    let probed = with_requirement(configure_media_probe_requirement(), || {
+        probe_or_refusal(Profile::Media, Some(helper))
     });
+    let (report, line) = match probed {
+        Ok(probed) => probed,
+        // The media profile starts an external program, so it only runs where both
+        // layers that confine the helper were established. A host that cannot give
+        // them refuses it — the expected shape on a locked-down host — and the media
+        // thumbnail tests skip on the same answer. Any other failure is real.
+        Err(why) if why.contains("sandbox refused") && why.contains("files") => {
+            assert!(
+                why.contains("network"),
+                "the refusal has to name the other layer too: {why}"
+            );
+            eprintln!("the media profile is unavailable on this host: {why}");
+            return;
+        }
+        Err(why) => panic!("the media probe failed: {why}"),
+    };
 
     the_common_answer(Profile::Media, &report, &line);
     the_items_answer(&report);
-    // It cannot carry the process item: it starts a program by definition, and
-    // every way of starting one copies the process first.
+    // An accepted report is one with the layers that confine the helper, and it
+    // cannot carry the process item: it starts a program by definition, and every
+    // way of starting one copies the process first.
+    assert!(
+        report.protections.files && report.protections.network,
+        "the accepted media profile has to show both layers: {line}"
+    );
     assert!(
         !report.protections.process,
         "the media profile must not claim the process item: {line}"

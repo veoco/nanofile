@@ -368,7 +368,14 @@ fn frame_command(
     if let Some(seek) = attempt.seek {
         command.arg("-ss").arg(seek);
     }
-    command.arg("-i").arg(source);
+    // Only a plain file may be opened: without the whitelist ffmpeg follows the
+    // protocols a container names, so a crafted upload can make it read a URL or a
+    // local path the parent never granted, and `concat` can chain further inputs.
+    command
+        .arg("-protocol_whitelist")
+        .arg("file")
+        .arg("-i")
+        .arg(source);
     if kind == Kind::Audio {
         command.arg("-map").arg("0:v:0");
     }
@@ -721,6 +728,44 @@ mod tests {
             .collect();
         assert!(args.iter().any(|arg| arg == "-vf"));
         assert!(!args.iter().any(|arg| arg == "-filter_complex"));
+    }
+
+    /// The input is a plain file and nothing else: without the whitelist ffmpeg
+    /// follows the protocol names a container carries, so a crafted upload could
+    /// reach a URL or a path the parent never granted, and `concat` could chain
+    /// further inputs.
+    #[test]
+    fn the_frame_command_whitelists_the_file_protocol_before_the_input() {
+        for kind in [Kind::Video, Kind::Audio, Kind::Image, Kind::Still] {
+            let command = frame_command(
+                Path::new("ffmpeg"),
+                kind,
+                Path::new("source.bin"),
+                frame_attempts(kind)[0],
+                THUMBNAIL_MAX_EDGE,
+            );
+            let args: Vec<String> = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            let whitelist = args
+                .iter()
+                .position(|arg| arg == "-protocol_whitelist")
+                .unwrap_or_else(|| panic!("no protocol whitelist for {kind:?}: {args:?}"));
+            assert_eq!(
+                args.get(whitelist + 1).map(String::as_str),
+                Some("file"),
+                "{kind:?}: {args:?}"
+            );
+            let input = args
+                .iter()
+                .position(|arg| arg == "-i")
+                .unwrap_or_else(|| panic!("no input for {kind:?}: {args:?}"));
+            assert!(
+                whitelist < input,
+                "the whitelist has to precede the input for {kind:?}: {args:?}"
+            );
+        }
     }
 
     /// The detector's source: a JPEG, at the still's own edge, decoded by the helper

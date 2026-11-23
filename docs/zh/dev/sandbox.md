@@ -21,7 +21,7 @@ profile 决定子进程可以建立哪些保护：
 - `--selftest` 用一行报告替代请求，不回复。
 - `--probe` 运行服务进程启动时运行的 probe，worker 不可用时以非 0 退出。
 
-父进程的 `accept` 在把子进程当作已约束之前检查报告。报告携带的是子进程**实际建立**的内容，而不是父进程要求的内容。
+父进程的 `accept` 在把子进程当作已约束之前检查报告。报告携带的是子进程**实际建立**的内容，而不是父进程要求的内容。对 `media` 这一项检查更严：它还要求 `files` 与 `network` 两项，因为这个 profile 会启动外部程序。
 
 ## 各 profile 建立什么
 
@@ -32,7 +32,12 @@ profile 决定子进程可以建立哪些保护：
 | network | 创建 socket | seccomp 拒绝列表、Landlock TCP 权限 | Seatbelt profile | 无能力的 AppContainer |
 | process | `exec`、`fork`、额外进程 | seccomp 拒绝列表（只对媒体 helper 与其加载器放行 `exec`） | Seatbelt profile：仅媒体 profile 放行 `exec`，解析器拒绝 `fork` 与 `exec` | Job 活动进程上限，加上内核的子进程策略 |
 
-`limits` 是硬不变量。建立不了它的子进程会被父子两侧同时拒绝——父进程的 `accept` 与子进程读取请求前的自检。`files`、`network` 与 `process` 是纵深防御：平台给不了某一项时，功能只靠 `limits` 运行，报告会说明。
+`limits` 是硬不变量。建立不了它的子进程会被父子两侧同时拒绝——父进程的 `accept` 与子进程读取请求前的自检。
+
+其余各层取决于该 profile 的本职工作：
+
+- `documents`、`images`、`faces`、`ocr` 这些解析器 profile 只靠 `limits` 就运行。`files`、`network` 与 `process` 对它们是纵深防御：平台给不了某一项时，功能照常运行，报告会说明。
+- `media` 只有在 **`files` 与 `network` 都就位**时才运行。它是唯一执行外部程序的 profile：没有把那个程序收窄到 helper 与源文件的层，也没有让它不至于变成通用程序的网络拒绝，这个 profile 就会被拒绝，而不是不带约束地运行。主机给不了这两层时（例如容器建不起来的受限 Windows 主机），媒体缩略图关闭，而解析器 profile 仍靠资源边界照常工作。
 
 媒体 profile 不可能有 process 项：它的存在意义就是启动程序，而每个平台启动程序都要先复制进程。约束 helper 的是文件层与父进程的超时。
 
@@ -42,7 +47,7 @@ profile 决定子进程可以建立哪些保护：
 
 - **Linux** —— 文件与 TCP 层用 Landlock，网络与进程层用 seccomp，边界用 `RLIMIT_AS`/`RLIMIT_CPU`/`RLIMIT_NOFILE`/`RLIMIT_FSIZE`。拒绝会被交给正在运行的内核验证：把过滤器装进一个子进程，再让它发起解析器绝不该发起的调用；每个调用都配一个同样进程、但不装过滤器的对照。
 - **macOS** —— 每个子进程都在 `sandbox-exec` 的 Seatbelt profile 下运行。解析器 profile 拒绝 `fork`，并把 `exec` 收窄到子进程自身的镜像。
-- **Windows** —— 先尝试 AppContainer，再叠加 Job Object、受限令牌与进程缓解策略。AppContainer 需要在注册表写 profile，并在 worker 自身镜像上给出包访问权限；一个约束自己所有子命令的主机会拒绝这些。此时启动报告 `files=open`，并且在该进程内不再申请容器。Job Object 约束已提交内存与 CPU 时间，但没有句柄或文件大小的等价物。
+- **Windows** —— 先尝试 AppContainer，再叠加 Job Object、受限令牌与进程缓解策略。AppContainer 需要在注册表写 profile，并在 worker 自身镜像上给出包访问权限；一个约束自己所有子命令的主机会拒绝这些。此时启动报告 `files=open`，并且在该进程内不再申请容器。解析器 profile 仍靠 Job Object 照常运行；媒体 profile 因为要求 `files` 与 `network` 会被拒绝，因此这类主机上媒体缩略图关闭。Job Object 约束已提交内存与 CPU 时间，但没有句柄或文件大小的等价物。
 
 媒体 helper 有独立的文件授权：helper 与它的加载器、它旁边的库文件（逐文件）、系统库目录，以及在 macOS 上——仅当 helper 确实安装在该目录下时——它所在的打包管理器目录。在 Windows 上 helper 的标准流使用管道而不是空设备，因为容器可能拒绝打开该设备。
 
@@ -54,6 +59,7 @@ profile 决定子进程可以建立哪些保护：
 - 每个 profile 还必须在它声称的约束下完成本职工作，判定依据是**产物**：probe 解析它携带的每一种结构化格式并比对解析器返回的全文；图片子进程的回复会对照交给它的像素；媒体子进程读取父进程写下的文件、解码一帧并交回编码后的缩略图；faces 子进程加载模型并完整跑一次检测，报告 `faces-ok(0)`（检测到人脸的正确性由内置人像单测覆盖）。
 - 文本接近上限的文档会在受限子进程里被完整抽出，因此资源限制是按"够用"来测的，而不只是"装上了"。
 - worker 完全起不来的机器上，头像上传、EXIF 读取与缩略图都必须拒绝，而不是退回服务器进程内解码。
+- 媒体 profile 的额外要求从两侧测试：缺少 `files` 或 `network` 的合成报告会被拒绝并点名缺失的层；给不了这些层的主机会让媒体相关测试按该原因跳过而不是失败。同一主机上的解析器 profile 仍会被测量并照常运行。
 
 发布出去的二进制与镜像也会跑同一份 probe，那也是沙盒唯一一次在 `FROM scratch` 里运行。见[CI 与发布](/zh/dev/ci-releases)。
 

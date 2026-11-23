@@ -5,9 +5,12 @@
 //! macOS applies the real Seatbelt profile to it — which grants the child's own
 //! image, not the `/bin/sh` its shebang needs. The decision's *place* is the test.
 //!
-//! The grade a host reaches is not a policy any more: a bound host runs the
-//! features at whatever layers it has, and the only refusal left is a host that
-//! established no memory or CPU bound. That is what these cases pin.
+//! The grade a host reaches is not a policy any more: a bounded host runs the
+//! parser features at whatever layers it has, and a host that established no memory
+//! or CPU bound refuses all of them. The media profile is the one exception: it
+//! starts an external program, so it also needs the file and network layers, and a
+//! host without them refuses it while the parser profiles keep running. That is what
+//! these cases pin.
 //!
 //! Every case lives in one `#[test]` because the fixture is process-global: the
 //! fake worker is installed once per binary, so each report this file measures
@@ -44,6 +47,12 @@ case "$*" in
         ;;
       unbounded)
         printf '%s\n' "NFS2-sandbox profile=documents limits=off files=denied network=denied process=denied detail=fake"
+        ;;
+      media-confined)
+        printf '%s\n' "NFS2-sandbox profile=media limits=on files=denied network=denied process=open detail=fake"
+        ;;
+      media-open)
+        printf '%s\n' "NFS2-sandbox profile=media limits=on files=open network=open process=open detail=fake"
         ;;
       *)
         printf '%s\n' "NFS2-sandbox profile=documents limits=on files=denied network=open process=open detail=fake"
@@ -123,6 +132,46 @@ fn the_resource_bound_is_an_invariant() {
         "the fixture is the bound with the layer: {}",
         report.detail
     );
+
+    // The media profile is the one that starts a program, so it is the one profile
+    // the resource bound alone cannot run: the layers are what confine the helper.
+    // The same shape that ran a parser above is refused here.
+    fs::remove_file(&marker).ok();
+    set_mode(&mode, "media-open");
+    worker::configure_requirement(Requirement::new(true));
+
+    let status = worker::status(Profile::Media);
+    let Status::Unavailable(reason) = &status else {
+        panic!("a media profile without its layers must be refused: {status:?}");
+    };
+    assert!(
+        reason.contains("refused"),
+        "the refusal is the requirement's, not a probe that never answered: {reason}"
+    );
+    assert!(
+        reason.contains("files") && reason.contains("network"),
+        "the reason has to name what the host did not establish: {reason}"
+    );
+    assert!(
+        !marker.exists(),
+        "a refused media profile starts no request child"
+    );
+
+    // With both layers in place it runs. The process item it cannot have is never
+    // asked for, so its absence does not refuse the profile.
+    set_mode(&mode, "media-confined");
+    worker::configure_requirement(Requirement::new(true));
+
+    let status = worker::status(Profile::Media);
+    let Status::Ready(report) = &status else {
+        panic!("a media profile with both layers must be accepted: {status:?}");
+    };
+    assert!(
+        report.protections.files && report.protections.network && !report.protections.process,
+        "the fixture is the media shape: {}",
+        report.detail
+    );
+    fs::remove_file(&marker).ok();
 
     // Every confinement layer in place and no memory or CPU limit: the one shape
     // nothing may run, because a parser with no bound is the failure this module
