@@ -304,14 +304,23 @@ fn is_html(response: &Response) -> bool {
 /// Where "Try again" points, or `None` when repeating the request is not what
 /// the reader wants. Offered for a GET only: replaying a failed POST through a
 /// link would turn a form submission into a different request. The value is
-/// always a path this server just served, so it cannot become an off-site href.
+/// always a path this server just served, so it cannot become an off-site href:
+/// the raw URI arrives from the client, so a `//host` or `/\host` shape (which a
+/// browser reads as protocol-relative) and any control or backslash character
+/// are refused rather than reflected into the error page.
 fn retry_target(req: &Request) -> Option<String> {
     if req.method() != Method::GET {
         return None;
     }
-    req.uri()
-        .path_and_query()
-        .map(|path_and_query| path_and_query.as_str().to_string())
+    let target = req.uri().path_and_query()?.as_str().to_string();
+    if !target.starts_with('/')
+        || target.starts_with("//")
+        || target.starts_with("/\\")
+        || target.chars().any(|c| c.is_ascii_control() || c == '\\')
+    {
+        return None;
+    }
+    Some(target)
 }
 
 /// The path matched no route. A browser gets the page; anything else keeps the
@@ -448,6 +457,35 @@ mod tests {
             .body(axum::body::Body::empty())
             .unwrap();
         assert_eq!(retry_target(&post), None);
+    }
+
+    /// The retry href is reflected from the request URI, so a path a browser
+    /// would read as protocol-relative (or a header-unsafe one) must not become a
+    /// link on the page.
+    #[test]
+    fn a_hostile_path_is_not_reflected_as_a_retry_link() {
+        for uri in [
+            "//evil.example/",
+            "/\\evil.example/",
+            "/\\/evil.example/",
+            "//evil.example/%09x",
+        ] {
+            let request = Request::builder()
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            assert_eq!(retry_target(&request), None, "{uri} must not be retried");
+        }
+        // A normal URL-encoded space stays a path: only raw control characters
+        // are refused, and `?`/`#` cannot appear unencoded in a decoded URI.
+        let ok = Request::builder()
+            .uri("/libraries/x/files/?p=/a%20b")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert_eq!(
+            retry_target(&ok).as_deref(),
+            Some("/libraries/x/files/?p=/a%20b")
+        );
     }
 
     #[test]

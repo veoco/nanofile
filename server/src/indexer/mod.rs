@@ -1360,7 +1360,15 @@ fn find_match_ranges(hay: &str, hay_lower: &str, terms: &[String]) -> Vec<(usize
     let mut ranges = Vec::new();
 
     if hay_lower.len() == hay.len() {
-        for term in terms {
+        // Equal total length still does not imply equal byte offsets: a character
+        // whose lowercase form grows (U+0130 `İ` -> "i" + combining dot) can be
+        // compensated by one that shrinks (`ẞ` -> `ß`) in the same string. The
+        // offsets then point into the middle of a character, and slicing the
+        // original with them panics. Only take this fast path when every range is
+        // a valid boundary of `hay`; otherwise fall back to the length-preserving
+        // ASCII scan below.
+        let mut boundary_safe = true;
+        'terms: for term in terms {
             let mut from = 0;
             while let Some(rel) = hay_lower[from..].find(term.as_str()) {
                 let s = from + rel;
@@ -1368,11 +1376,18 @@ fn find_match_ranges(hay: &str, hay_lower: &str, terms: &[String]) -> Vec<(usize
                 if e > hay.len() {
                     break;
                 }
+                if !hay.is_char_boundary(s) || !hay.is_char_boundary(e) {
+                    boundary_safe = false;
+                    break 'terms;
+                }
                 ranges.push((s, e));
                 from = e;
             }
         }
-        return ranges;
+        if boundary_safe {
+            return ranges;
+        }
+        ranges.clear();
     }
 
     let hay_bytes = hay.as_bytes();
@@ -2062,6 +2077,20 @@ mod highlight_regression_tests {
         ] {
             let out = build_content_highlight(content, "abc");
             // Must not panic; a hit may or may not be marked.
+            let _ = out;
+        }
+    }
+
+    /// `İ` grows by one byte under lowercasing while `ẞ` shrinks by one, so the
+    /// total byte length can stay equal even though the offsets no longer line up.
+    /// The fast path must notice the invalid boundary and fall back instead of
+    /// slicing a character in half.
+    #[test]
+    fn compensating_length_changes_do_not_panic() {
+        for content in ["İẞ i", "İẞ x i", "İẞabc", "aİẞ i"] {
+            let out = build_content_highlight(content, "i");
+            // Must not panic. The ASCII 'i' may be marked; the important part is
+            // that no slice lands inside a multi-byte character.
             let _ = out;
         }
     }
