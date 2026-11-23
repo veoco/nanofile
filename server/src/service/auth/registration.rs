@@ -40,6 +40,21 @@ impl RegistrationService {
         &self,
         params: RegistrationParams,
     ) -> Result<RegistrationResult, AppError> {
+        // Normalise once: the stored row, the duplicate check and the invitation
+        // binding all use the same value. Without trimming, " user@example.com"
+        // parses as a valid address (the mail parser trims) but is stored with
+        // the whitespace, so the account can never be found by the address the
+        // user signs in with.
+        let email = params.email.trim().to_string();
+
+        // Both modes accept only an address the mail parser accepts. Open mode
+        // mails the verification link to it; invitation mode may mail account
+        // notifications later, and the address is the login name either way, so
+        // the two modes must not disagree about what an address is.
+        if !crate::service::mail::settings::is_valid_address(&email) {
+            return Err(AppError::BadRequest("Invalid email address.".to_string()));
+        }
+
         let invitation = if params.require_invitation {
             let code = params
                 .invitation_code
@@ -63,7 +78,7 @@ impl RegistrationService {
             }
 
             if let Some(ref bound_email) = code_record.email
-                && bound_email.to_lowercase() != params.email.to_lowercase()
+                && bound_email.trim().to_lowercase() != email.to_lowercase()
             {
                 return Err(AppError::BadRequest(
                     "This invitation code is bound to a different email address.".to_string(),
@@ -75,22 +90,12 @@ impl RegistrationService {
             None
         };
 
-        if params.require_invitation {
-            if !params.email.contains('@') || params.email.len() > 254 {
-                return Err(AppError::BadRequest("Invalid email address.".to_string()));
-            }
-        } else if !crate::service::mail::settings::is_valid_address(&params.email) {
-            // The verification mail is the only way to activate an open
-            // registration, so the address has to be one the mailer accepts.
-            return Err(AppError::BadRequest("Invalid email address.".to_string()));
-        }
-
         // The answer is deliberately the same as for a bad invitation code in
         // invitation mode: the login and password-reset paths return generic
         // responses so an unauthenticated caller cannot test which addresses are
         // registered. Open registration uses its own generic message for the same
         // reason.
-        let existing = self.repos.user.find_by_email(&params.email).await?;
+        let existing = self.repos.user.find_by_email(&email).await?;
         if existing.is_some() {
             return Err(duplicate_email_error(params.require_invitation));
         }
@@ -108,7 +113,7 @@ impl RegistrationService {
             .repos
             .user
             .create_self_registered(
-                params.email.clone(),
+                email.clone(),
                 password_hash,
                 invitation.as_ref().map(|code| code.creator_id),
                 params.require_invitation,
@@ -120,13 +125,7 @@ impl RegistrationService {
                 // A concurrent registration with the same address can win between
                 // the read above and this insert. Report the same answer as the
                 // pre-check instead of a 500; anything else is a real failure.
-                if self
-                    .repos
-                    .user
-                    .find_by_email(&params.email)
-                    .await?
-                    .is_some()
-                {
+                if self.repos.user.find_by_email(&email).await?.is_some() {
                     return Err(duplicate_email_error(params.require_invitation));
                 }
                 return Err(err);

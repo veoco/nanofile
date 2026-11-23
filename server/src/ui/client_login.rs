@@ -1,15 +1,13 @@
 use askama::Template;
-/// GET /client-login/ — auto-login from a one-time token minted by
+/// GET /client-login/ — confirmation gate for a one-time token minted by
 /// POST /api2/client-login/; the sync client opens the browser here.
 use axum::{
-    extract::{ConnectInfo, Query, State},
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect},
 };
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
 
 use crate::AppState;
 use crate::domain::session_source::SessionSource;
@@ -20,37 +18,8 @@ use base::error::AppError;
 
 const TOKEN_TTL_SECS: i64 = 30;
 
-/// How long a token stays bound to the requesting address: slightly longer than
-/// the token, so a slow browser launch is not penalised.
-const ISSUER_TTL: Duration = Duration::from_secs(60);
-
-/// Hard cap on the issuer map, so a flood of tokens cannot grow it forever.
-const MAX_ISSUERS: usize = 10_000;
-
-/// `token → (issuing client address, issued at)`, in memory only: the token
-/// lives 30 seconds, so there is nothing worth persisting. In a multi-instance
-/// deployment the lookup may miss, which only means the confirmation page.
-static ISSUERS: LazyLock<Mutex<HashMap<String, (String, Instant)>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Remember which client address requested `token` (called by the API handler).
-pub fn remember_issuer(token: &str, client_ip: &str) {
-    let mut issuers = ISSUERS.lock().unwrap_or_else(|e| e.into_inner());
-    issuers.retain(|_, (_, issued_at)| issued_at.elapsed() < ISSUER_TTL);
-    if issuers.len() >= MAX_ISSUERS {
-        issuers.clear();
-    }
-    issuers.insert(token.to_string(), (client_ip.to_string(), Instant::now()));
-}
-
-fn issuer_matches(token: &str, client_ip: &str) -> bool {
-    let issuers = ISSUERS.lock().unwrap_or_else(|e| e.into_inner());
-    issuers
-        .get(token)
-        .is_some_and(|(ip, issued_at)| issued_at.elapsed() < ISSUER_TTL && ip == client_ip)
-}
-
-/// Confirmation page shown when the browser cannot be proven to be the token's issuer.
+/// Confirmation page for a one-time client-login token. It is always the GET's
+/// output: the POST is the only request that can create the session.
 #[derive(Template)]
 #[template(path = "web/client_login_confirm.html")]
 struct ClientLoginConfirmTemplate {
@@ -62,10 +31,18 @@ struct ClientLoginConfirmTemplate {
     pub next: Option<String>,
 }
 
+/// GET /client-login/ — render the confirmation page for a one-time token.
+///
+/// The token is minted by `POST /api2/client-login/` for the account that asks
+/// for it, but opening the URL proves nothing about who owns the browser. A
+/// silent login here would let anyone plant such a link and switch a victim's
+/// browser — and every subsequent upload — to the attacker's account. So a GET
+/// never signs in, whatever `Sec-Fetch-Site` or the peer address says: the POST
+/// below is the decision point, because a cross-site form POST cannot suppress
+/// its `Origin`.
 pub async fn client_token_login(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
-    headers: axum::http::HeaderMap,
+    headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
     let token_str = match params.get("token") {
@@ -73,51 +50,19 @@ pub async fn client_token_login(
         _ => return Ok(Redirect::to("/libraries/").into_response()),
     };
 
-    // This handler signs the browser in as the token's owner, on a top-level GET.
-    // `validate_origin` alone is not enough: it accepts a request with *neither*
-    // `Origin` nor `Referer`, exactly what a referrer-suppressed cross-site link
-    // produces, letting an attacker mint a token for their own account and
-    // silently switch a victim's browser to it.
-    //
-    // The issuing client address is therefore the only signal that decides a
-    // silent login: the client and the browser it opens share an egress address.
-    // `Sec-Fetch-Site` grants no trust — `none` is also what a link from chat,
-    // mail or a PDF produces — so it can only force the confirmation page, whose
-    // POST carries an `Origin` the attacker cannot suppress.
-    let client_ip = crate::middleware::effective_client_ip(
-        &addr,
-        &headers,
-        &state.config().server.trusted_proxies,
-    );
-    let cross_site_navigation = headers
-        .get("sec-fetch-site")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|site| !matches!(site, "none" | "same-origin"));
-    let trusted = !cross_site_navigation && issuer_matches(&token_str, &client_ip);
-
-    if !trusted {
-        let allowed_origin = state.config().server.site_url_origin();
-        let html = ClientLoginConfirmTemplate {
-            t: I18n::from_headers(&headers, &state.config().ui.default_language),
-            urls: crate::static_assets::template_urls(),
-            token: token_str.clone(),
-            next: params
-                .get("next")
-                .filter(|n| crate::ui::client_login::resolve_next(Some(n), &allowed_origin) == **n)
-                .cloned(),
-        }
-        .render()
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-        return Ok(Html(html).into_response());
+    let allowed_origin = state.config().server.site_url_origin();
+    let html = ClientLoginConfirmTemplate {
+        t: I18n::from_headers(&headers, &state.config().ui.default_language),
+        urls: crate::static_assets::template_urls(),
+        token: token_str,
+        next: params
+            .get("next")
+            .filter(|n| resolve_next(Some(n), &allowed_origin) == **n)
+            .cloned(),
     }
-
-    complete_login(
-        &state,
-        &token_str,
-        params.get("next").map(String::as_str),
-        crate::ui::user_agent::from_headers(&headers),
-    )
-    .await
+    .render()
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(Html(html).into_response())
 }
 
 /// POST /client-login/ — the confirmation form rendered above. A cross-site form
@@ -276,8 +221,10 @@ async fn complete_login(
 /// monitor, and strips the scheme/host before sending. What matters for an
 /// open-redirect is where the browser ends up:
 ///
-/// * a relative path is accepted unless it is protocol-relative (`//evil.example`)
-///   or escaped (`/\evil`, normalised to `//evil` by some browsers);
+/// * a relative path is accepted unless it is protocol-relative (`//evil.example`);
+/// * a backslash or any ASCII control character anywhere is refused: browsers
+///   normalise `\` to `/` (so `/\evil` becomes `//evil` after validation), and
+///   control characters are where URL and header parsers start to disagree;
 /// * an absolute URL only when its host matches this server's own origin.
 pub(crate) fn resolve_next(next: Option<&str>, allowed_origin: &str) -> String {
     const FALLBACK: &str = "/libraries/";
@@ -288,16 +235,19 @@ pub(crate) fn resolve_next(next: Option<&str>, allowed_origin: &str) -> String {
     if url.is_empty() {
         return FALLBACK.to_string();
     }
-    // Strip surrounding whitespace and a NUL/CR/LF; header injection is already
-    // impossible, but the value is compared below, so normalise it first.
+    // Strip surrounding whitespace; the value is compared below, so normalise it
+    // first. Interior control characters and backslashes are never acceptable.
     let url = url.trim();
-    if url.chars().any(|c| c == '\0' || c == '\r' || c == '\n') {
+    if url.is_empty() {
+        return FALLBACK.to_string();
+    }
+    if url.chars().any(|c| c.is_ascii_control() || c == '\\') {
         return FALLBACK.to_string();
     }
 
     if url.starts_with('/') {
-        // `//host` is protocol-relative; `/\` is normalised to it by browsers.
-        if url.starts_with("//") || url.starts_with("/\\") {
+        // `//host` is protocol-relative, i.e. a different origin.
+        if url.starts_with("//") {
             return FALLBACK.to_string();
         }
         return url.to_string();
@@ -345,7 +295,15 @@ mod resolve_next_tests {
 
     #[test]
     fn protocol_relative_and_escaped_paths_are_rejected() {
-        for hostile in ["//evil.example/x", "/\\evil.example", "/\\/evil.example"] {
+        for hostile in [
+            "//evil.example/x",
+            "/\\evil.example",
+            "/\\/evil.example",
+            // A backslash anywhere is refused: browsers normalise it to `/`, so a
+            // mid-path `\` can turn into a protocol-relative prefix after the check.
+            "/library\\evil",
+            "\\\\evil.example/x",
+        ] {
             assert_eq!(
                 resolve_next(Some(hostile), ORIGIN),
                 "/libraries/",
@@ -384,9 +342,18 @@ mod resolve_next_tests {
 
     #[test]
     fn control_characters_are_rejected() {
-        assert_eq!(
-            resolve_next(Some("/library/x\r\nLocation: https://evil"), ORIGIN),
-            "/libraries/"
-        );
+        for hostile in [
+            "/library/x\r\nLocation: https://evil",
+            "/library/x\ty",
+            "/library/x\0y",
+            "/library/x\x0by",
+            "https://files.example.com/\tx",
+        ] {
+            assert_eq!(
+                resolve_next(Some(hostile), ORIGIN),
+                "/libraries/",
+                "{hostile:?} must not be honoured"
+            );
+        }
     }
 }

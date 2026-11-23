@@ -227,6 +227,20 @@ pub async fn verify_2fa(
         )
         .await?;
 
+        // Enabling a second factor is an account-security boundary: every
+        // credential minted before it — other sessions, API tokens, keys, sync
+        // tokens and 2FA device trusts — must not survive it. The acting session
+        // stays alive, as on a password change, so the user is not logged out of
+        // the page that just enabled 2FA.
+        state.repos.s2fa_token.delete_by_user(user.user_id).await?;
+        crate::service::auth::token::revoke_all_credentials(
+            &state.repos,
+            Some(&state.token_manager),
+            user.user_id,
+            Some(user.session_token.as_str()),
+        )
+        .await?;
+
         render_page(
             &user,
             &state,
@@ -322,13 +336,24 @@ pub async fn disable_2fa(
     )
     .await?;
 
+    // A device-trust token ("skip 2FA on this device") is proof of the second
+    // factor that was just removed; keeping it would let a stolen one mark a
+    // future 2FA setup as trusted without any code.
+    state.repos.s2fa_token.delete_by_user(user.user_id).await?;
+
     // Successful disable clears the attempt counter.
     state.auth_limiters.disable_2fa.clear(&rate_key);
 
     Ok((StatusCode::FOUND, [("Location", "/settings/")]).into_response())
 }
 
-/// GET /settings/two-factor/qr-code/ — serve QR code generated locally.
+/// GET /settings/two-factor/qr-code/ — serve the setup QR code, generated locally.
+///
+/// Only a **pending** setup may fetch the seed. Once 2FA is enabled the seed is
+/// the account's second factor, and a session alone (no password) must not be
+/// able to read it back out of a QR image. Both "not configured" and "already
+/// enabled" therefore answer `404`: the endpoint does not reveal which state it
+/// refused.
 pub async fn qr_code_image(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -338,7 +363,10 @@ pub async fn qr_code_image(
         .user_2fa
         .find_by_user_id(user.user_id)
         .await?
-        .ok_or_else(|| AppError::BadRequest("2FA not set up.".into()))?;
+        .ok_or_else(|| AppError::NotFound("2FA setup is not pending.".into()))?;
+    if two_fa.enabled {
+        return Err(AppError::NotFound("2FA setup is not pending.".into()));
+    }
 
     let totp = TotpManager::create_totp(&two_fa.totp_secret, &user.email, "Nanofile")
         .map_err(|e| AppError::internal(e.to_string()))?;

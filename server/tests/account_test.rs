@@ -290,3 +290,130 @@ async fn test_register_admin_allowed() {
     let resp = client.login("created@example.com", "secret123").await;
     assert_eq!(resp.status(), 200);
 }
+
+// ── Self-registration in invitation mode ────────────────────────────────────
+//
+// The invitation code is the trust proof in this mode, but the address is still
+// the account's login name and may receive notification mail, so it must pass
+// the same parser open registration uses. It is also stored trimmed: an
+// untrimmed login name could never be matched by the address the user types.
+
+/// Seed an invitation code owned by the fixture user.
+async fn seed_invitation_code(f: &TestFixture, code: &str, bound_email: Option<&str>) {
+    f.server
+        .repos
+        .invitation_code
+        .create(
+            code.to_string(),
+            bound_email.map(str::to_string),
+            f.user_id,
+            chrono::Utc::now().timestamp(),
+        )
+        .await
+        .expect("seed an invitation code");
+}
+
+/// Submit the registration form in invitation mode.
+///
+/// No redirect following: a successful registration answers `302` to
+/// `/libraries/`, and following it would turn the success into a login page.
+async fn register_with_invitation(f: &TestFixture, email: &str, code: &str) -> reqwest::Response {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+        .post(format!("{}/accounts/register/", f.server.base_url))
+        .form(&[
+            ("email", email),
+            ("password1", "password123"),
+            ("password2", "password123"),
+            ("invitation_code", code),
+        ])
+        .send()
+        .await
+        .unwrap()
+}
+
+/// Invitation mode used to accept any string containing "@" as an address, so a
+/// malformed login name could be created (and later mailed to). It now runs the
+/// same parser as open registration, and a refused address does not burn the
+/// invitation code.
+#[tokio::test]
+async fn test_invitation_registration_rejects_invalid_email() {
+    let f = TestFixture::new().await;
+    let code = "invite-invalid-email-0123456789abcdef";
+    seed_invitation_code(&f, code, None).await;
+
+    for invalid in ["not-an-address", "a@b@c", "user name@example.com"] {
+        let resp = register_with_invitation(&f, invalid, code).await;
+        assert_eq!(
+            resp.status(),
+            200,
+            "{invalid:?} must re-render the registration form"
+        );
+        let body = resp.text().await.unwrap();
+        assert!(
+            body.contains("Invalid email address."),
+            "{invalid:?} must be refused with the address error, got: {body}"
+        );
+    }
+
+    // The refusals did not consume the code...
+    let record = f
+        .server
+        .repos
+        .invitation_code
+        .find_by_code(code)
+        .await
+        .unwrap()
+        .expect("the invitation row");
+    assert!(
+        record.used_by.is_none(),
+        "a rejected address must not consume the invitation code"
+    );
+
+    // ...so a valid address still registers with the same code.
+    let resp = register_with_invitation(&f, "invited@example.com", code).await;
+    assert_eq!(
+        resp.status(),
+        302,
+        "a valid invitation registration signs the new account in"
+    );
+}
+
+#[tokio::test]
+async fn test_invitation_registration_trims_email_and_matches_the_bound_code() {
+    let f = TestFixture::new().await;
+    // A legacy row may carry whitespace and mixed case; the binding comparison
+    // trims and case-folds both sides, like a freshly generated code (which is
+    // trimmed when stored).
+    let code = "invite-bound-email-0123456789abcdef";
+    seed_invitation_code(&f, code, Some(" Bound@Example.com ")).await;
+
+    let resp = register_with_invitation(&f, "  BOUND@Example.com  ", code).await;
+    assert_eq!(
+        resp.status(),
+        302,
+        "the trimmed, case-folded address matches the bound invitation"
+    );
+
+    let stored = f
+        .server
+        .repos
+        .user
+        .find_by_email("BOUND@Example.com")
+        .await
+        .unwrap()
+        .expect("the account is stored under the trimmed address");
+    assert_eq!(stored.email, "BOUND@Example.com");
+    assert!(
+        f.server
+            .repos
+            .user
+            .find_by_email("  BOUND@Example.com  ")
+            .await
+            .unwrap()
+            .is_none(),
+        "the whitespace-padded spelling must not be stored as-is"
+    );
+}

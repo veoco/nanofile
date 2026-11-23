@@ -62,7 +62,10 @@ impl PasswordResetService {
         // the same generic page either way, so the endpoint never answers "does
         // this account exist?".
         let Some(user) = user_record else {
-            tracing::info!("Password reset requested for unknown email: {}", email);
+            tracing::info!(
+                "Password reset requested for unknown email: {}",
+                sanitize_log_value(email)
+            );
             return Ok(PasswordResetTokenResult {
                 user_id: None,
                 reset_url: None,
@@ -90,7 +93,10 @@ impl PasswordResetService {
 
         let base = site_url.trim_end_matches('/');
         let link = format!("{}/accounts/password/reset/{}/", base, raw_token);
-        tracing::info!("Password reset link generated for user {}", user.email);
+        tracing::info!(
+            "Password reset link generated for user {}",
+            sanitize_log_value(&user.email)
+        );
 
         Ok(PasswordResetTokenResult {
             user_id: Some(user.id),
@@ -209,5 +215,56 @@ pub fn hash_token(token: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Longest user-supplied value written to one log line. An email address is at
+/// most 254 bytes (RFC 5321), so this only guards against arbitrary junk input.
+const MAX_LOG_VALUE_CHARS: usize = 254;
+
+/// Make a user-supplied value safe for a single log line.
+///
+/// The value is written to a text log, where CR/LF — and any other ASCII control
+/// character, such as a terminal escape — would let the requester forge extra
+/// lines or rewrite the terminal. Control characters are removed rather than
+/// escaped so an ordinary address still reads naturally; the value is truncated
+/// so one huge submission cannot bloat the log.
+fn sanitize_log_value(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| !c.is_ascii_control())
+        .take(MAX_LOG_VALUE_CHARS)
+        .collect()
+}
+
 /// Token expiry: 3 days (matching seahub).
 pub const RESET_TOKEN_TTL_SECONDS: i64 = 3 * 24 * 60 * 60;
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_LOG_VALUE_CHARS, sanitize_log_value};
+
+    #[test]
+    fn log_values_drop_cr_lf_and_tab() {
+        assert_eq!(
+            sanitize_log_value("victim@example.com\r\nfake: injected\tpayload\0"),
+            "victim@example.comfake: injectedpayload"
+        );
+    }
+
+    #[test]
+    fn log_values_are_truncated() {
+        let long = "a".repeat(MAX_LOG_VALUE_CHARS + 200);
+        let sanitized = sanitize_log_value(&long);
+        assert_eq!(sanitized.chars().count(), MAX_LOG_VALUE_CHARS);
+        assert!(sanitized.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
+    fn plain_addresses_are_unchanged() {
+        for address in [
+            "test@example.com",
+            "john.doe+tag@example.co.uk",
+            "用户@example.com",
+        ] {
+            assert_eq!(sanitize_log_value(address), address);
+        }
+    }
+}

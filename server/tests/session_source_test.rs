@@ -106,10 +106,13 @@ async fn a_web_login_records_its_user_agent() {
 
 /// The desktop client's "view on website" opens a real browser session — it
 /// sets the session cookie — but the user never typed a password to get it.
-/// That is exactly the distinction the inventory has to make.
+/// That is exactly the distinction the inventory has to make. The browser page
+/// is a confirmation gate: the session is created by the POST, not by opening
+/// the link.
 #[tokio::test]
 async fn the_view_on_website_handoff_is_a_browser_session() {
     let f = TestFixture::new().await;
+    let base = f.server.base_url.clone();
 
     let issued = f
         .client
@@ -128,17 +131,35 @@ async fn the_view_on_website_handoff_is_a_browser_session() {
     let agent = "NanofileTestBrowser/1.0 (handoff)";
     let client = browser(agent);
     let opened = client
-        .get(format!(
-            "{}/client-login/?token={one_time}",
-            f.server.base_url
-        ))
+        .get(format!("{}/client-login/?token={one_time}", base))
         .send()
         .await
         .unwrap();
     assert_eq!(
         opened.status(),
+        200,
+        "opening the link only shows the confirmation page"
+    );
+    assert!(
+        !opened
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .any(|v| v.to_str().is_ok_and(|c| c.starts_with("seahub-session="))),
+        "opening the link must not create the session"
+    );
+
+    let confirmed = client
+        .post(format!("{base}/client-login/"))
+        .header("origin", base.as_str())
+        .form(&[("token", one_time.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        confirmed.status(),
         302,
-        "a trusted same-address handoff signs the browser in"
+        "the confirmation POST signs the browser in"
     );
 
     let sessions = rows_with_source(&f, "web_client_login").await;

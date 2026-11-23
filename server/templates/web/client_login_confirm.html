@@ -2,9 +2,10 @@
 
 {% block title %}{{ t.tr("auth.login_to_client") }} | {{ t.tr("app.name") }}{% endblock %}
 
-{# Shown when the browser cannot be proven to be the client that asked for the
-   one-time token, so the visitor confirms it by hand. The warning is the point
-   of the page, so it is a banner rather than body text. #}
+{# Always shown for a one-time browser-login token: the visitor confirms the
+   sign-in by hand, so a cross-site link can never silently replace the browser's
+   current session. The warning is the point of the page, so it is a banner
+   rather than body text. #}
 {% block head %}
 <div class="px-5 pt-5 pb-2">
     <h1 class="text-[19px] font-semibold tracking-tight text-ink">{{ t.tr("auth.login_to_client") }}</h1>

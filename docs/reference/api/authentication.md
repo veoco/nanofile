@@ -81,8 +81,10 @@ token to revoke.
 `POST /api2/client-login/`
 
 Mints a token for the desktop client's "open in browser" action. The client then
-opens `{site_url}/client-login/?token=…`, which signs the browser in. The token
-is bound to the requesting address and expires after 30 seconds.
+opens `{site_url}/client-login/?token=…`, which shows a confirmation page; the
+browser is signed in only after the reader submits that form (a cross-site
+navigation can never silently replace an existing session). The token is
+single-use and expires after 30 seconds.
 
 **Response `200`** — `{"token": "…"}`. Requires an account credential (session or
 account token); API keys are rejected.

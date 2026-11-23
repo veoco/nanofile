@@ -200,9 +200,8 @@ async fn login_client(fixture: &TestFixture) -> reqwest::Client {
 }
 
 /// Mint a one-time client-login token the way the desktop client does.
-/// Going through `POST /api2/client-login/` matters: the endpoint records the
-/// requesting address as the token's issuer, and the browser entry point only
-/// logs in silently when the navigation comes from that same address.
+/// The web entry point never signs the browser in on the GET: it renders the
+/// confirmation page, whose POST performs the login.
 async fn mint_client_login_token(fixture: &TestFixture) -> String {
     let resp = reqwest::Client::new()
         .post(format!("{}/api2/client-login/", fixture.server.base_url))
@@ -1219,41 +1218,75 @@ async fn test_client_login_api_requires_auth() {
     assert_ne!(resp.status(), 200, "should require auth");
 }
 
+/// POST the client-login confirmation form — the step that actually signs the
+/// browser in. The browser always sends `Origin` with it; a cross-site page
+/// cannot forge that header.
+async fn confirm_client_login(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    next: Option<&str>,
+) -> reqwest::Response {
+    let mut form = vec![("token", token)];
+    if let Some(next) = next {
+        form.push(("next", next));
+    }
+    client
+        .post(format!("{base_url}/client-login/"))
+        .header("origin", base_url)
+        .form(&form)
+        .send()
+        .await
+        .unwrap()
+}
+
+/// Whether a response tries to set the browser session cookie.
+fn sets_session_cookie(resp: &reqwest::Response) -> bool {
+    resp.headers()
+        .get_all("set-cookie")
+        .iter()
+        .any(|v| v.to_str().is_ok_and(|c| c.starts_with("seahub-session=")))
+}
+
 #[tokio::test]
 async fn test_client_login_flow_works() {
     let fixture = TestFixture::new().await;
-    let api_client = reqwest::Client::new();
-
-    let resp = api_client
-        .post(format!("{}/api2/client-login/", fixture.server.base_url))
-        .header("Authorization", format!("Token {}", fixture.api_token))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    let token = body["token"].as_str().unwrap().to_string();
-
+    let token = mint_client_login_token(&fixture).await;
+    let base = fixture.server.base_url.clone();
     let browser = no_redirect_client();
+
+    // The GET is only the confirmation page: merely opening the link must not
+    // sign the browser in.
     let resp = browser
         .get(format!(
             "{}/client-login/?token={}&next=/libraries/",
-            fixture.server.base_url, token
+            base, token
         ))
         .send()
         .await
         .unwrap();
-
-    assert_eq!(resp.status(), 302, "client-login should redirect");
-
-    let cookie = resp
-        .headers()
-        .get("set-cookie")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    assert_eq!(
+        resp.status(),
+        200,
+        "a GET must render the confirmation page"
+    );
     assert!(
-        cookie.contains("seahub-session="),
-        "should set session cookie"
+        !sets_session_cookie(&resp),
+        "a GET must never set the session cookie"
+    );
+    let body = resp.text().await.unwrap();
+    assert!(
+        body.contains(r#"action="/client-login/""#),
+        "the page must post back to /client-login/: {}",
+        &body[..300.min(body.len())]
+    );
+
+    // The POST confirmation is what logs the browser in.
+    let resp = confirm_client_login(&browser, &base, &token, Some("/libraries/")).await;
+    assert_eq!(resp.status(), 302, "client-login should redirect");
+    assert!(
+        sets_session_cookie(&resp),
+        "the confirmation must set the session cookie"
     );
 
     let location = resp
@@ -1271,11 +1304,6 @@ async fn test_client_login_flow_works() {
 async fn test_client_login_expired_token_redirects() {
     let fixture = TestFixture::new().await;
 
-    // Mint the token through the API first: the silent-login path only trusts a
-    // browser request that comes from the address the token was issued to, so a
-    // token inserted straight into the database would be sent to the
-    // confirmation page instead of being evaluated. Then age the row past the
-    // 30 s TTL.
     let token = mint_client_login_token(&fixture).await;
 
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -1293,29 +1321,25 @@ async fn test_client_login_expired_token_redirects() {
         .unwrap();
 
     let browser = no_redirect_client();
+    let base = fixture.server.base_url.clone();
+
+    // The confirmation page itself is state-free, so it renders for the stale
+    // token too; the POST is where the expiry is enforced.
     let resp = browser
-        .get(format!(
-            "{}/client-login/?token={}&next=/libraries/",
-            fixture.server.base_url, token
-        ))
-        // The normal browser flow: a navigation the browser itself initiated.
-        .header("sec-fetch-site", "none")
+        .get(format!("{}/client-login/?token={}", base, token))
         .send()
         .await
         .unwrap();
+    assert_eq!(resp.status(), 200, "the confirmation page renders");
 
+    let resp = confirm_client_login(&browser, &base, &token, Some("/libraries/")).await;
     assert!(
         resp.status() == 302 || resp.status() == 303,
         "expired token should redirect, got {}",
         resp.status()
     );
-    let cookie = resp
-        .headers()
-        .get("set-cookie")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
     assert!(
-        !cookie.contains("seahub-session="),
+        !sets_session_cookie(&resp),
         "should NOT set session cookie for expired token"
     );
 }
@@ -1324,8 +1348,6 @@ async fn test_client_login_expired_token_redirects() {
 async fn test_client_login_invalid_token_redirects() {
     let fixture = TestFixture::new().await;
 
-    // Bound to the minting address (see the expired-token test), then deleted,
-    // so the request is trusted but the token is unknown to the server.
     let token = mint_client_login_token(&fixture).await;
     use sea_orm::EntityTrait;
     infra::entity::client_login_token::Entity::delete_by_id(
@@ -1336,28 +1358,23 @@ async fn test_client_login_invalid_token_redirects() {
     .unwrap();
 
     let browser = no_redirect_client();
+    let base = fixture.server.base_url.clone();
+
     let resp = browser
-        .get(format!(
-            "{}/client-login/?token={}&next=/libraries/",
-            fixture.server.base_url, token
-        ))
-        .header("sec-fetch-site", "none")
+        .get(format!("{}/client-login/?token={}", base, token))
         .send()
         .await
         .unwrap();
+    assert_eq!(resp.status(), 200, "the confirmation page renders");
 
+    let resp = confirm_client_login(&browser, &base, &token, Some("/libraries/")).await;
     assert!(
         resp.status() == 302 || resp.status() == 303,
         "invalid token should redirect, got {}",
         resp.status()
     );
-    let cookie = resp
-        .headers()
-        .get("set-cookie")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
     assert!(
-        !cookie.contains("seahub-session="),
+        !sets_session_cookie(&resp),
         "should NOT set session cookie for invalid token"
     );
 }
@@ -1376,6 +1393,98 @@ async fn test_client_login_no_token_redirects() {
     assert!(
         resp.status() == 302 || resp.status() == 303,
         "no token should redirect"
+    );
+}
+
+/// The 2FA setup QR serves the TOTP seed only while a setup is pending. Once 2FA
+/// is enabled the seed **is** the second factor, so a session alone must not be
+/// able to read it back out of the QR image; a missing row is equally "not
+/// pending". Both refusals are `404`, so the endpoint does not say which.
+#[tokio::test]
+async fn test_two_factor_qr_only_while_setup_pending() {
+    let fixture = TestFixture::new().await;
+    let client = login_client(&fixture).await;
+    let base = fixture.server.base_url.clone();
+    let qr_url = format!("{base}/settings/two-factor/qr-code/");
+
+    assert_eq!(
+        client.get(qr_url.as_str()).send().await.unwrap().status(),
+        404,
+        "without a 2FA row there is no pending setup to serve"
+    );
+
+    // Start setup from the POST form: the page GET is read-only.
+    let csrf = settings_csrf_token(&client, &base).await;
+    let resp = client
+        .post(format!("{base}/settings/two-factor/setup/"))
+        .form(&[("csrf_token", csrf.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "starting setup renders the scan page");
+
+    let resp = client.get(qr_url.as_str()).send().await.unwrap();
+    assert_eq!(resp.status(), 200, "a pending setup may fetch its QR code");
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("private, no-store"),
+        "the seed-bearing image must never be cached by a shared cache"
+    );
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        content_type.starts_with("image/svg+xml"),
+        "expected an SVG QR image, got {content_type}"
+    );
+    assert!(
+        resp.text().await.unwrap().contains("<svg"),
+        "the response must be the QR image"
+    );
+
+    // Enable 2FA with a real TOTP code, staying in the same browser session.
+    let secret = fixture
+        .server
+        .repos
+        .user_2fa
+        .find_by_user_id(fixture.user_id)
+        .await
+        .unwrap()
+        .expect("pending 2FA row")
+        .totp_secret;
+    let totp =
+        server::service::auth::totp::TotpManager::create_totp(&secret, &fixture.email, "Nanofile")
+            .expect("build TOTP");
+    let code = totp.generate_current().to_string();
+    let csrf = settings_csrf_token(&client, &base).await;
+    let resp = client
+        .post(format!("{base}/settings/two-factor/verify/"))
+        .form(&[("code", code.as_str()), ("csrf_token", csrf.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "verifying the code enables 2FA");
+    assert!(
+        fixture
+            .server
+            .repos
+            .user_2fa
+            .find_by_user_id(fixture.user_id)
+            .await
+            .unwrap()
+            .expect("2FA row")
+            .enabled,
+        "2FA must be enabled after verification"
+    );
+
+    assert_eq!(
+        client.get(qr_url.as_str()).send().await.unwrap().status(),
+        404,
+        "an enabled 2FA must not hand its seed back to a session"
     );
 }
 

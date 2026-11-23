@@ -67,7 +67,7 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
             "/accounts/password/reset/complete/",
             get(auth::password_reset_complete),
         )
-        // Client-login — auto-login from desktop client
+        // Client-login — token from the desktop client, confirmed in the browser
         .route(
             "/client-login/",
             get(client_login::client_token_login).post(client_login::client_token_login_confirm),

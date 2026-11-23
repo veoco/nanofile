@@ -719,11 +719,13 @@ async fn mint_client_login_token(base_url: &str, api_token: &str) -> String {
         .to_string()
 }
 
-/// A cross-site navigation must never silently sign the browser in.
-/// `validate_origin` accepts a request with neither `Origin` nor `Referer`, so
-/// an attacker could otherwise mint a token for their own account and have a
-/// victim's browser switch to it with a referrer-suppressed link — the victim's
-/// subsequent uploads would land in the attacker's account.
+/// A navigation to `/client-login/` must never silently sign the browser in.
+/// Opening a link proves nothing about who owns the browser: an attacker could
+/// mint a token for their own account and have a victim's browser switch to it
+/// (with a referrer-suppressed link), so the victim's subsequent uploads would
+/// land in the attacker's account. Every GET renders the confirmation page and
+/// the POST — which carries an `Origin` the attacker cannot suppress — is what
+/// performs the login.
 #[tokio::test]
 async fn client_login_cross_site_navigation_is_not_silent() {
     let f = common::TestFixture::new().await;
@@ -792,14 +794,38 @@ async fn client_login_cross_site_navigation_is_not_silent() {
     );
 
     // A browser-initiated navigation (`Sec-Fetch-Site: none`, e.g. the desktop
-    // client opening the URL) still logs in silently — the compatibility path.
+    // client opening the URL) gets **the same confirmation page**: the header
+    // says nothing about who owns the browser, and "none" is also what a link
+    // from chat, mail or a PDF produces. There is no silent-login compatibility
+    // path left.
     let resp = client
         .get(format!("{}/client-login/?token={}", base_url, token))
         .header("sec-fetch-site", "none")
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 302);
+    assert_eq!(resp.status(), 200, "the confirmation page is rendered");
+    let cookies: Vec<String> = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !cookies.iter().any(|c| c.starts_with("seahub-session=")),
+        "a browser-initiated navigation must not receive a session: {cookies:?}"
+    );
+
+    // The confirmation POST still signs the browser in when it carries the
+    // site's own Origin.
+    let resp = client
+        .post(format!("{}/client-login/", base_url))
+        .header("origin", base_url.as_str())
+        .form(&[("token", token.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "the same-origin POST logs in");
     let cookies: Vec<String> = resp
         .headers()
         .get_all("set-cookie")
@@ -808,7 +834,7 @@ async fn client_login_cross_site_navigation_is_not_silent() {
         .collect();
     assert!(
         cookies.iter().any(|c| c.starts_with("seahub-session=")),
-        "a browser-initiated navigation must still log in: {cookies:?}"
+        "the confirmation POST must issue the session: {cookies:?}"
     );
     assert!(
         cookies.iter().any(|c| c.starts_with("sfcsrftoken=")),
@@ -859,12 +885,27 @@ async fn client_login_next_is_restricted_to_safe_paths() {
         .unwrap();
     let token = mint_client_login_token(&base_url, &f.api_token).await;
 
-    let resp = client
+    // The GET drops an unsafe `next` from the form it renders; the POST is the
+    // path that actually redirects, so it has to reject it again on its own.
+    let page = client
         .get(format!(
             "{}/client-login/?token={}&next=https://evil.example/",
             base_url, token
         ))
-        .header("sec-fetch-site", "none")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), 200, "the confirmation page renders");
+    let body = page.text().await.unwrap();
+    assert!(
+        !body.contains("https://evil.example/"),
+        "the confirmation form must not carry an off-site next: {body}"
+    );
+
+    let resp = client
+        .post(format!("{}/client-login/", base_url))
+        .header("origin", base_url.as_str())
+        .form(&[("token", token.as_str()), ("next", "https://evil.example/")])
         .send()
         .await
         .unwrap();

@@ -21,6 +21,11 @@ Turn it on under **Settings → Security**:
 
 Turning two-factor off asks for your current password.
 
+Enabling it is an account-security boundary: the account's **other browser
+sessions, sync tokens, API keys and remembered 2FA devices** stop working, while
+the browser that performed the setup stays signed in. Setting it up again (after
+turning it off) clears the old remembered devices too.
+
 Signing in means password first, then the 6-digit code. Tick "trust this device"
 and that device stops asking for **90 days** — sync clients use the same
 mechanism, see [Connecting clients](/guide/use/clients). Codes have their own attempt
@@ -61,6 +66,7 @@ an administrator under **System Settings → Authentication / Rate limits**.
 | Action | What it affects |
 |---|---|
 | Changing your password | sessions on the account's **other devices**, every sync token, every API key |
+| Enabling two-factor | other browser sessions, every sync token, every API key, remembered 2FA devices |
 | Disabling the account / remote wipe | every login the account holds, including unused password-reset links |
 | Revoking one entry under Sessions & Credentials | that entry alone |
 | Rotating the master secret `server.secret_key` | everybody: sessions are signed out, sync clients break, encrypted blocks cannot be decrypted (see [Security](/guide/admin/security)) |

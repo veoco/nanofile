@@ -533,3 +533,216 @@ async fn deactivating_an_account_revokes_outstanding_capability_tokens() {
         "deactivation must revoke outstanding capability URLs"
     );
 }
+
+/// Log in through the web form and return the cookie-holding browser plus the
+/// CSRF token the settings pages embed.
+async fn web_session(f: &TestFixture) -> (reqwest::Client, String) {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let resp = client
+        .post(format!("{}/accounts/login/", f.server.base_url))
+        .form(&[
+            ("email", f.email.as_str()),
+            ("password", f.password.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_redirection(),
+        "web login failed: {}",
+        resp.status()
+    );
+    let csrf = settings_csrf_token(&client, &f.server.base_url).await;
+    assert!(!csrf.is_empty(), "settings page must expose a CSRF token");
+    (client, csrf)
+}
+
+/// Scrape the `csrf_token` hidden input from the settings page.
+async fn settings_csrf_token(client: &reqwest::Client, base: &str) -> String {
+    let body = client
+        .get(format!("{base}/settings/"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    body.split(r#"name="csrf_token" value=""#)
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Seed a 2FA device-trust token ("skip 2FA on this device") for the fixture user.
+async fn seed_s2fa_token(f: &TestFixture, raw: &str) {
+    let now = chrono::Utc::now().timestamp();
+    f.server
+        .repos
+        .s2fa_token
+        .create_s2fa_token(server::repository::s2fa_token::CreateS2faTokenParams {
+            user_id: f.user_id,
+            token: raw.to_string(),
+            device_id: Some("trusted-device".to_string()),
+            device_name: Some("laptop".to_string()),
+            created_at: now,
+            expires_at: now + 3600,
+        })
+        .await
+        .expect("create a device-trust token");
+}
+
+/// Enabling 2FA is a security boundary: the verify step drops every
+/// device-trust token (proof of the *old* second factor, which must not count as
+/// proof of the new one) and revokes the account's other credentials, while the
+/// session that performed the change must survive.
+#[tokio::test]
+async fn verifying_2fa_revokes_other_credentials_and_keeps_the_session() {
+    let f = TestFixture::new().await;
+
+    // A pending setup, as if the user had just clicked "Set Up".
+    let secret = server::service::auth::totp::TotpManager::generate_secret();
+    f.server
+        .repos
+        .user_2fa
+        .get_or_create(f.user_id, secret.clone())
+        .await
+        .expect("seed a pending 2FA setup");
+    seed_s2fa_token(&f, "stale-device-trust").await;
+
+    assert_eq!(
+        f.client.ping(&f.api_token).await.status(),
+        200,
+        "the fixture's API token works before verification"
+    );
+
+    let (client, csrf) = web_session(&f).await;
+    let totp = server::service::auth::totp::TotpManager::create_totp(&secret, &f.email, "Nanofile")
+        .expect("build TOTP");
+    let code = totp.generate_current().to_string();
+
+    let resp = client
+        .post(format!("{}/settings/two-factor/verify/", f.server.base_url))
+        .form(&[("code", code.as_str()), ("csrf_token", csrf.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "verifying the code enables 2FA");
+
+    assert!(
+        f.server
+            .repos
+            .user_2fa
+            .find_by_user_id(f.user_id)
+            .await
+            .unwrap()
+            .expect("2FA row")
+            .enabled,
+        "2FA must be enabled after verification"
+    );
+    assert!(
+        f.server
+            .repos
+            .s2fa_token
+            .list_for_user(f.user_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "enabling 2FA must drop every device-trust token"
+    );
+
+    // The acting session survives...
+    assert_eq!(
+        client
+            .get(format!("{}/settings/", f.server.base_url))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200,
+        "the session that enabled 2FA must stay usable"
+    );
+    // ...but the credentials it did not come with are gone.
+    assert_eq!(
+        f.client.ping(&f.api_token).await.status(),
+        401,
+        "other API tokens must be revoked by enabling 2FA"
+    );
+}
+
+/// Disabling 2FA must drop the device-trust tokens too: they are proof of a
+/// second factor that no longer exists, and a stolen one would otherwise let a
+/// device skip a future setup's verification.
+#[tokio::test]
+async fn disabling_2fa_drops_device_trusts_and_keeps_the_session() {
+    let f = TestFixture::new().await;
+
+    // Log in *before* 2FA is on: a 2FA-enabled login stops at the pending
+    // session / code page, and the disable form needs a real session.
+    let (client, csrf) = web_session(&f).await;
+
+    let secret = server::service::auth::totp::TotpManager::generate_secret();
+    f.server
+        .repos
+        .user_2fa
+        .get_or_create(f.user_id, secret)
+        .await
+        .expect("seed a 2FA row");
+    f.server
+        .repos
+        .user_2fa
+        .set_enabled(f.user_id, true, chrono::Utc::now().timestamp())
+        .await
+        .expect("enable 2FA");
+    seed_s2fa_token(&f, "device-trust").await;
+
+    let resp = client
+        .post(format!(
+            "{}/settings/two-factor/disable/",
+            f.server.base_url
+        ))
+        .form(&[
+            ("password", f.password.as_str()),
+            ("csrf_token", csrf.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302, "the correct password disables 2FA");
+
+    assert!(
+        f.server
+            .repos
+            .user_2fa
+            .find_by_user_id(f.user_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "the 2FA row must be removed"
+    );
+    assert!(
+        f.server
+            .repos
+            .s2fa_token
+            .list_for_user(f.user_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "disabling 2FA must drop every device-trust token"
+    );
+    assert_eq!(
+        client
+            .get(format!("{}/settings/", f.server.base_url))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200,
+        "disabling 2FA must not log the acting browser out"
+    );
+}
